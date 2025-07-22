@@ -1,0 +1,141 @@
+openapi: 3.1.0
+info:
+  title: Market GPT API
+  version: 1.0.0
+  description: API for calculating SL/TP and managing trades
+servers:
+  - url: https://market-gpt-api-template.onrender.com
+
+paths:
+  /auto-sl-tp:
+    post:
+      operationId: autoSlTp
+      summary: Calculate automatic SL and TP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                atr_sl:
+                  type: number
+                atr_tp:
+                  type: number
+              required:
+                - symbol
+                - entry
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stop:
+                    type: number
+                  tp:
+                    type: number
+                  rrr:
+                    type: number
+
+  /analyze-trade:
+    post:
+      operationId: analyzeTrade
+      summary: Analyze trade and return RRR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+              required:
+                - entry
+                - stop
+                - tp
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rrr:
+                    type: number
+
+  /save-trade:
+    post:
+      operationId: saveTrade
+      summary: Save a trade to memory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+              required:
+                - symbol
+                - entry
+                - stop
+                - tp
+      responses:
+        '200':
+          description: Trade saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /get-trades:
+    get:
+      operationId: getTrades
+      summary: Retrieve all saved trades
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /clear-trades:
+    post:
+      operationId: clearTrades
+      summary: Clear all saved trades
+      responses:
+        '200':
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
