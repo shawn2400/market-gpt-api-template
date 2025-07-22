@@ -3,7 +3,7 @@ info:
   title: Market GPT API בעברית
   version: 1.0.0
 description: |
-  API אישי ל־GPT שמבצע חישובי SL/TP, שמירת טריידים, ניתוחים וגרידים חכמים.
+  API אישי ל־GPT שמבצע חישובי SL/TP, גרידים חכמים, ניתוחים בזמן אמת, יציאות לפי RRR, תמיכה ב־Limit ו־Trailing, שמירה ל־CSV וניתוח 24h/7d.
   כולל פקודות מוכנות (Presets) בעברית.
 servers:
   - url: https://market-gpt-api-template.onrender.com
@@ -28,12 +28,11 @@ paths:
                   type: number
                 atr_tp:
                   type: number
-              required:
-                - symbol
-                - entry
+              required: [symbol, entry]
       responses:
         '200':
           description: תוצאה עם SL, TP ו־RRR
+
   /analyze-trade:
     post:
       operationId: analyzeTrade
@@ -52,18 +51,16 @@ paths:
                   type: number
                 tp:
                   type: number
-              required:
-                - entry
-                - stop
-                - tp
+              required: [entry, stop, tp]
       responses:
         '200':
           description: מחזיר רק RRR
+
   /save-trade:
     post:
       operationId: saveTrade
       summary: שמור טרייד
-      description: שומר טרייד עם פרטים כמו כניסה, SL, TP ו־RRR.
+      description: שומר טרייד כולל פרטי Limit, Trailing, SL/TP ו־RRR.
       requestBody:
         required: true
         content:
@@ -83,14 +80,15 @@ paths:
                   type: number
                 direction:
                   type: string
-              required:
-                - symbol
-                - entry
-                - stop
-                - tp
+                limit:
+                  type: boolean
+                trailing:
+                  type: boolean
+              required: [symbol, entry, stop, tp]
       responses:
         '200':
-          description: סטטוס שמירה
+          description: טרייד נשמר בהצלחה
+
   /get-trades:
     get:
       operationId: getTrades
@@ -99,6 +97,7 @@ paths:
       responses:
         '200':
           description: רשימת טריידים
+
   /clear-trades:
     post:
       operationId: clearTrades
@@ -106,7 +105,86 @@ paths:
       description: מוחק את כל הטריידים מהזיכרון.
       responses:
         '200':
-          description: טריידים נמחקו
+          description: כל הטריידים נמחקו
+
+  /smart-grid:
+    post:
+      operationId: smartGrid
+      summary: חשב גריד חכם
+      description: מחשב טווחי גרידים אוטומטיים לפי תקציב, ביטחון, ATR ו־RRR.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                budget:
+                  type: number
+              required: [symbol, entry, budget]
+      responses:
+        '200':
+          description: פרטי גריד חכם
+
+  /exit-on-broken-rrr:
+    post:
+      operationId: exitOnBrokenRRR
+      summary: צא רק אם RRR נשבר
+      description: בודק אם יחס הסיכון/רווח נשבר וממליץ אם לצאת מהטרייד.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                current_price:
+                  type: number
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+              required: [current_price, entry, stop, tp]
+      responses:
+        '200':
+          description: המלצה חכמה ליציאה או המשך
+
+  /market-analysis:
+    get:
+      operationId: marketAnalysis
+      summary: נתח מטבע חכם (24h/7d)
+      description: מחזיר ניתוח טכני כולל שינויי מחיר, תנודתיות וגרף.
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: timeframe
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d]
+      responses:
+        '200':
+          description: ניתוח מלא של המטבע
+
+  /log-csv:
+    post:
+      operationId: logToCSV
+      summary: שמור לקובץ CSV
+      description: שומר את הטריידים לקובץ CSV לצורך ניתוח חודשי או דוחות.
+      responses:
+        '200':
+          description: נשמר לקובץ CSV בהצלחה
+
 
 
 
