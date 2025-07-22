@@ -86,7 +86,20 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: true
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                rrr:
+                  type: number
+              required:
+                - symbol
+                - entry
       responses:
         '200':
           description: Trade saved
@@ -126,4 +139,5 @@ paths:
                 properties:
                   status:
                     type: string
+
 
