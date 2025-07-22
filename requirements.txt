@@ -1,2 +1,7 @@
 flask
 flask-cors
+pandas
+numpy
+matplotlib
+ta
+requests
