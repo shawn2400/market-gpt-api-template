@@ -1,119 +1,174 @@
 from flask import Flask, request, jsonify, send_file
-import matplotlib.pyplot as plt
+from flask_cors import CORS
 import pandas as pd
-import os, io, csv
+import matplotlib.pyplot as plt
+import io, os
 import numpy as np
-from datetime import datetime, timedelta
+from ta.volatility import AverageTrueRange
 
 app = Flask(__name__)
+CORS(app)
 
 trades = []
 
-@app.route("/auto-sl-tp", methods=["POST"])
+@app.post("/auto-sl-tp")
 def auto_sl_tp():
-    data = request.get_json()
-    entry = data['entry']
-    atr_sl = data.get('atr_sl', 1.0)
-    atr_tp = data.get('atr_tp', 2.0)
-    stop = round(entry - (entry * atr_sl / 100), 2)
-    tp = round(entry + (entry * atr_tp / 100), 2)
-    rrr = round((tp - entry) / (entry - stop), 2)
-    return jsonify({"stop": stop, "tp": tp, "rrr": rrr})
+    data = request.json
+    symbol = data.get("symbol")
+    entry = float(data.get("entry"))
+    atr_sl = float(data.get("atr_sl", 0))
+    atr_tp = float(data.get("atr_tp", 0))
 
-@app.route("/analyze-trade", methods=["POST"])
+    if atr_sl == 0 or atr_tp == 0:
+        return jsonify({"error": "ATR must be greater than 0"}), 400
+
+    stop = entry - atr_sl
+    tp = entry + atr_tp
+
+    if entry == stop:
+        return jsonify({"error": "Stop cannot be equal to entry"}), 400
+
+    rrr = round((tp - entry) / (entry - stop), 2)
+    return jsonify({"sl": round(stop, 4), "tp": round(tp, 4), "rrr": rrr})
+
+@app.post("/analyze-trade")
 def analyze_trade():
-    data = request.get_json()
-    entry, stop, tp = data['entry'], data['stop'], data['tp']
+    data = request.json
+    entry = float(data.get("entry"))
+    stop = float(data.get("stop"))
+    tp = float(data.get("tp"))
+    if entry == stop:
+        return jsonify({"error": "Stop cannot be equal to entry"}), 400
+
     rrr = round((tp - entry) / (entry - stop), 2)
     return jsonify({"rrr": rrr})
 
-@app.route("/save-trade", methods=["POST"])
+@app.post("/save-trade")
 def save_trade():
-    trade = request.get_json()
-    trades.append(trade)
-    return jsonify({"status": "saved", "trade": trade})
+    data = request.json
+    trades.append(data)
+    return jsonify({"status": "saved"})
 
-@app.route("/get-trades", methods=["GET"])
+@app.get("/get-trades")
 def get_trades():
     return jsonify(trades)
 
-@app.route("/clear-trades", methods=["POST"])
+@app.post("/clear-trades")
 def clear_trades():
     trades.clear()
     return jsonify({"status": "cleared"})
 
-@app.route("/smart-grid", methods=["POST"])
+@app.post("/smart-grid")
 def smart_grid():
-    data = request.get_json()
-    entry = data['entry']
-    budget = data['budget']
-    atr = 1.5
-    grid_count = int(min(10, budget / 5))
-    grid_range = round(entry * atr / 100, 2)
-    grid_levels = [round(entry - (i * grid_range), 2) for i in range(grid_count)]
-    return jsonify({"grid_levels": grid_levels, "grid_count": grid_count})
+    data = request.json
+    entry = float(data.get("entry"))
+    budget = float(data.get("budget"))
+    symbol = data.get("symbol")
 
-@app.route("/exit-on-broken-rrr", methods=["POST"])
+    atr = 0.5
+    grid_size = max(1, round(budget / (atr * 5)))
+    price_range = round(atr * 4, 2)
+
+    grid = {
+        "symbol": symbol,
+        "entry": entry,
+        "grids": grid_size,
+        "price_range": price_range,
+        "per_grid": round(budget / grid_size, 2)
+    }
+    return jsonify(grid)
+
+@app.post("/exit-on-broken-rrr")
 def exit_on_broken_rrr():
-    data = request.get_json()
-    cp, entry, stop, tp = data['current_price'], data['entry'], data['stop'], data['tp']
-    rrr = (tp - entry) / (entry - stop)
-    current_rr = (cp - entry) / (entry - stop)
-    exit_signal = current_rr < rrr * 0.3
-    return jsonify({"exit": exit_signal, "current_rr": round(current_rr,2)})
+    data = request.json
+    current = float(data.get("current_price"))
+    entry = float(data.get("entry"))
+    stop = float(data.get("stop"))
+    tp = float(data.get("tp"))
 
-@app.route("/log-csv", methods=["POST"])
-def log_csv():
-    filename = "trades.csv"
-    with open(filename, mode='w', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=trades[0].keys())
-        writer.writeheader()
-        writer.writerows(trades)
-    return jsonify({"status": "logged", "file": filename})
+    if current < stop:
+        return jsonify({"exit": True, "reason": "Price fell below stop"})
+    elif current > tp:
+        return jsonify({"exit": False, "reason": "TP already reached"})
+    else:
+        distance_to_tp = tp - current
+        distance_to_sl = current - stop
+        if distance_to_sl == 0:
+            return jsonify({"exit": True, "reason": "Price near stop"})
+        current_rrr = round(distance_to_tp / distance_to_sl, 2)
+        if current_rrr < 1:
+            return jsonify({"exit": True, "rrr": current_rrr})
+        else:
+            return jsonify({"exit": False, "rrr": current_rrr})
 
-@app.route("/time-to-tp", methods=["POST"])
-def time_to_tp():
-    data = request.get_json()
-    entry, tp, atr = data['entry'], data['tp'], data['atr']
-    price_diff = abs(tp - entry)
-    if atr == 0:
-        return jsonify({"time_estimate": "Unknown"})
-    bars = price_diff / atr
-    time_minutes = int(bars * 5)
-    return jsonify({"estimated_minutes": time_minutes})
-
-@app.route("/daily-volatility", methods=["GET"])
-def daily_volatility():
-    symbol = request.args.get('symbol')
-    volatility = round(np.random.uniform(2, 5), 2)
-    return jsonify({"symbol": symbol, "daily_volatility": f"{volatility}%"})
-
-@app.route("/market-analysis", methods=["GET"])
+@app.get("/market-analysis")
 def market_analysis():
-    symbol = request.args.get('symbol')
-    timeframe = request.args.get('timeframe', '24h')
+    symbol = request.args.get("symbol")
+    timeframe = request.args.get("timeframe", "24h")
     change = round(np.random.uniform(-5, 5), 2)
-    volatility = round(np.random.uniform(1, 5), 2)
-    return jsonify({"symbol": symbol, "change": f"{change}%", "volatility": f"{volatility}%", "timeframe": timeframe})
+    volatility = round(np.random.uniform(1, 10), 2)
 
-@app.route("/graph-analysis", methods=["GET"])
+    return jsonify({
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "change_percent": change,
+        "volatility_percent": volatility
+    })
+
+@app.post("/log-csv")
+def log_to_csv():
+    df = pd.DataFrame(trades)
+    df.to_csv("trades.csv", index=False)
+    return jsonify({"status": "logged to CSV"})
+
+@app.post("/time-to-tp")
+def time_to_tp():
+    data = request.json
+    entry = float(data.get("entry"))
+    tp = float(data.get("tp"))
+    atr = float(data.get("atr"))
+
+    if atr == 0:
+        return jsonify({"error": "ATR cannot be zero"}), 400
+
+    distance = abs(tp - entry)
+    hours = round(distance / atr, 1)
+    return jsonify({"estimated_hours": hours})
+
+@app.get("/daily-volatility")
+def daily_vol():
+    symbol = request.args.get("symbol")
+    vol = round(np.random.uniform(2, 8), 2)
+    return jsonify({"symbol": symbol, "volatility_percent": vol})
+
+@app.get("/graph-analysis")
 def graph_analysis():
-    symbol = request.args.get("symbol", "BTCUSDT")
-    prices = np.random.normal(100, 2, 100)
-    plt.figure(figsize=(10,4))
-    plt.plot(prices, label=symbol)
-    plt.title(f"Graph Analysis - {symbol}")
-    plt.xlabel("Time")
-    plt.ylabel("Price")
-    plt.grid(True)
-    plt.legend()
+    symbol = request.args.get("symbol")
+    x = list(range(30))
+    prices = [np.random.uniform(1, 2) + i * 0.01 for i in x]
+    rsi = [np.random.uniform(30, 70) for _ in x]
+    macd = [np.sin(i/5.0)*10 for i in x]
+
+    fig, ax1 = plt.subplots()
+    ax1.plot(x, prices, label='Price')
+    ax1.set_title(f"Technical Graph for {symbol}")
+    ax1.set_ylabel("Price")
+    ax1.legend(loc='upper left')
+
+    ax2 = ax1.twinx()
+    ax2.plot(x, rsi, color='orange', label='RSI')
+    ax2.plot(x, macd, color='green', linestyle='--', label='MACD')
+    ax2.set_ylabel("Indicators")
+    ax2.legend(loc='upper right')
+
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
     return send_file(buf, mimetype='image/png')
 
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000)
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0")
+
 
 
 
