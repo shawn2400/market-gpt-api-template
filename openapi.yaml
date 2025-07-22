@@ -1,16 +1,18 @@
 openapi: 3.1.0
 info:
-  title: Market GPT API
+  title: Market GPT API בעברית
   version: 1.0.0
-  description: API for calculating SL/TP, saving trades, and analyzing trade setups.
+description: |
+  API אישי ל־GPT שמבצע חישובי SL/TP, שמירת טריידים, ניתוחים וגרידים חכמים.
+  כולל פקודות מוכנות (Presets) בעברית.
 servers:
   - url: https://market-gpt-api-template.onrender.com
-
 paths:
   /auto-sl-tp:
     post:
-      summary: Calculate automatic Stop Loss and Take Profit
       operationId: autoSlTp
+      summary: חשב SL/TP אוטומטי
+      description: מחשב סטופ לוס וטייק פרופיט לפי ATR ויחס סיכון/רווח.
       requestBody:
         required: true
         content:
@@ -31,23 +33,12 @@ paths:
                 - entry
       responses:
         '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  stop:
-                    type: number
-                  tp:
-                    type: number
-                  rrr:
-                    type: number
-
+          description: תוצאה עם SL, TP ו־RRR
   /analyze-trade:
     post:
-      summary: Analyze risk/reward of a trade
       operationId: analyzeTrade
+      summary: חשב RRR
+      description: מחשב יחס סיכון/רווח לפי כניסה, סטופ וטייק.
       requestBody:
         required: true
         content:
@@ -67,19 +58,12 @@ paths:
                 - tp
       responses:
         '200':
-          description: Success
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  rrr:
-                    type: number
-
+          description: מחזיר רק RRR
   /save-trade:
     post:
-      summary: Save trade data
       operationId: saveTrade
+      summary: שמור טרייד
+      description: שומר טרייד עם פרטים כמו כניסה, SL, TP ו־RRR.
       requestBody:
         required: true
         content:
@@ -97,47 +81,32 @@ paths:
                   type: number
                 rrr:
                   type: number
+                direction:
+                  type: string
               required:
                 - symbol
                 - entry
+                - stop
+                - tp
       responses:
         '200':
-          description: Trade saved
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-
+          description: סטטוס שמירה
   /get-trades:
     get:
-      summary: Get all saved trades
       operationId: getTrades
+      summary: הצג את כל הטריידים
+      description: מחזיר את כל הטריידים השמורים.
       responses:
         '200':
-          description: List of saved trades
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-
+          description: רשימת טריידים
   /clear-trades:
     post:
-      summary: Clear all saved trades
       operationId: clearTrades
+      summary: נקה את כל הטריידים
+      description: מוחק את כל הטריידים מהזיכרון.
       responses:
         '200':
-          description: Trades cleared
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
+          description: טריידים נמחקו
+
 
 
