@@ -185,6 +185,45 @@ paths:
         '200':
           description: נשמר לקובץ CSV בהצלחה
 
+  /time-to-tp:
+    post:
+      operationId: timeToTP
+      summary: חשב זמן הגעה ל־TP
+      description: מעריך תוך כמה זמן המטבע עשוי להגיע ל־TP לפי מהירות תנודתית ממוצעת.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entry:
+                  type: number
+                tp:
+                  type: number
+                atr:
+                  type: number
+              required: [entry, tp, atr]
+      responses:
+        '200':
+          description: זמן משוער להגעה ל־TP
+
+  /daily-volatility:
+    get:
+      operationId: dailyVolatility
+      summary: חשב תנודתיות יומית
+      description: מחזיר את התנודתיות היומית של המטבע באחוזים לפי ATR וחישוב סטיית תקן.
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: אחוז תנודתיות יומית
+
+
 
 
 
