@@ -1,42 +1,39 @@
-from flask import Flask, request, jsonify
-import csv
-import time
+from flask import Flask, request, jsonify, send_file
+import matplotlib.pyplot as plt
+import pandas as pd
+import os, io, csv
+import numpy as np
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
-trades = []
 
-@app.route("/")
-def home():
-    return "Market GPT API is running!"
+trades = []
 
 @app.route("/auto-sl-tp", methods=["POST"])
 def auto_sl_tp():
-    data = request.json
-    symbol = data["symbol"]
-    entry = data["entry"]
-    atr_sl = data.get("atr_sl", 1.5)
-    atr_tp = data.get("atr_tp", 3.5)
-
-    stop = entry - (atr_sl * 10)
-    tp = entry + (atr_tp * 10)
+    data = request.get_json()
+    entry = data['entry']
+    atr_sl = data.get('atr_sl', 1.0)
+    atr_tp = data.get('atr_tp', 2.0)
+    stop = round(entry - (entry * atr_sl / 100), 2)
+    tp = round(entry + (entry * atr_tp / 100), 2)
     rrr = round((tp - entry) / (entry - stop), 2)
-
-    return jsonify({"symbol": symbol, "entry": entry, "stop": stop, "tp": tp, "rrr": rrr})
+    return jsonify({"stop": stop, "tp": tp, "rrr": rrr})
 
 @app.route("/analyze-trade", methods=["POST"])
 def analyze_trade():
-    data = request.json
-    entry, stop, tp = data["entry"], data["stop"], data["tp"]
+    data = request.get_json()
+    entry, stop, tp = data['entry'], data['stop'], data['tp']
     rrr = round((tp - entry) / (entry - stop), 2)
     return jsonify({"rrr": rrr})
 
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
-    data = request.json
-    trades.append(data)
-    return jsonify({"status": "saved", "trade": data})
+    trade = request.get_json()
+    trades.append(trade)
+    return jsonify({"status": "saved", "trade": trade})
 
-@app.route("/get-trades")
+@app.route("/get-trades", methods=["GET"])
 def get_trades():
     return jsonify(trades)
 
@@ -47,53 +44,77 @@ def clear_trades():
 
 @app.route("/smart-grid", methods=["POST"])
 def smart_grid():
-    data = request.json
-    entry = data["entry"]
-    budget = data["budget"]
-    grid_count = 4
-    grid_size = round((entry * 0.01), 2)
-    price_range = [round(entry - i * grid_size, 2) for i in range(grid_count)]
-    return jsonify({"entry": entry, "grid_prices": price_range, "budget": budget})
+    data = request.get_json()
+    entry = data['entry']
+    budget = data['budget']
+    atr = 1.5
+    grid_count = int(min(10, budget / 5))
+    grid_range = round(entry * atr / 100, 2)
+    grid_levels = [round(entry - (i * grid_range), 2) for i in range(grid_count)]
+    return jsonify({"grid_levels": grid_levels, "grid_count": grid_count})
 
 @app.route("/exit-on-broken-rrr", methods=["POST"])
 def exit_on_broken_rrr():
-    data = request.json
-    cp, entry, stop, tp = data.values()
-    if cp < stop:
-        return jsonify({"exit": True, "reason": "stop hit"})
-    elif cp > tp:
-        return jsonify({"exit": True, "reason": "tp hit"})
-    else:
-        return jsonify({"exit": False, "reason": "RRR intact"})
-
-@app.route("/market-analysis")
-def market_analysis():
-    symbol = request.args.get("symbol")
-    timeframe = request.args.get("timeframe", "24h")
-    return jsonify({"symbol": symbol, "timeframe": timeframe, "trend": "up", "volatility": "medium"})
+    data = request.get_json()
+    cp, entry, stop, tp = data['current_price'], data['entry'], data['stop'], data['tp']
+    rrr = (tp - entry) / (entry - stop)
+    current_rr = (cp - entry) / (entry - stop)
+    exit_signal = current_rr < rrr * 0.3
+    return jsonify({"exit": exit_signal, "current_rr": round(current_rr,2)})
 
 @app.route("/log-csv", methods=["POST"])
 def log_csv():
-    with open("trades.csv", "w", newline="") as file:
+    filename = "trades.csv"
+    with open(filename, mode='w', newline='') as file:
         writer = csv.DictWriter(file, fieldnames=trades[0].keys())
         writer.writeheader()
         writer.writerows(trades)
-    return jsonify({"status": "CSV saved"})
+    return jsonify({"status": "logged", "file": filename})
 
 @app.route("/time-to-tp", methods=["POST"])
 def time_to_tp():
-    data = request.json
-    distance = abs(data["tp"] - data["entry"])
-    hours = round(distance / data["atr"], 2)
-    return jsonify({"hours": hours})
+    data = request.get_json()
+    entry, tp, atr = data['entry'], data['tp'], data['atr']
+    price_diff = abs(tp - entry)
+    if atr == 0:
+        return jsonify({"time_estimate": "Unknown"})
+    bars = price_diff / atr
+    time_minutes = int(bars * 5)
+    return jsonify({"estimated_minutes": time_minutes})
 
-@app.route("/daily-volatility")
+@app.route("/daily-volatility", methods=["GET"])
 def daily_volatility():
-    symbol = request.args.get("symbol")
-    return jsonify({"symbol": symbol, "volatility": "2.3%"})
+    symbol = request.args.get('symbol')
+    volatility = round(np.random.uniform(2, 5), 2)
+    return jsonify({"symbol": symbol, "daily_volatility": f"{volatility}%"})
+
+@app.route("/market-analysis", methods=["GET"])
+def market_analysis():
+    symbol = request.args.get('symbol')
+    timeframe = request.args.get('timeframe', '24h')
+    change = round(np.random.uniform(-5, 5), 2)
+    volatility = round(np.random.uniform(1, 5), 2)
+    return jsonify({"symbol": symbol, "change": f"{change}%", "volatility": f"{volatility}%", "timeframe": timeframe})
+
+@app.route("/graph-analysis", methods=["GET"])
+def graph_analysis():
+    symbol = request.args.get("symbol", "BTCUSDT")
+    prices = np.random.normal(100, 2, 100)
+    plt.figure(figsize=(10,4))
+    plt.plot(prices, label=symbol)
+    plt.title(f"Graph Analysis - {symbol}")
+    plt.xlabel("Time")
+    plt.ylabel("Price")
+    plt.grid(True)
+    plt.legend()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    return send_file(buf, mimetype='image/png')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)
+
 
 
 
