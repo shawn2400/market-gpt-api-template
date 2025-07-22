@@ -2,15 +2,15 @@ openapi: 3.1.0
 info:
   title: Market GPT API
   version: 1.0.0
-  description: API for calculating SL/TP and managing trades
+  description: API for calculating SL/TP, saving trades, and analyzing trade setups.
 servers:
   - url: https://market-gpt-api-template.onrender.com
 
 paths:
   /auto-sl-tp:
     post:
+      summary: Calculate automatic Stop Loss and Take Profit
       operationId: autoSlTp
-      summary: Calculate automatic SL and TP
       requestBody:
         required: true
         content:
@@ -46,8 +46,8 @@ paths:
 
   /analyze-trade:
     post:
+      summary: Analyze risk/reward of a trade
       operationId: analyzeTrade
-      summary: Analyze trade and return RRR
       requestBody:
         required: true
         content:
@@ -78,28 +78,15 @@ paths:
 
   /save-trade:
     post:
+      summary: Save trade data
       operationId: saveTrade
-      summary: Save a trade to memory
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              properties:
-                symbol:
-                  type: string
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-              required:
-                - symbol
-                - entry
-                - stop
-                - tp
+              additionalProperties: true
       responses:
         '200':
           description: Trade saved
@@ -113,11 +100,11 @@ paths:
 
   /get-trades:
     get:
+      summary: Get all saved trades
       operationId: getTrades
-      summary: Retrieve all saved trades
       responses:
         '200':
-          description: Success
+          description: List of saved trades
           content:
             application/json:
               schema:
@@ -127,11 +114,11 @@ paths:
 
   /clear-trades:
     post:
-      operationId: clearTrades
       summary: Clear all saved trades
+      operationId: clearTrades
       responses:
         '200':
-          description: Cleared
+          description: Trades cleared
           content:
             application/json:
               schema:
@@ -139,3 +126,4 @@ paths:
                 properties:
                   status:
                     type: string
+
