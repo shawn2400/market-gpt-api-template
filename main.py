@@ -29,7 +29,14 @@ def auto_sl_tp():
         return jsonify({"error": "Stop cannot be equal to entry"}), 400
 
     rrr = round((tp - entry) / (entry - stop), 2)
-    return jsonify({"sl": round(stop, 4), "tp": round(tp, 4), "rrr": rrr})
+    profit_percent = round(((tp - entry) / entry) * 100, 2)
+
+    return jsonify({
+        "sl": round(stop, 4),
+        "tp": round(tp, 4),
+        "rrr": rrr,
+        "profit_percent": profit_percent
+    })
 
 @app.post("/analyze-trade")
 def analyze_trade():
@@ -41,7 +48,9 @@ def analyze_trade():
         return jsonify({"error": "Stop cannot be equal to entry"}), 400
 
     rrr = round((tp - entry) / (entry - stop), 2)
-    return jsonify({"rrr": rrr})
+    profit_percent = round(((tp - entry) / entry) * 100, 2)
+
+    return jsonify({"rrr": rrr, "profit_percent": profit_percent})
 
 @app.post("/save-trade")
 def save_trade():
@@ -74,7 +83,8 @@ def smart_grid():
         "entry": entry,
         "grids": grid_size,
         "price_range": price_range,
-        "per_grid": round(budget / grid_size, 2)
+        "per_grid": round(budget / grid_size, 2),
+        "note": "⛔ Orders only. The bull comes to me – I don't chase the market."
     }
     return jsonify(grid)
 
@@ -168,6 +178,7 @@ def graph_analysis():
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0")
+
 
 
 
