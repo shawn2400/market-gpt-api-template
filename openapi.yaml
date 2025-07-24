@@ -19,6 +19,7 @@ paths:
       responses:
         "200":
           description: מחיר חי
+
   /analyze:
     post:
       summary: ניתוח טכני ויצירת גרף
@@ -46,6 +47,7 @@ paths:
       responses:
         "200":
           description: אות קנייה/מכירה + RSI, MACD וגרף
+
   /calculate-sl-tp:
     post:
       summary: חשב SL/TP ו־RRR
@@ -61,11 +63,12 @@ paths:
                   type: number
                 stop:
                   type: number
-                tp:
+                target:
                   type: number
       responses:
         "200":
           description: תוצאה של SL/TP ו־RRR
+
   /calculate-quantity:
     post:
       summary: חשב כמות לפי תקציב
@@ -86,6 +89,7 @@ paths:
       responses:
         "200":
           description: כמות לחישוב
+
   /save-trade:
     post:
       summary: שמור את הטרייד
@@ -103,7 +107,7 @@ paths:
                   type: number
                 stop:
                   type: number
-                tp:
+                target:
                   type: number
                 leverage:
                   type: number
@@ -114,6 +118,7 @@ paths:
       responses:
         "200":
           description: טרייד נשמר
+
   /get-trades:
     get:
       summary: הצג את כל הטריידים
@@ -121,6 +126,7 @@ paths:
       responses:
         "200":
           description: רשימת טריידים
+
   /clear-trades:
     post:
       summary: נקה את כל הטריידים
