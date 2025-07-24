@@ -53,6 +53,8 @@ def calculate_quantity():
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
     trade = request.get_json()
+    if "type" not in trade:
+        trade["type"] = "regular"  # ברירת מחדל אם לא צוין
     trades.append(trade)
     return jsonify({"message": "Trade saved"})
 
@@ -89,7 +91,6 @@ def analyze():
     stop_loss = round(df["close"].iloc[-1] - (1.5 * atr), 4)
     take_profit = round(df["close"].iloc[-1] + (2.5 * (df["close"].iloc[-1] - stop_loss)), 4)
 
-    # גרף
     plt.figure(figsize=(10, 4))
     plt.plot(df["close"], label="Close Price")
     plt.title("Price with RSI & MACD")
