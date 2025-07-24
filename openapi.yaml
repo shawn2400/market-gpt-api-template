@@ -128,25 +128,39 @@ paths:
                 - leverage
                 - direction
                 - confidence
+                - type
               properties:
                 symbol:
                   type: string
+                  description: סימבול המטבע לדוגמה BTCUSDT
                 entry:
                   type: number
+                  description: מחיר הכניסה לטרייד
                 stop:
                   type: number
+                  description: מחיר ה־Stop Loss
                 tp:
                   type: number
+                  description: מחיר ה־Take Profit
                 leverage:
                   type: number
+                  description: מינוף
                 direction:
                   type: string
                   enum: [LONG, SHORT]
+                  description: כיוון הטרייד – לונג או שורט
                 confidence:
                   type: number
+                  description: רמת הביטחון (0–100)
+                type:
+                  type: string
+                  enum: [REGULAR, GRID]
+                  description: סוג הטרייד – רגיל או גריד
       responses:
         '200':
-          description: טרייד נשמר
+          description: טרייד נשמר בהצלחה
+        '400':
+          description: קלט לא תקין
 
   /get-trades:
     get:
@@ -154,7 +168,7 @@ paths:
       operationId: get_trades
       responses:
         '200':
-          description: רשימת טריידים
+          description: רשימת כל הטריידים השמורים
 
   /clear-trades:
     post:
@@ -162,7 +176,8 @@ paths:
       operationId: clear_trades
       responses:
         '200':
-          description: נמחקו כל הטריידים
+          description: כל הטריידים נמחקו
+
 
 
 
