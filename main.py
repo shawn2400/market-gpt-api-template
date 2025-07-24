@@ -32,6 +32,9 @@ def calculate_sl_tp():
     profit = abs(target - entry)
     rrr = round(profit / loss, 2) if loss != 0 else None
 
+    if rrr < 2.5:
+        return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.5"}), 400
+
     return jsonify({"sl": stop, "tp": target, "rrr": rrr})
 
 @app.route("/calculate-quantity", methods=["POST"])
@@ -72,12 +75,21 @@ def analyze():
     prices = data["prices"]
     df = pd.DataFrame(prices)
 
-    if df.empty or not all(col in df.columns for col in ["open", "high", "low", "close"]):
+    required_cols = ["open", "high", "low", "close"]
+    if df.empty or not all(col in df.columns for col in required_cols):
         return jsonify({"error": "Invalid 'prices' data format"}), 400
 
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
+    df["atr"] = ta.volatility.AverageTrueRange(
+        high=df["high"], low=df["low"], close=df["close"]
+    ).average_true_range()
 
+    atr = round(df["atr"].iloc[-1], 4)
+    stop_loss = round(df["close"].iloc[-1] - (1.5 * atr), 4)
+    take_profit = round(df["close"].iloc[-1] + (2.5 * (df["close"].iloc[-1] - stop_loss)), 4)
+
+    # גרף
     plt.figure(figsize=(10, 4))
     plt.plot(df["close"], label="Close Price")
     plt.title("Price with RSI & MACD")
@@ -93,11 +105,15 @@ def analyze():
         "signal": "buy" if df["rsi"].iloc[-1] < 30 else "sell" if df["rsi"].iloc[-1] > 70 else "neutral",
         "rsi": round(df["rsi"].iloc[-1], 2),
         "macd": round(df["macd"].iloc[-1], 4),
+        "atr": atr,
+        "dynamic_sl": stop_loss,
+        "dynamic_tp": take_profit,
         "chart": f"data:image/png;base64,{image_base64}"
     })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
