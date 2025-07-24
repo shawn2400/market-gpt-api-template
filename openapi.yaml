@@ -47,6 +47,10 @@ paths:
       responses:
         '200':
           description: אות קנייה/מכירה + RSI, MACD וגרף
+        '400':
+          description: שגיאה במבנה הקלט
+        '500':
+          description: שגיאת שרת פנימית
 
   /calculate-sl-tp:
     post:
@@ -63,11 +67,13 @@ paths:
                   type: number
                 stop:
                   type: number
-                target:
+                target:     # ✅ מפתח נכון – במקום "tp"
                   type: number
       responses:
         '200':
           description: תוצאה של SL/TP ו־RRR
+        '400':
+          description: קלט חסר או לא תקין
 
   /calculate-quantity:
     post:
@@ -89,6 +95,8 @@ paths:
       responses:
         '200':
           description: כמות לחישוב
+        '400':
+          description: קלט חסר
 
   /save-trade:
     post:
@@ -107,7 +115,7 @@ paths:
                   type: number
                 stop:
                   type: number
-                tp:
+                tp:   # שמור tp – רק לשמירה
                   type: number
                 leverage:
                   type: number
@@ -134,6 +142,7 @@ paths:
       responses:
         '200':
           description: נמחקו כל הטריידים
+
 
 
 
