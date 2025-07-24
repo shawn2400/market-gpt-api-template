@@ -1,4 +1,3 @@
-# ✅ main.py – Flask API for Crypto Trade Analysis
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import numpy as np
@@ -8,6 +7,7 @@ import matplotlib.pyplot as plt
 import io
 import base64
 import requests
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -46,6 +46,7 @@ def generate_chart(df):
     image_base64 = base64.b64encode(buf.read()).decode('utf-8')
     return image_base64
 
+# ניתוח טכני
 @app.route("/analyze", methods=["POST"])
 def analyze():
     try:
@@ -53,7 +54,6 @@ def analyze():
         prices = pd.DataFrame(data['prices'])
         df = analyze_coin(prices)
         last = df.iloc[-1]
-        prev = df.iloc[-2]
         signal = "🔍 ניטרלי"
         if last['close'] > last['EMA50'] and last['MACD'] > last['MACD_signal'] and last['RSI'] < 70:
             signal = "📈 אות קנייה (BUY)"
@@ -70,6 +70,7 @@ def analyze():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+# ✅ חישוב SL/TP – מתוקן ומינימליסטי
 @app.route("/calculate-sl-tp", methods=["POST"])
 def calculate_sl_tp():
     try:
@@ -77,13 +78,18 @@ def calculate_sl_tp():
         entry = float(data['entry'])
         stop = float(data['stop'])
         target = float(data['target'])
-        risk = round(entry - stop, 5)
-        reward = round(target - entry, 5)
+        risk = round(abs(entry - stop), 5)
+        reward = round(abs(target - entry), 5)
         rrr = round(reward / risk, 2) if risk != 0 else None
-        return jsonify({"RRR": rrr, "Risk": risk, "Reward": reward})
+        return jsonify({
+            "rrr": rrr,
+            "risk": risk,
+            "reward": reward
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+# חישוב כמות לפי תקציב
 @app.route("/calculate-quantity", methods=["POST"])
 def calculate_quantity():
     try:
@@ -96,6 +102,7 @@ def calculate_quantity():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+# שמירת טרייד בזיכרון
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
     try:
@@ -105,15 +112,18 @@ def save_trade():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+# שליפת כל הטריידים
 @app.route("/get-trades", methods=["GET"])
 def get_trades():
     return jsonify(trades)
 
+# ניקוי רשימת הטריידים
 @app.route("/clear-trades", methods=["POST"])
 def clear_trades():
     trades.clear()
     return jsonify({"message": "All trades cleared."})
 
+# מחיר חי מבינאנס
 @app.route("/price", methods=["GET"])
 def get_price():
     symbol = request.args.get("symbol", "BTCUSDT")
@@ -129,13 +139,15 @@ def get_price():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+# בדיקה שה־API רץ
 @app.route("/")
 def home():
     return "✅ Market GPT API is running."
 
+# הפעלת השרת
 if __name__ == "__main__":
-    import os
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
