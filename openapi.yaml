@@ -17,7 +17,7 @@ paths:
           schema:
             type: string
       responses:
-        "200":
+        '200':
           description: מחיר חי
 
   /analyze:
@@ -45,7 +45,7 @@ paths:
                       close:
                         type: number
       responses:
-        "200":
+        '200':
           description: אות קנייה/מכירה + RSI, MACD וגרף
 
   /calculate-sl-tp:
@@ -66,7 +66,7 @@ paths:
                 target:
                   type: number
       responses:
-        "200":
+        '200':
           description: תוצאה של SL/TP ו־RRR
 
   /calculate-quantity:
@@ -87,7 +87,7 @@ paths:
                 leverage:
                   type: number
       responses:
-        "200":
+        '200':
           description: כמות לחישוב
 
   /save-trade:
@@ -107,7 +107,7 @@ paths:
                   type: number
                 stop:
                   type: number
-                target:
+                tp:
                   type: number
                 leverage:
                   type: number
@@ -116,7 +116,7 @@ paths:
                 confidence:
                   type: number
       responses:
-        "200":
+        '200':
           description: טרייד נשמר
 
   /get-trades:
@@ -124,7 +124,7 @@ paths:
       summary: הצג את כל הטריידים
       operationId: get_trades
       responses:
-        "200":
+        '200':
           description: רשימת טריידים
 
   /clear-trades:
@@ -132,8 +132,9 @@ paths:
       summary: נקה את כל הטריידים
       operationId: clear_trades
       responses:
-        "200":
+        '200':
           description: נמחקו כל הטריידים
+
 
 
 
