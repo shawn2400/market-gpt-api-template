@@ -7,6 +7,7 @@ import ta
 import matplotlib.pyplot as plt
 import io
 import base64
+import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -19,12 +20,10 @@ def analyze_coin(df):
     df['EMA50'] = ta.trend.ema_indicator(df['close'], window=50).fillna(0)
     df['EMA200'] = ta.trend.ema_indicator(df['close'], window=200).fillna(0)
     df['RSI'] = ta.momentum.RSIIndicator(df['close']).rsi().fillna(0)
-
     macd = ta.trend.MACD(df['close'])
     df['MACD'] = macd.macd().fillna(0)
     df['MACD_signal'] = macd.macd_signal().fillna(0)
     df['MACD_diff'] = macd.macd_diff().fillna(0)
-
     bb = ta.volatility.BollingerBands(df['close'])
     df['BB_high'] = bb.bollinger_hband().fillna(0)
     df['BB_low'] = bb.bollinger_lband().fillna(0)
@@ -55,13 +54,11 @@ def analyze():
         df = analyze_coin(prices)
         last = df.iloc[-1]
         prev = df.iloc[-2]
-
         signal = "🔍 ניטרלי"
         if last['close'] > last['EMA50'] and last['MACD'] > last['MACD_signal'] and last['RSI'] < 70:
             signal = "📈 אות קנייה (BUY)"
         elif last['close'] < last['EMA50'] and last['MACD'] < last['MACD_signal'] and last['RSI'] > 30:
             signal = "📉 אות מכירה (SELL)"
-
         chart = generate_chart(df)
         return jsonify({
             "signal": signal,
@@ -117,12 +114,28 @@ def clear_trades():
     trades.clear()
     return jsonify({"message": "All trades cleared."})
 
+@app.route("/price", methods=["GET"])
+def get_price():
+    symbol = request.args.get("symbol", "BTCUSDT")
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return jsonify({
+            "symbol": symbol.upper(),
+            "price": round(float(data['price']), 6)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
 @app.route("/")
 def home():
     return "✅ Market GPT API is running."
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
