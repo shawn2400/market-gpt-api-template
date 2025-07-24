@@ -12,9 +12,9 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-trades = []  # זיכרון זמני לטריידים
+trades = []  # רשימת טריידים בזיכרון
 
-# פונקציה לחישוב אינדיקטורים
+# פונקציה לניתוח טכני עם אינדיקטורים
 def analyze_coin(df):
     df['EMA20'] = ta.trend.ema_indicator(df['close'], window=20).fillna(0)
     df['EMA50'] = ta.trend.ema_indicator(df['close'], window=50).fillna(0)
@@ -29,7 +29,7 @@ def analyze_coin(df):
     df['BB_low'] = bb.bollinger_lband().fillna(0)
     return df
 
-# יצירת גרף כתמונה
+# יצירת גרף כתמונה base64
 def generate_chart(df):
     fig, ax = plt.subplots()
     df['close'].plot(ax=ax, label='Price')
@@ -46,7 +46,7 @@ def generate_chart(df):
     image_base64 = base64.b64encode(buf.read()).decode('utf-8')
     return image_base64
 
-# ניתוח טכני
+# ✅ ניתוח טכני
 @app.route("/analyze", methods=["POST"])
 def analyze():
     try:
@@ -56,9 +56,9 @@ def analyze():
         last = df.iloc[-1]
         signal = "🔍 ניטרלי"
         if last['close'] > last['EMA50'] and last['MACD'] > last['MACD_signal'] and last['RSI'] < 70:
-            signal = "📈 אות קנייה (BUY)"
+            signal = "📈 BUY"
         elif last['close'] < last['EMA50'] and last['MACD'] < last['MACD_signal'] and last['RSI'] > 30:
-            signal = "📉 אות מכירה (SELL)"
+            signal = "📉 SELL"
         chart = generate_chart(df)
         return jsonify({
             "signal": signal,
@@ -70,7 +70,23 @@ def analyze():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# ✅ חישוב SL/TP – מתוקן ומינימליסטי
+# ✅ שליפת מחיר חי
+@app.route("/price", methods=["GET"])
+def get_price():
+    symbol = request.args.get("symbol", "BTCUSDT")
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return jsonify({
+            "symbol": symbol.upper(),
+            "price": round(float(data['price']), 6)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# ✅ חישוב SL/TP
 @app.route("/calculate-sl-tp", methods=["POST"])
 def calculate_sl_tp():
     try:
@@ -89,7 +105,7 @@ def calculate_sl_tp():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# חישוב כמות לפי תקציב
+# ✅ חישוב כמות לפי תקציב
 @app.route("/calculate-quantity", methods=["POST"])
 def calculate_quantity():
     try:
@@ -102,7 +118,7 @@ def calculate_quantity():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# שמירת טרייד בזיכרון
+# ✅ שמירת טרייד
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
     try:
@@ -112,41 +128,26 @@ def save_trade():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# שליפת כל הטריידים
+# ✅ הצגת כל הטריידים
 @app.route("/get-trades", methods=["GET"])
 def get_trades():
     return jsonify(trades)
 
-# ניקוי רשימת הטריידים
+# ✅ ניקוי טריידים
 @app.route("/clear-trades", methods=["POST"])
 def clear_trades():
     trades.clear()
     return jsonify({"message": "All trades cleared."})
 
-# מחיר חי מבינאנס
-@app.route("/price", methods=["GET"])
-def get_price():
-    symbol = request.args.get("symbol", "BTCUSDT")
-    try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        return jsonify({
-            "symbol": symbol.upper(),
-            "price": round(float(data['price']), 6)
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-# בדיקה שה־API רץ
+# ✅ דף הבית
 @app.route("/")
 def home():
     return "✅ Market GPT API is running."
 
-# הפעלת השרת
+# ✅ הרצת השרת בפורט 10000
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
