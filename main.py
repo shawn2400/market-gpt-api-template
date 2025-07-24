@@ -93,9 +93,9 @@ def calculate_sl_tp():
         data = request.get_json()
         entry = float(data['entry'])
         stop = float(data['stop'])
-        target = float(data['target'])
+        tp = float(data['tp'])
         risk = round(abs(entry - stop), 5)
-        reward = round(abs(target - entry), 5)
+        reward = round(abs(tp - entry), 5)
         rrr = round(reward / risk, 2) if risk != 0 else None
         return jsonify({
             "rrr": rrr,
@@ -147,6 +147,7 @@ def home():
 # ✅ הרצת השרת בפורט 10000
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
