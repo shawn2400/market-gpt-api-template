@@ -9,7 +9,7 @@ paths:
   /price:
     get:
       summary: שלוף מחיר חי למטבע
-      operationId: getPrice
+      operationId: get_price
       parameters:
         - name: symbol
           in: query
@@ -19,10 +19,11 @@ paths:
       responses:
         '200':
           description: מחיר חי
+
   /analyze:
     post:
       summary: ניתוח טכני ויצירת גרף
-      operationId: analyzeCoin
+      operationId: analyze
       requestBody:
         required: true
         content:
@@ -46,10 +47,11 @@ paths:
       responses:
         '200':
           description: אות קנייה/מכירה + RSI, MACD וגרף
+
   /calculate-sl-tp:
     post:
       summary: חשב SL/TP ו־RRR
-      operationId: calculateSLTP
+      operationId: calculate_sl_tp
       requestBody:
         required: true
         content:
@@ -66,10 +68,11 @@ paths:
       responses:
         '200':
           description: תוצאה של SL/TP ו־RRR
+
   /calculate-quantity:
     post:
       summary: חשב כמות לפי תקציב
-      operationId: calculateQuantity
+      operationId: calculate_quantity
       requestBody:
         required: true
         content:
@@ -86,10 +89,11 @@ paths:
       responses:
         '200':
           description: כמות לחישוב
+
   /save-trade:
     post:
       summary: שמור את הטרייד
-      operationId: saveTrade
+      operationId: save_trade
       requestBody:
         required: true
         content:
@@ -114,20 +118,23 @@ paths:
       responses:
         '200':
           description: טרייד נשמר
+
   /get-trades:
     get:
       summary: הצג את כל הטריידים
-      operationId: getTrades
+      operationId: get_trades
       responses:
         '200':
           description: רשימת טריידים
+
   /clear-trades:
     post:
       summary: נקה את כל הטריידים
-      operationId: clearTrades
+      operationId: clear_trades
       responses:
         '200':
           description: נמחקו כל הטריידים
+
 
 
 
