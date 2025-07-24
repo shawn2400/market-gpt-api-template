@@ -93,7 +93,7 @@ def calculate_sl_tp():
         data = request.get_json()
         entry = float(data['entry'])
         stop = float(data['stop'])
-        tp = float(data['tp'])
+        tp = float(data['target'])
         risk = round(abs(entry - stop), 5)
         reward = round(abs(tp - entry), 5)
         rrr = round(reward / risk, 2) if risk != 0 else None
