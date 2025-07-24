@@ -5,6 +5,7 @@ info:
   version: 1.0.0
 servers:
   - url: https://market-gpt-api-template.onrender.com
+
 paths:
   /price:
     get:
@@ -30,11 +31,14 @@ paths:
           application/json:
             schema:
               type: object
+              required:
+                - prices
               properties:
                 prices:
                   type: array
                   items:
                     type: object
+                    required: [open, high, low, close]
                     properties:
                       open:
                         type: number
@@ -62,12 +66,16 @@ paths:
           application/json:
             schema:
               type: object
+              required:
+                - entry
+                - stop
+                - target
               properties:
                 entry:
                   type: number
                 stop:
                   type: number
-                target:     # ✅ מפתח נכון – במקום "tp"
+                target:
                   type: number
       responses:
         '200':
@@ -85,6 +93,10 @@ paths:
           application/json:
             schema:
               type: object
+              required:
+                - budget
+                - entry
+                - leverage
               properties:
                 budget:
                   type: number
@@ -108,6 +120,14 @@ paths:
           application/json:
             schema:
               type: object
+              required:
+                - symbol
+                - entry
+                - stop
+                - tp
+                - leverage
+                - direction
+                - confidence
               properties:
                 symbol:
                   type: string
@@ -115,12 +135,13 @@ paths:
                   type: number
                 stop:
                   type: number
-                tp:   # שמור tp – רק לשמירה
+                tp:
                   type: number
                 leverage:
                   type: number
                 direction:
                   type: string
+                  enum: [LONG, SHORT]
                 confidence:
                   type: number
       responses:
@@ -142,6 +163,7 @@ paths:
       responses:
         '200':
           description: נמחקו כל הטריידים
+
 
 
 
