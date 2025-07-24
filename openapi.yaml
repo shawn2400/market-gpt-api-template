@@ -1,18 +1,16 @@
 openapi: 3.1.0
 info:
-  title: Market GPT API בעברית
+  title: Crypto Trade Assistant API
+  description: API לניתוח טכני, חישוב SL/TP, שמירת טריידים ועוד
   version: 1.0.0
-description: |
-  API אישי ל־GPT שמבצע חישובי SL/TP, גרידים חכמים, ניתוחים בזמן אמת, יציאות לפי RRR, תמיכה ב־Limit ו־Trailing, שמירה ל־CSV וניתוח 24h/7d.
-  כולל פקודות מוכנות (Presets) בעברית.
 servers:
   - url: https://market-gpt-api-template.onrender.com
+
 paths:
-  /auto-sl-tp:
+  /analyze:
     post:
-      operationId: autoSlTp
-      summary: חשב SL/TP אוטומטי
-      description: מחשב סטופ לוס וטייק פרופיט לפי ATR ויחס סיכון/רווח.
+      summary: ניתוח טכני
+      operationId: analyzeSymbol
       requestBody:
         required: true
         content:
@@ -22,22 +20,24 @@ paths:
               properties:
                 symbol:
                   type: string
-                entry:
-                  type: number
-                atr_sl:
-                  type: number
-                atr_tp:
-                  type: number
-              required: [symbol, entry]
+                  example: ETHUSDT
       responses:
         '200':
-          description: תוצאה עם SL, TP ו־RRR
+          description: ניתוח טכני בסיסי
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signal:
+                    type: string
+                  details:
+                    type: string
 
-  /analyze-trade:
+  /calculate-sl-tp:
     post:
-      operationId: analyzeTrade
-      summary: חשב RRR
-      description: מחשב יחס סיכון/רווח לפי כניסה, סטופ וטייק.
+      summary: חישוב SL ו־TP
+      operationId: calculateSLTP
       requestBody:
         required: true
         content:
@@ -47,20 +47,32 @@ paths:
               properties:
                 entry:
                   type: number
+                  example: 3.5
                 stop:
                   type: number
-                tp:
+                  example: 3.3
+                target:
                   type: number
-              required: [entry, stop, tp]
+                  example: 3.8
       responses:
         '200':
-          description: מחזיר רק RRR
+          description: תוצאת חישוב RRR
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rrr:
+                    type: number
+                  profit_percent:
+                    type: number
+                  loss_percent:
+                    type: number
 
-  /save-trade:
+  /calculate-quantity:
     post:
-      operationId: saveTrade
-      summary: שמור טרייד
-      description: שומר טרייד כולל פרטי Limit, Trailing, SL/TP ו־RRR.
+      summary: חישוב כמות מטבעות
+      operationId: calculateQuantity
       requestBody:
         required: true
         content:
@@ -68,160 +80,83 @@ paths:
             schema:
               type: object
               properties:
-                symbol:
-                  type: string
                 entry:
                   type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-                rrr:
-                  type: number
-                direction:
-                  type: string
-                limit:
-                  type: boolean
-                trailing:
-                  type: boolean
-              required: [symbol, entry, stop, tp]
-      responses:
-        '200':
-          description: טרייד נשמר בהצלחה
-
-  /get-trades:
-    get:
-      operationId: getTrades
-      summary: הצג את כל הטריידים
-      description: מחזיר את כל הטריידים השמורים.
-      responses:
-        '200':
-          description: רשימת טריידים
-
-  /clear-trades:
-    post:
-      operationId: clearTrades
-      summary: נקה את כל הטריידים
-      description: מוחק את כל הטריידים מהזיכרון.
-      responses:
-        '200':
-          description: כל הטריידים נמחקו
-
-  /smart-grid:
-    post:
-      operationId: smartGrid
-      summary: חשב גריד חכם
-      description: מחשב טווחי גרידים אוטומטיים לפי תקציב, ביטחון, ATR ו־RRR.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                entry:
+                leverage:
                   type: number
                 budget:
                   type: number
-              required: [symbol, entry, budget]
       responses:
         '200':
-          description: פרטי גריד חכם
+          description: תוצאת חישוב כמות
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quantity:
+                    type: number
+                  formula:
+                    type: string
 
-  /exit-on-broken-rrr:
+  /save-trade:
     post:
-      operationId: exitOnBrokenRRR
-      summary: צא רק אם RRR נשבר
-      description: בודק אם יחס הסיכון/רווח נשבר וממליץ אם לצאת מהטרייד.
+      summary: שמירת טרייד בזיכרון
+      operationId: saveTrade
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                current_price:
-                  type: number
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-              required: [current_price, entry, stop, tp]
+              $ref: '#/components/schemas/Trade'
       responses:
         '200':
-          description: המלצה חכמה ליציאה או המשך
+          description: טרייד נשמר
 
-  /market-analysis:
+  /get-trades:
     get:
-      operationId: marketAnalysis
-      summary: נתח מטבע חכם (24h/7d)
-      description: מחזיר ניתוח טכני כולל שינויי מחיר, תנודתיות וגרף.
-      parameters:
-        - name: symbol
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: timeframe
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [24h, 7d]
+      summary: הצגת כל הטריידים
+      operationId: getTrades
       responses:
         '200':
-          description: ניתוח מלא של המטבע
+          description: רשימת טריידים
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trade'
 
-  /log-csv:
+  /clear-trades:
     post:
-      operationId: logToCSV
-      summary: שמור לקובץ CSV
-      description: שומר את הטריידים לקובץ CSV לצורך ניתוח חודשי או דוחות.
+      summary: ניקוי כל הטריידים
+      operationId: clearTrades
       responses:
         '200':
-          description: נשמר לקובץ CSV בהצלחה
+          description: הטריידים נוקו
 
-  /time-to-tp:
-    post:
-      operationId: timeToTP
-      summary: חשב זמן הגעה ל־TP
-      description: מעריך תוך כמה זמן המטבע עשוי להגיע ל־TP לפי מהירות תנודתית ממוצעת.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                entry:
-                  type: number
-                tp:
-                  type: number
-                atr:
-                  type: number
-              required: [entry, tp, atr]
-      responses:
-        '200':
-          description: זמן משוער להגעה ל־TP
+components:
+  schemas:
+    Trade:
+      type: object
+      properties:
+        symbol:
+          type: string
+        entry:
+          type: number
+        stop:
+          type: number
+        target:
+          type: number
+        quantity:
+          type: number
+        leverage:
+          type: number
+        budget:
+          type: number
+        confidence:
+          type: number
 
-  /daily-volatility:
-    get:
-      operationId: dailyVolatility
-      summary: חשב תנודתיות יומית
-      description: מחזיר את התנודתיות היומית של המטבע באחוזים לפי ATR וחישוב סטיית תקן.
-      parameters:
-        - name: symbol
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: אחוז תנודתיות יומית
 
 
 
