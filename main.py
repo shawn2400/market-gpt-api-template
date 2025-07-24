@@ -16,7 +16,7 @@ trades = []
 @app.route("/price", methods=["GET"])
 def get_price():
     symbol = request.args.get("symbol")
-    return jsonify({"symbol": symbol, "price": 123.45})  # Dummy response
+    return jsonify({"symbol": symbol, "price": 123.45})  # Example static price
 
 @app.route("/calculate-sl-tp", methods=["POST"])
 def calculate_sl_tp():
@@ -25,13 +25,15 @@ def calculate_sl_tp():
     stop = data.get("stop")
     target = data.get("target")
 
-    if not all([entry, stop, target]):
+    if entry is None or stop is None or target is None:
         return jsonify({"error": "Missing one of the required fields: entry, stop, target"}), 400
 
     loss = abs(entry - stop)
     profit = abs(target - entry)
-    rrr = round(profit / loss, 2) if loss != 0 else None
+    if loss == 0:
+        return jsonify({"error": "Stop loss must be different from entry"}), 400
 
+    rrr = round(profit / loss, 2)
     if rrr < 2.5:
         return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.5"}), 400
 
@@ -53,10 +55,19 @@ def calculate_quantity():
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
     trade = request.get_json()
-    if "type" not in trade:
-        trade["type"] = "regular"  # ברירת מחדל אם לא צוין
+
+    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence"]
+    if not all(field in trade for field in required_fields):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    # Normalize 'type' to REGULAR or GRID
+    trade_type = trade.get("type", "REGULAR").upper()
+    if trade_type not in ["REGULAR", "GRID"]:
+        return jsonify({"error": "Invalid trade type. Must be 'REGULAR' or 'GRID'"}), 400
+
+    trade["type"] = trade_type
     trades.append(trade)
-    return jsonify({"message": "Trade saved"})
+    return jsonify({"message": "Trade saved", "trade": trade})
 
 @app.route("/get-trades", methods=["GET"])
 def get_trades():
@@ -88,8 +99,9 @@ def analyze():
     ).average_true_range()
 
     atr = round(df["atr"].iloc[-1], 4)
-    stop_loss = round(df["close"].iloc[-1] - (1.5 * atr), 4)
-    take_profit = round(df["close"].iloc[-1] + (2.5 * (df["close"].iloc[-1] - stop_loss)), 4)
+    close_price = df["close"].iloc[-1]
+    stop_loss = round(close_price - (1.5 * atr), 4)
+    take_profit = round(close_price + (2.5 * (close_price - stop_loss)), 4)
 
     plt.figure(figsize=(10, 4))
     plt.plot(df["close"], label="Close Price")
@@ -102,8 +114,14 @@ def analyze():
     image_base64 = base64.b64encode(buf.read()).decode('utf-8')
     plt.close()
 
+    signal = "neutral"
+    if df["rsi"].iloc[-1] < 30:
+        signal = "buy"
+    elif df["rsi"].iloc[-1] > 70:
+        signal = "sell"
+
     return jsonify({
-        "signal": "buy" if df["rsi"].iloc[-1] < 30 else "sell" if df["rsi"].iloc[-1] > 70 else "neutral",
+        "signal": signal,
         "rsi": round(df["rsi"].iloc[-1], 2),
         "macd": round(df["macd"].iloc[-1], 4),
         "atr": atr,
@@ -114,6 +132,7 @@ def analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
