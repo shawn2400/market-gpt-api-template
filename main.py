@@ -8,145 +8,181 @@ import io
 import base64
 import requests
 import os
+import time
+import json
 
 app = Flask(__name__)
 CORS(app)
 
-trades = []  # רשימת טריידים בזיכרון
+trades = []
 
-# פונקציה לניתוח טכני עם אינדיקטורים
+LOG_PATH = "logs.txt"
+TRADES_PATH = "trades.json"
+
+def log(msg):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    line = f"[{ts}] {msg}\n"
+    print(line.strip())
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except:
+        pass
+
+def save_trades_file():
+    try:
+        with open(TRADES_PATH, "w", encoding="utf-8") as f:
+            json.dump(trades, f, ensure_ascii=False, indent=2)
+        log("🗃️ טריידים נשמרו לקובץ")
+    except Exception as e:
+        log(f"❌ שגיאה בשמירת טריידים: {e}")
+
 def analyze_coin(df):
+    df = df.copy()
     df['EMA20'] = ta.trend.ema_indicator(df['close'], window=20).fillna(0)
     df['EMA50'] = ta.trend.ema_indicator(df['close'], window=50).fillna(0)
-    df['EMA200'] = ta.trend.ema_indicator(df['close'], window=200).fillna(0)
     df['RSI'] = ta.momentum.RSIIndicator(df['close']).rsi().fillna(0)
+    srsi = ta.momentum.StochRSIIndicator(df['close'])
+    df['StochRSI_k'] = srsi.stochrsi_k().fillna(0)
+    df['StochRSI_d'] = srsi.stochrsi_d().fillna(0)
     macd = ta.trend.MACD(df['close'])
     df['MACD'] = macd.macd().fillna(0)
     df['MACD_signal'] = macd.macd_signal().fillna(0)
     df['MACD_diff'] = macd.macd_diff().fillna(0)
-    bb = ta.volatility.BollingerBands(df['close'])
-    df['BB_high'] = bb.bollinger_hband().fillna(0)
-    df['BB_low'] = bb.bollinger_lband().fillna(0)
+    adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'])
+    df['ADX'] = adx.adx().fillna(0)
+    df['DI_plus'] = adx.adx_pos().fillna(0)
+    df['DI_minus'] = adx.adx_neg().fillna(0)
+    df['OBV'] = ta.volume.OnBalanceVolumeIndicator(df['close'], df['volume']).on_balance_volume().fillna(0)
+    atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14)
+    df['ATR'] = atr.average_true_range().fillna(0)
+
+    # Price Action: simple engulfing candle detection
+    df['engulf'] = False
+    if len(df) >= 2:
+        prev = df.iloc[-2]
+        cur = df.iloc[-1]
+        if cur['open'] < prev['close'] and cur['close'] > prev['open']:
+            df.at[df.index[-1], 'engulf'] = True
+
     return df
 
-# יצירת גרף כתמונה base64
 def generate_chart(df):
     fig, ax = plt.subplots()
     df['close'].plot(ax=ax, label='Price')
     df['EMA20'].plot(ax=ax, label='EMA20')
-    df['EMA50'].plot(ax=ax, label='EMA50')
-    ax.grid(True)
-    plt.legend()
-    plt.title("Technical Chart")
+    ax.legend(); ax.grid(True)
     plt.tight_layout()
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     plt.close(fig)
     buf.seek(0)
-    image_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    return image_base64
+    return base64.b64encode(buf.read()).decode('utf-8')
 
-# ✅ ניתוח טכני
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    try:
-        data = request.get_json()
-        prices = pd.DataFrame(data['prices'])
-        df = analyze_coin(prices)
-        last = df.iloc[-1]
-        signal = "🔍 ניטרלי"
-        if last['close'] > last['EMA50'] and last['MACD'] > last['MACD_signal'] and last['RSI'] < 70:
-            signal = "📈 BUY"
-        elif last['close'] < last['EMA50'] and last['MACD'] < last['MACD_signal'] and last['RSI'] > 30:
-            signal = "📉 SELL"
-        chart = generate_chart(df)
-        return jsonify({
-            "signal": signal,
-            "rsi": round(last['RSI'], 2),
-            "macd": round(last['MACD'], 5),
-            "ema": round(last['EMA50'], 2),
-            "image": chart
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    data = request.get_json()
+    log(f"/analyze – קלט התקבל: {data}")
+    prices = pd.DataFrame(data['prices'])
+    df = analyze_coin(prices)
+    last = df.iloc[-1]
+    signal = "🔍 ניטרלי"
+    if last['engulf']:
+        signal = "📣 ENGULFING"
+    elif last['close'] > last['EMA50'] and last['MACD'] > last['MACD_signal'] and last['RSI'] < 70 and last['ADX'] > 20:
+        signal = "📈 BUY"
+    elif last['close'] < last['EMA50'] and last['MACD'] < last['MACD_signal'] and last['RSI'] > 30 and last['ADX'] > 20:
+        signal = "📉 SELL"
 
-# ✅ שליפת מחיר חי
+    chart = generate_chart(df)
+    resp = {
+        "signal": signal,
+        "rsi": round(last['RSI'],2),
+        "stochrsi_k": round(last['StochRSI_k'],2),
+        "stochrsi_d": round(last['StochRSI_d'],2),
+        "macd": round(last['MACD'],5),
+        "macd_signal": round(last['MACD_signal'],5),
+        "adx": round(last['ADX'],2),
+        "di_plus": round(last['DI_plus'],2),
+        "di_minus": round(last['DI_minus'],2),
+        "obv": round(last['OBV'],2),
+        "atr": round(last['ATR'],2),
+        "engulf": last['engulf'],
+        "image": chart
+    }
+    log(f"/analyze – תוצאה: {signal}")
+    return jsonify(resp)
+
 @app.route("/price", methods=["GET"])
 def get_price():
-    symbol = request.args.get("symbol", "BTCUSDT")
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    log(f"/price – מסמל: {symbol}")
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        return jsonify({
-            "symbol": symbol.upper(),
-            "price": round(float(data['price']), 6)
-        })
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}")
+        r.raise_for_status()
+        price = float(r.json()['price'])
+        return jsonify({"symbol": symbol, "price": round(price,6)})
     except Exception as e:
+        log(f"/price – שגיאה: {e}")
         return jsonify({"error": str(e)}), 400
 
-# ✅ חישוב SL/TP
 @app.route("/calculate-sl-tp", methods=["POST"])
 def calculate_sl_tp():
-    try:
-        data = request.get_json()
-        entry = float(data['entry'])
-        stop = float(data['stop'])
+    data = request.get_json()
+    log(f"/calculate-sl-tp – קלט: {data}")
+    entry = float(data['entry'])
+    # dynamic via ATR if provided
+    atr = float(data.get("atr",0))
+    if atr > 0:
+        sl = entry - 1.5*atr
+        tp = entry + 3*atr
+    else:
+        sl = float(data['stop'])
         tp = float(data['target'])
-        risk = round(abs(entry - stop), 5)
-        reward = round(abs(tp - entry), 5)
-        rrr = round(reward / risk, 2) if risk != 0 else None
-        return jsonify({
-            "rrr": rrr,
-            "risk": risk,
-            "reward": reward
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    risk = abs(entry - sl)
+    reward = abs(tp - entry)
+    rrr = round(reward/risk,2) if risk>0 else None
+    resp={"rrr": rrr, "risk": round(risk,5), "reward": round(reward,5), "sl": round(sl,5), "tp": round(tp,5)}
+    log(f"/calculate-sl-tp – תוצאה: {resp}")
+    return jsonify(resp)
 
-# ✅ חישוב כמות לפי תקציב
 @app.route("/calculate-quantity", methods=["POST"])
 def calculate_quantity():
-    try:
-        data = request.get_json()
-        budget = float(data['budget'])
-        leverage = float(data['leverage'])
-        entry = float(data['entry'])
-        quantity = round((budget * leverage) / entry, 4)
-        return jsonify({"quantity": quantity})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    data = request.get_json()
+    log(f"/calculate-quantity – קלט: {data}")
+    budget = float(data['budget']); leverage=float(data['leverage']); entry=float(data['entry'])
+    quantity = round((budget*leverage)/entry,4)
+    log(f"/calculate-quantity – תוצאה: {quantity}")
+    return jsonify({"quantity":quantity})
 
-# ✅ שמירת טרייד
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
-    try:
-        trade = request.get_json()
-        trades.append(trade)
-        return jsonify({"message": "Trade saved successfully!"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    data = request.get_json()
+    log(f"/save-trade – טרייד חדש: {data}")
+    trades.append(data)
+    save_trades_file()
+    return jsonify({"message":"Trade saved"})
 
-# ✅ הצגת כל הטריידים
 @app.route("/get-trades", methods=["GET"])
 def get_trades():
+    log(f"/get-trades – סה\"כ טריידים: {len(trades)}")
     return jsonify(trades)
 
-# ✅ ניקוי טריידים
 @app.route("/clear-trades", methods=["POST"])
 def clear_trades():
     trades.clear()
-    return jsonify({"message": "All trades cleared."})
+    save_trades_file()
+    log("clear-trades – נמחקו כל הטריידים")
+    return jsonify({"message":"All cleared"})
 
-# ✅ דף הבית
 @app.route("/")
 def home():
-    return "✅ Market GPT API is running."
+    return "✅ Market GPT API running"
 
-# ✅ הרצת השרת בפורט 10000
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+if __name__=="__main__":
+    log("🚀 Server started")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+
 
 
 
