@@ -1,14 +1,54 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים וחישובים לפי כללים קשיחים
+  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים, גרפים וחישובים בזמן אמת
   version: 1.0.0
 servers:
   - url: https://market-gpt-api-template.onrender.com
 paths:
-  /sl_tp:
+  /price:
+    get:
+      summary: שלוף מחיר חי למטבע
+      operationId: getPrice
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: מחיר חי
+  /analyze:
     post:
-      summary: חשב SL/TP
+      summary: ניתוח טכני ויצירת גרף
+      operationId: analyzeCoin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prices:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      open:
+                        type: number
+                      high:
+                        type: number
+                      low:
+                        type: number
+                      close:
+                        type: number
+      responses:
+        '200':
+          description: אות קנייה/מכירה + RSI, MACD וגרף
+  /calculate-sl-tp:
+    post:
+      summary: חשב SL/TP ו־RRR
       operationId: calculateSLTP
       requestBody:
         required: true
@@ -21,12 +61,12 @@ paths:
                   type: number
                 stop:
                   type: number
-                tp:
+                target:
                   type: number
       responses:
         '200':
           description: תוצאה של SL/TP ו־RRR
-  /quantity:
+  /calculate-quantity:
     post:
       summary: חשב כמות לפי תקציב
       operationId: calculateQuantity
@@ -46,7 +86,7 @@ paths:
       responses:
         '200':
           description: כמות לחישוב
-  /save:
+  /save-trade:
     post:
       summary: שמור את הטרייד
       operationId: saveTrade
@@ -74,20 +114,21 @@ paths:
       responses:
         '200':
           description: טרייד נשמר
-  /trades:
+  /get-trades:
     get:
       summary: הצג את כל הטריידים
       operationId: getTrades
       responses:
         '200':
           description: רשימת טריידים
-  /clear:
+  /clear-trades:
     post:
       summary: נקה את כל הטריידים
       operationId: clearTrades
       responses:
         '200':
           description: נמחקו כל הטריידים
+
 
 
 
