@@ -1,42 +1,14 @@
 openapi: 3.1.0
 info:
-  title: Crypto Trade Assistant API
-  description: API לניתוח טכני, חישוב SL/TP, שמירת טריידים ועוד
+  title: AlgoGPT API
+  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים וחישובים לפי כללים קשיחים
   version: 1.0.0
 servers:
   - url: https://market-gpt-api-template.onrender.com
-
 paths:
-  /analyze:
+  /sl_tp:
     post:
-      summary: ניתוח טכני
-      operationId: analyzeSymbol
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                  example: ETHUSDT
-      responses:
-        '200':
-          description: ניתוח טכני בסיסי
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  signal:
-                    type: string
-                  details:
-                    type: string
-
-  /calculate-sl-tp:
-    post:
-      summary: חישוב SL ו־TP
+      summary: חשב SL/TP
       operationId: calculateSLTP
       requestBody:
         required: true
@@ -47,31 +19,16 @@ paths:
               properties:
                 entry:
                   type: number
-                  example: 3.5
                 stop:
                   type: number
-                  example: 3.3
-                target:
+                tp:
                   type: number
-                  example: 3.8
       responses:
         '200':
-          description: תוצאת חישוב RRR
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  rrr:
-                    type: number
-                  profit_percent:
-                    type: number
-                  loss_percent:
-                    type: number
-
-  /calculate-quantity:
+          description: תוצאה של SL/TP ו־RRR
+  /quantity:
     post:
-      summary: חישוב כמות מטבעות
+      summary: חשב כמות לפי תקציב
       operationId: calculateQuantity
       requestBody:
         required: true
@@ -80,82 +37,57 @@ paths:
             schema:
               type: object
               properties:
+                budget:
+                  type: number
                 entry:
                   type: number
                 leverage:
                   type: number
-                budget:
-                  type: number
       responses:
         '200':
-          description: תוצאת חישוב כמות
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  quantity:
-                    type: number
-                  formula:
-                    type: string
-
-  /save-trade:
+          description: כמות לחישוב
+  /save:
     post:
-      summary: שמירת טרייד בזיכרון
+      summary: שמור את הטרייד
       operationId: saveTrade
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Trade'
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: number
+                direction:
+                  type: string
+                confidence:
+                  type: number
       responses:
         '200':
           description: טרייד נשמר
-
-  /get-trades:
+  /trades:
     get:
-      summary: הצגת כל הטריידים
+      summary: הצג את כל הטריידים
       operationId: getTrades
       responses:
         '200':
           description: רשימת טריידים
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Trade'
-
-  /clear-trades:
+  /clear:
     post:
-      summary: ניקוי כל הטריידים
+      summary: נקה את כל הטריידים
       operationId: clearTrades
       responses:
         '200':
-          description: הטריידים נוקו
-
-components:
-  schemas:
-    Trade:
-      type: object
-      properties:
-        symbol:
-          type: string
-        entry:
-          type: number
-        stop:
-          type: number
-        target:
-          type: number
-        quantity:
-          type: number
-        leverage:
-          type: number
-        budget:
-          type: number
-        confidence:
-          type: number
+          description: נמחקו כל הטריידים
 
 
 
