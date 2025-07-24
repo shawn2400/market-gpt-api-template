@@ -11,12 +11,17 @@ import base64
 app = Flask(__name__)
 CORS(app)
 
+# רשימת טריידים
 trades = []
+
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "AlgoGPT API is live ✅"})
 
 @app.route("/price", methods=["GET"])
 def get_price():
     symbol = request.args.get("symbol")
-    return jsonify({"symbol": symbol, "price": 123.45})  # Example static price
+    return jsonify({"symbol": symbol, "price": 123.45})  # דוגמת מחיר סטטי
 
 @app.route("/calculate-sl-tp", methods=["POST"])
 def calculate_sl_tp():
@@ -56,11 +61,12 @@ def calculate_quantity():
 def save_trade():
     trade = request.get_json()
 
-    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence"]
+    # שדות חובה
+    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type"]
     if not all(field in trade for field in required_fields):
         return jsonify({"error": "Missing required fields"}), 400
 
-    # Normalize 'type' to REGULAR or GRID
+    # בדיקת סוג טרייד (רגיל או גריד)
     trade_type = trade.get("type", "REGULAR").upper()
     if trade_type not in ["REGULAR", "GRID"]:
         return jsonify({"error": "Invalid trade type. Must be 'REGULAR' or 'GRID'"}), 400
@@ -132,6 +138,7 @@ def analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
