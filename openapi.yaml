@@ -5,7 +5,6 @@ info:
   version: 1.0.0
 servers:
   - url: https://market-gpt-api-template.onrender.com
-
 paths:
   /price:
     get:
@@ -18,9 +17,8 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: מחיר חי
-
   /analyze:
     post:
       summary: ניתוח טכני ויצירת גרף
@@ -46,9 +44,8 @@ paths:
                       close:
                         type: number
       responses:
-        '200':
+        "200":
           description: אות קנייה/מכירה + RSI, MACD וגרף
-
   /calculate-sl-tp:
     post:
       summary: חשב SL/TP ו־RRR
@@ -64,12 +61,11 @@ paths:
                   type: number
                 stop:
                   type: number
-                tp:          # ← תואם לקוד Flask שלך
+                tp:
                   type: number
       responses:
-        '200':
+        "200":
           description: תוצאה של SL/TP ו־RRR
-
   /calculate-quantity:
     post:
       summary: חשב כמות לפי תקציב
@@ -88,9 +84,8 @@ paths:
                 leverage:
                   type: number
       responses:
-        '200':
+        "200":
           description: כמות לחישוב
-
   /save-trade:
     post:
       summary: שמור את הטרייד
@@ -117,23 +112,21 @@ paths:
                 confidence:
                   type: number
       responses:
-        '200':
+        "200":
           description: טרייד נשמר
-
   /get-trades:
     get:
       summary: הצג את כל הטריידים
       operationId: get_trades
       responses:
-        '200':
+        "200":
           description: רשימת טריידים
-
   /clear-trades:
     post:
       summary: נקה את כל הטריידים
       operationId: clear_trades
       responses:
-        '200':
+        "200":
           description: נמחקו כל הטריידים
 
 
