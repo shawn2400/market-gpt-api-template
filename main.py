@@ -28,10 +28,10 @@ def calculate_sl_tp():
     data = request.get_json()
     entry = data.get("entry")
     stop = data.get("stop")
-    target = data.get("target")
+    target = data.get("target") or data.get("tp")
 
     if entry is None or stop is None or target is None:
-        return jsonify({"error": "Missing one of the required fields: entry, stop, target"}), 400
+        return jsonify({"error": "Missing one of the required fields: entry, stop, target/tp"}), 400
 
     loss = abs(entry - stop)
     profit = abs(target - entry)
@@ -39,8 +39,8 @@ def calculate_sl_tp():
         return jsonify({"error": "Stop loss must be different from entry"}), 400
 
     rrr = round(profit / loss, 2)
-    if rrr < 2.5:
-        return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.5"}), 400
+    if rrr < 2.0:
+        return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.0"}), 400
 
     trailing_tp = round(profit * 0.2, 4)  # Trailing TP = 20% מהרווח הפוטנציאלי
 
@@ -63,17 +63,14 @@ def calculate_quantity():
 def save_trade():
     trade = request.get_json()
 
-    # שדות חובה
     required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
     if not all(field in trade for field in required_fields):
         return jsonify({"error": "Missing required fields"}), 400
 
-    # בדיקת סוג טרייד (רגיל או גריד)
     trade_type = trade.get("type", "REGULAR").upper()
     if trade_type not in ["REGULAR", "GRID"]:
         return jsonify({"error": "Invalid trade type. Must be 'REGULAR' or 'GRID'"}), 400
 
-    # בדיקת סוג פקודה
     order_type = trade.get("order_type", "LIMIT").upper()
     if order_type not in ["LIMIT", "STOP_LIMIT"]:
         return jsonify({"error": "Invalid order type. Must be 'LIMIT' or 'STOP_LIMIT'"}), 400
@@ -81,8 +78,17 @@ def save_trade():
     trade["type"] = trade_type
     trade["order_type"] = order_type
 
-    # חישוב Trailing SL לפי ATR
-    trade["trailing_sl"] = round(abs(trade["entry"] - trade["stop"]) * 0.2, 4)
+    sl_size = abs(trade["entry"] - trade["stop"])
+    trade["trailing_sl"] = round(sl_size * 0.2, 4)
+
+    if trade["confidence"] < 86:
+        return jsonify({"error": "Confidence must be ≥86% to save trade"}), 400
+
+    if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
+        return jsonify({"error": "Confidence <88% allowed only with quality score ≥4"}), 400
+
+    if trade["confidence"] < 90 and trade["rrr"] < 2.5:
+        return jsonify({"error": "RRR too low for confidence <90%"}), 400
 
     trades.append(trade)
     return jsonify({"message": "Trade saved", "trade": trade})
@@ -121,7 +127,7 @@ def analyze():
     stop_loss = round(close_price - (1.5 * atr), 4)
     take_profit = round(close_price + (2.5 * (close_price - stop_loss)), 4)
 
-    df_1h = df.tail(60)  # טיימפריים נוסף לשעה
+    df_1h = df.tail(60)
     rsi_1h = round(ta.momentum.RSIIndicator(close=df_1h["close"]).rsi().iloc[-1], 2)
 
     plt.figure(figsize=(10, 4))
@@ -154,6 +160,7 @@ def analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
