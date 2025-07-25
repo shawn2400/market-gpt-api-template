@@ -67,6 +67,28 @@
 8. תצפיות נריות תומכות:
 
    * Hammer, Engulfing, Doji + RSI קיצון ו־OBV חיובי
+9. Auto-tuning לפי תנודתיות (Volatility):
+
+   * SL/TP, מינוף ו־RR מותאמים דינמית לפי ATR או סטיית תקן
+10. שילוב API חדשות חיצוני (CoinDesk / Binance News):
+
+* פילטר חכם לפי חדשות חשובות או אירועי Macro
+
+11. Auto Risk Allocation לפי היסטוריית הצלחות:
+
+* גודל הפוזיציה משתנה לפי תוצאה ממוצעת של 5 טריידים אחרונים
+
+12. Machine Learning לחיזוי מגמה:
+
+* שימוש ב־Candle Patterns, MACD, RSI, Volume לזיהוי מגמה עתידית
+
+13. Pair Filtering (קורלציות בין מטבעות):
+
+* מניעת פתיחה של שני טריידים עם מתאם גבוה
+
+14. Order Blocks ו־FVG מתקדמים:
+
+* איתור אזורי ביקוש/היצע מוסדיים + Fair Value Gaps כחלק מהכניסה
 
 ---
 
@@ -89,6 +111,7 @@ Confidence: \[88%–95%]
 תצפיות תומכות: \[Volume spike, OBV, תמיכה עולה]
 היגיון טכני: \[RSI, Bollinger, Price Action וכו’]
 הערות נוספות: \[SL לפי ATR]
+
 
 
 
