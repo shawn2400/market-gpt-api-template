@@ -42,7 +42,9 @@ def calculate_sl_tp():
     if rrr < 2.5:
         return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.5"}), 400
 
-    return jsonify({"sl": stop, "tp": target, "rrr": rrr})
+    trailing_tp = round(profit * 0.2, 4)  # Trailing TP = 20% מהרווח הפוטנציאלי
+
+    return jsonify({"sl": stop, "tp": target, "rrr": rrr, "trailing_tp": trailing_tp})
 
 @app.route("/calculate-quantity", methods=["POST"])
 def calculate_quantity():
@@ -62,7 +64,7 @@ def save_trade():
     trade = request.get_json()
 
     # שדות חובה
-    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type"]
+    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
     if not all(field in trade for field in required_fields):
         return jsonify({"error": "Missing required fields"}), 400
 
@@ -71,7 +73,17 @@ def save_trade():
     if trade_type not in ["REGULAR", "GRID"]:
         return jsonify({"error": "Invalid trade type. Must be 'REGULAR' or 'GRID'"}), 400
 
+    # בדיקת סוג פקודה
+    order_type = trade.get("order_type", "LIMIT").upper()
+    if order_type not in ["LIMIT", "STOP_LIMIT"]:
+        return jsonify({"error": "Invalid order type. Must be 'LIMIT' or 'STOP_LIMIT'"}), 400
+
     trade["type"] = trade_type
+    trade["order_type"] = order_type
+
+    # חישוב Trailing SL לפי ATR
+    trade["trailing_sl"] = round(abs(trade["entry"] - trade["stop"]) * 0.2, 4)
+
     trades.append(trade)
     return jsonify({"message": "Trade saved", "trade": trade})
 
@@ -109,6 +121,9 @@ def analyze():
     stop_loss = round(close_price - (1.5 * atr), 4)
     take_profit = round(close_price + (2.5 * (close_price - stop_loss)), 4)
 
+    df_1h = df.tail(60)  # טיימפריים נוסף לשעה
+    rsi_1h = round(ta.momentum.RSIIndicator(close=df_1h["close"]).rsi().iloc[-1], 2)
+
     plt.figure(figsize=(10, 4))
     plt.plot(df["close"], label="Close Price")
     plt.title("Price with RSI & MACD")
@@ -128,7 +143,8 @@ def analyze():
 
     return jsonify({
         "signal": signal,
-        "rsi": round(df["rsi"].iloc[-1], 2),
+        "rsi_15m": round(df["rsi"].iloc[-1], 2),
+        "rsi_1h": rsi_1h,
         "macd": round(df["macd"].iloc[-1], 4),
         "atr": atr,
         "dynamic_sl": stop_loss,
@@ -138,6 +154,7 @@ def analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
