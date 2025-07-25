@@ -1,16 +1,17 @@
 openapi: 3.1.0
 info:
-  title: AlgoGPT API
-  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים, גרפים וחישובים בזמן אמת לפי כל חוקי Algo Pro Elite
-  version: 1.0.0
+  title: AlgoGPT Trader API
+  description: >
+    ממשק API למסחר חכם בזמן אמת – כולל ניתוחים טכניים, שמירת טריידים,
+    חישובי SL/TP/כמות, איתור טריידים, גרפים, פקודות limit ו־grid, תמיכה ב־Trailing SL
+    וניתוח רמת ביטחון (Confidence).
+  version: "1.0.0"
 servers:
   - url: https://market-gpt-api-template.onrender.com
-
 paths:
   /price:
     get:
-      summary: שלוף מחיר חי למטבע
-      operationId: get_price
+      summary: קבלת מחיר נוכחי
       parameters:
         - name: symbol
           in: query
@@ -18,196 +19,172 @@ paths:
           schema:
             type: string
       responses:
-        '200':
-          description: מחיר חי
-
-  /analyze:
-    post:
-      summary: ניתוח טכני וגרף
-      operationId: analyze
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - prices
-              properties:
-                prices:
-                  type: array
-                  items:
-                    type: object
-                    required: [open, high, low, close]
-                    properties:
-                      open: { type: number }
-                      high: { type: number }
-                      low: { type: number }
-                      close: { type: number }
-      responses:
-        '200':
-          description: אות קנייה/מכירה + RSI, MACD וגרף
-        '400':
-          description: שגיאה בקלט
-        '500':
-          description: שגיאת שרת
-
+        "200":
+          description: מחיר נוכחי
   /calculate-sl-tp:
     post:
-      summary: חשב SL/TP ו־RRR לפי חוקי RRR ≥ 2.0 ו־ATR
-      operationId: calculate_sl_tp
+      summary: חישוב SL, TP, יחס RRR ו־Trailing
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [entry, stop, target]
               properties:
-                entry: { type: number }
-                stop: { type: number }
-                target: { type: number }
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
       responses:
-        '200':
-          description: תוצאה של SL/TP ו־RRR
-
+        "200":
+          description: תוצאות החישוב
   /calculate-quantity:
     post:
-      summary: חשב כמות לפי תקציב ומינוף (5×–35× בלבד)
-      operationId: calculate_quantity
+      summary: חישוב כמות נכונה לפי תקציב
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [budget, entry, leverage]
               properties:
-                budget: { type: number }
-                entry: { type: number }
-                leverage: { type: number }
+                budget:
+                  type: number
+                entry:
+                  type: number
+                leverage:
+                  type: number
       responses:
-        '200':
-          description: כמות לחישוב
-
+        "200":
+          description: הכמות המחושבת
   /save-trade:
     post:
-      summary: שמור את הטרייד לפי כל הכללים (Confidence מ־88%, SL, RRR וכו')
-      operationId: save_trade
+      summary: שמירת טרייד חדש
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [symbol, entry, stop, tp, leverage, direction, confidence, type, order_type]
               properties:
                 symbol:
                   type: string
-                  description: סימבול (למשל BTCUSDT)
                 entry:
                   type: number
-                  description: מחיר כניסה
                 stop:
                   type: number
-                  description: SL
                 tp:
                   type: number
-                  description: TP
                 leverage:
-                  type: number
-                  description: מינוף (5×–35×)
+                  type: integer
                 direction:
                   type: string
                   enum: [LONG, SHORT]
-                  description: לונג או שורט
                 confidence:
                   type: number
-                  description: רמת ביטחון %
+                rrr:
+                  type: number
                 type:
                   type: string
                   enum: [REGULAR, GRID]
-                  description: סוג הטרייד
                 order_type:
                   type: string
                   enum: [LIMIT, STOP_LIMIT]
-                  description: סוג ההזמנה
+                quality_score:
+                  type: number
       responses:
-        '200':
-          description: הטרייד נשמר
-        '400':
-          description: שגיאה - תנאים לא מולאו
-
+        "200":
+          description: טרייד נשמר בהצלחה
   /get-trades:
     get:
-      summary: הצג את כל הטריידים
-      operationId: get_trades
+      summary: קבלת כל הטריידים
       responses:
-        '200':
-          description: רשימת טריידים שמורים
-
+        "200":
+          description: רשימת הטריידים
   /clear-trades:
     post:
-      summary: מחק את כל הטריידים
-      operationId: clear_trades
+      summary: מחיקת כל הטריידים
       responses:
-        '200':
-          description: נמחקו כל הטריידים
-
+        "200":
+          description: כל הטריידים נמחקו
   /active-trade:
     get:
-      summary: בדוק אם יש טרייד פתוח כרגע (status = OPEN)
-      operationId: active_trade
+      summary: בדיקה אם יש טרייד פתוח כרגע
       responses:
-        '200':
+        "200":
           description: טרייד פתוח (אם קיים)
-
   /update-trade:
     post:
-      summary: עדכן סטטוס טרייד ל־CLOSED לפי סימבול
-      operationId: update_trade
+      summary: עדכון סטטוס של טרייד לסגור (CLOSED)
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [symbol]
               properties:
                 symbol:
                   type: string
-                  description: סימבול של הטרייד לעדכון
       responses:
-        '200':
-          description: הסטטוס עודכן ל־CLOSED
-        '404':
-          description: לא נמצא טרייד פתוח
-
+        "200":
+          description: סטטוס טרייד עודכן
   /backtest:
     post:
-      summary: הרץ בדיקת רטרוספקטיבה (Backtest) על מחירים היסטוריים
-      operationId: backtest
+      summary: בדיקת אסטרטגיה היסטורית
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [prices]
               properties:
                 prices:
                   type: array
                   items:
                     type: object
-                    required: [open, high, low, close]
                     properties:
-                      open: { type: number }
-                      high: { type: number }
-                      low: { type: number }
-                      close: { type: number }
+                      open:
+                        type: number
+                      high:
+                        type: number
+                      low:
+                        type: number
+                      close:
+                        type: number
       responses:
-        '200':
-          description: רשימת טריידים תקפים לפי הכללים
+        "200":
+          description: טריידים תקפים שהתגלו בבק־טסט
+  /analyze:
+    post:
+      summary: ניתוח טכני מלא כולל RSI, MACD, ATR, SL/TP וגרף
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prices:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      open:
+                        type: number
+                      high:
+                        type: number
+                      low:
+                        type: number
+                      close:
+                        type: number
+      responses:
+        "200":
+          description: תוצאות ניתוח כולל אות, RSI, MACD, SL/TP וגרף
+
+components: {}
+
 
 
 
