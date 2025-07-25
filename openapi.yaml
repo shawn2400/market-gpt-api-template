@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים, גרפים וחישובים בזמן אמת לפי כל החוקים
+  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים, גרפים וחישובים בזמן אמת לפי כל חוקי Algo Pro Elite
   version: 1.0.0
 servers:
   - url: https://market-gpt-api-template.onrender.com
@@ -54,7 +54,7 @@ paths:
 
   /calculate-sl-tp:
     post:
-      summary: חשב SL/TP ו־RRR
+      summary: חשב SL/TP ו־RRR לפי חוקי RRR ≥ 2.0 ו־ATR
       operationId: calculate_sl_tp
       requestBody:
         required: true
@@ -73,7 +73,7 @@ paths:
 
   /calculate-quantity:
     post:
-      summary: חשב כמות לפי תקציב
+      summary: חשב כמות לפי תקציב ומינוף
       operationId: calculate_quantity
       requestBody:
         required: true
@@ -92,7 +92,7 @@ paths:
 
   /save-trade:
     post:
-      summary: שמור את הטרייד
+      summary: שמור את הטרייד לפי כל הכללים (Confidence, SL, RRR וכו')
       operationId: save_trade
       requestBody:
         required: true
@@ -100,7 +100,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [symbol, entry, stop, tp, leverage, direction, confidence, type]
+              required: [symbol, entry, stop, tp, leverage, direction, confidence, type, order_type]
               properties:
                 symbol:
                   type: string
@@ -128,9 +128,15 @@ paths:
                   type: string
                   enum: [REGULAR, GRID]
                   description: סוג הטרייד
+                order_type:
+                  type: string
+                  enum: [LIMIT, STOP_LIMIT]
+                  description: סוג ההזמנה
       responses:
         '200':
-          description: נשמר
+          description: הטרייד נשמר
+        '400':
+          description: שגיאה - תנאים לא מולאו
 
   /get-trades:
     get:
@@ -138,7 +144,7 @@ paths:
       operationId: get_trades
       responses:
         '200':
-          description: רשימת טריידים
+          description: רשימת טריידים שמורים
 
   /clear-trades:
     post:
@@ -146,7 +152,8 @@ paths:
       operationId: clear_trades
       responses:
         '200':
-          description: נמחקו
+          description: נמחקו כל הטריידים
+
 
 
 
