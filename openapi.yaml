@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  description: ניתוחים טכניים בזמן אמת, חישובי SL/TP, שמירת טריידים, ועוד
+  description: API עבור ניתוחים טכניים, חישובי SL/TP, שמירת טריידים ו־Backtest.
   version: 1.0.0
 
 servers:
@@ -10,7 +10,7 @@ servers:
 paths:
   /price:
     get:
-      summary: קבלת מחיר עדכני
+      summary: קבלת מחיר עדכני למטבע
       operationId: getPrice
       parameters:
         - in: query
@@ -21,11 +21,11 @@ paths:
           description: סימול המטבע (כמו BTCUSDT)
       responses:
         '200':
-          description: המחיר התקבל
+          description: מחיר התקבל בהצלחה
 
   /calculate-sl-tp:
     post:
-      summary: חישוב SL ו־TP כולל RRR
+      summary: חישוב SL ו־TP כולל יחס סיכון-רווח (RRR)
       operationId: calculateSlTp
       requestBody:
         required: true
@@ -43,11 +43,11 @@ paths:
                   type: number
       responses:
         '200':
-          description: חישוב הצליח
+          description: חישוב בוצע בהצלחה
 
   /calculate-quantity:
     post:
-      summary: חישוב כמות לפי תקציב ומינוף
+      summary: חישוב כמות לפי תקציב, מינוף ומחיר כניסה
       operationId: calculateQuantity
       requestBody:
         required: true
@@ -65,11 +65,11 @@ paths:
                   type: number
       responses:
         '200':
-          description: כמות חושבה
+          description: הכמות חושבה בהצלחה
 
   /save-trade:
     post:
-      summary: שמירת טרייד חדש
+      summary: שמירת טרייד חדש למעקב
       operationId: saveTrade
       requestBody:
         required: true
@@ -100,35 +100,35 @@ paths:
                   type: string
       responses:
         '200':
-          description: טרייד נשמר
+          description: הטרייד נשמר בהצלחה
 
   /get-trades:
     get:
-      summary: הצגת כל הטריידים
+      summary: הצגת כל הטריידים השמורים
       operationId: getTrades
       responses:
         '200':
-          description: רשימת טריידים
+          description: רשימת הטריידים התקבלה
 
   /clear-trades:
     post:
-      summary: ניקוי כל הטריידים
+      summary: ניקוי מוחלט של כל הטריידים
       operationId: clearTrades
       responses:
         '200':
-          description: כל הטריידים נמחקו
+          description: הטריידים נמחקו בהצלחה
 
   /active-trade:
     get:
-      summary: בדיקת סטטוס טרייד פתוח
+      summary: בדיקת טרייד פתוח קיים
       operationId: getActiveTrade
       responses:
         '200':
-          description: סטטוס הטרייד
+          description: מידע על טרייד פעיל
 
   /update-trade:
     post:
-      summary: עדכון טרייד פתוח ל־CLOSED
+      summary: סגירת טרייד פתוח על פי סימול
       operationId: updateTrade
       requestBody:
         required: true
@@ -142,11 +142,11 @@ paths:
                   type: string
       responses:
         '200':
-          description: טרייד עודכן
+          description: טרייד עודכן ל־CLOSED
 
   /backtest:
     post:
-      summary: ביצוע Backtest לנתוני עבר
+      summary: ביצוע בדיקת אסטרטגיה (Backtest)
       operationId: runBacktest
       requestBody:
         required: true
@@ -171,11 +171,11 @@ paths:
                         type: number
       responses:
         '200':
-          description: Backtest בוצע
+          description: Backtest בוצע בהצלחה
 
   /analyze:
     post:
-      summary: ניתוח טכני חי
+      summary: ניתוח טכני בזמן אמת כולל RSI, MACD, ATR ו־SL/TP דינמי
       operationId: analyzeLive
       requestBody:
         required: true
@@ -200,10 +200,11 @@ paths:
                         type: number
       responses:
         '200':
-          description: ניתוח בוצע
+          description: ניתוח טכני בוצע בהצלחה
 
 components:
   schemas: {}
+
 
 
 
