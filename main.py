@@ -11,7 +11,7 @@ import base64
 app = Flask(__name__)
 CORS(app)
 
-# רשימת טריידים
+# רשימת טריידים בזיכרון
 trades = []
 
 @app.route("/", methods=["GET"])
@@ -66,30 +66,25 @@ def calculate_quantity():
 def save_trade():
     trade = request.get_json()
 
-    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
-    if not all(field in trade for field in required_fields):
+    required = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
+    if not all(field in trade for field in required):
         return jsonify({"error": "Missing required fields"}), 400
 
-    trade_type = trade.get("type", "REGULAR").upper()
-    if trade_type not in ["REGULAR", "GRID"]:
+    trade["type"] = trade.get("type", "REGULAR").upper()
+    if trade["type"] not in ["REGULAR", "GRID"]:
         return jsonify({"error": "Invalid trade type. Must be 'REGULAR' or 'GRID'"}), 400
 
-    order_type = trade.get("order_type", "LIMIT").upper()
-    if order_type not in ["LIMIT", "STOP_LIMIT"]:
+    trade["order_type"] = trade.get("order_type", "LIMIT").upper()
+    if trade["order_type"] not in ["LIMIT", "STOP_LIMIT"]:
         return jsonify({"error": "Invalid order type. Must be 'LIMIT' or 'STOP_LIMIT'"}), 400
-
-    trade["type"] = trade_type
-    trade["order_type"] = order_type
 
     sl_size = abs(trade["entry"] - trade["stop"])
     trade["trailing_sl"] = round(sl_size * 0.2, 4)
 
     if trade["confidence"] < 86:
         return jsonify({"error": "Confidence must be ≥86% to save trade"}), 400
-
     if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
         return jsonify({"error": "Confidence <88% allowed only with quality score ≥4"}), 400
-
     if trade["confidence"] < 90 and trade["rrr"] < 2.5:
         return jsonify({"error": "RRR too low for confidence <90%"}), 400
 
@@ -117,7 +112,6 @@ def active_trade():
 def update_trade():
     data = request.get_json()
     symbol = data.get("symbol")
-
     for trade in trades:
         if trade.get("symbol") == symbol and trade.get("status") == "OPEN":
             trade["status"] = "CLOSED"
@@ -130,28 +124,31 @@ def backtest():
     if not data or "prices" not in data:
         return jsonify({"error": "Missing 'prices' key in JSON"}), 400
 
-    prices = data["prices"]
-    df = pd.DataFrame(prices)
-    required_cols = ["open", "high", "low", "close"]
-    if df.empty or not all(col in df.columns for col in required_cols):
+    df = pd.DataFrame(data["prices"])
+    if df.empty or not all(c in df.columns for c in ["open", "high", "low", "close"]):
         return jsonify({"error": "Invalid 'prices' data format"}), 400
 
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
-    df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
+    df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
 
     valid_trades = []
     for i in range(20, len(df)):
         row = df.iloc[i]
         if row["rsi"] < 30 and row["macd"] > 0:
             entry = row["close"]
-            sl = entry - (1.5 * row["atr"])
-            tp = entry + (2.5 * (entry - sl))
+            sl = entry - 1.5 * row["atr"]
+            tp = entry + 2.5 * (entry - sl)
             rrr = round((tp - entry) / (entry - sl), 2)
             if rrr >= 2.5:
-                valid_trades.append({"entry": round(entry, 4), "sl": round(sl, 4), "tp": round(tp, 4), "rrr": rrr})
+                valid_trades.append({
+                    "entry": round(entry, 4),
+                    "sl": round(sl, 4),
+                    "tp": round(tp, 4),
+                    "rrr": rrr
+                })
 
-    return jsonify({"total": len(prices), "valid_trades": valid_trades})
+    return jsonify({"total": len(df), "valid_trades": valid_trades})
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -159,20 +156,18 @@ def analyze():
     if not data or "prices" not in data:
         return jsonify({"error": "Missing 'prices' key in JSON"}), 400
 
-    prices = data["prices"]
-    df = pd.DataFrame(prices)
-    required_cols = ["open", "high", "low", "close"]
-    if df.empty or not all(col in df.columns for col in required_cols):
+    df = pd.DataFrame(data["prices"])
+    if df.empty or not all(c in df.columns for c in ["open", "high", "low", "close"]):
         return jsonify({"error": "Invalid 'prices' data format"}), 400
 
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
-    df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
+    df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
 
     atr = round(df["atr"].iloc[-1], 4)
-    close_price = df["close"].iloc[-1]
-    stop_loss = round(close_price - (1.5 * atr), 4)
-    take_profit = round(close_price + (2.5 * (close_price - stop_loss)), 4)
+    close = df["close"].iloc[-1]
+    sl = round(close - 1.5 * atr, 4)
+    tp = round(close + 2.5 * (close - sl), 4)
 
     df_1h = df.tail(60)
     rsi_1h = round(ta.momentum.RSIIndicator(close=df_1h["close"]).rsi().iloc[-1], 2)
@@ -185,23 +180,24 @@ def analyze():
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
-    image_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    image_base64 = base64.b64encode(buf.read()).decode("utf-8")
     plt.close()
 
     signal = "neutral"
-    if df["rsi"].iloc[-1] < 30:
+    rsi_val = df["rsi"].iloc[-1]
+    if rsi_val < 30:
         signal = "buy"
-    elif df["rsi"].iloc[-1] > 70:
+    elif rsi_val > 70:
         signal = "sell"
 
     return jsonify({
         "signal": signal,
-        "rsi_15m": round(df["rsi"].iloc[-1], 2),
+        "rsi_15m": round(rsi_val, 2),
         "rsi_1h": rsi_1h,
         "macd": round(df["macd"].iloc[-1], 4),
         "atr": atr,
-        "dynamic_sl": stop_loss,
-        "dynamic_tp": take_profit,
+        "dynamic_sl": sl,
+        "dynamic_tp": tp,
         "chart": f"data:image/png;base64,{image_base64}"
     })
 
