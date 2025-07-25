@@ -1,35 +1,39 @@
 openapi: 3.1.0
 info:
-  title: AlgoGPT Trader API
-  version: "1.0.0"
-  description: >
-    ממשק API לסוחר Algo מקצועי בזמן אמת (GPT) כולל ניתוח טכני, חישוב SL/TP, פיקוח טריידים,
-    הזמנות limit/stop, ניתוח אינדיקטורים, סריקה לפי חוקים קשיחים, נעילות חכמות, Grid אוטומטי, Trailing SL, איכות טריידים ועוד.
+  title: AlgoGPT API
+  description: ניתוחים טכניים בזמן אמת, חישובי SL/TP, שמירת טריידים, ועוד
+  version: 1.0.0
+
 servers:
   - url: https://market-gpt-api-template.onrender.com
+
 paths:
   /price:
     get:
-      summary: קבל מחיר חי למטבע
+      summary: קבלת מחיר עדכני
+      operationId: getPrice
       parameters:
-        - name: symbol
-          in: query
-          required: true
+        - in: query
+          name: symbol
           schema:
             type: string
+          required: true
+          description: סימול המטבע (כמו BTCUSDT)
       responses:
-        "200":
-          description: מחיר חי
+        '200':
+          description: המחיר התקבל
 
   /calculate-sl-tp:
     post:
-      summary: חשב SL ו־TP עם יחס RRR
+      summary: חישוב SL ו־TP כולל RRR
+      operationId: calculateSlTp
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [entry, stop, tp]
               properties:
                 entry:
                   type: number
@@ -38,32 +42,35 @@ paths:
                 tp:
                   type: number
       responses:
-        "200":
-          description: תוצאה עם SL/TP, יחס RRR ו־Trailing TP
+        '200':
+          description: חישוב הצליח
 
   /calculate-quantity:
     post:
-      summary: חשב כמות לפי תקציב, מינוף ומחיר כניסה
+      summary: חישוב כמות לפי תקציב ומינוף
+      operationId: calculateQuantity
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [budget, entry, leverage]
               properties:
                 budget:
                   type: number
                 entry:
                   type: number
                 leverage:
-                  type: integer
+                  type: number
       responses:
-        "200":
-          description: כמות מחושבת
+        '200':
+          description: כמות חושבה
 
   /save-trade:
     post:
-      summary: שמור טרייד חדש לפי כללים נוקשים
+      summary: שמירת טרייד חדש
+      operationId: saveTrade
       requestBody:
         required: true
         content:
@@ -71,15 +78,7 @@ paths:
             schema:
               type: object
               required:
-                - symbol
-                - entry
-                - stop
-                - tp
-                - leverage
-                - direction
-                - confidence
-                - type
-                - order_type
+                [symbol, entry, stop, tp, leverage, direction, confidence, type, order_type]
               properties:
                 symbol:
                   type: string
@@ -90,74 +89,65 @@ paths:
                 tp:
                   type: number
                 leverage:
-                  type: integer
+                  type: number
                 direction:
                   type: string
-                  enum: [LONG, SHORT]
                 confidence:
-                  type: integer
+                  type: number
                 type:
                   type: string
-                  enum: [REGULAR, GRID]
                 order_type:
                   type: string
-                  enum: [LIMIT, STOP_LIMIT]
-                quality_score:
-                  type: number
       responses:
-        "200":
-          description: טרייד נשמר בהצלחה
+        '200':
+          description: טרייד נשמר
 
   /get-trades:
     get:
-      summary: הצג את כל הטריידים הפתוחים
+      summary: הצגת כל הטריידים
+      operationId: getTrades
+      responses:
+        '200':
+          description: רשימת טריידים
 
   /clear-trades:
     post:
-      summary: מחק את כל הטריידים
+      summary: ניקוי כל הטריידים
+      operationId: clearTrades
+      responses:
+        '200':
+          description: כל הטריידים נמחקו
 
   /active-trade:
     get:
-      summary: בדוק אם יש טרייד פתוח פעיל
+      summary: בדיקת סטטוס טרייד פתוח
+      operationId: getActiveTrade
+      responses:
+        '200':
+          description: סטטוס הטרייד
 
   /update-trade:
     post:
-      summary: סגור טרייד לפי סימול
+      summary: עדכון טרייד פתוח ל־CLOSED
+      operationId: updateTrade
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [symbol]
               properties:
                 symbol:
                   type: string
+      responses:
+        '200':
+          description: טרייד עודכן
 
   /backtest:
     post:
-      summary: בצע בדיקת עבר (Backtest) על נתוני מחיר
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - prices
-              properties:
-                prices:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      open: { type: number }
-                      high: { type: number }
-                      low: { type: number }
-                      close: { type: number }
-
-  /analyze:
-    post:
-      summary: נתח טכני לפי מחירי עבר (RSI, MACD, ATR)
+      summary: ביצוע Backtest לנתוני עבר
+      operationId: runBacktest
       requestBody:
         required: true
         content:
@@ -171,16 +161,50 @@ paths:
                   items:
                     type: object
                     properties:
-                      open: { type: number }
-                      high: { type: number }
-                      low: { type: number }
-                      close: { type: number }
+                      open:
+                        type: number
+                      high:
+                        type: number
+                      low:
+                        type: number
+                      close:
+                        type: number
       responses:
-        "200":
-          description: ניתוח עם RSI, MACD, ATR, SL/TP, תמונה בסיסית
+        '200':
+          description: Backtest בוצע
+
+  /analyze:
+    post:
+      summary: ניתוח טכני חי
+      operationId: analyzeLive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prices]
+              properties:
+                prices:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      open:
+                        type: number
+                      high:
+                        type: number
+                      low:
+                        type: number
+                      close:
+                        type: number
+      responses:
+        '200':
+          description: ניתוח בוצע
 
 components:
   schemas: {}
+
 
 
 
