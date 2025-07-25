@@ -104,13 +104,7 @@ def save_trade():
     history.append(trade)
     return jsonify({"message": "Trade saved", "trade": trade})
 
-@app.route("/execute-trade", methods=["POST"])
-def execute_trade():
-    data = request.get_json()
-    required = ["symbol", "side", "quantity", "price", "order_type"]
-    if not all(k in data for k in required):
-        return jsonify({"error": "Missing fields"}), 400
-
+def execute_trade_internal(data):
     timestamp = int(time.time() * 1000)
     params = {
         "symbol": data["symbol"],
@@ -133,6 +127,38 @@ def execute_trade():
         return jsonify({"message": "Trade executed", "response": res.json()})
     else:
         return jsonify({"error": "Trade failed", "details": res.json()}), 400
+
+@app.route("/save-and-execute", methods=["POST"])
+def save_and_execute():
+    trade = request.get_json()
+    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type", "quantity"]
+    if not all(field in trade for field in required_fields):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    sl_size = abs(trade["entry"] - trade["stop"])
+    rrr = round(abs(trade["tp"] - trade["entry"]) / sl_size, 2)
+    trade["rrr"] = rrr
+    trade["trailing_sl"] = round(sl_size * 0.2, 4)
+    trade["status"] = "OPEN"
+
+    if trade["confidence"] < 86:
+        return jsonify({"error": "Confidence must be ≥86%"}), 400
+    if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
+        return jsonify({"error": "Confidence <88% allowed only with quality score ≥4"}), 400
+    if trade["confidence"] < 90 and rrr < 2.5:
+        return jsonify({"error": "RRR too low for confidence <90%"}), 400
+
+    trades.append(trade)
+    history.append(trade)
+
+    execution_data = {
+        "symbol": trade["symbol"],
+        "side": "BUY" if trade["direction"] == "LONG" else "SELL",
+        "quantity": trade["quantity"],
+        "price": trade["entry"],
+        "order_type": trade["order_type"]
+    }
+    return execute_trade_internal(execution_data)
 
 @app.route("/get-trades", methods=["GET"])
 def get_trades():
@@ -241,6 +267,7 @@ def analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
