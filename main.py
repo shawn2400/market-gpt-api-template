@@ -43,7 +43,6 @@ def calculate_sl_tp():
         return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.0"}), 400
 
     trailing_tp = round(profit * 0.2, 4)
-
     return jsonify({"sl": stop, "tp": target, "rrr": rrr, "trailing_tp": trailing_tp})
 
 @app.route("/calculate-quantity", methods=["POST"])
@@ -65,7 +64,6 @@ def calculate_quantity():
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
     trade = request.get_json()
-
     required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
     if not all(field in trade for field in required_fields):
         return jsonify({"error": "Missing required fields"}), 400
@@ -86,10 +84,8 @@ def save_trade():
 
     if trade["confidence"] < 86:
         return jsonify({"error": "Confidence must be ≥86% to save trade"}), 400
-
     if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
         return jsonify({"error": "Confidence <88% allowed only with quality score ≥4"}), 400
-
     if trade["confidence"] < 90 and trade["rrr"] < 2.5:
         return jsonify({"error": "RRR too low for confidence <90%"}), 400
 
@@ -150,7 +146,12 @@ def backtest():
             tp = entry + (2.5 * (entry - sl))
             rrr = round((tp - entry) / (entry - sl), 2)
             if rrr >= 2.5:
-                valid_trades.append({"entry": round(entry, 4), "sl": round(sl, 4), "tp": round(tp, 4), "rrr": rrr})
+                valid_trades.append({
+                    "entry": round(entry, 4),
+                    "sl": round(sl, 4),
+                    "tp": round(tp, 4),
+                    "rrr": rrr
+                })
 
     return jsonify({"total": len(prices), "valid_trades": valid_trades})
 
@@ -208,6 +209,7 @@ def analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
