@@ -73,7 +73,7 @@ paths:
 
   /calculate-quantity:
     post:
-      summary: חשב כמות לפי תקציב ומינוף
+      summary: חשב כמות לפי תקציב ומינוף (5×–35× בלבד)
       operationId: calculate_quantity
       requestBody:
         required: true
@@ -92,7 +92,7 @@ paths:
 
   /save-trade:
     post:
-      summary: שמור את הטרייד לפי כל הכללים (Confidence, SL, RRR וכו')
+      summary: שמור את הטרייד לפי כל הכללים (Confidence מ־88%, SL, RRR וכו')
       operationId: save_trade
       requestBody:
         required: true
@@ -116,7 +116,7 @@ paths:
                   description: TP
                 leverage:
                   type: number
-                  description: מינוף
+                  description: מינוף (5×–35×)
                 direction:
                   type: string
                   enum: [LONG, SHORT]
@@ -153,6 +153,62 @@ paths:
       responses:
         '200':
           description: נמחקו כל הטריידים
+
+  /active-trade:
+    get:
+      summary: בדוק אם יש טרייד פתוח כרגע (status = OPEN)
+      operationId: active_trade
+      responses:
+        '200':
+          description: טרייד פתוח (אם קיים)
+
+  /update-trade:
+    post:
+      summary: עדכן סטטוס טרייד ל־CLOSED לפי סימבול
+      operationId: update_trade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol]
+              properties:
+                symbol:
+                  type: string
+                  description: סימבול של הטרייד לעדכון
+      responses:
+        '200':
+          description: הסטטוס עודכן ל־CLOSED
+        '404':
+          description: לא נמצא טרייד פתוח
+
+  /backtest:
+    post:
+      summary: הרץ בדיקת רטרוספקטיבה (Backtest) על מחירים היסטוריים
+      operationId: backtest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prices]
+              properties:
+                prices:
+                  type: array
+                  items:
+                    type: object
+                    required: [open, high, low, close]
+                    properties:
+                      open: { type: number }
+                      high: { type: number }
+                      low: { type: number }
+                      close: { type: number }
+      responses:
+        '200':
+          description: רשימת טריידים תקפים לפי הכללים
+
 
 
 
