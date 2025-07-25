@@ -21,7 +21,7 @@ def home():
 @app.route("/price", methods=["GET"])
 def get_price():
     symbol = request.args.get("symbol")
-    return jsonify({"symbol": symbol, "price": 123.45})  # דוגמת מחיר סטטי
+    return jsonify({"symbol": symbol, "price": 123.45})
 
 @app.route("/calculate-sl-tp", methods=["POST"])
 def calculate_sl_tp():
@@ -42,7 +42,7 @@ def calculate_sl_tp():
     if rrr < 2.0:
         return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.0"}), 400
 
-    trailing_tp = round(profit * 0.2, 4)  # Trailing TP = 20% מהרווח הפוטנציאלי
+    trailing_tp = round(profit * 0.2, 4)
 
     return jsonify({"sl": stop, "tp": target, "rrr": rrr, "trailing_tp": trailing_tp})
 
@@ -55,6 +55,9 @@ def calculate_quantity():
 
     if not all([budget, entry, leverage]):
         return jsonify({"error": "Missing required fields"}), 400
+
+    if leverage < 5 or leverage > 35:
+        return jsonify({"error": "Leverage must be between 5× and 35×"}), 400
 
     quantity = round((budget * leverage) / entry, 4)
     return jsonify({"quantity": quantity})
@@ -90,6 +93,7 @@ def save_trade():
     if trade["confidence"] < 90 and trade["rrr"] < 2.5:
         return jsonify({"error": "RRR too low for confidence <90%"}), 400
 
+    trade["status"] = "OPEN"
     trades.append(trade)
     return jsonify({"message": "Trade saved", "trade": trade})
 
@@ -102,25 +106,68 @@ def clear_trades():
     trades.clear()
     return jsonify({"message": "All trades cleared"})
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    data = request.get_json()
+@app.route("/active-trade", methods=["GET"])
+def active_trade():
+    for trade in trades:
+        if trade.get("status") == "OPEN":
+            return jsonify({"active": True, "trade": trade})
+    return jsonify({"active": False})
 
+@app.route("/update-trade", methods=["POST"])
+def update_trade():
+    data = request.get_json()
+    symbol = data.get("symbol")
+
+    for trade in trades:
+        if trade.get("symbol") == symbol and trade.get("status") == "OPEN":
+            trade["status"] = "CLOSED"
+            return jsonify({"message": "Trade updated to CLOSED", "trade": trade})
+    return jsonify({"error": "No open trade found for given symbol"}), 404
+
+@app.route("/backtest", methods=["POST"])
+def backtest():
+    data = request.get_json()
     if not data or "prices" not in data:
         return jsonify({"error": "Missing 'prices' key in JSON"}), 400
 
     prices = data["prices"]
     df = pd.DataFrame(prices)
-
     required_cols = ["open", "high", "low", "close"]
     if df.empty or not all(col in df.columns for col in required_cols):
         return jsonify({"error": "Invalid 'prices' data format"}), 400
 
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
-    df["atr"] = ta.volatility.AverageTrueRange(
-        high=df["high"], low=df["low"], close=df["close"]
-    ).average_true_range()
+    df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
+
+    valid_trades = []
+    for i in range(20, len(df)):
+        row = df.iloc[i]
+        if row["rsi"] < 30 and row["macd"] > 0:
+            entry = row["close"]
+            sl = entry - (1.5 * row["atr"])
+            tp = entry + (2.5 * (entry - sl))
+            rrr = round((tp - entry) / (entry - sl), 2)
+            if rrr >= 2.5:
+                valid_trades.append({"entry": round(entry, 4), "sl": round(sl, 4), "tp": round(tp, 4), "rrr": rrr})
+
+    return jsonify({"total": len(prices), "valid_trades": valid_trades})
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    data = request.get_json()
+    if not data or "prices" not in data:
+        return jsonify({"error": "Missing 'prices' key in JSON"}), 400
+
+    prices = data["prices"]
+    df = pd.DataFrame(prices)
+    required_cols = ["open", "high", "low", "close"]
+    if df.empty or not all(col in df.columns for col in required_cols):
+        return jsonify({"error": "Invalid 'prices' data format"}), 400
+
+    df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
+    df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
+    df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
 
     atr = round(df["atr"].iloc[-1], 4)
     close_price = df["close"].iloc[-1]
