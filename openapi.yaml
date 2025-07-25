@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  description: API עבור ניתוחים טכניים, חישובי SL/TP, שמירת טריידים ו־Backtest.
+  description: API עבור ניתוחים טכניים, חישובי SL/TP, שמירת טריידים, ביצוע מסחר ו־Backtest.
   version: 1.0.0
 
 servers:
@@ -202,8 +202,42 @@ paths:
         '200':
           description: ניתוח טכני בוצע בהצלחה
 
+  /execute-trade:
+    post:
+      summary: ביצוע פקודת מסחר אוטומטית ב־Binance (LIVE)
+      operationId: executeTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol, side, quantity, price, order_type]
+              properties:
+                symbol:
+                  type: string
+                  example: BTCUSDT
+                side:
+                  type: string
+                  enum: [BUY, SELL]
+                quantity:
+                  type: number
+                  example: 0.002
+                price:
+                  type: number
+                  example: 29500
+                order_type:
+                  type: string
+                  enum: [LIMIT, STOP_LIMIT]
+      responses:
+        '200':
+          description: הפקודה בוצעה בהצלחה
+        '400':
+          description: שגיאה בביצוע הפקודה
+
 components:
   schemas: {}
+
 
 
 
