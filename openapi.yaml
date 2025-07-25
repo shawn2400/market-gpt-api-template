@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים, גרפים וחישובים בזמן אמת
+  description: API לחישוב SL/TP, ניתוחים טכניים, שמירת טריידים, גרפים וחישובים בזמן אמת לפי כל החוקים
   version: 1.0.0
 servers:
   - url: https://market-gpt-api-template.onrender.com
@@ -23,7 +23,7 @@ paths:
 
   /analyze:
     post:
-      summary: ניתוח טכני ויצירת גרף
+      summary: ניתוח טכני וגרף
       operationId: analyze
       requestBody:
         required: true
@@ -40,21 +40,17 @@ paths:
                     type: object
                     required: [open, high, low, close]
                     properties:
-                      open:
-                        type: number
-                      high:
-                        type: number
-                      low:
-                        type: number
-                      close:
-                        type: number
+                      open: { type: number }
+                      high: { type: number }
+                      low: { type: number }
+                      close: { type: number }
       responses:
         '200':
           description: אות קנייה/מכירה + RSI, MACD וגרף
         '400':
-          description: שגיאה במבנה הקלט
+          description: שגיאה בקלט
         '500':
-          description: שגיאת שרת פנימית
+          description: שגיאת שרת
 
   /calculate-sl-tp:
     post:
@@ -66,22 +62,14 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - entry
-                - stop
-                - target
+              required: [entry, stop, target]
               properties:
-                entry:
-                  type: number
-                stop:
-                  type: number
-                target:
-                  type: number
+                entry: { type: number }
+                stop: { type: number }
+                target: { type: number }
       responses:
         '200':
           description: תוצאה של SL/TP ו־RRR
-        '400':
-          description: קלט חסר או לא תקין
 
   /calculate-quantity:
     post:
@@ -93,22 +81,14 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - budget
-                - entry
-                - leverage
+              required: [budget, entry, leverage]
               properties:
-                budget:
-                  type: number
-                entry:
-                  type: number
-                leverage:
-                  type: number
+                budget: { type: number }
+                entry: { type: number }
+                leverage: { type: number }
       responses:
         '200':
           description: כמות לחישוב
-        '400':
-          description: קלט חסר
 
   /save-trade:
     post:
@@ -120,47 +100,37 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - symbol
-                - entry
-                - stop
-                - tp
-                - leverage
-                - direction
-                - confidence
-                - type
+              required: [symbol, entry, stop, tp, leverage, direction, confidence, type]
               properties:
                 symbol:
                   type: string
-                  description: סימבול המטבע לדוגמה BTCUSDT
+                  description: סימבול (למשל BTCUSDT)
                 entry:
                   type: number
-                  description: מחיר הכניסה לטרייד
+                  description: מחיר כניסה
                 stop:
                   type: number
-                  description: מחיר ה־Stop Loss
+                  description: SL
                 tp:
                   type: number
-                  description: מחיר ה־Take Profit
+                  description: TP
                 leverage:
                   type: number
                   description: מינוף
                 direction:
                   type: string
                   enum: [LONG, SHORT]
-                  description: כיוון הטרייד – לונג או שורט
+                  description: לונג או שורט
                 confidence:
                   type: number
-                  description: רמת הביטחון (0–100)
+                  description: רמת ביטחון %
                 type:
                   type: string
                   enum: [REGULAR, GRID]
-                  description: סוג הטרייד – רגיל או גריד
+                  description: סוג הטרייד
       responses:
         '200':
-          description: טרייד נשמר בהצלחה
-        '400':
-          description: קלט לא תקין
+          description: נשמר
 
   /get-trades:
     get:
@@ -168,15 +138,15 @@ paths:
       operationId: get_trades
       responses:
         '200':
-          description: רשימת כל הטריידים השמורים
+          description: רשימת טריידים
 
   /clear-trades:
     post:
-      summary: נקה את כל הטריידים
+      summary: מחק את כל הטריידים
       operationId: clear_trades
       responses:
         '200':
-          description: כל הטריידים נמחקו
+          description: נמחקו
 
 
 
