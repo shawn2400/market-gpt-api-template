@@ -7,6 +7,14 @@ import matplotlib.pyplot as plt
 import os
 import io
 import base64
+import hmac
+import hashlib
+import time
+import requests
+
+# Binance LIVE API Keys (REAL)
+BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
+BINANCE_API_SECRET = "soQYlzu6jYiQj8ZLxlXNPWHWTLPRb0EXLK239iFVz1XmnX9EvtDaG7D9zGabCVEq"
 
 app = Flask(__name__)
 CORS(app)
@@ -21,7 +29,12 @@ def home():
 @app.route("/price", methods=["GET"])
 def get_price():
     symbol = request.args.get("symbol")
-    return jsonify({"symbol": symbol, "price": 123.45})
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
+        res = requests.get(url).json()
+        return jsonify({"symbol": symbol, "price": float(res["price"])})
+    except:
+        return jsonify({"symbol": symbol, "price": None, "error": "Price fetch failed"}), 400
 
 @app.route("/calculate-sl-tp", methods=["POST"])
 def calculate_sl_tp():
@@ -29,7 +42,6 @@ def calculate_sl_tp():
     entry = data.get("entry")
     stop = data.get("stop")
     target = data.get("target") or data.get("tp")
-
     if entry is None or stop is None or target is None:
         return jsonify({"error": "Missing one of the required fields: entry, stop, target/tp"}), 400
 
@@ -51,10 +63,8 @@ def calculate_quantity():
     budget = data.get("budget")
     entry = data.get("entry")
     leverage = data.get("leverage")
-
     if not all([budget, entry, leverage]):
         return jsonify({"error": "Missing required fields"}), 400
-
     if leverage < 5 or leverage > 35:
         return jsonify({"error": "Leverage must be between 5× and 35×"}), 400
 
@@ -94,6 +104,36 @@ def save_trade():
     history.append(trade)
     return jsonify({"message": "Trade saved", "trade": trade})
 
+@app.route("/execute-trade", methods=["POST"])
+def execute_trade():
+    data = request.get_json()
+    required = ["symbol", "side", "quantity", "price", "order_type"]
+    if not all(k in data for k in required):
+        return jsonify({"error": "Missing fields"}), 400
+
+    timestamp = int(time.time() * 1000)
+    params = {
+        "symbol": data["symbol"],
+        "side": data["side"].upper(),
+        "type": data["order_type"].upper(),
+        "quantity": data["quantity"],
+        "price": data["price"],
+        "recvWindow": 5000,
+        "timeInForce": "GTC",
+        "timestamp": timestamp
+    }
+
+    query_string = "&".join([f"{k}={params[k]}" for k in sorted(params)])
+    signature = hmac.new(BINANCE_API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+    url = f"https://api.binance.com/api/v3/order?{query_string}&signature={signature}"
+    res = requests.post(url, headers=headers)
+
+    if res.status_code == 200:
+        return jsonify({"message": "Trade executed", "response": res.json()})
+    else:
+        return jsonify({"error": "Trade failed", "details": res.json()}), 400
+
 @app.route("/get-trades", methods=["GET"])
 def get_trades():
     return jsonify(trades)
@@ -114,7 +154,6 @@ def active_trade():
 def update_trade():
     data = request.get_json()
     symbol = data.get("symbol")
-
     for trade in trades:
         if trade.get("symbol") == symbol and trade.get("status") == "OPEN":
             trade["status"] = "CLOSED"
@@ -129,15 +168,14 @@ def backtest():
 
     prices = data["prices"]
     df = pd.DataFrame(prices)
-    required_cols = ["open", "high", "low", "close"]
-    if df.empty or not all(col in df.columns for col in required_cols):
-        return jsonify({"error": "Invalid 'prices' data format"}), 400
+    if df.empty or not all(col in df.columns for col in ["open", "high", "low", "close"]):
+        return jsonify({"error": "Invalid 'prices' format"}), 400
 
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
     df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
 
-    valid_trades = []
+    results = []
     for i in range(20, len(df)):
         row = df.iloc[i]
         if row["rsi"] < 30 and row["macd"] > 0:
@@ -146,35 +184,29 @@ def backtest():
             tp = entry + (2.5 * (entry - sl))
             rrr = round((tp - entry) / (entry - sl), 2)
             if rrr >= 2.5:
-                valid_trades.append({
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
-                    "rrr": rrr
-                })
+                results.append({"entry": round(entry, 4), "sl": round(sl, 4), "tp": round(tp, 4), "rrr": rrr})
 
-    return jsonify({"total": len(prices), "valid_trades": valid_trades})
+    return jsonify({"total": len(df), "valid_trades": results})
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
     data = request.get_json()
-    if not data or "prices" not in data:
-        return jsonify({"error": "Missing 'prices' key in JSON"}), 400
+    prices = data.get("prices")
+    if not prices:
+        return jsonify({"error": "Missing 'prices'"}), 400
 
-    prices = data["prices"]
     df = pd.DataFrame(prices)
-    required_cols = ["open", "high", "low", "close"]
-    if df.empty or not all(col in df.columns for col in required_cols):
-        return jsonify({"error": "Invalid 'prices' data format"}), 400
+    if df.empty or not all(col in df.columns for col in ["open", "high", "low", "close"]):
+        return jsonify({"error": "Invalid data"}), 400
 
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
     df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
 
     atr = round(df["atr"].iloc[-1], 4)
-    close_price = df["close"].iloc[-1]
-    stop_loss = round(close_price - (1.5 * atr), 4)
-    take_profit = round(close_price + (2.5 * (close_price - stop_loss)), 4)
+    close = df["close"].iloc[-1]
+    sl = round(close - (1.5 * atr), 4)
+    tp = round(close + (2.5 * (close - sl)), 4)
 
     df_1h = df.tail(60)
     rsi_1h = round(ta.momentum.RSIIndicator(close=df_1h["close"]).rsi().iloc[-1], 2)
@@ -202,13 +234,14 @@ def analyze():
         "rsi_1h": rsi_1h,
         "macd": round(df["macd"].iloc[-1], 4),
         "atr": atr,
-        "dynamic_sl": stop_loss,
-        "dynamic_tp": take_profit,
+        "dynamic_sl": sl,
+        "dynamic_tp": tp,
         "chart": f"data:image/png;base64,{image_base64}"
     })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
