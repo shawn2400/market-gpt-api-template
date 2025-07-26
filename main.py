@@ -12,7 +12,7 @@ import hashlib
 import time
 import requests
 
-# Binance LIVE API Keys (REAL)
+# Binance API Keys (REAL)
 BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
 BINANCE_API_SECRET = "soQYlzu6jYiQj8ZLxlXNPWHWTLPRb0EXLK239iFVz1XmnX9EvtDaG7D9zGabCVEq"
 
@@ -24,7 +24,10 @@ history = []
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"message": "AlgoGPT API is live ✅"})
+    check = requests.get("https://fapi.binance.com/fapi/v1/time")
+    if check.status_code == 200:
+        return jsonify({"message": "✅ AlgoGPT API is live (Binance connected)"})
+    return jsonify({"message": "⚠️ API live but Binance connection failed"}), 500
 
 @app.route("/price", methods=["GET"])
 def get_price():
@@ -43,19 +46,19 @@ def calculate_sl_tp():
     stop = data.get("stop")
     target = data.get("target") or data.get("tp")
     if entry is None or stop is None or target is None:
-        return jsonify({"error": "Missing one of the required fields: entry, stop, target/tp"}), 400
-
+        return jsonify({"error": "Missing entry, stop, or target"}), 400
     loss = abs(entry - stop)
     profit = abs(target - entry)
     if loss == 0:
-        return jsonify({"error": "Stop loss must be different from entry"}), 400
-
+        return jsonify({"error": "Invalid stop loss"}), 400
     rrr = round(profit / loss, 2)
     if rrr < 2.0:
-        return jsonify({"error": f"RRR too low: {rrr}. Must be ≥ 2.0"}), 400
-
+        return jsonify({"error": f"RRR too low: {rrr}"}), 400
     trailing_tp = round(profit * 0.2, 4)
-    return jsonify({"sl": stop, "tp": target, "rrr": rrr, "trailing_tp": trailing_tp})
+    return jsonify({
+        "sl": stop, "tp": target, "rrr": rrr, "trailing_tp": trailing_tp,
+        "sl_note": f"(Suggested SL size: {round(loss, 4)})"
+    })
 
 @app.route("/calculate-quantity", methods=["POST"])
 def calculate_quantity():
@@ -67,37 +70,31 @@ def calculate_quantity():
         return jsonify({"error": "Missing required fields"}), 400
     if leverage < 5 or leverage > 35:
         return jsonify({"error": "Leverage must be between 5× and 35×"}), 400
-
     quantity = round((budget * leverage) / entry, 4)
     return jsonify({"quantity": quantity})
 
 @app.route("/save-trade", methods=["POST"])
 def save_trade():
     trade = request.get_json()
-    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
-    if not all(field in trade for field in required_fields):
+    required = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
+    if not all(field in trade for field in required):
         return jsonify({"error": "Missing required fields"}), 400
 
-    trade_type = trade.get("type", "REGULAR").upper()
-    if trade_type not in ["REGULAR", "GRID"]:
-        return jsonify({"error": "Invalid trade type. Must be 'REGULAR' or 'GRID'"}), 400
+    if len([t for t in trades if t["status"] == "OPEN"]) >= 4:
+        return jsonify({"error": "Max 4 trades allowed"}), 400
 
-    order_type = trade.get("order_type", "LIMIT").upper()
-    if order_type not in ["LIMIT", "STOP_LIMIT"]:
-        return jsonify({"error": "Invalid order type. Must be 'LIMIT' or 'STOP_LIMIT'"}), 400
-
-    trade["type"] = trade_type
-    trade["order_type"] = order_type
-
+    trade["type"] = trade["type"].upper()
+    trade["order_type"] = trade["order_type"].upper()
     sl_size = abs(trade["entry"] - trade["stop"])
     trade["trailing_sl"] = round(sl_size * 0.2, 4)
+    trade["rrr"] = round(abs(trade["tp"] - trade["entry"]) / sl_size, 2)
 
     if trade["confidence"] < 86:
-        return jsonify({"error": "Confidence must be ≥86% to save trade"}), 400
+        return jsonify({"error": "Confidence must be ≥86"}), 400
     if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
-        return jsonify({"error": "Confidence <88% allowed only with quality score ≥4"}), 400
+        return jsonify({"error": "Low confidence without quality score"}), 400
     if trade["confidence"] < 90 and trade["rrr"] < 2.5:
-        return jsonify({"error": "RRR too low for confidence <90%"}), 400
+        return jsonify({"error": "RRR too low for confidence"}), 400
 
     trade["status"] = "OPEN"
     trades.append(trade)
@@ -116,37 +113,36 @@ def execute_trade_internal(data):
         "timeInForce": "GTC",
         "timestamp": timestamp
     }
-
-    query_string = "&".join([f"{k}={params[k]}" for k in sorted(params)])
-    signature = hmac.new(BINANCE_API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
+    signature = hmac.new(BINANCE_API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
     headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-    url = f"https://api.binance.com/api/v3/order?{query_string}&signature={signature}"
+    url = f"https://api.binance.com/api/v3/order?{query}&signature={signature}"
     res = requests.post(url, headers=headers)
-
     if res.status_code == 200:
-        return jsonify({"message": "Trade executed", "response": res.json()})
-    else:
-        return jsonify({"error": "Trade failed", "details": res.json()}), 400
+        return jsonify({"message": "Executed", "response": res.json()})
+    return jsonify({"error": "Execution failed", "details": res.json()}), 400
 
 @app.route("/save-and-execute", methods=["POST"])
 def save_and_execute():
     trade = request.get_json()
-    required_fields = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type", "quantity"]
-    if not all(field in trade for field in required_fields):
+    if len([t for t in trades if t["status"] == "OPEN"]) >= 4:
+        return jsonify({"error": "Max 4 trades allowed"}), 400
+
+    required = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type", "quantity"]
+    if not all(field in trade for field in required):
         return jsonify({"error": "Missing required fields"}), 400
 
     sl_size = abs(trade["entry"] - trade["stop"])
-    rrr = round(abs(trade["tp"] - trade["entry"]) / sl_size, 2)
-    trade["rrr"] = rrr
+    trade["rrr"] = round(abs(trade["tp"] - trade["entry"]) / sl_size, 2)
     trade["trailing_sl"] = round(sl_size * 0.2, 4)
     trade["status"] = "OPEN"
 
     if trade["confidence"] < 86:
-        return jsonify({"error": "Confidence must be ≥86%"}), 400
+        return jsonify({"error": "Confidence must be ≥86"}), 400
     if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
-        return jsonify({"error": "Confidence <88% allowed only with quality score ≥4"}), 400
-    if trade["confidence"] < 90 and rrr < 2.5:
-        return jsonify({"error": "RRR too low for confidence <90%"}), 400
+        return jsonify({"error": "Low confidence without quality score"}), 400
+    if trade["confidence"] < 90 and trade["rrr"] < 2.5:
+        return jsonify({"error": "RRR too low for confidence"}), 400
 
     trades.append(trade)
     history.append(trade)
@@ -183,36 +179,8 @@ def update_trade():
     for trade in trades:
         if trade.get("symbol") == symbol and trade.get("status") == "OPEN":
             trade["status"] = "CLOSED"
-            return jsonify({"message": "Trade updated to CLOSED", "trade": trade})
-    return jsonify({"error": "No open trade found for given symbol"}), 404
-
-@app.route("/backtest", methods=["POST"])
-def backtest():
-    data = request.get_json()
-    if not data or "prices" not in data:
-        return jsonify({"error": "Missing 'prices' key in JSON"}), 400
-
-    prices = data["prices"]
-    df = pd.DataFrame(prices)
-    if df.empty or not all(col in df.columns for col in ["open", "high", "low", "close"]):
-        return jsonify({"error": "Invalid 'prices' format"}), 400
-
-    df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
-    df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
-    df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
-
-    results = []
-    for i in range(20, len(df)):
-        row = df.iloc[i]
-        if row["rsi"] < 30 and row["macd"] > 0:
-            entry = row["close"]
-            sl = entry - (1.5 * row["atr"])
-            tp = entry + (2.5 * (entry - sl))
-            rrr = round((tp - entry) / (entry - sl), 2)
-            if rrr >= 2.5:
-                results.append({"entry": round(entry, 4), "sl": round(sl, 4), "tp": round(tp, 4), "rrr": rrr})
-
-    return jsonify({"total": len(df), "valid_trades": results})
+            return jsonify({"message": "Trade closed", "trade": trade})
+    return jsonify({"error": "No open trade for symbol"}), 404
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -223,7 +191,7 @@ def analyze():
 
     df = pd.DataFrame(prices)
     if df.empty or not all(col in df.columns for col in ["open", "high", "low", "close"]):
-        return jsonify({"error": "Invalid data"}), 400
+        return jsonify({"error": "Invalid price data"}), 400
 
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
@@ -267,6 +235,7 @@ def analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
