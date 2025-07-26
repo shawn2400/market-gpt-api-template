@@ -7,8 +7,8 @@ ta
 requests
 fpdf
 beautifulsoup4
-prophet==1.1.5
-pystan==2.19.1.1
 Cython==0.29.36
+pystan==2.19.1.1
+prophet==1.1.5
 
 
