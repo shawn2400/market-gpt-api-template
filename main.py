@@ -1,4 +1,3 @@
-# חלק עליון (imports)
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pandas as pd
@@ -16,37 +15,46 @@ import json
 from datetime import datetime
 import pytz
 
-# 🆕 החדשים:
+# 🆕 מודולים חיצוניים
 from news_utils import fetch_crypto_news, analyze_news_impact
 from report_utils import generate_daily_pdf_report
 
+# ✅ Binance API Keys (LIVE)
 BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
 BINANCE_API_SECRET = "soQYlzu6jYiQj8ZLxlXNPWHWTLPRb0EXLK239iFVz1XmnX9EvtDaG7D9zGabCVEq"
 
+# ✅ Flask Setup
 app = Flask(__name__)
 CORS(app)
 
 trades = []
 history = []
 
-# מסלולים קיימים כמו /
-# ... (לא מצרף שוב כאן את כל הקוד שלך – אתה כבר יודע שהוא תקין)
+# 📈 ברירת מחדל: דשבורד ROOT
+@app.route("/")
+def home():
+    return jsonify({"message": "AlgoGPT API is running"}), 200
 
-# ✅ הוספה: חדשות קריפטו
+# ✅ חדשות קריפטו /news
 @app.route("/news", methods=["GET"])
 def get_crypto_news():
-    raw_news = fetch_crypto_news()
-    scored = analyze_news_impact(raw_news)
-    return jsonify({"news": scored})
+    try:
+        raw_news = fetch_crypto_news()
+        scored = analyze_news_impact(raw_news)
+        return jsonify({"news": scored})
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch news: {str(e)}"}), 500
 
-# ✅ הוספה: הפקת דוח יומי PDF
+# ✅ הפקת דוח יומי /daily-report
 @app.route("/daily-report", methods=["GET"])
 def daily_report():
     try:
         with open("pnl_tracker.json", "r") as f:
             pnl_data = json.load(f)
-    except:
+    except FileNotFoundError:
         return jsonify({"error": "Missing pnl_tracker.json"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Failed to read pnl data: {str(e)}"}), 500
 
     try:
         pdf_bytes = generate_daily_pdf_report(pnl_data)
@@ -55,9 +63,12 @@ def daily_report():
     except Exception as e:
         return jsonify({"error": f"Failed to generate report: {str(e)}"}), 500
 
-# הפעלת Flask
+# ✅ כאן ייכנסו כל שאר המסלולים שלך (price, sl_tp, quantity, trades וכו')
+
+# 🚀 הפעלת Flask
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
