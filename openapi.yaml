@@ -1,13 +1,14 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  description: API עבור ניתוחים טכניים, חישובי SL/TP, שמירת טריידים, ביצוע מסחר ו־Backtest בזמן אמת.
+  description: API עבור ניתוחים טכניים, חישובי SL/TP, שמירת טריידים, ביצוע מסחר, דוחות, חדשות ו־AI בזמן אמת.
   version: 1.0.0
 
 servers:
   - url: https://market-gpt-api-template.onrender.com
 
 paths:
+
   /price:
     get:
       summary: קבלת מחיר עדכני למטבע
@@ -25,12 +26,12 @@ paths:
           content:
             application/json:
               example:
-                symbol: "BTCUSDT"
+                symbol: BTCUSDT
                 price: 29450.12
 
   /calculate-sl-tp:
     post:
-      summary: חישוב SL ו־TP כולל יחס סיכון-רווח (RRR)
+      summary: חישוב SL ו־TP כולל יחס סיכון־רווח (RRR)
       operationId: calculateSlTp
       requestBody:
         required: true
@@ -115,7 +116,7 @@ paths:
           content:
             application/json:
               example:
-                status: "saved"
+                status: saved
 
   /save-and-execute:
     post:
@@ -154,7 +155,7 @@ paths:
           content:
             application/json:
               example:
-                status: "executed"
+                status: executed
 
   /get-trades:
     get:
@@ -183,7 +184,7 @@ paths:
           content:
             application/json:
               example:
-                status: "cleared"
+                status: cleared
 
   /stats:
     get:
@@ -209,12 +210,65 @@ paths:
         '200':
           description: דוח נוצר בהצלחה
           content:
-            application/pdf:
-              example: (base64 של PDF)
+            application/json:
+              example:
+                pdf_base64: "<base64-of-pdf>"
 
-# תוכל להוסיף גם את שאר המסלולים (news, snapshot וכו') באותו פורמט לפי הצורך.
+  /news:
+    get:
+      summary: קבלת חדשות קריפטו וניתוח השפעתן
+      operationId: getCryptoNews
+      responses:
+        '200':
+          description: חדשות נותחו בהצלחה
+          content:
+            application/json:
+              example:
+                news:
+                  - title: "Bitcoin rallies 12%"
+                    impact_score: 0.85
+                    sentiment: "positive"
+
+  /ai-analyze:
+    post:
+      summary: ניתוח AI עם Prophet לחיזוי מגמה עתידית
+      operationId: aiAnalyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                prices:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      time:
+                        type: string
+                      close:
+                        type: number
+      responses:
+        '200':
+          description: ניתוח בוצע בהצלחה
+          content:
+            application/json:
+              example:
+                symbol: ETHUSDT
+                direction: LONG
+                forecast:
+                  - ds: "2025-07-27T12:00:00"
+                    yhat: 3620.15
+                    yhat_lower: 3598.22
+                    yhat_upper: 3642.01
+                chart: "<base64>"
+
 components:
   schemas: {}
+
 
 
 
