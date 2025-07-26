@@ -1,48 +1,38 @@
 import requests
 
-CRYPTO_PANIC_API_KEY = "your_crypto_panic_api_key_here"  # החלף במפתח האמיתי שלך
-
-NEWS_API_URL = "https://cryptopanic.com/api/v1/posts/"
-
+CRYPTO_PANIC_API_KEY = "89404de8e0bb4d6e78e95ed26ff19970cdb8830a"
 
 def fetch_crypto_news():
-    params = {
-        "auth_token": CRYPTO_PANIC_API_KEY,
-        "filter": "important",
-        "public": "true",
-        "kind": "news"
-    }
-    try:
-        response = requests.get(NEWS_API_URL, params=params)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("results", [])
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch news: {e}")
+    url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTO_PANIC_API_KEY}&public=true"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json().get("results", [])
+    else:
         return []
 
-
 def analyze_news_impact(news_items):
-    positive_keywords = ["bullish", "surge", "rally", "partnership", "adoption", "approval"]
-    negative_keywords = ["hack", "ban", "lawsuit", "regulation", "crash", "scam"]
-
     scored_news = []
     for item in news_items:
+        title = item.get("title", "")
+        sentiment = item.get("votes", {})
         score = 0
-        title = item.get("title", "").lower()
-        url = item.get("url", "")
-        if any(word in title for word in positive_keywords):
-            score += 1
-        if any(word in title for word in negative_keywords):
-            score -= 1
-        scored_news.append({"title": item.get("title"), "url": url, "impact_score": score})
 
-    return scored_news
+        if "important" in title.lower() or "hack" in title.lower():
+            score += 3
+        if sentiment.get("positive", 0) > 3:
+            score += 2
+        if sentiment.get("negative", 0) > 2:
+            score -= 2
+        if "etf" in title.lower() or "approval" in title.lower():
+            score += 2
 
+        scored_news.append({
+            "title": title,
+            "url": item.get("url"),
+            "published_at": item.get("published_at"),
+            "score": score,
+            "sentiment": sentiment,
+        })
 
-# דוגמה לשימוש:
-if __name__ == "__main__":
-    news = fetch_crypto_news()
-    analyzed = analyze_news_impact(news)
-    for n in analyzed:
-        print(f"{n['impact_score']} | {n['title']}\n{n['url']}\n")
+    return sorted(scored_news, key=lambda x: x["score"], reverse=True)
+
