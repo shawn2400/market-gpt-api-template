@@ -12,7 +12,7 @@ from datetime import datetime
 import pytz
 from ta import trend, momentum, volatility, volume
 from news_utils import fetch_crypto_news, analyze_news_impact
-from report_utils import generate_daily_pdf_report
+from report_utils import generate_daily_report  # ✅ שם מתוקן
 
 # ✅ Binance API Keys (LIVE)
 BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
@@ -32,6 +32,10 @@ def home():
 @app.route("/preset", methods=["GET"])
 def get_preset():
     return jsonify({"preset": PRESET_TEXT})
+
+@app.route("/strategy", methods=["GET"])
+def get_strategy_rules():
+    return jsonify({"strategy": PRESET_TEXT}), 200
 
 @app.route("/news", methods=["GET"])
 def get_crypto_news():
@@ -53,7 +57,7 @@ def daily_report():
         return jsonify({"error": f"Failed to read pnl data: {str(e)}"}), 500
 
     try:
-        pdf_bytes = generate_daily_pdf_report(pnl_data)
+        pdf_bytes = generate_daily_report(pnl_data=pnl_data)
         encoded_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
         return jsonify({"pdf_base64": encoded_pdf})
     except Exception as e:
@@ -101,6 +105,7 @@ def ai_analyze():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
