@@ -4,13 +4,12 @@ services:
     env: python
     plan: free
     region: oregon
-    buildCommand: |
-      pip install Cython==0.29.36
-      pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: gunicorn main:app --timeout 90
     envVars:
       - key: PYTHON_VERSION
         value: 3.10
     autoDeploy: true
+
 
 
