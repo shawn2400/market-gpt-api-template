@@ -301,8 +301,57 @@ paths:
                 today_pnl: 84.15
                 best_day: "2025-07-25"
 
+  /snapshot:
+    post:
+      summary: יצירת Snapshot גרפי של טרייד (כולל גרף וניתוח)
+      operationId: createSnapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol, entry, stop, tp, leverage, direction]
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: number
+                direction:
+                  type: string
+      responses:
+        '200':
+          description: Snapshot נוצר בהצלחה (base64 של גרף + תובנות)
+
+  /email-alert:
+    post:
+      summary: שליחת התראת אימייל פנימית (ללא גוף חיצוני)
+      operationId: sendEmailAlert
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, message]
+              properties:
+                subject:
+                  type: string
+                message:
+                  type: string
+      responses:
+        '200':
+          description: האימייל נשלח בהצלחה
+
 components:
   schemas: {}
+
 
 
 
