@@ -349,8 +349,25 @@ paths:
         '200':
           description: האימייל נשלח בהצלחה
 
+  /news:
+    get:
+      summary: קבלת חדשות קריפטו חמות מ־CryptoPanic
+      operationId: getCryptoNews
+      responses:
+        '200':
+          description: רשימת החדשות התקבלה בהצלחה
+
+  /daily-report:
+    get:
+      summary: הפקת דוח PDF יומי עם סטטיסטיקות וגרפים
+      operationId: getDailyReport
+      responses:
+        '200':
+          description: דוח PDF נוצר בהצלחה (base64 או לינק)
+
 components:
   schemas: {}
+
 
 
 
