@@ -36,3 +36,4 @@ def analyze_news_impact(news_items):
 
     return sorted(scored_news, key=lambda x: x["score"], reverse=True)
 
+
