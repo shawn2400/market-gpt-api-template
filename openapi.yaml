@@ -102,6 +102,43 @@ paths:
         '200':
           description: הטרייד נשמר בהצלחה
 
+  /save-and-execute:
+    post:
+      summary: שמירת טרייד + ביצוע LIVE מיידי בבינאנס
+      operationId: saveAndExecute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [symbol, entry, stop, tp, leverage, direction, confidence, type, order_type, quantity]
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: number
+                direction:
+                  type: string
+                confidence:
+                  type: number
+                type:
+                  type: string
+                order_type:
+                  type: string
+                quantity:
+                  type: number
+      responses:
+        '200':
+          description: טרייד נשמר ובוצע מיידית
+
   /get-trades:
     get:
       summary: הצגת כל הטריידים השמורים
@@ -216,16 +253,13 @@ paths:
               properties:
                 symbol:
                   type: string
-                  example: BTCUSDT
                 side:
                   type: string
                   enum: [BUY, SELL]
                 quantity:
                   type: number
-                  example: 0.002
                 price:
                   type: number
-                  example: 29500
                 order_type:
                   type: string
                   enum: [LIMIT, STOP_LIMIT]
@@ -242,9 +276,17 @@ paths:
       responses:
         '200':
           description: שעה נוכחית בישראל וסטטוס "שעה חמה" או לא
+          content:
+            application/json:
+              example:
+                datetime: "2025-07-26 15:43:00"
+                hour: 15
+                is_hot_hour: true
+                note: "🟢 שעה חמה למסחר"
 
 components:
   schemas: {}
+
 
 
 
