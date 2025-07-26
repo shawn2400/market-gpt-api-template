@@ -8,11 +8,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
 from prophet import Prophet
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from ta import trend, momentum, volatility, volume
 from news_utils import fetch_crypto_news, analyze_news_impact
-from report_utils import generate_daily_report  # ✅ שם מתוקן
+from report_utils import generate_daily_pdf_report
+from snapshot_utils import save_trade_snapshot
+from news_utils import send_email_alert
+import threading
+import schedule
+import time
 
 # ✅ Binance API Keys (LIVE)
 BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
@@ -57,7 +62,7 @@ def daily_report():
         return jsonify({"error": f"Failed to read pnl data: {str(e)}"}), 500
 
     try:
-        pdf_bytes = generate_daily_report(pnl_data=pnl_data)
+        pdf_bytes = generate_daily_pdf_report(pnl_data)
         encoded_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
         return jsonify({"pdf_base64": encoded_pdf})
     except Exception as e:
@@ -93,6 +98,10 @@ def ai_analyze():
         buf.seek(0)
         image_base64 = base64.b64encode(buf.read()).decode("utf-8")
 
+        # ✅ שמירת Snapshot + Email Alert אוטומטית
+        save_trade_snapshot(symbol, direction, forecast, image_base64)
+        send_email_alert(symbol, direction, forecast)
+
         return jsonify({
             "symbol": symbol,
             "direction": direction,
@@ -103,8 +112,28 @@ def ai_analyze():
     except Exception as e:
         return jsonify({"error": f"AI analysis failed: {str(e)}"}), 500
 
+# ✅ שליחה יומית אוטומטית של דוח PDF
+
+def run_daily_job():
+    try:
+        with open("pnl_tracker.json", "r") as f:
+            pnl_data = json.load(f)
+        pdf_bytes = generate_daily_pdf_report(pnl_data)
+        send_email_alert("Daily Report", "Attached daily trading report.", attachment=pdf_bytes)
+    except Exception as e:
+        print(f"[!] Daily job failed: {e}")
+
+def schedule_jobs():
+    schedule.every().day.at("20:30").do(run_daily_job)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+threading.Thread(target=schedule_jobs, daemon=True).start()
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
