@@ -284,6 +284,23 @@ paths:
                 is_hot_hour: true
                 note: "🟢 שעה חמה למסחר"
 
+  /stats:
+    get:
+      summary: הצגת סטטיסטיקות כוללות של PNL, רווחים, הצלחות ויחס הצלחה
+      operationId: getStats
+      responses:
+        '200':
+          description: סטטיסטיקות PNL יומיות ואחוזי הצלחה
+          content:
+            application/json:
+              example:
+                total_trades: 21
+                profitable_trades: 18
+                win_rate: 85.7
+                total_pnl: 653.42
+                today_pnl: 84.15
+                best_day: "2025-07-25"
+
 components:
   schemas: {}
 
