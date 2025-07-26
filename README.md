@@ -1,86 +1,85 @@
 # 📊 AlgoGPT — מערכת מסחר חכמה בזמן אמת
 
-מערכת אוטומטית לניתוח טכני, חישובי SL/TP, ניהול טריידים, סריקת הזדמנויות, Backtest, גריד חכם ומסחר ישיר ב־Binance Futures (כולל תמיכה ב־Grid ו־Spot).
+מערכת Algo אוטומטית לניתוח טכני, חישובי SL/TP, ניהול טריידים, גריד חכם, Backtest ומסחר ישיר ב־Binance Futures או Spot.  
+פועלת בזמן אמת לפי כללים קשיחים ו־API חי על שרת Render.
 
 ---
 
 ## 🚀 תכונות עיקריות
 
-- ✅ ניתוח טכני בזמן אמת: RSI, MACD, EMA, BB, ATR
-- ✅ חישוב SL/TP כולל Trailing SL ו־RRR דינמי
-- ✅ תמיכה ב־SL לפי ATR × 1.5 בלבד
-- ✅ ניתוח לפי שני טיימפריימים: 15m ו־1h
-- ✅ תמיכה ב־LIMIT ו־STOP-LIMIT בלבד
-- ✅ ניהול טריידים עם סטטוס (ACTIVE / CLOSED)
-- ✅ הצגת גרף כ־Base64 לצרכי GPT
-- ✅ תמיכה ב־Regular ו־Grid trades
-- ✅ תמיכה מלאה ב־Active Trade יחיד בלבד
-- ✅ Smart Grid אוטומטי לפי Confidence
-- ✅ זיהוי אוטומטי של FVG ו־Order Blocks
+- ✅ ניתוח טכני חי (RSI, MACD, EMA, BB, ADX, ATR, OBV)
+- ✅ חישוב SL ו־TP כולל Trailing SL ודינמיקה לפי תנודתיות
+- ✅ חישוב SL לפי ATR × 1.5 בלבד
+- ✅ ניתוח בטיימפריימים כפולים: 15m ו־1h בלבד
+- ✅ תמיכה בהזמנות Limit / Stop-Limit בלבד
+- ✅ ניהול טרייד יחיד (ACTIVE בלבד)
+- ✅ תמיכה מלאה ב־Spot, Futures ו־Grid
+- ✅ Smart Grid לפי Confidence
+- ✅ תצוגת גרף (base64) ל־GPT
+- ✅ ניתוח Order Blocks ו־Fair Value Gaps (FVG)
 - ✅ Backtest כולל quality_score
-- ✅ תמיכה מלאה במסחר חי (LIVE) דרך Binance API
-- ✅ שליחה אוטומטית של טריידים ל־Binance כולל spot ו־futures
+- ✅ תמיכה מלאה ב־Binance API LIVE (כולל ביצוע פקודות)
 
 ---
 
 ## 🧠 הרחבות Pro Elite
 
-- 📌 Confidence גמיש (88%+ או 86% עם תנאים)
-- 📌 מינוף דינמי בין 5× ל־35× לפי איכות טרייד
-- 📌 Order Type חכם (Limit / Stop-Limit בלבד)
-- 📌 Trailing SL ו־TP אוטומטיים לפי תנודתיות
-- 📌 תמיכה בפיצול תקציב ל־2 טריידים אם אין קורלציה
-- 📌 Filtering לפי איכות אינדיקטורים ו־quality_score
-- 📌 ניתוח קורלציה בין מטבעות – מניעת טריידים חופפים
-- 📌 כניסה רק לפי Breakout / Pullback / Reversal אמיתי
-- 📌 Auto Risk Allocation לפי טריידים היסטוריים
-- 📌 ניתוח גרפי כולל תצפיות נריות
+- 📌 Confidence גמיש (88%+ או 86% עם quality_score ≥ 4)
+- 📌 מינוף אוטומטי לפי רווחיות ו־SL (5× עד 35×)
+- 📌 Trailing SL/TP לפי תנודתיות
+- 📌 פיצול תקציב ל־2 טריידים רק אם אין קורלציה
+- 📌 Filtering לפי איכות אינדיקטורים ו־Scoring
+- 📌 כניסה רק לפי Breakout / Pullback / Reversal
+- 📌 Auto Risk Allocation
+- 📌 ניתוח עומק מלא כולל נרות, קורלציות, נפח חריג
 
 ---
 
-## 🔧 פיצ’רים לעתיד (בפיתוח)
+## 🔧 תכונות עתידיות (בפיתוח)
 
-- 🧠 ניתוח Machine Learning (תשתית מוכנה)
-- 📈 Heatmaps לפי עומק שוק
-- 💧 Liquidity Zones לזיהוי אזורי נזילות מוסדיים
-- 💼 ניהול תיק השקעות
-- 📘 יומן טריידים חכם (כולל הערות, קטגוריות, הצלחות)
+- 🤖 Machine Learning לזיהוי טריידים חוזרים
+- 📈 Heatmaps לזיהוי עומק שוק
+- 🧠 Liquidity Zones
+- 📘 יומן טריידים חכם
+- 📊 ניתוח תיק השקעות
 
 ---
 
-## 📡 מסלולי API
+## 📡 API — מסלולים נתמכים
 
-| נתיב                  | תיאור                                              |
+| נתיב API              | תיאור                                              |
 |-----------------------|-----------------------------------------------------|
-| `/price`              | קבלת מחיר עדכני ממקור Binance API                  |
-| `/calculate-sl-tp`    | חישוב SL / TP כולל יחס סיכון־רווח (RRR)            |
-| `/calculate-quantity` | חישוב כמות בהתאם לתקציב ומינוף                     |
-| `/save-trade`         | שמירת טרייד חדש אם עומד בכללים                      |
-| `/get-trades`         | הצגת כל הטריידים השמורים                            |
-| `/clear-trades`       | מחיקת כל הטריידים                                   |
-| `/active-trade`       | בדיקה אם יש טרייד פתוח                              |
-| `/update-trade`       | עדכון סטטוס טרייד קיים ל־CLOSED                    |
-| `/backtest`           | ניתוח אסטרטגי לאחור כולל אינדיקטורים              |
-| `/analyze`            | ניתוח טכני בזמן אמת כולל ניתוח עומק               |
-| `/execute-trade`      | ביצוע טרייד בפועל ב־Binance Futures או Spot        |
+| `/price`              | קבלת מחיר למטבע מסוים                             |
+| `/calculate-sl-tp`    | חישוב SL/TP כולל RRR                              |
+| `/calculate-quantity` | חישוב כמות לפי תקציב, מינוף ומחיר                 |
+| `/save-trade`         | שמירת טרייד חדש (כולל סטטוס, סיבה, אינדיקטורים)  |
+| `/get-trades`         | קבלת כל הטריידים                                   |
+| `/clear-trades`       | מחיקת טריידים קיימים                               |
+| `/active-trade`       | בדיקת טרייד פתוח                                  |
+| `/update-trade`       | סגירת טרייד לפי סימול                              |
+| `/backtest`           | בדיקת אסטרטגיה לאחור                              |
+| `/analyze`            | ניתוח טכני בזמן אמת                               |
+| `/execute-trade`      | ביצוע טרייד בפועל (Spot / Futures)                |
+| `/current-time-il`    | הצגת שעה נוכחית בישראל + בדיקת "שעה חמה"         |
 
 ---
 
 ## 💰 תקציב
 
 - ברירת מחדל: **$100–$1000**
-- התקציב בפועל מחושב אוטומטית לפי SL, Confidence, מינוף, ונזילות
-- תמיכה מלאה בפיצול תקציב רק אם אין קורלציה בין טריידים
+- כל טרייד מקבל תקציב מותאם לפי Confidence, SL, מינוף ונזילות
+- תמיכה בפיצול תקציב רק אם אין קורלציה בין טריידים
 
 ---
 
-## 🛠 התקנה מקומית
+## ⚙️ התקנה מקומית
 
 ```bash
 git clone https://github.com/your-username/AlgoGPT.git
 cd AlgoGPT
 pip install -r requirements.txt
 python main.py
+
 
 
 
