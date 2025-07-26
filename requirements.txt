@@ -7,8 +7,7 @@ ta
 requests
 fpdf
 beautifulsoup4
-Cython==0.29.36
-pystan==2.19.1.1
-prophet==1.1.5
+prophet           # ✅ גרסה עדכנית שלא דורשת pystan
+
 
 
