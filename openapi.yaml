@@ -14,17 +14,24 @@ paths:
       summary: קבלת מחיר עדכני למטבע
       operationId: getPrice
       parameters:
-        - in: query
-          name: symbol
+        - name: symbol
+          in: query
+          required: true
           schema:
             type: string
-          required: true
           description: סימול המטבע (כמו BTCUSDT)
       responses:
         '200':
           description: מחיר התקבל בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  price:
+                    type: number
               example:
                 symbol: BTCUSDT
                 price: 29450.12
@@ -51,6 +58,15 @@ paths:
           description: חישוב בוצע בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  sl:
+                    type: number
+                  tp:
+                    type: number
+                  rrr:
+                    type: number
               example:
                 sl: 3.5
                 tp: 4.2
@@ -78,6 +94,11 @@ paths:
           description: הכמות חושבה בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  quantity:
+                    type: number
               example:
                 quantity: 15.23
 
@@ -115,6 +136,11 @@ paths:
           description: הטרייד נשמר בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
               example:
                 status: saved
 
@@ -154,6 +180,11 @@ paths:
           description: טרייד נשמר ובוצע מיידית
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
               example:
                 status: executed
 
@@ -166,6 +197,24 @@ paths:
           description: רשימת הטריידים התקבלה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  trades:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        symbol:
+                          type: string
+                        entry:
+                          type: number
+                        stop:
+                          type: number
+                        tp:
+                          type: number
+                        status:
+                          type: string
               example:
                 trades:
                   - symbol: BTCUSDT
@@ -183,6 +232,11 @@ paths:
           description: הטריידים נמחקו בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
               example:
                 status: cleared
 
@@ -195,6 +249,19 @@ paths:
           description: סטטיסטיקות יומיות
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  total_trades:
+                    type: integer
+                  profitable_trades:
+                    type: integer
+                  win_rate:
+                    type: number
+                  total_pnl:
+                    type: number
+                  today_pnl:
+                    type: number
               example:
                 total_trades: 21
                 profitable_trades: 18
@@ -211,8 +278,13 @@ paths:
           description: דוח נוצר בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  pdf_base64:
+                    type: string
               example:
-                pdf_base64: "<base64-of-pdf>"
+                pdf_base64: "JVBERi0xLjQKJ..."
 
   /news:
     get:
@@ -223,6 +295,20 @@ paths:
           description: חדשות נותחו בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  news:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                        impact_score:
+                          type: number
+                        sentiment:
+                          type: string
               example:
                 news:
                   - title: "Bitcoin rallies 12%"
@@ -256,6 +342,28 @@ paths:
           description: ניתוח בוצע בהצלחה
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  direction:
+                    type: string
+                  forecast:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ds:
+                          type: string
+                        yhat:
+                          type: number
+                        yhat_lower:
+                          type: number
+                        yhat_upper:
+                          type: number
+                  chart:
+                    type: string
               example:
                 symbol: ETHUSDT
                 direction: LONG
@@ -268,6 +376,7 @@ paths:
 
 components:
   schemas: {}
+
 
 
 
