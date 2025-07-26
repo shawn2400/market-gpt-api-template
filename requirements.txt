@@ -7,4 +7,5 @@ ta
 requests
 fpdf
 beautifulsoup4
+prophet==1.1.5
 
