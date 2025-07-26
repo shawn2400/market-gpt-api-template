@@ -10,6 +10,7 @@ services:
     startCommand: gunicorn main:app --timeout 90
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10         # חובה! Prophet לא תומכת ב־3.13
+        value: 3.10
     autoDeploy: true
+
 
