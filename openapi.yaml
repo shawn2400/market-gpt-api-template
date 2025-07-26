@@ -235,8 +235,17 @@ paths:
         '400':
           description: שגיאה בביצוע הפקודה
 
+  /current-time-il:
+    get:
+      summary: בדיקת השעה הנוכחית בישראל וזיהוי אם זו שעה חמה למסחר
+      operationId: getCurrentTimeIL
+      responses:
+        '200':
+          description: שעה נוכחית בישראל וסטטוס "שעה חמה" או לא
+
 components:
   schemas: {}
+
 
 
 
