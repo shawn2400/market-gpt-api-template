@@ -112,6 +112,17 @@ def ai_analyze():
     except Exception as e:
         return jsonify({"error": f"AI analysis failed: {str(e)}"}), 500
 
+@app.route("/get-trades", methods=["GET"])
+def get_trades():
+    try:
+        with open("pnl_tracker.json", "r") as f:
+            trades = json.load(f)
+        return jsonify({"trades": trades})
+    except FileNotFoundError:
+        return jsonify({"trades": []})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ✅ שליחה יומית אוטומטית של דוח PDF
 
 def run_daily_job():
@@ -133,6 +144,7 @@ threading.Thread(target=schedule_jobs, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
