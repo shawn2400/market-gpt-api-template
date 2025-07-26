@@ -1,12 +1,12 @@
 services:
-  - type: web
-    name: market-gpt-api-template
-    env: python
-    plan: free
-    region: oregon
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app
+  - type: web                         # שירות אינטרנט (Flask API)
+    name: market-gpt-api-template     # שם השירות כפי שיוצג בלוח הבקרה של Render
+    env: python                       # סביבת הריצה היא Python
+    plan: free                        # תוכנית חינמית (אפשר לשדרג בעתיד)
+    region: oregon                    # אזור ההרצה (Oregon, ארה"ב)
+    buildCommand: pip install -r requirements.txt   # איך לבנות את הפרויקט (התקנת תלויות)
+    startCommand: gunicorn main:app                 # איך להפעיל את Flask API (קובץ main.py)
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10
-    autoDeploy: true
+        value: 3.10                  # גרסת פייתון (תואם ל־ta, matplotlib, וכו')
+    autoDeploy: true                 # כל שינוי בגיטהאב יבצע Deploy אוטומטי
