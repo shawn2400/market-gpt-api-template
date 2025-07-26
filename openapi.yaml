@@ -1,3 +1,220 @@
+openapi: 3.1.0
+info:
+  title: AlgoGPT API
+  description: API עבור ניתוחים טכניים, חישובי SL/TP, שמירת טריידים, ביצוע מסחר ו־Backtest בזמן אמת.
+  version: 1.0.0
+
+servers:
+  - url: https://market-gpt-api-template.onrender.com
+
+paths:
+  /price:
+    get:
+      summary: קבלת מחיר עדכני למטבע
+      operationId: getPrice
+      parameters:
+        - in: query
+          name: symbol
+          schema:
+            type: string
+          required: true
+          description: סימול המטבע (כמו BTCUSDT)
+      responses:
+        '200':
+          description: מחיר התקבל בהצלחה
+          content:
+            application/json:
+              example:
+                symbol: "BTCUSDT"
+                price: 29450.12
+
+  /calculate-sl-tp:
+    post:
+      summary: חישוב SL ו־TP כולל יחס סיכון-רווח (RRR)
+      operationId: calculateSlTp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+      responses:
+        '200':
+          description: חישוב בוצע בהצלחה
+          content:
+            application/json:
+              example:
+                sl: 3.5
+                tp: 4.2
+                rrr: 2.8
+
+  /calculate-quantity:
+    post:
+      summary: חישוב כמות לפי תקציב, מינוף ומחיר כניסה
+      operationId: calculateQuantity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                budget:
+                  type: number
+                entry:
+                  type: number
+                leverage:
+                  type: number
+      responses:
+        '200':
+          description: הכמות חושבה בהצלחה
+          content:
+            application/json:
+              example:
+                quantity: 15.23
+
+  /save-trade:
+    post:
+      summary: שמירת טרייד חדש למעקב
+      operationId: saveTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: number
+                direction:
+                  type: string
+                confidence:
+                  type: number
+                type:
+                  type: string
+                order_type:
+                  type: string
+      responses:
+        '200':
+          description: הטרייד נשמר בהצלחה
+          content:
+            application/json:
+              example:
+                status: "saved"
+
+  /save-and-execute:
+    post:
+      summary: שמירת טרייד + ביצוע LIVE מיידי בבינאנס
+      operationId: saveAndExecute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: number
+                direction:
+                  type: string
+                confidence:
+                  type: number
+                type:
+                  type: string
+                order_type:
+                  type: string
+                quantity:
+                  type: number
+      responses:
+        '200':
+          description: טרייד נשמר ובוצע מיידית
+          content:
+            application/json:
+              example:
+                status: "executed"
+
+  /get-trades:
+    get:
+      summary: הצגת כל הטריידים השמורים
+      operationId: getTrades
+      responses:
+        '200':
+          description: רשימת הטריידים התקבלה
+          content:
+            application/json:
+              example:
+                trades:
+                  - symbol: BTCUSDT
+                    entry: 30000
+                    stop: 29000
+                    tp: 32500
+                    status: OPEN
+
+  /clear-trades:
+    post:
+      summary: ניקוי מוחלט של כל הטריידים
+      operationId: clearTrades
+      responses:
+        '200':
+          description: הטריידים נמחקו בהצלחה
+          content:
+            application/json:
+              example:
+                status: "cleared"
+
+  /stats:
+    get:
+      summary: הצגת סטטיסטיקות כוללות של ביצועים
+      operationId: getStats
+      responses:
+        '200':
+          description: סטטיסטיקות יומיות
+          content:
+            application/json:
+              example:
+                total_trades: 21
+                profitable_trades: 18
+                win_rate: 85.7
+                total_pnl: 653.42
+                today_pnl: 84.15
+
+  /daily-report:
+    get:
+      summary: הפקת דוח יומי ב־PDF כולל גרף PNL
+      operationId: getDailyReport
+      responses:
+        '200':
+          description: דוח נוצר בהצלחה
+          content:
+            application/pdf:
+              example: (base64 של PDF)
+
+# תוכל להוסיף גם את שאר המסלולים (news, snapshot וכו') באותו פורמט לפי הצורך.
+components:
+  schemas: {}
 
 
 
