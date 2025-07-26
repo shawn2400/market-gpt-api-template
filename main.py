@@ -11,10 +11,10 @@ import hmac
 import hashlib
 import time
 import requests
+import json
 from datetime import datetime
 import pytz
 
-# Binance API Keys (REAL)
 BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
 BINANCE_API_SECRET = "soQYlzu6jYiQj8ZLxlXNPWHWTLPRb0EXLK239iFVz1XmnX9EvtDaG7D9zGabCVEq"
 
@@ -81,23 +81,19 @@ def save_trade():
     required = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type"]
     if not all(field in trade for field in required):
         return jsonify({"error": "Missing required fields"}), 400
-
     if len([t for t in trades if t["status"] == "OPEN"]) >= 4:
         return jsonify({"error": "Max 4 trades allowed"}), 400
-
     trade["type"] = trade["type"].upper()
     trade["order_type"] = trade["order_type"].upper()
     sl_size = abs(trade["entry"] - trade["stop"])
     trade["trailing_sl"] = round(sl_size * 0.2, 4)
     trade["rrr"] = round(abs(trade["tp"] - trade["entry"]) / sl_size, 2)
-
     if trade["confidence"] < 86:
         return jsonify({"error": "Confidence must be ≥86"}), 400
     if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
         return jsonify({"error": "Low confidence without quality score"}), 400
     if trade["confidence"] < 90 and trade["rrr"] < 2.5:
         return jsonify({"error": "RRR too low for confidence"}), 400
-
     trade["status"] = "OPEN"
     trades.append(trade)
     history.append(trade)
@@ -129,26 +125,21 @@ def save_and_execute():
     trade = request.get_json()
     if len([t for t in trades if t["status"] == "OPEN"]) >= 4:
         return jsonify({"error": "Max 4 trades allowed"}), 400
-
     required = ["symbol", "entry", "stop", "tp", "leverage", "direction", "confidence", "type", "order_type", "quantity"]
     if not all(field in trade for field in required):
         return jsonify({"error": "Missing required fields"}), 400
-
     sl_size = abs(trade["entry"] - trade["stop"])
     trade["rrr"] = round(abs(trade["tp"] - trade["entry"]) / sl_size, 2)
     trade["trailing_sl"] = round(sl_size * 0.2, 4)
     trade["status"] = "OPEN"
-
     if trade["confidence"] < 86:
         return jsonify({"error": "Confidence must be ≥86"}), 400
     if trade["confidence"] < 88 and trade.get("quality_score", 0) < 4:
         return jsonify({"error": "Low confidence without quality score"}), 400
     if trade["confidence"] < 90 and trade["rrr"] < 2.5:
         return jsonify({"error": "RRR too low for confidence"}), 400
-
     trades.append(trade)
     history.append(trade)
-
     execution_data = {
         "symbol": trade["symbol"],
         "side": "BUY" if trade["direction"] == "LONG" else "SELL",
@@ -190,23 +181,18 @@ def analyze():
     prices = data.get("prices")
     if not prices:
         return jsonify({"error": "Missing 'prices'"}), 400
-
     df = pd.DataFrame(prices)
     if df.empty or not all(col in df.columns for col in ["open", "high", "low", "close"]):
         return jsonify({"error": "Invalid price data"}), 400
-
     df["rsi"] = ta.momentum.RSIIndicator(close=df["close"]).rsi()
     df["macd"] = ta.trend.MACD(close=df["close"]).macd_diff()
     df["atr"] = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"]).average_true_range()
-
     atr = round(df["atr"].iloc[-1], 4)
     close = df["close"].iloc[-1]
     sl = round(close - (1.5 * atr), 4)
     tp = round(close + (2.5 * (close - sl)), 4)
-
     df_1h = df.tail(60)
     rsi_1h = round(ta.momentum.RSIIndicator(close=df_1h["close"]).rsi().iloc[-1], 2)
-
     plt.figure(figsize=(10, 4))
     plt.plot(df["close"], label="Close Price")
     plt.title("Price with RSI & MACD")
@@ -217,13 +203,11 @@ def analyze():
     buf.seek(0)
     image_base64 = base64.b64encode(buf.read()).decode('utf-8')
     plt.close()
-
     signal = "neutral"
     if df["rsi"].iloc[-1] < 30:
         signal = "buy"
     elif df["rsi"].iloc[-1] > 70:
         signal = "sell"
-
     return jsonify({
         "signal": signal,
         "rsi_15m": round(df["rsi"].iloc[-1], 2),
@@ -242,7 +226,6 @@ def current_time_il():
     hour = now.hour
     hot_hours = [(8, 10), (12, 14), (16, 18), (21, 23)]
     is_hot = any(start <= hour <= end for start, end in hot_hours)
-
     return jsonify({
         "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
         "hour": hour,
@@ -250,8 +233,41 @@ def current_time_il():
         "note": "🟢 שעה חמה למסחר" if is_hot else "🔴 שעה חלשה – עדיף להמתין"
     })
 
+@app.route("/stats", methods=["GET"])
+def stats():
+    try:
+        with open("pnl_tracker.json", "r") as f:
+            data = json.load(f)
+    except:
+        return jsonify({"error": "Missing or invalid pnl_tracker.json"}), 400
+
+    trades = data.get("trades", [])
+    if not trades:
+        return jsonify({"message": "No trades yet"}), 200
+
+    total = len(trades)
+    wins = sum(1 for t in trades if t["result"] == "WIN")
+    losses = sum(1 for t in trades if t["result"] == "LOSS")
+    success_rate = round((wins / total) * 100, 2)
+    total_pnl = sum(t.get("pnl", 0) for t in trades)
+
+    pnl_by_day = {}
+    for t in trades:
+        date = t.get("timestamp", "")[:10]
+        pnl_by_day[date] = pnl_by_day.get(date, 0) + t.get("pnl", 0)
+
+    return jsonify({
+        "total_trades": total,
+        "wins": wins,
+        "losses": losses,
+        "success_rate": f"{success_rate}%",
+        "total_pnl": round(total_pnl, 2),
+        "pnl_by_day": pnl_by_day
+    })
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
