@@ -1,20 +1,16 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+import json
+import os
+import base64
 import pandas as pd
 import numpy as np
-import ta
 import matplotlib.pyplot as plt
-import os
-import io
-import base64
-import hmac
-import hashlib
-import time
-import requests
-import json
+from io import BytesIO
+from prophet import Prophet
 from datetime import datetime
 import pytz
-from prophet import Prophet
+from ta import trend, momentum, volatility, volume
 from news_utils import fetch_crypto_news, analyze_news_impact
 from report_utils import generate_daily_pdf_report
 
@@ -22,19 +18,21 @@ from report_utils import generate_daily_pdf_report
 BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
 BINANCE_API_SECRET = "soQYlzu6jYiQj8ZLxlXNPWHWTLPRb0EXLK239iFVz1XmnX9EvtDaG7D9zGabCVEq"
 
-# ✅ Flask Setup
 app = Flask(__name__)
 CORS(app)
 
-trades = []
-history = []
+# Load preset content
+with open("preset.txt", "r", encoding="utf-8") as f:
+    PRESET_TEXT = f.read()
 
-# 📈 ברירת מחדל: דשבורד ROOT
 @app.route("/")
 def home():
     return jsonify({"message": "AlgoGPT API is running"}), 200
 
-# ✅ חדשות קריפטו /news
+@app.route("/preset", methods=["GET"])
+def get_preset():
+    return jsonify({"preset": PRESET_TEXT})
+
 @app.route("/news", methods=["GET"])
 def get_crypto_news():
     try:
@@ -44,7 +42,6 @@ def get_crypto_news():
     except Exception as e:
         return jsonify({"error": f"Failed to fetch news: {str(e)}"}), 500
 
-# ✅ הפקת דוח יומי /daily-report
 @app.route("/daily-report", methods=["GET"])
 def daily_report():
     try:
@@ -62,7 +59,6 @@ def daily_report():
     except Exception as e:
         return jsonify({"error": f"Failed to generate report: {str(e)}"}), 500
 
-# ✅ ניתוח AI לחיזוי טווחי מחיר עתידיים
 @app.route("/ai-analyze", methods=["POST"])
 def ai_analyze():
     try:
@@ -86,9 +82,8 @@ def ai_analyze():
         trend = forecast['trend'].iloc[-1] - forecast['trend'].iloc[-7]
         direction = "LONG" if trend > 0 else "SHORT"
 
-        # גרף
         fig = model.plot(forecast)
-        buf = io.BytesIO()
+        buf = BytesIO()
         plt.savefig(buf, format='png')
         plt.close(fig)
         buf.seek(0)
@@ -104,9 +99,8 @@ def ai_analyze():
     except Exception as e:
         return jsonify({"error": f"AI analysis failed: {str(e)}"}), 500
 
-# 🚀 הפעלת Flask
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(host="0.0.0.0", port=10000)
 
 
 
