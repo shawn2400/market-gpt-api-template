@@ -1,298 +1,75 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  description: API עבור ניתוחים טכניים, חישובי SL/TP, שמירת טריידים, ביצוע מסחר, דוחות, חדשות ו־AI בזמן אמת.
+  description: |
+    AlgoGPT הוא סוחר Algo בזמן אמת המתחבר ל־Binance, מבצע ניתוחים טכניים, שמירת טריידים, חישובי SL/TP, הפקת גרפים ודוחות, תמיכה בחדשות קריפטו וחיזוי AI.
   version: 1.0.0
 
 servers:
   - url: https://market-gpt-api-template.onrender.com
 
 paths:
-
-  /price:
+  /:
     get:
-      summary: קבלת מחיר עדכני למטבע
-      operationId: getPrice
-      parameters:
-        - name: symbol
-          in: query
-          required: true
-          schema:
-            type: string
-          description: סימול המטבע (כמו BTCUSDT)
+      summary: בדיקת סטטוס השרת
+      operationId: HealthCheck
       responses:
         '200':
-          description: מחיר התקבל בהצלחה
+          description: השרת פועל
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  symbol:
+                  message:
                     type: string
-                  price:
-                    type: number
-              example:
-                symbol: BTCUSDT
-                price: 29450.12
+                    example: AlgoGPT API is running
 
-  /calculate-sl-tp:
-    post:
-      summary: חישוב SL ו־TP כולל יחס סיכון־רווח (RRR)
-      operationId: calculateSlTp
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-      responses:
-        '200':
-          description: חישוב בוצע בהצלחה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  sl:
-                    type: number
-                  tp:
-                    type: number
-                  rrr:
-                    type: number
-              example:
-                sl: 3.5
-                tp: 4.2
-                rrr: 2.8
-
-  /calculate-quantity:
-    post:
-      summary: חישוב כמות לפי תקציב, מינוף ומחיר כניסה
-      operationId: calculateQuantity
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                budget:
-                  type: number
-                entry:
-                  type: number
-                leverage:
-                  type: number
-      responses:
-        '200':
-          description: הכמות חושבה בהצלחה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  quantity:
-                    type: number
-              example:
-                quantity: 15.23
-
-  /save-trade:
-    post:
-      summary: שמירת טרייד חדש למעקב
-      operationId: saveTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-                leverage:
-                  type: number
-                direction:
-                  type: string
-                confidence:
-                  type: number
-                type:
-                  type: string
-                order_type:
-                  type: string
-      responses:
-        '200':
-          description: הטרייד נשמר בהצלחה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-              example:
-                status: saved
-
-  /save-and-execute:
-    post:
-      summary: שמירת טרייד + ביצוע LIVE מיידי בבינאנס
-      operationId: saveAndExecute
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-                leverage:
-                  type: number
-                direction:
-                  type: string
-                confidence:
-                  type: number
-                type:
-                  type: string
-                order_type:
-                  type: string
-                quantity:
-                  type: number
-      responses:
-        '200':
-          description: טרייד נשמר ובוצע מיידית
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-              example:
-                status: executed
-
-  /get-trades:
+  /preset:
     get:
-      summary: הצגת כל הטריידים השמורים
-      operationId: getTrades
+      summary: הצגת קובץ preset.txt
+      operationId: GetPreset
       responses:
         '200':
-          description: רשימת הטריידים התקבלה
+          description: קובץ ההגדרות המלא
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  trades:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        symbol:
-                          type: string
-                        entry:
-                          type: number
-                        stop:
-                          type: number
-                        tp:
-                          type: number
-                        status:
-                          type: string
-              example:
-                trades:
-                  - symbol: BTCUSDT
-                    entry: 30000
-                    stop: 29000
-                    tp: 32500
-                    status: OPEN
-
-  /clear-trades:
-    post:
-      summary: ניקוי מוחלט של כל הטריידים
-      operationId: clearTrades
-      responses:
-        '200':
-          description: הטריידים נמחקו בהצלחה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
+                  preset:
                     type: string
-              example:
-                status: cleared
+        '500':
+          description: שגיאה כללית
 
-  /stats:
+  /strategy:
     get:
-      summary: הצגת סטטיסטיקות כוללות של ביצועים
-      operationId: getStats
+      summary: הצג את כללי האסטרטגיה של AlgoGPT
+      description: מחזיר את כללי המסחר המוגדרים מראש בקובץ preset.txt, כולל אינדיקטורים, חוקים קשיחים, ומבנה תשובה נדרש.
+      operationId: GetStrategyRules
+      tags:
+        - Strategy
       responses:
         '200':
-          description: סטטיסטיקות יומיות
+          description: טקסט האסטרטגיה המלא
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  total_trades:
-                    type: integer
-                  profitable_trades:
-                    type: integer
-                  win_rate:
-                    type: number
-                  total_pnl:
-                    type: number
-                  today_pnl:
-                    type: number
-              example:
-                total_trades: 21
-                profitable_trades: 18
-                win_rate: 85.7
-                total_pnl: 653.42
-                today_pnl: 84.15
-
-  /daily-report:
-    get:
-      summary: הפקת דוח יומי ב־PDF כולל גרף PNL
-      operationId: getDailyReport
-      responses:
-        '200':
-          description: דוח נוצר בהצלחה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  pdf_base64:
+                  strategy:
                     type: string
-              example:
-                pdf_base64: "JVBERi0xLjQKJ..."
+                    example: 🧠 הגדרת GPT – סוחר Algo מקצועי בזמן אמת...
+        '500':
+          description: שגיאה כללית
 
   /news:
     get:
-      summary: קבלת חדשות קריפטו וניתוח השפעתן
-      operationId: getCryptoNews
+      summary: שליפת חדשות קריפטו
+      operationId: GetCryptoNews
       responses:
         '200':
-          description: חדשות נותחו בהצלחה
+          description: רשימת חדשות עם ציון השפעה
           content:
             application/json:
               schema:
@@ -302,23 +79,33 @@ paths:
                     type: array
                     items:
                       type: object
-                      properties:
-                        title:
-                          type: string
-                        impact_score:
-                          type: number
-                        sentiment:
-                          type: string
-              example:
-                news:
-                  - title: "Bitcoin rallies 12%"
-                    impact_score: 0.85
-                    sentiment: "positive"
+        '500':
+          description: כשל בשליפת חדשות
+
+  /daily-report:
+    get:
+      summary: הפקת דוח יומי בפורמט PDF
+      operationId: GenerateDailyPDF
+      responses:
+        '200':
+          description: דוח מקודד בבסיס64
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pdf_base64:
+                    type: string
+                    format: byte
+        '400':
+          description: קובץ סטטיסטיקה לא קיים
+        '500':
+          description: כשל בהפקת הדוח
 
   /ai-analyze:
     post:
-      summary: ניתוח AI עם Prophet לחיזוי מגמה עתידית
-      operationId: aiAnalyze
+      summary: ניתוח AI מתקדם לחיזוי טווח מחירים
+      operationId: AIAnalyze
       requestBody:
         required: true
         content:
@@ -328,6 +115,7 @@ paths:
               properties:
                 symbol:
                   type: string
+                  example: ETHUSDT
                 prices:
                   type: array
                   items:
@@ -335,11 +123,12 @@ paths:
                     properties:
                       time:
                         type: string
+                        format: date-time
                       close:
                         type: number
       responses:
         '200':
-          description: ניתוח בוצע בהצלחה
+          description: תחזית AI כולל גרף וניתוח
           content:
             application/json:
               schema:
@@ -349,33 +138,22 @@ paths:
                     type: string
                   direction:
                     type: string
+                    enum: [LONG, SHORT]
                   forecast:
                     type: array
                     items:
                       type: object
-                      properties:
-                        ds:
-                          type: string
-                        yhat:
-                          type: number
-                        yhat_lower:
-                          type: number
-                        yhat_upper:
-                          type: number
                   chart:
                     type: string
-              example:
-                symbol: ETHUSDT
-                direction: LONG
-                forecast:
-                  - ds: "2025-07-27T12:00:00"
-                    yhat: 3620.15
-                    yhat_lower: 3598.22
-                    yhat_upper: 3642.01
-                chart: "<base64>"
+                    format: byte
+        '400':
+          description: נתונים חסרים או שגויים
+        '500':
+          description: ניתוח נכשל
 
 components:
   schemas: {}
+
 
 
 
