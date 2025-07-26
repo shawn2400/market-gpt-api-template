@@ -11,6 +11,8 @@ import hmac
 import hashlib
 import time
 import requests
+from datetime import datetime
+import pytz
 
 # Binance API Keys (REAL)
 BINANCE_API_KEY = "jJnAfHZd0EWQpX0CA0QNxRnrtsrnW10GQMg6Dx8d9O63mZSzZV7ixSBLNEqTeMIh"
@@ -233,8 +235,24 @@ def analyze():
         "chart": f"data:image/png;base64,{image_base64}"
     })
 
+@app.route("/current-time-il", methods=["GET"])
+def current_time_il():
+    tz = pytz.timezone("Asia/Jerusalem")
+    now = datetime.now(tz)
+    hour = now.hour
+    hot_hours = [(8, 10), (12, 14), (16, 18), (21, 23)]
+    is_hot = any(start <= hour <= end for start, end in hot_hours)
+
+    return jsonify({
+        "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "hour": hour,
+        "is_hot_hour": is_hot,
+        "note": "🟢 שעה חמה למסחר" if is_hot else "🔴 שעה חלשה – עדיף להמתין"
+    })
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
