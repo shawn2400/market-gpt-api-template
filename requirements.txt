@@ -1,18 +1,18 @@
-flask
-flask-cors
-gunicorn
-pandas
-numpy
-matplotlib
-plotly
-prophet
-ta
-pytz
-requests
-python-dotenv
-python-binance
-fpdf
-schedule
+flask==2.3.3
+flask-cors==4.0.0
+gunicorn==21.2.0
+pandas==2.2.2
+numpy==1.26.4
+matplotlib==3.8.4
+plotly==5.22.0
+prophet==1.1.5
+ta==0.11.0
+pytz==2024.1
+requests==2.31.0
+python-dotenv==1.0.1
+python-binance==1.0.17
+fpdf==1.7.2
+schedule==1.2.1
 
 
 
