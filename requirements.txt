@@ -13,6 +13,8 @@ plotly
 gunicorn
 python-binance
 python-dotenv
+scikit-learn
+
 
 
 
