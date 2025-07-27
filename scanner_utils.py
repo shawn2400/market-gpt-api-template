@@ -1,9 +1,10 @@
-import pandas as pd
 import time
-from utils.binance_client import client  # ✅
+import pandas as pd
+from utils.binance_client import client  # ✅ תיקון קריטי
 from utils.indicators import calculate_indicators, is_volume_spike
 from utils.quality_score import compute_quality_score
-from utils.price_utils import get_klines, get_live_price  # נניח שהפונקציות מוגדרות כאן או בקובץ אחר
+from utils.get_live_price import get_live_price
+from utils.get_klines import get_klines  # אם לא קיים – תוודא שיש קובץ כזה
 
 def scan_all_futures_live(budget_usd=100):
     results = []
@@ -85,6 +86,7 @@ def scan_all_futures_live(budget_usd=100):
 
     top = sorted(results, key=lambda x: (x['quality_score'], x['RRR']), reverse=True)[:10]
     return top
+
 
 
 
