@@ -1,9 +1,12 @@
+# trade_executor.py
+
 import os
 import json
 import time
 from binance.client import Client
-from dotenv import load_dotenv
+from binance.enums import *
 
+from dotenv import load_dotenv
 load_dotenv()
 
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -11,56 +14,42 @@ API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 client = Client(API_KEY, API_SECRET)
 
-def execute_trade_live(symbol, entry_price, stop_price, tp_price, direction, leverage):
+# ✅ פונקציה לשליחת טרייד בפועל ל־Binance Futures
+def execute_trade_live(symbol, side, quantity, entry_price, stop_price, tp_price, leverage=20):
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
+        side_binance = SIDE_BUY if side.upper() == 'LONG' else SIDE_SELL
 
-        side = Client.SIDE_BUY if direction.upper() == "LONG" else Client.SIDE_SELL
-        position_side = "LONG" if direction.upper() == "LONG" else "SHORT"
-
-        # פתיחת פקודת מרקט
         order = client.futures_create_order(
             symbol=symbol,
-            side=side,
-            type="MARKET",
-            quantity=calculate_quantity(symbol, entry_price, leverage),
+            side=side_binance,
+            type=ORDER_TYPE_MARKET,
+            quantity=quantity
         )
 
-        order_id = order["orderId"]
-
-        # הגדרת TP
+        # 🛡️ הצבת TP ו־SL דרך OCO (או פקודות נפרדות)
+        time.sleep(1)
         client.futures_create_order(
             symbol=symbol,
-            side=Client.SIDE_SELL if side == Client.SIDE_BUY else Client.SIDE_BUY,
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=tp_price,
-            closePosition=True,
-            workingType="MARK_PRICE",
-            timeInForce="GTC"
+            side=SIDE_SELL if side.upper() == 'LONG' else SIDE_BUY,
+            type=ORDER_TYPE_STOP_MARKET,
+            stopPrice=round(stop_price, 2),
+            closePosition=True
         )
-
-        # הגדרת SL
+        time.sleep(1)
         client.futures_create_order(
             symbol=symbol,
-            side=Client.SIDE_SELL if side == Client.SIDE_BUY else Client.SIDE_BUY,
-            type="STOP_MARKET",
-            stopPrice=stop_price,
-            closePosition=True,
-            workingType="MARK_PRICE",
-            timeInForce="GTC"
+            side=SIDE_SELL if side.upper() == 'LONG' else SIDE_BUY,
+            type=ORDER_TYPE_LIMIT,
+            price=round(tp_price, 2),
+            timeInForce=TIME_IN_FORCE_GTC,
+            closePosition=True
         )
 
-        return {"status": "ok", "order_id": order_id}
+        return {"status": "ok", "order": order}
     except Exception as e:
         return {"status": "failed", "error": str(e)}
 
-def calculate_quantity(symbol, entry_price, leverage, usdt_amount=100):
-    try:
-        step_size = 0.01  # ברירת מחדל – ניתן לשפר בהמשך עם fetch exchange info
-        qty = round((usdt_amount * leverage) / float(entry_price), 2)
-        return max(step_size, qty)
-    except:
-        return 0.01
 
 
 
