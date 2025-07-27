@@ -7,15 +7,18 @@ import os
 import pandas as pd
 import ta
 import logging
+
 from trade_executor import execute_trade_live
 from utils.quantity_utils import auto_risk_allocation
 from utils.quality_score import compute_quality_score
+from utils.trade_storage import save_trade  # ✅ שמירת טריידים
 
 load_dotenv()
 
 api_key = os.getenv("BINANCE_API_KEY")
 api_secret = os.getenv("BINANCE_API_SECRET")
 client = Client(api_key, api_secret)
+
 
 def get_futures_symbols():
     try:
@@ -26,6 +29,7 @@ def get_futures_symbols():
     except BinanceAPIException as e:
         logging.error(f"[get_futures_symbols] Binance API error: {e}")
         return []
+
 
 def fetch_klines(symbol, interval='15m', limit=100):
     try:
@@ -44,6 +48,7 @@ def fetch_klines(symbol, interval='15m', limit=100):
         logging.error(f"[fetch_klines] Error fetching klines for {symbol}: {e}")
         return None
 
+
 def scan_all_futures():
     results = []
     symbols = get_futures_symbols()
@@ -53,7 +58,6 @@ def scan_all_futures():
         if df is None or df.empty:
             continue
 
-        # הוספת אינדיקטורים טכניים
         try:
             df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
             df['macd'] = ta.trend.MACD(df['close']).macd()
@@ -66,7 +70,6 @@ def scan_all_futures():
         last = df.iloc[-1]
         prev = df.iloc[-2]
 
-        # תנאים לכניסה LONG
         if (
             last['rsi'] > 55 and
             last['macd'] > 0 and
@@ -80,7 +83,13 @@ def scan_all_futures():
             leverage = 20
             budget = 100
             confidence = 90
-            quality = compute_quality_score(df)
+
+            # quality score מחושב מה־df המלא
+            df['ema_21'] = df['ema21']
+            df['volume_mean'] = df['volume'].rolling(window=20).mean()
+            df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
+            df['direction'] = "LONG"
+            quality = compute_quality_score(df.iloc[-1])
 
             if quality < 4:
                 continue
@@ -97,6 +106,20 @@ def scan_all_futures():
                     budget_usd=capital,
                     use_grid=True
                 )
+
+                # ✅ שמירת הטרייד JSON
+                save_trade(
+                    symbol=symbol,
+                    entry=entry,
+                    stop=stop,
+                    tp=tp,
+                    direction="LONG",
+                    leverage=leverage,
+                    confidence=confidence,
+                    quality_score=quality,
+                    trade_type="GRID"
+                )
+
                 return {
                     "executed_trade": {
                         "symbol": symbol,
@@ -113,7 +136,6 @@ def scan_all_futures():
             except Exception as e:
                 logging.error(f"[scan_all_futures] שגיאה בהפעלה ל־{symbol}: {e}")
                 continue
-
         else:
             results.append({
                 "symbol": symbol,
@@ -126,6 +148,7 @@ def scan_all_futures():
             })
 
     return {"executed_trade": None, "all_candidates": results}
+
 
 
 
