@@ -1,11 +1,10 @@
 services:
   - type: web
     name: algogpt-api
-    env: python
-    region: frankfurt
+    env: docker
     plan: free
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: gunicorn main:app --bind 0.0.0.0:10000
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: BINANCE_API_KEY
         sync: false
@@ -17,7 +16,7 @@ services:
         sync: false
       - key: CRYPTO_PANIC_API_KEY
         sync: false
-    autoDeploy: true
+
 
 
 
