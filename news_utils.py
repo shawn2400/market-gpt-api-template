@@ -2,26 +2,33 @@ import requests
 import smtplib
 from email.message import EmailMessage
 import os
+from dotenv import load_dotenv
 
-CRYPTO_PANIC_API_KEY = "89404de8e0bb4d6e78e95ed26ff19970cdb8830a"
+load_dotenv()
 
 # ✅ שליפת חדשות מ-CryptoPanic
 def fetch_crypto_news():
-    url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTO_PANIC_API_KEY}&public=true"
+    api_key = os.getenv("CRYPTO_PANIC_API_KEY")
+    url = f"https://cryptopanic.com/api/v1/posts/?auth_token={api_key}&public=true"
     response = requests.get(url)
     response.raise_for_status()
     return response.json().get("results", [])
 
-# ✅ ניתוח השפעת החדשות (פשוט לפי מילות מפתח)
+# ✅ ניתוח השפעת החדשות (מורחב לפי מילות מפתח)
 def analyze_news_impact(news_list):
     scored_news = []
     for item in news_list:
         score = 0
         title = item.get("title", "").lower()
-        if "bullish" in title or "surge" in title or "breakout" in title:
+
+        positive_words = ["bullish", "surge", "breakout", "pump", "rally", "gain", "soar"]
+        negative_words = ["bearish", "crash", "fud", "dump", "selloff", "collapse"]
+
+        if any(word in title for word in positive_words):
             score += 1
-        if "bearish" in title or "crash" in title or "fud" in title:
+        if any(word in title for word in negative_words):
             score -= 1
+
         scored_news.append({
             "title": item.get("title"),
             "published_at": item.get("published_at"),
@@ -30,7 +37,7 @@ def analyze_news_impact(news_list):
         })
     return scored_news
 
-# ✅ שליחת מייל עם או בלי קובץ
+# ✅ שליחת מייל עם או בלי קובץ מצורף
 def send_email_alert(subject, body="See attached.", attachment=None):
     try:
         EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS", "your_email@example.com")
@@ -44,13 +51,19 @@ def send_email_alert(subject, body="See attached.", attachment=None):
         msg.set_content(body)
 
         if attachment:
-            msg.add_attachment(attachment, maintype="application", subtype="pdf", filename="report.pdf")
+            msg.add_attachment(
+                attachment,
+                maintype="application",
+                subtype="pdf",
+                filename="report.pdf"
+            )
 
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             smtp.send_message(msg)
     except Exception as e:
         print(f"[!] Email failed: {e}")
+
 
 
 
