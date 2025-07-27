@@ -1,37 +1,41 @@
 # utils/trade_storage.py
 
 import json
-import os
+from datetime import datetime
 
-TRADE_FILE = "saved_trades.json"
+TRADES_FILE = "pnl_tracker.json"
 
-def load_trades():
-    if not os.path.exists(TRADE_FILE):
-        return []
+def save_trade(symbol, entry, stop, tp, direction, leverage, confidence, quality_score, trade_type="REGULAR"):
     try:
-        with open(TRADE_FILE, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[!] שגיאה בקריאת טריידים: {e}")
-        return []
+        trade_data = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "direction": direction,
+            "leverage": leverage,
+            "confidence": confidence,
+            "quality_score": quality_score,
+            "type": trade_type
+        }
 
-def save_trade(trade):
-    trades = load_trades()
-    trades.append(trade)
-    try:
-        with open(TRADE_FILE, "w") as f:
+        try:
+            with open(TRADES_FILE, "r") as f:
+                trades = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            trades = []
+
+        trades.append(trade_data)
+
+        with open(TRADES_FILE, "w") as f:
             json.dump(trades, f, indent=2)
+
+        print(f"✅ טרייד נשמר: {symbol} | {direction} | {entry}")
         return True
+
     except Exception as e:
         print(f"[!] שגיאה בשמירת טרייד: {e}")
         return False
 
-def clear_trades():
-    try:
-        with open(TRADE_FILE, "w") as f:
-            json.dump([], f)
-        return True
-    except Exception as e:
-        print(f"[!] שגיאה באיפוס טריידים: {e}")
-        return False
 
