@@ -1,134 +1,91 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from binance.client import Client
-from datetime import datetime
-from ta import trend, momentum, volatility
-from report_utils import generate_daily_report
 from snapshot_utils import save_trade_snapshot
-import pandas as pd
-import json
+from report_utils import generate_daily_report
+from news_utils import get_crypto_news
 import os
+import json
+import base64
 
 app = Flask(__name__)
 CORS(app)
 
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
-client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
+# ✅ תיקון: מסלול בריאות (GET /)
+@app.route("/", methods=["GET"])
+def health_check():
+    return jsonify({"message": "AlgoGPT API is running"}), 200
 
-TRADES_FILE = "pnl_tracker.json"
+@app.route("/preset", methods=["GET"])
+def get_preset():
+    try:
+        with open("preset.txt", "r", encoding="utf-8") as f:
+            preset = f.read()
+        return jsonify({"preset": preset})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-def load_trades():
-    if os.path.exists(TRADES_FILE):
-        with open(TRADES_FILE, "r") as f:
-            return json.load(f)
-    return []
+@app.route("/strategy", methods=["GET"])
+def get_strategy_rules():
+    try:
+        with open("preset.txt", "r", encoding="utf-8") as f:
+            strategy = f.read()
+        return jsonify({"strategy": strategy})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-def save_trades(trades):
-    with open(TRADES_FILE, "w") as f:
-        json.dump(trades, f, indent=2)
+@app.route("/news", methods=["GET"])
+def crypto_news():
+    try:
+        news = get_crypto_news()
+        return jsonify({"news": news})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/save", methods=["POST"])
-def save_trade():
+@app.route("/daily-report", methods=["GET"])
+def generate_report():
+    try:
+        pdf_path = generate_daily_report()
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        return jsonify({"pdf_base64": pdf_base64})
+    except FileNotFoundError:
+        return jsonify({"error": "Statistics file not found"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/ai-analyze", methods=["POST"])
+def ai_analyze():
     data = request.json
-    trades = load_trades()
-    trades.append(data)
-    save_trades(trades)
-    save_trade_snapshot(data)
-    return jsonify({"status": "saved", "count": len(trades)})
-
-@app.route("/trades", methods=["GET"])
-def get_trades():
-    trades = load_trades()
-    return jsonify(trades)
-
-@app.route("/clear", methods=["POST"])
-def clear_trades():
-    save_trades([])
-    return jsonify({"status": "cleared"})
-
-@app.route("/price", methods=["GET"])
-def get_price():
-    symbol = request.args.get("symbol")
-    ticker = client.get_symbol_ticker(symbol=symbol)
-    return jsonify(ticker)
-
-@app.route("/calculate-sl-tp", methods=["POST"])
-def calculate_sl_tp():
-    data = request.json
-    entry = data["entry"]
-    stop = data["stop"]
-    tp = data["tp"]
-    risk = abs(entry - stop)
-    reward = abs(tp - entry)
-    rrr = round(reward / risk, 2) if risk > 0 else None
-    return jsonify({
-        "entry": entry,
-        "stop": stop,
-        "tp": tp,
-        "RRR": rrr
-    })
+    if not data or "symbol" not in data or "prices" not in data:
+        return jsonify({"error": "Missing symbol or prices"}), 400
+    try:
+        # כאן ייכנס ניתוח prophet או AI עתידי
+        return jsonify({
+            "symbol": data["symbol"],
+            "direction": "LONG",
+            "forecast": data["prices"][-5:],
+            "chart": ""
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/calculate-quantity", methods=["POST"])
 def calculate_quantity():
     data = request.json
-    budget = data["budget"]
-    entry = data["entry"]
-    leverage = data["leverage"]
-    qty = round((budget * leverage) / entry, 3)
-    return jsonify({
-        "budget": budget,
-        "entry": entry,
-        "leverage": leverage,
-        "quantity": qty
-    })
+    try:
+        budget = float(data["budget"])
+        entry = float(data["entry"])
+        leverage = float(data["leverage"])
+        quantity = (budget * leverage) / entry
+        return jsonify({"quantity": round(quantity, 4)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    data = request.json
-    prices = data["prices"]
-    df = pd.DataFrame(prices)
-    df["ema9"] = trend.ema_indicator(df["close"], window=9)
-    df["rsi"] = momentum.rsi(df["close"], window=14)
-    df["macd"] = trend.macd_diff(df["close"])
-    df["atr"] = volatility.average_true_range(df["high"], df["low"], df["close"])
-    latest = df.iloc[-1].to_dict()
-    return jsonify(latest)
-
-@app.route("/snapshot", methods=["GET"])
-def snapshot():
-    if not os.path.exists("snapshots"):
-        return jsonify({"error": "No snapshots found"}), 404
-    files = os.listdir("snapshots")
-    return jsonify({"snapshots": files})
-
-@app.route("/daily-report", methods=["GET"])
-def daily_report():
-    pdf_path = generate_daily_report()
-    return jsonify({"report": pdf_path})
-
-@app.route("/stats", methods=["GET"])
-def stats():
-    trades = load_trades()
-    if not trades:
-        return jsonify({"message": "No trades found"})
-    total = len(trades)
-    wins = [t for t in trades if t.get("pnl", 0) > 0]
-    losses = [t for t in trades if t.get("pnl", 0) <= 0]
-    win_rate = round(len(wins) / total * 100, 2) if total > 0 else 0
-    profit = sum([t.get("pnl", 0) for t in wins])
-    loss = sum([t.get("pnl", 0) for t in losses])
-    net = profit + loss
-    return jsonify({
-        "total_trades": total,
-        "win_rate": win_rate,
-        "total_profit": round(profit, 2),
-        "total_loss": round(loss, 2),
-        "net_pnl": round(net, 2)
-    })
-
+# ✅ הפעלת השרת
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
