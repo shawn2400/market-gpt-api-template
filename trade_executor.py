@@ -57,6 +57,9 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
 
         qty = calculate_quantity(budget_usd, entry_price, leverage)
 
+        if qty <= 0:
+            raise ValueError("הכמות שחושבה קטנה מ-0 או לא תקינה")
+
         # 🟢 כניסה לטרייד
         order = send_signed_request("POST", "/fapi/v1/order", {
             "symbol": symbol,
@@ -89,10 +92,19 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
         })
 
         print(f"✅ טרייד נשלח בהצלחה: {symbol} | כמות: {qty}")
-        return {"status": "ok", "symbol": symbol, "qty": qty, "entry": entry_price}
+        return {
+            "status": "ok",
+            "symbol": symbol,
+            "qty": qty,
+            "entry": entry_price,
+            "leverage": leverage,
+            "budget_used": budget_usd,
+            "side": side
+        }
     except Exception as e:
         print(f"[!] שגיאה בביצוע טרייד ל־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
