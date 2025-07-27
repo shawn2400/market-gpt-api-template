@@ -1,16 +1,16 @@
 services:
   - type: web
-    name: market-gpt-api-template
+    name: market-gpt-api
     env: python
     plan: free
+    region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
-      - key: FLASK_ENV
-        value: production
-      - key: PORT
-        value: 10000
+      - key: PYTHON_VERSION
+        value: 3.10
     autoDeploy: true
+
 
 
 
