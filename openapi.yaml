@@ -12,6 +12,7 @@ paths:
   /:
     get:
       summary: בדיקת סטטוס השרת
+      operationId: checkServerStatus
       responses:
         '200':
           description: השרת פועל
@@ -27,6 +28,7 @@ paths:
   /scan:
     get:
       summary: סריקה חיה של שוק Binance Futures לפי קריטריונים טכניים
+      operationId: scanFuturesMarket
       responses:
         '200':
           description: רשימת תוצאות מסוננות
@@ -56,6 +58,7 @@ paths:
   /backtest:
     post:
       summary: ביצוע Backtest על סדרת מחירים
+      operationId: runBacktest
       requestBody:
         required: true
         content:
@@ -99,7 +102,8 @@ paths:
 
   /execute-trade:
     post:
-      summary: ביצוע טרייד בפועל דרך Binance API
+      summary: ביצוע טרייד בפועל
+      operationId: executeLiveTrade
       requestBody:
         required: true
         content:
@@ -125,11 +129,12 @@ paths:
                   type: string
       responses:
         '200':
-          description: תוצאה מה-API של Binance
+          description: תוצאה מה-Binance
 
   /sl_tp:
     post:
-      summary: חישוב SL ו־TP לפי ATR, כיוון ו־RRR
+      summary: חישוב SL/TP לפי ATR ו-RRR
+      operationId: calculateSLTP
       requestBody:
         required: true
         content:
@@ -147,11 +152,25 @@ paths:
                   type: number
       responses:
         '200':
-          description: תוצאה עם stop, tp ו־rrr מחושב
+          description: ערכי SL ו-TP מחושבים
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entry:
+                    type: number
+                  stop:
+                    type: number
+                  tp:
+                    type: number
+                  rrr:
+                    type: number
 
   /calculate-quantity:
     post:
-      summary: חישוב כמות יחידות לפי תקציב ומינוף
+      summary: חישוב כמות נכס לפי תקציב ומינוף
+      operationId: calculateQuantity
       requestBody:
         required: true
         content:
@@ -167,31 +186,81 @@ paths:
                   type: number
       responses:
         '200':
-          description: כמות יחידות מתאימה לכניסה
+          description: כמות נכס מחושבת
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quantity:
+                    type: number
 
   /daily-report:
     get:
-      summary: הפקת דוח יומי בפורמט PDF Base64
+      summary: הפקת דוח יומי (PDF מקודד ב-base64)
+      operationId: generateDailyReport
       responses:
         '200':
-          description: קובץ PDF מוצפן בבסיס64
+          description: דוח יומי בקידוד base64
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pdf_base64:
+                    type: string
 
   /news:
     get:
-      summary: שליפת חדשות קריפטו בזמן אמת מ־CryptoPanic
+      summary: שליפת חדשות קריפטו מ-CryptoPanic
+      operationId: fetchCryptoNews
       responses:
         '200':
-          description: JSON עם רשימת חדשות
+          description: רשימת חדשות
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                        published_at:
+                          type: string
+                        url:
+                          type: string
 
   /save:
     post:
-      summary: שמירת טרייד בזיכרון זמני
+      summary: שמירת טרייד בזיכרון
+      operationId: saveTrade
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: integer
+                direction:
+                  type: string
+                confidence:
+                  type: number
+                type:
+                  type: string
       responses:
         '200':
           description: טרייד נשמר
@@ -199,30 +268,42 @@ paths:
   /trades:
     get:
       summary: שליפת כל הטריידים השמורים
+      operationId: getSavedTrades
       responses:
         '200':
           description: רשימת טריידים
 
   /clear:
     post:
-      summary: מחיקת כל הטריידים השמורים
+      summary: ניקוי רשימת הטריידים
+      operationId: clearAllTrades
       responses:
         '200':
-          description: נמחקו כל הטריידים
+          description: רשימת טריידים נוקתה
 
   /strategy:
     get:
-      summary: הצגת תוכן הקובץ preset.txt בפורמט טקסט
+      summary: שליפת אסטרטגיה גולמית בקובץ preset.txt
+      operationId: getStrategyText
       responses:
         '200':
-          description: תוכן קובץ טקסט אסטרטגיה
+          description: טקסט האסטרטגיה
 
   /preset:
     get:
-      summary: שליפת preset בפורמט JSON
+      summary: שליפת תוכן קובץ preset.txt בפורמט JSON
+      operationId: getPresetJson
       responses:
         '200':
-          description: JSON עם תוכן הקובץ preset.txt
+          description: תוכן preset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preset:
+                    type: string
+
 
 
 
