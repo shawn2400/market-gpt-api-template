@@ -1,5 +1,8 @@
 from binance.client import Client
 import os
+import pandas as pd
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator, MACD, ADXIndicator
 
 api_key = os.getenv("BINANCE_API_KEY")
 api_secret = os.getenv("BINANCE_API_SECRET")
@@ -15,15 +18,45 @@ def scan_all_futures():
     for symbol in symbols:
         try:
             klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_15MINUTE, limit=100)
-            closes = [float(k[4]) for k in klines]
-            volume = float(klines[-1][5])
-            if closes[-1] > closes[-2] and volume > 100000:  # תנאי פשוט
+            df = pd.DataFrame(klines, columns=[
+                "open_time", "open", "high", "low", "close", "volume",
+                "close_time", "quote_asset_volume", "number_of_trades",
+                "taker_buy_base", "taker_buy_quote", "ignore"
+            ])
+            df["close"] = df["close"].astype(float)
+            df["high"] = df["high"].astype(float)
+            df["low"] = df["low"].astype(float)
+            df["volume"] = df["volume"].astype(float)
+
+            if len(df) < 50:
+                continue
+
+            # אינדיקטורים
+            rsi = RSIIndicator(df["close"]).rsi().iloc[-1]
+            macd = MACD(df["close"]).macd_diff().iloc[-1]
+            ema21 = EMAIndicator(df["close"], window=21).ema_indicator().iloc[-1]
+            adx = ADXIndicator(df["high"], df["low"], df["close"]).adx().iloc[-1]
+
+            price = df["close"].iloc[-1]
+            volume = df["volume"].iloc[-1]
+
+            # תנאים
+            if (
+                rsi < 35 and
+                macd > 0 and
+                price > ema21 and
+                adx > 17 and
+                volume > 100000
+            ):
                 results.append({
                     "symbol": symbol,
-                    "last_price": closes[-1],
+                    "last_price": price,
                     "volume": volume,
+                    "rsi": round(rsi, 2),
+                    "adx": round(adx, 2),
                     "direction": "LONG"
                 })
+
         except Exception:
             continue
 
