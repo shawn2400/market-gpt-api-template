@@ -1,3 +1,5 @@
+# main.py
+
 import os
 import time
 import logging
@@ -7,10 +9,10 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 
 from trade_executor import execute_trade_live
-from scanner_utils import scan_all_futures_live  # ✅ תיקון שם קובץ
+from scanner_utils import scan_all_futures_live
 from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
 from utils.trade_storage import save_trade, load_trades, delete_trade
-from utils.pnl_tracker import update_pnl, generate_pnl_pdf  # ✅ חדש
+from utils.pnl_tracker import update_pnl, generate_pnl_pdf
 
 load_dotenv()
 app = Flask(__name__)
@@ -121,6 +123,7 @@ def pnl_report():
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 
