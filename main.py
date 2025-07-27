@@ -2,11 +2,13 @@ import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
+import pandas as pd
+import logging
+
 from trade_executor import execute_trade_live
 from scanner_utils import scan_all_futures
 from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
-import pandas as pd
-import logging
+from trade_storage import save_trade, load_trades, delete_trade  # ✅ חדש
 
 # טעינת משתני סביבה
 load_dotenv()
@@ -32,7 +34,7 @@ def execute_trade():
         budget = float(data.get("budget", 100))
         use_grid = bool(data.get("use_grid", False))
 
-        logging.info(f"📤 ביצוע טרייד: {symbol} | {direction} | entry={entry}, stop={stop}, tp={tp}, lev={leverage}, budget={budget}, grid={use_grid}")
+        logging.info(f"📤 טרייד: {symbol} {direction} | entry={entry}, stop={stop}, tp={tp}, lev={leverage}, $={budget}, grid={use_grid}")
         result = execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=budget, use_grid=use_grid)
         return jsonify(result)
     except Exception as e:
@@ -42,13 +44,13 @@ def execute_trade():
 @app.route("/scan", methods=["GET"])
 def scan():
     try:
-        logging.info("🔍 התחלת סריקה חיה על Binance Futures...")
+        logging.info("🔍 סריקה חיה על Binance Futures...")
         results = scan_all_futures()
-        logging.info(f"✅ הסתיימה סריקה: נמצאו {len(results['all_candidates'])} תוצאות")
+        logging.info(f"✅ סיום סריקה | נמצאו {len(results['all_candidates'])} מועמדים")
         return jsonify(results)
     except Exception as e:
         logging.error(f"❌ שגיאה בסריקה: {e}")
-        return jsonify({"status": "error", "message": "שגיאה בסריקה", "details": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/backtest", methods=["POST"])
 def backtest():
@@ -82,9 +84,40 @@ def news_impact():
         logging.error(f"❌ שגיאה בניתוח סנטימנט: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# ✅ API לשמירת טרייד
+@app.route("/save-trade", methods=["POST"])
+def save_trade_api():
+    try:
+        data = request.get_json()
+        save_trade(data)
+        return jsonify({"status": "success", "message": "Trade saved."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ✅ API להצגת טריידים
+@app.route("/get-trades", methods=["GET"])
+def get_trades():
+    try:
+        trades = load_trades()
+        return jsonify({"status": "success", "trades": trades})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ✅ API למחיקת טרייד לפי סימול
+@app.route("/delete-trade", methods=["POST"])
+def delete_trade_api():
+    try:
+        data = request.get_json()
+        symbol = data.get("symbol")
+        delete_trade(symbol)
+        return jsonify({"status": "success", "message": f"Trade {symbol} deleted."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
