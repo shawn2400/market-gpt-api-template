@@ -1,15 +1,14 @@
 services:
   - type: web
-    name: market-gpt-api
+    name: market-gpt-api-template
     env: python
-    plan: free
-    region: oregon
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    startCommand: gunicorn main:app --bind 0.0.0.0:10000
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10
-    autoDeploy: true
+        value: 3.10.13
+    plan: free
+
 
 
 
