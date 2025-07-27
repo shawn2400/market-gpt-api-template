@@ -1,58 +1,66 @@
-from binance.client import Client
-from binance.enums import *
 import os
+import json
+import time
+from binance.client import Client
 from dotenv import load_dotenv
 
 load_dotenv()
 
-api_key = os.getenv("BINANCE_API_KEY")
-api_secret = os.getenv("BINANCE_API_SECRET")
-client = Client(api_key, api_secret)
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-def execute_trade(symbol, side, quantity, price=None, order_type="LIMIT", market_type="futures", trailing_percent=None):
+client = Client(API_KEY, API_SECRET)
+
+def execute_trade_live(symbol, entry_price, stop_price, tp_price, direction, leverage):
     try:
-        side = side.upper()
+        client.futures_change_leverage(symbol=symbol, leverage=leverage)
 
-        if market_type == "futures":
-            try:
-                # שינוי מינוף ל־20 (גמיש אם כבר קיים)
-                client.futures_change_leverage(symbol=symbol, leverage=20)
-            except Exception as e:
-                print("⚠️ שגיאה בשינוי מינוף:", e)
+        side = Client.SIDE_BUY if direction.upper() == "LONG" else Client.SIDE_SELL
+        position_side = "LONG" if direction.upper() == "LONG" else "SHORT"
 
-            params = {
-                "symbol": symbol,
-                "side": side,
-                "quantity": float(quantity),
-                "type": order_type
-            }
+        # פתיחת פקודת מרקט
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="MARKET",
+            quantity=calculate_quantity(symbol, entry_price, leverage),
+        )
 
-            if order_type == "LIMIT":
-                if not price:
-                    return {"error": "Missing price for LIMIT order"}
-                params["price"] = str(price)
-                params["timeInForce"] = TIME_IN_FORCE_GTC
+        order_id = order["orderId"]
 
-            elif order_type == "TRAILING_STOP_MARKET":
-                params["callbackRate"] = float(trailing_percent or 1.0)
-                if price:
-                    params["activationPrice"] = str(price)
+        # הגדרת TP
+        client.futures_create_order(
+            symbol=symbol,
+            side=Client.SIDE_SELL if side == Client.SIDE_BUY else Client.SIDE_BUY,
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=tp_price,
+            closePosition=True,
+            workingType="MARK_PRICE",
+            timeInForce="GTC"
+        )
 
-            elif order_type == "MARKET":
-                pass  # אין צורך בפרמטרים נוספים
+        # הגדרת SL
+        client.futures_create_order(
+            symbol=symbol,
+            side=Client.SIDE_SELL if side == Client.SIDE_BUY else Client.SIDE_BUY,
+            type="STOP_MARKET",
+            stopPrice=stop_price,
+            closePosition=True,
+            workingType="MARK_PRICE",
+            timeInForce="GTC"
+        )
 
-            else:
-                return {"error": f"Unsupported order_type: {order_type}"}
-
-            print("🚀 Executing order:", params)
-            order = client.futures_create_order(**params)
-            return {"status": "success", "order": order}
-
-        else:
-            return {"error": "Only futures market supported at this time."}
-
+        return {"status": "ok", "order_id": order_id}
     except Exception as e:
-        return {"error": f"Exception occurred: {str(e)}"}
+        return {"status": "failed", "error": str(e)}
+
+def calculate_quantity(symbol, entry_price, leverage, usdt_amount=100):
+    try:
+        step_size = 0.01  # ברירת מחדל – ניתן לשפר בהמשך עם fetch exchange info
+        qty = round((usdt_amount * leverage) / float(entry_price), 2)
+        return max(step_size, qty)
+    except:
+        return 0.01
 
 
 
