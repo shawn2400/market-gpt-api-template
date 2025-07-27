@@ -1,36 +1,36 @@
-import pandas as pd
+# utils/indicators.py
 import ta
 
-
-def calculate_indicators(df):
+def compute_indicators(df):
     try:
-        # EMA21 ו-EMA50
         df['EMA21'] = ta.trend.EMAIndicator(close=df['close'], window=21).ema_indicator()
         df['EMA50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
 
-        # RSI
         df['RSI'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
 
-        # MACD + Signal
         macd = ta.trend.MACD(close=df['close'])
         df['MACD'] = macd.macd()
         df['MACD_signal'] = macd.macd_signal()
 
-        # ADX
         adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'])
         df['ADX'] = adx.adx()
 
-        # ATR
         atr = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'])
         df['ATR'] = atr.average_true_range()
 
-        # ממוצע נפח
         df['volume_mean'] = df['volume'].rolling(window=20).mean()
+        df.dropna(inplace=True)
 
-        return df.dropna()
+        signal = None
+        if df['RSI'].iloc[-1] > 55 and df['MACD'].iloc[-1] > df['MACD_signal'].iloc[-1] and df['ADX'].iloc[-1] > 17 and df['close'].iloc[-1] > df['EMA21'].iloc[-1]:
+            signal = "LONG"
+        elif df['RSI'].iloc[-1] < 45 and df['MACD'].iloc[-1] < df['MACD_signal'].iloc[-1] and df['ADX'].iloc[-1] > 17 and df['close'].iloc[-1] < df['EMA21'].iloc[-1]:
+            signal = "SHORT"
+
+        return {"signal": signal, "df": df}
     except Exception as e:
         print(f"[!] שגיאה בחישוב אינדיקטורים: {e}")
-        return df
+        return {"signal": None, "df": df}
 
 
 def is_volume_spike(df):
