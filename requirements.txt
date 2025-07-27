@@ -11,6 +11,8 @@ pytz
 requests
 plotly
 gunicorn
+python-binance
+
 
 
 
