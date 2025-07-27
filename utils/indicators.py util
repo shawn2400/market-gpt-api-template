@@ -1,4 +1,3 @@
-# utils/indicators.py
 import ta
 
 def compute_indicators(df):
@@ -32,12 +31,4 @@ def compute_indicators(df):
         print(f"[!] שגיאה בחישוב אינדיקטורים: {e}")
         return {"signal": None, "df": df}
 
-
-def is_volume_spike(df):
-    try:
-        recent_volume = df['volume'].iloc[-1]
-        mean_volume = df['volume_mean'].iloc[-1]
-        return recent_volume > 1.8 * mean_volume
-    except:
-        return False
 
