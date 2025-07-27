@@ -1,73 +1,63 @@
 # scanner_utils.py
 
-import pandas as pd
 from binance.client import Client
+import pandas as pd
+import numpy as np
+from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
-from ta.trend import MACD, EMAIndicator, ADXIndicator
 from ta.volume import OnBalanceVolumeIndicator
+import os
+import datetime
 
-client = None  # צריך להכניס את המפתח החי
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 
-
-def init_client(api_key, api_secret):
-    global client
-    client = Client(api_key, api_secret)
-
+client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
 def get_futures_symbols():
-    info = client.futures_exchange_info()
-    return [s["symbol"] for s in info["symbols"] if s["contractType"] == "PERPETUAL" and s["quoteAsset"] == "USDT"]
+    exchange_info = client.futures_exchange_info()
+    return [s['symbol'] for s in exchange_info['symbols'] if s['contractType'] == 'PERPETUAL']
 
-
-def fetch_klines(symbol, interval="15m", limit=100):
+def fetch_klines(symbol, interval='15m', limit=100):
     klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
     df = pd.DataFrame(klines, columns=[
         "timestamp", "open", "high", "low", "close", "volume",
         "close_time", "quote_asset_volume", "num_trades",
-        "taker_buy_base", "taker_buy_quote", "ignore"
-    ])
+        "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"])
     df["close"] = pd.to_numeric(df["close"])
-    df["high"] = pd.to_numeric(df["high"])
-    df["low"] = pd.to_numeric(df["low"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
     return df
 
+def analyze_indicators(df):
+    df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
+    df['ema_50'] = EMAIndicator(df['close'], window=50).ema_indicator()
+    df['macd'] = MACD(df['close']).macd_diff()
+    df['rsi'] = RSIIndicator(df['close']).rsi()
+    df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
+    df['bb_bbm'] = BollingerBands(df['close']).bollinger_mavg()
+    df['obv'] = OnBalanceVolumeIndicator(df['close'], df['volume']).on_balance_volume()
+    return df
 
-def calculate_indicators(df):
-    rsi = RSIIndicator(df["close"]).rsi()
-    bb = BollingerBands(df["close"])
-    macd = MACD(df["close"]).macd_diff()
-    ema9 = EMAIndicator(df["close"], window=9).ema_indicator()
-    ema21 = EMAIndicator(df["close"], window=21).ema_indicator()
-    adx = ADXIndicator(df["high"], df["low"], df["close"]).adx()
-    obv = OnBalanceVolumeIndicator(close=df["close"], volume=df["volume"].astype(float)).on_balance_volume()
+def filter_trade_signal(df):
+    latest = df.iloc[-1]
+    if latest['rsi'] < 30 and latest['macd'] > 0 and latest['close'] > latest['ema_21'] and latest['adx'] > 20:
+        return "LONG"
+    elif latest['rsi'] > 70 and latest['macd'] < 0 and latest['close'] < latest['ema_21'] and latest['adx'] > 20:
+        return "SHORT"
+    return None
 
-    return {
-        "rsi": rsi.iloc[-1],
-        "bb_high": bb.bollinger_hband().iloc[-1],
-        "bb_low": bb.bollinger_lband().iloc[-1],
-        "macd": macd.iloc[-1],
-        "ema9": ema9.iloc[-1],
-        "ema21": ema21.iloc[-1],
-        "adx": adx.iloc[-1],
-        "obv": obv.iloc[-1],
-    }
+def scan_market():
+    results = []
+    symbols = get_futures_symbols()
+    for symbol in symbols:
+        try:
+            df = fetch_klines(symbol)
+            df = analyze_indicators(df)
+            signal = filter_trade_signal(df)
+            if signal:
+                results.append({"symbol": symbol, "signal": signal})
+        except Exception as e:
+            print(f"Error scanning {symbol}: {e}")
+    return results
 
-
-def scan_symbol(symbol):
-    try:
-        df = fetch_klines(symbol)
-        indicators = calculate_indicators(df)
-        return {
-            "symbol": symbol,
-            "rsi": indicators["rsi"],
-            "macd": indicators["macd"],
-            "adx": indicators["adx"],
-            "bb_high": indicators["bb_high"],
-            "bb_low": indicators["bb_low"],
-            "ema9": indicators["ema9"],
-            "ema21": indicators["ema21"],
-            "obv": indicators["obv"]
-        }
-    except Exception as e:
-        return {"symbol": symbol, "error": str(e)}
