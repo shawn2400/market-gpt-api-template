@@ -1,7 +1,7 @@
-# בסיס על Python 3.10 (לא לשנות!)
+# בסיס על Python 3.10 בלבד
 FROM python:3.10-slim
 
-# התקנת חבילות מערכת נדרשות (ל־prophet, numpy, pandas וכו')
+# התקנת תלות מערכת ל־prophet, numpy, pandas, fpdf ועוד
 RUN apt-get update && apt-get install -y \
     build-essential \
     g++ \
@@ -20,20 +20,21 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# יצירת תיקיית עבודה
+# הגדרת תיקיית עבודה
 WORKDIR /app
 
-# העתקת קבצי הפרויקט
+# העתקת הקבצים לתוך הקונטיינר
 COPY . .
 
-# התקנת התלויות מ־requirements.txt
+# התקנת ספריות פייתון
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# חשיפת פורט להפעלה
+# פתיחת פורט עבור Gunicorn
 EXPOSE 10000
 
-# הפעלת השרת עם Gunicorn
+# הרצת האפליקציה דרך Gunicorn (מאוד מומלץ לפרודקשן)
 CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:10000", "--timeout", "300"]
+
 
 
