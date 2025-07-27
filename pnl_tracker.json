@@ -1,1 +1,77 @@
-[]
+import json
+import os
+from datetime import datetime
+from fpdf import FPDF
+
+PNL_FILE = "pnl_tracker.json"
+
+def update_pnl(symbol, direction, entry, exit_price, leverage, qty):
+    pnl = round((exit_price - entry) * qty * leverage, 2)
+    pnl = pnl if direction == "LONG" else -pnl
+
+    record = {
+        "symbol": symbol,
+        "direction": direction,
+        "entry": entry,
+        "exit": exit_price,
+        "leverage": leverage,
+        "qty": qty,
+        "pnl": pnl,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    if not os.path.exists(PNL_FILE):
+        with open(PNL_FILE, "w") as f:
+            json.dump([record], f, indent=2)
+    else:
+        with open(PNL_FILE, "r+") as f:
+            data = json.load(f)
+            data.append(record)
+            f.seek(0)
+            json.dump(data, f, indent=2)
+
+    return pnl
+
+
+def generate_pnl_pdf():
+    if not os.path.exists(PNL_FILE):
+        return None
+
+    with open(PNL_FILE, "r") as f:
+        data = json.load(f)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    daily_trades = [t for t in data if t["timestamp"].startswith(today)]
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(200, 10, f"דוח יומי לתאריך: {today}", ln=True, align="C")
+    pdf.set_font("Arial", size=12)
+
+    total_pnl = 0
+    wins = 0
+    losses = 0
+
+    for trade in daily_trades:
+        pnl = trade["pnl"]
+        total_pnl += pnl
+        if pnl > 0:
+            wins += 1
+        else:
+            losses += 1
+
+        pdf.cell(0, 10,
+                 f'{trade["symbol"]} | {trade["direction"]} | Entry: {trade["entry"]} | Exit: {trade["exit"]} | PNL: {pnl}',
+                 ln=True)
+
+    success_rate = round((wins / len(daily_trades)) * 100, 2) if daily_trades else 0
+    pdf.ln(10)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, f"סך רווח/הפסד: {round(total_pnl, 2)}$", ln=True)
+    pdf.cell(0, 10, f"הצלחות: {wins} | כישלונות: {losses} | הצלחה: {success_rate}%", ln=True)
+
+    filepath = f"daily_report_{today}.pdf"
+    pdf.output(filepath)
+    return filepath
+
