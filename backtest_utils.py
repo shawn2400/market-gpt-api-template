@@ -1,4 +1,5 @@
 # backtest_utils.py
+
 import pandas as pd
 from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator
@@ -12,7 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ✅ פונקציית סימולציית טריידים
-
 def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df = df.copy()
     df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
@@ -103,7 +103,6 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     return result
 
 # ✅ שליפת חדשות מ-CryptoPanic
-
 def fetch_crypto_news():
     api_key = os.getenv("CRYPTO_PANIC_API_KEY")
     url = f"https://cryptopanic.com/api/v1/posts/?auth_token={api_key}&public=true"
@@ -112,7 +111,6 @@ def fetch_crypto_news():
     return response.json().get("results", [])
 
 # ✅ ניתוח השפעת החדשות
-
 def analyze_news_impact(news_list):
     scored_news = []
     for item in news_list:
@@ -133,7 +131,6 @@ def analyze_news_impact(news_list):
     return scored_news
 
 # ✅ שליחת מייל עם קובץ PDF (לא חובה)
-
 def send_email_alert(subject, body="See attached.", attachment=None):
     try:
         EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS", "your_email@example.com")
@@ -159,6 +156,11 @@ def send_email_alert(subject, body="See attached.", attachment=None):
             smtp.send_message(msg)
     except Exception as e:
         print(f"[!] Email failed: {e}")
+
+# ✅ עטיפה לשימוש מ-main.py
+def run_backtest(df):
+    return backtest_strategy(df)
+
 
 
 
