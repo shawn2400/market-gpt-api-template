@@ -1,3 +1,10 @@
+import pandas as pd
+import time
+from utils.binance_client import client  # ✅
+from utils.indicators import calculate_indicators, is_volume_spike
+from utils.quality_score import compute_quality_score
+from utils.price_utils import get_klines, get_live_price  # נניח שהפונקציות מוגדרות כאן או בקובץ אחר
+
 def scan_all_futures_live(budget_usd=100):
     results = []
     symbols = [s['symbol'] for s in client.futures_exchange_info()['symbols']
@@ -29,7 +36,6 @@ def scan_all_futures_live(budget_usd=100):
         volume_ok = is_volume_spike(df)
 
         if all([ema_cross, macd_cross, rsi_ok, adx_ok, volume_ok]):
-            # הכנת df_row לפי הדרישות של compute_quality_score
             row = df.iloc[-1]
             direction = 'LONG'
             df_row = {
@@ -47,7 +53,6 @@ def scan_all_futures_live(budget_usd=100):
             score = compute_quality_score(df_row)
 
             if score >= 4:
-                # חישוב SL/TP לפי ATR
                 atr = row['ATR']
                 stop_loss = round(live_price - 1.5 * atr, 4)
                 take_profit = round(live_price + 3 * atr, 4)
@@ -55,7 +60,6 @@ def scan_all_futures_live(budget_usd=100):
                 reward = take_profit - live_price
                 rrr = round(reward / risk, 2) if risk > 0 else 0
 
-                # מינוף חכם לפי תקציב
                 qty = round((budget_usd * 1.0) / live_price, 3)
 
                 results.append({
@@ -79,7 +83,6 @@ def scan_all_futures_live(budget_usd=100):
 
         time.sleep(0.05)
 
-    # 🥇 מיון לפי Quality Score ו־RRR
     top = sorted(results, key=lambda x: (x['quality_score'], x['RRR']), reverse=True)[:10]
     return top
 
