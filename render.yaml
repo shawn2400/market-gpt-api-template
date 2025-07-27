@@ -4,13 +4,7 @@ services:
     env: python
     region: frankfurt
     plan: free
-    runtime: python
-    pythonVersion: 3.10.13
-    buildCommand: |
-      apt-get update && \
-      apt-get install -y build-essential g++ python3-dev libatlas-base-dev && \
-      pip install --upgrade pip && \
-      pip install -r requirements.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: gunicorn main:app --bind 0.0.0.0:10000
     envVars:
       - key: BINANCE_API_KEY
