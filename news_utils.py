@@ -1,39 +1,56 @@
 import requests
+import smtplib
+from email.message import EmailMessage
+import os
 
 CRYPTO_PANIC_API_KEY = "89404de8e0bb4d6e78e95ed26ff19970cdb8830a"
 
+# ✅ שליפת חדשות מ-CryptoPanic
 def fetch_crypto_news():
     url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTO_PANIC_API_KEY}&public=true"
     response = requests.get(url)
-    if response.status_code == 200:
-        return response.json().get("results", [])
-    else:
-        return []
+    response.raise_for_status()
+    return response.json().get("results", [])
 
-def analyze_news_impact(news_items):
+# ✅ ניתוח השפעת החדשות (פשוט לפי מילות מפתח)
+def analyze_news_impact(news_list):
     scored_news = []
-    for item in news_items:
-        title = item.get("title", "")
-        sentiment = item.get("votes", {})
+    for item in news_list:
         score = 0
-
-        if "important" in title.lower() or "hack" in title.lower():
-            score += 3
-        if sentiment.get("positive", 0) > 3:
-            score += 2
-        if sentiment.get("negative", 0) > 2:
-            score -= 2
-        if "etf" in title.lower() or "approval" in title.lower():
-            score += 2
-
+        title = item.get("title", "").lower()
+        if "bullish" in title or "surge" in title or "breakout" in title:
+            score += 1
+        if "bearish" in title or "crash" in title or "fud" in title:
+            score -= 1
         scored_news.append({
-            "title": title,
-            "url": item.get("url"),
+            "title": item.get("title"),
             "published_at": item.get("published_at"),
-            "score": score,
-            "sentiment": sentiment,
+            "url": item.get("url"),
+            "impact_score": score
         })
+    return scored_news
 
-    return sorted(scored_news, key=lambda x: x["score"], reverse=True)
+# ✅ שליחת מייל עם או בלי קובץ
+def send_email_alert(subject, body="See attached.", attachment=None):
+    try:
+        EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS", "your_email@example.com")
+        EMAIL_PASSWORD = os.getenv("ALERT_EMAIL_PASSWORD", "your_password")
+        TO_EMAIL = os.getenv("ALERT_TO_EMAIL", EMAIL_ADDRESS)
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_ADDRESS
+        msg["To"] = TO_EMAIL
+        msg.set_content(body)
+
+        if attachment:
+            msg.add_attachment(attachment, maintype="application", subtype="pdf", filename="report.pdf")
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            smtp.send_message(msg)
+    except Exception as e:
+        print(f"[!] Email failed: {e}")
+
 
 
