@@ -51,7 +51,7 @@ def fetch_klines(symbol, interval='15m', limit=100):
 
 def scan_all_futures():
     results = []
-    symbols = get_futures_symbols()
+    symbols = get_futures_symbols()[:50]  # ✅ הגבלה ל־50 מטבעות – כדי למנוע עומס
 
     for symbol in symbols:
         df = fetch_klines(symbol)
@@ -107,18 +107,18 @@ def scan_all_futures():
                     use_grid=True
                 )
 
-                # ✅ שמירת הטרייד JSON
-                save_trade(
-                    symbol=symbol,
-                    entry=entry,
-                    stop=stop,
-                    tp=tp,
-                    direction="LONG",
-                    leverage=leverage,
-                    confidence=confidence,
-                    quality_score=quality,
-                    trade_type="GRID"
-                )
+                # ✅ שמירת הטרייד – תיקון: שימוש במילון
+                save_trade({
+                    "symbol": symbol,
+                    "entry": entry,
+                    "stop": stop,
+                    "tp": tp,
+                    "direction": "LONG",
+                    "leverage": leverage,
+                    "confidence": confidence,
+                    "quality_score": quality,
+                    "type": "GRID"
+                })
 
                 return {
                     "executed_trade": {
