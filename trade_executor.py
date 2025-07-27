@@ -1,89 +1,74 @@
-# trade_executor.py
-
 from binance.client import Client
 from binance.enums import *
 from dotenv import load_dotenv
 import os
-import logging
-from utils.quantity_utils import calculate_quantity, generate_grid_levels
 import time
+import math
+import logging
 
 load_dotenv()
 
+# התחברות ל-Binance
 api_key = os.getenv("BINANCE_API_KEY")
 api_secret = os.getenv("BINANCE_API_SECRET")
 client = Client(api_key, api_secret)
 
+# 🟢 ביצוע טרייד בפועל
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False):
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
 
-        side = SIDE_BUY if direction == "LONG" else SIDE_SELL
-        position_side = "LONG" if direction == "LONG" else "SHORT"
+        price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
+        quantity = round((budget_usd * leverage) / price, 3)
 
-        quantity = calculate_quantity(budget_usd, entry, leverage)
+        side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
+        opposite_side = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
-        # פקודות רגילות או גריד
-        if use_grid:
-            grid_levels = generate_grid_levels(entry, tp, levels=3)
-            for level in grid_levels:
-                price = round(level, 4)
-                client.futures_create_order(
-                    symbol=symbol,
-                    side=side,
-                    type=ORDER_TYPE_LIMIT,
-                    quantity=quantity,
-                    price=str(price),
-                    timeInForce=TIME_IN_FORCE_GTC
-                )
-                time.sleep(0.3)
-        else:
-            client.futures_create_order(
-                symbol=symbol,
-                side=side,
-                type=ORDER_TYPE_LIMIT,
-                quantity=quantity,
-                price=str(entry),
-                timeInForce=TIME_IN_FORCE_GTC
-            )
+        # פתיחת פוזיציה
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type=ORDER_TYPE_MARKET,
+            quantity=quantity
+        )
 
-        # טריילינג SL
-        sl_price = round(stop, 4)
+        time.sleep(1)
+
+        # הגדרת סטופ
         client.futures_create_order(
             symbol=symbol,
-            side=SIDE_SELL if direction == "LONG" else SIDE_BUY,
+            side=opposite_side,
             type=ORDER_TYPE_STOP_MARKET,
-            stopPrice=str(sl_price),
+            stopPrice=round(stop, 4),
             closePosition=True,
             timeInForce=TIME_IN_FORCE_GTC
         )
 
-        # TP רגיל
-        tp_price = round(tp, 4)
+        # הגדרת טייק פרופיט
         client.futures_create_order(
             symbol=symbol,
-            side=SIDE_SELL if direction == "LONG" else SIDE_BUY,
+            side=opposite_side,
             type=ORDER_TYPE_LIMIT,
+            price=round(tp, 4),
             quantity=quantity,
-            price=str(tp_price),
             timeInForce=TIME_IN_FORCE_GTC
         )
 
         return {
             "status": "success",
             "symbol": symbol,
-            "entry": entry,
+            "entry_price": price,
+            "quantity": quantity,
             "stop": stop,
             "tp": tp,
             "leverage": leverage,
-            "quantity": quantity,
-            "budget": budget_usd,
-            "grid_used": use_grid
+            "side": side
         }
 
     except Exception as e:
-        logging.error(f"[execute_trade_live] ❌ שגיאה בביצוע טרייד: {e}")
+        logging.error(f"❌ שגיאה בביצוע טרייד: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
