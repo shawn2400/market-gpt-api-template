@@ -1,17 +1,16 @@
+# main.py
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 from trade_executor import execute_trade_live
-from scanner_utils import scan_all_futures  # ודא שזה קיים
+from scanner_utils import scan_all_futures
 import logging
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
-
-# ✅ לוגים לקונסול
 logging.basicConfig(level=logging.INFO)
 
 @app.route("/")
@@ -50,6 +49,7 @@ def scan():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
