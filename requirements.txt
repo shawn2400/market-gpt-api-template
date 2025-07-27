@@ -3,11 +3,11 @@ flask-cors
 pandas
 numpy
 matplotlib
-ta
-requests
 fpdf
-beautifulsoup4
-prophet           # ✅ גרסה עדכנית שלא דורשת pystan
+schedule
+prophet
+ta
+pytz
 
 
 
