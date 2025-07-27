@@ -2,6 +2,7 @@ from binance.client import Client
 from binance.enums import *
 import os
 from dotenv import load_dotenv
+
 load_dotenv()
 
 api_key = os.getenv("BINANCE_API_KEY")
@@ -10,11 +11,19 @@ client = Client(api_key, api_secret)
 
 def execute_trade(symbol, side, quantity, price=None, order_type="LIMIT", market_type="futures", trailing_percent=None):
     try:
+        side = side.upper()
+
         if market_type == "futures":
+            # בדיקת מינוף (אופציונלי – רק אם רוצים לוודא שהוא כבר קיים)
+            try:
+                client.futures_change_leverage(symbol=symbol, leverage=20)  # אפשר להתאים את המינוף כאן
+            except Exception as e:
+                pass  # לא חובה לשנות אם כבר קיים
+
             params = {
                 "symbol": symbol,
-                "side": side.upper(),
-                "quantity": quantity,
+                "side": side,
+                "quantity": float(quantity),
                 "type": order_type
             }
 
@@ -29,6 +38,12 @@ def execute_trade(symbol, side, quantity, price=None, order_type="LIMIT", market
                 if price:
                     params["activationPrice"] = str(price)
 
+            elif order_type == "MARKET":
+                pass  # אין צורך בהגדרות נוספות
+
+            else:
+                return {"error": f"Unsupported order_type: {order_type}"}
+
             print("🚀 Executing order:", params)
             order = client.futures_create_order(**params)
             return {"status": "success", "order": order}
@@ -37,7 +52,7 @@ def execute_trade(symbol, side, quantity, price=None, order_type="LIMIT", market
             return {"error": "Only futures market supported at this time."}
 
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Exception occurred: {str(e)}"}
 
 
 
