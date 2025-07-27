@@ -19,6 +19,9 @@ from trade_executor import execute_trade
 from binance.client import Client
 import requests
 import pytz
+from backtest_utils import backtest_strategy
+import io
+from scanner_utils import scan_all_futures
 
 app = Flask(__name__)
 CORS(app)
@@ -32,242 +35,53 @@ client = Client(binance_api_key, binance_api_secret)
 def index():
     return jsonify({"message": "AlgoGPT API is running"}), 200
 
-@app.route("/preset", methods=["GET"])
-def get_preset():
-    try:
-        with open("preset.txt", "r", encoding="utf-8") as file:
-            preset_text = file.read()
-        return jsonify({"preset": preset_text})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/strategy", methods=["GET"])
-def get_strategy():
-    try:
-        with open("preset.txt", "r", encoding="utf-8") as file:
-            strategy_text = file.read()
-        return jsonify({"strategy": strategy_text})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/calculate-quantity", methods=["POST"])
-def calculate_quantity():
-    data = request.json
-    try:
-        budget = data["budget"]
-        entry = data["entry"]
-        leverage = data["leverage"]
-        quantity = round((budget * leverage) / entry, 6)
-        return jsonify({"quantity": quantity})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/sl_tp", methods=["POST"])
-def calculate_sl_tp():
-    data = request.json
-    try:
-        entry = float(data["entry"])
-        stop = float(data["stop"])
-        tp = float(data["tp"])
-        risk = abs(entry - stop)
-        reward = abs(tp - entry)
-        rrr = round(reward / risk, 2)
-        return jsonify({"rrr": rrr})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/save", methods=["POST"])
-def save_trade():
-    data = request.json
-    try:
-        data["status"] = data.get("status", "open")
-        with open("trades.json", "a", encoding="utf-8") as f:
-            f.write(json.dumps(data) + "\n")
-        save_trade_snapshot(data)
-        return jsonify({"status": "saved"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/trades", methods=["GET"])
-def get_trades():
-    try:
-        if not os.path.exists("trades.json"):
-            return jsonify({"trades": []})
-        with open("trades.json", "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            trades = [json.loads(line) for line in lines]
-        return jsonify({"trades": trades})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/open-trades", methods=["GET"])
-def get_open_trades():
-    try:
-        if not os.path.exists("trades.json"):
-            return jsonify({"trades": []})
-        with open("trades.json", "r", encoding="utf-8") as f:
-            trades = [json.loads(line) for line in f if json.loads(line).get("status", "open") == "open"]
-        return jsonify({"open_trades": trades})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/close-trade", methods=["POST"])
-def close_trade():
-    try:
-        data = request.json
-        symbol_to_close = data["symbol"]
-        updated = []
-        with open("trades.json", "r", encoding="utf-8") as f:
-            trades = [json.loads(line) for line in f]
-        for trade in trades:
-            if trade["symbol"] == symbol_to_close and trade.get("status", "open") == "open":
-                trade["status"] = "closed"
-            updated.append(trade)
-        with open("trades.json", "w", encoding="utf-8") as f:
-            for t in updated:
-                f.write(json.dumps(t) + "\n")
-        return jsonify({"status": "closed", "symbol": symbol_to_close})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/clear", methods=["POST"])
-def clear_trades():
-    try:
-        open("trades.json", "w", encoding="utf-8").close()
-        return jsonify({"status": "cleared"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/daily-report", methods=["GET"])
-def daily_report():
-    try:
-        if not os.path.exists("pnl_tracker.json"):
-            return jsonify({"error": "No statistics file found"}), 400
-        pdf_base64 = generate_daily_report()
-        return jsonify({"pdf_base64": pdf_base64})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/ai-analyze", methods=["POST"])
-def ai_analyze():
+@app.route("/backtest", methods=["POST"])
+def run_backtest():
     try:
         data = request.json
         df = pd.DataFrame(data["prices"])
-        df["time"] = pd.to_datetime(df["time"])
-        df.rename(columns={"time": "ds", "close": "y"}, inplace=True)
-        model = Prophet()
-        model.fit(df)
-        future = model.make_future_dataframe(periods=10)
-        forecast = model.predict(future)
-        fig = model.plot(forecast)
-        filename = "forecast.png"
-        fig.savefig(filename)
-        with open(filename, "rb") as f:
-            img_data = base64.b64encode(f.read()).decode("utf-8")
-        direction = "LONG" if forecast["yhat"].iloc[-1] > df["y"].iloc[-1] else "SHORT"
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values("timestamp")
+
+        result_df = backtest_strategy(df)
+        result_df.dropna(inplace=True)
+        result_df["position"] = result_df["signal"].apply(lambda x: 1 if x == "LONG" else (-1 if x == "SHORT" else 0))
+        result_df["return"] = result_df["close"].pct_change().fillna(0)
+        result_df["strategy_return"] = result_df["position"].shift(1).fillna(0) * result_df["return"]
+
+        total_return = (1 + result_df["strategy_return"]).prod() - 1
+        win_rate = (result_df["strategy_return"] > 0).sum() / len(result_df)
+
+        # Create plot
+        result_df["cumulative"] = (1 + result_df["strategy_return"]).cumprod()
+        plt.figure(figsize=(10, 5))
+        plt.plot(result_df["timestamp"], result_df["cumulative"], label="Strategy")
+        plt.title("Backtest Performance")
+        plt.xlabel("Date")
+        plt.ylabel("Cumulative Return")
+        plt.legend()
+        plt.grid(True)
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        buf.seek(0)
+        chart_base64 = base64.b64encode(buf.read()).decode("utf-8")
+        buf.close()
+        plt.close()
+
         return jsonify({
-            "symbol": data["symbol"],
-            "direction": direction,
-            "forecast": forecast[["ds", "yhat"]].tail(10).to_dict(orient="records"),
-            "chart": img_data
+            "result": result_df.tail(20).to_dict(orient="records"),
+            "total_return": round(total_return * 100, 2),
+            "win_rate": round(win_rate * 100, 2),
+            "chart": chart_base64
         })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/news", methods=["GET"])
-def get_news():
-    try:
-        url = "https://cryptopanic.com/api/v1/posts/"
-        params = {
-            "auth_token": "89404de8e0bb4d6e78e95ed26ff19970cdb8830a",
-            "public": "true"
-        }
-        response = requests.get(url, params=params)
-        news_data = response.json().get("results", [])
-        return jsonify({"news": news_data})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/stats", methods=["GET"])
-def get_stats():
-    try:
-        if not os.path.exists("pnl_tracker.json"):
-            return jsonify({"error": "No statistics available"}), 400
-        df = pd.read_json("pnl_tracker.json")
-        df["date"] = pd.to_datetime(df["timestamp"]).dt.date
-        stats = df.groupby("date").agg({
-            "pnl": ["sum", "count"],
-            "success": "mean"
-        }).reset_index()
-        stats.columns = ["date", "total_pnl", "num_trades", "success_rate"]
-        stats["success_rate"] = (stats["success_rate"] * 100).round(2)
-        stats["total_pnl"] = stats["total_pnl"].round(2)
-        return jsonify({"daily_stats": stats.to_dict(orient="records")})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/scan", methods=["GET"])
 def scan_market():
-    from scanner_utils import scan_all_futures
     try:
         results = scan_all_futures()
         return jsonify({"results": results})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/grid-trade", methods=["POST"])
-def grid_trade():
-    try:
-        data = request.json
-        symbol = data["symbol"]
-        budget = float(data["budget"])
-        grids = int(data["grids"])
-        range_min = float(data["range_min"])
-        range_max = float(data["range_max"])
-        leverage = data.get("leverage", 10)
-
-        interval = (range_max - range_min) / grids
-        quantity_per_trade = round((budget / grids * leverage) / ((range_min + range_max) / 2), 4)
-
-        responses = []
-        for i in range(grids):
-            entry_price = round(range_min + i * interval, 4)
-            response = execute_trade(
-                symbol=symbol,
-                side="BUY",
-                quantity=quantity_per_trade,
-                price=entry_price,
-                order_type="LIMIT",
-                market_type="futures"
-            )
-            responses.append(response)
-
-        return jsonify({"status": "executed", "grid_orders": responses})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/execute-trade", methods=["POST"])
-def execute():
-    try:
-        data = request.json
-        symbol = data["symbol"]
-        side = data["side"]
-        quantity = data["quantity"]
-        price = data.get("price")
-        order_type = data.get("order_type", "LIMIT")
-        market_type = data.get("market_type", "futures")
-        trailing_percent = data.get("trailing_percent")
-
-        # ולידציה אם סימול חוקי
-        valid_symbols = [s["symbol"] for s in client.futures_exchange_info()["symbols"]]
-        if symbol not in valid_symbols:
-            return jsonify({"error": f"Symbol {symbol} not found on Binance Futures"}), 400
-
-        if trailing_percent:
-            order_type = "TRAILING_STOP_MARKET"
-
-        result = execute_trade(symbol, side, quantity, price, order_type, market_type, trailing_percent)
-        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
