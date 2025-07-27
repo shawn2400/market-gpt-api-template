@@ -11,6 +11,8 @@ import pytz
 import datetime
 import json
 import os
+import base64
+from io import BytesIO
 
 from snapshot_utils import generate_snapshot
 from report_utils import generate_daily_report
@@ -63,7 +65,6 @@ def clear_trades():
         json.dump([], f)
     return jsonify({"message": "All trades cleared"})
 
-# ✅ מסלול מתוקן – חישוב כמות לפי תקציב ומינוף
 @app.route("/calculate-quantity", methods=["POST"])
 def calculate_quantity():
     data = request.get_json()
@@ -76,8 +77,6 @@ def calculate_quantity():
 
     quantity = round((float(budget) * float(leverage)) / float(entry), 3)
     return jsonify({"quantity": quantity})
-
-# === פונקציות מתקדמות ===
 
 @app.route("/snapshot", methods=["POST"])
 def get_snapshot():
@@ -99,6 +98,90 @@ def news_analysis():
     if impact["level"] == "high":
         send_email_alert(impact)
     return jsonify(impact)
+
+@app.route("/ai-analyze", methods=["POST"])
+def ai_analyze():
+    data = request.get_json()
+    symbol = data.get("symbol")
+    prices = data.get("prices")
+
+    if not symbol or not prices:
+        return jsonify({"error": "Missing symbol or prices"}), 400
+
+    try:
+        df = pd.DataFrame(prices)
+        df['ds'] = pd.to_datetime(df['time'])
+        df['y'] = df['close']
+
+        model = Prophet()
+        model.fit(df[['ds', 'y']])
+        future = model.make_future_dataframe(periods=12, freq='H')
+        forecast = model.predict(future)
+
+        direction = "LONG" if forecast["yhat"].iloc[-1] > df['y'].iloc[-1] else "SHORT"
+
+        fig = model.plot(forecast)
+        plt.title(f"Forecast for {symbol}")
+        plt.xlabel("Time")
+        plt.ylabel("Price")
+        plt.tight_layout()
+
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format="png")
+        img_buffer.seek(0)
+        image_base64 = base64.b64encode(img_buffer.read()).decode("utf-8")
+
+        forecast_out = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(12).to_dict(orient="records")
+
+        return jsonify({
+            "symbol": symbol,
+            "direction": direction,
+            "forecast": forecast_out,
+            "chart": image_base64
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/preset", methods=["GET"])
+def get_preset():
+    try:
+        with open("preset.txt", "r", encoding="utf-8") as f:
+            content = f.read()
+        return jsonify({"preset": content})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/strategy", methods=["GET"])
+def get_strategy():
+    try:
+        with open("preset.txt", "r", encoding="utf-8") as f:
+            content = f.read()
+        return jsonify({"strategy": content})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/stats", methods=["GET"])
+def get_stats():
+    try:
+        with open("pnl_tracker.json", "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return jsonify({"message": "No data yet"}), 404
+
+    total_trades = len(data)
+    wins = [x for x in data if x.get("pnl", 0) > 0]
+    losses = [x for x in data if x.get("pnl", 0) <= 0]
+    total_pnl = round(sum([x.get("pnl", 0) for x in data]), 2)
+
+    stats = {
+        "total_trades": total_trades,
+        "wins": len(wins),
+        "losses": len(losses),
+        "success_rate": round((len(wins) / total_trades) * 100, 2) if total_trades else 0,
+        "total_pnl": total_pnl
+    }
+    return jsonify(stats)
 
 # ========== הרצה ==========
 if __name__ == "__main__":
