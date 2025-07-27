@@ -100,13 +100,16 @@ def scan_all_futures_live(budget_usd=100):
                     'RRR': rrr,
                     'quantity': qty,
                     'risk_capital': round(capital, 2),
-                    'grid_levels': grid
+                    'grid_levels': grid,
+                    'expected_profit': round(reward * qty, 2),
+                    'expected_loss': round(risk * qty, 2)
                 })
 
         time.sleep(0.05)
 
     top = sorted(results, key=lambda x: (x['quality_score'], x['RRR']), reverse=True)[:10]
     return top
+
 
 
 
