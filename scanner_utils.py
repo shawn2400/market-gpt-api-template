@@ -1,10 +1,18 @@
-from binance.client import Client
-from binance.enums import *
+import os
+import time
 import numpy as np
 import pandas as pd
-import time
+from binance.client import Client
+from utils.quality_score import compute_quality_score  # לוודא שיש קובץ כזה
+from ta.trend import EMAIndicator, MACD, ADXIndicator
+from ta.momentum import RSIIndicator
+from ta.volatility import AverageTrueRange
 
-client = Client(api_key=API_KEY, api_secret=API_SECRET)
+# התחברות ל־Binance
+client = Client(
+    api_key=os.getenv("BINANCE_API_KEY"),
+    api_secret=os.getenv("BINANCE_API_SECRET")
+)
 
 def get_live_price(symbol):
     try:
@@ -19,55 +27,73 @@ def get_klines(symbol, interval='1m', limit=100):
         return []
 
 def calculate_indicators(df):
-    df['EMA21'] = df['close'].ewm(span=21).mean()
-    df['EMA50'] = df['close'].ewm(span=50).mean()
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    df['EMA21'] = EMAIndicator(df['close'], window=21).ema_indicator()
+    df['EMA50'] = EMAIndicator(df['close'], window=50).ema_indicator()
+    df['RSI'] = RSIIndicator(df['close'], window=14).rsi()
+    macd = MACD(df['close'])
+    df['MACD'] = macd.macd()
+    df['MACD_signal'] = macd.macd_signal()
+    df['ADX'] = ADXIndicator(df['high'], df['low'], df['close'], window=14).adx()
+    df['ATR'] = AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     return df
 
-def scan_all_futures():
+def is_volume_spike(df, threshold=1.8):
+    last_vol = df['volume'].iloc[-1]
+    avg_vol = df['volume'].iloc[:-1].mean()
+    return last_vol > avg_vol * threshold
+
+def scan_all_futures_live():
     results = []
-    exchange_info = client.futures_exchange_info()
-    symbols = [s['symbol'] for s in exchange_info['symbols'] if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT']
+    symbols = [s['symbol'] for s in client.futures_exchange_info()['symbols']
+               if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT']
 
     for symbol in symbols:
         klines = get_klines(symbol)
         if len(klines) < 50:
             continue
 
-        df = pd.DataFrame(klines, columns=['timestamp','open','high','low','close','volume','close_time','quote_asset_volume','trades','taker_buy_base','taker_buy_quote','ignore'])
-        df['close'] = df['close'].astype(float)
+        df = pd.DataFrame(klines, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'qav', 'trades', 'tb_base', 'tb_quote', 'ignore'
+        ])
+        df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].astype(float)
 
+        # הזרקת מחיר חי לנר האחרון
         live_price = get_live_price(symbol)
         if not live_price:
             continue
-
-        # החלפת המחיר האחרון במחיר חי!
-        df.iloc[-1, df.columns.get_loc('close')] = live_price
+        df.at[df.index[-1], 'close'] = live_price
 
         df = calculate_indicators(df)
 
-        # תנאי לדוגמה: EMA21 חוצה את EMA50 מלמטה
-        if df['EMA21'].iloc[-2] < df['EMA50'].iloc[-2] and df['EMA21'].iloc[-1] > df['EMA50'].iloc[-1]:
-            rsi = df['RSI'].iloc[-1]
-            if rsi < 70:  # רק אם RSI עדיין לא בשיא
+        # תנאי LONG:
+        ema_cross = df['EMA21'].iloc[-2] < df['EMA50'].iloc[-2] and df['EMA21'].iloc[-1] > df['EMA50'].iloc[-1]
+        macd_cross = df['MACD'].iloc[-2] < df['MACD_signal'].iloc[-2] and df['MACD'].iloc[-1] > df['MACD_signal'].iloc[-1]
+        rsi_ok = df['RSI'].iloc[-1] > 50 and df['RSI'].iloc[-1] < 70
+        adx_ok = df['ADX'].iloc[-1] > 17
+        volume_ok = is_volume_spike(df)
+        
+        if all([ema_cross, macd_cross, rsi_ok, adx_ok, volume_ok]):
+            score = compute_quality_score(df)
+            if score >= 4:  # ציון איכות מינימלי
                 results.append({
                     'symbol': symbol,
-                    'live_price': live_price,
+                    'price': live_price,
                     'signal': 'LONG',
                     'EMA21': df['EMA21'].iloc[-1],
                     'EMA50': df['EMA50'].iloc[-1],
-                    'RSI': rsi
+                    'RSI': df['RSI'].iloc[-1],
+                    'MACD': df['MACD'].iloc[-1],
+                    'ADX': df['ADX'].iloc[-1],
+                    'ATR': df['ATR'].iloc[-1],
+                    'volume': df['volume'].iloc[-1],
+                    'quality_score': score
                 })
 
-        time.sleep(0.05)  # למנוע rate limit
+        time.sleep(0.05)  # מניעת rate-limit
 
     return results
+
 
 
 
