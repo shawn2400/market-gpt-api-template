@@ -6,13 +6,14 @@ import hashlib
 import requests
 from urllib.parse import urlencode
 from dotenv import load_dotenv
+from utils.quantity_utils import calculate_quantity
 
 load_dotenv()
 
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET").encode()
-BASE_URL = "https://18.162.221.196"  # IP ישיר
-HOST_HEADER = {"Host": "fapi.binance.com"}
+BASE_URL = "https://fapi.binance.com"
+HOST_HEADER = {}  # אין צורך ב־Host אם אתה משתמש ב־URL המקורי
 
 def sign_request(params):
     query_string = urlencode(params)
@@ -29,13 +30,23 @@ def send_signed_request(http_method, endpoint, payload=None):
     payload["timestamp"] = int(time.time() * 1000)
     signed = sign_request(payload)
 
-    if http_method == "POST":
-        return requests.post(url, headers=headers, data=signed, timeout=10)
-    elif http_method == "GET":
-        return requests.get(f"{url}?{signed}", headers=headers, timeout=10)
-
-def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage=20):
     try:
+        if http_method == "POST":
+            response = requests.post(url, headers=headers, data=signed, timeout=10)
+        elif http_method == "GET":
+            response = requests.get(f"{url}?{signed}", headers=headers, timeout=10)
+        else:
+            raise ValueError("Unsupported HTTP method")
+
+        response.raise_for_status()
+        return response
+    except requests.exceptions.RequestException as e:
+        print(f"[!] שגיאה בבקשת {endpoint}: {e}")
+        raise
+
+def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage=20, budget_usd=100):
+    try:
+        # ⚙️ שינוי מינוף
         send_signed_request("POST", "/fapi/v1/leverage", {
             "symbol": symbol,
             "leverage": leverage
@@ -44,8 +55,9 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
         side_binance = "BUY" if side.upper() == "LONG" else "SELL"
         opposite_side = "SELL" if side_binance == "BUY" else "BUY"
 
-        qty = round(10 / entry_price, 3)  # לדוגמה
+        qty = calculate_quantity(budget_usd, entry_price, leverage)
 
+        # 🟢 כניסה לטרייד
         order = send_signed_request("POST", "/fapi/v1/order", {
             "symbol": symbol,
             "side": side_binance,
@@ -55,6 +67,7 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
 
         time.sleep(1)
 
+        # 🔴 Stop Loss
         send_signed_request("POST", "/fapi/v1/order", {
             "symbol": symbol,
             "side": opposite_side,
@@ -65,6 +78,7 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
 
         time.sleep(1)
 
+        # 🟢 Take Profit
         send_signed_request("POST", "/fapi/v1/order", {
             "symbol": symbol,
             "side": opposite_side,
@@ -74,9 +88,12 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
             "closePosition": "true"
         })
 
+        print(f"✅ טרייד נשלח בהצלחה: {symbol} | כמות: {qty}")
         return {"status": "ok", "symbol": symbol, "qty": qty, "entry": entry_price}
     except Exception as e:
+        print(f"[!] שגיאה בביצוע טרייד ל־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
