@@ -1,11 +1,10 @@
-# main.py
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 from trade_executor import execute_trade_live
 from scanner_utils import scan_all_futures
-from backtest_utils import run_backtest
+from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
 import pandas as pd
 import logging
 
@@ -61,9 +60,29 @@ def backtest():
         logging.error(f"❌ שגיאה ב־Backtest: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/news", methods=["GET"])
+def news():
+    try:
+        news_items = fetch_crypto_news()
+        return jsonify(news_items)
+    except Exception as e:
+        logging.error(f"❌ שגיאה בשליפת חדשות: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/news-impact", methods=["GET"])
+def news_impact():
+    try:
+        news_items = fetch_crypto_news()
+        scored = analyze_news_impact(news_items)
+        return jsonify(scored)
+    except Exception as e:
+        logging.error(f"❌ שגיאה בניתוח סנטימנט: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
