@@ -1,23 +1,19 @@
-import json
 import os
+import json
 from datetime import datetime
 
-def save_trade_snapshot(symbol, direction, forecast, chart_base64):
-    if not os.path.exists("snapshots"):
-        os.makedirs("snapshots")
+def save_trade_snapshot(trade):
+    folder = "snapshots"
+    if not os.path.exists(folder):
+        os.makedirs(folder)
 
-    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"snapshots/{symbol}_{direction}_{now}.json"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    symbol = trade.get("symbol", "UNKNOWN")
+    filename = f"{symbol}_{timestamp}.json"
+    path = os.path.join(folder, filename)
 
-    data = {
-        "symbol": symbol,
-        "direction": direction,
-        "timestamp": now,
-        "forecast": forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(6).to_dict(orient='records'),
-        "chart_base64": chart_base64
-    }
+    with open(path, "w") as f:
+        json.dump(trade, f, indent=2)
 
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=2)
 
 
