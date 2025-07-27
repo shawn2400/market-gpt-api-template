@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 
-TRADES_FILE = "pnl_tracker.json"
+TRADES_FILE = "saved_trades.json"
 
 def save_trade(data):
     try:
@@ -57,6 +57,7 @@ def delete_trade(symbol):
     except Exception as e:
         print(f"[!] שגיאה במחיקת טרייד: {e}")
         return False
+
 
 
 
