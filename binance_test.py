@@ -6,20 +6,31 @@ from binance.enums import *
 # טען משתני סביבה
 load_dotenv()
 
-# קח את המפתחות
+# אתחול הלקוח
 api_key = os.getenv("BINANCE_API_KEY")
 api_secret = os.getenv("BINANCE_API_SECRET")
-
-# אתחול הלקוח
 client = Client(api_key, api_secret)
+
+# בדיקת חיבור
+print("🔐 Binance API Key Loaded:", bool(api_key))
+print("🔌 Checking connection...")
+
+try:
+    account_info = client.futures_account()
+    print("✅ Connected to Binance Futures!")
+except Exception as e:
+    print("❌ Failed to connect:", str(e))
+    exit()
 
 # 🧪 פרטי טרייד לבדיקה
 symbol = "BTCUSDT"
 side = SIDE_BUY
 quantity = 0.001
-order_type = "LIMIT"  # אפשר גם "TRAILING_STOP_MARKET"
+order_type = "LIMIT"  # או "TRAILING_STOP_MARKET"
 price = "30000"
 trailing_percent = 1.0
+
+print(f"\n🚀 Sending test order: {order_type} {symbol} {side}")
 
 try:
     if order_type == "LIMIT":
@@ -38,7 +49,7 @@ try:
             type=ORDER_TYPE_TRAILING_STOP_MARKET,
             quantity=quantity,
             callbackRate=trailing_percent,
-            activationPrice="30500"  # אופציונלי אך מומלץ
+            activationPrice="30500"
         )
     else:
         raise Exception("Unsupported order type")
