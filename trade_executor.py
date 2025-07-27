@@ -1,17 +1,40 @@
-from binance.enums import *
-from utils.binance_client import client  # ✅ במקום להגדיר client מקומית
-import time
-import math
-import logging
+# trade_executor.py
 
-# 🟢 ביצוע טרייד בפועל
+import time
+import logging
+from math import floor
+from binance.enums import *
+from utils.binance_client import client  # שימוש ב־Client מוכן מה-ENV
+
+# עיגול כמות לפי מינימום מותר
+def round_quantity(symbol, quantity):
+    try:
+        info = client.futures_exchange_info()
+        for s in info["symbols"]:
+            if s["symbol"] == symbol:
+                step_size = float([f for f in s["filters"] if f["filterType"] == "LOT_SIZE"][0]["stepSize"])
+                return floor(quantity / step_size) * step_size
+    except Exception as e:
+        logging.error(f"[!] שגיאה בעיגול כמות: {e}")
+    return round(quantity, 3)
+
+
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False):
     try:
+        # הגדרת מינוף
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
 
+        # מחיר נוכחי
         price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
-        quantity = round((budget_usd * leverage) / price, 3)
 
+        # חישוב כמות
+        quantity = (budget_usd * leverage) / price
+        quantity = round_quantity(symbol, quantity)
+
+        if quantity <= 0:
+            raise ValueError("כמות לא חוקית (אולי תקציב נמוך מדי?)")
+
+        # צד פקודה
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite_side = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
@@ -23,9 +46,9 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             quantity=quantity
         )
 
-        time.sleep(1)
+        time.sleep(0.5)
 
-        # הגדרת סטופ
+        # סטופ לוס
         client.futures_create_order(
             symbol=symbol,
             side=opposite_side,
@@ -35,15 +58,20 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             timeInForce=TIME_IN_FORCE_GTC
         )
 
-        # הגדרת טייק פרופיט
-        client.futures_create_order(
-            symbol=symbol,
-            side=opposite_side,
-            type=ORDER_TYPE_LIMIT,
-            price=round(tp, 4),
-            quantity=quantity,
-            timeInForce=TIME_IN_FORCE_GTC
-        )
+        time.sleep(0.5)
+
+        # טייק פרופיט (LIMIT)
+        try:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite_side,
+                type=ORDER_TYPE_LIMIT,
+                price=round(tp, 4),
+                quantity=quantity,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+        except Exception as e:
+            logging.warning(f"[!] טייק פרופיט נכשל: {e} — ממשיכים בלעדיו")
 
         return {
             "status": "success",
@@ -57,8 +85,9 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         }
 
     except Exception as e:
-        logging.error(f"❌ שגיאה בביצוע טרייד: {e}")
+        logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
