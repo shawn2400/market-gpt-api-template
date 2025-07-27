@@ -5,6 +5,8 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from trade_executor import execute_trade_live
 from scanner_utils import scan_all_futures
+from backtest_utils import run_backtest
+import pandas as pd
 import logging
 
 load_dotenv()
@@ -46,9 +48,23 @@ def scan():
         logging.error(f"❌ שגיאה בסריקה: {e}")
         return jsonify({"status": "error", "message": "שגיאה בסריקה", "details": str(e)}), 500
 
+@app.route("/backtest", methods=["POST"])
+def backtest():
+    try:
+        data = request.get_json()
+        df = pd.DataFrame(data["data"])
+        if 'timestamp' not in df.columns:
+            df['timestamp'] = pd.date_range(start='2023-01-01', periods=len(df), freq='15min')
+        results = run_backtest(df)
+        return jsonify(results.to_dict(orient="records"))
+    except Exception as e:
+        logging.error(f"❌ שגיאה ב־Backtest: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
