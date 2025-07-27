@@ -1,251 +1,88 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from dotenv import load_dotenv
 import os
-import json
-import base64
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from prophet import Prophet
-from ta.trend import EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator
-from ta.volatility import AverageTrueRange
-from datetime import datetime
-from report_utils import generate_daily_report
-from trade_executor import execute_trade
-from snapshot_utils import save_trade_snapshot
-from binance.client import Client
-from backtest_utils import backtest_strategy
-import requests
-import io
 
+from trade_executor import execute_trade_live
+from snapshot_utils import analyze_snapshot
+from scanner_utils import scan_all_futures
+from report_utils import generate_daily_report_base64
+from backtest_utils import backtest_strategy, fetch_crypto_news, analyze_news_impact
+from datetime import datetime
+
+load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# Binance client init
-binance_api_key = os.getenv("BINANCE_API_KEY")
-binance_api_secret = os.getenv("BINANCE_API_SECRET")
-client = Client(binance_api_key, binance_api_secret)
-
-# In-memory store
-trades = []
-
-# === Utility: scan futures ===
-def scan_all_futures():
-    symbols = [
-        s["symbol"] for s in client.futures_exchange_info()["symbols"]
-        if "USDT" in s["symbol"] and s["contractType"] == "PERPETUAL"
-    ]
-    results = []
-    for symbol in symbols:
-        try:
-            klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_15MINUTE, limit=100)
-            df = pd.DataFrame(klines, columns=[
-                "open_time", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "number_of_trades",
-                "taker_buy_base", "taker_buy_quote", "ignore"
-            ])
-            df["close"] = df["close"].astype(float)
-            df["high"] = df["high"].astype(float)
-            df["low"] = df["low"].astype(float)
-            df["volume"] = df["volume"].astype(float)
-
-            if len(df) < 50:
-                continue
-
-            rsi = RSIIndicator(df["close"]).rsi().iloc[-1]
-            macd = MACD(df["close"]).macd_diff().iloc[-1]
-            ema21 = EMAIndicator(df["close"], window=21).ema_indicator().iloc[-1]
-            adx = ADXIndicator(df["high"], df["low"], df["close"]).adx().iloc[-1]
-            price = df["close"].iloc[-1]
-            volume = df["volume"].iloc[-1]
-
-            if rsi < 35 and macd > 0 and price > ema21 and adx > 17 and volume > 100000:
-                results.append({
-                    "symbol": symbol,
-                    "last_price": price,
-                    "volume": volume,
-                    "rsi": round(rsi, 2),
-                    "adx": round(adx, 2),
-                    "direction": "LONG"
-                })
-
-        except Exception:
-            continue
-
-    return sorted(results, key=lambda x: x["volume"], reverse=True)
-
-# === Routes ===
-
-@app.route("/", methods=["GET", "HEAD"])
+@app.route("/")
 def index():
-    return jsonify({"message": "AlgoGPT API is running"}), 200
+    return jsonify({"status": "AlgoGPT API is running 🚀"})
 
 @app.route("/scan", methods=["GET"])
 def scan_market():
     try:
-        return jsonify({"results": scan_all_futures()})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/backtest", methods=["POST"])
-def run_backtest():
-    try:
-        data = request.json
-        df = pd.DataFrame(data["prices"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.sort_values("timestamp")
-        result_df = backtest_strategy(df)
-        result_df.dropna(inplace=True)
-        result_df["position"] = result_df["signal"].map({"LONG": 1, "SHORT": -1}).fillna(0)
-        result_df["return"] = result_df["close"].pct_change().fillna(0)
-        result_df["strategy_return"] = result_df["position"].shift(1).fillna(0) * result_df["return"]
-        total_return = (1 + result_df["strategy_return"]).prod() - 1
-        win_rate = (result_df["strategy_return"] > 0).sum() / len(result_df)
-        result_df["cumulative"] = (1 + result_df["strategy_return"]).cumprod()
-
-        plt.figure(figsize=(10, 5))
-        plt.plot(result_df["timestamp"], result_df["cumulative"], label="Strategy")
-        plt.title("Backtest Performance")
-        plt.xlabel("Date")
-        plt.ylabel("Cumulative Return")
-        plt.legend()
-        plt.grid(True)
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png")
-        chart_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-        buf.close()
-        plt.close()
-
-        return jsonify({
-            "result": result_df.tail(20).to_dict(orient="records"),
-            "total_return": round(total_return * 100, 2),
-            "win_rate": round(win_rate * 100, 2),
-            "chart": chart_base64
-        })
-
+        results = scan_all_futures()
+        if not results:
+            return jsonify({"message": "No valid trades found."}), 404
+        return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/execute-trade", methods=["POST"])
-def route_execute_trade():
-    try:
-        trade_data = request.get_json()
-        response = execute_trade(**trade_data)
-        return jsonify(response)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/save", methods=["POST"])
-def save_trade():
+def execute_trade():
     try:
         data = request.json
-        trades.append(data)
-        return jsonify({"status": "saved", "total_trades": len(trades)}), 200
+        result = execute_trade_live(data)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/trades", methods=["GET"])
-def get_trades():
-    return jsonify(trades)
-
-@app.route("/clear", methods=["POST"])
-def clear_trades():
-    trades.clear()
-    return jsonify({"status": "cleared"})
-
-@app.route("/preset", methods=["GET"])
-def get_preset():
-    with open("preset.txt", encoding="utf-8") as f:
-        return jsonify({"preset": f.read()})
-
-@app.route("/strategy", methods=["GET"])
-def get_strategy_txt():
-    with open("preset.txt", encoding="utf-8") as f:
-        return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
-
-@app.route("/sl_tp", methods=["POST"])
-def sl_tp():
+@app.route("/snapshot", methods=["POST"])
+def analyze_snapshot_route():
     try:
-        data = request.get_json()
-        entry = data["entry"]
-        atr = data.get("atr", 0)
-        direction = data.get("direction", "LONG")
-        rrr = data.get("rrr", 2.5)
-
-        if not entry:
-            return jsonify({"error": "Missing entry price"}), 400
-
-        if direction == "LONG":
-            stop = entry - atr * 1.5
-            tp = entry + rrr * (entry - stop)
-        else:
-            stop = entry + atr * 1.5
-            tp = entry - rrr * (stop - entry)
-
-        return jsonify({
-            "entry": entry,
-            "stop": round(stop, 4),
-            "tp": round(tp, 4),
-            "rrr": rrr
-        })
+        data = request.json
+        symbol = data.get("symbol", "BTCUSDT")
+        interval = data.get("interval", "1h")
+        result = analyze_snapshot(symbol, interval)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/calculate-quantity", methods=["POST"])
-def calculate_quantity():
+@app.route("/backtest", methods=["POST"])
+def backtest():
     try:
-        data = request.get_json()
-        budget = data["budget"]
-        entry = data["entry"]
-        leverage = data.get("leverage", 10)
+        df_json = request.json.get("data", [])
+        import pandas as pd
+        df = pd.DataFrame(df_json)
+        results = backtest_strategy(df)
+        return jsonify(results.to_dict(orient="records"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-        if not budget or not entry:
-            return jsonify({"error": "Missing budget or entry"}), 400
-
-        quantity = round((budget * leverage) / entry, 4)
-        return jsonify({"quantity": quantity})
+@app.route("/news", methods=["GET"])
+def get_news():
+    try:
+        news = fetch_crypto_news()
+        scored = analyze_news_impact(news)
+        return jsonify(scored)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/daily-report", methods=["GET"])
 def daily_report():
     try:
-        report_path = generate_daily_report()
-        with open(report_path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode("utf-8")
-        return jsonify({"pdf_base64": encoded})
+        report_base64 = generate_daily_report_base64()
+        return jsonify({"pdf_base64": report_base64})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/news", methods=["GET"])
-def crypto_news():
-    try:
-        key = os.getenv("CRYPTO_PANIC_API_KEY")
-        url = f"https://cryptopanic.com/api/v1/posts/?auth_token={key}&kind=news"
-        res = requests.get(url)
-        return jsonify(res.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/ping-binance", methods=["GET"])
-def ping_binance():
-    try:
-        info = client.futures_exchange_info()
-        return jsonify({
-            "status": "ok",
-            "symbols": len(info.get("symbols", [])),
-            "serverTime": info.get("serverTime")
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"status": "ok", "timestamp": datetime.utcnow().isoformat() + "Z"})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
+
 
 
 
