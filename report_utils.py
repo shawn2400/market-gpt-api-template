@@ -1,64 +1,32 @@
-from fpdf import FPDF
-import json
-import matplotlib.pyplot as plt
 import os
+import json
+from fpdf import FPDF
 from datetime import datetime
 
-def generate_daily_report(pnl_file='pnl_tracker.json', output_file='daily_report.pdf'):
-    if not os.path.exists(pnl_file):
+def generate_daily_report():
+    folder = "snapshots"
+    if not os.path.exists(folder):
         return None
 
-    with open(pnl_file, 'r') as f:
-        pnl_data = json.load(f)
-
-    if not pnl_data:
-        return None
-
-    # יצירת גרף רווח יומי
-    dates = [entry['date'] for entry in pnl_data]
-    pnls = [entry['pnl'] for entry in pnl_data]
-
-    plt.figure(figsize=(8, 4))
-    plt.plot(dates, pnls, marker='o', linestyle='-', color='blue')
-    plt.xticks(rotation=45)
-    plt.xlabel('Date')
-    plt.ylabel('Daily PNL ($)')
-    plt.title('Daily Profit & Loss')
-    plt.tight_layout()
-    graph_path = 'pnl_graph.png'
-    plt.savefig(graph_path)
-    plt.close()
-
-    # יצירת דוח PDF
+    report_path = os.path.join(folder, f"daily_report_{datetime.now().strftime('%Y%m%d')}.pdf")
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, 'Daily Trading Report', ln=True, align='C')
-
     pdf.set_font("Arial", size=12)
-    total_trades = len(pnl_data)
-    profitable = sum(1 for entry in pnl_data if entry['pnl'] > 0)
-    win_rate = round((profitable / total_trades) * 100, 2)
-    total_pnl = sum(pnls)
+    pdf.cell(200, 10, txt="Daily Trade Report", ln=1, align="C")
 
-    pdf.ln(10)
-    pdf.cell(0, 10, f'Total Trades: {total_trades}', ln=True)
-    pdf.cell(0, 10, f'Profitable Trades: {profitable}', ln=True)
-    pdf.cell(0, 10, f'Win Rate: {win_rate}%', ln=True)
-    pdf.cell(0, 10, f'Total PNL: ${total_pnl:.2f}', ln=True)
+    files = sorted(os.listdir(folder))[-10:]  # take last 10 snapshots
+    for fname in files:
+        path = os.path.join(folder, fname)
+        try:
+            with open(path, "r") as f:
+                trade = json.load(f)
+                pdf.ln(5)
+                for key, value in trade.items():
+                    pdf.cell(200, 10, txt=f"{key}: {value}", ln=1)
+        except:
+            continue
 
-    today = datetime.now().strftime('%Y-%m-%d')
-    today_data = next((entry for entry in pnl_data if entry['date'] == today), None)
-    if today_data:
-        pdf.cell(0, 10, f"Today's PNL: ${today_data['pnl']:.2f}", ln=True)
-
-    pdf.ln(10)
-    pdf.cell(0, 10, 'PNL Graph:', ln=True)
-    pdf.image(graph_path, x=10, y=pdf.get_y(), w=190)
-
-    pdf.output(output_file)
-
-    with open(output_file, 'rb') as f:
-        return f.read()
+    pdf.output(report_path)
+    return report_path
 
 
