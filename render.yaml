@@ -5,19 +5,19 @@ services:
     region: frankfurt
     plan: free
     runtime: python
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    buildCommand: |
+      apt-get update && apt-get install -y build-essential && \
+      pip install --upgrade pip && pip install -r requirements.txt
     startCommand: gunicorn main:app --bind 0.0.0.0:10000
     envVars:
       - key: BINANCE_API_KEY
-        value: YOUR_BINANCE_API_KEY
+        sync: false
       - key: BINANCE_API_SECRET
-        value: YOUR_BINANCE_API_SECRET
-      - key: CRYPTO_PANIC_API_KEY
-        value: 89404de8e0bb4d6e78e95ed26ff19970cdb8830a
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
-        value: your_telegram_token
+        sync: false
       - key: TELEGRAM_CHAT_ID
-        value: your_telegram_chat_id
+        sync: false
     autoDeploy: true
 
 
