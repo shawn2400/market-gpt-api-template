@@ -8,6 +8,7 @@ from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
 import pandas as pd
 import logging
 
+# טעינת משתני סביבה
 load_dotenv()
 
 app = Flask(__name__)
@@ -43,7 +44,7 @@ def scan():
     try:
         logging.info("🔍 התחלת סריקה חיה על Binance Futures...")
         results = scan_all_futures()
-        logging.info(f"✅ הסתיימה סריקה: נמצאו {len(results)} תוצאות")
+        logging.info(f"✅ הסתיימה סריקה: נמצאו {len(results['all_candidates'])} תוצאות")
         return jsonify(results)
     except Exception as e:
         logging.error(f"❌ שגיאה בסריקה: {e}")
@@ -84,6 +85,7 @@ def news_impact():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
