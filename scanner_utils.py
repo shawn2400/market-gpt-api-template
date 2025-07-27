@@ -1,15 +1,14 @@
-# scanner_utils.py
-
+import os
+import time
+import pandas as pd
 from binance.client import Client
 from binance.enums import *
-from datetime import datetime, timedelta
-import pandas as pd
-import time
+from dotenv import load_dotenv
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
-import os
-from dotenv import load_dotenv
-from binance_client import client  # ודא שזה קיים
+from binance_client import client
+
+load_dotenv()
 
 def scan_all_futures_live(budget_usd=100):
     symbols = [s['symbol'] for s in client.futures_exchange_info()['symbols'] if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT']
@@ -50,6 +49,7 @@ def scan_all_futures_live(budget_usd=100):
 
     sorted_results = sorted(results, key=lambda x: x['quality_score'], reverse=True)
     return sorted_results
+
 
 
 
