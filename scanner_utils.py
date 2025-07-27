@@ -1,95 +1,132 @@
-import os
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+# scanner_utils.py
+
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
 from dotenv import load_dotenv
-from trade_executor import execute_trade_live
-from scanner_utils import scan_all_futures
-from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
+import os
 import pandas as pd
+import ta
 import logging
+from trade_executor import execute_trade_live
+from utils.quantity_utils import auto_risk_allocation
+from utils.quality_score import compute_quality_score
 
 load_dotenv()
 
-app = Flask(__name__)
-CORS(app)
-logging.basicConfig(level=logging.INFO)
+api_key = os.getenv("BINANCE_API_KEY")
+api_secret = os.getenv("BINANCE_API_SECRET")
+client = Client(api_key, api_secret)
 
-@app.route("/")
-def home():
-    return jsonify({"status": "ok", "message": "AlgoGPT API is running ✅"})
-
-@app.route("/execute-trade", methods=["POST"])
-def execute_trade():
+def get_futures_symbols():
     try:
-        data = request.get_json()
-        symbol = data["symbol"]
-        entry = float(data["entry"])
-        stop = float(data["stop"])
-        tp = float(data["tp"])
-        direction = data["direction"]
-        leverage = int(data.get("leverage", 10))
-        budget = float(data.get("budget", 100))
-        use_grid = bool(data.get("use_grid", False))
+        exchange_info = client.futures_exchange_info()
+        symbols = [s['symbol'] for s in exchange_info['symbols']
+                   if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT']
+        return symbols
+    except BinanceAPIException as e:
+        logging.error(f"[get_futures_symbols] Binance API error: {e}")
+        return []
 
-        logging.info(f"📤 ביצוע טרייד: {symbol} | {direction} | entry={entry}, stop={stop}, tp={tp}, lev={leverage}, budget={budget}, grid={use_grid}")
-        result = execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=budget, use_grid=use_grid)
-        return jsonify(result)
-    except Exception as e:
-        logging.error(f"❌ שגיאה בביצוע טרייד: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/scan", methods=["GET"])
-def scan():
+def fetch_klines(symbol, interval='15m', limit=100):
     try:
-        logging.info("🔍 התחלת סריקה חיה על Binance Futures...")
-        scan_result = scan_all_futures()
-        executed = scan_result.get("executed_trade")
-        candidates = scan_result.get("all_candidates", [])
+        klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+        df = pd.DataFrame(klines, columns=[
+            'timestamp', 'open', 'high', 'low', 'close',
+            'volume', 'close_time', 'quote_asset_volume',
+            'number_of_trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'
+        ])
+        df['close'] = df['close'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
+        df['volume'] = df['volume'].astype(float)
+        return df
+    except BinanceAPIException as e:
+        logging.error(f"[fetch_klines] Error fetching klines for {symbol}: {e}")
+        return None
 
-        logging.info(f"✅ הסתיימה סריקה: נמצאו {len(candidates)} מועמדים")
-        return jsonify({
-            "executed_trade": executed,
-            "candidates": candidates
-        })
-    except Exception as e:
-        logging.error(f"❌ שגיאה בסריקה: {e}")
-        return jsonify({"status": "error", "message": "שגיאה בסריקה", "details": str(e)}), 500
+def scan_all_futures():
+    results = []
+    symbols = get_futures_symbols()
 
-@app.route("/backtest", methods=["POST"])
-def backtest():
-    try:
-        data = request.get_json()
-        df = pd.DataFrame(data["data"])
-        if 'timestamp' not in df.columns:
-            df['timestamp'] = pd.date_range(start='2023-01-01', periods=len(df), freq='15min')
-        results = run_backtest(df)
-        return jsonify(results.to_dict(orient="records"))
-    except Exception as e:
-        logging.error(f"❌ שגיאה ב־Backtest: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    for symbol in symbols:
+        df = fetch_klines(symbol)
+        if df is None or df.empty:
+            continue
 
-@app.route("/news", methods=["GET"])
-def news():
-    try:
-        news_items = fetch_crypto_news()
-        return jsonify(news_items)
-    except Exception as e:
-        logging.error(f"❌ שגיאה בשליפת חדשות: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        # הוספת אינדיקטורים טכניים
+        try:
+            df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
+            df['macd'] = ta.trend.MACD(df['close']).macd()
+            df['ema21'] = ta.trend.EMAIndicator(df['close'], window=21).ema_indicator()
+            df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close']).adx()
+        except Exception as e:
+            logging.warning(f"[scan] אינדיקטור נכשל עבור {symbol}: {e}")
+            continue
 
-@app.route("/news-impact", methods=["GET"])
-def news_impact():
-    try:
-        news_items = fetch_crypto_news()
-        scored = analyze_news_impact(news_items)
-        return jsonify(scored)
-    except Exception as e:
-        logging.error(f"❌ שגיאה בניתוח סנטימנט: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+        # תנאים לכניסה LONG
+        if (
+            last['rsi'] > 55 and
+            last['macd'] > 0 and
+            last['close'] > last['ema21'] and
+            last['adx'] > 17 and
+            last['volume'] > prev['volume'] * 1.3
+        ):
+            entry = round(last['close'], 4)
+            stop = round(entry * 0.97, 4)
+            tp = round(entry * 1.05, 4)
+            leverage = 20
+            budget = 100
+            confidence = 90
+            quality = compute_quality_score(df)
+
+            if quality < 4:
+                continue
+
+            try:
+                capital = auto_risk_allocation(entry, stop, budget)
+                result = execute_trade_live(
+                    symbol=symbol,
+                    entry=entry,
+                    stop=stop,
+                    tp=tp,
+                    direction="LONG",
+                    leverage=leverage,
+                    budget_usd=capital,
+                    use_grid=True
+                )
+                return {
+                    "executed_trade": {
+                        "symbol": symbol,
+                        "entry": entry,
+                        "stop": stop,
+                        "tp": tp,
+                        "leverage": leverage,
+                        "direction": "LONG",
+                        "confidence": confidence,
+                        "quality_score": quality
+                    },
+                    "all_candidates": results
+                }
+            except Exception as e:
+                logging.error(f"[scan_all_futures] שגיאה בהפעלה ל־{symbol}: {e}")
+                continue
+
+        else:
+            results.append({
+                "symbol": symbol,
+                "entry": round(last['close'], 4),
+                "rsi": round(last['rsi'], 2),
+                "macd": round(last['macd'], 4),
+                "ema21": round(last['ema21'], 4),
+                "adx": round(last['adx'], 2),
+                "volume": round(last['volume'], 2)
+            })
+
+    return {"executed_trade": None, "all_candidates": results}
+
 
 
 
