@@ -8,6 +8,9 @@ schedule
 prophet
 ta
 pytz
+requests
+plotly
+
 
 
 
