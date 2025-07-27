@@ -18,6 +18,7 @@ from report_utils import generate_daily_report
 from snapshot_utils import save_trade_snapshot
 import requests
 import pytz
+from trade_executor import execute_trade
 
 app = Flask(__name__)
 CORS(app)
@@ -76,7 +77,7 @@ def save_trade():
     try:
         with open("trades.json", "a", encoding="utf-8") as f:
             f.write(json.dumps(data) + "\n")
-        save_trade_snapshot(data)  # Save visual snapshot
+        save_trade_snapshot(data)
         return jsonify({"status": "saved"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -169,8 +170,25 @@ def get_stats():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/execute-trade", methods=["POST"])
+def execute():
+    try:
+        data = request.json
+        symbol = data["symbol"]
+        side = data["side"]
+        quantity = data["quantity"]
+        price = data.get("price")
+        order_type = data.get("order_type", "LIMIT")
+        market_type = data.get("market_type", "futures")
+
+        result = execute_trade(symbol, side, quantity, price, order_type, market_type)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
