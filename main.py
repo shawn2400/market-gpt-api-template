@@ -228,10 +228,25 @@ def crypto_news():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# === Run with dynamic port ===
+@app.route("/ping-binance", methods=["GET"])
+def ping_binance():
+    try:
+        info = client.futures_exchange_info()
+        return jsonify({
+            "status": "ok",
+            "symbols": len(info.get("symbols", [])),
+            "serverTime": info.get("serverTime")
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
