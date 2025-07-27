@@ -1,7 +1,7 @@
-# בסיס על Python 3.10 (לא 3.13!)
+# בסיס על Python 3.10 (לא לשנות!)
 FROM python:3.10-slim
 
-# עדכון בסיסי והתקנת ספריות הנדרשות ל־prophet ו־pandas
+# התקנת חבילות מערכת נדרשות (ל־prophet, numpy, pandas וכו')
 RUN apt-get update && apt-get install -y \
     build-essential \
     g++ \
@@ -17,20 +17,23 @@ RUN apt-get update && apt-get install -y \
     libopenblas-dev \
     curl \
     git \
-    && apt-get clean
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # יצירת תיקיית עבודה
 WORKDIR /app
 
-# העתקת הקוד
+# העתקת קבצי הפרויקט
 COPY . .
 
-# התקנת התלויות
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# התקנת התלויות מ־requirements.txt
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-# פתיחת פורט
+# חשיפת פורט להפעלה
 EXPOSE 10000
 
-# הפעלת האפליקציה
-CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:10000"]
+# הפעלת השרת עם Gunicorn
+CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:10000", "--timeout", "300"]
+
 
