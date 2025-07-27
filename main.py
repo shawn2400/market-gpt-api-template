@@ -1,13 +1,18 @@
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from trade_executor import execute_trade_live
 from dotenv import load_dotenv
+from trade_executor import execute_trade_live
+from scanner_utils import scan_all_futures  # ודא שזה קיים
+import logging
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# ✅ לוגים לקונסול
+logging.basicConfig(level=logging.INFO)
 
 @app.route("/")
 def home():
@@ -24,14 +29,28 @@ def execute_trade():
         direction = data["direction"]
         leverage = int(data.get("leverage", 10))
 
+        logging.info(f"📤 ביצוע טרייד: {symbol} | {direction} | entry={entry}, stop={stop}, tp={tp}, lev={leverage}")
         result = execute_trade_live(symbol, entry, stop, tp, direction, leverage)
         return jsonify(result)
     except Exception as e:
+        logging.error(f"❌ שגיאה בביצוע טרייד: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/scan", methods=["GET"])
+def scan():
+    try:
+        logging.info("🔍 התחלת סריקה חיה על Binance Futures...")
+        results = scan_all_futures()
+        logging.info(f"✅ הסתיימה סריקה: נמצאו {len(results)} תוצאות")
+        return jsonify(results)
+    except Exception as e:
+        logging.error(f"❌ שגיאה בסריקה: {e}")
+        return jsonify({"status": "error", "message": "שגיאה בסריקה", "details": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
