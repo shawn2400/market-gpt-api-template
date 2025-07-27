@@ -2,21 +2,21 @@ services:
   - type: web
     name: algogpt-api
     env: python
+    region: frankfurt
     plan: free
     runtime: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn main:app --bind 0.0.0.0:10000"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:10000
     envVars:
       - key: BINANCE_API_KEY
-        value: your_actual_api_key_here
+        sync: false
       - key: BINANCE_API_SECRET
-        value: your_actual_api_secret_here
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
-        value: your_telegram_token
+        sync: false
       - key: TELEGRAM_CHAT_ID
-        value: your_telegram_chat_id
+        sync: false
     autoDeploy: true
-    region: frankfurt
 
 
 
