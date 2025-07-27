@@ -9,19 +9,24 @@ import matplotlib.pyplot as plt
 from prophet import Prophet
 from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
+from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 from ta.trend import ADXIndicator
-from ta.volatility import AverageTrueRange
 from datetime import datetime
 from report_utils import generate_daily_report
 from snapshot_utils import save_trade_snapshot
+from trade_executor import execute_trade
+from binance.client import Client
 import requests
 import pytz
-from trade_executor import execute_trade
 
 app = Flask(__name__)
 CORS(app)
+
+# Binance Client Init
+binance_api_key = os.getenv("BINANCE_API_KEY")
+binance_api_secret = os.getenv("BINANCE_API_SECRET")
+client = Client(binance_api_key, binance_api_secret)
 
 @app.route("/", methods=["GET", "HEAD"])
 def index():
@@ -75,6 +80,7 @@ def calculate_sl_tp():
 def save_trade():
     data = request.json
     try:
+        data["status"] = data.get("status", "open")
         with open("trades.json", "a", encoding="utf-8") as f:
             f.write(json.dumps(data) + "\n")
         save_trade_snapshot(data)
@@ -91,6 +97,36 @@ def get_trades():
             lines = f.readlines()
             trades = [json.loads(line) for line in lines]
         return jsonify({"trades": trades})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/open-trades", methods=["GET"])
+def get_open_trades():
+    try:
+        if not os.path.exists("trades.json"):
+            return jsonify({"trades": []})
+        with open("trades.json", "r", encoding="utf-8") as f:
+            trades = [json.loads(line) for line in f if json.loads(line).get("status", "open") == "open"]
+        return jsonify({"open_trades": trades})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/close-trade", methods=["POST"])
+def close_trade():
+    try:
+        data = request.json
+        symbol_to_close = data["symbol"]
+        updated = []
+        with open("trades.json", "r", encoding="utf-8") as f:
+            trades = [json.loads(line) for line in f]
+        for trade in trades:
+            if trade["symbol"] == symbol_to_close and trade.get("status", "open") == "open":
+                trade["status"] = "closed"
+            updated.append(trade)
+        with open("trades.json", "w", encoding="utf-8") as f:
+            for t in updated:
+                f.write(json.dumps(t) + "\n")
+        return jsonify({"status": "closed", "symbol": symbol_to_close})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -170,6 +206,46 @@ def get_stats():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/scan", methods=["GET"])
+def scan_market():
+    from scanner_utils import scan_all_futures
+    try:
+        results = scan_all_futures()
+        return jsonify({"results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/grid-trade", methods=["POST"])
+def grid_trade():
+    try:
+        data = request.json
+        symbol = data["symbol"]
+        budget = float(data["budget"])
+        grids = int(data["grids"])
+        range_min = float(data["range_min"])
+        range_max = float(data["range_max"])
+        leverage = data.get("leverage", 10)
+
+        interval = (range_max - range_min) / grids
+        quantity_per_trade = round((budget / grids * leverage) / ((range_min + range_max) / 2), 4)
+
+        responses = []
+        for i in range(grids):
+            entry_price = round(range_min + i * interval, 4)
+            response = execute_trade(
+                symbol=symbol,
+                side="BUY",
+                quantity=quantity_per_trade,
+                price=entry_price,
+                order_type="LIMIT",
+                market_type="futures"
+            )
+            responses.append(response)
+
+        return jsonify({"status": "executed", "grid_orders": responses})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/execute-trade", methods=["POST"])
 def execute():
     try:
@@ -180,14 +256,25 @@ def execute():
         price = data.get("price")
         order_type = data.get("order_type", "LIMIT")
         market_type = data.get("market_type", "futures")
+        trailing_percent = data.get("trailing_percent")
 
-        result = execute_trade(symbol, side, quantity, price, order_type, market_type)
+        # ולידציה אם סימול חוקי
+        valid_symbols = [s["symbol"] for s in client.futures_exchange_info()["symbols"]]
+        if symbol not in valid_symbols:
+            return jsonify({"error": f"Symbol {symbol} not found on Binance Futures"}), 400
+
+        if trailing_percent:
+            order_type = "TRAILING_STOP_MARKET"
+
+        result = execute_trade(symbol, side, quantity, price, order_type, market_type, trailing_percent)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
+
 
 
 
