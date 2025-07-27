@@ -15,9 +15,10 @@ def execute_trade(symbol, side, quantity, price=None, order_type="LIMIT", market
 
         if market_type == "futures":
             try:
+                # שינוי מינוף ל־20 (גמיש אם כבר קיים)
                 client.futures_change_leverage(symbol=symbol, leverage=20)
-            except Exception:
-                pass
+            except Exception as e:
+                print("⚠️ שגיאה בשינוי מינוף:", e)
 
             params = {
                 "symbol": symbol,
@@ -38,12 +39,12 @@ def execute_trade(symbol, side, quantity, price=None, order_type="LIMIT", market
                     params["activationPrice"] = str(price)
 
             elif order_type == "MARKET":
-                pass
+                pass  # אין צורך בפרמטרים נוספים
 
             else:
                 return {"error": f"Unsupported order_type: {order_type}"}
 
-            print("\U0001F680 Executing order:", params)
+            print("🚀 Executing order:", params)
             order = client.futures_create_order(**params)
             return {"status": "success", "order": order}
 
