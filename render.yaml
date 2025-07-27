@@ -6,8 +6,11 @@ services:
     plan: free
     runtime: python
     buildCommand: |
-      apt-get update && apt-get install -y build-essential && \
-      pip install --upgrade pip && pip install -r requirements.txt
+      apt-get update && \
+      apt-get install -y build-essential g++ python3-dev libatlas-base-dev && \
+      pip install --upgrade pip && \
+      pip install --no-binary :all: pandas==2.1.4 && \
+      pip install -r requirements.txt
     startCommand: gunicorn main:app --bind 0.0.0.0:10000
     envVars:
       - key: BINANCE_API_KEY
@@ -18,7 +21,10 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      - key: CRYPTO_PANIC_API_KEY
+        sync: false
     autoDeploy: true
+
 
 
 
