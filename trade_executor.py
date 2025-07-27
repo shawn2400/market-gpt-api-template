@@ -1,17 +1,8 @@
-from binance.client import Client
 from binance.enums import *
-from dotenv import load_dotenv
-import os
+from utils.binance_client import client  # ✅ במקום להגדיר client מקומית
 import time
 import math
 import logging
-
-load_dotenv()
-
-# התחברות ל-Binance
-api_key = os.getenv("BINANCE_API_KEY")
-api_secret = os.getenv("BINANCE_API_SECRET")
-client = Client(api_key, api_secret)
 
 # 🟢 ביצוע טרייד בפועל
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False):
