@@ -5,6 +5,8 @@ from utils.indicators import calculate_indicators, is_volume_spike
 from utils.quality_score import compute_quality_score
 from utils.get_live_price import get_live_price
 from utils.get_klines import get_klines
+from utils.quantity_utils import calculate_quantity, auto_risk_allocation, generate_grid_levels
+
 
 def scan_all_futures_live(budget_usd=100):
     results = []
@@ -60,7 +62,7 @@ def scan_all_futures_live(budget_usd=100):
             setups.append(df_row)
 
         for df_row in setups:
-            score = compute_quality_score(df_row)
+            score = compute_quality_score(df_row) * 10  # הפיכת score ל־0–100
             if score >= 86:
                 atr = row['ATR']
                 direction = df_row['direction']
@@ -76,7 +78,9 @@ def scan_all_futures_live(budget_usd=100):
                 reward = abs(take_profit - live_price)
                 rrr = round(reward / risk, 2) if risk > 0 else 0
 
-                qty = round((budget_usd * 1.0) / live_price, 3)
+                qty = calculate_quantity(budget_usd, live_price, 1)
+                capital = auto_risk_allocation(live_price, stop_loss, budget_usd)
+                grid = generate_grid_levels(live_price, take_profit)
 
                 results.append({
                     'symbol': symbol,
@@ -89,12 +93,14 @@ def scan_all_futures_live(budget_usd=100):
                     'ADX': row['ADX'],
                     'ATR': atr,
                     'volume': row['volume'],
-                    'quality_score': score,
+                    'quality_score': round(score, 2),
                     'entry': live_price,
                     'stop_loss': stop_loss,
                     'take_profit': take_profit,
                     'RRR': rrr,
-                    'quantity': qty
+                    'quantity': qty,
+                    'risk_capital': round(capital, 2),
+                    'grid_levels': grid
                 })
 
         time.sleep(0.05)
