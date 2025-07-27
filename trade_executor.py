@@ -6,14 +6,14 @@ import hashlib
 import requests
 from urllib.parse import urlencode
 from dotenv import load_dotenv
-from utils.quantity_utils import calculate_quantity
+from utils.quantity_utils import calculate_quantity, auto_risk_allocation, generate_grid_levels
 
 load_dotenv()
 
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET").encode()
 BASE_URL = "https://fapi.binance.com"
-HOST_HEADER = {}  # אין צורך ב־Host אם אתה משתמש ב־URL המקורי
+HOST_HEADER = {}
 
 def sign_request(params):
     query_string = urlencode(params)
@@ -44,9 +44,8 @@ def send_signed_request(http_method, endpoint, payload=None):
         print(f"[!] שגיאה בבקשת {endpoint}: {e}")
         raise
 
-def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage=20, budget_usd=100):
+def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage=20, budget_usd=100, use_grid=False):
     try:
-        # ⚙️ שינוי מינוף
         send_signed_request("POST", "/fapi/v1/leverage", {
             "symbol": symbol,
             "leverage": leverage
@@ -55,12 +54,12 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
         side_binance = "BUY" if side.upper() == "LONG" else "SELL"
         opposite_side = "SELL" if side_binance == "BUY" else "BUY"
 
-        qty = calculate_quantity(budget_usd, entry_price, leverage)
+        risk_allocated = auto_risk_allocation(entry_price, stop_price, budget_usd)
+        qty = calculate_quantity(risk_allocated, entry_price, leverage)
 
         if qty <= 0:
             raise ValueError("הכמות שחושבה קטנה מ-0 או לא תקינה")
 
-        # 🟢 כניסה לטרייד
         order = send_signed_request("POST", "/fapi/v1/order", {
             "symbol": symbol,
             "side": side_binance,
@@ -70,7 +69,6 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
 
         time.sleep(1)
 
-        # 🔴 Stop Loss
         send_signed_request("POST", "/fapi/v1/order", {
             "symbol": symbol,
             "side": opposite_side,
@@ -81,29 +79,42 @@ def execute_trade_live(symbol, entry_price, stop_price, tp_price, side, leverage
 
         time.sleep(1)
 
-        # 🟢 Take Profit
-        send_signed_request("POST", "/fapi/v1/order", {
-            "symbol": symbol,
-            "side": opposite_side,
-            "type": "LIMIT",
-            "price": round(tp_price, 2),
-            "timeInForce": "GTC",
-            "closePosition": "true"
-        })
+        if use_grid:
+            grid_prices = generate_grid_levels(entry_price, tp_price, levels=3)
+            for grid_tp in grid_prices:
+                send_signed_request("POST", "/fapi/v1/order", {
+                    "symbol": symbol,
+                    "side": opposite_side,
+                    "type": "LIMIT",
+                    "price": round(grid_tp, 2),
+                    "timeInForce": "GTC",
+                    "quantity": qty / len(grid_prices)
+                })
+        else:
+            send_signed_request("POST", "/fapi/v1/order", {
+                "symbol": symbol,
+                "side": opposite_side,
+                "type": "LIMIT",
+                "price": round(tp_price, 2),
+                "timeInForce": "GTC",
+                "closePosition": "true"
+            })
 
-        print(f"✅ טרייד נשלח בהצלחה: {symbol} | כמות: {qty}")
+        print(f"✅ טרייד נשלח בהצלחה: {symbol} | כמות: {qty} | גריד: {use_grid}")
         return {
             "status": "ok",
             "symbol": symbol,
             "qty": qty,
             "entry": entry_price,
             "leverage": leverage,
-            "budget_used": budget_usd,
-            "side": side
+            "budget_used": risk_allocated,
+            "side": side,
+            "grid": use_grid
         }
     except Exception as e:
         print(f"[!] שגיאה בביצוע טרייד ל־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
