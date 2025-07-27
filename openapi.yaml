@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   description: |
-    AlgoGPT הוא סוחר Algo בזמן אמת המתחבר ל־Binance, מבצע ניתוחים טכניים, שמירת טריידים, חישובי SL/TP, הפקת גרפים ודוחות, תמיכה בחדשות קריפטו וחיזוי AI.
+    AlgoGPT הוא סוחר Algo בזמן אמת המתחבר ל-Binance, מבצע ניתוחים טכניים, חיזוי AI, טריידים בפועל, גרפים, דוחות, וסטטיסטיקות.
   version: 1.0.0
 
 servers:
@@ -12,7 +12,6 @@ paths:
   /:
     get:
       summary: בדיקת סטטוס השרת
-      operationId: HealthCheck
       responses:
         '200':
           description: השרת פועל
@@ -25,156 +24,12 @@ paths:
                     type: string
                     example: AlgoGPT API is running
 
-  /sl_tp:
-    post:
-      summary: חישוב SL ו־TP לפי Entry ו־RRR
-      operationId: CalculateSLTP
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-      responses:
-        '200':
-          description: חישוב תקין
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  rrr:
-                    type: number
-
-  /calculate-quantity:
-    post:
-      summary: חישוב כמות לכניסה לפי תקציב, מחיר ומינוף
-      operationId: CalculateQuantity
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                budget:
-                  type: number
-                entry:
-                  type: number
-                leverage:
-                  type: number
-      responses:
-        '200':
-          description: כמות מתאימה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  quantity:
-                    type: number
-
-  /save:
-    post:
-      summary: שמירת טרייד חדש
-      operationId: SaveTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-                leverage:
-                  type: number
-                direction:
-                  type: string
-                confidence:
-                  type: number
-                type:
-                  type: string
-      responses:
-        '200':
-          description: טרייד נשמר בהצלחה
-
-  /trades:
-    get:
-      summary: הצגת כל הטריידים
-      operationId: GetTrades
-      responses:
-        '200':
-          description: רשימת טריידים
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-
-  /open-trades:
-    get:
-      summary: קבלת רשימת טריידים פתוחים בלבד
-      operationId: GetOpenTrades
-      responses:
-        '200':
-          description: רשימת טריידים פתוחים
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  open_trades:
-                    type: array
-                    items:
-                      type: object
-
-  /close-trade:
-    post:
-      summary: סגירת טרייד לפי סימול
-      operationId: CloseTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-      responses:
-        '200':
-          description: טרייד נסגר
-
-  /clear:
-    post:
-      summary: ניקוי כל הטריידים מהמערכת
-      operationId: ClearTrades
-      responses:
-        '200':
-          description: כל הטריידים נמחקו
-
   /scan:
     get:
-      summary: סריקה חיה של שוק Binance Futures לפי קריטריונים מוגדרים
-      operationId: ScanMarket
+      summary: סריקה חיה של שוק Binance Futures לפי קריטריונים טכניים
       responses:
         '200':
-          description: רשימת טריידים מתאימים
+          description: רשימת תוצאות מסוננות
           content:
             application/json:
               schema:
@@ -184,11 +39,23 @@ paths:
                     type: array
                     items:
                       type: object
+                      properties:
+                        symbol:
+                          type: string
+                        last_price:
+                          type: number
+                        volume:
+                          type: number
+                        rsi:
+                          type: number
+                        adx:
+                          type: number
+                        direction:
+                          type: string
 
-  /grid-trade:
+  /backtest:
     post:
-      summary: ביצוע Grid Trading אוטומטי לפי טווח ומספר רשתות
-      operationId: ExecuteGridTrade
+      summary: ביצוע Backtest על סדרת מחירים
       requestBody:
         required: true
         content:
@@ -196,176 +63,40 @@ paths:
             schema:
               type: object
               properties:
-                symbol:
-                  type: string
-                budget:
-                  type: number
-                grids:
-                  type: integer
-                range_min:
-                  type: number
-                range_max:
-                  type: number
-                leverage:
-                  type: number
-      responses:
-        '200':
-          description: פקודות Grid נשלחו
-
-  /execute-trade:
-    post:
-      summary: ביצוע טרייד בפועל דרך Binance API
-      operationId: ExecuteTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                quantity:
-                  type: number
-                order_type:
-                  type: string
-                side:
-                  type: string
-                price:
-                  type: number
-                market_type:
-                  type: string
-                trailing_percent:
-                  type: number
-      responses:
-        '200':
-          description: פקודה בוצעה
-
-  /daily-report:
-    get:
-      summary: הפקת דוח יומי בפורמט PDF
-      operationId: GenerateDailyPDF
-      responses:
-        '200':
-          description: דוח מקודד בבסיס64
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  pdf_base64:
-                    type: string
-                    format: byte
-
-  /ai-analyze:
-    post:
-      summary: ניתוח AI מתקדם לחיזוי טווח מחירים
-      operationId: AIAnalyze
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
                 prices:
                   type: array
                   items:
                     type: object
                     properties:
-                      time:
+                      timestamp:
                         type: string
-                        format: date-time
+                      open:
+                        type: number
+                      high:
+                        type: number
+                      low:
+                        type: number
                       close:
                         type: number
       responses:
         '200':
-          description: תחזית AI כולל גרף
+          description: תוצאות הסימולציה
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  symbol:
-                    type: string
-                  direction:
-                    type: string
-                  forecast:
+                  result:
                     type: array
                     items:
                       type: object
+                  total_return:
+                    type: number
+                  win_rate:
+                    type: number
                   chart:
                     type: string
-                    format: byte
 
-  /stats:
-    get:
-      summary: סטטיסטיקת ביצועים מתוך PNL Tracker
-      operationId: GetStats
-      responses:
-        '200':
-          description: סיכום יומי, רווחים, הצלחה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  daily_stats:
-                    type: array
-                    items:
-                      type: object
-
-  /preset:
-    get:
-      summary: הצגת preset.txt המלא
-      operationId: GetPreset
-      responses:
-        '200':
-          description: קובץ ההגדרות
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  preset:
-                    type: string
-
-  /strategy:
-    get:
-      summary: הצגת כללי האסטרטגיה של AlgoGPT
-      operationId: GetStrategy
-      responses:
-        '200':
-          description: תיאור כללי
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  strategy:
-                    type: string
-
-  /news:
-    get:
-      summary: שליפת חדשות קריפטו
-      operationId: GetCryptoNews
-      responses:
-        '200':
-          description: חדשות עם ציון השפעה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  news:
-                    type: array
-                    items:
-                      type: object
-
-components:
-  schemas: {}
 
 
 
