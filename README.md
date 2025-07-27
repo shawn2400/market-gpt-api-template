@@ -49,28 +49,58 @@
 
 ---
 
-## 📡 API — מסלולים נתמכים
+## 📡 REST API — מסלולים נתמכים
 
 | נתיב API              | תיאור                                              |
 |-----------------------|-----------------------------------------------------|
-| `/price`              | קבלת מחיר עדכני למטבע                             |
-| `/calculate-sl-tp`    | חישוב SL/TP כולל יחס RRR                          |
+| `/`                   | בדיקת תקינות ה־API                                 |
+| `/sl_tp`              | חישוב SL/TP כולל יחס RRR                          |
 | `/calculate-quantity` | חישוב כמות לפי תקציב, מינוף ומחיר כניסה          |
-| `/save-trade`         | שמירת טרייד חדש למעקב                             |
-| `/save-and-execute`   | שמירה + שליחה אוטומטית לביצוע ב־Binance          |
-| `/get-trades`         | הצגת כל הטריידים השמורים                          |
-| `/clear-trades`       | מחיקת כל הטריידים                                 |
-| `/active-trade`       | בדיקת טריידים פתוחים                              |
-| `/update-trade`       | סגירת טרייד לפי סימול                              |
+| `/save`               | שמירת טרייד חדש למעקב                             |
+| `/trades`             | הצגת כל הטריידים השמורים                          |
+| `/clear`              | מחיקת כל הטריידים                                 |
+| `/open-trades`        | הצגת טריידים פתוחים                               |
+| `/close-trade`        | סגירת טרייד לפי סימול                             |
 | `/backtest`           | בדיקת אסטרטגיה על סמך היסטוריה                   |
-| `/analyze`            | ניתוח טכני בזמן אמת                               |
+| `/scan`               | סריקה טכנית חיה של Binance Futures               |
 | `/execute-trade`      | שליחה למסחר בפועל (Spot / Futures)               |
-| `/current-time-il`    | השעה הנוכחית בישראל + האם "שעה חמה"              |
-| `/stats`              | סטטיסטיקות PNL כלליות + Win Rate                 |
-| `/snapshot`           | הפקת תמונה גרפית לטרייד (Base64 Chart)           |
-| `/news`               | קבלת חדשות חשובות מ־CryptoPanic                  |
 | `/daily-report`       | הפקת דוח PDF יומי כולל גרף וסטטיסטיקות           |
-| `/email-alert`        | שליחת התראה פנימית במייל ללא שירות חיצוני        |
+| `/ai-analyze`         | חיזוי AI גרפי לתחום מחירים                       |
+| `/stats`              | סטטיסטיקות רווחים ו־Win Rate                      |
+| `/preset`             | שליפת קובץ הגדרות                                 |
+| `/strategy`           | הצגת כללי אסטרטגיה                                |
+| `/news`               | קבלת חדשות מ־CryptoPanic                          |
+
+---
+
+## 🔐 קובץ .env (חובה)
+
+```env
+BINANCE_API_KEY=...
+BINANCE_API_SECRET=...
+CRYPTO_PANIC_API_KEY=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
+
+---
+
+## 🧪 דוגמה לשליחת טרייד חדש (POST /save)
+
+```bash
+curl -X POST http://localhost:10000/save \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "BTCUSDT",
+    "entry": 30000,
+    "stop": 29000,
+    "tp": 33000,
+    "leverage": 10,
+    "direction": "LONG",
+    "confidence": 91,
+    "type": "REGULAR"
+  }'
+```
 
 ---
 
@@ -89,6 +119,13 @@ git clone https://github.com/your-username/AlgoGPT.git
 cd AlgoGPT
 pip install -r requirements.txt
 python main.py
+```
+
+---
+
+✅ נבדק מול הקוד הראשי (`main.py`, `openapi.yaml`) — כל הנתיבים תקינים.
+עודכן בתאריך: 2025-07-27
+
 
 
 
