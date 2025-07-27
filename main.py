@@ -30,6 +30,10 @@ binance_api_key = os.getenv("BINANCE_API_KEY")
 binance_api_secret = os.getenv("BINANCE_API_SECRET")
 client = Client(binance_api_key, binance_api_secret)
 
+# In-memory trade store
+trades = []
+
+# --- Utility Functions ---
 def scan_all_futures():
     symbols = [
         s["symbol"] for s in client.futures_exchange_info()["symbols"]
@@ -82,6 +86,7 @@ def scan_all_futures():
 
     return sorted(results, key=lambda x: x["volume"], reverse=True)
 
+# --- Routes ---
 @app.route("/", methods=["GET", "HEAD"])
 def index():
     return jsonify({"message": "AlgoGPT API is running"}), 200
@@ -135,8 +140,111 @@ def scan_market():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/execute-trade", methods=["POST"])
+def route_execute_trade():
+    try:
+        trade_data = request.get_json()
+        response = execute_trade(trade_data)
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/strategy", methods=["GET"])
+def strategy():
+    with open("preset.txt", encoding="utf-8") as f:
+        return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+@app.route("/preset", methods=["GET"])
+def preset():
+    with open("preset.txt", encoding="utf-8") as f:
+        return jsonify({"preset": f.read()})
+
+@app.route("/daily-report", methods=["GET"])
+def daily_report():
+    try:
+        report_path = generate_daily_report()
+        with open(report_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        return jsonify({"pdf_base64": encoded})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/news", methods=["GET"])
+def news():
+    try:
+        key = os.getenv("CRYPTO_PANIC_API_KEY")
+        url = f"https://cryptopanic.com/api/v1/posts/?auth_token={key}&kind=news"
+        res = requests.get(url)
+        return jsonify(res.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/save", methods=["POST"])
+def save_trade():
+    try:
+        data = request.json
+        trades.append(data)
+        return jsonify({"status": "saved", "total_trades": len(trades)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/trades", methods=["GET"])
+def get_trades():
+    return jsonify(trades)
+
+@app.route("/clear", methods=["POST"])
+def clear_trades():
+    trades.clear()
+    return jsonify({"status": "cleared"})
+
+@app.route("/open-trades", methods=["GET"])
+def open_trades():
+    return jsonify([t for t in trades if not t.get("closed")])
+
+@app.route("/close-trade", methods=["POST"])
+def close_trade():
+    symbol = request.json.get("symbol")
+    for t in trades:
+        if t["symbol"] == symbol and not t.get("closed"):
+            t["closed"] = True
+            return jsonify({"status": "closed", "symbol": symbol})
+    return jsonify({"error": "Trade not found or already closed"}), 404
+
+@app.route("/sl_tp", methods=["POST"])
+def sl_tp():
+    try:
+        data = request.get_json()
+        entry = data["entry"]
+        atr = data.get("atr", 0)
+        direction = data.get("direction", "LONG")
+        rrr = data.get("rrr", 2.5)
+
+        if direction == "LONG":
+            stop = entry - atr * 1.5
+            tp = entry + rrr * (entry - stop)
+        else:
+            stop = entry + atr * 1.5
+            tp = entry - rrr * (stop - entry)
+
+        return jsonify({"entry": entry, "stop": round(stop, 4), "tp": round(tp, 4), "rrr": rrr})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/calculate-quantity", methods=["POST"])
+def calculate_quantity():
+    try:
+        data = request.get_json()
+        budget = data["budget"]
+        entry = data["entry"]
+        leverage = data.get("leverage", 10)
+        quantity = round((budget * leverage) / entry, 4)
+        return jsonify({"quantity": quantity})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
