@@ -27,7 +27,7 @@ binance_api_key = os.getenv("BINANCE_API_KEY")
 binance_api_secret = os.getenv("BINANCE_API_SECRET")
 client = Client(binance_api_key, binance_api_secret)
 
-# Trade memory store
+# In-memory store
 trades = []
 
 # === Utility: scan futures ===
@@ -173,6 +173,9 @@ def sl_tp():
         direction = data.get("direction", "LONG")
         rrr = data.get("rrr", 2.5)
 
+        if not entry:
+            return jsonify({"error": "Missing entry price"}), 400
+
         if direction == "LONG":
             stop = entry - atr * 1.5
             tp = entry + rrr * (entry - stop)
@@ -196,6 +199,10 @@ def calculate_quantity():
         budget = data["budget"]
         entry = data["entry"]
         leverage = data.get("leverage", 10)
+
+        if not budget or not entry:
+            return jsonify({"error": "Missing budget or entry"}), 400
+
         quantity = round((budget * leverage) / entry, 4)
         return jsonify({"quantity": quantity})
     except Exception as e:
@@ -225,6 +232,7 @@ def crypto_news():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
