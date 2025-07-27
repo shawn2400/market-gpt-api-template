@@ -151,8 +151,45 @@ paths:
         '500':
           description: ניתוח נכשל
 
+  /calculate-quantity:
+    post:
+      summary: חישוב כמות לכניסה לפי תקציב, מחיר ומינוף
+      operationId: CalculateQuantity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                budget:
+                  type: number
+                  example: 100
+                entry:
+                  type: number
+                  example: 29000
+                leverage:
+                  type: number
+                  example: 20
+      responses:
+        '200':
+          description: כמות מתאימה למסחר לפי התקציב והמינוף
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quantity:
+                    type: number
+                    example: 0.069
+        '400':
+          description: פרמטרים חסרים או לא חוקיים
+        '500':
+          description: שגיאה כללית בחישוב
+
 components:
   schemas: {}
+
 
 
 
