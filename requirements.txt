@@ -1,19 +1,19 @@
 flask
 flask-cors
+gunicorn
 pandas
 numpy
 matplotlib
-fpdf
-schedule
+plotly
 prophet
 ta
 pytz
 requests
-plotly
-gunicorn
-python-binance
 python-dotenv
-scikit-learn
+python-binance
+fpdf
+schedule
+
 
 
 
