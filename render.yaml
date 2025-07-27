@@ -3,13 +3,15 @@ services:
     name: market-gpt-api-template
     env: python
     plan: free
-    region: oregon
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app --timeout 90
+    startCommand: python main.py
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10
+      - key: FLASK_ENV
+        value: production
+      - key: PORT
+        value: 10000
     autoDeploy: true
+
 
 
 
