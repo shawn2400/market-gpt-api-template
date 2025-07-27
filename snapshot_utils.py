@@ -1,6 +1,5 @@
 import matplotlib.pyplot as plt
 import os
-import base64
 from datetime import datetime
 
 def save_trade_snapshot(trade):
@@ -12,7 +11,6 @@ def save_trade_snapshot(trade):
         direction = trade.get("direction", "LONG")
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H-%M-%S")
 
-        # קביעת גבולות הגרף
         buffer = abs(entry - stop) * 2
         y_min = min(entry, stop, tp) - buffer
         y_max = max(entry, stop, tp) + buffer
