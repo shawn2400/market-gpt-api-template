@@ -18,7 +18,10 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      - key: CRYPTO_PANIC_API_KEY
+        sync: false
     autoDeploy: true
+
 
 
 
