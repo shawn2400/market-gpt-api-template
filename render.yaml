@@ -1,13 +1,22 @@
 services:
   - type: web
-    name: market-gpt-api-template
+    name: algogpt-api
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app --bind 0.0.0.0:10000
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.13
     plan: free
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn main:app --bind 0.0.0.0:10000"
+    envVars:
+      - key: BINANCE_API_KEY
+        value: your_actual_api_key_here
+      - key: BINANCE_API_SECRET
+        value: your_actual_api_secret_here
+      - key: TELEGRAM_BOT_TOKEN
+        value: your_telegram_token
+      - key: TELEGRAM_CHAT_ID
+        value: your_telegram_chat_id
+    autoDeploy: true
+    region: frankfurt
 
 
 
