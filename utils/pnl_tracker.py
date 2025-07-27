@@ -1,57 +1,53 @@
 import json
+import os
 from datetime import datetime
 from fpdf import FPDF
 
 PNL_FILE = "pnl_tracker.json"
 
-def update_pnl(symbol, entry, exit_price, direction, leverage, budget):
-    try:
-        pnl = (exit_price - entry) if direction == "LONG" else (entry - exit_price)
-        pnl *= leverage * (budget / entry)
+def update_pnl(symbol, pnl):
+    today = datetime.now().strftime("%Y-%m-%d")
+    if not os.path.exists(PNL_FILE):
+        data = {}
+    else:
+        with open(PNL_FILE, "r") as f:
+            data = json.load(f)
 
-        trade = {
-            "symbol": symbol,
-            "entry": entry,
-            "exit": exit_price,
-            "direction": direction,
-            "leverage": leverage,
-            "budget": budget,
-            "pnl": round(pnl, 2),
-            "timestamp": datetime.utcnow().isoformat()
-        }
+    if today not in data:
+        data[today] = []
 
-        try:
-            with open(PNL_FILE, "r") as f:
-                data = json.load(f)
-        except:
-            data = []
+    data[today].append({"symbol": symbol, "pnl": pnl})
 
-        data.append(trade)
-        with open(PNL_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-
-    except Exception as e:
-        print(f"PNL error: {e}")
+    with open(PNL_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
 def generate_pnl_pdf():
-    try:
-        with open(PNL_FILE, "r") as f:
-            trades = json.load(f)
-    except:
-        trades = []
+    if not os.path.exists(PNL_FILE):
+        return None
+
+    with open(PNL_FILE, "r") as f:
+        data = json.load(f)
 
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt="PNL Report", ln=True, align='C')
+    pdf.set_font("Arial", size=14)
+    pdf.cell(200, 10, txt="Daily PNL Report", ln=True, align="C")
 
-    for t in trades[-20:]:  # רק 20 אחרונים
-        line = f"{t['symbol']} | {t['direction']} | Entry: {t['entry']} → Exit: {t['exit']} | PNL: ${t['pnl']}"
-        pdf.cell(200, 10, txt=line, ln=True)
+    for date, trades in data.items():
+        pdf.ln(10)
+        pdf.set_font("Arial", size=12)
+        pdf.cell(200, 10, txt=f"📅 {date}", ln=True, align="L")
+        total = 0
+        for t in trades:
+            line = f"{t['symbol']} | PNL: {t['pnl']}$"
+            pdf.cell(200, 8, txt=line, ln=True, align="L")
+            total += t['pnl']
+        pdf.cell(200, 8, txt=f"📈 Total: {round(total,2)}$", ln=True, align="L")
 
-    filename = "pnl_report.pdf"
-    pdf.output(filename)
-    return filename
+    output_path = "/app/static/pnl_report.pdf"
+    pdf.output(output_path)
+    return output_path
+
 
 
 
