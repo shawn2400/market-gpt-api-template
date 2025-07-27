@@ -9,14 +9,17 @@ services:
     startCommand: gunicorn main:app --bind 0.0.0.0:10000
     envVars:
       - key: BINANCE_API_KEY
-        sync: false
+        value: YOUR_BINANCE_API_KEY
       - key: BINANCE_API_SECRET
-        sync: false
+        value: YOUR_BINANCE_API_SECRET
+      - key: CRYPTO_PANIC_API_KEY
+        value: 89404de8e0bb4d6e78e95ed26ff19970cdb8830a
       - key: TELEGRAM_BOT_TOKEN
-        sync: false
+        value: your_telegram_token
       - key: TELEGRAM_CHAT_ID
-        sync: false
+        value: your_telegram_chat_id
     autoDeploy: true
+
 
 
 
