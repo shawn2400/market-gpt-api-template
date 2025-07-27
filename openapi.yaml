@@ -97,6 +97,134 @@ paths:
                   chart:
                     type: string
 
+  /execute-trade:
+    post:
+      summary: ביצוע טרייד בפועל דרך Binance API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: integer
+                direction:
+                  type: string
+                confidence:
+                  type: number
+                type:
+                  type: string
+      responses:
+        '200':
+          description: תוצאה מה-API של Binance
+
+  /sl_tp:
+    post:
+      summary: חישוב SL ו־TP לפי ATR, כיוון ו־RRR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entry:
+                  type: number
+                atr:
+                  type: number
+                direction:
+                  type: string
+                rrr:
+                  type: number
+      responses:
+        '200':
+          description: תוצאה עם stop, tp ו־rrr מחושב
+
+  /calculate-quantity:
+    post:
+      summary: חישוב כמות יחידות לפי תקציב ומינוף
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                budget:
+                  type: number
+                entry:
+                  type: number
+                leverage:
+                  type: number
+      responses:
+        '200':
+          description: כמות יחידות מתאימה לכניסה
+
+  /daily-report:
+    get:
+      summary: הפקת דוח יומי בפורמט PDF Base64
+      responses:
+        '200':
+          description: קובץ PDF מוצפן בבסיס64
+
+  /news:
+    get:
+      summary: שליפת חדשות קריפטו בזמן אמת מ־CryptoPanic
+      responses:
+        '200':
+          description: JSON עם רשימת חדשות
+
+  /save:
+    post:
+      summary: שמירת טרייד בזיכרון זמני
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: טרייד נשמר
+
+  /trades:
+    get:
+      summary: שליפת כל הטריידים השמורים
+      responses:
+        '200':
+          description: רשימת טריידים
+
+  /clear:
+    post:
+      summary: מחיקת כל הטריידים השמורים
+      responses:
+        '200':
+          description: נמחקו כל הטריידים
+
+  /strategy:
+    get:
+      summary: הצגת תוכן הקובץ preset.txt בפורמט טקסט
+      responses:
+        '200':
+          description: תוכן קובץ טקסט אסטרטגיה
+
+  /preset:
+    get:
+      summary: שליפת preset בפורמט JSON
+      responses:
+        '200':
+          description: JSON עם תוכן הקובץ preset.txt
+
+
 
 
 
