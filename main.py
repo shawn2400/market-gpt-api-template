@@ -124,6 +124,28 @@ def pnl_report():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/backtest", methods=["POST"])
+def backtest():
+    try:
+        data = request.get_json()
+        df = pd.DataFrame(data['prices'])
+        result = run_backtest(df)
+        return jsonify(result.to_dict(orient="records"))
+    except Exception as e:
+        logging.error(f"❌ שגיאה בבק-טסט: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/news", methods=["GET"])
+def crypto_news():
+    try:
+        news = fetch_crypto_news()
+        scored = analyze_news_impact(news)
+        return jsonify(scored)
+    except Exception as e:
+        logging.error(f"❌ שגיאה בשליפת חדשות: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 
 
 
