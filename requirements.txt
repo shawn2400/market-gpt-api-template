@@ -10,7 +10,8 @@ ta
 pytz
 requests
 plotly
-python-binance
+gunicorn
+
 
 
 
