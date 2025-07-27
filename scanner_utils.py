@@ -1,95 +1,74 @@
-def scan_all_futures(limit_symbols=300):
+from binance.client import Client
+from binance.enums import *
+import numpy as np
+import pandas as pd
+import time
+
+client = Client(api_key=API_KEY, api_secret=API_SECRET)
+
+def get_live_price(symbol):
+    try:
+        return float(client.futures_symbol_ticker(symbol=symbol)['price'])
+    except:
+        return None
+
+def get_klines(symbol, interval='1m', limit=100):
+    try:
+        return client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+    except:
+        return []
+
+def calculate_indicators(df):
+    df['EMA21'] = df['close'].ewm(span=21).mean()
+    df['EMA50'] = df['close'].ewm(span=50).mean()
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    return df
+
+def scan_all_futures():
     results = []
-    symbols = get_futures_symbols()[:limit_symbols]  # ✅ סריקה עד 300
+    exchange_info = client.futures_exchange_info()
+    symbols = [s['symbol'] for s in exchange_info['symbols'] if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT']
 
     for symbol in symbols:
-        df = fetch_klines(symbol)
-        if df is None or df.empty:
+        klines = get_klines(symbol)
+        if len(klines) < 50:
             continue
 
-        try:
-            df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-            df['macd'] = ta.trend.MACD(df['close']).macd()
-            df['ema21'] = ta.trend.EMAIndicator(df['close'], window=21).ema_indicator()
-            df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close']).adx()
-        except Exception as e:
-            logging.warning(f"[scan] אינדיקטור נכשל עבור {symbol}: {e}")
+        df = pd.DataFrame(klines, columns=['timestamp','open','high','low','close','volume','close_time','quote_asset_volume','trades','taker_buy_base','taker_buy_quote','ignore'])
+        df['close'] = df['close'].astype(float)
+
+        live_price = get_live_price(symbol)
+        if not live_price:
             continue
 
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
+        # החלפת המחיר האחרון במחיר חי!
+        df.iloc[-1, df.columns.get_loc('close')] = live_price
 
-        if (
-            last['rsi'] > 55 and
-            last['macd'] > 0 and
-            last['close'] > last['ema21'] and
-            last['adx'] > 17 and
-            last['volume'] > prev['volume'] * 1.3
-        ):
-            entry = round(last['close'], 4)
-            stop = round(entry * 0.97, 4)
-            tp = round(entry * 1.05, 4)
-            leverage = 20
-            budget = 100
-            confidence = 90
+        df = calculate_indicators(df)
 
-            df['ema_21'] = df['ema21']
-            df['volume_mean'] = df['volume'].rolling(window=20).mean()
-            df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
-            df['direction'] = "LONG"
-            quality = compute_quality_score(df.iloc[-1])
-            if quality < 4:
-                continue
+        # תנאי לדוגמה: EMA21 חוצה את EMA50 מלמטה
+        if df['EMA21'].iloc[-2] < df['EMA50'].iloc[-2] and df['EMA21'].iloc[-1] > df['EMA50'].iloc[-1]:
+            rsi = df['RSI'].iloc[-1]
+            if rsi < 70:  # רק אם RSI עדיין לא בשיא
+                results.append({
+                    'symbol': symbol,
+                    'live_price': live_price,
+                    'signal': 'LONG',
+                    'EMA21': df['EMA21'].iloc[-1],
+                    'EMA50': df['EMA50'].iloc[-1],
+                    'RSI': rsi
+                })
 
-            capital = auto_risk_allocation(entry, stop, budget)
-            result = execute_trade_live(
-                symbol=symbol,
-                entry=entry,
-                stop=stop,
-                tp=tp,
-                direction="LONG",
-                leverage=leverage,
-                budget_usd=capital,
-                use_grid=True
-            )
+        time.sleep(0.05)  # למנוע rate limit
 
-            save_trade(
-                symbol=symbol,
-                entry=entry,
-                stop=stop,
-                tp=tp,
-                direction="LONG",
-                leverage=leverage,
-                confidence=confidence,
-                quality_score=quality,
-                trade_type="GRID"
-            )
+    return results
 
-            return {
-                "executed_trade": {
-                    "symbol": symbol,
-                    "entry": entry,
-                    "stop": stop,
-                    "tp": tp,
-                    "leverage": leverage,
-                    "direction": "LONG",
-                    "confidence": confidence,
-                    "quality_score": quality
-                },
-                "all_candidates": results
-            }
-        else:
-            results.append({
-                "symbol": symbol,
-                "entry": round(last['close'], 4),
-                "rsi": round(last['rsi'], 2),
-                "macd": round(last['macd'], 4),
-                "ema21": round(last['ema21'], 4),
-                "adx": round(last['adx'], 2),
-                "volume": round(last['volume'], 2)
-            })
-
-    return {"executed_trade": None, "all_candidates": results}
 
 
 
