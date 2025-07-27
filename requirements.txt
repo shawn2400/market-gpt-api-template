@@ -1,18 +1,30 @@
 flask==2.3.3
 flask-cors==4.0.0
 gunicorn==21.2.0
+
 pandas==2.1.4
 numpy==1.26.4
 matplotlib==3.8.4
 plotly==5.22.0
-prophet==1.1.5
 ta==0.11.0
+
+prophet==1.1.5
+cmdstanpy==1.2.5   # דרוש ל־Prophet
+
 pytz==2024.1
+tzdata==2025.2
+tzlocal==5.3.1
+
 requests==2.31.0
 python-dotenv==1.0.1
 python-binance==1.0.17
 fpdf==1.7.2
 schedule==1.2.1
+
+dateparser==1.2.0   # דרוש אם אתה עובד עם תאריכים בפורמט חדשות
+ujson==5.10.0       # JSON מהיר – שיפור ביצועים אם תומך
+websockets==15.0.1  # תשתית WebSocket עתידית
+
 
 
 
