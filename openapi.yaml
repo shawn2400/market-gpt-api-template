@@ -25,13 +25,209 @@ paths:
                     type: string
                     example: AlgoGPT API is running
 
+  /price:
+    get:
+      summary: קבלת מחיר נוכחי של מטבע
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+            example: BTCUSDT
+      operationId: GetPrice
+      responses:
+        '200':
+          description: מחיר נוכחי
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  price:
+                    type: number
+        '400':
+          description: פרמטר חסר
+        '500':
+          description: שגיאה כללית
+
+  /sl_tp:
+    post:
+      summary: חישוב SL ו־TP לפי Entry ו־RRR
+      operationId: CalculateSLTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+      responses:
+        '200':
+          description: חישוב תקין
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rrr:
+                    type: number
+        '400':
+          description: נתונים חסרים
+        '500':
+          description: שגיאה כללית
+
+  /save:
+    post:
+      summary: שמירת טרייד חדש
+      operationId: SaveTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: number
+                direction:
+                  type: string
+                confidence:
+                  type: number
+                type:
+                  type: string
+      responses:
+        '200':
+          description: טרייד נשמר בהצלחה
+        '400':
+          description: פרמטרים חסרים או לא תקינים
+
+  /trades:
+    get:
+      summary: הצגת כל הטריידים הפתוחים
+      operationId: GetTrades
+      responses:
+        '200':
+          description: רשימת טריידים
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '500':
+          description: שגיאה כללית
+
+  /clear:
+    post:
+      summary: ניקוי כל הטריידים מהמערכת
+      operationId: ClearTrades
+      responses:
+        '200':
+          description: כל הטריידים נמחקו
+        '500':
+          description: שגיאה במחיקה
+
+  /snapshot:
+    get:
+      summary: שליפת גרף ניתוח של טרייד פתוח
+      operationId: GetSnapshot
+      responses:
+        '200':
+          description: גרף ב־Base64
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chart:
+                    type: string
+                    format: byte
+
+  /execute-trade:
+    post:
+      summary: ביצוע טרייד בפועל דרך Binance API
+      operationId: ExecuteTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: number
+                direction:
+                  type: string
+                quantity:
+                  type: number
+                order_type:
+                  type: string
+      responses:
+        '200':
+          description: פקודה בוצעה
+        '500':
+          description: שגיאה בביצוע
+
+  /calculate-quantity:
+    post:
+      summary: חישוב כמות לכניסה לפי תקציב, מחיר ומינוף
+      operationId: CalculateQuantity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                budget:
+                  type: number
+                entry:
+                  type: number
+                leverage:
+                  type: number
+      responses:
+        '200':
+          description: כמות מתאימה
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quantity:
+                    type: number
+
   /preset:
     get:
-      summary: הצגת קובץ preset.txt
+      summary: הצגת preset.txt המלא
       operationId: GetPreset
       responses:
         '200':
-          description: קובץ ההגדרות המלא
+          description: קובץ ההגדרות
           content:
             application/json:
               schema:
@@ -39,19 +235,14 @@ paths:
                 properties:
                   preset:
                     type: string
-        '500':
-          description: שגיאה כללית
 
   /strategy:
     get:
-      summary: הצג את כללי האסטרטגיה של AlgoGPT
-      description: מחזיר את כללי המסחר המוגדרים מראש בקובץ preset.txt, כולל אינדיקטורים, חוקים קשיחים, ומבנה תשובה נדרש.
-      operationId: GetStrategyRules
-      tags:
-        - Strategy
+      summary: הצגת כללי האסטרטגיה של AlgoGPT
+      operationId: GetStrategy
       responses:
         '200':
-          description: טקסט האסטרטגיה המלא
+          description: תיאור כללי
           content:
             application/json:
               schema:
@@ -59,9 +250,6 @@ paths:
                 properties:
                   strategy:
                     type: string
-                    example: 🧠 הגדרת GPT – סוחר Algo מקצועי בזמן אמת...
-        '500':
-          description: שגיאה כללית
 
   /news:
     get:
@@ -69,7 +257,7 @@ paths:
       operationId: GetCryptoNews
       responses:
         '200':
-          description: רשימת חדשות עם ציון השפעה
+          description: חדשות עם ציון השפעה
           content:
             application/json:
               schema:
@@ -79,8 +267,6 @@ paths:
                     type: array
                     items:
                       type: object
-        '500':
-          description: כשל בשליפת חדשות
 
   /daily-report:
     get:
@@ -97,10 +283,6 @@ paths:
                   pdf_base64:
                     type: string
                     format: byte
-        '400':
-          description: קובץ סטטיסטיקה לא קיים
-        '500':
-          description: כשל בהפקת הדוח
 
   /ai-analyze:
     post:
@@ -115,7 +297,6 @@ paths:
               properties:
                 symbol:
                   type: string
-                  example: ETHUSDT
                 prices:
                   type: array
                   items:
@@ -128,7 +309,7 @@ paths:
                         type: number
       responses:
         '200':
-          description: תחזית AI כולל גרף וניתוח
+          description: תחזית AI כולל גרף
           content:
             application/json:
               schema:
@@ -146,49 +327,33 @@ paths:
                   chart:
                     type: string
                     format: byte
-        '400':
-          description: נתונים חסרים או שגויים
-        '500':
-          description: ניתוח נכשל
 
-  /calculate-quantity:
-    post:
-      summary: חישוב כמות לכניסה לפי תקציב, מחיר ומינוף
-      operationId: CalculateQuantity
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                budget:
-                  type: number
-                  example: 100
-                entry:
-                  type: number
-                  example: 29000
-                leverage:
-                  type: number
-                  example: 20
+  /stats:
+    get:
+      summary: סטטיסטיקת ביצועים מתוך PNL Tracker
+      operationId: GetStats
       responses:
         '200':
-          description: כמות מתאימה למסחר לפי התקציב והמינוף
+          description: סיכום יומי, רווחים, הצלחה
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  quantity:
+                  success_rate:
                     type: number
-                    example: 0.069
-        '400':
-          description: פרמטרים חסרים או לא חוקיים
+                  total_trades:
+                    type: integer
+                  daily_profit:
+                    type: number
+                  win_loss:
+                    type: object
         '500':
-          description: שגיאה כללית בחישוב
+          description: שגיאה בחישוב סטטיסטיקה
 
 components:
   schemas: {}
+
 
 
 
