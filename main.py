@@ -1,155 +1,177 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from binance.client import Client
-from binance.enums import *
+import os
+import json
+import base64
 import pandas as pd
 import numpy as np
-import ta
-import hmac, hashlib, time
+import matplotlib.pyplot as plt
+from prophet import Prophet
+from ta.trend import EMAIndicator, MACD
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
+from ta.volume import OnBalanceVolumeIndicator
+from ta.trend import ADXIndicator
+from ta.volatility import AverageTrueRange
+from datetime import datetime
+from report_utils import generate_daily_report
+from snapshot_utils import save_trade_snapshot
 import requests
-import os
 import pytz
 
 app = Flask(__name__)
 CORS(app)
 
-# === Binance API Keys ===
-BINANCE_API_KEY = 'YOUR_API_KEY'
-BINANCE_SECRET_KEY = 'YOUR_SECRET_KEY'
+@app.route("/", methods=["GET", "HEAD"])
+def index():
+    return jsonify({"message": "AlgoGPT API is running"}), 200
 
-client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
+@app.route("/preset", methods=["GET"])
+def get_preset():
+    try:
+        with open("preset.txt", "r", encoding="utf-8") as file:
+            preset_text = file.read()
+        return jsonify({"preset": preset_text})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# === Utility: Get Futures Symbols ===
-def get_futures_symbols():
-    info = client.futures_exchange_info()
-    return [s['symbol'] for s in info['symbols'] if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT']
+@app.route("/strategy", methods=["GET"])
+def get_strategy():
+    try:
+        with open("preset.txt", "r", encoding="utf-8") as file:
+            strategy_text = file.read()
+        return jsonify({"strategy": strategy_text})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# === Utility: Get Historical Prices ===
-def get_klines(symbol, interval='15m', limit=100):
-    klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
-    df = pd.DataFrame(klines, columns=[
-        'timestamp', 'open', 'high', 'low', 'close',
-        'volume', 'close_time', 'quote_asset_volume',
-        'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
-    ])
-    df['close'] = df['close'].astype(float)
-    df['high'] = df['high'].astype(float)
-    df['low'] = df['low'].astype(float)
-    df['open'] = df['open'].astype(float)
-    return df
+@app.route("/calculate-quantity", methods=["POST"])
+def calculate_quantity():
+    data = request.json
+    try:
+        budget = data["budget"]
+        entry = data["entry"]
+        leverage = data["leverage"]
+        quantity = round((budget * leverage) / entry, 6)
+        return jsonify({"quantity": quantity})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# === Utility: Calculate Indicators ===
-def analyze_indicators(df):
-    rsi = ta.momentum.RSIIndicator(df['close']).rsi().iloc[-1]
-    macd = ta.trend.MACD(df['close'])
-    macd_val = macd.macd().iloc[-1]
-    macd_signal = macd.macd_signal().iloc[-1]
-    bb = ta.volatility.BollingerBands(df['close'])
-    bb_upper = bb.bollinger_hband().iloc[-1]
-    bb_lower = bb.bollinger_lband().iloc[-1]
-    price = df['close'].iloc[-1]
-    return {
-        'rsi': rsi,
-        'macd': macd_val,
-        'macd_signal': macd_signal,
-        'bb_upper': bb_upper,
-        'bb_lower': bb_lower,
-        'price': price
-    }
-
-# === Logic: Scan Futures Market ===
-@app.route('/scan-futures', methods=['POST'])
-def scan_futures():
-    data = request.get_json()
-    budget = data.get("budget", 100)
-    leverage_range = data.get("leverage_range", [10, 30])
-    confidence_threshold = data.get("confidence_threshold", 90)
-    max_trades = data.get("max_trades", 1)
-    rrr_min = data.get("rrr_min", 2.5)
-    sl_tp_mode = data.get("sl_tp_mode", "atr")
-    timeframes = data.get("timeframes", ["15m", "1h"])
-
-    symbols = get_futures_symbols()
-    results = []
-
-    for symbol in symbols:
-        try:
-            df = get_klines(symbol, interval='15m')
-            indicators = analyze_indicators(df)
-
-            # התנאים לבחירת טרייד טוב
-            rsi = indicators['rsi']
-            macd_val = indicators['macd']
-            macd_signal = indicators['macd_signal']
-            price = indicators['price']
-
-            if rsi < 35 and macd_val > macd_signal:
-                direction = "LONG"
-            elif rsi > 65 and macd_val < macd_signal:
-                direction = "SHORT"
-            else:
-                continue
-
-            sl = round(price * 0.96, 2) if direction == "LONG" else round(price * 1.04, 2)
-            tp = round(price * 1.08, 2) if direction == "LONG" else round(price * 0.92, 2)
-            rrr = abs(tp - price) / abs(price - sl)
-            confidence = np.random.randint(confidence_threshold, 96)  # סימולציה
-
-            if rrr >= rrr_min:
-                results.append({
-                    'symbol': symbol,
-                    'direction': direction,
-                    'entry': round(price, 4),
-                    'sl': sl,
-                    'tp': tp,
-                    'rrr': round(rrr, 2),
-                    'confidence': confidence
-                })
-
-        except Exception as e:
-            print(f"Error with {symbol}: {str(e)}")
-
-    sorted_results = sorted(results, key=lambda x: x['confidence'], reverse=True)
-    return jsonify(sorted_results[:max_trades])
-
-# === SL/TP Calculator ===
-@app.route('/calculate-sl-tp', methods=['POST'])
+@app.route("/sl_tp", methods=["POST"])
 def calculate_sl_tp():
-    data = request.get_json()
-    entry = data.get("entry")
-    stop = data.get("stop")
-    tp = data.get("tp")
-    if not all([entry, stop, tp]):
-        return jsonify({'error': 'Missing data'}), 400
-    rrr = abs(tp - entry) / abs(entry - stop)
-    return jsonify({
-        'entry': entry,
-        'sl': stop,
-        'tp': tp,
-        'rrr': round(rrr, 2)
-    })
+    data = request.json
+    try:
+        entry = float(data["entry"])
+        stop = float(data["stop"])
+        tp = float(data["tp"])
+        risk = abs(entry - stop)
+        reward = abs(tp - entry)
+        rrr = round(reward / risk, 2)
+        return jsonify({"rrr": rrr})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# === Save Trade Example ===
-trades = []
-
-@app.route('/save', methods=['POST'])
+@app.route("/save", methods=["POST"])
 def save_trade():
-    data = request.get_json()
-    trades.append(data)
-    return jsonify({"message": "Trade saved", "total": len(trades)})
+    data = request.json
+    try:
+        with open("trades.json", "a", encoding="utf-8") as f:
+            f.write(json.dumps(data) + "\n")
+        save_trade_snapshot(data)  # Save visual snapshot
+        return jsonify({"status": "saved"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/trades', methods=['GET'])
+@app.route("/trades", methods=["GET"])
 def get_trades():
-    return jsonify(trades)
+    try:
+        if not os.path.exists("trades.json"):
+            return jsonify({"trades": []})
+        with open("trades.json", "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            trades = [json.loads(line) for line in lines]
+        return jsonify({"trades": trades})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/clear', methods=['POST'])
+@app.route("/clear", methods=["POST"])
 def clear_trades():
-    trades.clear()
-    return jsonify({"message": "All trades cleared."})
+    try:
+        open("trades.json", "w", encoding="utf-8").close()
+        return jsonify({"status": "cleared"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# === Start Server ===
-if __name__ == '__main__':
+@app.route("/daily-report", methods=["GET"])
+def daily_report():
+    try:
+        if not os.path.exists("pnl_tracker.json"):
+            return jsonify({"error": "No statistics file found"}), 400
+        pdf_base64 = generate_daily_report()
+        return jsonify({"pdf_base64": pdf_base64})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/ai-analyze", methods=["POST"])
+def ai_analyze():
+    try:
+        data = request.json
+        df = pd.DataFrame(data["prices"])
+        df["time"] = pd.to_datetime(df["time"])
+        df.rename(columns={"time": "ds", "close": "y"}, inplace=True)
+        model = Prophet()
+        model.fit(df)
+        future = model.make_future_dataframe(periods=10)
+        forecast = model.predict(future)
+        fig = model.plot(forecast)
+        filename = "forecast.png"
+        fig.savefig(filename)
+        with open(filename, "rb") as f:
+            img_data = base64.b64encode(f.read()).decode("utf-8")
+        direction = "LONG" if forecast["yhat"].iloc[-1] > df["y"].iloc[-1] else "SHORT"
+        return jsonify({
+            "symbol": data["symbol"],
+            "direction": direction,
+            "forecast": forecast[["ds", "yhat"]].tail(10).to_dict(orient="records"),
+            "chart": img_data
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/news", methods=["GET"])
+def get_news():
+    try:
+        url = "https://cryptopanic.com/api/v1/posts/"
+        params = {
+            "auth_token": "89404de8e0bb4d6e78e95ed26ff19970cdb8830a",
+            "public": "true"
+        }
+        response = requests.get(url, params=params)
+        news_data = response.json().get("results", [])
+        return jsonify({"news": news_data})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/stats", methods=["GET"])
+def get_stats():
+    try:
+        if not os.path.exists("pnl_tracker.json"):
+            return jsonify({"error": "No statistics available"}), 400
+        df = pd.read_json("pnl_tracker.json")
+        df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+        stats = df.groupby("date").agg({
+            "pnl": ["sum", "count"],
+            "success": "mean"
+        }).reset_index()
+        stats.columns = ["date", "total_pnl", "num_trades", "success_rate"]
+        stats["success_rate"] = (stats["success_rate"] * 100).round(2)
+        stats["total_pnl"] = stats["total_pnl"].round(2)
+        return jsonify({"daily_stats": stats.to_dict(orient="records")})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
 
 
 
