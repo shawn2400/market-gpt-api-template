@@ -1,7 +1,8 @@
 flask==2.3.3
 flask-cors==4.0.0
 gunicorn==21.2.0
-pandas==2.2.2
+pandas==2.1.4
+
 numpy==1.26.4
 matplotlib==3.8.4
 plotly==5.22.0
