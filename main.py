@@ -28,9 +28,11 @@ def execute_trade():
         tp = float(data["tp"])
         direction = data["direction"]
         leverage = int(data.get("leverage", 10))
+        budget = float(data.get("budget", 100))
+        use_grid = bool(data.get("use_grid", False))
 
-        logging.info(f"📤 ביצוע טרייד: {symbol} | {direction} | entry={entry}, stop={stop}, tp={tp}, lev={leverage}")
-        result = execute_trade_live(symbol, entry, stop, tp, direction, leverage)
+        logging.info(f"📤 ביצוע טרייד: {symbol} | {direction} | entry={entry}, stop={stop}, tp={tp}, lev={leverage}, budget={budget}, grid={use_grid}")
+        result = execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=budget, use_grid=use_grid)
         return jsonify(result)
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד: {e}")
@@ -82,6 +84,7 @@ def news_impact():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
