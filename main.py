@@ -8,7 +8,7 @@ import logging
 from trade_executor import execute_trade_live
 from scanner_utils import scan_all_futures
 from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
-from trade_storage import save_trade, load_trades, delete_trade  # ✅ חדש
+from utils.trade_storage import save_trade, load_trades, delete_trade  # ✅ תיקון כאן
 
 # טעינת משתני סביבה
 load_dotenv()
@@ -117,6 +117,7 @@ def delete_trade_api():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
