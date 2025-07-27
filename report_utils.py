@@ -5,7 +5,6 @@ import os
 from datetime import datetime
 
 def generate_daily_report(pnl_file='pnl_tracker.json', output_file='daily_report.pdf'):
-    # קריאת נתוני PNL
     if not os.path.exists(pnl_file):
         return None
 
@@ -59,8 +58,7 @@ def generate_daily_report(pnl_file='pnl_tracker.json', output_file='daily_report
 
     pdf.output(output_file)
 
-    # המרה ל־base64 אם רוצים לשלב ב־API
     with open(output_file, 'rb') as f:
-        pdf_bytes = f.read()
-    return pdf_bytes
+        return f.read()
+
 
