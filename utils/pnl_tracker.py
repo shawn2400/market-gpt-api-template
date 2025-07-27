@@ -5,7 +5,7 @@ from fpdf import FPDF
 
 PNL_FILE = "pnl_tracker.json"
 
-def update_pnl(symbol, pnl):
+def update_pnl(symbol, direction, entry, exit_price, leverage, qty):
     today = datetime.now().strftime("%Y-%m-%d")
     if not os.path.exists(PNL_FILE):
         data = {}
@@ -16,10 +16,25 @@ def update_pnl(symbol, pnl):
     if today not in data:
         data[today] = []
 
-    data[today].append({"symbol": symbol, "pnl": pnl})
+    # חישוב PNL ריאלי
+    diff = (exit_price - entry) if direction.upper() == "LONG" else (entry - exit_price)
+    pnl = round(diff * qty * leverage, 2)
+
+    data[today].append({
+        "symbol": symbol,
+        "direction": direction,
+        "entry": entry,
+        "exit": exit_price,
+        "leverage": leverage,
+        "qty": qty,
+        "pnl": pnl
+    })
 
     with open(PNL_FILE, "w") as f:
         json.dump(data, f, indent=4)
+
+    return pnl
+
 
 def generate_pnl_pdf():
     if not os.path.exists(PNL_FILE):
@@ -39,7 +54,7 @@ def generate_pnl_pdf():
         pdf.cell(200, 10, txt=f"📅 {date}", ln=True, align="L")
         total = 0
         for t in trades:
-            line = f"{t['symbol']} | PNL: {t['pnl']}$"
+            line = f"{t['symbol']} | {t['direction']} | Entry: {t['entry']} | Exit: {t['exit']} | PNL: {t['pnl']}$"
             pdf.cell(200, 8, txt=line, ln=True, align="L")
             total += t['pnl']
         pdf.cell(200, 8, txt=f"📈 Total: {round(total,2)}$", ln=True, align="L")
@@ -47,6 +62,7 @@ def generate_pnl_pdf():
     output_path = "/app/static/pnl_report.pdf"
     pdf.output(output_path)
     return output_path
+
 
 
 
