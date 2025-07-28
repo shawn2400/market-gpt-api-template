@@ -5,10 +5,8 @@ import pandas as pd
 import requests
 import smtplib
 from email.message import EmailMessage
-from ta.trend import EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.volatility import BollingerBands, AverageTrueRange
 from dotenv import load_dotenv
+from indicators_utils import prepare_indicators_for_backtest
 
 load_dotenv()
 
@@ -21,23 +19,10 @@ def detect_bearish_engulfing(df):
     )
     return df
 
-def calculate_obv(df):
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['close'].iloc[i-1]:
-            obv.append(obv[-1] + df['volume'].iloc[i])
-        elif df['close'].iloc[i] < df['close'].iloc[i-1]:
-            obv.append(obv[-1] - df['volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    df['obv'] = obv
-    df['obv_trend'] = df['obv'].diff() > 0
-    return df
-
 def compute_confidence(row):
     score = 0
     if 15 < row['rsi'] < 35 or 65 < row['rsi'] < 85: score += 1
-    if abs(row['macd']) > 0: score += 1
+    if abs(row['macd_hist']) > 0: score += 1
     if row['adx'] >= 17: score += 1
     if row['close'] > row['ema_21']: score += 1
     if row['volume'] > row['volume_mean'] * 1.3: score += 1
@@ -51,21 +36,7 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     if len(df) < 5:
         raise ValueError("Not enough data to run backtest. Need at least 5 candles.")
 
-    df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
-    df['ema_50'] = EMAIndicator(df['close'], window=50).ema_indicator()
-    df['macd'] = MACD(df['close']).macd_diff()
-    df['rsi'] = RSIIndicator(df['close']).rsi()
-    df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
-    df['atr'] = AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
-    df['bb_upper'] = BollingerBands(df['close']).bollinger_hband()
-    df['bb_lower'] = BollingerBands(df['close']).bollinger_lband()
-    df['volume_mean'] = df['volume'].rolling(10).mean()
-    df['stoch_k'] = StochasticOscillator(df['high'], df['low'], df['close']).stoch()
-    df['stoch_d'] = StochasticOscillator(df['high'], df['low'], df['close']).stoch_signal()
-    df['vwap'] = (df['high'] + df['low'] + df['close']) / 3
-    df['vwap_trend'] = df['close'] > df['vwap']
-
-    df = calculate_obv(df)
+    df = prepare_indicators_for_backtest(df)
     df = detect_bearish_engulfing(df)
 
     df['signal'] = None
@@ -83,13 +54,13 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
         entry = stop = tp = None
         signal = None
 
-        if row['rsi'] < 30 and row['macd'] > 0 and row['close'] > row['ema_21'] and row['adx'] >= min_adx and row['stoch_k'] < 20:
+        if row['rsi'] < 30 and row['macd_hist'] > 0 and row['close'] > row['ema_21'] and row['adx'] >= min_adx and row['stoch_k'] < 20:
             entry = row['close']
             stop = entry * 0.985
             tp = entry + (rrr_target * (entry - stop))
             signal = "LONG"
 
-        elif row['rsi'] > 70 and row['macd'] < 0 and row['close'] < row['ema_21'] and row['adx'] >= min_adx and row['bearish_engulfing'] and row['stoch_k'] > 80:
+        elif row['rsi'] > 70 and row['macd_hist'] < 0 and row['close'] < row['ema_21'] and row['adx'] >= min_adx and row['bearish_engulfing'] and row['stoch_k'] > 80:
             entry = row['close']
             stop = entry * 1.015
             tp = entry - (rrr_target * (stop - entry))
@@ -202,6 +173,7 @@ def send_email_alert(subject, body="See attached.", attachment=None):
 
 def run_backtest(df):
     return backtest_strategy(df)
+
 
 
 
