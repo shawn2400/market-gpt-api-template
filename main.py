@@ -164,7 +164,8 @@ async def ai_analyze(data: AIAnalysisRequest):
 
 @app.on_event("startup")
 async def start_background_tasks():
-    asyncio.create_task(start_auto_executor())
+    asyncio.create_task(start_auto_executor(delay=10))
+
 
 
 
