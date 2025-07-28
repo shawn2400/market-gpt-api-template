@@ -9,9 +9,9 @@
   },
   "api": {
     "type": "openapi",
-    "url": "https://market-gpt-api-template.onrender.com/openapi.yaml"
+    "url": "https://algogpt-docker.onrender.com/openapi.yaml"
   },
-  "logo_url": "https://market-gpt-api-template.onrender.com/logo.png",
+  "logo_url": "https://algogpt-docker.onrender.com/logo.png",
   "contact_email": "support@yourdomain.com",
   "legal_info_url": "https://yourdomain.com/legal"
 }
