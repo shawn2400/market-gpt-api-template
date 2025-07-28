@@ -6,6 +6,7 @@ from math import floor
 from binance.enums import *
 from utils.binance_client import client  # ודא שהקובץ הזה קיים
 from snapshot_utils import save_trade_snapshot  # <- חדש
+from utils.trade_storage import save_trade  # <- חדש לשמירת טריידים
 
 def round_quantity(symbol, quantity):
     try:
@@ -71,6 +72,19 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "stop": stop,
             "tp": tp,
             "direction": direction.upper()
+        })
+
+        # שמירת פרטי הטרייד לקובץ JSON
+        save_trade({
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "direction": direction.upper(),
+            "leverage": leverage,
+            "confidence": 90,
+            "quality_score": 5,
+            "type": "REGULAR"
         })
 
         return {
