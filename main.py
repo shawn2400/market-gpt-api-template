@@ -1,6 +1,5 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import pandas as pd
 import os
@@ -17,6 +16,7 @@ load_dotenv()
 
 app = FastAPI(title="AlgoGPT API", description="API למסחר אלגוריתמי עם Binance", version="1.0.0")
 
+# === Data Models ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -44,6 +44,7 @@ class TradeRequest(BaseModel):
     use_trailing: bool = False
     user_id: str = None
 
+# === Routes ===
 @app.get("/")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
@@ -129,6 +130,7 @@ async def execute_trade(data: TradeRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
