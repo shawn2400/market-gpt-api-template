@@ -10,18 +10,17 @@ WORKDIR /app
 
 # העתקת קבצים
 COPY requirements.txt .
-COPY utils/scan_futures.py ./scan_futures.py
-COPY app/flask_api.py ./flask_api.py  # דוגמה לקובץ Flask אם יש
+COPY main.py .
 
-# התקנת כל הספריות
+# התקנת כל התלויות
 RUN pip install --no-cache-dir -r requirements.txt
 
-# חשיפת פורטים (ניתן להריץ שני שירותים שונים אם צריך)
+# חשיפת פורטים
 EXPOSE 8080
 EXPOSE 5000
 
-# פקודת ברירת מחדל – להריץ aiohttp בלבד
-CMD ["python", "scan_futures.py"]
+# הפעלת שני השירותים (Flask + Aiohttp) דרך main.py
+CMD ["python", "main.py"]
 
 
 
