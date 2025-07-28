@@ -1,20 +1,14 @@
-# Dockerfile להרצת אפליקציית aiohttp
 FROM python:3.11-slim
 
-# יצירת סביבת עבודה
 WORKDIR /app
-
-# העתקת קבצים
 COPY scan_futures.py .
+COPY requirements.txt .
 
-# התקנת ספריות בצורה יעילה
-RUN pip install --no-cache-dir aiohttp numpy
+RUN pip install --no-cache-dir -r requirements.txt
 
-# פתיחת פורט
 EXPOSE 8080
-
-# הפעלת השרת
 CMD ["python", "scan_futures.py"]
+
 
 
 
