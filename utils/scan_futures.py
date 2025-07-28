@@ -1,6 +1,7 @@
 from aiohttp import web
 import aiohttp
 import numpy as np
+import os
 
 async def fetch_binance_futures_data():
     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
@@ -41,7 +42,9 @@ async def scan_futures_market(request):
 if __name__ == '__main__':
     app = web.Application()
     app.router.add_get('/scan_futures_market', scan_futures_market)
-    web.run_app(app, port=8080)
+    port = int(os.environ.get('PORT', 8080))
+    web.run_app(app, port=port)
+
 
 
 
