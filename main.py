@@ -1,16 +1,36 @@
-# main.py
+# main.py (גרסה משודרגת מלאה)
 
 from flask import Flask, jsonify, request
-import requests
-import numpy as np
 import os
 import pandas as pd
+from dotenv import load_dotenv
+
+# === Utils / Services ===
 from backtest_utils import run_backtest
+from news_utils import fetch_crypto_news, analyze_news_impact
+from utils.quantity_utils import calculate_quantity
+from utils.sl_tp_utils import calculate_sl_tp
+from utils.trade_storage import save_trade
+from snapshot_utils import save_trade_snapshot
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# === שליפת מידע פיוצ'רס מ-Binance ===
-def fetch_binance_futures_data(limit=20):
+# === בסיס API ===
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({
+        "status": "ok",
+        "message": "AlgoGPT API is running ✅"
+    })
+
+# === סריקת שוק ===
+from utils.klines_utils import get_klines
+from utils.live_price import get_live_price
+
+def fetch_binance_futures_data(limit=30):
+    import requests, numpy as np
     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
     try:
         response = requests.get(url, timeout=10)
@@ -28,7 +48,7 @@ def fetch_binance_futures_data(limit=20):
             last_price = float(item['lastPrice'])
             volume = float(item['quoteVolume'])
 
-            # ניתוח טכני רנדומלי זמני (עדיף להחליף לנתוני live)
+            # 🔧 סימולציה זמנית עד שתשלב אינדיקטורים חיים
             rsi = np.random.uniform(20, 80)
             adx = np.random.uniform(10, 50)
             direction = "LONG" if rsi < 30 else "SHORT" if rsi > 70 else "NEUTRAL"
@@ -46,17 +66,6 @@ def fetch_binance_futures_data(limit=20):
 
     return results
 
-
-# === מסלולי API ===
-
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({
-        "status": "ok",
-        "message": "AlgoGPT API is running ✅"
-    })
-
-
 @app.route('/scan', methods=['GET'])
 def scan():
     try:
@@ -65,7 +74,43 @@ def scan():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# === חישוב SL/TP ===
+@app.route('/sl_tp', methods=['POST'])
+def sl_tp():
+    try:
+        data = request.get_json()
+        df = pd.DataFrame(data.get("df", []))
+        direction = data.get("direction")
+        result = calculate_sl_tp(df, direction)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
+# === חישוב כמות למסחר ===
+@app.route('/calculate-quantity', methods=['POST'])
+def calc_qty():
+    try:
+        data = request.get_json()
+        symbol = data['symbol']
+        price = data['price']
+        leverage = data['leverage']
+        budget = data['budget']
+        quantity = calculate_quantity(symbol, price, leverage, budget)
+        return jsonify({"quantity": quantity})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+# === ניתוח חדשות ===
+@app.route('/news', methods=['GET'])
+def news():
+    return jsonify(fetch_crypto_news())
+
+@app.route('/analyze-news', methods=['GET'])
+def analyze_news():
+    news = fetch_crypto_news()
+    return jsonify(analyze_news_impact(news))
+
+# === Backtest ===
 @app.route('/backtest', methods=['POST'])
 def backtest():
     try:
@@ -103,11 +148,11 @@ def backtest():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# === הרצה מקומית בלבד (ל־Render זה לא רלוונטי) ===
+# === הרצה מקומית בלבד ===
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
