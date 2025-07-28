@@ -41,6 +41,12 @@ def compute_indicators(df, volume_window=20):
         # Volume mean
         df['volume_mean'] = df['volume'].rolling(window=volume_window).mean()
 
+        # CCI
+        df['cci'] = ta.trend.CCIIndicator(high=df['high'], low=df['low'], close=df['close'], window=20).cci()
+
+        # Doji candlestick
+        df['is_doji'] = (abs(df['close'] - df['open']) / (df['high'] - df['low'] + 1e-6)) < 0.1
+
         df.dropna(inplace=True)
         return df
 
