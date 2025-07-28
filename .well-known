@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "AlgoGPT",
+  "name_for_model": "algogpt",
+  "description_for_human": "סוחר אלגוריתמי בזמן אמת ל־Binance: סריקה, טריידים, דוחות, ניתוחים.",
+  "description_for_model": "Plugin לחיבור ל־Binance. כולל סריקת שוק, ביצוע טריידים, Backtest, גרפים, ניתוחי חדשות ועוד.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://market-gpt-api-template.onrender.com/openapi.yaml"
+  },
+  "logo_url": "https://market-gpt-api-template.onrender.com/logo.png",
+  "contact_email": "support@yourdomain.com",
+  "legal_info_url": "https://yourdomain.com/legal"
+}
