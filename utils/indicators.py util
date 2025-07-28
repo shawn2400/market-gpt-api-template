@@ -3,6 +3,7 @@
 import ta
 import pandas as pd
 
+
 def compute_indicators(df, volume_window=20):
     try:
         # EMA
@@ -34,7 +35,7 @@ def compute_indicators(df, volume_window=20):
         df['obv'] = obv.on_balance_volume()
         df['obv_trend'] = df['obv'].diff() > 0
 
-        # VWAP (cumulative)
+        # VWAP
         df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
         df['vwap_trend'] = df['close'] > df['vwap']
 
@@ -44,8 +45,11 @@ def compute_indicators(df, volume_window=20):
         # CCI
         df['cci'] = ta.trend.CCIIndicator(high=df['high'], low=df['low'], close=df['close'], window=20).cci()
 
-        # Doji pattern (small real body)
+        # Doji
         df['is_doji'] = (abs(df['close'] - df['open']) / (df['high'] - df['low'] + 1e-6)) < 0.1
+
+        # GRID Signal (optional logic)
+        df['grid_signal'] = ((df['rsi'] < 35) & (df['macd_hist'] > 0) & (df['adx'] > 17))
 
         df.dropna(inplace=True)
         return df
@@ -55,12 +59,16 @@ def compute_indicators(df, volume_window=20):
         return df
 
 
+# שילוב עם backtest_utils.py
+
 def prepare_indicators_for_backtest(df):
     return compute_indicators(df)
 
 
+# שילוב עם סריקת שוק חיה (scanner_utils.py)
 def prepare_indicators_for_live_scan(df):
     return compute_indicators(df)
+
 
 
 
