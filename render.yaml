@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: algo-scan-flask
+    name: algo-gpt-fastapi
     env: docker
     plan: free
     autoDeploy: true
