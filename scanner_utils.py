@@ -6,8 +6,8 @@ from binance import AsyncClient
 import os
 from dotenv import load_dotenv
 from ta.trend import EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator
-from ta.volatility import AverageTrueRange
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.volatility import AverageTrueRange, BollingerBands
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -16,6 +16,19 @@ API_SECRET = os.getenv("BINANCE_API_SECRET")
 MAX_RETRIES = 3
 SYMBOL_LIMIT = 300
 CANDLE_LIMIT = 100
+
+def calculate_obv(df):
+    obv = [0]
+    for i in range(1, len(df)):
+        if df['close'].iloc[i] > df['close'].iloc[i-1]:
+            obv.append(obv[-1] + df['volume'].iloc[i])
+        elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+            obv.append(obv[-1] - df['volume'].iloc[i])
+        else:
+            obv.append(obv[-1])
+    df['obv'] = obv
+    df['obv_trend'] = df['obv'].diff() > 0
+    return df
 
 async def fetch_futures_symbols():
     client = await AsyncClient.create(API_KEY, API_SECRET)
@@ -79,6 +92,7 @@ async def scan_all_futures():
         print(f"✅ נמצאו {len(results)} סמלים בעלי תנועה חזקה מתוך {len(symbols)}")
 
         return results
+
 
 
 
