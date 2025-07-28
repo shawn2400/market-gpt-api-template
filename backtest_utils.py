@@ -1,4 +1,4 @@
-# backtest_utils.py
+# updated_backtest_utils.py
 
 import os
 import pandas as pd
@@ -11,6 +11,15 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from dotenv import load_dotenv
 
 load_dotenv()
+
+def detect_bearish_engulfing(df):
+    df['bearish_engulfing'] = (
+        (df['close'].shift(1) > df['open'].shift(1)) &
+        (df['close'] < df['open']) &
+        (df['open'] > df['close'].shift(1)) &
+        (df['close'] < df['open'].shift(1))
+    )
+    return df
 
 def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df = df.copy()
@@ -26,6 +35,7 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df['bb_upper'] = BollingerBands(df['close']).bollinger_hband()
     df['bb_lower'] = BollingerBands(df['close']).bollinger_lband()
     df['volume_mean'] = df['volume'].rolling(10).mean()
+    df = detect_bearish_engulfing(df)
 
     df['signal'] = None
     df['entry'] = None
@@ -44,6 +54,7 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
         rsi = row['rsi']
         macd = row['macd']
         price = row['close']
+        engulf = row['bearish_engulfing']
 
         score = 0
         if 15 < rsi < 35 or 65 < rsi < 85: score += 1
@@ -57,13 +68,13 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
 
         if rsi < 30 and macd > 0 and price > row['ema_21'] and adx >= min_adx:
             entry = price
-            stop = entry - atr * 1.5
+            stop = entry * 0.985
             tp = entry + (rrr_target * (entry - stop))
             signal = "LONG"
 
-        elif rsi > 70 and macd < 0 and price < row['ema_21'] and adx >= min_adx:
+        elif rsi > 70 and macd < 0 and price < row['ema_21'] and adx >= min_adx and engulf:
             entry = price
-            stop = entry + atr * 1.5
+            stop = entry * 1.015
             tp = entry - (rrr_target * (stop - entry))
             signal = "SHORT"
 
@@ -75,7 +86,8 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
             df.at[i, 'rrr'] = rrr_target
             df.at[i, 'quality_score'] = round(score / 5, 2)
 
-            for j in range(i + 1, min(i + 30, len(df))):
+            max_hold = 30  # סימולציה של "אם נשארנו עוד"
+            for j in range(i + 1, min(i + max_hold, len(df))):
                 close_price = df['close'].iloc[j]
                 if signal == 'LONG':
                     if close_price <= stop:
@@ -107,7 +119,6 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
 
     return result
 
-
 def fetch_crypto_news():
     api_key = os.getenv("CRYPTO_PANIC_API_KEY")
     if not api_key:
@@ -121,7 +132,6 @@ def fetch_crypto_news():
     except Exception as e:
         print(f"[!] שגיאה בשליפת חדשות: {e}")
         return []
-
 
 def analyze_news_impact(news_list):
     scored_news = []
@@ -141,7 +151,6 @@ def analyze_news_impact(news_list):
             "impact_score": score
         })
     return scored_news
-
 
 def send_email_alert(subject, body="See attached.", attachment=None):
     try:
@@ -174,9 +183,9 @@ def send_email_alert(subject, body="See attached.", attachment=None):
     except Exception as e:
         print(f"[!] Email failed: {e}")
 
-
 def run_backtest(df):
     return backtest_strategy(df)
+
 
 
 
