@@ -7,34 +7,44 @@ from backtest_utils import run_backtest
 
 app = Flask(__name__)
 
-# שליפת מידע פיוצ'רס מ-Binance
-def fetch_binance_futures_data():
+# === שליפת מידע פיוצ'רס מה־Binance ===
+def fetch_binance_futures_data(limit=20):
     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
-    resp = requests.get(url)
-    raw_data = resp.json()
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        raw_data = response.json()
+    except Exception as e:
+        raise RuntimeError(f"שגיאה בשליפת מידע מ-Binance: {e}")
 
-    top_20 = sorted(raw_data, key=lambda x: float(x['quoteVolume']), reverse=True)[:20]
-
+    top_symbols = sorted(raw_data, key=lambda x: float(x['quoteVolume']), reverse=True)[:limit]
     results = []
-    for item in top_20:
-        symbol = item['symbol']
-        last_price = float(item['lastPrice'])
-        volume = float(item['quoteVolume'])
 
-        rsi = np.random.uniform(20, 80)
-        adx = np.random.uniform(10, 50)
-        direction = "LONG" if rsi < 30 else "SHORT" if rsi > 70 else "NEUTRAL"
+    for item in top_symbols:
+        try:
+            symbol = item['symbol']
+            last_price = float(item['lastPrice'])
+            volume = float(item['quoteVolume'])
+            rsi = np.random.uniform(20, 80)
+            adx = np.random.uniform(10, 50)
+            direction = "LONG" if rsi < 30 else "SHORT" if rsi > 70 else "NEUTRAL"
 
-        results.append({
-            'symbol': symbol,
-            'last_price': last_price,
-            'volume': volume,
-            'rsi': round(rsi, 2),
-            'adx': round(adx, 2),
-            'direction': direction
-        })
+            results.append({
+                'symbol': symbol,
+                'last_price': last_price,
+                'volume': round(volume, 2),
+                'rsi': round(rsi, 2),
+                'adx': round(adx, 2),
+                'direction': direction
+            })
+
+        except Exception:
+            continue  # דילוג על שורות פגומות
 
     return results
+
+
+# === מסלולים ===
 
 @app.route('/', methods=['GET'])
 def home():
@@ -53,31 +63,45 @@ def backtest():
     try:
         data = request.get_json()
         prices = data.get("prices", [])
+        symbol = data.get("symbol", "UNKNOWN")
+        interval = data.get("interval", "15m")
 
         if not prices or len(prices) < 30:
             return jsonify({
                 "error": "Insufficient data – at least 30 candles are required",
+                "symbol": symbol,
+                "interval": interval,
                 "code": "ERR_TOO_SHORT"
             }), 400
 
         df = pd.DataFrame(prices)
-
-        # המרה למספרים למניעת שגיאות
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # הסרת שורות לא תקינות
         df.dropna(inplace=True)
+        if df.empty:
+            return jsonify({"error": "No valid rows after cleaning"}), 400
 
         results = run_backtest(df)
-        return jsonify(results.to_dict(orient="records"))
+        return jsonify({
+            "symbol": symbol,
+            "interval": interval,
+            "results": results.to_dict(orient="records"),
+            "success_count": int(results["success"].sum()),
+            "total_trades": len(results),
+            "avg_quality": round(results["quality_score"].mean(), 2) if not results.empty else 0
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# === הרצה מקומית ===
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
+
 
 
 
