@@ -2,9 +2,9 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   description: |
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance, מבצע ניתוחים טכניים, 
+    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance, מבצע ניתוחים טכניים,
     טריידים בפועל, חיזוי AI, גרפים, דוחות וסטטיסטיקות חכמות.
-  version: 1.1.0
+  version: 1.3.0
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -72,52 +72,6 @@ paths:
                           type: string
                           example: LONG
 
-  /scan-and-execute:
-    post:
-      summary: סריקה חיה + ביצוע טרייד מיידי לפי חוקים מוגדרים
-      operationId: scanAndExecute
-      responses:
-        '200':
-          description: תוצאה של טרייד שבוצע
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: success
-                  symbol:
-                    type: string
-                    example: ETHUSDT
-                  entry_price:
-                    type: number
-                    example: 2915.4
-                  stop:
-                    type: number
-                    example: 2868.1
-                  tp:
-                    type: number
-                    example: 3032.7
-                  quantity:
-                    type: number
-                    example: 0.036
-                  leverage:
-                    type: number
-                    example: 10
-                  confidence:
-                    type: number
-                    example: 91.2
-                  quality_score:
-                    type: number
-                    example: 7
-                  news_score:
-                    type: number
-                    example: 1
-                  snapshot:
-                    type: string
-                    example: snapshots/ETHUSDT_LONG_2025-07-28.png
-
   /backtest:
     post:
       summary: ביצוע סימולציית Backtest על סדרת מחירים
@@ -152,31 +106,44 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    timestamp:
-                      type: string
-                    signal:
-                      type: string
-                      example: LONG
-                    entry:
-                      type: number
-                    stop:
-                      type: number
-                    tp:
-                      type: number
-                    exit:
-                      type: number
-                    rrr:
-                      type: number
-                    pnl:
-                      type: number
-                    success:
-                      type: boolean
-                    quality_score:
-                      type: number
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  interval:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                        signal:
+                          type: string
+                          example: LONG
+                        entry:
+                          type: number
+                        stop:
+                          type: number
+                        tp:
+                          type: number
+                        exit:
+                          type: number
+                        rrr:
+                          type: number
+                        pnl:
+                          type: number
+                        success:
+                          type: boolean
+                        quality_score:
+                          type: number
+                  success_count:
+                    type: number
+                  total_trades:
+                    type: number
+                  avg_quality:
+                    type: number
         '400':
           description: חסרה היסטוריית מחירים
           content:
@@ -191,10 +158,175 @@ paths:
                     type: string
                     example: ERR_TOO_SHORT
 
-  # (המשך המקטעים יושלמו בקבצי המשך במסמך זה – קוצר מטעמי מגבלה)
+  /execute-trade:
+    post:
+      summary: ביצוע טרייד בפועל על Binance Futures
+      operationId: executeLiveTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                direction:
+                  type: string
+                  enum: [LONG, SHORT]
+                leverage:
+                  type: number
+                budget_usd:
+                  type: number
+                use_grid:
+                  type: boolean
+                use_trailing:
+                  type: boolean
+      responses:
+        '200':
+          description: תוצאה של ביצוע הטרייד
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  confidence:
+                    type: number
+                    example: 88.4
+                  quality_score:
+                    type: number
+                    example: 7
+                  quantity:
+                    type: number
+                  snapshot:
+                    type: string
+                  news_score:
+                    type: number
+        '400':
+          description: שגיאה בביצוע
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: error
+                  message:
+                    type: string
+
+  /calculate-quantity:
+    post:
+      summary: חישוב כמות נכונה למסחר לפי מחיר, מינוף ותקציב
+      operationId: calculateQuantity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                price:
+                  type: number
+                leverage:
+                  type: number
+                budget:
+                  type: number
+      responses:
+        '200':
+          description: תוצאה של החישוב
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quantity:
+                    type: number
+
+  /daily-report:
+    get:
+      summary: הפקת דוח יומי כולל סטטיסטיקות
+      operationId: getDailyReport
+      responses:
+        '200':
+          description: דוח PDF מוצלח (ב־base64 או קובץ)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  base64_pdf:
+                    type: string
+
+  /news:
+    get:
+      summary: שליפת חדשות קריפטו וניתוח סנטימנט
+      operationId: getNewsSentiment
+      responses:
+        '200':
+          description: רשימת חדשות עם ניקוד סנטימנט
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    title:
+                      type: string
+                    published_at:
+                      type: string
+                    url:
+                      type: string
+                    impact_score:
+                      type: number
+
+  /ai-analyze:
+    post:
+      summary: ניתוח גרפי וסטטיסטי באמצעות AI
+      operationId: aiAnalyzeChart
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prices:
+                  type: array
+                  items:
+                    type: number
+      responses:
+        '200':
+          description: פלט ניתוח AI
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trend:
+                    type: string
+                    example: UP
+                  confidence:
+                    type: number
+                    example: 92.3
 
 components:
   schemas: {}
+
 
 
 
