@@ -14,6 +14,10 @@ load_dotenv()
 
 def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df = df.copy()
+
+    if len(df) < 30:
+        raise ValueError("Not enough data to run backtest. Need at least 30 candles.")
+
     df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
     df['macd'] = MACD(df['close']).macd_diff()
     df['rsi'] = RSIIndicator(df['close']).rsi()
@@ -104,7 +108,6 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     return result
 
 
-# חדשות קריפטו מ-CryptoPanic
 def fetch_crypto_news():
     api_key = os.getenv("CRYPTO_PANIC_API_KEY")
     if not api_key:
@@ -120,7 +123,6 @@ def fetch_crypto_news():
         return []
 
 
-# ניתוח סנטימנט
 def analyze_news_impact(news_list):
     scored_news = []
     for item in news_list:
@@ -141,7 +143,6 @@ def analyze_news_impact(news_list):
     return scored_news
 
 
-# שליחת מייל (לא חובה)
 def send_email_alert(subject, body="See attached.", attachment=None):
     try:
         EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS")
@@ -176,6 +177,7 @@ def send_email_alert(subject, body="See attached.", attachment=None):
 
 def run_backtest(df):
     return backtest_strategy(df)
+
 
 
 
