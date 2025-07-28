@@ -1,62 +1,26 @@
-import os
-import time
-import pandas as pd
-from binance.client import Client
-from binance.enums import *
-from dotenv import load_dotenv
-from utils.quality_score import compute_quality_score
-from utils.binance_client import client
-
-import ta
-
-load_dotenv()
-
-def compute_indicators(df):
-    try:
-        df['EMA21'] = ta.trend.EMAIndicator(close=df['close'], window=21).ema_indicator()
-        df['EMA50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
-
-        df['RSI'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-
-        macd = ta.trend.MACD(close=df['close'])
-        df['MACD'] = macd.macd()
-        df['MACD_signal'] = macd.macd_signal()
-
-        adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'])
-        df['ADX'] = adx.adx()
-
-        atr = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'])
-        df['ATR'] = atr.average_true_range()
-
-        df['volume_mean'] = df['volume'].rolling(window=20).mean()
-        df.dropna(inplace=True)
-
-        signal = None
-        if df['RSI'].iloc[-1] > 55 and df['MACD'].iloc[-1] > df['MACD_signal'].iloc[-1] and df['ADX'].iloc[-1] > 17 and df['close'].iloc[-1] > df['EMA21'].iloc[-1]:
-            signal = "LONG"
-        elif df['RSI'].iloc[-1] < 45 and df['MACD'].iloc[-1] < df['MACD_signal'].iloc[-1] and df['ADX'].iloc[-1] > 17 and df['close'].iloc[-1] < df['EMA21'].iloc[-1]:
-            signal = "SHORT"
-
-        return {"signal": signal, "df": df}
-    except Exception as e:
-        print(f"[!] שגיאה בחישוב אינדיקטורים: {e}")
-        return {"signal": None, "df": df}
-
-def is_volume_spike(df):
-    try:
-        recent_volume = df['volume'].iloc[-1]
-        mean_volume = df['volume_mean'].iloc[-1]
-        return recent_volume > 1.8 * mean_volume
-    except:
-        return False
-
 def scan_all_futures_live(budget_usd=100):
-    symbols = [s['symbol'] for s in client.futures_exchange_info()['symbols'] if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT']
+    try:
+        print("🚀 התחלת סריקה חיה")
+        symbols = [
+            s['symbol']
+            for s in client.futures_exchange_info()['symbols']
+            if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT'
+        ]
+    except Exception as e:
+        print(f"[!] שגיאה בקבלת רשימת סמלים: {e}")
+        return []
+
     results = []
 
-    for symbol in symbols[:300]:
+    for i, symbol in enumerate(symbols[:20]):  # הוגבל ל־20 סמלים בלבד לצורך בדיקה
         try:
-            klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_15MINUTE, limit=100)
+            print(f"[{i}] 🔍 בודק {symbol}")
+            klines = client.futures_klines(
+                symbol=symbol,
+                interval=Client.KLINE_INTERVAL_15MINUTE,
+                limit=100
+            )
+
             df = pd.DataFrame(klines, columns=[
                 'timestamp', 'open', 'high', 'low', 'close',
                 'volume', 'close_time', 'quote_asset_volume',
@@ -86,12 +50,15 @@ def scan_all_futures_live(budget_usd=100):
                 })
 
             time.sleep(0.1)
+
         except Exception as e:
-            print(f"שגיאה ב־{symbol}: {e}")
+            print(f"[!] שגיאה ב־{symbol}: {e}")
             continue
 
+    print(f"✅ סיום סריקה. נמצאו {len(results)} תוצאות.")
     sorted_results = sorted(results, key=lambda x: x['quality_score'], reverse=True)
     return sorted_results
+
 
 
 
