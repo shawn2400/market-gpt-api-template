@@ -1,5 +1,3 @@
-# main.py (גרסה משודרגת מלאה)
-
 from flask import Flask, jsonify, request
 import os
 import pandas as pd
@@ -24,55 +22,6 @@ def home():
         "status": "ok",
         "message": "AlgoGPT API is running ✅"
     })
-
-# === סריקת שוק ===
-from utils.klines_utils import get_klines
-from utils.live_price import get_live_price
-
-def fetch_binance_futures_data(limit=30):
-    import requests, numpy as np
-    url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        raw_data = response.json()
-    except Exception as e:
-        raise RuntimeError(f"שגיאה בשליפת מידע מ-Binance: {e}")
-
-    top_symbols = sorted(raw_data, key=lambda x: float(x['quoteVolume']), reverse=True)[:limit]
-    results = []
-
-    for item in top_symbols:
-        try:
-            symbol = item['symbol']
-            last_price = float(item['lastPrice'])
-            volume = float(item['quoteVolume'])
-
-            # 🔧 סימולציה זמנית עד שתשלב אינדיקטורים חיים
-            rsi = np.random.uniform(20, 80)
-            adx = np.random.uniform(10, 50)
-            direction = "LONG" if rsi < 30 else "SHORT" if rsi > 70 else "NEUTRAL"
-
-            results.append({
-                'symbol': symbol,
-                'last_price': last_price,
-                'volume': round(volume, 2),
-                'rsi': round(rsi, 2),
-                'adx': round(adx, 2),
-                'direction': direction
-            })
-        except Exception:
-            continue
-
-    return results
-
-@app.route('/scan', methods=['GET'])
-def scan():
-    try:
-        data = fetch_binance_futures_data(limit=30)
-        return jsonify({'results': data})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 # === חישוב SL/TP ===
 @app.route('/sl_tp', methods=['POST'])
@@ -152,6 +101,7 @@ def backtest():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
