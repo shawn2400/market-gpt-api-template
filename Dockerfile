@@ -1,25 +1,43 @@
+# שלב בסיסי: Python רזה
 FROM python:3.11-slim
 
-# התקנת תלות מערכת
+# משתנים לסביבת עבודה נקייה ולוגים ישירים
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# התקנת תלות מערכת לבניית ספריות כבדות כמו ta-lib, Prophet וכו'
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential gcc libffi-dev && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    build-essential \
+    gcc \
+    libffi-dev \
+    libatlas-base-dev \
+    libprotobuf-dev \
+    libpng-dev \
+    libjpeg-dev \
+    libopenblas-dev \
+    liblapack-dev \
+    gfortran \
+    git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # הגדרת תיקיית עבודה
 WORKDIR /app
 
-# העתקת קבצים והתקנת דרישות
+# העתקת קובץ הדרישות בלבד קודם – יאפשר cache טוב
 COPY requirements.txt .
+
+# התקנת חבילות Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# העתקת הקוד עצמו
+# העתקת שאר קבצי הקוד
 COPY . .
 
-# פתיחת פורט האפליקציה (רק Flask)
+# פתיחת פורט (חשוב ב־Render ודומיו)
 EXPOSE 5000
 
-# הרצת Flask באמצעות gunicorn להרצה יציבה ותקינה (פרודקשן)
+# הפעלת Gunicorn (שרת WSGI לפרודקשן)
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
+
 
 
 
