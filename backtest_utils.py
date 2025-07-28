@@ -1,190 +1,151 @@
-# updated_backtest_utils.py
+# trade_executor.py
 
-import os
-import pandas as pd
-import requests
-import smtplib
-from email.message import EmailMessage
-from ta.trend import EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands, AverageTrueRange
-from dotenv import load_dotenv
+import time
+import logging
+from math import floor
+from binance.enums import *
+from utils.binance_client import client  # ודא שהקובץ הזה קיים
+from snapshot_utils import save_trade_snapshot  # <- חדש
+from utils.trade_storage import save_trade  # <- חדש לשמירת טריידים
+from utils.quality_score import compute_quality_score  # <- איכות דינמית
+from utils.pnl_tracker import log_pnl  # <- לוג פומבי
+from report_utils import send_email_alert  # <- מייל
+from news_utils import fetch_crypto_news, analyze_news_impact  # <- ניתוח סנטימנט
 
-load_dotenv()
 
-def detect_bearish_engulfing(df):
-    df['bearish_engulfing'] = (
-        (df['close'].shift(1) > df['open'].shift(1)) &
-        (df['close'] < df['open']) &
-        (df['open'] > df['close'].shift(1)) &
-        (df['close'] < df['open'].shift(1))
-    )
-    return df
-
-def backtest_strategy(df, rrr_target=2.5, min_adx=17):
-    df = df.copy()
-
-    if len(df) < 30:
-        raise ValueError("Not enough data to run backtest. Need at least 30 candles.")
-
-    df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
-    df['macd'] = MACD(df['close']).macd_diff()
-    df['rsi'] = RSIIndicator(df['close']).rsi()
-    df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
-    df['atr'] = AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
-    df['bb_upper'] = BollingerBands(df['close']).bollinger_hband()
-    df['bb_lower'] = BollingerBands(df['close']).bollinger_lband()
-    df['volume_mean'] = df['volume'].rolling(10).mean()
-    df = detect_bearish_engulfing(df)
-
-    df['signal'] = None
-    df['entry'] = None
-    df['stop'] = None
-    df['tp'] = None
-    df['rrr'] = None
-    df['exit'] = None
-    df['pnl'] = None
-    df['success'] = None
-    df['quality_score'] = None
-
-    for i in range(1, len(df)):
-        row = df.iloc[i]
-        atr = row['atr']
-        adx = row['adx']
-        rsi = row['rsi']
-        macd = row['macd']
-        price = row['close']
-        engulf = row['bearish_engulfing']
-
-        score = 0
-        if 15 < rsi < 35 or 65 < rsi < 85: score += 1
-        if abs(macd) > 0: score += 1
-        if adx >= min_adx: score += 1
-        if price > row['ema_21']: score += 1
-        if row['volume'] > row['volume_mean'] * 1.3: score += 1
-
-        entry = stop = tp = None
-        signal = None
-
-        if rsi < 30 and macd > 0 and price > row['ema_21'] and adx >= min_adx:
-            entry = price
-            stop = entry * 0.985
-            tp = entry + (rrr_target * (entry - stop))
-            signal = "LONG"
-
-        elif rsi > 70 and macd < 0 and price < row['ema_21'] and adx >= min_adx and engulf:
-            entry = price
-            stop = entry * 1.015
-            tp = entry - (rrr_target * (stop - entry))
-            signal = "SHORT"
-
-        if signal:
-            df.at[i, 'signal'] = signal
-            df.at[i, 'entry'] = entry
-            df.at[i, 'stop'] = stop
-            df.at[i, 'tp'] = tp
-            df.at[i, 'rrr'] = rrr_target
-            df.at[i, 'quality_score'] = round(score / 5, 2)
-
-            max_hold = 30  # סימולציה של "אם נשארנו עוד"
-            for j in range(i + 1, min(i + max_hold, len(df))):
-                close_price = df['close'].iloc[j]
-                if signal == 'LONG':
-                    if close_price <= stop:
-                        df.at[i, 'exit'] = close_price
-                        df.at[i, 'pnl'] = close_price - entry
-                        df.at[i, 'success'] = False
-                        break
-                    elif close_price >= tp:
-                        df.at[i, 'exit'] = close_price
-                        df.at[i, 'pnl'] = close_price - entry
-                        df.at[i, 'success'] = True
-                        break
-                else:
-                    if close_price >= stop:
-                        df.at[i, 'exit'] = close_price
-                        df.at[i, 'pnl'] = entry - close_price
-                        df.at[i, 'success'] = False
-                        break
-                    elif close_price <= tp:
-                        df.at[i, 'exit'] = close_price
-                        df.at[i, 'pnl'] = entry - close_price
-                        df.at[i, 'success'] = True
-                        break
-
-    result = df[df['signal'].notnull()][[
-        'timestamp', 'signal', 'entry', 'stop', 'tp', 'exit',
-        'rrr', 'pnl', 'success', 'quality_score'
-    ]].reset_index(drop=True)
-
-    return result
-
-def fetch_crypto_news():
-    api_key = os.getenv("CRYPTO_PANIC_API_KEY")
-    if not api_key:
-        print("[!] לא הוגדר מפתח API ל־CryptoPanic")
-        return []
-    url = f"https://cryptopanic.com/api/v1/posts/?auth_token={api_key}&public=true"
+def round_quantity(symbol, quantity):
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json().get("results", [])
+        info = client.futures_exchange_info()
+        for s in info["symbols"]:
+            if s["symbol"] == symbol:
+                step_size = float([f for f in s["filters"] if f["filterType"] == "LOT_SIZE"][0]["stepSize"])
+                return floor(quantity / step_size) * step_size
     except Exception as e:
-        print(f"[!] שגיאה בשליפת חדשות: {e}")
-        return []
+        logging.error(f"[!] שגיאה בעיגול כמות: {e}")
+    return round(quantity, 3)
 
-def analyze_news_impact(news_list):
-    scored_news = []
-    for item in news_list:
-        score = 0
-        title = item.get("title", "").lower()
-        positive_words = ["bullish", "surge", "breakout", "pump", "rally", "gain", "soar"]
-        negative_words = ["bearish", "crash", "fud", "dump", "selloff", "collapse"]
-        if any(w in title for w in positive_words):
-            score += 1
-        if any(w in title for w in negative_words):
-            score -= 1
-        scored_news.append({
-            "title": item.get("title"),
-            "published_at": item.get("published_at"),
-            "url": item.get("url"),
-            "impact_score": score
-        })
-    return scored_news
 
-def send_email_alert(subject, body="See attached.", attachment=None):
+def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
     try:
-        EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS")
-        EMAIL_PASSWORD = os.getenv("ALERT_EMAIL_PASSWORD")
-        TO_EMAIL = os.getenv("ALERT_TO_EMAIL", EMAIL_ADDRESS)
+        # ניתוח סנטימנט
+        news = fetch_crypto_news()
+        sentiment = analyze_news_impact(news)
+        news_score = sum(n['impact_score'] for n in sentiment if symbol[:3].lower() in n['title'].lower())
 
-        if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
-            print("[!] דילוג על שליחת מייל – פרטי התחברות חסרים")
-            return
+        client.futures_change_leverage(symbol=symbol, leverage=leverage)
+        price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
 
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_ADDRESS
-        msg["To"] = TO_EMAIL
-        msg.set_content(body)
+        quantity = (budget_usd * leverage) / price
+        quantity = round_quantity(symbol, quantity)
 
-        if attachment:
-            msg.add_attachment(
-                attachment,
-                maintype="application",
-                subtype="pdf",
-                filename="report.pdf"
+        if quantity <= 0:
+            raise ValueError("כמות לא חוקית (אולי תקציב נמוך מדי?)")
+
+        side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
+        opposite_side = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
+
+        client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type=ORDER_TYPE_MARKET,
+            quantity=quantity
+        )
+
+        time.sleep(0.5)
+
+        if use_trailing:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite_side,
+                type=ORDER_TYPE_TRAILING_STOP_MARKET,
+                callbackRate=2.0,
+                activationPrice=round(entry, 4),
+                closePosition=True,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+        else:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite_side,
+                type=ORDER_TYPE_STOP_MARKET,
+                stopPrice=round(stop, 4),
+                closePosition=True,
+                timeInForce=TIME_IN_FORCE_GTC
             )
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            smtp.send_message(msg)
+        time.sleep(0.5)
+
+        try:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite_side,
+                type=ORDER_TYPE_LIMIT,
+                price=round(tp, 4),
+                quantity=quantity,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+        except Exception as e:
+            logging.warning(f"[!] טייק פרופיט נכשל: {e} — ממשיכים בלעדיו")
+
+        snapshot_path = save_trade_snapshot({
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "direction": direction.upper()
+        })
+
+        quality = compute_quality_score({
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "price": price,
+            "leverage": leverage
+        })
+
+        confidence = round(70 + 3 * quality + news_score * 2, 2)
+
+        trade_data = {
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "direction": direction.upper(),
+            "leverage": leverage,
+            "confidence": confidence,
+            "quality_score": quality,
+            "type": "GRID" if use_grid else "REGULAR",
+            "user_id": user_id or "default"
+        }
+
+        save_trade(trade_data)
+        log_pnl({"symbol": symbol, "entry": entry, "pnl": 0, "success": None})
+
+        send_email_alert(
+            subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
+            body=f"Symbol: {symbol}\nDirection: {direction}\nEntry: {entry}\nStop: {stop}\nTP: {tp}\nLeverage: {leverage}\nConfidence: {confidence:.2f}%\nQuality: {quality}/10\nNews Score: {news_score}"
+        )
+
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "entry_price": price,
+            "quantity": quantity,
+            "stop": stop,
+            "tp": tp,
+            "leverage": leverage,
+            "side": side,
+            "confidence": confidence,
+            "quality_score": quality,
+            "snapshot": snapshot_path,
+            "news_score": news_score
+        }
 
     except Exception as e:
-        print(f"[!] Email failed: {e}")
+        logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
+        return {"status": "error", "message": str(e)}
 
-def run_backtest(df):
-    return backtest_strategy(df)
 
 
 
