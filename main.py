@@ -1,9 +1,10 @@
-from flask import Flask, jsonify, request
-import os
-import pandas as pd
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+import pandas as pd
+import os
 
-# === Utils / Services ===
 from backtest_utils import run_backtest
 from news_utils import fetch_crypto_news, analyze_news_impact
 from utils.quantity_utils import calculate_quantity
@@ -13,94 +14,90 @@ from snapshot_utils import save_trade_snapshot
 
 load_dotenv()
 
-app = Flask(__name__)
+app = FastAPI(title="AlgoGPT API", description="API למסחר אלגוריתמי עם Binance", version="1.0.0")
 
-# === בסיס API ===
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({
-        "status": "ok",
-        "message": "AlgoGPT API is running ✅"
-    })
+class SLTPRequest(BaseModel):
+    df: list
+    direction: str
 
-# === חישוב SL/TP ===
-@app.route('/sl_tp', methods=['POST'])
-def sl_tp():
+class QuantityRequest(BaseModel):
+    symbol: str
+    price: float
+    leverage: float
+    budget: float
+
+class BacktestRequest(BaseModel):
+    prices: list
+    symbol: str = "UNKNOWN"
+    interval: str = "15m"
+
+@app.get("/")
+async def home():
+    return {"status": "ok", "message": "AlgoGPT API is running ✅"}
+
+@app.post("/sl_tp")
+async def sl_tp(request: SLTPRequest):
     try:
-        data = request.get_json()
-        df = pd.DataFrame(data.get("df", []))
-        direction = data.get("direction")
-        result = calculate_sl_tp(df, direction)
-        return jsonify(result)
+        df = pd.DataFrame(request.df)
+        result = calculate_sl_tp(df, request.direction)
+        return result
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-# === חישוב כמות למסחר ===
-@app.route('/calculate-quantity', methods=['POST'])
-def calc_qty():
+@app.post("/calculate-quantity")
+async def calc_qty(data: QuantityRequest):
     try:
-        data = request.get_json()
-        symbol = data['symbol']
-        price = data['price']
-        leverage = data['leverage']
-        budget = data['budget']
-        quantity = calculate_quantity(symbol, price, leverage, budget)
-        return jsonify({"quantity": quantity})
+        quantity = calculate_quantity(data.symbol, data.price, data.leverage, data.budget)
+        return {"quantity": quantity}
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        raise HTTPException(status_code=400, detail=str(e))
 
-# === ניתוח חדשות ===
-@app.route('/news', methods=['GET'])
-def news():
-    return jsonify(fetch_crypto_news())
+@app.get("/news")
+async def news():
+    return fetch_crypto_news()
 
-@app.route('/analyze-news', methods=['GET'])
-def analyze_news():
+@app.get("/analyze-news")
+async def analyze_news():
     news = fetch_crypto_news()
-    return jsonify(analyze_news_impact(news))
+    return analyze_news_impact(news)
 
-# === Backtest ===
-@app.route('/backtest', methods=['POST'])
-def backtest():
+@app.post("/backtest")
+async def backtest(request: BacktestRequest):
     try:
-        data = request.get_json()
-        prices = data.get("prices", [])
-        symbol = data.get("symbol", "UNKNOWN")
-        interval = data.get("interval", "15m")
+        if not request.prices or len(request.prices) < 30:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Insufficient data – at least 30 candles are required",
+                    "symbol": request.symbol,
+                    "interval": request.interval,
+                    "code": "ERR_TOO_SHORT"
+                }
+            )
 
-        if not prices or len(prices) < 30:
-            return jsonify({
-                "error": "Insufficient data – at least 30 candles are required",
-                "symbol": symbol,
-                "interval": interval,
-                "code": "ERR_TOO_SHORT"
-            }), 400
-
-        df = pd.DataFrame(prices)
+        df = pd.DataFrame(request.prices)
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
         df.dropna(inplace=True)
         if df.empty:
-            return jsonify({"error": "No valid rows after cleaning"}), 400
+            raise HTTPException(status_code=400, detail="No valid rows after cleaning")
 
         results = run_backtest(df)
-        return jsonify({
-            "symbol": symbol,
-            "interval": interval,
+        return {
+            "symbol": request.symbol,
+            "interval": request.interval,
             "results": results.to_dict(orient="records"),
             "success_count": int(results["success"].sum()),
             "total_trades": len(results),
             "avg_quality": round(results["quality_score"].mean(), 2) if not results.empty else 0
-        })
+        }
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-# === הרצה מקומית בלבד ===
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
 
 
 
