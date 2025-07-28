@@ -19,7 +19,7 @@ def round_quantity(symbol, quantity):
         logging.error(f"[!] שגיאה בעיגול כמות: {e}")
     return round(quantity, 3)
 
-def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False):
+def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False):
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
         price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
@@ -42,14 +42,25 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
 
         time.sleep(0.5)
 
-        client.futures_create_order(
-            symbol=symbol,
-            side=opposite_side,
-            type=ORDER_TYPE_STOP_MARKET,
-            stopPrice=round(stop, 4),
-            closePosition=True,
-            timeInForce=TIME_IN_FORCE_GTC
-        )
+        if use_trailing:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite_side,
+                type=ORDER_TYPE_TRAILING_STOP_MARKET,
+                callbackRate=2.0,  # 2% טריילינג סטופ
+                activationPrice=round(entry, 4),
+                closePosition=True,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+        else:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite_side,
+                type=ORDER_TYPE_STOP_MARKET,
+                stopPrice=round(stop, 4),
+                closePosition=True,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
 
         time.sleep(0.5)
 
@@ -102,6 +113,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
