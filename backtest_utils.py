@@ -8,7 +8,6 @@ from email.message import EmailMessage
 from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.volatility import BollingerBands, AverageTrueRange
-from ta.volume import OnBalanceVolume
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,6 +19,19 @@ def detect_bearish_engulfing(df):
         (df['open'] > df['close'].shift(1)) &
         (df['close'] < df['open'].shift(1))
     )
+    return df
+
+def calculate_obv(df):
+    obv = [0]
+    for i in range(1, len(df)):
+        if df['close'].iloc[i] > df['close'].iloc[i-1]:
+            obv.append(obv[-1] + df['volume'].iloc[i])
+        elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+            obv.append(obv[-1] - df['volume'].iloc[i])
+        else:
+            obv.append(obv[-1])
+    df['obv'] = obv
+    df['obv_trend'] = df['obv'].diff() > 0
     return df
 
 def compute_confidence(row):
@@ -50,11 +62,10 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df['volume_mean'] = df['volume'].rolling(10).mean()
     df['stoch_k'] = StochasticOscillator(df['high'], df['low'], df['close']).stoch()
     df['stoch_d'] = StochasticOscillator(df['high'], df['low'], df['close']).stoch_signal()
-    df['obv'] = OnBalanceVolume(df['close'], df['volume']).on_balance_volume()
-    df['obv_trend'] = df['obv'].diff() > 0
     df['vwap'] = (df['high'] + df['low'] + df['close']) / 3
     df['vwap_trend'] = df['close'] > df['vwap']
 
+    df = calculate_obv(df)
     df = detect_bearish_engulfing(df)
 
     df['signal'] = None
@@ -191,6 +202,7 @@ def send_email_alert(subject, body="See attached.", attachment=None):
 
 def run_backtest(df):
     return backtest_strategy(df)
+
 
 
 
