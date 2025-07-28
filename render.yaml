@@ -1,12 +1,13 @@
 services:
   - type: web
-    name: algo-scan
+    name: algo-scan-flask
     env: docker
     plan: free
     autoDeploy: true
     envVars:
       - key: PORT
-        value: 8080
+        value: 5000
+
 
 
 
