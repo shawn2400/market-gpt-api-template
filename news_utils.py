@@ -1,3 +1,5 @@
+# news_utils.py
+
 import requests
 import smtplib
 from email.message import EmailMessage
@@ -6,23 +8,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ✅ שליפת חדשות מ-CryptoPanic
+# ✅ שליפת חדשות מ־CryptoPanic עם טיפול שגיאות
 def fetch_crypto_news():
-    api_key = os.getenv("CRYPTO_PANIC_API_KEY")
-    url = f"https://cryptopanic.com/api/v1/posts/?auth_token={api_key}&public=true"
-    response = requests.get(url)
-    response.raise_for_status()
-    return response.json().get("results", [])
+    try:
+        api_key = os.getenv("CRYPTO_PANIC_API_KEY")
+        if not api_key:
+            raise ValueError("Missing CRYPTO_PANIC_API_KEY in environment")
 
-# ✅ ניתוח השפעת החדשות (מורחב לפי מילות מפתח)
+        url = f"https://cryptopanic.com/api/v1/posts/?auth_token={api_key}&public=true"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        return response.json().get("results", [])
+    except Exception as e:
+        print(f"[!] שגיאה בשליפת חדשות: {e}")
+        return []
+
+# ✅ ניתוח השפעה לפי מילות מפתח חיוביות / שליליות
 def analyze_news_impact(news_list):
     scored_news = []
-    for item in news_list:
-        score = 0
-        title = item.get("title", "").lower()
+    positive_words = ["bullish", "surge", "breakout", "pump", "rally", "gain", "soar"]
+    negative_words = ["bearish", "crash", "fud", "dump", "selloff", "collapse", "fear"]
 
-        positive_words = ["bullish", "surge", "breakout", "pump", "rally", "gain", "soar"]
-        negative_words = ["bearish", "crash", "fud", "dump", "selloff", "collapse"]
+    for item in news_list:
+        title = item.get("title", "").lower()
+        score = 0
 
         if any(word in title for word in positive_words):
             score += 1
@@ -35,14 +44,18 @@ def analyze_news_impact(news_list):
             "url": item.get("url"),
             "impact_score": score
         })
+
     return scored_news
 
-# ✅ שליחת מייל עם או בלי קובץ מצורף
+# ✅ שליחת מייל עם אפשרות לצרף קובץ PDF (בינארי)
 def send_email_alert(subject, body="See attached.", attachment=None):
     try:
-        EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS", "your_email@example.com")
-        EMAIL_PASSWORD = os.getenv("ALERT_EMAIL_PASSWORD", "your_password")
+        EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS")
+        EMAIL_PASSWORD = os.getenv("ALERT_EMAIL_PASSWORD")
         TO_EMAIL = os.getenv("ALERT_TO_EMAIL", EMAIL_ADDRESS)
+
+        if not all([EMAIL_ADDRESS, EMAIL_PASSWORD, TO_EMAIL]):
+            raise ValueError("Missing email credentials in environment variables")
 
         msg = EmailMessage()
         msg["Subject"] = subject
@@ -51,18 +64,30 @@ def send_email_alert(subject, body="See attached.", attachment=None):
         msg.set_content(body)
 
         if attachment:
-            msg.add_attachment(
-                attachment,
-                maintype="application",
-                subtype="pdf",
-                filename="report.pdf"
-            )
+            if isinstance(attachment, bytes):
+                msg.add_attachment(
+                    attachment,
+                    maintype="application",
+                    subtype="pdf",
+                    filename="report.pdf"
+                )
+            elif isinstance(attachment, str) and os.path.exists(attachment):
+                with open(attachment, "rb") as f:
+                    file_data = f.read()
+                msg.add_attachment(
+                    file_data,
+                    maintype="application",
+                    subtype="pdf",
+                    filename=os.path.basename(attachment)
+                )
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as smtp:
             smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             smtp.send_message(msg)
+
     except Exception as e:
         print(f"[!] Email failed: {e}")
+
 
 
 
