@@ -1,22 +1,10 @@
 services:
   - type: web
-    name: algogpt-api
+    name: algo-scan
     env: docker
     plan: free
-    region: frankfurt
-    dockerfilePath: ./Dockerfile
     autoDeploy: true
-    envVars:
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
-      - key: CRYPTO_PANIC_API_KEY
-        sync: false
+
 
 
 
