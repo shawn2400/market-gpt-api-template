@@ -4,14 +4,13 @@ import time
 import logging
 from math import floor
 from binance.enums import *
-from utils.binance_client import client  # ודא שהקובץ הזה קיים
-from snapshot_utils import save_trade_snapshot  # <- חדש
-from utils.trade_storage import save_trade  # <- חדש לשמירת טריידים
-from utils.quality_score import compute_quality_score  # <- איכות דינמית
-from utils.pnl_tracker import log_pnl  # <- לוג פומבי
-from report_utils import send_email_alert  # <- מייל
-from news_utils import fetch_crypto_news, analyze_news_impact  # <- ניתוח סנטימנט
-
+from utils.binance_client import client
+from snapshot_utils import save_trade_snapshot
+from utils.trade_storage import save_trade
+from utils.quality_score import compute_quality_score
+from utils.pnl_tracker import log_pnl
+from report_utils import send_email_alert
+from news_utils import fetch_crypto_news, analyze_news_impact
 
 def round_quantity(symbol, quantity):
     try:
@@ -23,7 +22,6 @@ def round_quantity(symbol, quantity):
     except Exception as e:
         logging.error(f"[!] שגיאה בעיגול כמות: {e}")
     return round(quantity, 3)
-
 
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
     try:
@@ -116,7 +114,8 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "confidence": confidence,
             "quality_score": quality,
             "type": "GRID" if use_grid else "REGULAR",
-            "user_id": user_id or "default"
+            "user_id": user_id or "default",
+            "news_score": news_score
         }
 
         save_trade(trade_data)
@@ -145,6 +144,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
