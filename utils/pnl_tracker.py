@@ -1,15 +1,13 @@
-# utils/pnl_tracker.py
-
 import json
 import os
 from datetime import datetime
 from fpdf import FPDF
 
 PNL_FILE = "pnl_tracker.json"
-PDF_OUTPUT_PATH = "static/pnl_report.pdf"  # מותאם לכל מערכת
+PDF_OUTPUT_PATH = "static/reports/pnl_report.pdf"
 
 def update_pnl(symbol, direction, entry, exit_price, leverage, qty):
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.utcnow().strftime("%Y-%m-%d")
     data = {}
 
     try:
@@ -27,15 +25,19 @@ def update_pnl(symbol, direction, entry, exit_price, leverage, qty):
         diff = (exit_price - entry) if direction.upper() == "LONG" else (entry - exit_price)
         pnl = round(diff * qty * leverage, 2)
 
-        data[today].append({
+        trade = {
             "symbol": symbol,
             "direction": direction.upper(),
-            "entry": entry,
-            "exit": exit_price,
+            "entry": round(entry, 4),
+            "exit": round(exit_price, 4),
             "leverage": leverage,
             "qty": qty,
-            "pnl": pnl
-        })
+            "pnl": pnl,
+            "timestamp": datetime.utcnow().isoformat(),
+            "success": 1 if pnl > 0 else 0
+        }
+
+        data[today].append(trade)
 
         with open(PNL_FILE, "w") as f:
             json.dump(data, f, indent=4)
@@ -44,6 +46,7 @@ def update_pnl(symbol, direction, entry, exit_price, leverage, qty):
     except Exception as e:
         print(f"[!] שגיאה בחישוב או כתיבה של PNL: {e}")
         return 0
+
 
 def generate_pnl_pdf():
     if not os.path.exists(PNL_FILE):
@@ -56,6 +59,7 @@ def generate_pnl_pdf():
         print(f"[!] שגיאה בקריאת קובץ PNL ל־PDF: {e}")
         return None
 
+    os.makedirs("static/reports", exist_ok=True)
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=14)
@@ -66,14 +70,18 @@ def generate_pnl_pdf():
         pdf.set_font("Arial", size=12)
         pdf.cell(200, 8, txt=f"📅 {date}", ln=True, align="L")
         total = 0
+        wins = 0
 
         for t in trades:
-            line = f"{t['symbol']} | {t['direction']} | Entry: {t['entry']} | Exit: {t['exit']} | PNL: {t['pnl']}$"
+            pnl = round(t['pnl'], 2)
+            total += pnl
+            wins += 1 if pnl > 0 else 0
+            line = f"{t['symbol']} | {t['direction']} | Entry: {t['entry']} | Exit: {t['exit']} | PNL: {pnl}$"
             pdf.cell(200, 8, txt=line, ln=True, align="L")
-            total += t['pnl']
 
+        success_rate = round((wins / len(trades)) * 100, 2) if trades else 0
         pdf.set_font("Arial", "B", size=12)
-        pdf.cell(200, 8, txt=f"Total: {round(total, 2)}$", ln=True, align="L")
+        pdf.cell(200, 8, txt=f"Total: {total}$ | Success Rate: {success_rate}%", ln=True, align="L")
 
     try:
         pdf.output(PDF_OUTPUT_PATH)
