@@ -10,11 +10,10 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-# ייבוא פנימי (כמו בקוד שלך)
 from trade_executor import execute_trade_live
 from scanner_utils import scan_all_futures_live
 from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
-from utils.trade_storage import save_trade, load_trades, delete_trade
+from utils.trade_storage import save_trade
 from utils.pnl_tracker import update_pnl, generate_pnl_pdf
 
 load_dotenv()
@@ -22,7 +21,8 @@ app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
-# ========== Flask Endpoints ==========
+# -------------------- Flask Endpoints --------------------
+
 @app.route("/")
 def home():
     return jsonify({"status": "ok", "message": "AlgoGPT API is running ✅"})
@@ -76,7 +76,7 @@ def scan_and_execute():
         executed = []
         each_budget = budget / max_trades
 
-        for i, trade in enumerate(top_trades[:max_trades]):
+        for trade in top_trades[:max_trades]:
             symbol = trade['symbol']
             entry = trade['entry']
             stop = trade['stop_loss']
@@ -153,11 +153,14 @@ def pnl_report():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# -------------------- Flask Runner --------------------
+
 def run_flask():
     port = int(os.getenv("FLASK_PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# ========== AIOHTTP ==========
+# -------------------- AIOHTTP --------------------
+
 async def fetch_binance_futures_data():
     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
     async with aiohttp.ClientSession() as session:
@@ -194,10 +197,12 @@ def run_aiohttp():
     port = int(os.environ.get('PORT', 8080))
     web.run_app(aio_app, port=port)
 
-# ========== MAIN ==========
+# -------------------- MAIN --------------------
+
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
     threading.Thread(target=run_aiohttp).start()
+
 
 
 
