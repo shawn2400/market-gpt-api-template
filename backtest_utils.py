@@ -48,8 +48,8 @@ def compute_confidence(row):
 def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df = df.copy()
 
-    if len(df) < 10:
-        raise ValueError("Not enough data to run backtest. Need at least 10 candles.")
+    if len(df) < 5:
+        raise ValueError("Not enough data to run backtest. Need at least 5 candles.")
 
     df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
     df['ema_50'] = EMAIndicator(df['close'], window=50).ema_indicator()
@@ -202,6 +202,7 @@ def send_email_alert(subject, body="See attached.", attachment=None):
 
 def run_backtest(df):
     return backtest_strategy(df)
+
 
 
 
