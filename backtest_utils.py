@@ -8,6 +8,7 @@ from email.message import EmailMessage
 from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.volatility import BollingerBands, AverageTrueRange
+from ta.volume import OnBalanceVolume
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,6 +22,17 @@ def detect_bearish_engulfing(df):
     )
     return df
 
+def compute_confidence(row):
+    score = 0
+    if 15 < row['rsi'] < 35 or 65 < row['rsi'] < 85: score += 1
+    if abs(row['macd']) > 0: score += 1
+    if row['adx'] >= 17: score += 1
+    if row['close'] > row['ema_21']: score += 1
+    if row['volume'] > row['volume_mean'] * 1.3: score += 1
+    if row['obv_trend']: score += 1
+    if row['vwap_trend']: score += 1
+    return round(score / 7, 2)
+
 def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df = df.copy()
 
@@ -28,6 +40,7 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
         raise ValueError("Not enough data to run backtest. Need at least 10 candles.")
 
     df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
+    df['ema_50'] = EMAIndicator(df['close'], window=50).ema_indicator()
     df['macd'] = MACD(df['close']).macd_diff()
     df['rsi'] = RSIIndicator(df['close']).rsi()
     df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
@@ -37,6 +50,11 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df['volume_mean'] = df['volume'].rolling(10).mean()
     df['stoch_k'] = StochasticOscillator(df['high'], df['low'], df['close']).stoch()
     df['stoch_d'] = StochasticOscillator(df['high'], df['low'], df['close']).stoch_signal()
+    df['obv'] = OnBalanceVolume(df['close'], df['volume']).on_balance_volume()
+    df['obv_trend'] = df['obv'].diff() > 0
+    df['vwap'] = (df['high'] + df['low'] + df['close']) / 3
+    df['vwap_trend'] = df['close'] > df['vwap']
+
     df = detect_bearish_engulfing(df)
 
     df['signal'] = None
@@ -51,32 +69,17 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
 
     for i in range(1, len(df)):
         row = df.iloc[i]
-        atr = row['atr']
-        adx = row['adx']
-        rsi = row['rsi']
-        macd = row['macd']
-        price = row['close']
-        engulf = row['bearish_engulfing']
-        stoch_k = row['stoch_k']
-
-        score = 0
-        if 15 < rsi < 35 or 65 < rsi < 85: score += 1
-        if abs(macd) > 0: score += 1
-        if adx >= min_adx: score += 1
-        if price > row['ema_21']: score += 1
-        if row['volume'] > row['volume_mean'] * 1.3: score += 1
-
         entry = stop = tp = None
         signal = None
 
-        if rsi < 30 and macd > 0 and price > row['ema_21'] and adx >= min_adx and stoch_k < 20:
-            entry = price
+        if row['rsi'] < 30 and row['macd'] > 0 and row['close'] > row['ema_21'] and row['adx'] >= min_adx and row['stoch_k'] < 20:
+            entry = row['close']
             stop = entry * 0.985
             tp = entry + (rrr_target * (entry - stop))
             signal = "LONG"
 
-        elif rsi > 70 and macd < 0 and price < row['ema_21'] and adx >= min_adx and engulf and stoch_k > 80:
-            entry = price
+        elif row['rsi'] > 70 and row['macd'] < 0 and row['close'] < row['ema_21'] and row['adx'] >= min_adx and row['bearish_engulfing'] and row['stoch_k'] > 80:
+            entry = row['close']
             stop = entry * 1.015
             tp = entry - (rrr_target * (stop - entry))
             signal = "SHORT"
@@ -87,7 +90,7 @@ def backtest_strategy(df, rrr_target=2.5, min_adx=17):
             df.at[i, 'stop'] = stop
             df.at[i, 'tp'] = tp
             df.at[i, 'rrr'] = rrr_target
-            df.at[i, 'quality_score'] = round(score / 5, 2)
+            df.at[i, 'quality_score'] = compute_confidence(row)
 
             max_hold = 30
             for j in range(i + 1, min(i + max_hold, len(df))):
