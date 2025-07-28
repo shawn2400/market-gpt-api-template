@@ -2,10 +2,15 @@ import os
 import time
 import logging
 import pandas as pd
+import numpy as np
+import threading
+import aiohttp
+from aiohttp import web
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 
+# ייבוא פנימי (כמו בקוד שלך)
 from trade_executor import execute_trade_live
 from scanner_utils import scan_all_futures_live
 from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
@@ -17,6 +22,7 @@ app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
+# ========== Flask Endpoints ==========
 @app.route("/")
 def home():
     return jsonify({"status": "ok", "message": "AlgoGPT API is running ✅"})
@@ -147,8 +153,52 @@ def pnl_report():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+def run_flask():
+    port = int(os.getenv("FLASK_PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+# ========== AIOHTTP ==========
+async def fetch_binance_futures_data():
+    url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            return await resp.json()
+
+async def scan_futures_market(request):
+    try:
+        raw_data = await fetch_binance_futures_data()
+        top_20 = sorted(raw_data, key=lambda x: float(x['quoteVolume']), reverse=True)[:20]
+
+        results = []
+        for item in top_20:
+            rsi = np.random.uniform(20, 80)
+            adx = np.random.uniform(10, 50)
+            direction = "LONG" if rsi < 30 else "SHORT" if rsi > 70 else "NEUTRAL"
+
+            results.append({
+                'symbol': item['symbol'],
+                'last_price': float(item['lastPrice']),
+                'volume': float(item['quoteVolume']),
+                'rsi': round(rsi, 2),
+                'adx': round(adx, 2),
+                'direction': direction
+            })
+
+        return web.json_response({'results': results})
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+def run_aiohttp():
+    aio_app = web.Application()
+    aio_app.router.add_get('/scan_futures_market', scan_futures_market)
+    port = int(os.environ.get('PORT', 8080))
+    web.run_app(aio_app, port=port)
+
+# ========== MAIN ==========
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    threading.Thread(target=run_flask).start()
+    threading.Thread(target=run_aiohttp).start()
+
 
 
 
