@@ -8,18 +8,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # הגדרת תיקיית עבודה
 WORKDIR /app
 
-# העתקת קבצים
+# העתקת קבצים והתקנת דרישות
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# העתקת הקוד עצמו
 COPY . .
 
-# פתיחת פורטים עבור Flask ו־AIOHTTP
+# פתיחת פורט האפליקציה (רק Flask)
 EXPOSE 5000
-EXPOSE 8080
 
-# הרצת האפליקציה
-CMD ["python", "main.py"]
+# הרצת Flask באמצעות gunicorn להרצה יציבה ותקינה (פרודקשן)
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
 
 
 
