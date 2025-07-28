@@ -1,112 +1,65 @@
-import os
+import asyncio
+import aiohttp
 import time
-import pandas as pd
 from binance.client import Client
-from binance.enums import *
+from binance.enums import FuturesType
+from binance import AsyncClient
+import os
 from dotenv import load_dotenv
-from utils.quality_score import compute_quality_score
-from utils.binance_client import client
-import ta
 
 load_dotenv()
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-def compute_indicators(df):
-    try:
-        df['EMA21'] = ta.trend.EMAIndicator(close=df['close'], window=21).ema_indicator()
-        df['EMA50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
-        df['RSI'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-        macd = ta.trend.MACD(close=df['close'])
-        df['MACD'] = macd.macd()
-        df['MACD_signal'] = macd.macd_signal()
-        adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'])
-        df['ADX'] = adx.adx()
-        atr = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'])
-        df['ATR'] = atr.average_true_range()
-        df['volume_mean'] = df['volume'].rolling(window=20).mean()
-        df.dropna(inplace=True)
+MAX_RETRIES = 3
+SYMBOL_LIMIT = 300
 
-        signal = None
-        if df['RSI'].iloc[-1] > 55 and df['MACD'].iloc[-1] > df['MACD_signal'].iloc[-1] and df['ADX'].iloc[-1] > 17 and df['close'].iloc[-1] > df['EMA21'].iloc[-1]:
-            signal = "LONG"
-        elif df['RSI'].iloc[-1] < 45 and df['MACD'].iloc[-1] < df['MACD_signal'].iloc[-1] and df['ADX'].iloc[-1] > 17 and df['close'].iloc[-1] < df['EMA21'].iloc[-1]:
-            signal = "SHORT"
+async def fetch_futures_symbols():
+    client = await AsyncClient.create(API_KEY, API_SECRET)
+    exchange_info = await client.futures_exchange_info()
+    await client.close_connection()
+    return [
+        symbol["symbol"]
+        for symbol in exchange_info["symbols"]
+        if symbol["contractType"] == "PERPETUAL" and symbol["status"] == "TRADING"
+    ][:SYMBOL_LIMIT]  # מגביל ל-300 הראשונים
 
-        return {"signal": signal, "df": df}
-    except Exception as e:
-        print(f"[!] שגיאה בחישוב אינדיקטורים: {e}")
-        return {"signal": None, "df": df}
-
-def scan_all_futures_live(budget_usd=100):
-    try:
-        print("🚀 התחלת סריקה חיה")
-        symbols = [
-            s['symbol']
-            for s in client.futures_exchange_info()['symbols']
-            if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT'
-        ]
-        print(f"🔢 נמצאו {len(symbols)} סמלים לבדיקה")
-    except Exception as e:
-        print(f"[!] שגיאה בקבלת רשימת סמלים: {e}")
-        return []
-
-    results = []
-
-    for i, symbol in enumerate(symbols[:30]):
+async def fetch_symbol_data(session, symbol):
+    url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}"
+    for attempt in range(MAX_RETRIES):
         try:
-            start_time = time.time()
-            print(f"[{i}] 🔍 בודק {symbol}...")
-
-            klines = client.futures_klines(
-                symbol=symbol,
-                interval=Client.KLINE_INTERVAL_15MINUTE,
-                limit=100
-            )
-
-            df = pd.DataFrame(klines, columns=[
-                'timestamp', 'open', 'high', 'low', 'close',
-                'volume', 'close_time', 'quote_asset_volume',
-                'num_trades', 'taker_buy_base_asset_volume',
-                'taker_buy_quote_asset_volume', 'ignore'
-            ])
-            df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
-
-            recent_vol = df['volume'].iloc[-1]
-            avg_vol = df['volume'].rolling(20).mean().iloc[-1]
-            if recent_vol < 0.5 * avg_vol:
-                print(f"⚠️ דילוג על {symbol} — נפח מסחר נמוך ({recent_vol:.2f} < {avg_vol:.2f})")
-                continue
-
-            indicators = compute_indicators(df)
-            signal = indicators['signal']
-            df = indicators['df']
-
-            score = compute_quality_score(df)
-            duration = round(time.time() - start_time, 2)
-            print(f"✅ סיים {symbol} תוך {duration} שניות")
-
-            if signal and score >= 4:
-                price = float(df['close'].iloc[-1])
-                tp = round(price * 1.03, 2)
-                sl = round(price * 0.98, 2)
-
-                results.append({
-                    "symbol": symbol,
-                    "entry": price,
-                    "take_profit": tp,
-                    "stop_loss": sl,
-                    "signal": signal,
-                    "quality_score": score
-                })
-
-            time.sleep(0.1)
-
+            async with session.get(url, timeout=10) as response:
+                response.raise_for_status()
+                return await response.json()
+        except aiohttp.ClientResponseError as e:
+            print(f"⚠️ שגיאה ({e.status}) על {symbol} | ניסיון {attempt+1}")
+            if e.status in [429, 418]:
+                print("⏳ חסימה זמנית – ממתין 10 שניות")
+                await asyncio.sleep(10)
+            elif e.status >= 500:
+                print("🛠 שגיאת שרת – ננסה שוב")
+                await asyncio.sleep(2)
+            else:
+                break  # שגיאה קשה – לא מנסה שוב
         except Exception as e:
-            print(f"[!] שגיאה ב־{symbol}: {e}")
-            continue
+            print(f"❌ שגיאה כללית על {symbol}:", str(e))
+            await asyncio.sleep(1)
+    return None  # אם נכשל
 
-    print(f"✅ סיום סריקה. נמצאו {len(results)} תוצאות.")
-    sorted_results = sorted(results, key=lambda x: x['quality_score'], reverse=True)
-    return sorted_results
+async def scan_all_futures():
+    symbols = await fetch_futures_symbols()
+    print(f"🔍 סורק {len(symbols)} מטבעות Futures מ-Binance")
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_symbol_data(session, symbol) for symbol in symbols]
+        results = await asyncio.gather(*tasks)
+
+    valid_results = [res for res in results if res]
+    print(f"✅ נמצאו {len(valid_results)} סמלים תקינים מתוך {len(symbols)}")
+
+    # כאן אפשר להפעיל פילטרים / ניתוח טכני:
+    return valid_results
+
 
 
 
