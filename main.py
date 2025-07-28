@@ -11,6 +11,7 @@ from scanner_utils import scan_all_futures_live
 from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
 from utils.trade_storage import save_trade, load_trades, delete_trade
 from utils.pnl_tracker import update_pnl, generate_pnl_pdf
+from binance.client import Client
 
 load_dotenv()
 app = Flask(__name__)
@@ -29,6 +30,15 @@ def scan():
     except Exception as e:
         logging.error(f"❌ שגיאה בסריקה: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/test-binance", methods=["GET"])
+def test_binance():
+    try:
+        from utils.binance_client import client
+        data = client.futures_klines(symbol="BTCUSDT", interval=Client.KLINE_INTERVAL_15MINUTE, limit=5)
+        return jsonify({"status": "ok", "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 @app.route("/scan-and-execute", methods=["POST"])
 def scan_and_execute():
@@ -146,6 +156,7 @@ def crypto_news():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
