@@ -55,18 +55,30 @@ def backtest():
         prices = data.get("prices", [])
 
         if not prices or len(prices) < 30:
-            return jsonify({"error": "Insufficient data – at least 30 candles are required", "code": "ERR_TOO_SHORT"}), 400
+            return jsonify({
+                "error": "Insufficient data – at least 30 candles are required",
+                "code": "ERR_TOO_SHORT"
+            }), 400
 
         df = pd.DataFrame(prices)
-        results = run_backtest(df)
 
+        # המרה למספרים למניעת שגיאות
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # הסרת שורות לא תקינות
+        df.dropna(inplace=True)
+
+        results = run_backtest(df)
         return jsonify(results.to_dict(orient="records"))
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
