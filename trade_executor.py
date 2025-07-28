@@ -12,10 +12,12 @@ from utils.pnl_tracker import log_pnl
 from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
 
+# קאש ל־exchange info לצמצום קריאות מיותרות
+EXCHANGE_INFO_CACHE = client.futures_exchange_info()
+
 def round_quantity(symbol, quantity):
     try:
-        info = client.futures_exchange_info()
-        for s in info["symbols"]:
+        for s in EXCHANGE_INFO_CACHE["symbols"]:
             if s["symbol"] == symbol:
                 step_size = float([f for f in s["filters"] if f["filterType"] == "LOT_SIZE"][0]["stepSize"])
                 return floor(quantity / step_size) * step_size
@@ -25,11 +27,12 @@ def round_quantity(symbol, quantity):
 
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
     try:
-        # ניתוח סנטימנט
+        # ניתוח סנטימנט לפי חדשות
         news = fetch_crypto_news()
         sentiment = analyze_news_impact(news)
         news_score = sum(n['impact_score'] for n in sentiment if symbol[:3].lower() in n['title'].lower())
 
+        # מינוף
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
         price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
 
@@ -37,27 +40,29 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         quantity = round_quantity(symbol, quantity)
 
         if quantity <= 0:
-            raise ValueError("כמות לא חוקית (אולי תקציב נמוך מדי?)")
+            raise ValueError("⚠️ כמות לא חוקית (אולי תקציב נמוך מדי או tickSize לא נכון?)")
 
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite_side = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
+        # כניסה בלמארקט
         client.futures_create_order(
             symbol=symbol,
             side=side,
             type=ORDER_TYPE_MARKET,
             quantity=quantity
         )
-
         time.sleep(0.5)
 
+        # SL – לפי Trailing או רגיל
         if use_trailing:
+            activation_price = round(max(entry * 1.005, price * 1.005), 4)
             client.futures_create_order(
                 symbol=symbol,
                 side=opposite_side,
                 type=ORDER_TYPE_TRAILING_STOP_MARKET,
                 callbackRate=2.0,
-                activationPrice=round(entry, 4),
+                activationPrice=activation_price,
                 closePosition=True,
                 timeInForce=TIME_IN_FORCE_GTC
             )
@@ -70,9 +75,9 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 closePosition=True,
                 timeInForce=TIME_IN_FORCE_GTC
             )
-
         time.sleep(0.5)
 
+        # TP – ניסיון הגדרת טייק פרופיט
         try:
             client.futures_create_order(
                 symbol=symbol,
@@ -83,8 +88,9 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 timeInForce=TIME_IN_FORCE_GTC
             )
         except Exception as e:
-            logging.warning(f"[!] טייק פרופיט נכשל: {e} — ממשיכים בלעדיו")
+            logging.warning(f"[!] טייק פרופיט נכשל: {e} – ממשיכים בלי")
 
+        # תמונת מצב ו־איכות
         snapshot_path = save_trade_snapshot({
             "symbol": symbol,
             "entry": entry,
@@ -101,7 +107,6 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "price": price,
             "leverage": leverage
         })
-
         confidence = round(70 + 3 * quality + news_score * 2, 2)
 
         trade_data = {
@@ -123,13 +128,22 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
 
         send_email_alert(
             subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
-            body=f"Symbol: {symbol}\nDirection: {direction}\nEntry: {entry}\nStop: {stop}\nTP: {tp}\nLeverage: {leverage}\nConfidence: {confidence:.2f}%\nQuality: {quality}/10\nNews Score: {news_score}"
+            body=f"""Symbol: {symbol}
+Direction: {direction}
+Entry: {entry}
+Stop: {stop}
+TP: {tp}
+Leverage: {leverage}
+Confidence: {confidence:.2f}%
+Quality: {quality}/10
+News Score: {news_score}"""
         )
 
         return {
             "status": "success",
             "symbol": symbol,
-            "entry_price": price,
+            "entry": entry,
+            "price_now": price,
             "quantity": quantity,
             "stop": stop,
             "tp": tp,
@@ -137,13 +151,16 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "side": side,
             "confidence": confidence,
             "quality_score": quality,
+            "news_score": news_score,
             "snapshot": snapshot_path,
-            "news_score": news_score
+            "trailing": use_trailing,
+            "grid": use_grid
         }
 
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
