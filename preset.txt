@@ -1,132 +1,76 @@
 # 📊 AlgoGPT — מערכת מסחר חכמה בזמן אמת (Pro Elite Edition)
 
-מערכת Algo אוטומטית לניתוח טכני, חישובי SL/TP, ניהול טריידים, Grid חכם, ניתוח חדשות, הפקת דוחות PDF, וביצוע מסחר חי ב־Binance.  
-פועלת לפי כללים קשיחים בזמן אמת, רצה על Render עם REST API תקני.
+AlgoGPT היא מערכת מסחר אלגוריתמית אוטומטית הפועלת על Binance (Futures + Spot), מבצעת ניתוח טכני, סורקת מאות מטבעות בזמן אמת, שומרת טריידים, מפיקה דוחות PDF, ומבצעת טריידים חיים לפי כללים קשיחים.  
+מתוכננת לרוץ על Render עם REST API יציב, כולל תמיכה מלאה ב־Grid חכם, Quality Scoring, ניתוח חדשות, SL/TP אוטומטי, ומערכת ניטור PNL.
 
 ---
 
 ## 🚀 תכונות עיקריות
 
-- ✅ ניתוח טכני חי (RSI, MACD, EMA, BB, ADX, ATR, OBV)
-- ✅ חישוב SL ו־TP כולל Trailing SL ודינמיקה לפי תנודתיות
-- ✅ חישוב SL לפי ATR × 1.5 בלבד
-- ✅ ניתוח בטיימפריימים כפולים: 15m ו־1h בלבד
-- ✅ תמיכה בהזמנות Limit / Stop-Limit בלבד
-- ✅ ניהול עד 4 טריידים פתוחים במקביל
-- ✅ תמיכה מלאה ב־Spot, Futures ו־Grid
-- ✅ Smart Grid לפי Confidence
-- ✅ תצוגת גרף Base64 (ל־GPT / Dashboard)
-- ✅ ניתוח Order Blocks ו־Fair Value Gaps (FVG)
-- ✅ Backtest כולל quality_score
-- ✅ חיבור Binance API (כולל שליחת עסקאות)
-- ✅ סטטיסטיקות PNL, Win Rate, רווח יומי / חודשי
+- ✅ ניתוח טכני חי: RSI, MACD, EMA21/50, BB, ADX, ATR, OBV, Volume Spike
+- ✅ חישוב SL/TP חכם כולל Trailing ו־ATR × 1.5 בלבד
+- ✅ תמיכה במינוף 5×–35× לפי איכות וזמינות
+- ✅ תמיכה בסוגי טריידים: Spot / Futures / Grid
+- ✅ Smart Grid עם חלוקה ל־2 טריידים אם אין קורלציה
+- ✅ כניסה רק לפי Breakout, Pullback או Reversal
+- ✅ ניתוח Dual TF: טיימפריים 15m + 1h בלבד
+- ✅ תמיכה ב־Limit / Stop Limit בלבד (אין Market SL/TP)
+- ✅ הפקת דוחות PDF יומיים עם סטטיסטיקות, גרפים וציון הצלחה
+- ✅ ניתוח איכות טריידים (quality_score) מ־0 עד 10
+- ✅ מערכת שמירה וניהול טריידים (`trades_log.json`)
+- ✅ ניתוח חדשות וסנטימנט חי מ־CryptoPanic
+- ✅ תמיכת REST API מלאה
 
 ---
 
 ## 🧠 הרחבות Pro Elite
 
-- 📌 Confidence גמיש (88%+ או 86% עם quality_score ≥ 4)
-- 📌 מינוף אוטומטי לפי רווחיות ו־SL (5× עד 35×)
-- 📌 Trailing SL/TP לפי תנודתיות
-- 📌 פיצול תקציב ל־2 טריידים רק אם אין קורלציה
-- 📌 Filtering לפי איכות אינדיקטורים ו־Scoring
-- 📌 כניסה רק לפי Breakout / Pullback / Reversal
-- 📌 Auto Risk Allocation
-- 📌 ניתוח עומק כולל נרות, קורלציות, נזילות, Volume Spike
-- 📌 תמיכה ב־PNL Tracker
-- 📌 Snapshot גרפי לכל טרייד
-- 📌 חיזוי עתידי עם Prophet AI
-- 📌 תמיכה במסחר חי כולל WunderTrading
-- 📌 ניתוח Machine Learning תשתיתי (מוקפא)
-- 📌 Active Trade Enforcement (טרייד אחד פתוח בלבד)
-- 📌 תשתית Pipeline: Backtest → Analyze → Confirm → Execute
-- 📌 Order Type חכם לפי תנודתיות
+- 📌 Confidence משתנה: 88%+ או 86% עם quality ≥ 4
+- 📌 מינוף דינמי לפי גובה הסיכון (5× עד 35×)
+- 📌 PNL Tracker חי ו־Snapshot לכל טרייד
+- 📌 Auto Risk Allocation לפי תנודתיות ויחס RRR
+- 📌 Order Type חכם לפי סוג תנועה (Volatile vs Stable)
+- 📌 חיזוי טווחים עם Prophet AI (ב־/ai-analyze)
+- 📌 הגנה מפני טריידים כפולים (Active Trade Enforcement)
+- 📌 Trailing SL חכם (callback + activation)
+- 📌 ניתוח נרות, פערים, Volume, OBV וכיווני מגמה
+- 📌 תשתית ל־Backtest → Analyze → Confirm → Execute
 
 ---
 
-## 📡 REST API — מסלולים נתמכים
+## 📡 REST API — נתיבים
 
-| נתיב API              | תיאור                                              |
-|-----------------------|-----------------------------------------------------|
-| `/`                   | בדיקת תקינות ה־API                                 |
-| `/sl_tp`              | חישוב SL/TP כולל יחס RRR                          |
-| `/calculate-quantity` | חישוב כמות לפי תקציב, מינוף ומחיר כניסה          |
-| `/save`               | שמירת טרייד חדש למעקב                             |
-| `/trades`             | הצגת כל הטריידים השמורים                          |
-| `/clear`              | מחיקת כל הטריידים                                 |
-| `/open-trades`        | הצגת טריידים פתוחים                               |
-| `/close-trade`        | סגירת טרייד לפי סימול                             |
-| `/backtest`           | בדיקת אסטרטגיה על סמך היסטוריה                   |
-| `/scan`               | סריקה טכנית חיה של Binance Futures               |
-| `/execute-trade`      | שליחה למסחר בפועל (Spot / Futures)               |
-| `/daily-report`       | הפקת דוח PDF יומי כולל גרף וסטטיסטיקות           |
-| `/ai-analyze`         | חיזוי AI גרפי לתחום מחירים                       |
-| `/stats`              | סטטיסטיקות רווחים ו־Win Rate                      |
-| `/preset`             | שליפת קובץ הגדרות                                 |
-| `/strategy`           | הצגת כללי אסטרטגיה                                |
-| `/news`               | קבלת חדשות מ־CryptoPanic                          |
+| נתיב                  | תיאור                                               |
+|-----------------------|------------------------------------------------------|
+| `/`                   | בדיקת תקינות השרת                                   |
+| `/scan`               | סריקה טכנית חיה לפי Binance Futures                |
+| `/backtest`           | בדיקה היסטורית לפי אסטרטגיה                        |
+| `/execute-trade`      | שליחת טרייד חי בפועל (Spot/Futures)               |
+| `/sl_tp`              | חישוב SL ו־TP לפי תנודתיות ויחס RRR               |
+| `/calculate-quantity` | חישוב כמות לפי תקציב, מינוף ומחיר נכנס            |
+| `/save`               | שמירת טרייד למעקב                                  |
+| `/trades`             | הצגת כל הטריידים השמורים                           |
+| `/open-trades`        | הצגת טריידים פתוחים                                |
+| `/close-trade`        | סגירת טרייד לפי סימול                              |
+| `/daily-report`       | הפקת דוח PDF יומי עם סיכום וגרף                    |
+| `/ai-analyze`         | חיזוי AI גרפי לפי Prophet                          |
+| `/stats`              | סטטיסטיקת PNL ו־Win Rate                           |
+| `/news`               | חדשות קריפטו מ־CryptoPanic + ניתוח השפעה         |
+| `/preset`             | שליפת הגדרות מערכת                                 |
+| `/strategy`           | תיאור כללי האסטרטגיה                               |
 
 ---
 
-## 🔐 קובץ .env (חובה)
+## 🔐 קובץ `.env` (חובה)
 
 ```env
 BINANCE_API_KEY=...
 BINANCE_API_SECRET=...
 CRYPTO_PANIC_API_KEY=...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-```
+ALERT_EMAIL_ADDRESS=...
+ALERT_EMAIL_PASSWORD=...
+ALERT_TO_EMAIL=...
 
----
-
-## 🧪 דוגמה לשליחת טרייד חדש (POST /save)
-
-```bash
-curl -X POST http://localhost:10000/save \
-  -H "Content-Type: application/json" \
-  -d '{
-    "symbol": "BTCUSDT",
-    "entry": 30000,
-    "stop": 29000,
-    "tp": 33000,
-    "leverage": 10,
-    "direction": "LONG",
-    "confidence": 91,
-    "type": "REGULAR"
-  }'
-```
-
----
-
-## 💰 תקציב
-
-- ברירת מחדל: **$100–$1000**
-- כל טרייד מקבל תקציב דינמי לפי SL, מינוף, נזילות ו־confidence
-- תמיכה בפיצול תקציב (רק אם אין קורלציה בין טריידים)
-
----
-
-## 📆 שעות מסחר מומלצות
-
-- בין 08:00–20:00 לפי שעון ישראל בלבד
-- לא יבוצעו טריידים בלילה אלא אם מזוהה Spike חריג
-
----
-
-## 🛠️ התקנה מקומית
-
-```bash
-git clone https://github.com/your-username/AlgoGPT.git
-cd AlgoGPT
-pip install -r requirements.txt
-python main.py
-```
-
----
-
-✅ נבדק מול הקוד הראשי (`main.py`, `openapi.yaml`) — כל הנתיבים תקינים.  
-עודכן בתאריך: 2025-07-27
 
 
 
