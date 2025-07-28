@@ -9,7 +9,7 @@ plotly==5.22.0
 ta==0.11.0
 
 prophet==1.1.5
-cmdstanpy==1.2.5   # דרוש ל־Prophet
+cmdstanpy==1.2.5
 
 pytz==2024.1
 tzdata==2025.2
@@ -21,9 +21,11 @@ python-binance==1.0.17
 fpdf==1.7.2
 schedule==1.2.1
 
-dateparser==1.2.0   # דרוש אם אתה עובד עם תאריכים בפורמט חדשות
-ujson==5.10.0       # JSON מהיר – שיפור ביצועים אם תומך
-websockets==15.0.1  # תשתית WebSocket עתידית
+dateparser==1.2.0
+ujson==5.10.0
+websockets==15.0.1
+aiohttp==3.9.5
+
 
 
 
