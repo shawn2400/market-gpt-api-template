@@ -23,8 +23,10 @@ schedule==1.2.1
 
 dateparser==1.2.0
 ujson==5.10.0
-websockets==15.0.1
 aiohttp==3.9.5
+aiofiles==23.2.1
+websockets==15.0.1
+
 
 
 
