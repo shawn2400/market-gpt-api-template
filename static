@@ -1,6 +1,19 @@
-import matplotlib.pyplot as plt
+{
+  "schema_version": "v1",
+  "name_for_human": "AlgoGPT",
+  "name_for_model": "algogpt",
+  "description_for_human": "סוחר אלגוריתמי בזמן אמת ל־Binance: סריקה, טריידים, דוחות, ניתוחים.",
+  "description_for_model": "Plugin לחיבור ל־Binance. כולל סריקת שוק, ביצוע טריידים, Backtest, גרפים, ניתוחי חדשות ועוד.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://algogpt-docker.onrender.com/openapi.yaml"
+  },
+  "logo_url": "https://algogpt-docker.onrender.com/logo.png",
+  "contact_email": "support@algogpt.ai",
+  "legal_info_url": "https://algogpt.ai/legal"
+}
 
-plt.plot([1, 2, 3], [4, 5, 6])
-plt.title("דוגמה")
-plt.savefig("static/chart.png")
 
