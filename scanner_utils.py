@@ -1,8 +1,6 @@
 import asyncio
 import aiohttp
 import time
-from binance.client import Client
-from binance.enums import FuturesType
 from binance import AsyncClient
 import os
 from dotenv import load_dotenv
@@ -22,7 +20,7 @@ async def fetch_futures_symbols():
         symbol["symbol"]
         for symbol in exchange_info["symbols"]
         if symbol["contractType"] == "PERPETUAL" and symbol["status"] == "TRADING"
-    ][:SYMBOL_LIMIT]  # מגביל ל-300 הראשונים
+    ][:SYMBOL_LIMIT]
 
 async def fetch_symbol_data(session, symbol):
     url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}"
@@ -40,11 +38,11 @@ async def fetch_symbol_data(session, symbol):
                 print("🛠 שגיאת שרת – ננסה שוב")
                 await asyncio.sleep(2)
             else:
-                break  # שגיאה קשה – לא מנסה שוב
+                break
         except Exception as e:
             print(f"❌ שגיאה כללית על {symbol}:", str(e))
             await asyncio.sleep(1)
-    return None  # אם נכשל
+    return None
 
 async def scan_all_futures():
     symbols = await fetch_futures_symbols()
@@ -57,8 +55,8 @@ async def scan_all_futures():
     valid_results = [res for res in results if res]
     print(f"✅ נמצאו {len(valid_results)} סמלים תקינים מתוך {len(symbols)}")
 
-    # כאן אפשר להפעיל פילטרים / ניתוח טכני:
     return valid_results
+
 
 
 
