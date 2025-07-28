@@ -3,6 +3,7 @@ import logging
 from math import floor
 from binance.enums import *
 from utils.binance_client import client
+from utils.get_live_price import get_live_price
 from snapshot_utils import save_trade_snapshot
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
@@ -11,9 +12,10 @@ from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
 import pandas as pd
 
-# קאש ל־exchange info לצמצום קריאות מיותרות
+# מטמון Exchange Info
 EXCHANGE_INFO_CACHE = client.futures_exchange_info()
 
+# עיגול לפי stepSize
 def round_quantity(symbol, quantity):
     try:
         for s in EXCHANGE_INFO_CACHE["symbols"]:
@@ -24,25 +26,40 @@ def round_quantity(symbol, quantity):
         logging.error(f"[!] שגיאה בעיגול כמות: {e}")
     return round(quantity, 3)
 
+# === ביצוע טרייד בפועל ===
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
     try:
+        # ניתוח חדשות
         news = fetch_crypto_news()
         sentiment = analyze_news_impact(news)
         news_score = sum(n['impact_score'] for n in sentiment if symbol[:3].lower() in n['title'].lower())
 
+        # קביעת מינוף
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
 
+        # מחיר נוכחי
+        price = get_live_price(symbol)
+        if not price:
+            raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
+
+        # חישוב SL/TP אם חסרים
+        if not stop or not tp:
+            sl_pct = 0.01  # SL 1%
+            tp_pct = 0.015  # TP 1.5%
+            stop = price * (1 - sl_pct) if direction.upper() == "LONG" else price * (1 + sl_pct)
+            tp = price * (1 + tp_pct) if direction.upper() == "LONG" else price * (1 - tp_pct)
+
+        # כמות
         quantity = (budget_usd * leverage) / price
         quantity = round_quantity(symbol, quantity)
-
         if quantity <= 0:
             raise ValueError("⚠️ כמות לא חוקית (תקציב נמוך מדי או tickSize לא מתאים)")
 
+        # צד הפקודה
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite_side = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
-        # שליחת פקודת מרקט
+        # פתיחת פוזיציה
         client.futures_create_order(
             symbol=symbol,
             side=side,
@@ -51,9 +68,9 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         )
         time.sleep(0.5)
 
-        # SL
+        # Stop Loss
         if use_trailing:
-            activation_price = round(price * 1.005, 4)
+            activation_price = round(price * 1.005 if direction.upper() == "LONG" else price * 0.995, 4)
             client.futures_create_order(
                 symbol=symbol,
                 side=opposite_side,
@@ -73,7 +90,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 timeInForce=TIME_IN_FORCE_GTC
             )
 
-        # TP
+        # Take Profit
         try:
             client.futures_create_order(
                 symbol=symbol,
@@ -86,7 +103,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         except Exception as e:
             logging.warning(f"[!] טייק פרופיט נכשל: {e} – ממשיכים בלי")
 
-        # שמירת Snapshot
+        # צילום גרף
         snapshot_path = save_trade_snapshot({
             "symbol": symbol,
             "entry": entry,
@@ -95,7 +112,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "direction": direction.upper()
         })
 
-        # איכות ו־Confidence
+        # ציון איכות (מזויף)
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -111,7 +128,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality + news_score * 2, 2)
 
-        # שמירת טרייד
+        # שמירה
         trade_data = {
             "symbol": symbol,
             "entry": entry,
@@ -121,14 +138,15 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "leverage": leverage,
             "confidence": confidence,
             "quality_score": quality,
+            "mock_quality": True,
             "type": "GRID" if use_grid else "REGULAR",
             "user_id": user_id or "default",
             "news_score": news_score
         }
-
         save_trade(trade_data)
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
+        # שליחת מייל
         send_email_alert(
             subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
             body=f"""Symbol: {symbol}
@@ -163,6 +181,7 @@ News Score: {news_score}"""
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
