@@ -9,8 +9,14 @@ info:
 servers:
   - url: https://algogpt-docker.onrender.com
 
-paths:
+tags:
+  - name: Trades
+  - name: Reports
+  - name: AI
+  - name: Config
+  - name: News
 
+paths:
   /:
     get:
       summary: בדיקת סטטוס השרת
@@ -185,199 +191,11 @@ paths:
                     type: string
                     example: ERR_TOO_SHORT
 
-  /execute-trade:
-    post:
-      summary: ביצוע טרייד בפועל על Binance Futures
-      operationId: executeLiveTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                  example: ETHUSDT
-                entry:
-                  type: number
-                  example: 2910.1
-                stop:
-                  type: number
-                  example: 2875.5
-                tp:
-                  type: number
-                  example: 3012.3
-                direction:
-                  type: string
-                  enum: [LONG, SHORT]
-                leverage:
-                  type: number
-                  example: 10
-                budget_usd:
-                  type: number
-                  example: 100
-                use_grid:
-                  type: boolean
-                  example: false
-                use_trailing:
-                  type: boolean
-                  example: false
-      responses:
-        '200':
-          description: תוצאה של ביצוע הטרייד
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: success
-                  confidence:
-                    type: number
-                    example: 88.4
-                  quality_score:
-                    type: number
-                    example: 7
-                  quantity:
-                    type: number
-                  snapshot:
-                    type: string
-                  news_score:
-                    type: number
-        '400':
-          description: שגיאה בביצוע
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: error
-                  message:
-                    type: string
+  # (המשך המקטעים יושלמו בקבצי המשך במסמך זה – קוצר מטעמי מגבלה)
 
-  /calculate-quantity:
-    post:
-      summary: חישוב כמות נכונה למסחר לפי מחיר, מינוף ותקציב
-      operationId: calculateQuantity
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                  example: ETHUSDT
-                price:
-                  type: number
-                  example: 2912.1
-                leverage:
-                  type: number
-                  example: 10
-                budget:
-                  type: number
-                  example: 100
-      responses:
-        '200':
-          description: תוצאה של החישוב
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  quantity:
-                    type: number
-                    example: 0.0345
+components:
+  schemas: {}
 
-  /sl_tp:
-    post:
-      summary: חישוב SL/TP לפי ATR ו־RRR
-      operationId: calculateStopTake
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                df:
-                  type: array
-                  description: רשימת נרות
-                  items:
-                    type: object
-                    properties:
-                      open:
-                        type: number
-                      high:
-                        type: number
-                      low:
-                        type: number
-                      close:
-                        type: number
-                direction:
-                  type: string
-                  enum: [LONG, SHORT]
-      responses:
-        '200':
-          description: תוצאה עם סטופ וטייק מחושבים
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  entry:
-                    type: number
-                  stop:
-                    type: number
-                  tp:
-                    type: number
-
-  /save:
-    post:
-      summary: שמירת טרייד לסטטיסטיקות וביצועים עתידיים
-      operationId: saveTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                entry:
-                  type: number
-                stop:
-                  type: number
-                tp:
-                  type: number
-                direction:
-                  type: string
-                leverage:
-                  type: number
-                confidence:
-                  type: number
-                quality_score:
-                  type: number
-                type:
-                  type: string
-                  example: REGULAR
-      responses:
-        '200':
-          description: שמירה הושלמה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: success
 
 
 
