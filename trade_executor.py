@@ -5,6 +5,7 @@ import logging
 from math import floor
 from binance.enums import *
 from utils.binance_client import client  # ודא שהקובץ הזה קיים
+from snapshot_utils import save_trade_snapshot  # <- חדש
 
 def round_quantity(symbol, quantity):
     try:
@@ -63,6 +64,15 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         except Exception as e:
             logging.warning(f"[!] טייק פרופיט נכשל: {e} — ממשיכים בלעדיו")
 
+        # שמירת Snapshot ויזואלי של הטרייד
+        snapshot_path = save_trade_snapshot({
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "direction": direction.upper()
+        })
+
         return {
             "status": "success",
             "symbol": symbol,
@@ -71,13 +81,13 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "stop": stop,
             "tp": tp,
             "leverage": leverage,
-            "side": side
+            "side": side,
+            "snapshot": snapshot_path
         }
 
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
-
 
 
 
