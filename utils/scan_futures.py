@@ -1,3 +1,4 @@
+import asyncio
 from aiohttp import web
 import aiohttp
 import numpy as np
@@ -44,6 +45,7 @@ if __name__ == '__main__':
     app.router.add_get('/scan_futures_market', scan_futures_market)
     port = int(os.environ.get('PORT', 8080))
     web.run_app(app, port=port)
+
 
 
 
