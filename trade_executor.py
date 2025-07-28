@@ -7,6 +7,10 @@ from binance.enums import *
 from utils.binance_client import client  # ודא שהקובץ הזה קיים
 from snapshot_utils import save_trade_snapshot  # <- חדש
 from utils.trade_storage import save_trade  # <- חדש לשמירת טריידים
+from utils.quality_score import compute_quality_score  # <- איכות דינמית
+from utils.pnl_tracker import log_pnl  # <- לוג פומבי
+from report_utils import send_email_alert  # <- מייל
+
 
 def round_quantity(symbol, quantity):
     try:
@@ -19,7 +23,8 @@ def round_quantity(symbol, quantity):
         logging.error(f"[!] שגיאה בעיגול כמות: {e}")
     return round(quantity, 3)
 
-def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False):
+
+def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
         price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
@@ -47,7 +52,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 symbol=symbol,
                 side=opposite_side,
                 type=ORDER_TYPE_TRAILING_STOP_MARKET,
-                callbackRate=2.0,  # 2% טריילינג סטופ
+                callbackRate=2.0,
                 activationPrice=round(entry, 4),
                 closePosition=True,
                 timeInForce=TIME_IN_FORCE_GTC
@@ -76,7 +81,6 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         except Exception as e:
             logging.warning(f"[!] טייק פרופיט נכשל: {e} — ממשיכים בלעדיו")
 
-        # שמירת Snapshot ויזואלי של הטרייד
         snapshot_path = save_trade_snapshot({
             "symbol": symbol,
             "entry": entry,
@@ -85,18 +89,37 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "direction": direction.upper()
         })
 
-        # שמירת פרטי הטרייד לקובץ JSON
-        save_trade({
+        quality = compute_quality_score({
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "price": price,
+            "leverage": leverage
+        })
+
+        confidence = round(70 + 3 * quality, 2)
+
+        trade_data = {
             "symbol": symbol,
             "entry": entry,
             "stop": stop,
             "tp": tp,
             "direction": direction.upper(),
             "leverage": leverage,
-            "confidence": 90,
-            "quality_score": 5,
-            "type": "REGULAR"
-        })
+            "confidence": confidence,
+            "quality_score": quality,
+            "type": "REGULAR",
+            "user_id": user_id or "default"
+        }
+
+        save_trade(trade_data)
+        log_pnl({"symbol": symbol, "entry": entry, "pnl": 0, "success": None})
+
+        send_email_alert(
+            subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
+            body=f"Symbol: {symbol}\nDirection: {direction}\nEntry: {entry}\nStop: {stop}\nTP: {tp}\nLeverage: {leverage}\nConfidence: {confidence:.2f}%\nQuality: {quality}/10"
+        )
 
         return {
             "status": "success",
@@ -107,12 +130,15 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "tp": tp,
             "leverage": leverage,
             "side": side,
+            "confidence": confidence,
+            "quality_score": quality,
             "snapshot": snapshot_path
         }
 
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
