@@ -1,36 +1,38 @@
-# Flask והשרת
-flask==2.3.3
-flask-cors==4.0.0
-gunicorn==21.2.0
+# ✅ FastAPI והשרת
+fastapi==0.111.0
+uvicorn==0.30.1
+gunicorn==21.2.0  # רק אם אתה בפרודקשן ב-Render
 
-# ספריות עזר
+# ✅ CORS
+fastapi[all]
+aiohttp==3.9.5
+
+# 📦 ספריות עזר
 requests==2.31.0
 ujson==5.10.0
 python-dotenv==1.0.1
 
-# עיבוד נתונים
+# 📊 עיבוד נתונים
 numpy==1.26.4
 pandas==2.2.2
 
-# TA - אינדיקטורים טכניים
+# 📈 אינדיקטורים טכניים
 ta==0.11.0
 
-# Binance API
+# 🟡 Binance API
 python-binance==1.0.17
 
-# גרפים
+# 📉 גרפים
 matplotlib==3.8.4
 
-# שליחת דוחות PDF
+# 🧾 דוחות PDF
 fpdf==1.7.2
 
-# ניבוי AI – סדר חשוב!
+# 🧠 חיזוי AI
 cython>=0.29.33
-pystan==2.19.1.1  # נדרש עבור prophet
+pystan==2.19.1.1
 prophet==1.1.5
 
-# תזמון ועבודה אסינכרונית
-aiohttp==3.9.5
 
 
 
