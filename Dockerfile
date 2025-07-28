@@ -1,4 +1,3 @@
-
 # שלב בסיסי: Python רזה
 FROM python:3.11-slim
 
@@ -6,7 +5,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# התקנת תלות מערכת לבניית ספריות כבדות כמו ta-lib, Prophet וכו'
+# התקנת תלות מערכת לבניית ספריות כבדות כמו prophet ו־ta
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
@@ -26,24 +25,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # הגדרת תיקיית עבודה
 WORKDIR /app
 
-# העתקת קובץ הדרישות בלבד קודם – יאפשר cache טוב
+# שלב ביניים: התקנת numpy ו־cython תחילה כדי למנוע שגיאות בבניית Prophet
 COPY requirements.txt .
-
-# פתרון לקריסה של pystan: התקנה מוקדמת של numpy ו-cython
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir numpy cython
+    && pip install --no-cache-dir numpy cython \
+    && pip install --no-cache-dir -r requirements.txt
 
-# התקנת כל הדרישות
-RUN pip install --no-cache-dir -r requirements.txt
-
-# העתקת שאר קבצי הקוד
+# העתקת כל הקוד
 COPY . .
 
-# פתיחת פורט (חשוב ב־Render ודומיו)
+# פתיחת פורט (Render מחפש את זה)
 EXPOSE 5000
 
-# הפעלת Gunicorn (שרת WSGI לפרודקשן)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
+# הפעלת uvicorn (FastAPI) במקום gunicorn של Flask
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
+
 
 
 
