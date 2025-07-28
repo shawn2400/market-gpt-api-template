@@ -1,227 +1,54 @@
-import os
-import time
-import logging
-import pandas as pd
+from flask import Flask, jsonify
+import requests
 import numpy as np
-import threading
-import aiohttp
-from aiohttp import web
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
-from dotenv import load_dotenv
+import os
 
-from trade_executor import execute_trade_live
-from scanner_utils import scan_all_futures  # ← תוקן כאן
-from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
-from utils.trade_storage import save_trade
-from utils.pnl_tracker import update_pnl, generate_pnl_pdf
-
-load_dotenv()
 app = Flask(__name__)
-CORS(app)
-logging.basicConfig(level=logging.INFO)
 
-@app.route("/")
+def fetch_binance_futures_data():
+    url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
+    resp = requests.get(url)
+    raw_data = resp.json()
+
+    top_20 = sorted(raw_data, key=lambda x: float(x['quoteVolume']), reverse=True)[:20]
+
+    results = []
+    for item in top_20:
+        symbol = item['symbol']
+        last_price = float(item['lastPrice'])
+        volume = float(item['quoteVolume'])
+
+        rsi = np.random.uniform(20, 80)
+        adx = np.random.uniform(10, 50)
+        direction = "LONG" if rsi < 30 else "SHORT" if rsi > 70 else "NEUTRAL"
+
+        results.append({
+            'symbol': symbol,
+            'last_price': last_price,
+            'volume': volume,
+            'rsi': round(rsi, 2),
+            'adx': round(adx, 2),
+            'direction': direction
+        })
+
+    return results
+
+@app.route('/scan_futures_market', methods=['GET'])
+def scan_futures_market():
+    try:
+        data = fetch_binance_futures_data()
+        return jsonify({'results': data})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/', methods=['GET'])
 def home():
     return jsonify({"status": "ok", "message": "AlgoGPT API is running ✅"})
 
-@app.route("/.well-known/ai-plugin.json")
-def serve_plugin_manifest():
-    return send_from_directory(".well-known", "ai-plugin.json")
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
 
-@app.route("/scan", methods=["GET"])
-def scan():
-    try:
-        results = asyncio.run(scan_all_futures())  # ← שונה לקריאה אסינכרונית
-        return jsonify({"status": "ok", "results": results})
-    except Exception as e:
-        logging.error(f"❌ שגיאה בסריקה: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/backtest", methods=["POST"])
-def backtest():
-    try:
-        data = request.get_json()
-        df = pd.DataFrame(data['prices'])
-        result = run_backtest(df)
-        return jsonify(result.to_dict(orient="records"))
-    except Exception as e:
-        logging.error(f"❌ שגיאה בבק-טסט: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/news", methods=["GET"])
-def crypto_news():
-    try:
-        news = fetch_crypto_news()
-        scored = analyze_news_impact(news)
-        return jsonify(scored)
-    except Exception as e:
-        logging.error(f"❌ שגיאה בשליפת חדשות: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/execute-trade", methods=["POST"])
-def execute_trade():
-    try:
-        data = request.get_json()
-        symbol = data["symbol"]
-        entry = float(data["entry"])
-        stop = float(data["stop"])
-        tp = float(data["tp"])
-        direction = data["direction"]
-        leverage = int(data["leverage"])
-        budget = float(data.get("budget", 100))
-        use_grid = bool(data.get("use_grid", False))
-
-        result = execute_trade_live(
-            symbol=symbol,
-            entry=entry,
-            stop=stop,
-            tp=tp,
-            direction=direction,
-            leverage=leverage,
-            budget_usd=budget,
-            use_grid=use_grid
-        )
-
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
-
-@app.route("/scan-and-execute", methods=["POST"])
-def scan_and_execute():
-    try:
-        data = request.get_json()
-        budget = float(data.get("budget", 100))
-        leverage = int(data.get("leverage", 10))
-        max_trades = int(data.get("max_trades", 2))
-
-        top_trades = asyncio.run(scan_all_futures())  # ← תוקן לקריאה אסינכרונית
-        if not top_trades:
-            return jsonify({"status": "no_trades", "message": "לא נמצאו טריידים מתאימים 🔍"})
-
-        executed = []
-        each_budget = budget / max_trades
-
-        for trade in top_trades[:max_trades]:
-            symbol = trade['symbol']
-            entry = float(trade['lastPrice'])
-            stop = entry * 0.98
-            tp = entry * 1.02
-            direction = trade['direction']
-            quality = (trade['adx'] + trade['rsi']) / 100
-
-            result = execute_trade_live(
-                symbol=symbol,
-                entry=entry,
-                stop=stop,
-                tp=tp,
-                direction=direction,
-                leverage=leverage,
-                budget_usd=each_budget,
-                use_grid=False
-            )
-
-            qty = round((each_budget * leverage) / entry, 4)
-            save_trade({
-                "symbol": symbol,
-                "entry": entry,
-                "stop": stop,
-                "tp": tp,
-                "leverage": leverage,
-                "direction": direction,
-                "confidence": quality,
-                "type": "REGULAR"
-            })
-
-            pnl_value = update_pnl(
-                symbol=symbol,
-                direction=direction,
-                entry=entry,
-                exit_price=tp,
-                leverage=leverage,
-                qty=qty
-            )
-
-            executed.append({
-                "symbol": symbol,
-                "entry": entry,
-                "stop_loss": stop,
-                "take_profit": tp,
-                "quantity": qty,
-                "leverage": leverage,
-                "quality_score": quality,
-                "pnl_simulated": pnl_value,
-                "trade_result": result
-            })
-
-            time.sleep(0.5)
-
-        return jsonify({
-            "status": "executed",
-            "executed_trades": executed
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/pnl-report", methods=["GET"])
-def pnl_report():
-    try:
-        path = generate_pnl_pdf()
-        if not path:
-            return jsonify({"status": "no_data", "message": "אין דוח זמין להיום"}), 404
-        with open(path, "rb") as f:
-            encoded = f.read()
-        return jsonify({
-            "status": "ok",
-            "report_name": path,
-            "pdf_base64": encoded.hex()
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-def run_flask():
-    port = int(os.getenv("FLASK_PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
-async def fetch_binance_futures_data():
-    url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            return await resp.json()
-
-async def scan_futures_market(request):
-    try:
-        raw_data = await fetch_binance_futures_data()
-        top_20 = sorted(raw_data, key=lambda x: float(x['quoteVolume']), reverse=True)[:20]
-
-        results = []
-        for item in top_20:
-            rsi = np.random.uniform(20, 80)
-            adx = np.random.uniform(10, 50)
-            direction = "LONG" if rsi < 30 else "SHORT" if rsi > 70 else "NEUTRAL"
-
-            results.append({
-                'symbol': item['symbol'],
-                'last_price': float(item['lastPrice']),
-                'volume': float(item['quoteVolume']),
-                'rsi': round(rsi, 2),
-                'adx': round(adx, 2),
-                'direction': direction
-            })
-
-        return web.json_response({'results': results})
-    except Exception as e:
-        return web.json_response({'error': str(e)}, status=500)
-
-def run_aiohttp():
-    aio_app = web.Application()
-    aio_app.router.add_get('/scan_futures_market', scan_futures_market)
-    port = int(os.environ.get('PORT', 8080))
-    web.run_app(aio_app, port=port)
-
-if __name__ == "__main__":
-    threading.Thread(target=run_flask).start()
-    threading.Thread(target=run_aiohttp).start()
 
 
 
