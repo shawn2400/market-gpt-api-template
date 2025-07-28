@@ -25,11 +25,22 @@ def compute_indicators(df):
         df['Stoch_K'] = stoch.stoch()
         df['Stoch_D'] = stoch.stoch_signal()
 
-        df['OBV'] = ta.volume.OnBalanceVolumeIndicator(close=df['close'], volume=df['volume']).on_balance_volume()
+        obv = [0]
+        for i in range(1, len(df)):
+            if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                obv.append(obv[-1] + df['volume'].iloc[i])
+            elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                obv.append(obv[-1] - df['volume'].iloc[i])
+            else:
+                obv.append(obv[-1])
+        df['OBV'] = obv
+        df['OBV_trend'] = df['OBV'].diff() > 0
 
-        df['VWAP'] = df['volume'].cumsum() * df['close'] / df['volume'].cumsum()  # Approximation
+        df['VWAP'] = (df['high'] + df['low'] + df['close']) / 3
+        df['VWAP_trend'] = df['close'] > df['VWAP']
 
         df['volume_mean'] = df['volume'].rolling(window=20).mean()
+
         df.dropna(inplace=True)
 
         return df
