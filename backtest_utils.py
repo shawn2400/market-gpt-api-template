@@ -6,7 +6,7 @@ import requests
 import smtplib
 from email.message import EmailMessage
 from dotenv import load_dotenv
-from indicators_utils import prepare_indicators_for_backtest
+from utils.indicators_utils import prepare_indicators_for_backtest
 
 load_dotenv()
 
