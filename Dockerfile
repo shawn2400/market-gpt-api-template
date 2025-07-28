@@ -5,7 +5,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# התקנת תלות מערכת לבניית ספריות כבדות כמו prophet ו־ta
+# התקנת תלות מערכת לבניית ספריות כבדות כמו ta-lib, Prophet וכו'
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
@@ -25,20 +25,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # הגדרת תיקיית עבודה
 WORKDIR /app
 
-# שלב ביניים: התקנת numpy ו־cython תחילה כדי למנוע שגיאות בבניית Prophet
+# העתקת קובץ הדרישות בלבד קודם – יאפשר cache טוב
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir numpy cython \
-    && pip install --no-cache-dir -r requirements.txt
 
-# העתקת כל הקוד
+# פתרון לקריסה של pystan: התקנה מוקדמת של numpy ו-cython
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir numpy cython
+
+# התקנת כל הדרישות
+RUN pip install --no-cache-dir -r requirements.txt
+
+# העתקת שאר קבצי הקוד
 COPY . .
 
-# פתיחת פורט (Render מחפש את זה)
+# פתיחת פורט (חשוב ב־Render ודומיו)
 EXPOSE 5000
 
-# הפעלת uvicorn (FastAPI) במקום gunicorn של Flask
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
+# ✅ הפעלת FastAPI עם Gunicorn דרך UvicornWorker
+CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:5000"]
 
 
 
