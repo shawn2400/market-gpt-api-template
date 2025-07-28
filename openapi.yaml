@@ -2,12 +2,11 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   description: |
-    AlgoGPT הוא סוחר Algo בזמן אמת המתחבר ל-Binance, מבצע ניתוחים טכניים, חיזוי AI, טריידים בפועל, גרפים, דוחות, וסטטיסטיקות.
+    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל-Binance, מבצע ניתוחים טכניים, 
+    חיזוי AI, טריידים בפועל, גרפים, דוחות, וסטטיסטיקות.
   version: 1.0.0
-
 servers:
-  - url: https://market-gpt-api-template.onrender.com
-
+  - url: https://algogpt-docker.onrender.com
 paths:
   /:
     get:
@@ -21,10 +20,12 @@ paths:
               schema:
                 type: object
                 properties:
+                  status:
+                    type: string
+                    example: ok
                   message:
                     type: string
-                    example: AlgoGPT API is running
-
+                    example: AlgoGPT API is running ✅
   /scan:
     get:
       summary: סריקה חיה של שוק Binance Futures לפי קריטריונים טכניים
@@ -37,6 +38,8 @@ paths:
               schema:
                 type: object
                 properties:
+                  status:
+                    type: string
                   results:
                     type: array
                     items:
@@ -54,7 +57,6 @@ paths:
                           type: number
                         direction:
                           type: string
-
   /backtest:
     post:
       summary: ביצוע Backtest על סדרת מחירים
@@ -81,28 +83,41 @@ paths:
                         type: number
                       close:
                         type: number
+                      volume?:
+                        type: number
       responses:
         '200':
           description: תוצאות הסימולציה
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  result:
-                    type: array
-                    items:
-                      type: object
-                  total_return:
-                    type: number
-                  win_rate:
-                    type: number
-                  chart:
-                    type: string
-
+                type: array
+                items:
+                  type: object
+                  properties:
+                    timestamp:
+                      type: string
+                    signal:
+                      type: string
+                    entry:
+                      type: number
+                    stop:
+                      type: number
+                    tp:
+                      type: number
+                    exit:
+                      type: number
+                    rrr:
+                      type: number
+                    pnl:
+                      type: number
+                    success:
+                      type: boolean
+                    quality_score:
+                      type: number
   /execute-trade:
     post:
-      summary: ביצוע טרייד בפועל
+      summary: ביצוע טרייד חי בפועל
       operationId: executeLiveTrade
       requestBody:
         required: true
@@ -119,20 +134,18 @@ paths:
                   type: number
                 tp:
                   type: number
-                leverage:
-                  type: integer
                 direction:
                   type: string
                   enum: [LONG, SHORT]
+                leverage:
+                  type: integer
                 budget:
                   type: number
-                  description: סכום השקעה בדולרים
                 use_grid:
                   type: boolean
-                  description: הפעלת גריד חכם
       responses:
         '200':
-          description: תוצאה מה-Binance
+          description: תוצאה מה־Binance Futures
           content:
             application/json:
               schema:
@@ -142,59 +155,33 @@ paths:
                     type: string
                   symbol:
                     type: string
-                  qty:
+                  entry_price:
                     type: number
-                  entry:
-                    type: number
-                  leverage:
-                    type: number
-                  budget_used:
-                    type: number
-                  side:
-                    type: string
-                  grid:
-                    type: boolean
-
-  /sl_tp:
-    post:
-      summary: חישוב SL/TP לפי ATR ו-RRR
-      operationId: calculateSLTP
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                entry:
-                  type: number
-                atr:
-                  type: number
-                direction:
-                  type: string
-                rrr:
-                  type: number
-      responses:
-        '200':
-          description: ערכי SL ו-TP מחושבים
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  entry:
+                  quantity:
                     type: number
                   stop:
                     type: number
                   tp:
                     type: number
-                  rrr:
+                  leverage:
                     type: number
-
-  /calculate-quantity:
+                  side:
+                    type: string
+        '400':
+          description: שגיאה בבקשה
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+  /scan-and-execute:
     post:
-      summary: חישוב כמות נכס לפי תקציב ומינוף
-      operationId: calculateQuantity
+      summary: סריקה + ביצוע טריידים במקביל
+      operationId: scanAndExecuteBatch
       requestBody:
         required: true
         content:
@@ -204,43 +191,79 @@ paths:
               properties:
                 budget:
                   type: number
-                entry:
-                  type: number
                 leverage:
-                  type: number
+                  type: integer
+                max_trades:
+                  type: integer
       responses:
         '200':
-          description: כמות נכס מחושבת
+          description: ביצוע סדרה של טריידים
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  quantity:
-                    type: number
-
-  /daily-report:
+                  status:
+                    type: string
+                  executed_trades:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        symbol:
+                          type: string
+                        entry:
+                          type: number
+                        stop_loss:
+                          type: number
+                        take_profit:
+                          type: number
+                        quantity:
+                          type: number
+                        leverage:
+                          type: number
+                        quality_score:
+                          type: number
+                        pnl_simulated:
+                          type: number
+                        trade_result:
+                          type: object
+  /pnl-report:
     get:
-      summary: הפקת דוח יומי (PDF מקודד ב-base64)
+      summary: דוח יומי בפורמט PDF base64
       operationId: generateDailyReport
       responses:
         '200':
-          description: דוח יומי בקידוד base64
+          description: דוח PDF מוצפן ב‑base64
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  status:
+                    type: string
+                  report_name:
+                    type: string
                   pdf_base64:
                     type: string
-
+        '404':
+          description: אין דוח זמין
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
   /news:
     get:
-      summary: שליפת חדשות קריפטו מ-CryptoPanic
+      summary: שליפת חדשות קריפטו מ‑CryptoPanic
       operationId: fetchCryptoNews
       responses:
         '200':
-          description: רשימת חדשות
+          description: רשימת חדשות (raw)
           content:
             application/json:
               schema:
@@ -257,14 +280,13 @@ paths:
                           type: string
                         url:
                           type: string
-
   /news-impact:
     get:
       summary: ניתוח סנטימנט של חדשות קריפטו
       operationId: analyzeCryptoNewsImpact
       responses:
         '200':
-          description: רשימת חדשות עם ציון השפעה
+          description: חדשות עם ציון השפעה
           content:
             application/json:
               schema:
@@ -280,10 +302,9 @@ paths:
                       type: string
                     impact_score:
                       type: integer
-
   /save:
     post:
-      summary: שמירת טרייד בזיכרון
+      summary: שמירת טרייד במאגר מקומי
       operationId: saveTrade
       requestBody:
         required: true
@@ -310,39 +331,62 @@ paths:
                   type: string
       responses:
         '200':
-          description: טרייד נשמר
-
+          description: אישור שמירה
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
   /trades:
     get:
-      summary: שליפת כל הטריידים השמורים
-      operationId: getSavedTrades
+      summary: הצגת כל הטריידים השמורים
+      operationId: listSavedTrades
       responses:
         '200':
           description: רשימת טריידים
-
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
   /clear:
     post:
-      summary: ניקוי רשימת הטריידים
+      summary: ניקוי כל הטריידים המקומיים
       operationId: clearAllTrades
       responses:
         '200':
-          description: רשימת טריידים נוקתה
-
+          description: טראנסקציה התקבלה, הטריידים נמחקו
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
   /strategy:
     get:
-      summary: שליפת אסטרטגיה גולמית בקובץ preset.txt
+      summary: שליפת אסטרטגיה גולמית מקובץ preset.txt
       operationId: getStrategyText
       responses:
         '200':
-          description: טקסט האסטרטגיה
-
+          description: טקסט גולמי של אסטרטגיה
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  strategy:
+                    type: string
   /preset:
     get:
-      summary: שליפת תוכן קובץ preset.txt בפורמט JSON
+      summary: שליפת הגדרות preset כ‑JSON
       operationId: getPresetJson
       responses:
         '200':
-          description: תוכן preset
+          description: תוכן premise
           content:
             application/json:
               schema:
@@ -350,6 +394,7 @@ paths:
                 properties:
                   preset:
                     type: string
+
 
 
 
