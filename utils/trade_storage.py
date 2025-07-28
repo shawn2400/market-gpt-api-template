@@ -1,5 +1,3 @@
-# utils/trade_storage.py
-
 import json
 import os
 from datetime import datetime
@@ -61,6 +59,7 @@ def load_trades():
     except Exception as e:
         print(f"[!] שגיאה בטעינת טריידים: {e}")
         return []
+
 
 
 
