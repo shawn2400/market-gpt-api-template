@@ -1,0 +1,29 @@
+# קבצי סביבה
+.env
+*.env
+
+# קבצי לוגים
+*.log
+
+# קבצים זמניים / קאש
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+
+# קבצי מערכת
+.DS_Store
+Thumbs.db
+
+# דוחות
+*.pdf
+
+# קבצים רגישים
+*.key
+*.pem
+
+# תיקיות נוספות לא להכללה
+saved_trades.json
+pnl_tracker.json
+static/
