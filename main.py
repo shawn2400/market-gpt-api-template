@@ -1,7 +1,9 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import requests
 import numpy as np
 import os
+import pandas as pd
+from backtest_utils import run_backtest  # <- זה מוסיף את הפונקציה שלך
 
 app = Flask(__name__)
 
@@ -45,9 +47,20 @@ def scan():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/backtest', methods=['POST'])
+def backtest():
+    try:
+        data = request.get_json()
+        prices = pd.DataFrame(data["prices"])
+        results = run_backtest(prices)
+        return jsonify(results.to_dict(orient="records"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
