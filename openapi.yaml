@@ -7,6 +7,7 @@ info:
   version: 1.0.0
 servers:
   - url: https://algogpt-docker.onrender.com
+
 paths:
   /:
     get:
@@ -26,7 +27,8 @@ paths:
                   message:
                     type: string
                     example: AlgoGPT API is running ✅
-  /scan:
+
+  /scan_futures_market:
     get:
       summary: סריקה חיה של שוק Binance Futures לפי קריטריונים טכניים
       operationId: scanFuturesMarket
@@ -38,8 +40,6 @@ paths:
               schema:
                 type: object
                 properties:
-                  status:
-                    type: string
                   results:
                     type: array
                     items:
@@ -57,6 +57,7 @@ paths:
                           type: number
                         direction:
                           type: string
+
   /backtest:
     post:
       summary: ביצוע Backtest על סדרת מחירים
@@ -83,7 +84,7 @@ paths:
                         type: number
                       close:
                         type: number
-                      volume?:
+                      volume:
                         type: number
       responses:
         '200':
@@ -115,6 +116,7 @@ paths:
                       type: boolean
                     quality_score:
                       type: number
+
   /execute-trade:
     post:
       summary: ביצוע טרייד חי בפועל
@@ -178,6 +180,7 @@ paths:
                     type: string
                   message:
                     type: string
+
   /scan-and-execute:
     post:
       summary: סריקה + ביצוע טריידים במקביל
@@ -228,6 +231,7 @@ paths:
                           type: number
                         trade_result:
                           type: object
+
   /pnl-report:
     get:
       summary: דוח יומי בפורמט PDF base64
@@ -257,6 +261,7 @@ paths:
                     type: string
                   message:
                     type: string
+
   /news:
     get:
       summary: שליפת חדשות קריפטו מ‑CryptoPanic
@@ -280,6 +285,7 @@ paths:
                           type: string
                         url:
                           type: string
+
   /news-impact:
     get:
       summary: ניתוח סנטימנט של חדשות קריפטו
@@ -302,6 +308,7 @@ paths:
                       type: string
                     impact_score:
                       type: integer
+
   /save:
     post:
       summary: שמירת טרייד במאגר מקומי
@@ -339,6 +346,7 @@ paths:
                 properties:
                   status:
                     type: string
+
   /trades:
     get:
       summary: הצגת כל הטריידים השמורים
@@ -352,6 +360,7 @@ paths:
                 type: array
                 items:
                   type: object
+
   /clear:
     post:
       summary: ניקוי כל הטריידים המקומיים
@@ -366,6 +375,7 @@ paths:
                 properties:
                   status:
                     type: string
+
   /strategy:
     get:
       summary: שליפת אסטרטגיה גולמית מקובץ preset.txt
@@ -380,13 +390,14 @@ paths:
                 properties:
                   strategy:
                     type: string
+
   /preset:
     get:
       summary: שליפת הגדרות preset כ‑JSON
       operationId: getPresetJson
       responses:
         '200':
-          description: תוכן premise
+          description: תוכן preset
           content:
             application/json:
               schema:
@@ -394,6 +405,7 @@ paths:
                 properties:
                   preset:
                     type: string
+
 
 
 
