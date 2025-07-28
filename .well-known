@@ -3,7 +3,7 @@
   "name_for_human": "AlgoGPT",
   "name_for_model": "algogpt",
   "description_for_human": "סוחר אלגוריתמי בזמן אמת ל־Binance: סריקה, טריידים, דוחות, ניתוחים.",
-  "description_for_model": "Plugin לחיבור ל־Binance. כולל סריקת שוק, ביצוע טריידים, Backtest, גרפים, ניתוחי חדשות ועוד.",
+  "description_for_model": "Plugin לחיבור ל־Binance. כולל סריקת שוק, ביצוע טריידים, Backtest, גרפים, ניתוחי חדשות ודוחות PDF.",
   "auth": {
     "type": "none"
   },
@@ -13,6 +13,8 @@
   },
   "logo_url": "https://algogpt-docker.onrender.com/logo.png",
   "contact_email": "support@algogpt.ai",
-  "legal_info_url": "https://algogpt.ai/legal"
+  "legal_info_url": "https://algogpt.ai/legal",
+  "terms_of_service_url": "https://algogpt.ai/terms",
+  "privacy_policy_url": "https://algogpt.ai/privacy"
 }
 
