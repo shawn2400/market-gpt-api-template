@@ -1,0 +1,21 @@
+import matplotlib.pyplot as plt
+import os
+
+# יצירת תיקייה סטטית אם אינה קיימת
+os.makedirs("static", exist_ok=True)
+
+# יצירת גרף פשוט עם עיצוב
+plt.figure(figsize=(6, 4))
+plt.plot([1, 2, 3], [4, 5, 6], marker='o', linestyle='-', color='blue')
+plt.title("📈 דוגמה לגרף פשוט", fontsize=14)
+plt.xlabel("ציר X", fontsize=12)
+plt.ylabel("ציר Y", fontsize=12)
+plt.grid(True)
+
+# שמירה לקובץ ב־static
+output_path = "static/chart.png"
+plt.tight_layout()
+plt.savefig(output_path)
+plt.close()
+
+print(f"✅ גרף נשמר בהצלחה: {output_path}")
