@@ -11,6 +11,7 @@ from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.trade_storage import save_trade
 from snapshot_utils import save_trade_snapshot
+from trade_executor import execute_trade_live
 
 load_dotenv()
 
@@ -30,6 +31,18 @@ class BacktestRequest(BaseModel):
     prices: list
     symbol: str = "UNKNOWN"
     interval: str = "15m"
+
+class TradeRequest(BaseModel):
+    symbol: str
+    entry: float
+    stop: float
+    tp: float
+    direction: str
+    leverage: int
+    budget: float = 100
+    use_grid: bool = False
+    use_trailing: bool = False
+    user_id: str = None
 
 @app.get("/")
 async def home():
@@ -97,6 +110,26 @@ async def backtest(request: BacktestRequest):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/execute-trade")
+async def execute_trade(data: TradeRequest):
+    try:
+        result = await execute_trade_live(
+            symbol=data.symbol,
+            entry=data.entry,
+            stop=data.stop,
+            tp=data.tp,
+            direction=data.direction,
+            leverage=data.leverage,
+            budget_usd=data.budget,
+            use_grid=data.use_grid,
+            use_trailing=data.use_trailing,
+            user_id=data.user_id
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
