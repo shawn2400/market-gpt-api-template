@@ -3,10 +3,11 @@ import requests
 import numpy as np
 import os
 import pandas as pd
-from backtest_utils import run_backtest  # <- זה מוסיף את הפונקציה שלך
+from backtest_utils import run_backtest
 
 app = Flask(__name__)
 
+# שליפת מידע פיוצ'רס מ-Binance
 def fetch_binance_futures_data():
     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
     resp = requests.get(url)
@@ -51,8 +52,14 @@ def scan():
 def backtest():
     try:
         data = request.get_json()
-        prices = pd.DataFrame(data["prices"])
-        results = run_backtest(prices)
+        prices = data.get("prices", [])
+
+        if not prices or len(prices) < 30:
+            return jsonify({"error": "Insufficient data – at least 30 candles are required", "code": "ERR_TOO_SHORT"}), 400
+
+        df = pd.DataFrame(prices)
+        results = run_backtest(df)
+
         return jsonify(results.to_dict(orient="records"))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -60,6 +67,9 @@ def backtest():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
+
+
 
 
 
