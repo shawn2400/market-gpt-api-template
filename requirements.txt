@@ -1,32 +1,27 @@
+aiofiles==23.2.1
+aiohttp==3.9.5
+cmdstanpy==1.2.5        # דרוש ל־prophet
+dateparser==1.2.0
 flask==2.3.3
 flask-cors==4.0.0
+fpdf==1.7.2
 gunicorn==21.2.0
-
-pandas==2.1.4
-numpy==1.26.4
 matplotlib==3.8.4
+numpy==1.26.4
+openai==1.34.0
+pandas==2.1.4
 plotly==5.22.0
-ta==0.11.0
-
-prophet==1.1.5
-cmdstanpy==1.2.5
-
+prophet==1.1.5           # אם לא בשימוש, אפשר להסיר
+python-binance==1.0.17
+python-dotenv==1.0.1
 pytz==2024.1
+requests==2.31.0
+schedule==1.2.1
+ta==0.11.0
 tzdata==2025.2
 tzlocal==5.3.1
-
-requests==2.31.0
-python-dotenv==1.0.1
-python-binance==1.0.17
-fpdf==1.7.2
-schedule==1.2.1
-
-dateparser==1.2.0
 ujson==5.10.0
-aiohttp==3.9.5
-aiofiles==23.2.1
 websockets==15.0.1
-openai==1.34.0
 
 
 
