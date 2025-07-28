@@ -1,4 +1,4 @@
-def scan_all_futures_live(budget_usd=100):
+def scan_all_futures_live(budget_usd=100, strict=True):
     try:
         print("🚀 התחלת סריקה חיה")
         symbols = [
@@ -6,15 +6,18 @@ def scan_all_futures_live(budget_usd=100):
             for s in client.futures_exchange_info()['symbols']
             if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT'
         ]
+        print(f"🔢 נמצאו {len(symbols)} סמלים לבדיקה")
     except Exception as e:
         print(f"[!] שגיאה בקבלת רשימת סמלים: {e}")
         return []
 
     results = []
 
-    for i, symbol in enumerate(symbols[:20]):  # הוגבל ל־20 סמלים בלבד לצורך בדיקה
+    for i, symbol in enumerate(symbols[:20]):
         try:
-            print(f"[{i}] 🔍 בודק {symbol}")
+            start_time = time.time()
+            print(f"[{i}] 🔍 בודק {symbol}...")
+
             klines = client.futures_klines(
                 symbol=symbol,
                 interval=Client.KLINE_INTERVAL_15MINUTE,
@@ -29,11 +32,22 @@ def scan_all_futures_live(budget_usd=100):
             ])
             df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
 
+            # סינון לפי נפח מסחר
+            if strict:
+                recent_vol = df['volume'].iloc[-1]
+                avg_vol = df['volume'].rolling(20).mean().iloc[-1]
+                if recent_vol < 0.5 * avg_vol:
+                    print(f"⚠️ דילוג על {symbol} — נפח מסחר נמוך ({recent_vol:.2f} < {avg_vol:.2f})")
+                    continue
+
             indicators = compute_indicators(df)
             signal = indicators['signal']
             df = indicators['df']
 
             score = compute_quality_score(df)
+
+            duration = round(time.time() - start_time, 2)
+            print(f"✅ סיים {symbol} תוך {duration} שניות")
 
             if signal and score >= 4:
                 price = float(df['close'].iloc[-1])
