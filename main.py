@@ -11,7 +11,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 
 from trade_executor import execute_trade_live
-from scanner_utils import scan_all_futures_live
+from scanner_utils import scan_all_futures  # ← תוקן כאן
 from backtest_utils import run_backtest, fetch_crypto_news, analyze_news_impact
 from utils.trade_storage import save_trade
 from utils.pnl_tracker import update_pnl, generate_pnl_pdf
@@ -32,7 +32,7 @@ def serve_plugin_manifest():
 @app.route("/scan", methods=["GET"])
 def scan():
     try:
-        results = scan_all_futures_live()
+        results = asyncio.run(scan_all_futures())  # ← שונה לקריאה אסינכרונית
         return jsonify({"status": "ok", "results": results})
     except Exception as e:
         logging.error(f"❌ שגיאה בסריקה: {e}")
@@ -95,7 +95,7 @@ def scan_and_execute():
         leverage = int(data.get("leverage", 10))
         max_trades = int(data.get("max_trades", 2))
 
-        top_trades = scan_all_futures_live(budget_usd=budget)
+        top_trades = asyncio.run(scan_all_futures())  # ← תוקן לקריאה אסינכרונית
         if not top_trades:
             return jsonify({"status": "no_trades", "message": "לא נמצאו טריידים מתאימים 🔍"})
 
@@ -104,11 +104,11 @@ def scan_and_execute():
 
         for trade in top_trades[:max_trades]:
             symbol = trade['symbol']
-            entry = trade['entry']
-            stop = trade['stop_loss']
-            tp = trade['take_profit']
-            direction = trade['signal']
-            quality = trade.get("quality_score", 0)
+            entry = float(trade['lastPrice'])
+            stop = entry * 0.98
+            tp = entry * 1.02
+            direction = trade['direction']
+            quality = (trade['adx'] + trade['rsi']) / 100
 
             result = execute_trade_live(
                 symbol=symbol,
@@ -183,8 +183,6 @@ def run_flask():
     port = int(os.getenv("FLASK_PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# -------------------- AIOHTTP --------------------
-
 async def fetch_binance_futures_data():
     url = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
     async with aiohttp.ClientSession() as session:
@@ -224,6 +222,7 @@ def run_aiohttp():
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
     threading.Thread(target=run_aiohttp).start()
+
 
 
 
