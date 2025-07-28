@@ -1,15 +1,35 @@
+# Flask והשרת
 flask==2.3.3
 flask-cors==4.0.0
 gunicorn==21.2.0
-numpy==1.26.4
-requests==2.31.0
-python-dotenv==1.0.1
-python-binance==1.0.17
-ujson==5.10.0
 
-# נוספו לפי השימוש בקוד שלך:
+# ספריות עזר
+requests==2.31.0
+ujson==5.10.0
+python-dotenv==1.0.1
+
+# עיבוד נתונים
 pandas==2.2.2
+numpy==1.26.4
+
+# TA - אינדיקטורים טכניים
 ta==0.11.0
+
+# Binance API
+python-binance==1.0.17
+
+# גרפים
+matplotlib==3.8.4
+
+# שליחת דוחות PDF
+fpdf==1.7.2
+
+# ניבוי AI
+prophet==1.1.5
+pystan==2.19.1.1  # נדרש עבור prophet
+
+# תזמון ועבודה אסינכרונית
+aiohttp==3.9.5
 
 
 
