@@ -29,12 +29,12 @@ def compute_indicators(df, volume_window=20):
         df['stoch_k'] = stoch.stoch()
         df['stoch_d'] = stoch.stoch_signal()
 
-        # OBV (using TA-lib directly)
+        # OBV
         obv = ta.volume.OnBalanceVolumeIndicator(close=df['close'], volume=df['volume'])
         df['obv'] = obv.on_balance_volume()
         df['obv_trend'] = df['obv'].diff() > 0
 
-        # VWAP (cumulative rolling)
+        # VWAP (cumulative)
         df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
         df['vwap_trend'] = df['close'] > df['vwap']
 
@@ -44,7 +44,7 @@ def compute_indicators(df, volume_window=20):
         # CCI
         df['cci'] = ta.trend.CCIIndicator(high=df['high'], low=df['low'], close=df['close'], window=20).cci()
 
-        # Doji candlestick
+        # Doji pattern (small real body)
         df['is_doji'] = (abs(df['close'] - df['open']) / (df['high'] - df['low'] + 1e-6)) < 0.1
 
         df.dropna(inplace=True)
@@ -54,12 +54,11 @@ def compute_indicators(df, volume_window=20):
         print(f"[!] שגיאה בחישוב אינדיקטורים: {e}")
         return df
 
-# שילוב עם backtest_utils.py
 
 def prepare_indicators_for_backtest(df):
     return compute_indicators(df)
 
-# שילוב עם סריקת שוק חיה (scanner_utils.py)
+
 def prepare_indicators_for_live_scan(df):
     return compute_indicators(df)
 
