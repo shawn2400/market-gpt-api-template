@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import time
 import logging
@@ -144,6 +142,11 @@ def crypto_news():
     except Exception as e:
         logging.error(f"❌ שגיאה בשליפת חדשות: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
 
 
 
