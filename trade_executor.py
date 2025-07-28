@@ -1,5 +1,3 @@
-# trade_executor.py
-
 import time
 import logging
 from math import floor
@@ -99,16 +97,16 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
 
         # איכות ו־Confidence
         df = pd.DataFrame([{
-            "ATR": abs(tp - stop),
-            "MACD": 1,
-            "MACD_signal": 0,
-            "RSI": 50,
-            "ADX": 25,
+            "atr": abs(tp - stop),
+            "macd": 1,
+            "macd_signal": 0,
+            "rsi": 50,
+            "adx": 25,
             "volume": 1_000_000,
             "volume_mean": 800_000,
             "close": price,
-            "EMA21": price * 0.99,
-            "EMA50": price * 0.98
+            "ema_21": price * 0.99,
+            "ema_50": price * 0.98
         }])
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality + news_score * 2, 2)
