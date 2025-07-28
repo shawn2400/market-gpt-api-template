@@ -10,6 +10,7 @@ from utils.trade_storage import save_trade  # <- חדש לשמירת טרייד�
 from utils.quality_score import compute_quality_score  # <- איכות דינמית
 from utils.pnl_tracker import log_pnl  # <- לוג פומבי
 from report_utils import send_email_alert  # <- מייל
+from news_utils import fetch_crypto_news, analyze_news_impact  # <- ניתוח סנטימנט
 
 
 def round_quantity(symbol, quantity):
@@ -26,6 +27,11 @@ def round_quantity(symbol, quantity):
 
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
     try:
+        # ניתוח סנטימנט
+        news = fetch_crypto_news()
+        sentiment = analyze_news_impact(news)
+        news_score = sum(n['impact_score'] for n in sentiment if symbol[:3].lower() in n['title'].lower())
+
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
         price = float(client.futures_symbol_ticker(symbol=symbol)["price"])
 
@@ -98,7 +104,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "leverage": leverage
         })
 
-        confidence = round(70 + 3 * quality, 2)
+        confidence = round(70 + 3 * quality + news_score * 2, 2)
 
         trade_data = {
             "symbol": symbol,
@@ -109,7 +115,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "leverage": leverage,
             "confidence": confidence,
             "quality_score": quality,
-            "type": "REGULAR",
+            "type": "GRID" if use_grid else "REGULAR",
             "user_id": user_id or "default"
         }
 
@@ -118,7 +124,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
 
         send_email_alert(
             subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
-            body=f"Symbol: {symbol}\nDirection: {direction}\nEntry: {entry}\nStop: {stop}\nTP: {tp}\nLeverage: {leverage}\nConfidence: {confidence:.2f}%\nQuality: {quality}/10"
+            body=f"Symbol: {symbol}\nDirection: {direction}\nEntry: {entry}\nStop: {stop}\nTP: {tp}\nLeverage: {leverage}\nConfidence: {confidence:.2f}%\nQuality: {quality}/10\nNews Score: {news_score}"
         )
 
         return {
@@ -132,7 +138,8 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "side": side,
             "confidence": confidence,
             "quality_score": quality,
-            "snapshot": snapshot_path
+            "snapshot": snapshot_path,
+            "news_score": news_score
         }
 
     except Exception as e:
