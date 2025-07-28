@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import pandas as pd
 import os
+import asyncio
 
 from backtest_utils import run_backtest
 from news_utils import fetch_crypto_news, analyze_news_impact
@@ -11,10 +12,14 @@ from utils.sl_tp_utils import calculate_sl_tp
 from utils.trade_storage import save_trade
 from snapshot_utils import save_trade_snapshot
 from trade_executor import execute_trade_live
+from scanner_utils import scan_all_futures
+from report_utils import generate_daily_report
+from ai_analysis import analyze_with_ai
+from services.auto_executor import start_auto_executor
 
 load_dotenv()
 
-app = FastAPI(title="AlgoGPT API", description="API למסחר אלגוריתמי עם Binance", version="1.0.0")
+app = FastAPI(title="AlgoGPT API", description="API למסחר אלגוריתמי עם Binance", version="1.3.0")
 
 # === Data Models ===
 class SLTPRequest(BaseModel):
@@ -43,6 +48,9 @@ class TradeRequest(BaseModel):
     use_grid: bool = False
     use_trailing: bool = False
     user_id: str = None
+
+class AIAnalysisRequest(BaseModel):
+    prices: list
 
 # === Routes ===
 @app.get("/")
@@ -131,6 +139,32 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/scan")
+async def scan():
+    try:
+        results = await scan_all_futures()
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/daily-report")
+async def daily_report():
+    try:
+        result = generate_daily_report()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/ai-analyze")
+async def ai_analyze(data: AIAnalysisRequest):
+    try:
+        return analyze_with_ai(data.prices)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.on_event("startup")
+async def start_background_tasks():
+    asyncio.create_task(start_auto_executor())
 
 
 
