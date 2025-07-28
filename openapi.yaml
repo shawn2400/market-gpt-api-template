@@ -58,8 +58,6 @@ paths:
                         direction:
                           type: string
 
-# המשך הקובץ ללא שינוי:
-
   /backtest:
     post:
       summary: ביצוע Backtest על סדרת מחירים
@@ -118,9 +116,20 @@ paths:
                       type: boolean
                     quality_score:
                       type: number
+        '400':
+          description: שגיאת קלט – נשלחה פחות מדי היסטוריית מחירים (נדרש מינימום 30)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Insufficient data – at least 30 candles are required
+                  code:
+                    type: string
+                    example: ERR_TOO_SHORT
 
-# 👇 כל שאר הנתיבים נשארים כפי שהם: /execute-trade, /scan-and-execute, /pnl-report, /news וכו'
-# אין צורך לשנות דבר מלבד הנתיב שהיה `/scan_futures_market`
 
 
 
