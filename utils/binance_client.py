@@ -1,6 +1,7 @@
 # utils/binance_client.py
 
 import os
+import logging
 from binance.client import Client
 from dotenv import load_dotenv
 
@@ -14,12 +15,11 @@ if not BINANCE_API_KEY or not BINANCE_API_SECRET:
 
 try:
     client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
-
-    # בדיקה פשוטה שהחיבור אכן הצליח
     status = client.futures_ping()
-    print("✅ Binance Futures API connected successfully.")
+    logging.info("✅ Binance Futures API connected successfully.")
 except Exception as e:
-    print(f"❌ שגיאה בחיבור ל־Binance API: {e}")
+    logging.error(f"❌ שגיאה בחיבור ל־Binance API: {e}")
     client = None  # למניעת קריסה, אפשר לבדוק client לפני שימוש
+
 
 
