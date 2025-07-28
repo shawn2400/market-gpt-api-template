@@ -1,32 +1,30 @@
-# report_utils.py
-
 import os
+import json
 import base64
 from datetime import datetime
 from fpdf import FPDF
 import pandas as pd
 
 PNL_FILE = "pnl_tracker.json"
+PDF_OUTPUT_PATH = "static/pnl_report.pdf"
+
 
 def generate_daily_report():
     try:
         if not os.path.exists(PNL_FILE):
             raise FileNotFoundError(f"{PNL_FILE} not found.")
 
-        # קריאה לתוך מבנה נתון
-        raw = pd.read_json(PNL_FILE)
+        with open(PNL_FILE, "r") as f:
+            raw = json.load(f)
 
-        if isinstance(raw, dict):  # אם בפורמט חדש של מילון לפי תאריך
-            records = []
-            for date, trades in raw.items():
-                for trade in trades:
-                    trade["timestamp"] = f"{date}T00:00:00"
-                    records.append(trade)
-            df = pd.DataFrame(records)
-        else:
-            df = raw
+        records = []
+        for date, trades in raw.items():
+            for trade in trades:
+                trade["timestamp"] = f"{date}T00:00:00"
+                trade.setdefault("success", 1 if trade.get("pnl", 0) > 0 else 0)
+                records.append(trade)
 
-        # עיבוד נתונים
+        df = pd.DataFrame(records)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["date"] = df["timestamp"].dt.date
 
@@ -39,7 +37,7 @@ def generate_daily_report():
         grouped.columns = ["Date", "Total PNL", "Trades", "Success Rate"]
         grouped["Success Rate"] = (grouped["Success Rate"] * 100).round(2)
 
-        # יצירת PDF
+        # PDF
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
@@ -47,21 +45,27 @@ def generate_daily_report():
         pdf.ln(10)
 
         for _, row in grouped.iterrows():
-            date_str = row["Date"].strftime("%Y-%m-%d")
-            line = f"{date_str} | PNL: ${row['Total PNL']:.2f} | Trades: {int(row['Trades'])} | Success: {row['Success Rate']:.2f}%"
+            line = f"{row['Date']} | PNL: ${row['Total PNL']:.2f} | Trades: {int(row['Trades'])} | Success: {row['Success Rate']:.2f}%"
             pdf.cell(200, 10, txt=line, ln=1)
 
-        output_path = "daily_report.pdf"
-        pdf.output(output_path)
+        pdf.output(PDF_OUTPUT_PATH)
 
-        with open(output_path, "rb") as f:
+        with open(PDF_OUTPUT_PATH, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
 
         return encoded
 
     except Exception as e:
-        print("❌ Error generating report:", str(e))
+        print(f"❌ Error generating report: {e}")
         return None
+
+
+def send_email_alert(subject, body):
+    """
+    שליחת מייל בעת ביצוע טרייד (בהמשך אפשר להחליף ב־Telegram)
+    כרגע: רק הדפסה למסך כ־simulation.
+    """
+    print(f"📬 EMAIL: {subject}\n{body}")
 
 
 
