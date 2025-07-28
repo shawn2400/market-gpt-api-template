@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.volatility import AverageTrueRange
+import logging
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -20,7 +21,6 @@ SYMBOL_LIMIT = 300
 CANDLE_LIMIT = 100
 MIN_VOLUME = 10_000_000
 MIN_VOLATILITY_PERCENT = 2.0
-
 
 # === חישוב OBV ===
 def calculate_obv(df):
@@ -36,7 +36,6 @@ def calculate_obv(df):
     df['obv_trend'] = df['obv'].diff() > 0
     return df
 
-
 # === סמלים של Binance Futures ===
 async def fetch_futures_symbols():
     try:
@@ -48,9 +47,8 @@ async def fetch_futures_symbols():
             if s["contractType"] == "PERPETUAL" and s["status"] == "TRADING"
         ][:SYMBOL_LIMIT]
     except Exception as e:
-        print(f"[!] שגיאה בהבאת סמלים: {e}")
+        logging.error(f"[!] שגיאה בהבאת סמלים: {e}")
         return []
-
 
 # === נתוני נרות ===
 async def fetch_historical_klines(session, symbol, interval="1m", limit=CANDLE_LIMIT):
@@ -68,9 +66,8 @@ async def fetch_historical_klines(session, symbol, interval="1m", limit=CANDLE_L
                 df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].astype(float)
                 return df
         except Exception as e:
-            print(f"[!] ניסיון כושל ({symbol}): {e}")
+            logging.warning(f"[!] ניסיון כושל ({symbol}): {e}")
     return None
-
 
 # === אינדיקטורים טכניים ===
 def compute_indicators(df):
@@ -90,9 +87,8 @@ def compute_indicators(df):
         df.dropna(inplace=True)
         return df
     except Exception as e:
-        print(f"[!] שגיאה באינדיקטורים: {e}")
+        logging.error(f"[!] שגיאה באינדיקטורים: {e}")
         return df
-
 
 # === ניתוח סמל בודד ===
 async def fetch_symbol_analysis(session, symbol):
@@ -130,23 +126,23 @@ async def fetch_symbol_analysis(session, symbol):
         "signal": signal
     }
 
-
 # === סריקה חיה מלאה ===
 async def scan_all_futures():
     symbols = await fetch_futures_symbols()
     if not symbols:
-        print("[!] לא נמצאו סמלים לסריקה.")
+        logging.warning("[!] לא נמצאו סמלים לסריקה.")
         return []
 
-    print(f"🔍 סריקה על {len(symbols)} מטבעות מ-Binance Futures")
+    logging.info(f"🔍 סריקה על {len(symbols)} מטבעות מ-Binance Futures")
 
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_symbol_analysis(session, symbol) for symbol in symbols]
         results = await asyncio.gather(*tasks)
         valid = [r for r in results if r]
 
-    print(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
+    logging.info(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
     return valid
+
 
 
 
