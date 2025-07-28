@@ -1,13 +1,12 @@
 import asyncio
 import aiohttp
-import time
 import pandas as pd
 from binance import AsyncClient
 import os
 from dotenv import load_dotenv
 from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.volatility import AverageTrueRange, BollingerBands
+from ta.volatility import AverageTrueRange
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -16,7 +15,11 @@ API_SECRET = os.getenv("BINANCE_API_SECRET")
 MAX_RETRIES = 3
 SYMBOL_LIMIT = 300
 CANDLE_LIMIT = 100
+MIN_VOLUME = 10_000_000
+MIN_VOLATILITY_PERCENT = 2.0
 
+
+# === חישוב OBV ===
 def calculate_obv(df):
     obv = [0]
     for i in range(1, len(df)):
@@ -30,6 +33,8 @@ def calculate_obv(df):
     df['obv_trend'] = df['obv'].diff() > 0
     return df
 
+
+# === סמלים של Binance Futures ===
 async def fetch_futures_symbols():
     client = await AsyncClient.create(API_KEY, API_SECRET)
     exchange_info = await client.futures_exchange_info()
@@ -40,28 +45,8 @@ async def fetch_futures_symbols():
         if symbol["contractType"] == "PERPETUAL" and symbol["status"] == "TRADING"
     ][:SYMBOL_LIMIT]
 
-async def fetch_symbol_data(session, symbol):
-    url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}"
-    for attempt in range(MAX_RETRIES):
-        try:
-            async with session.get(url, timeout=10) as response:
-                response.raise_for_status()
-                return await response.json()
-        except aiohttp.ClientResponseError as e:
-            print(f"⚠️ שגיאה ({e.status}) על {symbol} | ניסיון {attempt+1}")
-            if e.status in [429, 418]:
-                print("⏳ חסימה זמנית – ממתין 10 שניות")
-                await asyncio.sleep(10)
-            elif e.status >= 500:
-                print("🛠 שגיאת שרת – ננסה שוב")
-                await asyncio.sleep(2)
-            else:
-                break
-        except Exception as e:
-            print(f"❌ שגיאה כללית על {symbol}:", str(e))
-            await asyncio.sleep(1)
-    return None
 
+# === נתוני נר בודד לניתוח ===
 async def fetch_historical_klines(session, symbol, interval="1m", limit=CANDLE_LIMIT):
     url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
@@ -75,23 +60,76 @@ async def fetch_historical_klines(session, symbol, interval="1m", limit=CANDLE_L
             df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].astype(float)
             return df
     except Exception as e:
-        print(f"[!] שגיאה בהורדת נתונים עבור {symbol}: {e}")
+        print(f"[!] שגיאה בנתוני קווים ל־{symbol}: {e}")
         return None
 
+
+# === אינדיקטורים טכניים ===
+def compute_indicators(df):
+    df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
+    df['ema_50'] = EMAIndicator(df['close'], window=50).ema_indicator()
+    df['rsi'] = RSIIndicator(df['close']).rsi()
+    macd = MACD(df['close'])
+    df['macd_hist'] = macd.macd_diff()
+    df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
+    df['atr'] = AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
+    stoch = StochasticOscillator(df['high'], df['low'], df['close'])
+    df['stoch_k'] = stoch.stoch()
+    df['stoch_d'] = stoch.stoch_signal()
+    df['volume_mean'] = df['volume'].rolling(window=20).mean()
+    df = calculate_obv(df)
+    df.dropna(inplace=True)
+    return df
+
+
+# === שליפת נתוני Symbol בודד עם ניתוח ===
+async def fetch_symbol_analysis(session, symbol):
+    kline_df = await fetch_historical_klines(session, symbol)
+    if kline_df is None or len(kline_df) < 30:
+        return None
+
+    kline_df = compute_indicators(kline_df)
+    last = kline_df.iloc[-1]
+
+    signal = None
+    if (
+        last['rsi'] < 30 and last['macd_hist'] > 0 and last['close'] > last['ema_21']
+        and last['adx'] > 17 and last['volume'] > last['volume_mean'] * 1.3
+    ):
+        signal = "LONG"
+    elif (
+        last['rsi'] > 70 and last['macd_hist'] < 0 and last['close'] < last['ema_21']
+        and last['adx'] > 17 and not last['obv_trend']
+    ):
+        signal = "SHORT"
+
+    return {
+        "symbol": symbol,
+        "price": last['close'],
+        "rsi": round(last['rsi'], 2),
+        "adx": round(last['adx'], 2),
+        "atr": round(last['atr'], 4),
+        "macd_hist": round(last['macd_hist'], 4),
+        "stoch_k": round(last['stoch_k'], 2),
+        "volume": round(last['volume'], 2),
+        "signal": signal
+    } if signal else None
+
+
+# === סריקה מלאה ===
 async def scan_all_futures():
     symbols = await fetch_futures_symbols()
-    print(f"🔍 סורק {len(symbols)} מטבעות Futures מ-Binance")
+    print(f"🔍 סריקה על {len(symbols)} סימולים מ־Binance Futures")
 
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_symbol_data(session, symbol) for symbol in symbols]
-        raw_results = await asyncio.gather(*tasks)
+        tasks = [fetch_symbol_analysis(session, symbol) for symbol in symbols]
+        results = await asyncio.gather(*tasks)
+        valid = [res for res in results if res is not None]
 
-        # סינון סמלים עם תנועה חזקה בלבד (volume גבוה + תנועה משמעותית)
-        results = [res for res in raw_results if res and float(res.get("quoteVolume", 0)) > 10_000_000 and abs(float(res.get("priceChangePercent", 0))) > 2.0]
+    print(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
+    return valid
 
-        print(f"✅ נמצאו {len(results)} סמלים בעלי תנועה חזקה מתוך {len(symbols)}")
 
-        return results
 
 
 
