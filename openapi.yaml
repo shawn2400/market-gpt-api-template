@@ -19,6 +19,7 @@ tags:
 paths:
   /:
     get:
+      tags: [Config]
       summary: בדיקת סטטוס השרת
       operationId: checkServerStatus
       responses:
@@ -38,6 +39,7 @@ paths:
 
   /scan:
     get:
+      tags: [Trades]
       summary: סריקה חיה של שוק Binance Futures לפי אינדיקטורים
       operationId: scanFuturesMarket
       responses:
@@ -55,25 +57,20 @@ paths:
                       properties:
                         symbol:
                           type: string
-                          example: ETHUSDT
                         last_price:
                           type: number
-                          example: 2920.15
                         volume:
                           type: number
-                          example: 35000000
                         rsi:
                           type: number
-                          example: 28.7
                         adx:
                           type: number
-                          example: 21.2
                         direction:
                           type: string
-                          example: LONG
 
   /backtest:
     post:
+      tags: [Trades]
       summary: ביצוע סימולציית Backtest על סדרת מחירים
       operationId: runBacktest
       requestBody:
@@ -100,6 +97,10 @@ paths:
                         type: number
                       volume:
                         type: number
+                symbol:
+                  type: string
+                interval:
+                  type: string
       responses:
         '200':
           description: תוצאות backtest
@@ -121,7 +122,6 @@ paths:
                           type: string
                         signal:
                           type: string
-                          example: LONG
                         entry:
                           type: number
                         stop:
@@ -146,20 +146,12 @@ paths:
                     type: number
         '400':
           description: חסרה היסטוריית מחירים
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                    example: Insufficient data – at least 30 candles are required
-                  code:
-                    type: string
-                    example: ERR_TOO_SHORT
+        '500':
+          description: שגיאה כללית
 
   /execute-trade:
     post:
+      tags: [Trades]
       summary: ביצוע טרייד בפועל על Binance Futures
       operationId: executeLiveTrade
       requestBody:
@@ -182,15 +174,17 @@ paths:
                   enum: [LONG, SHORT]
                 leverage:
                   type: number
-                budget_usd:
+                budget:
                   type: number
                 use_grid:
                   type: boolean
                 use_trailing:
                   type: boolean
+                user_id:
+                  type: string
       responses:
         '200':
-          description: תוצאה של ביצוע הטרייד
+          description: טרייד בוצע
           content:
             application/json:
               schema:
@@ -198,35 +192,23 @@ paths:
                 properties:
                   status:
                     type: string
-                    example: success
                   confidence:
                     type: number
-                    example: 88.4
                   quality_score:
                     type: number
-                    example: 7
                   quantity:
                     type: number
                   snapshot:
                     type: string
                   news_score:
                     type: number
-        '400':
+        '500':
           description: שגיאה בביצוע
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: error
-                  message:
-                    type: string
 
   /calculate-quantity:
     post:
-      summary: חישוב כמות נכונה למסחר לפי מחיר, מינוף ותקציב
+      tags: [Trades]
+      summary: חישוב כמות נכונה לפי מחיר, מינוף ותקציב
       operationId: calculateQuantity
       requestBody:
         required: true
@@ -245,7 +227,7 @@ paths:
                   type: number
       responses:
         '200':
-          description: תוצאה של החישוב
+          description: תוצאה
           content:
             application/json:
               schema:
@@ -254,50 +236,71 @@ paths:
                   quantity:
                     type: number
 
+  /sl_tp:
+    post:
+      tags: [Trades]
+      summary: חישוב SL ו־TP לפי גרף
+      operationId: calculateSLTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                df:
+                  type: array
+                  items:
+                    type: object
+                direction:
+                  type: string
+      responses:
+        '200':
+          description: תוצאה
+        '500':
+          description: שגיאה
+
+  /news:
+    get:
+      tags: [News]
+      summary: שליפת חדשות קריפטו
+      operationId: getNews
+      responses:
+        '200':
+          description: רשימת חדשות
+
+  /analyze-news:
+    get:
+      tags: [News]
+      summary: ניתוח חדשות וסנטימנט
+      operationId: analyzeNews
+      responses:
+        '200':
+          description: ניתוח סנטימנט
+
   /daily-report:
     get:
+      tags: [Reports]
       summary: הפקת דוח יומי כולל סטטיסטיקות
       operationId: getDailyReport
       responses:
         '200':
-          description: דוח PDF מוצלח (ב־base64 או קובץ)
+          description: דוח ב־base64
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  status:
-                    type: string
                   base64_pdf:
                     type: string
-
-  /news:
-    get:
-      summary: שליפת חדשות קריפטו וניתוח סנטימנט
-      operationId: getNewsSentiment
-      responses:
-        '200':
-          description: רשימת חדשות עם ניקוד סנטימנט
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    title:
-                      type: string
-                    published_at:
-                      type: string
-                    url:
-                      type: string
-                    impact_score:
-                      type: number
+                  status:
+                    type: string
 
   /ai-analyze:
     post:
-      summary: ניתוח גרפי וסטטיסטי באמצעות AI
-      operationId: aiAnalyzeChart
+      tags: [AI]
+      summary: ניתוח גרפי וסטטיסטי עם AI
+      operationId: analyzeWithAI
       requestBody:
         required: true
         content:
@@ -311,7 +314,7 @@ paths:
                     type: number
       responses:
         '200':
-          description: פלט ניתוח AI
+          description: תוצאה מה-AI
           content:
             application/json:
               schema:
@@ -319,10 +322,8 @@ paths:
                 properties:
                   trend:
                     type: string
-                    example: UP
                   confidence:
                     type: number
-                    example: 92.3
 
 components:
   schemas: {}
