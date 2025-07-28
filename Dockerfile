@@ -1,3 +1,4 @@
+
 # שלב בסיסי: Python רזה
 FROM python:3.11-slim
 
@@ -9,6 +10,7 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
+    g++ \
     libffi-dev \
     libatlas-base-dev \
     libprotobuf-dev \
@@ -18,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     liblapack-dev \
     gfortran \
     git \
+    curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # הגדרת תיקיית עבודה
@@ -26,7 +29,11 @@ WORKDIR /app
 # העתקת קובץ הדרישות בלבד קודם – יאפשר cache טוב
 COPY requirements.txt .
 
-# התקנת חבילות Python
+# פתרון לקריסה של pystan: התקנה מוקדמת של numpy ו-cython
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir numpy cython
+
+# התקנת כל הדרישות
 RUN pip install --no-cache-dir -r requirements.txt
 
 # העתקת שאר קבצי הקוד
