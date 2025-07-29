@@ -1,51 +1,18 @@
-# utils/get_live_price.py
+from utils.binance_client import client
 
-import logging
-from typing import Optional
-
-def get_live_price(symbol: str, is_futures: bool = True, source: str = "last") -> Optional[float]:
+def get_price(symbol: str, market_type: str = "futures") -> float:
     """
-    מחזיר מחיר עדכני מ־Binance (Spot או Futures)
-    
-    Args:
-        symbol (str): לדוגמה: "BTCUSDT"
-        is_futures (bool): האם לשלוף מ־Futures (True) או Spot (False)
-        source (str): מקור המחיר: 'last', 'mark', 'index' (רק עבור Futures)
-    
-    Returns:
-        float | None: מחיר עדכני או None במקרה של שגיאה
+    מחזיר את מחיר השוק החי של המטבע הנתון.
     """
     try:
-        from utils.binance_client import client
-
-        symbol = symbol.upper().strip()
-        if not client:
-            logging.warning("⚠️ Binance client לא מאותחל.")
-            return None
-
-        if is_futures:
-            if source == "mark":
-                data = client.futures_mark_price(symbol=symbol)
-                return float(data.get("markPrice"))
-            elif source == "index":
-                data = client.futures_index_price(symbol=symbol)
-                return float(data.get("indexPrice"))
-            else:
-                data = client.futures_symbol_ticker(symbol=symbol)
-                return float(data.get("price"))
+        if market_type == "futures":
+            data = client.futures_symbol_ticker(symbol=symbol)
         else:
             data = client.get_symbol_ticker(symbol=symbol)
-            return float(data.get("price"))
-
+        return float(data["price"])
     except Exception as e:
-        logging.error(f"[get_live_price] שגיאה בשליפת מחיר עבור {symbol} (source={source}): {e}")
-        return None
+        raise RuntimeError(f"שגיאה בשליפת מחיר חי עבור {symbol}: {e}")
 
-# בדיקה עצמית (run standalone)
-if __name__ == "__main__":
-    symbol = "BTCUSDT"
-    price = get_live_price(symbol)
-    print(f"🔹 מחיר {symbol}: {price if price else 'שגיאה'}")
 
 
 
