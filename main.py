@@ -43,6 +43,7 @@ class TradeRequest(BaseModel):
     use_grid: bool = False
     use_trailing: bool = False
     user_id: str = None
+    take_snapshot: bool = True
 
 class AIAnalysisRequest(BaseModel):
     rsi: float
@@ -149,7 +150,7 @@ async def execute_trade(data: TradeRequest):
             use_grid=data.use_grid,
             use_trailing=data.use_trailing,
             user_id=data.user_id,
-            take_snapshot=True
+            take_snapshot=data.take_snapshot
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -203,6 +204,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
