@@ -1,4 +1,4 @@
-# scanner_utils.py – גרסה משודרגת תואמת auto_executor עם Snapshot
+# scanner_utils.py – גרסה משודרגת עם טיפול ב־GPT Rate Limit ותמיכה בפרמטרים דינמיים
 
 import asyncio
 import aiohttp
@@ -9,20 +9,21 @@ from dotenv import load_dotenv
 import logging
 from utils.quality_score import compute_quality_score
 from ai_analysis import analyze_with_ai
-from indicators_utils import compute_indicators  # ← שימוש בקובץ המרכזי
+from indicators_utils import compute_indicators
 from snapshot_utils import save_trade_snapshot
-import matplotlib.pyplot as plt  # ← שילוב גרף
+import matplotlib.pyplot as plt
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-# הגדרות
-MAX_RETRIES = 3
+# הגדרות ברירת מחדל
+DEFAULT_INTERVAL = "1m"
 SYMBOL_LIMIT = 300
 CANDLE_LIMIT = 100
 MIN_VOLUME = 10_000_000
 MIN_VOLATILITY_PERCENT = 2.0
+MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 5))
 
 # === סמלים של Binance Futures ===
 async def fetch_futures_symbols():
@@ -39,9 +40,9 @@ async def fetch_futures_symbols():
         return []
 
 # === נתוני נרות ===
-async def fetch_historical_klines(session, symbol, interval="1m", limit=CANDLE_LIMIT):
+async def fetch_historical_klines(session, symbol, interval=DEFAULT_INTERVAL, limit=CANDLE_LIMIT):
     url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    for _ in range(MAX_RETRIES):
+    for _ in range(3):
         try:
             async with session.get(url, timeout=10) as response:
                 response.raise_for_status()
@@ -81,15 +82,6 @@ async def fetch_symbol_analysis(session, symbol):
     if not signal:
         return None
 
-    # חיזוי AI
-    ai_analysis = analyze_with_ai({
-        "rsi": round(last['rsi'], 2),
-        "adx": round(last['adx'], 2),
-        "trend": signal,
-        "volume": round(last['volume'], 2),
-        "pattern": "N/A"
-    })
-
     # חישוב SL/TP לפי ATR
     atr = last['atr']
     entry = last['close']
@@ -98,8 +90,24 @@ async def fetch_symbol_analysis(session, symbol):
 
     direction = signal
     quality_score = compute_quality_score(kline_df)
+    if quality_score < MIN_QUALITY_SCORE:
+        return None
 
-    # יצירת Snapshot לגרף
+    # חיזוי AI – מוגן מ־Rate Limit
+    try:
+        ai_analysis = analyze_with_ai({
+            "rsi": round(last['rsi'], 2),
+            "adx": round(last['adx'], 2),
+            "trend": signal,
+            "volume": round(last['volume'], 2),
+            "pattern": "N/A"
+        })
+        ai_result = ai_analysis.get("analysis", "N/A")
+    except Exception as e:
+        logging.warning(f"[!] שגיאה ב־AI עבור {symbol}: {e}")
+        ai_result = "N/A"
+
+    # צילום snapshot
     snapshot_path = save_trade_snapshot({
         "symbol": symbol,
         "entry": entry,
@@ -108,12 +116,12 @@ async def fetch_symbol_analysis(session, symbol):
         "direction": direction
     })
 
-    # יצירת גרף עם matplotlib
+    # שמירת גרף
     try:
         os.makedirs("static", exist_ok=True)
         plt.figure(figsize=(6, 4))
-        plt.plot(kline_df['timestamp'][-20:], kline_df['close'][-20:], marker='o', linestyle='-', label='Close Price')
-        plt.title(f"📈 {symbol} Snapshot", fontsize=14)
+        plt.plot(kline_df['timestamp'][-20:], kline_df['close'][-20:], marker='o', linestyle='-', label='Close')
+        plt.title(f"📈 {symbol} Snapshot")
         plt.xlabel("Time")
         plt.ylabel("Price")
         plt.grid(True)
@@ -141,7 +149,7 @@ async def fetch_symbol_analysis(session, symbol):
         "volume": round(last['volume'], 2),
         "signal": signal,
         "quality_score": quality_score,
-        "ai_analysis": ai_analysis.get("analysis", "N/A"),
+        "ai_analysis": ai_result,
         "snapshot": snapshot_path,
         "chart": chart_path
     }
