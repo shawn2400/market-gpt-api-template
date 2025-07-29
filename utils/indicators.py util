@@ -1,4 +1,4 @@
-# indicators_utils.py
+# indicators_utils.py – גרסה מלאה מתקדמת
 
 import ta
 import pandas as pd
@@ -45,11 +45,29 @@ def compute_indicators(df, volume_window=20):
         # CCI
         df['cci'] = ta.trend.CCIIndicator(high=df['high'], low=df['low'], close=df['close'], window=20).cci()
 
+        # Bollinger Bands
+        bb = ta.volatility.BollingerBands(close=df['close'], window=20)
+        df['bb_upper'] = bb.bollinger_hband()
+        df['bb_lower'] = bb.bollinger_lband()
+        df['bb_width'] = df['bb_upper'] - df['bb_lower']
+
+        # MFI
+        mfi = ta.volume.MFIIndicator(high=df['high'], low=df['low'], close=df['close'], volume=df['volume'])
+        df['mfi'] = mfi.money_flow_index()
+
         # Doji
         df['is_doji'] = (abs(df['close'] - df['open']) / (df['high'] - df['low'] + 1e-6)) < 0.1
 
-        # GRID Signal (optional logic)
+        # Grid Signal
         df['grid_signal'] = ((df['rsi'] < 35) & (df['macd_hist'] > 0) & (df['adx'] > 17))
+
+        # טכני משוקלל (לא חובה – אבל שימושי להסקת AI)
+        df['tech_score'] = (
+            (df['rsi'].between(45, 60)) * 1 +
+            (df['adx'] > 20) * 1 +
+            (df['macd_hist'] > 0) * 1 +
+            (df['close'] > df['ema_21']) * 1
+        )
 
         df.dropna(inplace=True)
         return df
@@ -60,14 +78,13 @@ def compute_indicators(df, volume_window=20):
 
 
 # שילוב עם backtest_utils.py
-
 def prepare_indicators_for_backtest(df):
     return compute_indicators(df)
-
 
 # שילוב עם סריקת שוק חיה (scanner_utils.py)
 def prepare_indicators_for_live_scan(df):
     return compute_indicators(df)
+
 
 
 
