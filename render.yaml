@@ -2,11 +2,28 @@ services:
   - type: web
     name: algo-gpt-fastapi
     env: docker
-    plan: free
+    plan: starter  # או advanced אם אתה על תוכנית בתשלום
     autoDeploy: true
     envVars:
       - key: PORT
         value: 5000
+      - key: BINANCE_API_KEY
+        value: your_api_key_here
+      - key: BINANCE_API_SECRET
+        value: your_api_secret_here
+      - key: AUTO_RUN
+        value: "true"
+      - key: MIN_QUALITY_SCORE
+        value: "6"
+      - key: MAX_TRADE_BUDGET
+        value: "100"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
+
+healthCheckPath: /
+
 
 
 
