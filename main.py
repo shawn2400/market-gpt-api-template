@@ -1,23 +1,12 @@
-### ✅ main.py – קובץ API ראשי
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import pandas as pd
 import os
 import asyncio
+import time
 
-from backtest_utils import run_backtest
-from news_utils import fetch_crypto_news, analyze_news_impact
-from utils.quantity_utils import calculate_quantity
-from utils.sl_tp_utils import calculate_sl_tp
-from utils.trade_storage import save_trade
-from snapshot_utils import save_trade_snapshot
-from trade_executor import execute_trade_live
-from scanner_utils import scan_all_futures
-from report_utils import generate_daily_report
-from ai_analysis import analyze_with_ai
-from auto_executor import start_auto_executor
-
+__boot_start__ = time.time()
 load_dotenv()
 
 app = FastAPI(title="AlgoGPT API", description="API למסחר אלגוריתמי עם Binance", version="1.3.0")
@@ -61,6 +50,7 @@ async def home():
 @app.post("/sl_tp")
 async def sl_tp(request: SLTPRequest):
     try:
+        from utils.sl_tp_utils import calculate_sl_tp
         df = pd.DataFrame(request.df)
         result = calculate_sl_tp(df, request.direction)
         return result
@@ -70,6 +60,7 @@ async def sl_tp(request: SLTPRequest):
 @app.post("/calculate-quantity")
 async def calc_qty(data: QuantityRequest):
     try:
+        from utils.quantity_utils import calculate_quantity
         quantity = calculate_quantity(data.symbol, data.price, data.leverage, data.budget)
         return {"quantity": quantity}
     except Exception as e:
@@ -77,16 +68,26 @@ async def calc_qty(data: QuantityRequest):
 
 @app.get("/news")
 async def news():
-    return fetch_crypto_news()
+    try:
+        from news_utils import fetch_crypto_news
+        return fetch_crypto_news()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/analyze-news")
 async def analyze_news():
-    news = fetch_crypto_news()
-    return analyze_news_impact(news)
+    try:
+        from news_utils import fetch_crypto_news, analyze_news_impact
+        news = fetch_crypto_news()
+        return analyze_news_impact(news)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/backtest")
 async def backtest(request: BacktestRequest):
     try:
+        from backtest_utils import run_backtest
+
         if not request.prices or len(request.prices) < 30:
             raise HTTPException(
                 status_code=400,
@@ -124,6 +125,7 @@ async def backtest(request: BacktestRequest):
 @app.post("/execute-trade")
 async def execute_trade(data: TradeRequest):
     try:
+        from trade_executor import execute_trade_live
         result = await execute_trade_live(
             symbol=data.symbol,
             entry=data.entry,
@@ -143,6 +145,7 @@ async def execute_trade(data: TradeRequest):
 @app.get("/scan")
 async def scan():
     try:
+        from scanner_utils import scan_all_futures
         results = await scan_all_futures()
         return {"results": results}
     except Exception as e:
@@ -151,14 +154,15 @@ async def scan():
 @app.get("/daily-report")
 async def daily_report():
     try:
-        result = generate_daily_report()
-        return result
+        from report_utils import generate_daily_report
+        return generate_daily_report()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/ai-analyze")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
+        from ai_analysis import analyze_with_ai
         return analyze_with_ai(data.prices)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -167,6 +171,8 @@ async def ai_analyze(data: AIAnalysisRequest):
 @app.on_event("startup")
 async def start_background_tasks():
     try:
+        from auto_executor import start_auto_executor
+
         auto_run = os.getenv("AUTO_RUN", "true").lower()
         min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
         max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -174,8 +180,13 @@ async def start_background_tasks():
         if auto_run == "true":
             print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
             asyncio.create_task(start_auto_executor(delay=30, min_quality=min_quality, max_budget=max_trade_budget))
+
+        elapsed = time.time() - __boot_start__
+        print(f"[BOOT TIME] Server ready in {elapsed:.2f} seconds")
+
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
