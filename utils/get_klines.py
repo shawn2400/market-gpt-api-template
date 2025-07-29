@@ -1,5 +1,3 @@
-# utils/get_klines.py
-
 from utils.binance_client import client
 import pandas as pd
 
@@ -76,6 +74,7 @@ def get_klines(
     except Exception as e:
         print(f"[!] שגיאה בשליפת Klines עבור {symbol}: {e}")
         return pd.DataFrame()
+
 
 
 
