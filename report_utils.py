@@ -6,10 +6,12 @@ from fpdf import FPDF
 import pandas as pd
 import smtplib
 from email.message import EmailMessage
+from dotenv import load_dotenv
+
+load_dotenv()
 
 PNL_FILE = "pnl_tracker.json"
 PDF_OUTPUT_PATH = "static/pnl_report.pdf"
-EMAIL_CONFIG_PATH = "email_config.json"
 
 
 def generate_daily_report(as_of_date=None):
@@ -79,25 +81,18 @@ def generate_daily_report(as_of_date=None):
         return {"status": "error", "message": str(e)}
 
 
-def send_email_alert(subject: str, message: str, to_emails: list):
+def send_email_alert(subject: str, message: str, to_emails: list = None):
     try:
-        if not os.path.exists(EMAIL_CONFIG_PATH):
-            raise FileNotFoundError("email_config.json not found.")
+        sender_email = os.getenv("ALERT_EMAIL_ADDRESS")
+        sender_password = os.getenv("ALERT_EMAIL_PASSWORD")
+        default_to = os.getenv("ALERT_TO_EMAIL")
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 587
 
-        with open(EMAIL_CONFIG_PATH, "r") as f:
-            config = json.load(f)
+        if not sender_email or not sender_password or not default_to:
+            raise ValueError("❌ שדות אימייל חסרים בקובץ .env")
 
-        if not config.get("enabled", True):
-            print("📭 שליחת מיילים כבויה בקובץ config.")
-            return
-
-        smtp_server = config.get("smtp_server")
-        smtp_port = config.get("smtp_port", 587)
-        sender_email = config.get("sender_email")
-        sender_password = config.get("sender_password")
-
-        if not smtp_server or not sender_email or not sender_password:
-            raise ValueError("Missing email configuration fields.")
+        to_emails = to_emails or [default_to]
 
         msg = EmailMessage()
         msg["Subject"] = subject
@@ -114,6 +109,7 @@ def send_email_alert(subject: str, message: str, to_emails: list):
 
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
+
 
 
 
