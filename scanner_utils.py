@@ -82,7 +82,7 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
 async def scan_all(
     market_type: str = "futures",
     interval: str = "15m",
-    limit: int = 100,
+    limit: int = 30,  # הגבלה ל־30 בלבד
     min_quality: int = 5
 ):
     symbols = get_symbols(market_type=market_type)[:limit]
@@ -91,8 +91,9 @@ async def scan_all(
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
-    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
+    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]  # החזרים עד 5
     return filtered
+
 
 
 
