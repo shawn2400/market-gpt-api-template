@@ -1,87 +1,78 @@
 # utils/quantity_utils.py
 
 import math
-from utils.binance_client import client
 import logging
+from utils.calculate_quantity import get_precision_info
 
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-
-def round_step(quantity, step_size: float) -> float:
+def round_step(quantity: float, step: float) -> float:
     """
     עיגול כמות לפי stepSize
     """
     try:
-        return math.floor(quantity / step_size) * step_size
+        return math.floor(quantity / step) * step
     except Exception as e:
-        logging.error(f"[!] שגיאה בעיגול כמות לפי stepSize: {e}")
+        logging.error(f"[!] שגיאה בעיגול כמות: {e}")
         return 0.0
 
-def get_symbol_precision(symbol: str) -> dict:
+def auto_risk_allocation(entry_price: float, stop_price: float, total_budget: float, risk_percent: float = 2.0, leverage: float = 1, symbol: str = None) -> float:
     """
-    מחזיר את הגדרות stepSize ו־minQty לסימבול מסוים
-    """
-    try:
-        exchange_info = client.futures_exchange_info()
-        symbol_info = next((s for s in exchange_info['symbols'] if s['symbol'] == symbol), None)
-        if not symbol_info:
-            raise ValueError(f"Symbol {symbol} not found in exchange info")
-
-        lot_size_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'LOT_SIZE'), {})
-        return {
-            "stepSize": float(lot_size_filter.get("stepSize", 0.01)),
-            "minQty": float(lot_size_filter.get("minQty", 0.0))
-        }
-    except Exception as e:
-        logging.error(f"[!] שגיאה בשליפת precision עבור {symbol}: {e}")
-        return {"stepSize": 0.01, "minQty": 0.0}
-
-def calculate_quantity(budget_usd, entry_price, leverage, symbol=None) -> float:
-    """
-    מחשב כמות (quantity) בהתחשב בתקציב, מינוף, מחיר, stepSize של Binance
+    מחשב כמות חוזים לפי סיכון מוגדר ו־SL
     """
     try:
-        step_size = 0.01
-        if symbol:
-            precision = get_symbol_precision(symbol)
-            step_size = precision["stepSize"]
-
-        raw_qty = (budget_usd * leverage) / entry_price
-        qty = round_step(raw_qty, step_size)
-        return round(qty, 6)
-    except Exception as e:
-        logging.error(f"[!] שגיאה בחישוב כמות: {e}")
-        return 0.0
-
-def auto_risk_allocation(entry_price, stop_price, total_budget, risk_percent=2, leverage=1, symbol=None) -> dict:
-    """
-    מחשב כמות לפי סיכון אחוזי מהתקציב, תוך שימוש ב־stepSize
-    """
-    try:
-        risk_per_trade = total_budget * (risk_percent / 100)
+        risk_amount = total_budget * (risk_percent / 100)
         risk_per_unit = abs(entry_price - stop_price)
         if risk_per_unit == 0:
-            raise ValueError("Stop price and entry price זהים – אי אפשר לחשב סיכון")
+            raise ValueError("⚠️ Entry ו־Stop שווים – לא ניתן לחשב סיכון")
 
-        raw_qty = risk_per_trade / risk_per_unit
+        raw_qty = risk_amount / risk_per_unit
         capital_required = raw_qty * entry_price
 
         if symbol:
-            step_size = get_symbol_precision(symbol)["stepSize"]
-            qty = round_step(raw_qty, step_size)
+            precision = get_precision_info(symbol)
+            step = precision.get("stepSize", 0.01)
+            qty = round_step(raw_qty, step)
         else:
-            qty = round(raw_qty, 6)
+            qty = round(raw_qty, 3)
 
-        return {
-            "capital_required": min(capital_required, total_budget),
-            "quantity": qty
-        }
-
+        return qty
     except Exception as e:
-        logging.error(f"[!] שגיאה בחישוב חלוקת סיכון: {e}")
+        logging.error(f"[!] שגיאה ב־auto_risk_allocation: {e}")
+        return 0.0
+
+def generate_grid_levels_with_sl(entry_price: float, tp_price: float, sl_price: float, levels: int = 3) -> dict:
+    """
+    מחלק טווח רווח/הפסד לרמות TP ו־SL לגריד
+    """
+    try:
+        tp_diff = tp_price - entry_price
+        sl_diff = entry_price - sl_price
+
+        tp_levels = [round(entry_price + (tp_diff * i / levels), 4) for i in range(1, levels + 1)]
+        sl_levels = [round(entry_price - (sl_diff * i / levels), 4) for i in range(1, levels + 1)]
+
         return {
-            "capital_required": total_budget,
-            "quantity": 0
+            "tp_levels": tp_levels,
+            "sl_levels": sl_levels
         }
+    except Exception as e:
+        logging.error(f"[!] שגיאה ביצירת רמות גריד: {e}")
+        return {
+            "tp_levels": [],
+            "sl_levels": []
+        }
+
+def apply_precision(symbol: str, quantity: float) -> float:
+    """
+    מחזיר כמות מעוגלת לפי stepSize של הסימבול
+    """
+    try:
+        precision = get_precision_info(symbol)
+        step = precision.get("stepSize", 0.01)
+        return round_step(quantity, step)
+    except Exception as e:
+        logging.error(f"[!] שגיאה ב־apply_precision: {e}")
+        return 0.0
+
 
 
 
