@@ -1,5 +1,6 @@
 from utils.binance_client import client
 import pandas as pd
+import logging
 
 def get_klines(
     symbol: str,
@@ -31,7 +32,7 @@ def get_klines(
         market_type = "futures" if is_futures else "spot"
 
     if not client:
-        print("⚠️ Binance client לא מחובר.")
+        logging.warning("⚠️ Binance client לא מחובר.")
         return pd.DataFrame()
 
     mt = market_type
@@ -56,11 +57,11 @@ def get_klines(
                 endTime=end_time
             )
         else:
-            print(f"[!] סוג שוק לא נתמך: {mt}")
+            logging.error(f"[!] סוג שוק לא נתמך: {mt}")
             return pd.DataFrame()
 
         if not raw:
-            # אם רשימת הנתונים ריקה
+            logging.warning(f"[!] נתוני Klines ריקים עבור {symbol} בשוק {mt}")
             return pd.DataFrame()
 
         df = pd.DataFrame(raw, columns=[
@@ -76,8 +77,9 @@ def get_klines(
         return df
 
     except Exception as e:
-        print(f"[!] שגיאה בשליפת Klines עבור {symbol}: {e}")
+        logging.error(f"[!] שגיאה בשליפת Klines עבור {symbol}: {e}")
         return pd.DataFrame()
+
 
 
 
