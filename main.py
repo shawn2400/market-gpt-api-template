@@ -1,223 +1,110 @@
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
-from dotenv import load_dotenv
-import pandas as pd
+import requests
+import smtplib
+from email.message import EmailMessage
 import os
-import asyncio
-import time
+from dotenv import load_dotenv
 
-from utils.ai_analysis import analyze_with_ai
-
-__boot_start__ = time.time()
 load_dotenv()
 
-app = FastAPI(
-    title="AlgoGPT API",
-    description="API למסחר אלגוריתמי עם Binance (Futures, Spot, Grid, AI, דוחות)",
-    version="1.3.1"
-)
+# === משתנים נדרשים מה־.env ===
+CRYPTO_PANIC_API_KEY = os.getenv("CRYPTO_PANIC_API_KEY")
+EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS")
+EMAIL_PASSWORD = os.getenv("ALERT_EMAIL_PASSWORD")
+TO_EMAIL = os.getenv("ALERT_TO_EMAIL", EMAIL_ADDRESS)
 
-# === Data Models ===
-class SLTPRequest(BaseModel):
-    df: list
-    direction: str
 
-class QuantityRequest(BaseModel):
-    symbol: str
-    price: float
-    leverage: float
-    budget: float
-
-class BacktestRequest(BaseModel):
-    prices: list
-    symbol: str = "UNKNOWN"
-    interval: str = "15m"
-
-class TradeRequest(BaseModel):
-    symbol: str
-    entry: float
-    stop: float
-    tp: float
-    direction: str
-    leverage: int
-    budget: float = 100
-    use_grid: bool = False
-    use_trailing: bool = False
-    user_id: str = None
-    take_snapshot: bool = True
-    grid_mode: str = "FUTURES"
-
-class AIAnalysisRequest(BaseModel):
-    rsi: float
-    adx: float
-    trend: str
-    volume: float
-    pattern: str
-
-# === Routes ===
-
-@app.get("/", operation_id="checkServerStatus")
-async def home():
-    return {"status": "ok", "message": "AlgoGPT API is running ✅"}
-
-@app.post("/sl_tp", operation_id="calculateSLTP")
-async def sl_tp(request: SLTPRequest):
+# ✅ שליפת חדשות מ־CryptoPanic
+def fetch_crypto_news():
     try:
-        from utils.sl_tp_utils import calculate_sl_tp_adaptive
-        df = pd.DataFrame(request.df)
-        return calculate_sl_tp_adaptive(df, request.direction)
+        if not CRYPTO_PANIC_API_KEY:
+            raise ValueError("Missing CRYPTO_PANIC_API_KEY in environment")
+
+        url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTO_PANIC_API_KEY}&public=true"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+
+        return response.json().get("results", [])
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[!] שגיאה בשליפת חדשות: {e}")
+        return []
 
-@app.post("/calculate-quantity", operation_id="calculateQuantity")
-async def calc_qty(data: QuantityRequest):
+
+# ✅ ניתוח סנטימנט לפי מילים חיוביות/שליליות
+def analyze_news_impact(news_list, positive_words=None, negative_words=None):
+    scored_news = []
+    seen_urls = set()
+
+    default_positive = ["bullish", "surge", "breakout", "pump", "rally", "gain", "soar", "moon"]
+    default_negative = ["bearish", "crash", "fud", "dump", "selloff", "collapse", "fear", "rekt"]
+
+    positive_words = positive_words or default_positive
+    negative_words = negative_words or default_negative
+
+    for item in news_list:
+        url = item.get("url")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+
+        title = item.get("title", "").lower()
+        desc = item.get("description", "").lower()
+        text = title + " " + desc
+
+        score = 0
+        if any(word in text for word in positive_words):
+            score += 1
+        if any(word in text for word in negative_words):
+            score -= 1
+
+        scored_news.append({
+            "title": item.get("title"),
+            "published_at": item.get("published_at"),
+            "url": url,
+            "impact_score": score
+        })
+
+    return scored_news
+
+
+# ✅ שליחת מייל (עם או בלי קובץ PDF)
+def send_email_alert(subject, body="See attached.", attachment=None):
     try:
-        from utils.calculate_quantity import calculate_quantity
-        quantity = calculate_quantity(data.symbol, data.price, data.leverage, data.budget)
-        return {"quantity": quantity}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        if not all([EMAIL_ADDRESS, EMAIL_PASSWORD, TO_EMAIL]):
+            raise ValueError("Missing email credentials in environment")
 
-@app.get("/news", operation_id="fetchCryptoNews")
-async def news():
-    try:
-        from news_utils import fetch_crypto_news
-        return fetch_crypto_news()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_ADDRESS
+        msg["To"] = TO_EMAIL
+        msg.set_content(body)
 
-@app.get("/analyze-news", operation_id="analyzeNewsImpact")
-async def analyze_news():
-    try:
-        from news_utils import fetch_crypto_news, analyze_news_impact
-        news = fetch_crypto_news()
-        return analyze_news_impact(news)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        if attachment:
+            if isinstance(attachment, bytes):
+                msg.add_attachment(
+                    attachment,
+                    maintype="application",
+                    subtype="pdf",
+                    filename="report.pdf"
+                )
+            elif isinstance(attachment, str) and os.path.exists(attachment):
+                with open(attachment, "rb") as f:
+                    file_data = f.read()
+                msg.add_attachment(
+                    file_data,
+                    maintype="application",
+                    subtype="pdf",
+                    filename=os.path.basename(attachment)
+                )
 
-@app.post("/backtest", operation_id="runBacktest")
-async def backtest(request: BacktestRequest):
-    try:
-        from backtest_utils import run_backtest
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as smtp:
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            smtp.send_message(msg)
 
-        if not request.prices or len(request.prices) < 30:
-            raise HTTPException(status_code=400, detail={
-                "error": "Insufficient data – at least 30 candles are required",
-                "symbol": request.symbol,
-                "interval": request.interval,
-                "code": "ERR_TOO_SHORT"
-            })
-
-        df = pd.DataFrame(request.prices)
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df.dropna(inplace=True)
-
-        if df.empty:
-            raise HTTPException(status_code=400, detail="No valid rows after cleaning")
-
-        results = run_backtest(df)
-        return {
-            "symbol": request.symbol,
-            "interval": request.interval,
-            "results": results.to_dict(orient="records"),
-            "success_count": int(results["success"].sum()),
-            "total_trades": len(results),
-            "avg_quality": round(results["quality_score"].mean(), 2) if not results.empty else 0
-        }
-
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/execute-trade", operation_id="executeTrade")
-async def execute_trade(data: TradeRequest):
-    try:
-        if data.use_grid:
-            from utils.grid_utils import execute_grid
-            is_futures = (data.grid_mode or "FUTURES").upper() == "FUTURES"
-            return await asyncio.to_thread(
-                execute_grid,
-                symbol=data.symbol,
-                budget=data.budget,
-                grid_count=8,
-                grid_pct=0.5,
-                leverage=data.leverage,
-                futures=is_futures,
-                direction="BOTH",
-                tp_pct=1,
-                sl_pct=1
-            )
-        else:
-            from trade_executor import execute_trade_live
-            return await asyncio.to_thread(
-                execute_trade_live,
-                symbol=data.symbol,
-                entry=data.entry,
-                stop=data.stop,
-                tp=data.tp,
-                direction=data.direction,
-                leverage=data.leverage,
-                budget_usd=data.budget,
-                use_grid=data.use_grid,
-                use_trailing=data.use_trailing,
-                user_id=data.user_id,
-                take_snapshot=data.take_snapshot
-            )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/scan", operation_id="scanMarket")
-async def scan(
-    min_quality: int = Query(0, description="ציון איכות מינימלי"),
-    interval: str = Query("1m", description="טיימפריים לניתוח"),
-    limit: int = Query(300, description="מספר מטבעות לבדיקה")
-):
-    try:
-        from scanner_utils import scan_all  # ← תוקן! לא utils.scanner_utils
-        results = await scan_all(interval=interval, limit=limit, min_quality=min_quality)
-        return {"count": len(results), "results": results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/daily-report", operation_id="generateDailyReport")
-async def daily_report():
-    try:
-        from report_utils import generate_daily_report
-        return generate_daily_report()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/ai-analyze", operation_id="aiAnalysis")
-async def ai_analyze(data: AIAnalysisRequest):
-    try:
-        return analyze_with_ai(data.dict())
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.on_event("startup")
-async def start_background_tasks():
-    try:
-        from auto_executor import start_auto_executor
-
-        auto_run = os.getenv("AUTO_RUN", "true").lower()
-        min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
-        max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
-        delay = int(os.getenv("SCAN_INTERVAL", 30))
-
-        if auto_run == "true":
-            print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
-            asyncio.create_task(start_auto_executor(
-                delay=delay,
-                min_quality=min_quality,
-                max_budget=max_trade_budget
-            ))
-
-        print(f"[BOOT TIME] Server ready in {time.time() - __boot_start__:.2f} seconds")
+        print("[+] Email sent successfully.")
 
     except Exception as e:
-        print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+        print(f"[!] Email failed: {e}")
+
 
 
 
