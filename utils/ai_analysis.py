@@ -37,26 +37,34 @@ def analyze_with_ai(data: dict) -> dict:
         return {"error": f"שגיאה בניתוח GPT: {e}"}
 
 
-def predict_optimal_sl_tp(symbol: str, price: float, direction: str) -> dict:
+def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float = None) -> dict:
     """
-    חיזוי SL/TP חכם – מבוסס כיוון ומרווח הגיוני.
+    חיזוי SL/TP חכם – מבוסס כיוון + ATR אם קיים.
+    :param symbol: סימול
+    :param price: מחיר נוכחי
+    :param direction: 'LONG' או 'SHORT'
+    :param atr: ממוצע טווח תנודתיות (אופציונלי)
     """
     try:
         direction = direction.upper()
         if direction not in {"LONG", "SHORT"}:
             raise ValueError("כיוון לא חוקי: נדרש 'LONG' או 'SHORT'")
 
-        sl_pct = 0.01   # 1%
-        tp_pct = 0.015  # 1.5%
-
-        sl = price * (1 - sl_pct) if direction == "LONG" else price * (1 + sl_pct)
-        tp = price * (1 + tp_pct) if direction == "LONG" else price * (1 - tp_pct)
+        # ברירת מחדל אם אין ATR
+        if not atr or atr <= 0:
+            sl_pct = 0.01
+            tp_pct = 0.015
+            sl = price * (1 - sl_pct) if direction == "LONG" else price * (1 + sl_pct)
+            tp = price * (1 + tp_pct) if direction == "LONG" else price * (1 - tp_pct)
+        else:
+            sl = price - atr if direction == "LONG" else price + atr
+            tp = price + 1.5 * atr if direction == "LONG" else price - 1.5 * atr
 
         sl = round(sl, 4)
         tp = round(tp, 4)
 
+        # הגנה: אם המרווח קטן מדי
         if abs(tp - sl) / price < 0.005:
-            # אם המרווח קטן מ־0.5% – הגדל אותו (הגנה)
             adjust = price * 0.01
             sl = round(price - adjust, 4) if direction == "LONG" else round(price + adjust, 4)
             tp = round(price + adjust * 1.5, 4) if direction == "LONG" else round(price - adjust * 1.5, 4)
@@ -64,5 +72,6 @@ def predict_optimal_sl_tp(symbol: str, price: float, direction: str) -> dict:
         return {"sl": sl, "tp": tp}
     except Exception as e:
         return {"error": f"שגיאה בחיזוי SL/TP: {e}"}
+
 
 
