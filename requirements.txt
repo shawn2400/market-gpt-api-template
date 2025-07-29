@@ -1,37 +1,21 @@
-# ✅ FastAPI והשרת
 fastapi==0.111.0
 uvicorn==0.30.1
-gunicorn==21.2.0  # רק אם אתה בפרודקשן ב-Render
+gunicorn==21.2.0
 
-# ✅ CORS
-fastapi[all]
 aiohttp==3.9.5
-
-# 📦 ספריות עזר
 requests==2.31.0
 ujson==5.10.0
 python-dotenv==1.0.1
 
-# 📊 עיבוד נתונים
 numpy==1.26.4
 pandas==2.2.2
-
-# 📈 אינדיקטורים טכניים
 ta==0.11.0
 
-# 🟡 Binance API
 python-binance==1.0.17
 
-# 📉 גרפים
 matplotlib==3.8.4
-
-# 🧾 דוחות PDF
 fpdf==1.7.2
 
-# 🧠 חיזוי AI
-cython>=0.29.33
-pystan==2.19.1.1
-prophet==1.1.5
 
 
 
