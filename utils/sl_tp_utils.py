@@ -2,8 +2,16 @@
 
 import numpy as np
 import logging
+from typing import Tuple
 
-def calc_sl_tp_by_atr(entry_price: float, direction: str, atr: float = None, risk_reward: float = 2.0, sl_pct: float = 0.7, tp_pct: float = 1.4) -> tuple[float, float]:
+def calculate_sl_tp(
+    entry_price: float,
+    direction: str,
+    atr: float = None,
+    risk_reward: float = 2.0,
+    sl_pct: float = 0.7,
+    tp_pct: float = 1.4
+) -> Tuple[float, float]:
     """
     חישוב SL ו-TP לטרייד, לפי ATR או אחוזים.
     - direction: 'long' או 'short'
@@ -11,7 +19,7 @@ def calc_sl_tp_by_atr(entry_price: float, direction: str, atr: float = None, ris
     - risk_reward: יחס סיכוי/סיכון (ברירת מחדל 2)
     - sl_pct/tp_pct: אחוז מהמחיר לסטופ/טייק, אם אין ATR
     """
-    if direction not in ['long', 'short']:
+    if direction.lower() not in ['long', 'short']:
         raise ValueError("Direction must be 'long' or 'short'")
 
     try:
@@ -22,7 +30,7 @@ def calc_sl_tp_by_atr(entry_price: float, direction: str, atr: float = None, ris
             sl_distance = entry_price * 0.0035 * sl_pct  # ברירת מחדל 0.35%
             tp_distance = entry_price * 0.0035 * tp_pct * risk_reward
 
-        if direction == 'long':
+        if direction.lower() == 'long':
             sl = round(entry_price - sl_distance, 6)
             tp = round(entry_price + tp_distance, 6)
         else:
@@ -34,7 +42,12 @@ def calc_sl_tp_by_atr(entry_price: float, direction: str, atr: float = None, ris
         logging.error(f"[!] שגיאה בחישוב SL/TP: {e}")
         raise
 
-def trailing_stop(entry_price: float, direction: str, atr: float = None, trailing_pct: float = 0.5) -> float:
+def trailing_stop(
+    entry_price: float,
+    direction: str,
+    atr: float = None,
+    trailing_pct: float = 0.5
+) -> float:
     """
     מחשב Trailing Stop לפי ATR או אחוז מהמחיר.
     - direction: 'long' או 'short'
@@ -45,7 +58,7 @@ def trailing_stop(entry_price: float, direction: str, atr: float = None, trailin
         else:
             trailing_distance = entry_price * 0.003 * trailing_pct  # ברירת מחדל 0.15%
 
-        if direction == 'long':
+        if direction.lower() == 'long':
             trailing = round(entry_price - trailing_distance, 6)
         else:
             trailing = round(entry_price + trailing_distance, 6)
@@ -55,14 +68,20 @@ def trailing_stop(entry_price: float, direction: str, atr: float = None, trailin
         logging.error(f"[!] שגיאה בחישוב Trailing Stop: {e}")
         raise
 
-def validate_sl_tp(entry_price: float, sl: float, tp: float, direction: str) -> bool:
+def validate_sl_tp(
+    entry_price: float,
+    sl: float,
+    tp: float,
+    direction: str
+) -> bool:
     """
     ולידציה ש-SL/TP נכונים ביחס לכניסה וכיוון.
     """
-    if direction == 'long':
+    if direction.lower() == 'long':
         return sl < entry_price < tp
     else:
         return tp < entry_price < sl
+
 
 
 
