@@ -1,11 +1,18 @@
-# Base: Python 3.11 with minimal footprint
+# בסיס קליל עם Python 3.11
 FROM python:3.11-slim
 
-# Clean env + unbuffered logs
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# הגדרות סביבתיות
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
-# System dependencies only as needed
+# תיוג גרסה ותחזוקה
+LABEL maintainer="AlgoGPT Team <dev@algogpt.ai>" \
+      version="1.3.0" \
+      description="AlgoGPT Docker Image for FastAPI Trading Bot"
+
+# עדכון מערכת והתקנת תלויות בסיסיות
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libopenblas-dev \
@@ -15,23 +22,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# יצירת תיקיית עבודה
 WORKDIR /app
 
-# Copy and install dependencies
+# התקנת תלות מוקדמת ל־numpy וצמצום שכבות
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir numpy cython
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && pip install --no-cache-dir numpy cython \
+ && pip install --no-cache-dir -r requirements.txt
 
-# Copy all app code
+# העתקת כל קוד הפרויקט
 COPY . .
 
-# Expose port for Render
+# פתיחת פורט 5000 (Render.com)
 EXPOSE 5000
 
-# Run FastAPI with Gunicorn & Uvicorn worker
+# בדיקת תקינות אוטומטית של השרת (בדרך ל־Render Healthcheck)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl --fail http://localhost:5000/ || exit 1
+
+# הרצת Gunicorn עם uvicorn worker
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:5000"]
+
 
 
 
