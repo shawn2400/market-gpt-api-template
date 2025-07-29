@@ -1,4 +1,4 @@
-# scanner_utils.py
+# scanner_utils.py – גרסה משודרגת תואמת auto_executor
 
 import asyncio
 import aiohttp
@@ -10,6 +10,7 @@ from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.volatility import AverageTrueRange
 import logging
+from utils.quality_score import compute_quality_score
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -114,16 +115,30 @@ async def fetch_symbol_analysis(session, symbol):
     if not signal:
         return None
 
+    # חישוב SL/TP לפי ATR
+    atr = last['atr']
+    entry_price = last['close']
+    sl = entry_price - atr * 2 if signal == "LONG" else entry_price + atr * 2
+    tp = entry_price + atr * 3 if signal == "LONG" else entry_price - atr * 3
+
+    direction = signal
+    quality_score = compute_quality_score(kline_df)
+
     return {
         "symbol": symbol,
-        "price": round(last['close'], 4),
+        "entry_price": round(entry_price, 4),
+        "sl": round(sl, 4),
+        "tp": round(tp, 4),
+        "direction": direction,
+        "price": round(entry_price, 4),
         "rsi": round(last['rsi'], 2),
         "adx": round(last['adx'], 2),
-        "atr": round(last['atr'], 4),
+        "atr": round(atr, 4),
         "macd_hist": round(last['macd_hist'], 4),
         "stoch_k": round(last['stoch_k'], 2),
         "volume": round(last['volume'], 2),
-        "signal": signal
+        "signal": signal,
+        "quality_score": quality_score
     }
 
 # === סריקה חיה מלאה ===
