@@ -2,30 +2,22 @@ services:
   - type: web
     name: algo-gpt-fastapi
     env: docker
-    plan: starter  # שנה ל־advanced אם אתה במנוי Pro
+    plan: starter
     autoDeploy: true
-
     envVars:
       - key: PORT
         value: 5000
-
-      # קריאה של כל המשתנים מתוך הקובץ .env
       - fromDotEnv: true
-
-      # משתנים תפעוליים
       - key: AUTO_RUN
         value: "true"
       - key: MIN_QUALITY_SCORE
         value: "6"
       - key: MAX_TRADE_BUDGET
         value: "100"
-
-      # משתני מערכת לפייתון
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
-
 healthCheckPath: /
 
 
