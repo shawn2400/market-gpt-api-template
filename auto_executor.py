@@ -1,9 +1,6 @@
-### ✅ auto_executor.py – הרצת טריידים אוטומטיים לפי סינון חכם
 import asyncio
 import os
 import traceback
-from scanner_utils import scan_all_futures
-from trade_executor import execute_trade_live
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,9 +10,15 @@ DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", 10))
 
 async def start_auto_executor(delay: int = 30, min_quality: int = 6, max_budget: float = 100):
     print("[AUTO_EXECUTOR] 🔁 Auto executor started with delay:", delay)
+    
     while True:
         try:
             print("[AUTO_EXECUTOR] 🔍 Scanning for trade opportunities...")
+
+            # 💤 Lazy import – רק בעת שימוש
+            from scanner_utils import scan_all_futures
+            from trade_executor import execute_trade_live
+
             results = await scan_all_futures()
             filtered = [r for r in results if r.get("quality_score", 0) >= min_quality]
 
@@ -45,6 +48,7 @@ async def start_auto_executor(delay: int = 30, min_quality: int = 6, max_budget:
             traceback.print_exc()
 
         await asyncio.sleep(delay)
+
 
 
 
