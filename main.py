@@ -181,9 +181,8 @@ async def scan(
 ):
     try:
         from scanner_utils import scan_all
-        results = await scan_all(interval=interval, limit=limit)
-        filtered = [r for r in results if r.get("quality_score", 0) >= min_quality]
-        return {"count": len(filtered), "results": filtered}
+        results = await scan_all(interval=interval, limit=limit, min_quality=min_quality)
+        return {"count": len(results), "results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -224,6 +223,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
