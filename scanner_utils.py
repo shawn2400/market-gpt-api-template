@@ -11,6 +11,7 @@ from utils.quality_score import compute_quality_score
 from ai_analysis import analyze_with_ai
 from indicators_utils import compute_indicators  # ← שימוש בקובץ המרכזי
 from snapshot_utils import save_trade_snapshot
+import matplotlib.pyplot as plt  # ← שילוב גרף
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -107,6 +108,24 @@ async def fetch_symbol_analysis(session, symbol):
         "direction": direction
     })
 
+    # יצירת גרף עם matplotlib
+    try:
+        os.makedirs("static", exist_ok=True)
+        plt.figure(figsize=(6, 4))
+        plt.plot(kline_df['timestamp'][-20:], kline_df['close'][-20:], marker='o', linestyle='-', label='Close Price')
+        plt.title(f"📈 {symbol} Snapshot", fontsize=14)
+        plt.xlabel("Time")
+        plt.ylabel("Price")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        chart_path = f"static/{symbol}_chart.png"
+        plt.savefig(chart_path)
+        plt.close()
+    except Exception as e:
+        logging.warning(f"[!] שגיאה ביצירת גרף עבור {symbol}: {e}")
+        chart_path = None
+
     return {
         "symbol": symbol,
         "entry_price": round(entry_price, 4),
@@ -123,7 +142,8 @@ async def fetch_symbol_analysis(session, symbol):
         "signal": signal,
         "quality_score": quality_score,
         "ai_analysis": ai_analysis.get("analysis", "N/A"),
-        "snapshot": snapshot_path
+        "snapshot": snapshot_path,
+        "chart": chart_path
     }
 
 # === סריקה חיה מלאה ===
@@ -142,6 +162,7 @@ async def scan_all_futures():
 
     logging.info(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
     return valid
+
 
 
 
