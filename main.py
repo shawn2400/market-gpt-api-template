@@ -16,7 +16,7 @@ from trade_executor import execute_trade_live
 from scanner_utils import scan_all_futures
 from report_utils import generate_daily_report
 from ai_analysis import analyze_with_ai
-from services.auto_executor import start_auto_executor
+from auto_executor import start_auto_executor
 
 load_dotenv()
 
@@ -171,6 +171,7 @@ async def start_background_tasks():
 
     if auto_run == "true":
         asyncio.create_task(start_auto_executor(delay=30, min_quality=min_quality, max_budget=max_trade_budget))
+
 
 
 
