@@ -59,7 +59,7 @@ def scan_all_futures_symbols(limit=100, interval='5m'):
                 df = compute_indicators(df)
                 last = df.iloc[-1]
 
-                # לייבא את הפונקציה רק כאן למניעת תלות מעגלית
+                # ייבוא לייט של הפונקציה למניעת תלות מעגלית
                 from utils.sl_tp_utils import calculate_sl_tp
 
                 sl, tp = calculate_sl_tp(last['close'], direction='long', atr=last.get('atr', None))
