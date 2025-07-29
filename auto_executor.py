@@ -14,7 +14,7 @@ from utils.pnl_tracker import update_pnl
 from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
 from scanner_utils import scan_all_futures
-from utils.ai_analysis import predict_optimal_sl_tp  # ✅ תיקון כאן
+from utils.ai_analysis import predict_optimal_sl_tp
 
 EXCHANGE_INFO_CACHE = client.futures_exchange_info()
 
@@ -92,7 +92,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 timeInForce=TIME_IN_FORCE_GTC
             )
         except Exception as e:
-            logging.warning(f"[!] טייק פרופיט נכשל: {e} – ממשיכים בליעדו")
+            logging.warning(f"[!] טייק פרופיט נכשל: {e} – ממשיכים בלעדו")
 
         snapshot_path = save_trade_snapshot({
             "symbol": symbol,
@@ -102,7 +102,18 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "direction": direction.upper()
         })
 
-        df = pd.DataFrame([{...}])  # דוגמה איכות לציון confidence
+        df = pd.DataFrame([{  # דוגמה בסיסית עבור quality score
+            "atr": abs(tp - stop),
+            "macd": 1,
+            "macd_signal": 0,
+            "rsi": 50,
+            "adx": 25,
+            "volume": 1000000,
+            "volume_mean": 800000,
+            "close": price,
+            "ema_21": price * 0.99,
+            "ema_50": price * 0.98
+        }])
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality + news_score * 2, 2)
 
