@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+AUTO_USER_ID = "auto"
+DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", 10))
+
 async def start_auto_executor(delay: int = 30, min_quality: int = 6, max_budget: float = 100):
     print("[AUTO_EXECUTOR] 🔁 Auto executor started with delay:", delay)
     while True:
@@ -29,11 +32,11 @@ async def start_auto_executor(delay: int = 30, min_quality: int = 6, max_budget:
                     stop=best['sl'],
                     tp=best['tp'],
                     direction=best['direction'],
-                    leverage=best.get('leverage', 10),
+                    leverage=best.get('leverage', DEFAULT_LEVERAGE),
                     budget_usd=max_budget,
-                    use_grid=False,
-                    use_trailing=False,
-                    user_id="auto"
+                    use_grid=best.get("use_grid", False),
+                    use_trailing=best.get("use_trailing", False),
+                    user_id=AUTO_USER_ID
                 )
                 print("[AUTO_EXECUTOR] 🚀 Trade executed:", response)
 
@@ -42,5 +45,6 @@ async def start_auto_executor(delay: int = 30, min_quality: int = 6, max_budget:
             traceback.print_exc()
 
         await asyncio.sleep(delay)
+
 
 
