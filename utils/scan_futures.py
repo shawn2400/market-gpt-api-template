@@ -1,101 +1,131 @@
-# scan_futures_market.py
+# utils/market_scan_utils.py
 
-import asyncio
-from aiohttp import web, ClientSession
-import numpy as np
-import pandas as pd
-import ta
-import os
 import logging
+import pandas as pd
+from utils.binance_client import client
+from utils.indicators import compute_indicators
+from utils.sl_tp_utils import calc_sl_tp_by_atr
 
-logging.basicConfig(level=logging.INFO)
-
-BINANCE_FAPI_URL = "https://fapi.binance.com"
-
-async def fetch_klines(symbol, interval="15m", limit=100):
-    """
-    שולף נתוני נרות פיוצ'רס מ-Binance (async).
-    """
-    url = f"{BINANCE_FAPI_URL}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    async with ClientSession() as session:
-        async with session.get(url, timeout=7) as resp:
-            if resp.status != 200:
-                raise Exception(f"Failed to fetch klines for {symbol}: {resp.status}")
-            raw = await resp.json()
-            df = pd.DataFrame(raw, columns=[
-                'timestamp','open','high','low','close','volume','close_time',
-                'quote_asset_volume','number_of_trades','taker_buy_base_volume',
-                'taker_buy_quote_volume','ignore'
-            ])
-            df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
-            return df
-
-async def fetch_top_symbols(limit=20):
-    """
-    מחזיר את המטבעות עם הנפח הגבוה ביותר (פיוצ'רס)
-    """
-    url = f"{BINANCE_FAPI_URL}/fapi/v1/ticker/24hr"
-    async with ClientSession() as session:
-        async with session.get(url, timeout=7) as resp:
-            data = await resp.json()
-            top = sorted(data, key=lambda x: float(x['quoteVolume']), reverse=True)
-            return [d['symbol'] for d in top[:limit]]
-
-async def analyze_symbol(symbol):
-    """
-    מחשב אינדיקטורים (RSI, ADX) על הנתונים העדכניים ומחזיר המלצה
-    """
+def check_binance_status():
+    """בדיקת זמינות Binance API"""
     try:
-        df = await fetch_klines(symbol)
-        if len(df) < 30:
-            return None  # Not enough data
-        df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-        adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'])
-        df['adx'] = adx.adx()
-        last = df.iloc[-1]
-        direction = "LONG" if last['rsi'] < 35 and last['adx'] > 20 else \
-                    "SHORT" if last['rsi'] > 70 and last['adx'] > 20 else "NEUTRAL"
+        client.futures_ping()
+        return True
+    except Exception as e:
+        logging.warning(f"Binance API לא מגיב: {e}")
+        return False
+
+def get_futures_symbols():
+    """שליפת כל סימבולי USDT הנתמכים בפיוצ'רס"""
+    try:
+        info = client.futures_exchange_info()
+        return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT']
+    except Exception as e:
+        logging.error(f"[!] שגיאה בשליפת סימבולים: {e}")
+        return []
+
+def get_bid_ask_high_low(symbol: str):
+    """שליפת bid/ask/high/low"""
+    try:
+        orderbook = client.get_orderbook_ticker(symbol=symbol)
+        stats = client.get_ticker_24hr(symbol=symbol)
         return {
-            'symbol': symbol,
-            'close': float(last['close']),
-            'volume': float(last['volume']),
-            'rsi': round(float(last['rsi']), 2),
-            'adx': round(float(last['adx']), 2),
-            'direction': direction
+            "bid": float(orderbook["bidPrice"]),
+            "ask": float(orderbook["askPrice"]),
+            "high": float(stats["highPrice"]),
+            "low": float(stats["lowPrice"]),
         }
     except Exception as e:
-        logging.warning(f"[{symbol}] error: {e}")
-        return None
+        logging.error(f"[!] bid/ask/high/low error for {symbol}: {e}")
+        return {}
 
-async def fetch_binance_futures_data(limit=15):
-    """
-    סורק את המטבעות הכי נזילים ומחזיר רשימה עם RSI/ADX/המלצה
-    """
-    symbols = await fetch_top_symbols(limit)
-    tasks = [analyze_symbol(symbol) for symbol in symbols]
-    results = await asyncio.gather(*tasks)
-    return [r for r in results if r is not None]
-
-async def scan_futures_market(request):
-    """
-    נקודת קצה ל-API: שלח בקשת GET ל-/scan_futures_market וקבל תוצאה חיה
-    """
+def scan_all_futures_symbols(limit=100, interval='5m'):
+    """סריקת פיוצ’רס חיה עם אינדיקטורים (sync)"""
     try:
-        results = await fetch_binance_futures_data(limit=15)
-        return web.json_response({'results': results})
+        all_tickers = client.futures_ticker_price()
+        symbols = [x['symbol'] for x in all_tickers if x['symbol'].endswith('USDT')]
+        prices = {x['symbol']: float(x['price']) for x in all_tickers}
+        symbols = symbols[:limit]
+        result = []
+        for symbol in symbols:
+            try:
+                klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
+                df = pd.DataFrame(klines, columns=[
+                    'open_time', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_asset_volume', 'number_of_trades',
+                    'taker_buy_base', 'taker_buy_quote', 'ignore'
+                ])
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = df[col].astype(float)
+                df = compute_indicators(df)
+                last = df.iloc[-1]
+                result.append({
+                    "symbol": symbol,
+                    "price": prices.get(symbol),
+                    "rsi": last['rsi'],
+                    "adx": last['adx'],
+                    "macd": last['macd'],
+                    "volume": last['volume'],
+                    "ema_21": last['ema_21'],
+                    "ema_50": last['ema_50'],
+                    "quality_score": last.get('tech_score', 0)
+                })
+            except Exception as e:
+                logging.warning(f"[!] Symbol {symbol} error: {e}")
+        return result
     except Exception as e:
-        logging.error(f"Scan error: {e}")
-        return web.json_response({'error': str(e)}, status=500)
+        logging.error(f"[!] SCAN שגיאה: {e}")
+        return []
 
-def create_app():
-    app = web.Application()
-    app.router.add_get('/scan_futures_market', scan_futures_market)
-    return app
+def get_best_trade_symbol(limit=50, min_score=2):
+    """הסימבול הכי איכותי לשוק"""
+    data = scan_all_futures_symbols(limit=limit)
+    if not data:
+        return None
+    filtered = [x for x in data if x["quality_score"] >= min_score]
+    if not filtered:
+        return None
+    best = max(filtered, key=lambda x: x["quality_score"])
+    return best
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    logging.info(f"🚀 Starting server on port {port}")
-    web.run_app(create_app(), port=port)
+def get_trade_levels(symbol, direction="long", interval="5m"):
+    """מחיר נוכחי + SL/TP לפי ATR"""
+    from utils.get_live_price import get_live_price  # לייט-אימפורט! (למניעת circular)
+    price = get_live_price(symbol, is_futures=True)
+    klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
+    df = pd.DataFrame(klines, columns=[
+        'open_time', 'open', 'high', 'low', 'close', 'volume',
+        'close_time', 'quote_asset_volume', 'number_of_trades',
+        'taker_buy_base', 'taker_buy_quote', 'ignore'
+    ])
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        df[col] = df[col].astype(float)
+    df = compute_indicators(df)
+    last = df.iloc[-1]
+    sl, tp = calc_sl_tp_by_atr(last['close'], last['atr'], direction=direction)
+    return {"price": price, "sl": sl, "tp": tp}
+
+# דוגמת זרימת עבודה מלאה – מציאת טרייד מוכן
+def auto_scan_and_trade(min_rsi=35, min_adx=20, limit=100):
+    scan_results = scan_all_futures_symbols(limit=limit)
+    signals = []
+    for coin in scan_results:
+        if coin['rsi'] < min_rsi and coin['adx'] > min_adx:
+            signals.append(coin)
+            print(f"ENTRY: {coin['symbol']} @ {coin['price']} (RSI={coin['rsi']:.2f}, ADX={coin['adx']:.2f}, Score={coin['quality_score']})")
+    return signals
+
+# הפעלה סינכרונית בלבד (אין ייבוא מיותר, אין תלות צולבת)
+if __name__ == "__main__":
+    if not check_binance_status():
+        print("Binance API לא פעיל כרגע.")
+    else:
+        best = get_best_trade_symbol(limit=30, min_score=3)
+        if best:
+            print(f"Best trade: {best['symbol']} | Price: {best['price']} | Score: {best['quality_score']}")
+        trades = auto_scan_and_trade()
+
+
 
 
 
