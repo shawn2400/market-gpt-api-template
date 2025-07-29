@@ -3,11 +3,11 @@ import argparse
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
-from utils.snapshot_utils import generate_trade_snapshot
+from snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from scanner_utils import scan_all_futures
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.binance_client import place_futures_order
+from utils.binance_trader import place_futures_order
 
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
@@ -55,7 +55,16 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                 timestamp = str(order.get("timestamp", int(asyncio.get_running_loop().time())))
                 pnl = float(order.get("pnl", 0))
 
-                snapshot_path = generate_trade_snapshot(symbol, entry, stop, tp, direction)
+                snapshot_path = save_trade_snapshot({
+                    "symbol": symbol,
+                    "entry": entry,
+                    "stop": stop,
+                    "tp": tp,
+                    "direction": direction,
+                    "price_now": entry,
+                    "budget": max_budget,
+                    "leverage": leverage
+                })
 
                 # שמירת הטרייד
                 save_trade({
