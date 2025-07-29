@@ -29,6 +29,10 @@ def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_
             raise ValueError("Entry price must be positive")
 
         step_size = get_step_size(symbol)
+        if step_size <= 0:
+            logging.warning(f"[!] step_size לא חוקי עבור {symbol}, משתמש ב-0.01 כברירת מחדל")
+            step_size = 0.01
+
         raw_qty = (budget_usdt * leverage) / entry_price
         qty = floor(raw_qty / step_size) * step_size
 
@@ -39,5 +43,6 @@ def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_
     except Exception as e:
         logging.error(f"[!] שגיאה בחישוב כמות עבור {symbol}: {e}")
         return 0.0
+
 
 
