@@ -1,4 +1,4 @@
-# scanner_utils.py – גרסה משודרגת תואם auto_executor
+# scanner_utils.py – גרסה משודרגת תואמת auto_executor
 
 import asyncio
 import aiohttp
@@ -157,7 +157,6 @@ async def scan_all_futures():
 
     logging.info(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
     return valid
-
 
 
 
