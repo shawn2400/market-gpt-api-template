@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import pandas as pd
@@ -13,7 +13,7 @@ load_dotenv()
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר אלגוריתמי עם Binance",
-    version="1.3.0"
+    version="1.3.1"
 )
 
 # === Data Models ===
@@ -51,6 +51,7 @@ class AIAnalysisRequest(BaseModel):
     trend: str
     volume: float
     pattern: str
+
 
 # === Routes ===
 
@@ -157,11 +158,16 @@ async def execute_trade(data: TradeRequest):
 
 
 @app.get("/scan", operation_id="scanMarket")
-async def scan():
+async def scan(
+    min_quality: int = Query(0, description="ציון איכות מינימלי"),
+    interval: str = Query("1m", description="טיימפריים לניתוח"),
+    limit: int = Query(300, description="מספר מטבעות לבדיקה")
+):
     try:
         from scanner_utils import scan_all_futures
-        results = await scan_all_futures()
-        return {"count": len(results), "results": results}
+        results = await scan_all_futures(interval=interval, symbol_limit=limit)
+        filtered = [r for r in results if r.get("quality_score", 0) >= min_quality]
+        return {"count": len(filtered), "results": filtered}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -191,11 +197,12 @@ async def start_background_tasks():
         auto_run = os.getenv("AUTO_RUN", "true").lower()
         min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
         max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
+        delay = int(os.getenv("SCAN_INTERVAL", 30))
 
         if auto_run == "true":
             print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
             asyncio.create_task(start_auto_executor(
-                delay=30,
+                delay=delay,
                 min_quality=min_quality,
                 max_budget=max_trade_budget
             ))
@@ -204,6 +211,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
