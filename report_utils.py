@@ -9,7 +9,7 @@ PNL_FILE = "pnl_tracker.json"
 PDF_OUTPUT_PATH = "static/pnl_report.pdf"
 
 
-def generate_daily_report():
+def generate_daily_report(as_of_date=None):
     try:
         if not os.path.exists(PNL_FILE):
             raise FileNotFoundError(f"{PNL_FILE} not found.")
@@ -24,6 +24,9 @@ def generate_daily_report():
                 trade.setdefault("success", 1 if trade.get("pnl", 0) > 0 else 0)
                 records.append(trade)
 
+        if not records:
+            raise ValueError("📭 אין טריידים זמינים בדוח.")
+
         df = pd.DataFrame(records)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["date"] = df["timestamp"].dt.date
@@ -37,11 +40,14 @@ def generate_daily_report():
         grouped.columns = ["Date", "Total PNL", "Trades", "Success Rate"]
         grouped["Success Rate"] = (grouped["Success Rate"] * 100).round(2)
 
+        if as_of_date:
+            grouped = grouped[grouped["Date"] <= pd.to_datetime(as_of_date).date()]
+
         # PDF
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt="📊 Daily Performance Report", ln=1, align="C")
+        pdf.cell(200, 10, txt=f"📊 Daily Performance Report – {datetime.today().date()}", ln=1, align="C")
         pdf.ln(10)
 
         for _, row in grouped.iterrows():
@@ -53,19 +59,16 @@ def generate_daily_report():
         with open(PDF_OUTPUT_PATH, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
 
-        return encoded
+        return {
+            "status": "success",
+            "base64_pdf": encoded,
+            "summary": grouped.to_dict(orient="records")
+        }
 
     except Exception as e:
         print(f"❌ Error generating report: {e}")
-        return None
+        return {"status": "error", "message": str(e)}
 
-
-def send_email_alert(subject, body):
-    """
-    שליחת מייל בעת ביצוע טרייד (בהמשך אפשר להחליף ב־Telegram)
-    כרגע: רק הדפסה למסך כ־simulation.
-    """
-    print(f"📬 EMAIL: {subject}\n{body}")
 
 
 
