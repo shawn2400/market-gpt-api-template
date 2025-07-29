@@ -1,6 +1,6 @@
 import asyncio
 import argparse
-from binance_client import place_futures_order
+from utils.binance_client import place_futures_order
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
@@ -15,10 +15,12 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             print(f"[AUTO_EXECUTOR] סורק את השוק...")
             trades = await scan_all_futures()
 
+            # סינון לפי איכות
             filtered = [t for t in trades if t.get("quality_score", 0) >= min_quality]
             if not filtered:
                 print(f"[AUTO_EXECUTOR] לא נמצאו טריידים איכותיים.")
                 if once:
+                    print("[AUTO_EXECUTOR] מצב once - יציאה.")
                     return
                 await asyncio.sleep(delay)
                 continue
@@ -28,6 +30,8 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             direction = trade["signal"]
             leverage = 10
             entry = float(await get_price(symbol))
+
+            # SL/TP לפי כיוון
             stop = entry * 0.985 if direction == "LONG" else entry * 1.015
             tp = entry * 1.02 if direction == "LONG" else entry * 0.98
             qty = round((max_budget * leverage) / entry, 3)
@@ -47,7 +51,12 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     leverage=leverage
                 )
 
+                # גיבוי ל־timestamp
+                timestamp = str(order.get("timestamp", asyncio.get_event_loop().time()))
+                pnl = float(order.get("pnl", 0))
+
                 snapshot_path = generate_trade_snapshot(symbol, entry, stop, tp, direction)
+
                 save_trade({
                     "symbol": symbol,
                     "entry": entry,
@@ -55,16 +64,19 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     "tp": tp,
                     "direction": direction,
                     "quantity": qty,
-                    "timestamp": str(order["timestamp"]),
-                    "quality_score": trade["quality_score"]
+                    "timestamp": timestamp,
+                    "quality_score": trade.get("quality_score", 0)
                 })
-                update_pnl(symbol, float(order.get("pnl", 0)), trade["quality_score"])
+
+                update_pnl(symbol, pnl, trade.get("quality_score", 0))
 
         except Exception as e:
             print(f"❌ [AUTO_EXECUTOR] שגיאה: {e}")
 
         if once:
+            print("[AUTO_EXECUTOR] בוצע טרייד אחד בלבד. סיום.")
             break
+
         await asyncio.sleep(delay)
 
 
@@ -84,3 +96,4 @@ if __name__ == "__main__":
         min_quality=args.min_quality,
         max_budget=args.budget
     ))
+
