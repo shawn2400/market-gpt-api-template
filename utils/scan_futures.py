@@ -40,6 +40,10 @@ async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
             return None
 
         df = compute_indicators(df)
+        if df.empty or len(df) < 1:
+            logging.warning(f"[{symbol}] אין נתונים לאחר חישוב אינדיקטורים")
+            return None
+
         last = df.iloc[-1]
 
         direction = (
@@ -91,7 +95,6 @@ async def scan_all(symbols: list = None, interval: str = "15m", limit: int = 100
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
 
-    # מיון לפי איכות ואח"כ לפי נפח
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
     return filtered
 
@@ -101,6 +104,7 @@ if __name__ == "__main__":
     best = asyncio.run(scan_all())
     for x in best:
         print(x)
+
 
 
 
