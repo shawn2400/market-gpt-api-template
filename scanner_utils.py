@@ -43,7 +43,7 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
     ניתוח סמבול בודד (כולל אינדיקטורים, כיוון טרייד, איכות) – תומך FUTURES/SPOT
     """
     try:
-        df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
+        df = get_klines(symbol=symbol, interval=interval, limit=limit, is_futures=(market_type == "futures"))
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
             return None
