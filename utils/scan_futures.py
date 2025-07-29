@@ -1,6 +1,7 @@
 # utils/scan_futures.py
 
 import asyncio
+import logging
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
@@ -26,6 +27,8 @@ async def analyze_symbol(symbol: str, interval="1m", min_quality=6) -> dict:
     סורק מטבע לפי אינדיקטורים ומחזיר נתונים אם עומד בקריטריונים
     """
     try:
+        await asyncio.sleep(0.2)  # ⏱️ הפחתת עומס על ה־API
+
         df = get_klines(symbol=symbol, interval=interval, limit=100)
         if df is None or df.empty:
             return None
@@ -59,7 +62,7 @@ async def analyze_symbol(symbol: str, interval="1m", min_quality=6) -> dict:
         }
 
     except Exception as e:
-        print(f"[!] שגיאה בניתוח {symbol}: {e}")
+        logging.warning(f"[!] שגיאה בניתוח {symbol}: {type(e).__name__} – {e}")
         return None
 
 async def scan_all(interval="1m", limit=SYMBOL_LIMIT, min_quality=6):
@@ -72,6 +75,7 @@ async def scan_all(interval="1m", limit=SYMBOL_LIMIT, min_quality=6):
     filtered = [r for r in results if r]
     sorted_results = sorted(filtered, key=lambda x: x["quality_score"], reverse=True)
     return sorted_results
+
 
 
 
