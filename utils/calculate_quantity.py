@@ -1,3 +1,6 @@
+# utils/calculate_quantity.py
+
+import logging
 from math import floor
 from utils.binance_client import client
 
@@ -13,7 +16,7 @@ def get_step_size(symbol: str) -> float:
                     if f["filterType"] == "LOT_SIZE":
                         return float(f["stepSize"])
     except Exception as e:
-        print(f"[!] שגיאה בשליפת stepSize עבור {symbol}: {e}")
+        logging.error(f"[!] שגיאה בשליפת stepSize עבור {symbol}: {e}")
     return 0.01  # ברירת מחדל שמרנית
 
 def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_usdt: float) -> float:
@@ -34,7 +37,7 @@ def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_
 
         return round(qty, 6)
     except Exception as e:
-        print(f"[!] שגיאה בחישוב כמות עבור {symbol}: {e}")
+        logging.error(f"[!] שגיאה בחישוב כמות עבור {symbol}: {e}")
         return 0.0
 
 
