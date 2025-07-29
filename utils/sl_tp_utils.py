@@ -3,7 +3,7 @@
 import numpy as np
 import logging
 
-def calculate_sl_tp(entry_price: float, direction: str, atr: float = None, risk_reward: float = 2.0, sl_pct: float = 0.7, tp_pct: float = 1.4) -> tuple[float, float]:
+def calc_sl_tp_by_atr(entry_price: float, direction: str, atr: float = None, risk_reward: float = 2.0, sl_pct: float = 0.7, tp_pct: float = 1.4) -> tuple[float, float]:
     """
     חישוב SL ו-TP לטרייד, לפי ATR או אחוזים.
     - direction: 'long' או 'short'
@@ -63,6 +63,7 @@ def validate_sl_tp(entry_price: float, sl: float, tp: float, direction: str) -> 
         return sl < entry_price < tp
     else:
         return tp < entry_price < sl
+
 
 
 
