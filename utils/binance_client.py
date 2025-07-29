@@ -1,5 +1,4 @@
 import os
-import time
 import logging
 from dotenv import load_dotenv
 from binance.client import Client
@@ -13,19 +12,15 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 if not BINANCE_API_KEY or not BINANCE_API_SECRET:
     raise ValueError("❌ BINANCE_API_KEY or BINANCE_API_SECRET missing in .env")
 
-# בניית לקוח Binance
 try:
     client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
-    client.futures_ping()
-    logging.info("✅ Binance Futures API connected successfully.")
+    # חשוב: לא לקרוא כאן ל־client.futures_ping() – זה יקר ויכול להיכשל בהרצה!
+    logging.info("✅ Binance Futures API client ready.")
 except Exception as e:
-    logging.error(f"❌ שגיאה בחיבור ל־Binance API: {e}")
+    logging.error(f"❌ שגיאה בבניית Binance API client: {e}")
     client = None
 
 def get_symbol_precision(symbol):
-    """
-    מחזיר stepSize/precision של symbol מנתוני exchangeInfo
-    """
     try:
         info = client.futures_exchange_info()
         for s in info['symbols']:
@@ -34,41 +29,35 @@ def get_symbol_precision(symbol):
                 for f in s['filters']:
                     if f['filterType'] == 'LOT_SIZE':
                         step_size = float(f['stepSize'])
-                return step_size
+                        return step_size
     except Exception as e:
         logging.error(f"לא ניתן לקבל stepSize ל־{symbol}: {e}")
-    return 0.01  # ברירת מחדל
+    return 0.01
 
 def round_quantity(quantity, step_size):
-    """
-    עיגול כמות לפי step_size
-    """
+    if step_size == 0:
+        step_size = 0.01
     return round(round(quantity / step_size) * step_size, 8)
 
 def place_futures_order(symbol, side, quantity, entry_price, stop_loss, take_profit, leverage=10):
-    """
-    ביצוע הוראת MARKET FUTURES עם SL/TP, כולל עיגול לפי stepSize ו־leverage
-    """
     if client is None:
         raise RuntimeError("Binance client לא מחובר")
 
     try:
-        # עיגול לפי stepSize
         step_size = get_symbol_precision(symbol)
         quantity = round_quantity(quantity, step_size)
-
+        if quantity <= 0:
+            raise ValueError("כמות לא חוקית אחרי עיגול stepSize")
         # מינוף
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-
-        # ביצוע MARKET
+        # פתיחת פקודה
         order = client.futures_create_order(
             symbol=symbol,
             side=side,
             type=FUTURE_ORDER_TYPE_MARKET,
             quantity=quantity
         )
-
-        # פקודת SL
+        # SL
         client.futures_create_order(
             symbol=symbol,
             side=SIDE_SELL if side == SIDE_BUY else SIDE_BUY,
@@ -77,7 +66,7 @@ def place_futures_order(symbol, side, quantity, entry_price, stop_loss, take_pro
             closePosition=True,
             timeInForce=TIME_IN_FORCE_GTC
         )
-        # פקודת TP
+        # TP
         client.futures_create_order(
             symbol=symbol,
             side=SIDE_SELL if side == SIDE_BUY else SIDE_BUY,
@@ -86,7 +75,6 @@ def place_futures_order(symbol, side, quantity, entry_price, stop_loss, take_pro
             closePosition=True,
             timeInForce=TIME_IN_FORCE_GTC
         )
-
         logging.info(f"✅ טרייד FUTURES בוצע ({symbol}) כמות: {quantity} מחיר כניסה: {entry_price}")
         return {
             "status": "success",
