@@ -17,12 +17,11 @@ def get_step_size(symbol: str) -> float:
                         return float(f["stepSize"])
     except Exception as e:
         logging.error(f"[!] שגיאה בשליפת stepSize עבור {symbol}: {e}")
-    return 0.01  # ברירת מחדל שמרנית
+    return 0.01  # ברירת מחדל
 
 def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_usdt: float) -> float:
     """
-    מחשב כמות נכונה של חוזים למסחר בפיוצ'רס, לפי תקציב, מינוף ומחיר כניסה.
-    תוצאה מעוגלת לפי stepSize של Binance.
+    מחשב כמות חוזים לפי תקציב, מחיר, ומינוף. מחזיר כמות מעוגלת לפי stepSize.
     """
     try:
         if entry_price <= 0:
@@ -43,6 +42,25 @@ def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_
     except Exception as e:
         logging.error(f"[!] שגיאה בחישוב כמות עבור {symbol}: {e}")
         return 0.0
+
+def get_precision_info(symbol: str) -> dict:
+    """
+    שולף את ה־stepSize ו־minQty לפי הסימבול מ־Binance Futures.
+    """
+    try:
+        info = client.futures_exchange_info()
+        for s in info.get("symbols", []):
+            if s["symbol"] == symbol:
+                for f in s.get("filters", []):
+                    if f["filterType"] == "LOT_SIZE":
+                        return {
+                            "stepSize": float(f["stepSize"]),
+                            "minQty": float(f["minQty"])
+                        }
+    except Exception as e:
+        logging.error(f"[!] שגיאה ב־get_precision_info עבור {symbol}: {e}")
+    return {"stepSize": 0.01, "minQty": 0.0}
+
 
 
 
