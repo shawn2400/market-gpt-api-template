@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
+  version: "1.3.1"
   description: |
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance, מבצע ניתוחים טכניים,
-    טריידים בפועל, חיזוי AI, גרפים, דוחות וסטטיסטיקות חכמות.
-  version: 1.3.0
+    AlgoGPT – סוחר אלגוריתמי בזמן אמת (Binance Futures/Spot/Grid/AI)
+    כולל טריידים חיים, גרידים, דוחות, ניתוחים חכמים, ניהול סיכונים, TP/SL חכם ועוד.
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -32,16 +32,30 @@ paths:
                 properties:
                   status:
                     type: string
-                    example: ok
                   message:
                     type: string
-                    example: AlgoGPT API is running ✅
 
   /scan:
     get:
       tags: [Trades]
-      summary: סריקה חיה של שוק Binance Futures לפי אינדיקטורים
-      operationId: scanFutures
+      summary: סריקת שוק Binance (Futures/Spot) לפי אינדיקטורים
+      operationId: scanMarket
+      parameters:
+        - name: min_quality
+          in: query
+          schema:
+            type: integer
+          description: ציון איכות מינימלי (0–7)
+        - name: interval
+          in: query
+          schema:
+            type: string
+          description: טיימפריים לניתוח (כגון 1m, 5m, 15m)
+        - name: limit
+          in: query
+          schema:
+            type: integer
+          description: מספר מטבעות לבדיקה
       responses:
         '200':
           description: רשימת סמלים עם ניתוחים טכניים
@@ -50,62 +64,37 @@ paths:
               schema:
                 type: object
                 properties:
+                  count:
+                    type: integer
                   results:
                     type: array
                     items:
-                      type: object
+                      $ref: '#/components/schemas/ScanSymbol'
         '500':
-          description: שגיאת שרת כללית
+          description: שגיאת שרת
 
   /execute-trade:
     post:
       tags: [Trades]
-      summary: ביצוע טרייד בפועל
-      operationId: executeLiveTrade
+      summary: ביצוע טרייד בפועל (Futures/Spot/Grid)
+      operationId: executeTrade
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                  example: "BTCUSDT"
-                entry:
-                  type: number
-                  example: 30000
-                stop:
-                  type: number
-                  example: 29000
-                tp:
-                  type: number
-                  example: 33000
-                direction:
-                  type: string
-                  example: "LONG"
-                leverage:
-                  type: integer
-                  example: 10
-                budget:
-                  type: number
-                  example: 100
-                use_grid:
-                  type: boolean
-                  example: false
-                use_trailing:
-                  type: boolean
-                  example: true
-                user_id:
-                  type: string
-                  example: "user123"
+              $ref: '#/components/schemas/TradeRequest'
       responses:
         '200':
-          description: תוצאה מלאה מהשרת
+          description: פרטי טרייד מלאים
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradeResponse'
         '400':
-          description: בקשה שגויה – נתונים חסרים או לא תקפים
+          description: שגיאה בבקשה
         '500':
-          description: שגיאת שרת כללית
+          description: שגיאת שרת
 
   /calculate-quantity:
     post:
@@ -117,20 +106,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                  example: "ETHUSDT"
-                price:
-                  type: number
-                  example: 1800
-                leverage:
-                  type: number
-                  example: 10
-                budget:
-                  type: number
-                  example: 100
+              $ref: '#/components/schemas/QuantityRequest'
       responses:
         '200':
           description: כמות מחושבת
@@ -141,77 +117,68 @@ paths:
                 properties:
                   quantity:
                     type: number
-                    example: 0.55
         '400':
           description: שגיאת חישוב כמות
 
   /sl_tp:
     post:
       tags: [Trades]
-      summary: חישוב SL ו־TP על בסיס ניתוח גרפי
+      summary: חישוב SL ו־TP לפי DataFrame וכיוון
       operationId: calculateSlTp
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                df:
-                  type: array
-                  items:
-                    type: object
-                  example:
-                    - open: 30000
-                      high: 30200
-                      low: 29800
-                      close: 30100
-                      volume: 1500
-                    - open: 30100
-                      high: 30300
-                      low: 30000
-                      close: 30250
-                      volume: 1800
-                direction:
-                  type: string
-                  example: "LONG"
+              $ref: '#/components/schemas/SLTPRequest'
       responses:
         '200':
-          description: תוצאה עם SL ו־TP
+          description: SL ו־TP מחושבים
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sl:
+                    type: number
+                  tp:
+                    type: number
         '500':
           description: שגיאה פנימית
 
   /backtest:
     post:
       tags: [Trades]
-      summary: הרצת סימולציית Backtest
+      summary: הרצת Backtest לפי סדרת מחירים
       operationId: runBacktest
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                prices:
-                  type: array
-                  items:
-                    type: object
-                  example:
-                    - open: 100
-                      high: 105
-                      low: 95
-                      close: 102
-                      volume: 1000
-                symbol:
-                  type: string
-                  example: "ADAUSDT"
-                interval:
-                  type: string
-                  example: "15m"
+              $ref: '#/components/schemas/BacktestRequest'
       responses:
         '200':
           description: תוצאות הסימולציה
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  interval:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BacktestResult'
+                  success_count:
+                    type: integer
+                  total_trades:
+                    type: integer
+                  avg_quality:
+                    type: number
         '400':
           description: חוסר נתונים
         '500':
@@ -221,68 +188,72 @@ paths:
     post:
       tags: [AI]
       summary: ניתוח שוק בעזרת GPT
-      operationId: analyzeWithAI
+      operationId: aiAnalysis
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                prices:
-                  type: array
-                  items:
-                    type: number
-                  example: [30000, 30200, 30500, 30100]
+              $ref: '#/components/schemas/AIAnalysisRequest'
       responses:
         '200':
-          description: פלט GPT
+          description: תוצאה מ־AI
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  trend:
+                  answer:
                     type: string
-                    example: "UP"
-                  confidence:
+                  score:
                     type: number
-                    example: 0.87
 
   /news:
     get:
       tags: [News]
       summary: שליפת חדשות קריפטו
-      operationId: getNews
+      operationId: fetchCryptoNews
       responses:
         '200':
           description: רשימת חדשות
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
 
   /analyze-news:
     get:
       tags: [News]
-      summary: ניתוח סנטימנט של החדשות
-      operationId: analyzeNews
+      summary: ניתוח סנטימנט חדשות
+      operationId: analyzeNewsImpact
       responses:
         '200':
-          description: תוצאה ניתוח סנטימנט
+          description: תוצאת ניתוח סנטימנט
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
 
   /daily-report:
     get:
       tags: [Reports]
-      summary: יצירת דוח יומי כולל base64 PDF (אפשרות סינון לפי תאריך)
+      summary: דוח יומי כולל base64 PDF
       operationId: generateDailyReport
       parameters:
         - name: date
           in: query
-          description: תאריך סינון להצגת דוחות עד לתאריך זה (YYYY-MM-DD)
-          required: false
           schema:
             type: string
             format: date
+          required: false
+          description: תאריך סינון (YYYY-MM-DD)
       responses:
         '200':
-          description: דוח בפורמט base64 עם סיכום לפי ימים
+          description: דוח PDF
           content:
             application/json:
               schema:
@@ -290,33 +261,210 @@ paths:
                 properties:
                   status:
                     type: string
-                    example: success
                   base64_pdf:
                     type: string
-                    description: קובץ PDF מקודד כ־base64
                   summary:
                     type: array
-                    description: טבלת סיכום PNL לפי ימים
                     items:
-                      type: object
-                      properties:
-                        Date:
-                          type: string
-                          example: "2025-07-28"
-                        Total PNL:
-                          type: number
-                          example: 42.50
-                        Trades:
-                          type: integer
-                          example: 6
-                        Success Rate:
-                          type: number
-                          example: 83.3
+                      $ref: '#/components/schemas/DailySummary'
         '500':
-          description: שגיאת שרת כללית
+          description: שגיאת שרת
 
 components:
-  schemas: {}
+  schemas:
+    ScanSymbol:
+      type: object
+      properties:
+        symbol:
+          type: string
+        close:
+          type: number
+        volume:
+          type: number
+        rsi:
+          type: number
+        adx:
+          type: number
+        macd:
+          type: number
+        macd_hist:
+          type: number
+        ema_21:
+          type: number
+        ema_50:
+          type: number
+        vwap:
+          type: number
+        bb_upper:
+          type: number
+        bb_lower:
+          type: number
+        stoch_k:
+          type: number
+        stoch_d:
+          type: number
+        obv:
+          type: number
+        cci:
+          type: number
+        mfi:
+          type: number
+        atr:
+          type: number
+        direction:
+          type: string
+        quality_score:
+          type: integer
+
+    TradeRequest:
+      type: object
+      required:
+        - symbol
+        - entry
+        - stop
+        - tp
+        - direction
+        - leverage
+      properties:
+        symbol:
+          type: string
+        entry:
+          type: number
+        stop:
+          type: number
+        tp:
+          type: number
+        direction:
+          type: string
+          enum: [LONG, SHORT]
+        leverage:
+          type: integer
+        budget:
+          type: number
+        use_grid:
+          type: boolean
+        use_trailing:
+          type: boolean
+        user_id:
+          type: string
+        take_snapshot:
+          type: boolean
+
+    TradeResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        symbol:
+          type: string
+        entry:
+          type: number
+        price_now:
+          type: number
+        quantity:
+          type: number
+        stop:
+          type: number
+        tp:
+          type: number
+        leverage:
+          type: integer
+        side:
+          type: string
+        confidence:
+          type: number
+        quality_score:
+          type: number
+        news_score:
+          type: number
+        snapshot:
+          type: string
+        trailing:
+          type: boolean
+        grid:
+          type: boolean
+        message:
+          type: string
+
+    QuantityRequest:
+      type: object
+      required: [symbol, price, leverage, budget]
+      properties:
+        symbol:
+          type: string
+        price:
+          type: number
+        leverage:
+          type: number
+        budget:
+          type: number
+
+    SLTPRequest:
+      type: object
+      required: [df, direction]
+      properties:
+        df:
+          type: array
+          items:
+            type: object
+        direction:
+          type: string
+
+    BacktestRequest:
+      type: object
+      required: [prices, symbol, interval]
+      properties:
+        prices:
+          type: array
+          items:
+            type: object
+        symbol:
+          type: string
+        interval:
+          type: string
+
+    BacktestResult:
+      type: object
+      properties:
+        timestamp:
+          type: string
+        close:
+          type: number
+        signal:
+          type: string
+        quality_score:
+          type: number
+        success:
+          type: boolean
+
+    AIAnalysisRequest:
+      type: object
+      required: [rsi, adx, trend, volume, pattern]
+      properties:
+        rsi:
+          type: number
+        adx:
+          type: number
+        trend:
+          type: string
+        volume:
+          type: number
+        pattern:
+          type: string
+
+    DailySummary:
+      type: object
+      properties:
+        Date:
+          type: string
+        Total_PNL:
+          type: number
+        Trades:
+          type: integer
+        Success_Rate:
+          type: number
+
 
 
 
