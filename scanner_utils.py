@@ -57,8 +57,11 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         if direction == "NEUTRAL":
             return None
 
-        # ניתוח SL/TP עם GPT
-        sltp = predict_optimal_sl_tp(symbol, last["close"], direction)
+        try:
+            sltp = predict_optimal_sl_tp(symbol, last["close"], direction)
+        except Exception as e:
+            logging.warning(f"[{symbol}] שגיאה בחיזוי SL/TP: {type(e).__name__} – {e}")
+            sltp = {"sl": None, "tp": None}
 
         return {
             "symbol": symbol,
@@ -86,8 +89,9 @@ async def scan_all(
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
-    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]  # החזקים ביותר
+    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]
     return filtered
+
 
 
 
