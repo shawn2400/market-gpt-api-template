@@ -92,9 +92,9 @@ async def fetch_symbol_analysis(session, symbol):
 
     # חישוב SL/TP לפי ATR
     atr = last['atr']
-    entry_price = last['close']
-    sl = entry_price - atr * 2 if signal == "LONG" else entry_price + atr * 2
-    tp = entry_price + atr * 3 if signal == "LONG" else entry_price - atr * 3
+    entry = last['close']
+    sl = entry - atr * 2 if signal == "LONG" else entry + atr * 2
+    tp = entry + atr * 3 if signal == "LONG" else entry - atr * 3
 
     direction = signal
     quality_score = compute_quality_score(kline_df)
@@ -102,7 +102,7 @@ async def fetch_symbol_analysis(session, symbol):
     # יצירת Snapshot לגרף
     snapshot_path = save_trade_snapshot({
         "symbol": symbol,
-        "entry": entry_price,
+        "entry": entry,
         "stop": sl,
         "tp": tp,
         "direction": direction
@@ -128,11 +128,11 @@ async def fetch_symbol_analysis(session, symbol):
 
     return {
         "symbol": symbol,
-        "entry_price": round(entry_price, 4),
-        "sl": round(sl, 4),
+        "entry": round(entry, 4),
+        "stop": round(sl, 4),
         "tp": round(tp, 4),
         "direction": direction,
-        "price": round(entry_price, 4),
+        "price_now": round(entry, 4),
         "rsi": round(last['rsi'], 2),
         "adx": round(last['adx'], 2),
         "atr": round(atr, 4),
@@ -162,6 +162,7 @@ async def scan_all_futures():
 
     logging.info(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
     return valid
+
 
 
 
