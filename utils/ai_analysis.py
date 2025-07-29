@@ -1,11 +1,19 @@
+# ai_analysis.py
+
 import os
-import openai
 from dotenv import load_dotenv
+import openai
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-def analyze_with_gpt(data):
+def analyze_with_ai(data: dict) -> dict:
+    """
+    ניתוח שוק חכם בעזרת GPT (OpenAI API).
+    """
+    if not data or not isinstance(data, dict):
+        return {"error": "Invalid or empty input data"}
+
     prompt = f"""
     הנתונים הטכניים שקיבלתי הם:
     RSI: {data.get("rsi")}
@@ -24,6 +32,8 @@ def analyze_with_gpt(data):
             temperature=0.7,
             max_tokens=300
         )
-        return response.choices[0].message.content.strip()
+        result = response.choices[0].message.content.strip()
+        return {"analysis": result}
     except Exception as e:
-        return f"שגיאה בניתוח GPT: {e}"
+        return {"error": f"שגיאה בניתוח GPT: {e}"}
+
