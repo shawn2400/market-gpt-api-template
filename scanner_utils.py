@@ -6,9 +6,7 @@ from utils.binance_client import client
 from utils.quality_score import compute_quality_score
 from utils.ai_analysis import predict_optimal_sl_tp
 
-
 semaphore = asyncio.Semaphore(10)  # הגבלת כמות משימות בו זמנית
-
 
 def get_symbols(market_type="futures"):
     try:
