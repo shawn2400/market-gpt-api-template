@@ -1,29 +1,34 @@
 import matplotlib.pyplot as plt
 import os
+from datetime import datetime
 
-# יצירת תיקייה סטטית אם אינה קיימת
-os.makedirs("static", exist_ok=True)
+def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה", filename: str = "chart.png") -> str:
+    """
+    יוצר ושומר גרף פשוט מהנתונים שסופקו בתיקייה static.
+    מחזיר את הנתיב המלא של הקובץ.
+    """
+    try:
+        os.makedirs("static", exist_ok=True)
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        full_path = os.path.join("static", f"{timestamp}_{filename}")
 
-# נתוני דוגמה – ניתן להחליף לנתונים אמיתיים מ־Binance או backtest
-x = [1, 2, 3]
-y = [4, 5, 6]
+        plt.figure(figsize=(6, 4))
+        plt.plot(x, y, marker='o', linestyle='-', color='blue', label="קו מגמה")
+        plt.title(title, fontsize=14)
+        plt.xlabel("ציר X", fontsize=12)
+        plt.ylabel("ציר Y", fontsize=12)
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(full_path)
+        plt.close()
 
-# יצירת הגרף
-plt.figure(figsize=(6, 4))
-plt.plot(x, y, marker='o', linestyle='-', color='blue', label="קו מגמה")
-plt.title("📈 גרף דוגמה פשוט", fontsize=14)
-plt.xlabel("ציר X", fontsize=12)
-plt.ylabel("ציר Y", fontsize=12)
-plt.grid(True)
-plt.legend()
-plt.tight_layout()
+        print(f"✅ גרף נשמר: {full_path}")
+        return full_path
+    except Exception as e:
+        print(f"[!] שגיאה ביצירת הגרף: {e}")
+        return None
 
-# שמירת הגרף לקובץ
-output_path = "static/chart.png"
-plt.savefig(output_path)
-plt.close()
-
-print(f"✅ גרף נשמר בהצלחה: {output_path}")
 
 
 
