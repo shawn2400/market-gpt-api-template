@@ -1,5 +1,3 @@
-# news_utils.py
-
 import requests
 import smtplib
 from email.message import EmailMessage
@@ -23,31 +21,44 @@ def fetch_crypto_news():
         print(f"[!] שגיאה בשליפת חדשות: {e}")
         return []
 
-# ✅ ניתוח השפעה לפי מילות מפתח חיוביות / שליליות
-def analyze_news_impact(news_list):
+# ✅ ניתוח השפעה לפי מילות מפתח חיוביות / שליליות – כולל title + description
+def analyze_news_impact(news_list, positive_words=None, negative_words=None):
     scored_news = []
-    positive_words = ["bullish", "surge", "breakout", "pump", "rally", "gain", "soar"]
-    negative_words = ["bearish", "crash", "fud", "dump", "selloff", "collapse", "fear"]
+    seen_urls = set()
+
+    default_positive = ["bullish", "surge", "breakout", "pump", "rally", "gain", "soar", "moon"]
+    default_negative = ["bearish", "crash", "fud", "dump", "selloff", "collapse", "fear", "rekt"]
+
+    positive_words = positive_words or default_positive
+    negative_words = negative_words or default_negative
 
     for item in news_list:
-        title = item.get("title", "").lower()
-        score = 0
+        url = item.get("url")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
 
-        if any(word in title for word in positive_words):
+        title = item.get("title", "").lower()
+        desc = item.get("description", "").lower()
+
+        score = 0
+        text = title + " " + desc
+
+        if any(word in text for word in positive_words):
             score += 1
-        if any(word in title for word in negative_words):
+        if any(word in text for word in negative_words):
             score -= 1
 
         scored_news.append({
             "title": item.get("title"),
             "published_at": item.get("published_at"),
-            "url": item.get("url"),
+            "url": url,
             "impact_score": score
         })
 
     return scored_news
 
-# ✅ שליחת מייל עם אפשרות לצרף קובץ PDF (בינארי)
+# ✅ שליחת מייל עם אפשרות לצרף קובץ PDF (בינארי או קובץ)
 def send_email_alert(subject, body="See attached.", attachment=None):
     try:
         EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS")
@@ -87,6 +98,7 @@ def send_email_alert(subject, body="See attached.", attachment=None):
 
     except Exception as e:
         print(f"[!] Email failed: {e}")
+
 
 
 
