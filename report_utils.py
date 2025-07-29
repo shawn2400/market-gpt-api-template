@@ -1,14 +1,15 @@
-# report_utils.py
-
 import os
 import json
 import base64
 from datetime import datetime
 from fpdf import FPDF
 import pandas as pd
+import smtplib
+from email.message import EmailMessage
 
 PNL_FILE = "pnl_tracker.json"
 PDF_OUTPUT_PATH = "static/pnl_report.pdf"
+EMAIL_CONFIG_PATH = "email_config.json"
 
 
 def generate_daily_report(as_of_date=None):
@@ -42,7 +43,6 @@ def generate_daily_report(as_of_date=None):
         grouped.columns = ["Date", "Total PNL", "Trades", "Success Rate"]
         grouped["Success Rate"] = (grouped["Success Rate"] * 100).round(2)
 
-        # סינון לפי תאריך אם התקבל
         if as_of_date:
             cutoff = pd.to_datetime(as_of_date).date()
             grouped = grouped[grouped["Date"] <= cutoff]
@@ -50,7 +50,6 @@ def generate_daily_report(as_of_date=None):
         if grouped.empty:
             raise ValueError("📭 אין נתונים לתאריך המבוקש.")
 
-        # קביעת כותרת לפי התאריך האחרון המדווח
         report_title_date = grouped["Date"].max() if not grouped.empty else datetime.today().date()
 
         # יצירת PDF
@@ -78,6 +77,44 @@ def generate_daily_report(as_of_date=None):
     except Exception as e:
         print(f"❌ Error generating report: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def send_email_alert(subject: str, message: str, to_emails: list):
+    try:
+        if not os.path.exists(EMAIL_CONFIG_PATH):
+            raise FileNotFoundError("email_config.json not found.")
+
+        with open(EMAIL_CONFIG_PATH, "r") as f:
+            config = json.load(f)
+
+        if not config.get("enabled", True):
+            print("📭 שליחת מיילים כבויה בקובץ config.")
+            return
+
+        smtp_server = config.get("smtp_server")
+        smtp_port = config.get("smtp_port", 587)
+        sender_email = config.get("sender_email")
+        sender_password = config.get("sender_password")
+
+        if not smtp_server or not sender_email or not sender_password:
+            raise ValueError("Missing email configuration fields.")
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = sender_email
+        msg["To"] = ", ".join(to_emails)
+        msg.set_content(message)
+
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+
+        print(f"✅ Email sent to {to_emails}")
+
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
+
 
 
 
