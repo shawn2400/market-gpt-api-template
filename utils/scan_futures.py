@@ -31,7 +31,6 @@ async def analyze_symbol(symbol: str, interval="1m", min_quality=6) -> dict:
             return None
 
         df = compute_indicators(df)
-
         if df is None or df.empty:
             return None
 
@@ -63,7 +62,7 @@ async def analyze_symbol(symbol: str, interval="1m", min_quality=6) -> dict:
         print(f"[!] שגיאה בניתוח {symbol}: {e}")
         return None
 
-async def scan_all_futures(interval="1m", limit=SYMBOL_LIMIT, min_quality=6):
+async def scan_all(interval="1m", limit=SYMBOL_LIMIT, min_quality=6):
     """
     סורק את שוק ה־Futures ומחזיר את כל המטבעות שעומדים בקריטריונים
     """
