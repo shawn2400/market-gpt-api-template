@@ -36,7 +36,6 @@ def supertrend(df, period=10, multiplier=3):
     df['supertrend_dir'] = direction
     return df
 
-
 def compute_indicators(df, volume_window=20):
     required_cols = ['open', 'high', 'low', 'close', 'volume']
     missing_cols = [c for c in required_cols if c not in df.columns]
@@ -58,16 +57,16 @@ def compute_indicators(df, volume_window=20):
 
         df['ema_21'] = ta.trend.EMAIndicator(close=df['close'], window=21).ema_indicator()
         df['ema_50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
+        df['ema_100'] = ta.trend.EMAIndicator(close=df['close'], window=100).ema_indicator()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
-        
+
         df['sma_50'] = ta.trend.SMAIndicator(close=df['close'], window=50).sma_indicator()
         df['sma_200'] = ta.trend.SMAIndicator(close=df['close'], window=200).sma_indicator()
 
         df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
         df['stoch_rsi'] = ta.momentum.StochRSIIndicator(close=df['close'], window=14).stochrsi()
 
-        df['williams_r'] = ta.momentum.WilliamsRIndicator(
-            high=df['high'], low=df['low'], close=df['close'], lbp=14).williams_r()
+        df['williams_r'] = ta.momentum.WilliamsRIndicator(high=df['high'], low=df['low'], close=df['close'], lbp=14).williams_r()
 
         macd = ta.trend.MACD(close=df['close'])
         df['macd'] = macd.macd()
@@ -75,7 +74,6 @@ def compute_indicators(df, volume_window=20):
         df['macd_hist'] = macd.macd_diff()
 
         df['adx'] = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close']).adx()
-
         df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close']).average_true_range()
 
         stoch = ta.momentum.StochasticOscillator(high=df['high'], low=df['low'], close=df['close'])
@@ -107,10 +105,10 @@ def compute_indicators(df, volume_window=20):
         df['grid_signal'] = ((df['rsi'] < 35) & (df['macd_hist'] > 0) & (df['adx'] > 17))
 
         df['tech_score'] = (
-            (df['rsi'].between(45, 60)) * 1 +
-            (df['adx'] > 20) * 1 +
-            (df['macd_hist'] > 0) * 1 +
-            (df['close'] > df['ema_21']) * 1
+            (df['rsi'].between(45, 60)).astype(int) +
+            (df['adx'] > 20).astype(int) +
+            (df['macd_hist'] > 0).astype(int) +
+            (df['close'] > df['ema_21']).astype(int)
         )
 
         df = supertrend(df, period=10, multiplier=3)
@@ -123,7 +121,9 @@ def compute_indicators(df, volume_window=20):
         df['bullish_engulfing'] = (df['close'] > df['open']) & (df['open'].shift(1) > df['close'].shift(1)) & (df['close'] > df['open'].shift(1))
         df['bearish_engulfing'] = (df['close'] < df['open']) & (df['open'].shift(1) < df['close'].shift(1)) & (df['close'] < df['open'].shift(1))
 
-        # השתמש ב-fillna במקום dropna כדי לשמור על כל השורות
+        df['trend_strength'] = df[['tech_score', 'supertrend_dir']].sum(axis=1)
+        df['signal_score'] = df[['ema_cross_bull', 'macd_cross_bull', 'bullish_engulfing']].sum(axis=1)
+
         df.fillna(method='ffill', inplace=True)
         df.fillna(method='bfill', inplace=True)
 
