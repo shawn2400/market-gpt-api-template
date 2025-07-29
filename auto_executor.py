@@ -2,10 +2,10 @@ import asyncio
 from binance_client import place_futures_order
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
-from utils.quality_score import compute_quality_score
 from utils.snapshot_utils import generate_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from scanner_utils import scan_all_futures
+
 
 async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
     while True:
@@ -41,7 +41,12 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
                 leverage=leverage
             )
 
+            # ודא שקיימים מפתחות הכרחיים
+            timestamp = order.get("timestamp", str(asyncio.get_event_loop().time()))
+            pnl = float(order.get("pnl", 0))
+
             snapshot_path = generate_trade_snapshot(symbol, entry, stop, tp, direction)
+
             save_trade({
                 "symbol": symbol,
                 "entry": entry,
@@ -49,15 +54,17 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
                 "tp": tp,
                 "direction": direction,
                 "quantity": qty,
-                "timestamp": str(order["timestamp"]),
-                "quality_score": trade["quality_score"]
+                "timestamp": timestamp,
+                "quality_score": trade.get("quality_score", 0)
             })
-            update_pnl(symbol, float(order.get("pnl", 0)), trade["quality_score"])
+
+            update_pnl(symbol, pnl, trade.get("quality_score", 0))
 
         except Exception as e:
-            print(f"❌ [AUTO_EXECUTOR] Error: {e}")
+            print(f"\u274c [AUTO_EXECUTOR] Error: {e}")
 
         await asyncio.sleep(delay)
+
 
 
 
