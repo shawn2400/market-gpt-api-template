@@ -12,7 +12,7 @@ from utils.quality_score import compute_quality_score
 from utils.pnl_tracker import update_pnl
 from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
-from ai_analysis import predict_optimal_sl_tp  # חדש – מנוע ניבוי AI
+from ai_analysis import predict_optimal_sl_tp, analyze_with_ai  # נוספו מנועי ניבוי וניתוח שוק
 import pandas as pd
 
 # מטמון Exchange Info
@@ -114,6 +114,15 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "direction": direction.upper()
         })
 
+        # ניתוח AI כללי לשיפור ההחלטה
+        ai_feedback = analyze_with_ai({
+            "rsi": 50,
+            "adx": 25,
+            "trend": direction.upper(),
+            "volume": 1_000_000,
+            "pattern": "trend-follow"
+        })
+
         # ציון איכות (אמיתי עם ATR וכו')
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
@@ -143,7 +152,8 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "mock_quality": True,
             "type": "GRID" if use_grid else "REGULAR",
             "user_id": user_id or "default",
-            "news_score": news_score
+            "news_score": news_score,
+            "ai_opinion": ai_feedback.get("analysis")
         }
         save_trade(trade_data)
         update_pnl(symbol, direction, entry, price, leverage, quantity)
@@ -159,7 +169,8 @@ TP: {tp}
 Leverage: {leverage}
 Confidence: {confidence:.2f}%
 Quality: {quality}/10
-News Score: {news_score}"""
+News Score: {news_score}
+AI: {ai_feedback.get('analysis')}"""
         )
 
         return {
@@ -175,6 +186,7 @@ News Score: {news_score}"""
             "confidence": confidence,
             "quality_score": quality,
             "news_score": news_score,
+            "ai_opinion": ai_feedback.get("analysis"),
             "snapshot": snapshot_path,
             "trailing": use_trailing,
             "grid": use_grid
@@ -183,6 +195,7 @@ News Score: {news_score}"""
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
