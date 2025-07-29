@@ -1,3 +1,4 @@
+### ✅ main.py – קובץ API ראשי
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -164,7 +165,13 @@ async def ai_analyze(data: AIAnalysisRequest):
 
 @app.on_event("startup")
 async def start_background_tasks():
-    asyncio.create_task(start_auto_executor(delay=10))
+    auto_run = os.getenv("AUTO_RUN", "true").lower()
+    min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
+    max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
+
+    if auto_run == "true":
+        asyncio.create_task(start_auto_executor(delay=30, min_quality=min_quality, max_budget=max_trade_budget))
+
 
 
 
