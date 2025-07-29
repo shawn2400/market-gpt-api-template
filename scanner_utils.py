@@ -19,10 +19,7 @@ def get_symbols(market_type="futures"):
             raise ValueError("market_type must be 'futures' or 'spot'")
     except Exception as e:
         logging.error(f"[!] שגיאה בשליפת סמלים ({market_type}): {e}")
-        # ברירת מחדל – מצומצמת
-        return [
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"
-        ]
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 
 def compute_quality_score(last):
     """דירוג איכות טרייד (0–7) לפי אינדיקטורים מרכזיים"""
@@ -45,12 +42,13 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
             return None
-        
+        last = df.iloc[-1]
         df = compute_indicators(df)
-        if df.empty or len(df) < 30:
-            logging.warning(f"[{symbol}] DataFrame אחרי חישוב אינדיקטורים ריק או קצר מדי")
+
+        # אחרי חישוב אינדיקטורים, תמיד ודא שיש לפחות שורה אחת לפני גישה
+        if df.empty or len(df) < 1:
+            logging.warning(f"[{symbol}] אין נתונים לאחר חישוב אינדיקטורים")
             return None
-        
         last = df.iloc[-1]
 
         direction = (
@@ -102,7 +100,6 @@ async def scan_all(
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
-    # מיון לפי איכות ואז נפח
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
     return filtered
 
@@ -118,6 +115,7 @@ if __name__ == "__main__":
     best_spot = asyncio.run(scan_all(market_type="spot", limit=10, min_quality=2))
     for x in best_spot:
         print(x)
+
 
 
 
