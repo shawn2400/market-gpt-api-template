@@ -12,11 +12,6 @@ load_dotenv()
 from utils.ai_analysis import analyze_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 
-# === Defaults for scanning ===
-DEFAULT_INTERVAL = "5m"
-DEFAULT_LIMIT = 100
-DEFAULT_MIN_QUALITY = 5
-
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר אלגוריתמי עם Binance (Futures, Spot, Grid, AI, דוחות)",
@@ -37,7 +32,7 @@ class QuantityRequest(BaseModel):
 class BacktestRequest(BaseModel):
     prices: list
     symbol: str = "UNKNOWN"
-    interval: str = DEFAULT_INTERVAL
+    interval: str = "15m"
 
 class TradeRequest(BaseModel):
     symbol: str
@@ -184,9 +179,9 @@ async def execute_trade(data: TradeRequest):
 
 @app.get("/scan", operation_id="scanMarket")
 async def scan(
-    min_quality: int = Query(DEFAULT_MIN_QUALITY, description="ציון איכות מינימלי"),
-    interval: str = Query(DEFAULT_INTERVAL, description="טיימפריים"),
-    limit: int = Query(DEFAULT_LIMIT, description="מספר מטבעות לבדיקה")
+    min_quality: int = Query(0, description="ציון איכות מינימלי"),
+    interval: str = Query("1m", description="טיימפריים"),
+    limit: int = Query(300, description="מספר מטבעות לבדיקה")
 ):
     try:
         from scanner_utils import scan_all
@@ -215,7 +210,7 @@ async def ai_analyze(data: AIAnalysisRequest):
 
 @app.post("/start-auto")
 def start_auto_executor():
-    start_executor_loop(debug=False, delay=60, min_quality=DEFAULT_MIN_QUALITY, max_budget=100)
+    start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100)
     return {"status": "running"}
 
 
@@ -238,7 +233,7 @@ def get_executor_status():
 async def start_background_tasks():
     try:
         auto_run = os.getenv("AUTO_RUN", "true").lower()
-        min_quality = int(os.getenv("MIN_QUALITY_SCORE", DEFAULT_MIN_QUALITY))
+        min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
         max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
         delay = int(os.getenv("SCAN_INTERVAL", 30))
 
@@ -250,6 +245,187 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed: {e}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
