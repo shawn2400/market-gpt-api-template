@@ -4,13 +4,27 @@ import asyncio
 import logging
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
+from utils.binance_client import client
 
-# רשימת סמלים פופולריים — אפשר להרחיב לרשימה חיה מה־API בהמשך
-POPULAR_SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT", "AVAXUSDT",
-    "DOGEUSDT", "MATICUSDT", "LINKUSDT", "OPUSDT", "LTCUSDT", "DOTUSDT", "UNIUSDT",
-    "FILUSDT", "SUIUSDT", "ARBUSDT", "ENAUSDT", "PEPEUSDT", "1000FLOKIUSDT"
-]
+def get_symbols(market_type="futures"):
+    """
+    שליפת סמלים דינמית: Futures או Spot
+    """
+    try:
+        if market_type == "futures":
+            info = client.futures_exchange_info()
+            return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT']
+        elif market_type == "spot":
+            info = client.get_exchange_info()
+            return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT']
+        else:
+            raise ValueError("market_type must be 'futures' or 'spot'")
+    except Exception as e:
+        logging.error(f"[!] שגיאה בשליפת סמלים ({market_type}): {e}")
+        # ברירת מחדל – מצומצמת
+        return [
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"
+        ]
 
 def compute_quality_score(last):
     """דירוג איכות טרייד (0–7) לפי אינדיקטורים מרכזיים"""
@@ -24,13 +38,14 @@ def compute_quality_score(last):
     if last.get("vwap", 0) < last.get("close", 0): score += 1
     return score
 
-async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
+async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "15m", limit: int = 100):
     """
-    ניתוח סמבול בודד (כולל אינדיקטורים, כיוון טרייד, איכות)
+    ניתוח סמבול בודד (כולל אינדיקטורים, כיוון טרייד, איכות) – תומך FUTURES/SPOT
     """
     try:
-        df = get_klines(symbol=symbol, interval=interval, limit=limit)
-        if df is None or len(df) < 30:
+        df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
+        if df is None or df.empty or len(df) < 30:
+            logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
             return None
         df = compute_indicators(df)
         last = df.iloc[-1]
@@ -44,6 +59,7 @@ async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
 
         return {
             "symbol": symbol,
+            "market_type": market_type,
             "close": float(last["close"]),
             "volume": float(last["volume"]),
             "rsi": round(float(last["rsi"]), 2),
@@ -65,15 +81,20 @@ async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
             "quality_score": int(quality_score)
         }
     except Exception as e:
-        logging.warning(f"[{symbol}] analyze error: {e}")
+        logging.warning(f"[{symbol}] analyze error ({market_type}): {e}")
         return None
 
-async def scan_all_futures(symbols: list = None, interval: str = "15m", limit: int = 100, min_quality: int = 5):
+async def scan_all(
+    market_type: str = "futures",
+    interval: str = "15m",
+    limit: int = 100,
+    min_quality: int = 5
+):
     """
-    סריקה חכמה לכל רשימת הסמלים, מחזירה תוצאות עם quality_score גבוה בלבד
+    סריקה חכמה לכל רשימת הסמלים ב־FUTURES/SPOT, מחזירה רק איכותיים
     """
-    symbols = symbols or POPULAR_SYMBOLS
-    tasks = [analyze_symbol(s, interval, limit) for s in symbols]
+    symbols = get_symbols(market_type=market_type)[:limit]
+    tasks = [analyze_symbol(s, market_type, interval, limit) for s in symbols]
     results = await asyncio.gather(*tasks)
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
@@ -82,12 +103,19 @@ async def scan_all_futures(symbols: list = None, interval: str = "15m", limit: i
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
     return filtered
 
-# דוגמה לבדיקת מודול עצמאית (אפשר למחוק בפרודקשן)
+# דוגמה לשימוש – FUTURES/SPOT
 if __name__ == "__main__":
     import asyncio
-    best = asyncio.run(scan_all_futures())
-    for x in best:
+    print("=== FUTURES ===")
+    best_futures = asyncio.run(scan_all(market_type="futures", limit=10, min_quality=2))
+    for x in best_futures:
         print(x)
+
+    print("\n=== SPOT ===")
+    best_spot = asyncio.run(scan_all(market_type="spot", limit=10, min_quality=2))
+    for x in best_spot:
+        print(x)
+
 
 
 
