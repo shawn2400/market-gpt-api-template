@@ -45,7 +45,7 @@ class TradeRequest(BaseModel):
     use_trailing: bool = False
     user_id: str = None
     take_snapshot: bool = True
-    grid_mode: str = "FUTURES"  # אפשרות עתידית: "SPOT", "FUTURES", "BOTH"
+    grid_mode: str = "FUTURES"
 
 class AIAnalysisRequest(BaseModel):
     rsi: float
@@ -133,26 +133,21 @@ async def backtest(request: BacktestRequest):
 
 @app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
-    """
-    תומך ב־Futures, Spot ו־Grid. 
-    ברירת מחדל: פיוצ'רס עם גריד/טריילינג אופציונלי. גריד תמיד עם TP/SL פר רמה!
-    """
     try:
         if data.use_grid:
             from utils.grid_utils import execute_grid
-            # אפשרות: grid_mode="FUTURES" / "SPOT" / "BOTH"
             is_futures = (data.grid_mode or "FUTURES").upper() == "FUTURES"
             return await asyncio.to_thread(
                 execute_grid,
                 symbol=data.symbol,
                 budget=data.budget,
-                grid_count=8,           # אפשר לעדכן לפי פרמטר
-                grid_pct=0.5,           # ברירת מחדל 0.5%
+                grid_count=8,
+                grid_pct=0.5,
                 leverage=data.leverage,
                 futures=is_futures,
                 direction="BOTH",
-                tp_pct=1,               # תמיד! TP 1%
-                sl_pct=1                # תמיד! SL 1%
+                tp_pct=1,
+                sl_pct=1
             )
         else:
             from trade_executor import execute_trade_live
@@ -180,7 +175,7 @@ async def scan(
     limit: int = Query(300, description="מספר מטבעות לבדיקה")
 ):
     try:
-        from scanner_utils import scan_all
+        from scanner_utils import scan_all  # ← תוקן! לא utils.scanner_utils
         results = await scan_all(interval=interval, limit=limit, min_quality=min_quality)
         return {"count": len(results), "results": results}
     except Exception as e:
@@ -223,6 +218,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
