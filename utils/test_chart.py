@@ -1,21 +1,36 @@
 import matplotlib.pyplot as plt
 import os
 
-# יצירת תיקייה סטטית אם אינה קיימת
-os.makedirs("static", exist_ok=True)
+def generate_sample_chart(save_path="static/chart.png"):
+    """
+    יוצר גרף לדוגמה ושומר אותו כ־PNG.
+    """
+    # יצירת תיקייה אם אינה קיימת
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-# יצירת גרף פשוט עם עיצוב
-plt.figure(figsize=(6, 4))
-plt.plot([1, 2, 3], [4, 5, 6], marker='o', linestyle='-', color='blue')
-plt.title("📈 דוגמה לגרף פשוט", fontsize=14)
-plt.xlabel("ציר X", fontsize=12)
-plt.ylabel("ציר Y", fontsize=12)
-plt.grid(True)
+    # נתונים לדוגמה
+    x = [1, 2, 3, 4, 5]
+    y = [5, 6, 7, 6, 5]
 
-# שמירה לקובץ ב־static
-output_path = "static/chart.png"
-plt.tight_layout()
-plt.savefig(output_path)
-plt.close()
+    # יצירת גרף
+    plt.figure(figsize=(8, 5))
+    plt.plot(x, y, marker='o', linestyle='-', color='navy', linewidth=2)
+    plt.title("📊 גרף מבחן של AlgoGPT", fontsize=16)
+    plt.xlabel("שלבים", fontsize=12)
+    plt.ylabel("תוצאה", fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.5)
 
-print(f"✅ גרף נשמר בהצלחה: {output_path}")
+    # הוספת הערות לגרף
+    for i, value in enumerate(y):
+        plt.text(x[i], y[i] + 0.2, str(value), ha='center', fontsize=10)
+
+    # שמירה
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"✅ גרף לדוגמה נשמר בהצלחה: {save_path}")
+
+# קריאה ישירה אם קובץ מופעל עצמאית
+if __name__ == "__main__":
+    generate_sample_chart()
+
