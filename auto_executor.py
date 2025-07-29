@@ -1,8 +1,11 @@
+# auto_executor.py
+
 import os
 import asyncio
 import logging
 from dotenv import load_dotenv
-from utils.scan_futures import scan_all_futures
+
+from utils.scan_futures import scan_all as scan_all_futures  # ✅ תיקון שם הפונקציה
 from utils.get_live_price import get_live_price
 from utils.quantity_utils import auto_risk_allocation
 from utils.calculate_quantity import get_step_size
@@ -17,6 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
+
 
 async def auto_execute_trade():
     logging.info("🚀 סריקה חיה התחילה...")
@@ -91,6 +95,7 @@ async def auto_execute_trade():
 
     except Exception as e:
         logging.error(f"[!] שגיאה בביצוע אוטומטי: {e}")
+
 
 if __name__ == "__main__":
     if AUTO_RUN:
