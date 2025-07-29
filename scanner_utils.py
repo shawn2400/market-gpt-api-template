@@ -1,13 +1,10 @@
 import asyncio
 import logging
-from get_klines import get_klines
-from indicators import compute_indicators
-from binance_client import client
+from utils.get_klines import get_klines
+from utils.indicators import compute_indicators
+from utils.binance_client import client
 
 def get_symbols(market_type="futures"):
-    """
-    שליפת סמלים דינמית: Futures או Spot
-    """
     try:
         if market_type == "futures":
             info = client.futures_exchange_info()
@@ -22,7 +19,6 @@ def get_symbols(market_type="futures"):
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 
 def compute_quality_score(last):
-    """דירוג איכות טרייד (0–7) לפי אינדיקטורים מרכזיים"""
     score = 0
     if 45 < last.get("rsi", 0) < 65: score += 1
     if last.get("adx", 0) > 20: score += 1
@@ -34,9 +30,6 @@ def compute_quality_score(last):
     return score
 
 async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "15m", limit: int = 100):
-    """
-    ניתוח סמבול בודד (כולל אינדיקטורים, כיוון טרייד, איכות) – תומך FUTURES/SPOT
-    """
     try:
         df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or df.empty or len(df) < 30:
@@ -90,9 +83,6 @@ async def scan_all(
     limit: int = 100,
     min_quality: int = 5
 ):
-    """
-    סריקה חכמה לכל רשימת הסמלים ב־FUTURES/SPOT, מחזירה רק איכותיים
-    """
     symbols = get_symbols(market_type=market_type)[:limit]
     tasks = [analyze_symbol(s, market_type, interval, limit) for s in symbols]
     results = await asyncio.gather(*tasks)
@@ -102,7 +92,6 @@ async def scan_all(
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
     return filtered
 
-# דוגמה לשימוש – FUTURES/SPOT
 if __name__ == "__main__":
     import asyncio
     print("=== FUTURES ===")
@@ -114,6 +103,7 @@ if __name__ == "__main__":
     best_spot = asyncio.run(scan_all(market_type="spot", limit=10, min_quality=2))
     for x in best_spot:
         print(x)
+
 
 
 
