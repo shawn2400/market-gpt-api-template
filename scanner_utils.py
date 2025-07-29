@@ -1,4 +1,4 @@
-# scanner_utils.py – גרסה משודרגת תואמת auto_executor
+# scanner_utils.py – גרסה משודרגת תואם auto_executor
 
 import asyncio
 import aiohttp
@@ -67,7 +67,7 @@ async def fetch_historical_klines(session, symbol, interval="1m", limit=CANDLE_L
                 df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].astype(float)
                 return df
         except Exception as e:
-            logging.warning(f"[!] ניסיון כושל ({symbol}): {e}")
+            logging.warning(f"[!] נסיון כושל ({symbol}): {e}")
     return None
 
 # === אינדיקטורים טכניים ===
@@ -157,6 +157,7 @@ async def scan_all_futures():
 
     logging.info(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
     return valid
+
 
 
 
