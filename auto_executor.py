@@ -4,16 +4,18 @@ from math import floor
 import asyncio
 import pandas as pd
 import json
+
 from binance.enums import *
 from utils.binance_client import client
 from utils.get_live_price import get_live_price
-from snapshot_utils import save_trade_snapshot
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
 from utils.pnl_tracker import update_pnl
 from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
 from scanner_utils import scan_all_futures
+from snapshot_utils import save_trade_snapshot
+from utils.ai_analysis import predict_optimal_sl_tp  # ✅ תיקון קריסה
 
 EXCHANGE_INFO_CACHE = client.futures_exchange_info()
 
@@ -41,11 +43,11 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         if not price:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
+        # SL/TP adaptively via AI (אם חסר)
         if not stop or not tp:
-            sl_pct = 0.01
-            tp_pct = 0.015
-            stop = price * (1 - sl_pct) if direction.upper() == "LONG" else price * (1 + sl_pct)
-            tp = price * (1 + tp_pct) if direction.upper() == "LONG" else price * (1 - tp_pct)
+            predicted = predict_optimal_sl_tp(symbol, price, direction)
+            stop = predicted["sl"]
+            tp = predicted["tp"]
 
         quantity = (budget_usd * leverage) / price
         quantity = round_quantity(symbol, quantity)
@@ -98,7 +100,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
 
         snapshot_path = save_trade_snapshot({
             "symbol": symbol,
-            "entry": entry,
+            "entry": entry or price,
             "stop": stop,
             "tp": tp,
             "direction": direction.upper()
@@ -121,7 +123,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
 
         trade_data = {
             "symbol": symbol,
-            "entry": entry,
+            "entry": entry or price,
             "stop": stop,
             "tp": tp,
             "direction": direction.upper(),
@@ -134,7 +136,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "news_score": news_score
         }
         save_trade(trade_data)
-        update_pnl(symbol, direction, entry, price, leverage, quantity)
+        update_pnl(symbol, direction, entry or price, price, leverage, quantity)
 
         with open("email_config.json", "r") as f:
             cfg = json.load(f)
@@ -157,7 +159,7 @@ News Score: {news_score}""",
         return {
             "status": "success",
             "symbol": symbol,
-            "entry": entry,
+            "entry": entry or price,
             "price_now": price,
             "quantity": quantity,
             "stop": stop,
@@ -209,6 +211,7 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
             logging.error(f"[AUTO_EXECUTOR] שגיאה: {e}")
 
         await asyncio.sleep(delay)
+
 
 
 
