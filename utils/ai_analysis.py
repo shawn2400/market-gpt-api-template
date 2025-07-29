@@ -1,69 +1,69 @@
 # utils/ai_analysis.py
 
 import os
-from dotenv import load_dotenv
 import openai
+from dotenv import load_dotenv
 
-# טען מפתח API
+# טען מפתחות
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-
 def analyze_with_ai(data: dict) -> dict:
     """
-    ניתוח GPT על סמך RSI, ADX, תבנית, מגמה ונפח.
+    ניתוח GPT על סמך RSI, ADX, מגמה, תבנית ונפח.
+    מחזיר טקסט המלצה עם סיכום ניתוח.
     """
     if not openai.api_key:
-        return {"error": "מפתח OpenAI לא מוגדר"}
+        return {"error": "⚠️ מפתח OpenAI לא מוגדר"}
 
     if not data or not isinstance(data, dict):
-        return {"error": "Invalid or empty input data"}
+        return {"error": "⚠️ קלט לא תקין"}
 
     prompt = f"""
-    הנתונים הטכניים:
+    ניתוח טכני לפי נתונים:
     - RSI: {data.get("rsi")}
     - ADX: {data.get("adx")}
     - מגמה: {data.get("trend")}
     - תבנית גרף: {data.get("pattern")}
     - נפח מסחר: {data.get("volume")}
 
-    האם כדאי להיכנס לעסקת לונג או שורט? נתח בקצרה וכתוב המלצה.
+    בהסתמך על הנתונים, האם יש פוטנציאל ללונג או שורט? הסבר בקצרה מה מצביע על כך.
     """
-
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "אתה אנליסט טכני מנוסה בקריפטו. התשובה שלך צריכה להיות ישירה, תמציתית ומבוססת אינדיקטורים בלבד."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5,
             max_tokens=300
         )
-        result = response.choices[0].message.content.strip()
-        return {"analysis": result}
+        content = response.choices[0].message.content.strip()
+        return {"analysis": content}
     except Exception as e:
-        return {"error": f"שגיאה בניתוח GPT: {e}"}
+        return {"error": f"שגיאה בניתוח GPT: {str(e)}"}
 
 
 def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float = None) -> dict:
     """
-    חיזוי SL/TP חכם לפי כיוון ומחיר, כולל ATR אם קיים.
+    חיזוי SL ו־TP חכם לפי כיוון, מחיר ו־ATR אם קיים.
     """
     try:
         direction = direction.upper()
-        if direction not in {"LONG", "SHORT"}:
-            raise ValueError("כיוון לא חוקי: נדרש 'LONG' או 'SHORT'")
+        if direction not in ("LONG", "SHORT"):
+            raise ValueError("כיוון לא חוקי (רק LONG או SHORT)")
 
-        # חישוב מבוסס ATR אם קיים
+        # ATR-based חישוב
         if atr and atr > 0:
             sl = price - atr if direction == "LONG" else price + atr
             tp = price + atr * 1.5 if direction == "LONG" else price - atr * 1.5
         else:
-            # ברירת מחדל לפי אחוזים
-            sl_pct = 0.01
-            tp_pct = 0.015
-            sl = price * (1 - sl_pct) if direction == "LONG" else price * (1 + sl_pct)
-            tp = price * (1 + tp_pct) if direction == "LONG" else price * (1 - tp_pct)
+            # ברירת מחדל לפי אחוז
+            sl = price * (0.99 if direction == "LONG" else 1.01)
+            tp = price * (1.015 if direction == "LONG" else 0.985)
 
-        # הגנה על מרחק SL/TP מינימלי (לפחות 0.5%)
+        # הגנה על מרחק מינימלי
         min_gap = price * 0.005
         if abs(tp - sl) < min_gap:
             adjust = price * 0.01
@@ -76,7 +76,8 @@ def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float 
         }
 
     except Exception as e:
-        return {"error": f"שגיאה בחיזוי SL/TP: {e}"}
+        return {"error": f"שגיאה בחיזוי SL/TP: {str(e)}"}
+
 
 
 
