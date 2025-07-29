@@ -1,5 +1,3 @@
-# utils/scan_futures.py
-
 import asyncio
 import logging
 from utils.get_klines import get_klines
@@ -36,7 +34,6 @@ async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
     ניתוח אסינכרוני של סמבול בודד עם אינדיקטורים, כיוון טרייד ואיכות.
     """
     try:
-        # שים לב: תיקון קריאת get_klines כך שתעביר market_type במקום is_futures
         df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type="futures")
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים לניתוח")
@@ -104,6 +101,7 @@ if __name__ == "__main__":
     best = asyncio.run(scan_all())
     for x in best:
         print(x)
+
 
 
 
