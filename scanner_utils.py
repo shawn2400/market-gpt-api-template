@@ -1,4 +1,4 @@
-# scanner_utils.py – גרסה משודרגת תואמת auto_executor
+# scanner_utils.py – גרסה משודרגת תואמת auto_executor עם Snapshot
 
 import asyncio
 import aiohttp
@@ -6,11 +6,11 @@ import pandas as pd
 from binance import AsyncClient
 import os
 from dotenv import load_dotenv
-from ta.trend import EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.volatility import AverageTrueRange
 import logging
 from utils.quality_score import compute_quality_score
+from ai_analysis import analyze_with_ai
+from indicators_utils import compute_indicators  # ← שימוש בקובץ המרכזי
+from snapshot_utils import save_trade_snapshot
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -22,20 +22,6 @@ SYMBOL_LIMIT = 300
 CANDLE_LIMIT = 100
 MIN_VOLUME = 10_000_000
 MIN_VOLATILITY_PERCENT = 2.0
-
-# === חישוב OBV ===
-def calculate_obv(df):
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['close'].iloc[i-1]:
-            obv.append(obv[-1] + df['volume'].iloc[i])
-        elif df['close'].iloc[i] < df['close'].iloc[i-1]:
-            obv.append(obv[-1] - df['volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    df['obv'] = obv
-    df['obv_trend'] = df['obv'].diff() > 0
-    return df
 
 # === סמלים של Binance Futures ===
 async def fetch_futures_symbols():
@@ -70,27 +56,6 @@ async def fetch_historical_klines(session, symbol, interval="1m", limit=CANDLE_L
             logging.warning(f"[!] נסיון כושל ({symbol}): {e}")
     return None
 
-# === אינדיקטורים טכניים ===
-def compute_indicators(df):
-    try:
-        df['ema_21'] = EMAIndicator(df['close'], window=21).ema_indicator()
-        df['ema_50'] = EMAIndicator(df['close'], window=50).ema_indicator()
-        df['rsi'] = RSIIndicator(df['close']).rsi()
-        macd = MACD(df['close'])
-        df['macd_hist'] = macd.macd_diff()
-        df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
-        df['atr'] = AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
-        stoch = StochasticOscillator(df['high'], df['low'], df['close'])
-        df['stoch_k'] = stoch.stoch()
-        df['stoch_d'] = stoch.stoch_signal()
-        df['volume_mean'] = df['volume'].rolling(window=20).mean()
-        df = calculate_obv(df)
-        df.dropna(inplace=True)
-        return df
-    except Exception as e:
-        logging.error(f"[!] שגיאה באינדיקטורים: {e}")
-        return df
-
 # === ניתוח סמל בודד ===
 async def fetch_symbol_analysis(session, symbol):
     kline_df = await fetch_historical_klines(session, symbol)
@@ -115,6 +80,15 @@ async def fetch_symbol_analysis(session, symbol):
     if not signal:
         return None
 
+    # חיזוי AI
+    ai_analysis = analyze_with_ai({
+        "rsi": round(last['rsi'], 2),
+        "adx": round(last['adx'], 2),
+        "trend": signal,
+        "volume": round(last['volume'], 2),
+        "pattern": "N/A"
+    })
+
     # חישוב SL/TP לפי ATR
     atr = last['atr']
     entry_price = last['close']
@@ -123,6 +97,15 @@ async def fetch_symbol_analysis(session, symbol):
 
     direction = signal
     quality_score = compute_quality_score(kline_df)
+
+    # יצירת Snapshot לגרף
+    snapshot_path = save_trade_snapshot({
+        "symbol": symbol,
+        "entry": entry_price,
+        "stop": sl,
+        "tp": tp,
+        "direction": direction
+    })
 
     return {
         "symbol": symbol,
@@ -138,7 +121,9 @@ async def fetch_symbol_analysis(session, symbol):
         "stoch_k": round(last['stoch_k'], 2),
         "volume": round(last['volume'], 2),
         "signal": signal,
-        "quality_score": quality_score
+        "quality_score": quality_score,
+        "ai_analysis": ai_analysis.get("analysis", "N/A"),
+        "snapshot": snapshot_path
     }
 
 # === סריקה חיה מלאה ===
