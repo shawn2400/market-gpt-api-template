@@ -1,9 +1,15 @@
 import ta
 import pandas as pd
 import numpy as np
+import logging
 
-# === פונקציית סופרטרנד מלאה ===
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+
 def supertrend(df, period=10, multiplier=3):
+    if df.empty:
+        logging.warning("supertrend: DataFrame ריק, מחזיר ללא שינוי")
+        return df
+
     hl2 = (df['high'] + df['low']) / 2
     atr = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=period).average_true_range()
     upperband = hl2 + (multiplier * atr)
@@ -12,6 +18,7 @@ def supertrend(df, period=10, multiplier=3):
     final_lowerband = lowerband.copy()
     supertrend = [np.nan] * len(df)
     direction = [1] * len(df)
+
     for i in range(1, len(df)):
         if df['close'].iloc[i] > final_upperband.iloc[i-1]:
             direction[i] = 1
@@ -24,18 +31,33 @@ def supertrend(df, period=10, multiplier=3):
             if direction[i] == -1 and final_upperband.iloc[i] > final_upperband.iloc[i-1]:
                 final_upperband.iloc[i] = final_upperband.iloc[i-1]
         supertrend[i] = final_lowerband.iloc[i] if direction[i] == 1 else final_upperband.iloc[i]
+
     df['supertrend'] = supertrend
     df['supertrend_dir'] = direction
     return df
 
-# === פונקציית אינדיקטורים מלאה ===
+
 def compute_indicators(df, volume_window=20):
-    # בדיקה בסיסית לפני חישוב אינדיקטורים
-    if df.empty or any(col not in df.columns for col in ['open','high','low','close','volume']):
-        print("[!] df לא תקין לחישוב אינדיקטורים - חסרים עמודות חיוניות או ריק")
+    # בדיקת תקינות בסיסית
+    required_cols = ['open', 'high', 'low', 'close', 'volume']
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if df.empty or missing_cols:
+        logging.error(f"compute_indicators: DataFrame לא תקין - חסרים עמודות: {missing_cols} או ריק")
         return df
 
+    # וידוא שהעמודות מספריות
+    for col in required_cols:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            try:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                logging.info(f"compute_indicators: המרתי עמודה {col} למספרית")
+            except Exception as e:
+                logging.error(f"compute_indicators: לא ניתן להמיר {col} למספרי: {e}")
+                return df
+
     try:
+        logging.info(f"compute_indicators: מספר שורות לפני חישוב אינדיקטורים: {len(df)}")
+
         # חישוב אינדיקטורים
         df['ema_21'] = ta.trend.EMAIndicator(close=df['close'], window=21).ema_indicator()
         df['ema_50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
@@ -104,25 +126,26 @@ def compute_indicators(df, volume_window=20):
         df['bullish_engulfing'] = (df['close'] > df['open']) & (df['open'].shift(1) > df['close'].shift(1)) & (df['close'] > df['open'].shift(1))
         df['bearish_engulfing'] = (df['close'] < df['open']) & (df['open'].shift(1) < df['close'].shift(1)) & (df['close'] < df['open'].shift(1))
 
-        print(f"[indicators] לפני dropna: {len(df)} שורות")
+        logging.info(f"indicators: לפני dropna: {len(df)} שורות")
         df.dropna(inplace=True)
-        print(f"[indicators] אחרי dropna: {len(df)} שורות")
+        logging.info(f"indicators: אחרי dropna: {len(df)} שורות")
 
         if len(df) < 30:
-            print("[!] אזהרה: אחרי dropna, מעט מדי נתונים לניתוח אמין")
+            logging.warning("אזהרה: אחרי dropna, מעט מדי נתונים לניתוח אמין")
 
         return df
 
     except Exception as e:
-        print(f"[!] שגיאה בחישוב אינדיקטורים: {e}")
+        logging.error(f"שגיאה בחישוב אינדיקטורים: {e}")
         return df
 
-# ==== שימוש לקוד חיצוני (ל־Backtest, ל־LIVE וכו׳) ====
+
 def prepare_indicators_for_backtest(df):
     return compute_indicators(df)
 
 def prepare_indicators_for_live_scan(df):
     return compute_indicators(df)
+
 
 
 
