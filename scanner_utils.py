@@ -8,7 +8,7 @@ import logging
 from utils.quality_score import compute_quality_score
 from utils.ai_analysis import analyze_with_ai
 from utils.indicators import compute_indicators
-from utils.snapshot_utils import save_trade_snapshot
+from snapshot_utils import save_trade_snapshot  # ✅ תיקון מיקום
 import matplotlib.pyplot as plt
 
 load_dotenv()
@@ -98,7 +98,7 @@ async def fetch_symbol_analysis(session, symbol, interval):
         })
         ai_result = ai_analysis.get("analysis", "N/A")
     except Exception as e:
-        logging.warning(f"[!] שגיאה בּ‏AI עבור {symbol}: {e}")
+        logging.warning(f"[!] שגיאה ב־AI עבור {symbol}: {e}")
         ai_result = "N/A"
 
     snapshot_path = save_trade_snapshot({
@@ -161,6 +161,7 @@ async def scan_all_futures(interval=DEFAULT_INTERVAL, symbol_limit=DEFAULT_SYMBO
 
     logging.info(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
     return valid
+
 
 
 
