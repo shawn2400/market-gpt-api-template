@@ -6,19 +6,19 @@ from utils.quality_score import compute_quality_score
 from utils.snapshot_utils import generate_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from scanner_utils import scan_all_futures
-from utils.ai_analysis import predict_optimal_sl_tp  # ✅ AI SL/TP
+from utils.ai_analysis import predict_optimal_sl_tp
 from utils.binance_client import place_futures_order
 
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
     while True:
         try:
-            print(f"[AUTO_EXECUTOR] סורק את השוק...")
+            print(f"\n[AUTO_EXECUTOR] 🚀 סורק את שוק הפיוצ'רס...")
             trades = await scan_all_futures()
 
             filtered = [t for t in trades if t.get("quality_score", 0) >= min_quality]
             if not filtered:
-                print(f"[AUTO_EXECUTOR] לא נמצאו טריידים איכותיים.")
+                print(f"[AUTO_EXECUTOR] ⚠️ לא נמצאו טריידים איכותיים.")
                 if once:
                     print("[AUTO_EXECUTOR] מצב once - יציאה.")
                     return
@@ -31,16 +31,16 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             leverage = 10
             entry = float(await get_price(symbol))
 
-            # ✅ חיזוי SL/TP לפי כיוון ומחיר
+            # חיזוי SL/TP לפי AI
             sltp = predict_optimal_sl_tp(symbol, entry, direction)
             stop = sltp["sl"]
             tp = sltp["tp"]
             qty = round((max_budget * leverage) / entry, 3)
 
-            print(f"[AUTO_EXECUTOR] {direction} על {symbol} @ {entry} | SL: {stop}, TP: {tp}, Qty: {qty}, QS: {trade['quality_score']}")
+            print(f"[AUTO_EXECUTOR] 📊 טרייד: {symbol} | {direction} @ {entry} | SL={stop} TP={tp} Qty={qty} QS={trade['quality_score']}")
 
             if debug:
-                print("[DEBUG] מצב בדיקה פעיל - לא מתבצע שליחת פקודה ל־Binance")
+                print("[DEBUG] מצב בדיקה פעיל - לא נשלחת פקודה ל-Binance.")
             else:
                 order = await place_futures_order(
                     symbol=symbol,
@@ -52,11 +52,12 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     leverage=leverage
                 )
 
-                timestamp = str(order.get("timestamp", asyncio.get_event_loop().time()))
+                timestamp = str(order.get("timestamp", int(asyncio.get_running_loop().time())))
                 pnl = float(order.get("pnl", 0))
 
                 snapshot_path = generate_trade_snapshot(symbol, entry, stop, tp, direction)
 
+                # שמירת הטרייד
                 save_trade({
                     "symbol": symbol,
                     "entry": entry,
@@ -69,25 +70,29 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     "snapshot": snapshot_path
                 })
 
+                # עדכון PNL
                 update_pnl(symbol, pnl, trade.get("quality_score", 0))
 
+                print(f"[AUTO_EXECUTOR] ✅ טרייד בוצע ונשמר: {symbol} {direction} @ {entry}")
+
         except Exception as e:
-            print(f"❌ [AUTO_EXECUTOR] שגיאה: {e}")
+            print(f"❌ [AUTO_EXECUTOR] שגיאה כללית: {e}")
 
         if once:
-            print("[AUTO_EXECUTOR] בוצע טרייד אחד בלבד. סיום.")
+            print("[AUTO_EXECUTOR] 🛑 הרצה בודדת הושלמה. יציאה.")
             break
 
+        print(f"[AUTO_EXECUTOR] ⏳ ממתין {delay} שניות לפני סריקה נוספת...")
         await asyncio.sleep(delay)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--debug", action="store_true", help="הדפס פרטים מבלי לבצע מסחר בפועל")
-    parser.add_argument("--once", action="store_true", help="הרץ רק פעם אחת ויצא")
-    parser.add_argument("--delay", type=int, default=60, help="השהיה בין סריקות")
-    parser.add_argument("--min_quality", type=int, default=6, help="סף מינימום לאיכות הטרייד")
-    parser.add_argument("--budget", type=float, default=100, help="תקציב ב-USDT לכל טרייד")
+    parser = argparse.ArgumentParser(description="הרצה חיה של AlgoGPT Auto Executor")
+    parser.add_argument("--debug", action="store_true", help="מצב בדיקה - ללא שליחה ל־Binance")
+    parser.add_argument("--once", action="store_true", help="הרצה חד פעמית בלבד")
+    parser.add_argument("--delay", type=int, default=60, help="השהיה בין הרצות (שניות)")
+    parser.add_argument("--min_quality", type=int, default=6, help="סף מינימלי לציון איכות")
+    parser.add_argument("--budget", type=float, default=100, help="תקציב לטרייד (USDT)")
     args = parser.parse_args()
 
     asyncio.run(run_executor(
