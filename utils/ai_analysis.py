@@ -1,11 +1,10 @@
-# ai_analysis.py
-
 import os
 from dotenv import load_dotenv
 import openai
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
 
 def analyze_with_ai(data: dict) -> dict:
     """
@@ -36,4 +35,15 @@ def analyze_with_ai(data: dict) -> dict:
         return {"analysis": result}
     except Exception as e:
         return {"error": f"שגיאה בניתוח GPT: {e}"}
+
+
+def predict_optimal_sl_tp(symbol: str, price: float, direction: str) -> dict:
+    """
+    ניבוי SL/TP חכם על בסיס מגמה ומחיר – ניתן לשפר בעתיד למודל למידה אמיתי.
+    """
+    direction = direction.upper()
+    sl = price * (0.99 if direction == "LONG" else 1.01)
+    tp = price * (1.015 if direction == "LONG" else 0.985)
+    return {"sl": round(sl, 4), "tp": round(tp, 4)}
+
 
