@@ -4,7 +4,6 @@ import logging
 import pandas as pd
 from utils.binance_client import client
 from utils.indicators import compute_indicators
-from utils.sl_tp_utils import calc_sl_tp_by_atr
 
 def check_binance_status():
     """בדיקת זמינות Binance API"""
@@ -59,6 +58,12 @@ def scan_all_futures_symbols(limit=100, interval='5m'):
                     df[col] = df[col].astype(float)
                 df = compute_indicators(df)
                 last = df.iloc[-1]
+
+                # לייבא את הפונקציה רק כאן למניעת תלות מעגלית
+                from utils.sl_tp_utils import calculate_sl_tp
+
+                sl, tp = calculate_sl_tp(last['close'], direction='long', atr=last.get('atr', None))
+
                 result.append({
                     "symbol": symbol,
                     "price": prices.get(symbol),
@@ -68,7 +73,9 @@ def scan_all_futures_symbols(limit=100, interval='5m'):
                     "volume": last['volume'],
                     "ema_21": last['ema_21'],
                     "ema_50": last['ema_50'],
-                    "quality_score": last.get('tech_score', 0)
+                    "quality_score": last.get('tech_score', 0),
+                    "sl": sl,
+                    "tp": tp
                 })
             except Exception as e:
                 logging.warning(f"[!] Symbol {symbol} error: {e}")
@@ -91,6 +98,8 @@ def get_best_trade_symbol(limit=50, min_score=2):
 def get_trade_levels(symbol, direction="long", interval="5m"):
     """מחיר נוכחי + SL/TP לפי ATR"""
     from utils.get_live_price import get_live_price  # לייט-אימפורט! (למניעת circular)
+    from utils.sl_tp_utils import calculate_sl_tp
+
     price = get_live_price(symbol, is_futures=True)
     klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
     df = pd.DataFrame(klines, columns=[
@@ -102,7 +111,7 @@ def get_trade_levels(symbol, direction="long", interval="5m"):
         df[col] = df[col].astype(float)
     df = compute_indicators(df)
     last = df.iloc[-1]
-    sl, tp = calc_sl_tp_by_atr(last['close'], last['atr'], direction=direction)
+    sl, tp = calculate_sl_tp(last['close'], last['atr'], direction=direction)
     return {"price": price, "sl": sl, "tp": tp}
 
 # דוגמת זרימת עבודה מלאה – מציאת טרייד מוכן
@@ -124,6 +133,7 @@ if __name__ == "__main__":
         if best:
             print(f"Best trade: {best['symbol']} | Price: {best['price']} | Score: {best['quality_score']}")
         trades = auto_scan_and_trade()
+
 
 
 
