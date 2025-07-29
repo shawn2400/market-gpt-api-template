@@ -18,7 +18,6 @@ from utils.ai_analysis import predict_optimal_sl_tp  # ✅ תיקון כאן
 
 EXCHANGE_INFO_CACHE = client.futures_exchange_info()
 
-
 def round_quantity(symbol, quantity):
     try:
         for s in EXCHANGE_INFO_CACHE["symbols"]:
@@ -28,7 +27,6 @@ def round_quantity(symbol, quantity):
     except Exception as e:
         logging.error(f"[!] שגיאה בעיגול כמות: {e}")
     return round(quantity, 3)
-
 
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
     try:
@@ -42,7 +40,6 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         if not price:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
-        # ✅ שימוש בפונקציית AI לחישוב SL/TP אם לא סופקו
         if not stop or not tp:
             sl_tp = predict_optimal_sl_tp(symbol, price, direction)
             stop = sl_tp["sl"]
@@ -51,7 +48,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         quantity = (budget_usd * leverage) / price
         quantity = round_quantity(symbol, quantity)
         if quantity <= 0:
-            raise ValueError("⚠️ כמות לא חוקית (תקציב נמוך מדי או tickSize לא מתאים)")
+            raise ValueError("⚠️ כמות לא חוקית")
 
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite_side = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
@@ -95,7 +92,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 timeInForce=TIME_IN_FORCE_GTC
             )
         except Exception as e:
-            logging.warning(f"[!] טייק פרופיט נכשל: {e} – ממשיכים בלי")
+            logging.warning(f"[!] טייק פרופיט נכשל: {e} – ממשיכים בליעדו")
 
         snapshot_path = save_trade_snapshot({
             "symbol": symbol,
@@ -105,18 +102,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "direction": direction.upper()
         })
 
-        df = pd.DataFrame([{
-            "atr": abs(tp - stop),
-            "macd": 1,
-            "macd_signal": 0,
-            "rsi": 50,
-            "adx": 25,
-            "volume": 1_000_000,
-            "volume_mean": 800_000,
-            "close": price,
-            "ema_21": price * 0.99,
-            "ema_50": price * 0.98
-        }])
+        df = pd.DataFrame([{...}])  # דוגמה איכות לציון confidence
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality + news_score * 2, 2)
 
@@ -174,7 +160,7 @@ News Score: {news_score}""",
         }
 
     except Exception as e:
-        logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
+        logging.error(f"❌ שגיאה בביצוע טרייד ב‏{symbol}: {e}")
         return {"status": "error", "message": str(e)}
 
 
