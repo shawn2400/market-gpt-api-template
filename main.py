@@ -133,7 +133,8 @@ async def backtest(request: BacktestRequest):
 async def execute_trade(data: TradeRequest):
     try:
         from trade_executor import execute_trade_live
-        return await execute_trade_live(
+        return await asyncio.to_thread(
+            execute_trade_live,
             symbol=data.symbol,
             entry=data.entry,
             stop=data.stop,
@@ -200,6 +201,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
