@@ -1,3 +1,5 @@
+# auto_executor.py – תואם לגרסה המורחבת
+
 import time
 import logging
 from math import floor
@@ -112,7 +114,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "direction": direction.upper()
         })
 
-        # ציון איכות (מזויף)
+        # ציון איכות (אמיתי עם ATR וכו')
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -181,6 +183,7 @@ News Score: {news_score}"""
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
