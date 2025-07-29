@@ -13,9 +13,10 @@ from utils.quality_score import compute_quality_score
 from utils.pnl_tracker import update_pnl
 from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
-from scanner_utils import scan_all_futures
+from utils.scan_futures import scan_all  # שים לב לשם הפונקציה העדכנית
 from utils.ai_analysis import predict_optimal_sl_tp
 
+# קאש למידע הבורסה
 EXCHANGE_INFO_CACHE = client.futures_exchange_info()
 
 def round_quantity(symbol, quantity):
@@ -42,8 +43,8 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
 
         if not stop or not tp:
             sl_tp = predict_optimal_sl_tp(symbol, price, direction)
-            stop = sl_tp["sl"]
-            tp = sl_tp["tp"]
+            stop = sl_tp.get("sl")
+            tp = sl_tp.get("tp")
 
         quantity = (budget_usd * leverage) / price
         quantity = round_quantity(symbol, quantity)
@@ -102,7 +103,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "direction": direction.upper()
         })
 
-        df = pd.DataFrame([{  # דוגמה בסיסית עבור quality score
+        df = pd.DataFrame([{  # נתונים לדוגמה לציון איכות
             "atr": abs(tp - stop),
             "macd": 1,
             "macd_signal": 0,
@@ -179,7 +180,7 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
     while True:
         try:
             print(f"[AUTO_EXECUTOR] מתחיל סריקה חיה... (min_quality={min_quality})")
-            trades = await scan_all_futures()
+            trades = await scan_all(min_quality=min_quality)  # עדכון לשם הפונקציה הנכון
 
             filtered = [t for t in trades if t.get("quality_score", 0) >= min_quality]
             if not filtered:
@@ -188,15 +189,15 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
                 continue
 
             trade = filtered[0]
-            print(f"[AUTO_EXECUTOR] מבצע טרייד חי על {trade['symbol']} ({trade['signal']})")
+            print(f"[AUTO_EXECUTOR] מבצע טרייד חי על {trade['symbol']} ({trade['direction']})")
 
             await asyncio.to_thread(
                 execute_trade_live,
                 symbol=trade["symbol"],
-                entry=trade.get("entry", None),
+                entry=trade.get("close", None),
                 stop=trade.get("stop", None),
                 tp=trade.get("tp", None),
-                direction=trade["signal"],
+                direction=trade["direction"],
                 leverage=10,
                 budget_usd=max_budget,
                 use_grid=False,
@@ -207,6 +208,7 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
             logging.error(f"[AUTO_EXECUTOR] שגיאה: {e}")
 
         await asyncio.sleep(delay)
+
 
 
 
