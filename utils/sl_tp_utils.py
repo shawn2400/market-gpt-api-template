@@ -55,3 +55,4 @@ def validate_sl_tp(entry_price: float, sl: float, tp: float, direction: str) -> 
     else:
         return tp < entry_price < sl
 
+
