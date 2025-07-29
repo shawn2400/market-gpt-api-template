@@ -1,48 +1,38 @@
-# שלב בסיסי: Python רזה
+# Base: Python 3.11 with minimal footprint
 FROM python:3.11-slim
 
-# משתנים לסביבת עבודה נקייה ולוגים ישירים
+# Clean env + unbuffered logs
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# התקנת תלות מערכת לבניית ספריות כבדות כמו ta-lib, Prophet וכו'
+# System dependencies for typical Python libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    gcc \
-    g++ \
-    libffi-dev \
-    libatlas-base-dev \
-    libprotobuf-dev \
-    libpng-dev \
-    libjpeg-dev \
     libopenblas-dev \
     liblapack-dev \
-    gfortran \
-    git \
+    libjpeg-dev \
+    libpng-dev \
     curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# הגדרת תיקיית עבודה
+# Set working directory
 WORKDIR /app
 
-# העתקת קובץ הדרישות בלבד קודם – יאפשר cache טוב
+# Copy and install dependencies
 COPY requirements.txt .
-
-# פתרון לקריסה של pystan: התקנה מוקדמת של numpy ו-cython
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir numpy cython
-
-# התקנת כל הדרישות
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir numpy cython
 RUN pip install --no-cache-dir -r requirements.txt
 
-# העתקת שאר קבצי הקוד
+# Copy app files
 COPY . .
 
-# פתיחת פורט (חשוב ב־Render ודומיו)
+# Expose port for Render
 EXPOSE 5000
 
-# ✅ הפעלת FastAPI עם Gunicorn דרך UvicornWorker
+# Run FastAPI with Gunicorn & Uvicorn worker
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:5000"]
+
 
 
 
