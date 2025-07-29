@@ -1,15 +1,13 @@
-# run_executor.py
-
 import asyncio
 import argparse
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
-from snapshot_utils import save_trade_snapshot
+from utils.snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from scanner_utils import scan_all_futures
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.binance_trader import place_futures_order  # ← תיקון כאן
+from utils.binance_trader import place_futures_order
 
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
@@ -33,7 +31,7 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             leverage = 10
             entry = float(await get_price(symbol))
 
-            # חיזוי SL/TP לפי GPT
+            # חיזוי SL/TP לפי AI
             sltp = predict_optimal_sl_tp(symbol, entry, direction)
             stop = sltp["sl"]
             tp = sltp["tp"]
@@ -57,6 +55,7 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                 timestamp = str(order.get("timestamp", int(asyncio.get_running_loop().time())))
                 pnl = float(order.get("pnl", 0))
 
+                # יצירת snapshot
                 snapshot_path = save_trade_snapshot({
                     "symbol": symbol,
                     "entry": entry,
@@ -113,5 +112,6 @@ if __name__ == "__main__":
         min_quality=args.min_quality,
         max_budget=args.budget
     ))
+
 
 
