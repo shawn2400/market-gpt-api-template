@@ -31,6 +31,8 @@ def compute_quality_score(last):
 
 async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "15m", limit: int = 100):
     try:
+        await asyncio.sleep(0.2)  # 🕒 מרווח נגד עומס Binance
+
         df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
@@ -74,7 +76,7 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
             "quality_score": int(quality_score)
         }
     except Exception as e:
-        logging.warning(f"[{symbol}] analyze error ({market_type}): {e}")
+        logging.warning(f"[{symbol}] analyze error ({market_type}): {type(e).__name__} – {e}")
         return None
 
 async def scan_all(
@@ -92,17 +94,6 @@ async def scan_all(
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
     return filtered
 
-if __name__ == "__main__":
-    import asyncio
-    print("=== FUTURES ===")
-    best_futures = asyncio.run(scan_all(market_type="futures", limit=10, min_quality=2))
-    for x in best_futures:
-        print(x)
-
-    print("\n=== SPOT ===")
-    best_spot = asyncio.run(scan_all(market_type="spot", limit=10, min_quality=2))
-    for x in best_spot:
-        print(x)
 
 
 
