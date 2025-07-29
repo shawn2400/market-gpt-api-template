@@ -52,13 +52,11 @@ class AIAnalysisRequest(BaseModel):
     volume: float
     pattern: str
 
-
 # === Routes ===
 
 @app.get("/", operation_id="checkServerStatus")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
-
 
 @app.post("/sl_tp", operation_id="calculateSLTP")
 async def sl_tp(request: SLTPRequest):
@@ -69,7 +67,6 @@ async def sl_tp(request: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/calculate-quantity", operation_id="calculateQuantity")
 async def calc_qty(data: QuantityRequest):
     try:
@@ -79,7 +76,6 @@ async def calc_qty(data: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.get("/news", operation_id="fetchCryptoNews")
 async def news():
     try:
@@ -87,7 +83,6 @@ async def news():
         return fetch_crypto_news()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/analyze-news", operation_id="analyzeNewsImpact")
 async def analyze_news():
@@ -97,7 +92,6 @@ async def analyze_news():
         return analyze_news_impact(news)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/backtest", operation_id="runBacktest")
 async def backtest(request: BacktestRequest):
@@ -135,7 +129,6 @@ async def backtest(request: BacktestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
     try:
@@ -156,7 +149,6 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/scan", operation_id="scanMarket")
 async def scan(
     min_quality: int = Query(0, description="ציון איכות מינימלי"),
@@ -171,7 +163,6 @@ async def scan(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/daily-report", operation_id="generateDailyReport")
 async def daily_report():
     try:
@@ -180,14 +171,12 @@ async def daily_report():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/ai-analyze", operation_id="aiAnalysis")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
         return analyze_with_ai(data.dict())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.on_event("startup")
 async def start_background_tasks():
@@ -211,6 +200,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
