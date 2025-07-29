@@ -31,7 +31,7 @@ def compute_quality_score(last):
     if last.get("vwap", 0) < last.get("close", 0): score += 1
     return score
 
-async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "15m", limit: int = 100):
+async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "5m", limit: int = 100):
     try:
         await asyncio.sleep(0.2)
 
@@ -57,11 +57,8 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         if direction == "NEUTRAL":
             return None
 
-        try:
-            sltp = predict_optimal_sl_tp(symbol, last["close"], direction)
-        except Exception as e:
-            logging.warning(f"[{symbol}] שגיאה בחיזוי SL/TP: {type(e).__name__} – {e}")
-            sltp = {"sl": None, "tp": None}
+        # ניתוח SL/TP עם GPT
+        sltp = predict_optimal_sl_tp(symbol, last["close"], direction)
 
         return {
             "symbol": symbol,
@@ -79,8 +76,8 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
 
 async def scan_all(
     market_type: str = "futures",
-    interval: str = "15m",
-    limit: int = 30,
+    interval: str = "5m",
+    limit: int = 100,
     min_quality: int = 5
 ):
     symbols = get_symbols(market_type=market_type)[:limit]
@@ -89,8 +86,9 @@ async def scan_all(
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
-    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]
+    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]  # החזקים ביותר
     return filtered
+
 
 
 
