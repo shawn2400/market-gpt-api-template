@@ -10,18 +10,23 @@ def save_trade_snapshot(trade):
         stop = float(trade.get("stop", 0))
         tp = float(trade.get("tp", 0))
         direction = trade.get("direction", "LONG").upper()
+        price_now = float(trade.get("price_now", 0)) if "price_now" in trade else None
         timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
 
         # גבולות Y עם buffer בטיחות
         buffer = max(abs(entry - stop), abs(tp - entry)) * 1.5
-        y_min = min(entry, stop, tp) - buffer
-        y_max = max(entry, stop, tp) + buffer
+        y_min = min(entry, stop, tp, price_now if price_now else entry) - buffer
+        y_max = max(entry, stop, tp, price_now if price_now else entry) + buffer
 
         # ציור גרף
         fig, ax = plt.subplots(figsize=(7, 4))
         ax.axhline(entry, color="blue", linestyle="--", linewidth=1.5, label=f"Entry: {entry}")
         ax.axhline(stop, color="red", linestyle="--", linewidth=1.5, label=f"Stop: {stop}")
         ax.axhline(tp, color="green", linestyle="--", linewidth=1.5, label=f"TP: {tp}")
+
+        # קו מחיר בפועל אם קיים
+        if price_now:
+            ax.axhline(price_now, color="orange", linestyle=":", linewidth=1.5, label=f"Price Now: {price_now}")
 
         ax.set_ylim([y_min, y_max])
         ax.set_title(f"{symbol} Trade Snapshot ({direction})", fontsize=12)
@@ -42,6 +47,7 @@ def save_trade_snapshot(trade):
     except Exception as e:
         print(f"[!] שגיאה בשמירת Snapshot: {e}")
         return None
+
 
 
 
