@@ -6,10 +6,10 @@ import os
 import asyncio
 import time
 
-from utils.ai_analysis import analyze_with_ai
-
 __boot_start__ = time.time()
 load_dotenv()
+
+from utils.ai_analysis import analyze_with_ai
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -17,7 +17,6 @@ app = FastAPI(
     version="1.3.1"
 )
 
-# === Data Models ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -53,8 +52,6 @@ class AIAnalysisRequest(BaseModel):
     trend: str
     volume: float
     pattern: str
-
-# === Routes ===
 
 @app.get("/", operation_id="checkServerStatus")
 async def home():
@@ -171,7 +168,7 @@ async def execute_trade(data: TradeRequest):
 @app.get("/scan", operation_id="scanMarket")
 async def scan(
     min_quality: int = Query(0, description="ציון איכות מינימלי"),
-    interval: str = Query("1m", description="טיימפריים לניתוח"),
+    interval: str = Query("1m", description="טיימפריים"),
     limit: int = Query(300, description="מספר מטבעות לבדיקה")
 ):
     try:
@@ -208,16 +205,12 @@ async def start_background_tasks():
 
         if auto_run == "true":
             print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
-            asyncio.create_task(start_auto_executor(
-                delay=delay,
-                min_quality=min_quality,
-                max_budget=max_trade_budget
-            ))
+            asyncio.create_task(start_auto_executor(delay=delay, min_quality=min_quality, max_budget=max_trade_budget))
 
         print(f"[BOOT TIME] Server ready in {time.time() - __boot_start__:.2f} seconds")
-
     except Exception as e:
-        print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+        print(f"[ERROR on startup] Auto Executor failed: {e}")
+
 
 
 
