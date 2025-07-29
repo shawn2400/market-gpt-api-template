@@ -45,7 +45,12 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
             return None
+        
         df = compute_indicators(df)
+        if df.empty or len(df) < 30:
+            logging.warning(f"[{symbol}] DataFrame אחרי חישוב אינדיקטורים ריק או קצר מדי")
+            return None
+        
         last = df.iloc[-1]
 
         direction = (
