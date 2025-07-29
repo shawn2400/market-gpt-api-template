@@ -5,7 +5,7 @@ import logging
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 
-# סמלים נבחרים — אפשר להרחיב/לשנות
+# רשימת סמלים פופולריים — אפשר להרחיב לרשימה חיה מה־API בהמשך
 POPULAR_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT", "AVAXUSDT",
     "DOGEUSDT", "MATICUSDT", "LINKUSDT", "OPUSDT", "LTCUSDT", "DOTUSDT", "UNIUSDT",
@@ -13,7 +13,7 @@ POPULAR_SYMBOLS = [
 ]
 
 def compute_quality_score(last):
-    """ דירוג איכות טרייד (0–7) לפי אינדיקטורים מרכזיים """
+    """דירוג איכות טרייד (0–7) לפי אינדיקטורים מרכזיים"""
     score = 0
     if 45 < last.get("rsi", 0) < 65: score += 1
     if last.get("adx", 0) > 20: score += 1
@@ -82,12 +82,13 @@ async def scan_all_futures(symbols: list = None, interval: str = "15m", limit: i
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
     return filtered
 
-# דוגמה לבדיקת מודול עצמאית (לא חובה לפרודקשן)
+# דוגמה לבדיקת מודול עצמאית (אפשר למחוק בפרודקשן)
 if __name__ == "__main__":
     import asyncio
     best = asyncio.run(scan_all_futures())
     for x in best:
         print(x)
+
 
 
 
