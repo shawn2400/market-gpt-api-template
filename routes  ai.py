@@ -1,44 +1,47 @@
 # routes/ai.py
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
 
-router = APIRouter(tags=["AI"])
+router = APIRouter()
 
-class AnalyzeRequest(BaseModel):
+class AIAnalysisRequest(BaseModel):
     rsi: float
     adx: float
-    volume: float
     pattern: str = ""
     trend: str = ""
+    volume: float = 0
 
 class PredictSLTPRequest(BaseModel):
+    symbol: str
     entry_price: float
-    direction: str
+    direction: str  # "LONG" or "SHORT"
 
-@router.post("/analyze")
-async def ai_analyze(request: AnalyzeRequest):
+@router.post("/ai-analyze", tags=["AI"])
+def ai_analysis(request: AIAnalysisRequest):
     try:
         result = analyze_with_ai(
             rsi=request.rsi,
             adx=request.adx,
-            volume=request.volume,
             pattern=request.pattern,
-            trend=request.trend
+            trend=request.trend,
+            volume=request.volume
         )
         return {"analysis": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"AI analysis error: {e}")
 
-@router.post("/predict-sl-tp")
-async def ai_predict_sl_tp(request: PredictSLTPRequest):
+
+@router.post("/predict-sl-tp", tags=["AI"])
+def predict_sl_tp(request: PredictSLTPRequest):
     try:
         result = predict_optimal_sl_tp(
-            direction=request.direction,
-            entry_price=request.entry_price
+            symbol=request.symbol,
+            entry_price=request.entry_price,
+            direction=request.direction
         )
-        return {"predicted_sl_tp": result}
+        return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"SL/TP prediction error: {e}")
+
 
