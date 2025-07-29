@@ -38,14 +38,12 @@ def supertrend(df, period=10, multiplier=3):
 
 
 def compute_indicators(df, volume_window=20):
-    # בדיקת תקינות בסיסית
     required_cols = ['open', 'high', 'low', 'close', 'volume']
     missing_cols = [c for c in required_cols if c not in df.columns]
     if df.empty or missing_cols:
-        logging.error(f"compute_indicators: DataFrame לא תקין - חסרים עמודות: {missing_cols} או ריק")
+        logging.warning(f"compute_indicators: DataFrame לא תקין - חסרים עמודות: {missing_cols} או ריק")
         return df
 
-    # וידוא שהעמודות מספריות
     for col in required_cols:
         if not pd.api.types.is_numeric_dtype(df[col]):
             try:
@@ -58,7 +56,6 @@ def compute_indicators(df, volume_window=20):
     try:
         logging.info(f"compute_indicators: מספר שורות לפני חישוב אינדיקטורים: {len(df)}")
 
-        # חישוב אינדיקטורים
         df['ema_21'] = ta.trend.EMAIndicator(close=df['close'], window=21).ema_indicator()
         df['ema_50'] = ta.trend.EMAIndicator(close=df['close'], window=50).ema_indicator()
         df['ema_200'] = ta.trend.EMAIndicator(close=df['close'], window=200).ema_indicator()
@@ -126,25 +123,16 @@ def compute_indicators(df, volume_window=20):
         df['bullish_engulfing'] = (df['close'] > df['open']) & (df['open'].shift(1) > df['close'].shift(1)) & (df['close'] > df['open'].shift(1))
         df['bearish_engulfing'] = (df['close'] < df['open']) & (df['open'].shift(1) < df['close'].shift(1)) & (df['close'] < df['open'].shift(1))
 
-        logging.info(f"indicators: לפני dropna: {len(df)} שורות")
-        df.dropna(inplace=True)
-        logging.info(f"indicators: אחרי dropna: {len(df)} שורות")
-
-        if len(df) < 30:
-            logging.warning("אזהרה: אחרי dropna, מעט מדי נתונים לניתוח אמין")
+        # השתמש ב-fillna במקום dropna כדי לשמור על כל השורות
+        df.fillna(method='ffill', inplace=True)
+        df.fillna(method='bfill', inplace=True)
 
         return df
 
     except Exception as e:
-        logging.error(f"שגיאה בחישוב אינדיקטורים: {e}")
+        logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}")
         return df
 
-
-def prepare_indicators_for_backtest(df):
-    return compute_indicators(df)
-
-def prepare_indicators_for_live_scan(df):
-    return compute_indicators(df)
 
 
 
