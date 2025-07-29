@@ -59,6 +59,10 @@ def get_klines(
             print(f"[!] סוג שוק לא נתמך: {mt}")
             return pd.DataFrame()
 
+        if not raw:
+            # אם רשימת הנתונים ריקה
+            return pd.DataFrame()
+
         df = pd.DataFrame(raw, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'quote_asset_volume', 'number_of_trades',
@@ -74,6 +78,7 @@ def get_klines(
     except Exception as e:
         print(f"[!] שגיאה בשליפת Klines עבור {symbol}: {e}")
         return pd.DataFrame()
+
 
 
 
