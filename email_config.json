@@ -1,7 +1,9 @@
 {
-  "from_email": "shaharabecassis8@gmail.com",
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "sender_email": "shaharabecassis8@gmail.com",
+  "sender_password": "סיסמת-אפליקציה-פה",
   "to_email": "shaharabecassis8@gmail.com",
-  "subject": "📩 AlgoGPT – Trade Alert",
   "enabled": true
 }
 
