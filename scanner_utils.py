@@ -6,20 +6,15 @@ from utils.binance_client import client
 from utils.quality_score import compute_quality_score
 from utils.ai_analysis import predict_optimal_sl_tp
 
-DEFAULT_INTERVAL = "5m"
-DEFAULT_LIMIT = 100
-DEFAULT_MIN_QUALITY = 5
-DEFAULT_TOP_RESULTS = 5
-
 
 def get_symbols(market_type="futures"):
     try:
         if market_type == "futures":
             info = client.futures_exchange_info()
-            return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT' and x['status'] == 'TRADING']
+            return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT']
         elif market_type == "spot":
             info = client.get_exchange_info()
-            return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT' and x['status'] == 'TRADING']
+            return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT']
         else:
             raise ValueError("market_type must be 'futures' or 'spot'")
     except Exception as e:
@@ -39,7 +34,7 @@ def compute_quality_score(last):
     return score
 
 
-async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = DEFAULT_INTERVAL, limit: int = 100):
+async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "1m", limit: int = 100):
     try:
         await asyncio.sleep(0.2)
 
@@ -62,7 +57,7 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         )
         quality_score = compute_quality_score(last)
 
-        if direction == "NEUTRAL" or quality_score < DEFAULT_MIN_QUALITY:
+        if direction == "NEUTRAL":
             return None
 
         sltp = predict_optimal_sl_tp(symbol, last["close"], direction)
@@ -84,9 +79,9 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
 
 async def scan_all(
     market_type: str = "futures",
-    interval: str = DEFAULT_INTERVAL,
-    limit: int = DEFAULT_LIMIT,
-    min_quality: int = DEFAULT_MIN_QUALITY
+    interval: str = "1m",
+    limit: int = 80,
+    min_quality: int = 5
 ):
     symbols = get_symbols(market_type=market_type)[:limit]
     tasks = [analyze_symbol(s, market_type, interval, limit) for s in symbols]
@@ -94,7 +89,7 @@ async def scan_all(
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
-    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:DEFAULT_TOP_RESULTS]
+    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]
     return filtered
 
 
