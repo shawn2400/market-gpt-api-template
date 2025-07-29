@@ -1,3 +1,5 @@
+# run_executor.py
+
 import asyncio
 import argparse
 from utils.get_live_price import get_price
@@ -7,7 +9,7 @@ from snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from scanner_utils import scan_all_futures
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.binance_trader import place_futures_order
+from utils.binance_trader import place_futures_order  # ← תיקון כאן
 
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
@@ -31,7 +33,7 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             leverage = 10
             entry = float(await get_price(symbol))
 
-            # חיזוי SL/TP לפי AI
+            # חיזוי SL/TP לפי GPT
             sltp = predict_optimal_sl_tp(symbol, entry, direction)
             stop = sltp["sl"]
             tp = sltp["tp"]
