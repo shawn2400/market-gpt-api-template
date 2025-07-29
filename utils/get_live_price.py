@@ -2,7 +2,7 @@ from utils.binance_client import client
 
 def get_price(symbol: str, market_type: str = "futures") -> float:
     """
-    מחזיר את מחיר השוק החי של המטבע הנתון.
+    מחזיר את מחיר השוק החי של המטבע הנתון מ־Binance.
     """
     try:
         if market_type == "futures":
