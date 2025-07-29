@@ -124,14 +124,15 @@ def compute_indicators(df, volume_window=20):
         df['trend_strength'] = df[['tech_score', 'supertrend_dir']].sum(axis=1)
         df['signal_score'] = df[['ema_cross_bull', 'macd_cross_bull', 'bullish_engulfing']].sum(axis=1)
 
-        df.fillna(method='ffill', inplace=True)
-        df.fillna(method='bfill', inplace=True)
+        df.ffill(inplace=True)
+        df.bfill(inplace=True)
 
         return df
 
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}")
         return df
+
 
 
 
