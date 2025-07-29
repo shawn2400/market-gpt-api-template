@@ -1,23 +1,20 @@
-# auto_executor.py – תואם לגרסה המורחבת
-
 import time
 import logging
 from math import floor
+import pandas as pd
 from binance.enums import *
 from utils.binance_client import client
 from utils.get_live_price import get_live_price
-from snapshot_utils import save_trade_snapshot
+from snapshot_utils import save_trade_snapshot  # ✅ מחוץ ל-utils
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
 from utils.pnl_tracker import update_pnl
 from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
-import pandas as pd
+from utils.ai_analysis import predict_optimal_sl_tp  # SL/TP AI
 
-# מטמון Exchange Info
 EXCHANGE_INFO_CACHE = client.futures_exchange_info()
 
-# עיגול לפי stepSize
 def round_quantity(symbol, quantity):
     try:
         for s in EXCHANGE_INFO_CACHE["symbols"]:
@@ -28,8 +25,8 @@ def round_quantity(symbol, quantity):
         logging.error(f"[!] שגיאה בעיגול כמות: {e}")
     return round(quantity, 3)
 
-# === ביצוע טרייד בפועל ===
-def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None):
+
+def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None, take_snapshot=True):
     try:
         # ניתוח חדשות
         news = fetch_crypto_news()
@@ -44,22 +41,20 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         if not price:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
-        # חישוב SL/TP אם חסרים
+        # SL/TP אוטומטי אם חסרים
         if not stop or not tp:
-            sl_pct = 0.01  # SL 1%
-            tp_pct = 0.015  # TP 1.5%
-            stop = price * (1 - sl_pct) if direction.upper() == "LONG" else price * (1 + sl_pct)
-            tp = price * (1 + tp_pct) if direction.upper() == "LONG" else price * (1 - tp_pct)
+            sltp = predict_optimal_sl_tp(symbol, price, direction)
+            stop = sltp["sl"]
+            tp = sltp["tp"]
 
-        # כמות
+        # חישוב כמות
         quantity = (budget_usd * leverage) / price
         quantity = round_quantity(symbol, quantity)
         if quantity <= 0:
-            raise ValueError("⚠️ כמות לא חוקית (תקציב נמוך מדי או tickSize לא מתאים)")
+            raise ValueError("⚠️ כמות לא חוקית (תקציב או tickSize שגוי)")
 
-        # צד הפקודה
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
-        opposite_side = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
+        opposite = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
         # פתיחת פוזיציה
         client.futures_create_order(
@@ -75,7 +70,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             activation_price = round(price * 1.005 if direction.upper() == "LONG" else price * 0.995, 4)
             client.futures_create_order(
                 symbol=symbol,
-                side=opposite_side,
+                side=opposite,
                 type=ORDER_TYPE_TRAILING_STOP_MARKET,
                 callbackRate=2.0,
                 activationPrice=activation_price,
@@ -85,7 +80,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         else:
             client.futures_create_order(
                 symbol=symbol,
-                side=opposite_side,
+                side=opposite,
                 type=ORDER_TYPE_STOP_MARKET,
                 stopPrice=round(stop, 4),
                 closePosition=True,
@@ -96,25 +91,27 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         try:
             client.futures_create_order(
                 symbol=symbol,
-                side=opposite_side,
+                side=opposite,
                 type=ORDER_TYPE_LIMIT,
                 price=round(tp, 4),
                 quantity=quantity,
                 timeInForce=TIME_IN_FORCE_GTC
             )
         except Exception as e:
-            logging.warning(f"[!] טייק פרופיט נכשל: {e} – ממשיכים בלי")
+            logging.warning(f"[!] טייק פרופיט נכשל: {e}")
 
-        # צילום גרף
-        snapshot_path = save_trade_snapshot({
-            "symbol": symbol,
-            "entry": entry,
-            "stop": stop,
-            "tp": tp,
-            "direction": direction.upper()
-        })
+        # Snapshot
+        snapshot_path = None
+        if take_snapshot:
+            snapshot_path = save_trade_snapshot({
+                "symbol": symbol,
+                "entry": entry,
+                "stop": stop,
+                "tp": tp,
+                "direction": direction.upper()
+            })
 
-        # ציון איכות (אמיתי עם ATR וכו')
+        # חישוב איכות ו־confidence
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -130,7 +127,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality + news_score * 2, 2)
 
-        # שמירה
+        # שמירת טרייד
         trade_data = {
             "symbol": symbol,
             "entry": entry,
@@ -146,6 +143,8 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "news_score": news_score
         }
         save_trade(trade_data)
+
+        # עדכון PNL
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
         # שליחת מייל
