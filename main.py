@@ -61,9 +61,9 @@ async def home():
 @app.post("/sl_tp", operation_id="calculateSLTP")
 async def sl_tp(request: SLTPRequest):
     try:
-        from utils.sl_tp_utils import calculate_sl_tp
+        from utils.sl_tp_utils import calculate_sl_tp_adaptive
         df = pd.DataFrame(request.df)
-        return calculate_sl_tp(df, request.direction)
+        return calculate_sl_tp_adaptive(df, request.direction)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -148,7 +148,8 @@ async def execute_trade(data: TradeRequest):
             budget_usd=data.budget,
             use_grid=data.use_grid,
             use_trailing=data.use_trailing,
-            user_id=data.user_id
+            user_id=data.user_id,
+            take_snapshot=True
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
