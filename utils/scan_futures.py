@@ -1,138 +1,108 @@
-# utils/market_scan_utils.py
+# utils/scan_futures.py
 
+import asyncio
 import logging
-import pandas as pd
-from utils.binance_client import client
+from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 
-def check_binance_status():
-    """בדיקת זמינות Binance API"""
-    try:
-        client.futures_ping()
-        return True
-    except Exception as e:
-        logging.warning(f"Binance API לא מגיב: {e}")
-        return False
+POPULAR_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT",
+    "XRPUSDT", "AVAXUSDT", "DOGEUSDT", "MATICUSDT", "LINKUSDT"
+]
 
-def get_futures_symbols():
-    """שליפת כל סימבולי USDT הנתמכים בפיוצ'רס"""
-    try:
-        info = client.futures_exchange_info()
-        return [x['symbol'] for x in info['symbols'] if x['quoteAsset'] == 'USDT']
-    except Exception as e:
-        logging.error(f"[!] שגיאה בשליפת סימבולים: {e}")
-        return []
+def compute_quality_score(last):
+    """
+    דירוג איכות טרייד (0–7) לפי אינדיקטורים מרכזיים.
+    """
+    score = 0
+    if 45 < last.get("rsi", 0) < 65:
+        score += 1
+    if last.get("adx", 0) > 20:
+        score += 1
+    if last.get("macd_hist", 0) > 0:
+        score += 1
+    if last.get("close", 0) > last.get("ema_21", 0):
+        score += 1
+    if 30 < last.get("stoch_k", 0) < 70:
+        score += 1
+    if last.get("cci", 0) > 0:
+        score += 1
+    if last.get("vwap", 0) < last.get("close", 0):
+        score += 1
+    return score
 
-def get_bid_ask_high_low(symbol: str):
-    """שליפת bid/ask/high/low"""
+async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
+    """
+    ניתוח אסינכרוני של סמבול בודד עם אינדיקטורים, כיוון טרייד ואיכות.
+    """
     try:
-        orderbook = client.get_orderbook_ticker(symbol=symbol)
-        stats = client.get_ticker_24hr(symbol=symbol)
+        df = get_klines(symbol=symbol, interval=interval, limit=limit, is_futures=True)
+        if df is None or df.empty or len(df) < 30:
+            logging.warning(f"[{symbol}] אין מספיק נתונים לניתוח")
+            return None
+
+        df = compute_indicators(df)
+        last = df.iloc[-1]
+
+        direction = (
+            "LONG" if last["rsi"] < 35 and last["adx"] > 20 and last["close"] > last["ema_21"]
+            else "SHORT" if last["rsi"] > 70 and last["adx"] > 20 and last["close"] < last["ema_21"]
+            else "NEUTRAL"
+        )
+
+        quality_score = compute_quality_score(last)
+
         return {
-            "bid": float(orderbook["bidPrice"]),
-            "ask": float(orderbook["askPrice"]),
-            "high": float(stats["highPrice"]),
-            "low": float(stats["lowPrice"]),
+            "symbol": symbol,
+            "close": float(last["close"]),
+            "volume": float(last["volume"]),
+            "rsi": round(float(last["rsi"]), 2),
+            "adx": round(float(last["adx"]), 2),
+            "macd": round(float(last["macd"]), 4),
+            "macd_hist": round(float(last["macd_hist"]), 4),
+            "ema_21": round(float(last["ema_21"]), 4),
+            "ema_50": round(float(last["ema_50"]), 4),
+            "vwap": round(float(last["vwap"]), 4),
+            "bb_upper": round(float(last["bb_upper"]), 4),
+            "bb_lower": round(float(last["bb_lower"]), 4),
+            "stoch_k": round(float(last["stoch_k"]), 2),
+            "stoch_d": round(float(last["stoch_d"]), 2),
+            "obv": round(float(last["obv"]), 2),
+            "cci": round(float(last["cci"]), 2),
+            "mfi": round(float(last["mfi"]), 2),
+            "atr": round(float(last["atr"]), 4),
+            "direction": direction,
+            "quality_score": int(quality_score)
         }
     except Exception as e:
-        logging.error(f"[!] bid/ask/high/low error for {symbol}: {e}")
-        return {}
-
-def scan_all_futures_symbols(limit=100, interval='5m'):
-    """סריקת פיוצ’רס חיה עם אינדיקטורים (sync)"""
-    try:
-        all_tickers = client.futures_ticker_price()
-        symbols = [x['symbol'] for x in all_tickers if x['symbol'].endswith('USDT')]
-        prices = {x['symbol']: float(x['price']) for x in all_tickers}
-        symbols = symbols[:limit]
-        result = []
-        for symbol in symbols:
-            try:
-                klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
-                df = pd.DataFrame(klines, columns=[
-                    'open_time', 'open', 'high', 'low', 'close', 'volume',
-                    'close_time', 'quote_asset_volume', 'number_of_trades',
-                    'taker_buy_base', 'taker_buy_quote', 'ignore'
-                ])
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    df[col] = df[col].astype(float)
-                df = compute_indicators(df)
-                last = df.iloc[-1]
-
-                # ייבוא לייט של הפונקציה למניעת תלות מעגלית
-                from utils.sl_tp_utils import calculate_sl_tp
-
-                sl, tp = calculate_sl_tp(last['close'], direction='long', atr=last.get('atr', None))
-
-                result.append({
-                    "symbol": symbol,
-                    "price": prices.get(symbol),
-                    "rsi": last['rsi'],
-                    "adx": last['adx'],
-                    "macd": last['macd'],
-                    "volume": last['volume'],
-                    "ema_21": last['ema_21'],
-                    "ema_50": last['ema_50'],
-                    "quality_score": last.get('tech_score', 0),
-                    "sl": sl,
-                    "tp": tp
-                })
-            except Exception as e:
-                logging.warning(f"[!] Symbol {symbol} error: {e}")
-        return result
-    except Exception as e:
-        logging.error(f"[!] SCAN שגיאה: {e}")
-        return []
-
-def get_best_trade_symbol(limit=50, min_score=2):
-    """הסימבול הכי איכותי לשוק"""
-    data = scan_all_futures_symbols(limit=limit)
-    if not data:
+        logging.warning(f"[{symbol}] analyze error: {e}")
         return None
-    filtered = [x for x in data if x["quality_score"] >= min_score]
-    if not filtered:
-        return None
-    best = max(filtered, key=lambda x: x["quality_score"])
-    return best
 
-def get_trade_levels(symbol, direction="long", interval="5m"):
-    """מחיר נוכחי + SL/TP לפי ATR"""
-    from utils.get_live_price import get_live_price  # לייט-אימפורט! (למניעת circular)
-    from utils.sl_tp_utils import calculate_sl_tp
+async def scan_all(symbols: list = None, interval: str = "15m", limit: int = 100, min_quality: int = 5):
+    """
+    סריקה אסינכרונית לכל רשימת סמלים עם סינון לפי quality_score וכיוון.
+    מחזירה רק טריידים איכותיים (LONG/SHORT).
+    """
+    if symbols is None:
+        symbols = POPULAR_SYMBOLS
 
-    price = get_live_price(symbol, is_futures=True)
-    klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
-    df = pd.DataFrame(klines, columns=[
-        'open_time', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'quote_asset_volume', 'number_of_trades',
-        'taker_buy_base', 'taker_buy_quote', 'ignore'
-    ])
-    for col in ['open', 'high', 'low', 'close', 'volume']:
-        df[col] = df[col].astype(float)
-    df = compute_indicators(df)
-    last = df.iloc[-1]
-    sl, tp = calculate_sl_tp(last['close'], last['atr'], direction=direction)
-    return {"price": price, "sl": sl, "tp": tp}
+    tasks = [analyze_symbol(s, interval, limit) for s in symbols]
+    results = await asyncio.gather(*tasks)
 
-# דוגמת זרימת עבודה מלאה – מציאת טרייד מוכן
-def auto_scan_and_trade(min_rsi=35, min_adx=20, limit=100):
-    scan_results = scan_all_futures_symbols(limit=limit)
-    signals = []
-    for coin in scan_results:
-        if coin['rsi'] < min_rsi and coin['adx'] > min_adx:
-            signals.append(coin)
-            print(f"ENTRY: {coin['symbol']} @ {coin['price']} (RSI={coin['rsi']:.2f}, ADX={coin['adx']:.2f}, Score={coin['quality_score']})")
-    return signals
+    filtered = [
+        r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
+    ]
 
-# הפעלה סינכרונית בלבד (אין ייבוא מיותר, אין תלות צולבת)
+    # מיון לפי איכות ואח"כ לפי נפח
+    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
+    return filtered
+
+# דוגמה להרצה עצמאית לבדיקה
 if __name__ == "__main__":
-    if not check_binance_status():
-        print("Binance API לא פעיל כרגע.")
-    else:
-        best = get_best_trade_symbol(limit=30, min_score=3)
-        if best:
-            print(f"Best trade: {best['symbol']} | Price: {best['price']} | Score: {best['quality_score']}")
-        trades = auto_scan_and_trade()
+    import asyncio
+    best = asyncio.run(scan_all())
+    for x in best:
+        print(x)
 
 
 
