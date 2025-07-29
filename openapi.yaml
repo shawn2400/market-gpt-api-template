@@ -226,23 +226,50 @@ paths:
   /daily-report:
     get:
       tags: [Reports]
-      summary: יצירת דוח יומי כולל base64 PDF
+      summary: יצירת דוח יומי כולל base64 PDF (אפשרות סינון לפי תאריך)
       operationId: generateDailyReport
+      parameters:
+        - name: date
+          in: query
+          description: תאריך סינון להצגת דוחות עד לתאריך זה (YYYY-MM-DD)
+          required: false
+          schema:
+            type: string
+            format: date
       responses:
         '200':
-          description: דוח בפורמט base64
+          description: דוח בפורמט base64 עם סיכום לפי ימים
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  base64_pdf:
-                    type: string
                   status:
                     type: string
+                    example: success
+                  base64_pdf:
+                    type: string
+                    description: קובץ PDF מקודד כ־base64
+                  summary:
+                    type: array
+                    description: טבלת סיכום PNL לפי ימים
+                    items:
+                      type: object
+                      properties:
+                        Date:
+                          type: string
+                        Total PNL:
+                          type: number
+                        Trades:
+                          type: integer
+                        Success Rate:
+                          type: number
+        '500':
+          description: שגיאת שרת כללית
 
 components:
   schemas: {}
+
 
 
 
