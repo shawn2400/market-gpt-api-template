@@ -1,21 +1,18 @@
-# utils/binance_client.py
-
 import os
 import logging
-from binance.client import Client
 from dotenv import load_dotenv
+from binance.client import Client
 
-# טעינת משתנים מהסביבה
+# טעינת משתני סביבה
 load_dotenv()
 
 # הגדרת לוגינג
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-# מפתחות API
+# מפתחות
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-# אובייקט הלקוח
 client = None
 
 try:
@@ -23,10 +20,18 @@ try:
         raise EnvironmentError("❌ מפתחות Binance API לא הוגדרו בקובץ .env")
 
     client = Client(API_KEY, API_SECRET)
+
+    # בדיקת התחברות בפועל
+    ping = client.ping()
+    if ping != {}:
+        raise ConnectionError("❌ לא הצלחנו להתחבר ל־Binance API (ping נכשל)")
+
     logging.info("✅ Binance client initialized (Spot & Futures)")
 
 except Exception as e:
-    logging.error(f"[!] שגיאה אתחול Binance client: {e}")
+    logging.error(f"[!] שגיאה אתחול Binance client: {type(e).__name__} – {e}")
+    client = None  # ביטול גישה כדי לא לקרוס בקוד אחר
+
 
 
 
