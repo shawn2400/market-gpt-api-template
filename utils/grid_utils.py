@@ -1,144 +1,134 @@
+# utils/grid_utils.py
+
 import logging
+import math
+import time
+from utils.binance_client import client
+from utils.get_live_price import get_live_price
 
-def get_binance_client(is_futures):
-    from utils.binance_client import client
-    return client
+def round_step(quantity, step):
+    """ עיגול כמות לפי stepSize של סימבול """
+    return math.floor(quantity / step) * step
 
-def get_symbol_step_size(symbol, is_futures):
-    client = get_binance_client(is_futures)
-    try:
-        info = client.futures_exchange_info() if is_futures else client.get_exchange_info()
-        for s in info['symbols']:
-            if s['symbol'] == symbol:
-                for f in s['filters']:
-                    if f['filterType'] == 'LOT_SIZE':
-                        return float(f['stepSize'])
-    except Exception as e:
-        logging.error(f"לא ניתן לאתר stepSize ל־{symbol}: {e}")
+def get_symbol_step(symbol, futures=False):
+    info = client.futures_exchange_info() if futures else client.get_exchange_info()
+    for s in info['symbols']:
+        if s['symbol'] == symbol:
+            for f in s['filters']:
+                if f['filterType'] == 'LOT_SIZE':
+                    return float(f['stepSize'])
     return 0.01
 
-def round_quantity(quantity, step_size):
-    from math import floor
-    return floor(quantity / step_size) * step_size
-
-def build_grid_levels(entry_price, grid_size, gap_pct, side, two_sided=False):
-    """יוצר רמות גריד בכיוון אחד או דו־צדדי"""
+def create_grid_levels(price, grid_size, grid_count, grid_pct=0.5, direction="BOTH"):
+    """ מחזיר רשימת רמות מחיר לגריד דו־צדדי """
     levels = []
-    for i in range(grid_size):
-        pct_shift = (i + 1) * gap_pct / 100
-        # צד אחד
-        if not two_sided:
-            price = entry_price * (1 - pct_shift) if side == "BUY" else entry_price * (1 + pct_shift)
-            levels.append(round(price, 6))
-        # דו־צדדי (גם קנייה למטה וגם מכירה למעלה)
-        else:
-            long_price = entry_price * (1 - pct_shift)
-            short_price = entry_price * (1 + pct_shift)
-            levels.append({'side': 'BUY', 'price': round(long_price, 6)})
-            levels.append({'side': 'SELL', 'price': round(short_price, 6)})
-    return levels
+    for i in range(1, grid_count + 1):
+        up = price * (1 + grid_pct / 100 * i)
+        down = price * (1 - grid_pct / 100 * i)
+        if direction in ("BOTH", "SELL"):
+            levels.append(round(up, grid_size))
+        if direction in ("BOTH", "BUY"):
+            levels.append(round(down, grid_size))
+    return sorted(list(set(levels)))
 
-def grid_trade(
-    symbol: str,
-    entry_price: float,
-    grid_size: int = 6,
-    gap_pct: float = 0.35,
-    budget_usd: float = 100,
-    is_futures: bool = False,
-    leverage: int = 1,
-    auto_close: bool = True,
-    sl_pct: float = 0.6,
-    tp_pct: float = 0.6,
-    two_sided: bool = True,
-):
+def place_limit_order_with_sl_tp(symbol, side, price, quantity, futures=True, leverage=1, tp_pct=1, sl_pct=1):
     """
-    גריד ב־Binance Spot/Futures עם TP/SL
-    דו־כיווני (גם BUY גם SELL) – אם two_sided=True, אחרת צד בודד (רק BUY/SELL)
+    פותח פקודת LIMIT + SL/TP אוטומטיים בכל מקרה, אי אפשר לבטל!
     """
-    client = get_binance_client(is_futures)
-    step_size = get_symbol_step_size(symbol, is_futures)
-    total_orders = grid_size * 2 if two_sided else grid_size
-    qty_per_order = budget_usd / total_orders / entry_price * (leverage if is_futures else 1)
-    qty_per_order = round_quantity(qty_per_order, step_size)
-
-    results = []
-    levels = build_grid_levels(entry_price, grid_size, gap_pct, "BUY", two_sided=two_sided)
-    for i, lvl in enumerate(levels):
-        if two_sided:
-            side = lvl['side']
-            price = lvl['price']
-        else:
-            side = "BUY"
-            price = lvl
-
-        try:
-            # פקודת גריד (LIMIT)
-            order_args = dict(
+    results = {}
+    try:
+        if futures:
+            # פקודת Limit
+            order = client.futures_create_order(
                 symbol=symbol,
                 side=side,
                 type="LIMIT",
                 price=round(price, 4),
-                quantity=qty_per_order,
+                quantity=quantity,
                 timeInForce="GTC"
             )
-            if is_futures:
-                order = client.futures_create_order(**order_args)
-            else:
-                order = client.create_order(**order_args)
-            logging.info(f"✔️ {side} GRID order {symbol} @ {price} qty={qty_per_order} (spot={not is_futures})")
-            # פקודות סגירה אוטומטית (TP/SL)
-            tp_price = price * (1 + tp_pct/100) if side == "BUY" else price * (1 - tp_pct/100)
-            sl_price = price * (1 - sl_pct/100) if side == "BUY" else price * (1 + sl_pct/100)
-            if auto_close:
-                close_side = "SELL" if side == "BUY" else "BUY"
-                if is_futures:
-                    # TP (LIMIT) – ב־Futures אפשר גם TAKE_PROFIT_MARKET, לבחירתך
-                    client.futures_create_order(
-                        symbol=symbol,
-                        side=close_side,
-                        type="TAKE_PROFIT_MARKET",
-                        stopPrice=round(tp_price, 4),
-                        closePosition=False,
-                        quantity=qty_per_order,
-                        timeInForce="GTC"
-                    )
-                    # SL (STOP_MARKET)
-                    client.futures_create_order(
-                        symbol=symbol,
-                        side=close_side,
-                        type="STOP_MARKET",
-                        stopPrice=round(sl_price, 4),
-                        closePosition=False,
-                        quantity=qty_per_order,
-                        timeInForce="GTC"
-                    )
-                else:
-                    # ב־Spot אפשר רק Limit/Market – לכן TP/SL בהיגיון פשוט (אפשר גם API אחר)
-                    pass
-            results.append({
-                "order": order,
-                "tp": tp_price,
-                "sl": sl_price,
-                "side": side,
-                "price": price
-            })
-        except Exception as e:
-            logging.error(f"❌ שגיאה בפקודת גריד ({symbol}, {side}, {price}): {e}")
+            results['order'] = order
 
+            # SL/TP Market ב־Futures: opposite side, STOP_MARKET ו־TAKE_PROFIT_MARKET
+            sl_price = price * (1 - sl_pct / 100) if side == "BUY" else price * (1 + sl_pct / 100)
+            tp_price = price * (1 + tp_pct / 100) if side == "BUY" else price * (1 - tp_pct / 100)
+            # Stop Loss
+            sl = client.futures_create_order(
+                symbol=symbol,
+                side="SELL" if side == "BUY" else "BUY",
+                type="STOP_MARKET",
+                stopPrice=round(sl_price, 4),
+                closePosition=False,
+                quantity=quantity,
+                timeInForce="GTC"
+            )
+            # Take Profit
+            tp = client.futures_create_order(
+                symbol=symbol,
+                side="SELL" if side == "BUY" else "BUY",
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=round(tp_price, 4),
+                closePosition=False,
+                quantity=quantity,
+                timeInForce="GTC"
+            )
+            results['sl'] = sl
+            results['tp'] = tp
+
+        else:
+            # SPOT — פקודת OCO (LIMIT+TP+SL באותה הפקודה)
+            sl_price = price * (1 - sl_pct / 100) if side == "BUY" else price * (1 + sl_pct / 100)
+            tp_price = price * (1 + tp_pct / 100) if side == "BUY" else price * (1 - tp_pct / 100)
+            oco = client.create_oco_order(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=round(price, 4),
+                stopPrice=round(sl_price, 4),
+                stopLimitPrice=round(sl_price, 4),
+                limitPrice=round(tp_price, 4),
+                timeInForce="GTC"
+            )
+            results['oco'] = oco
+
+    except Exception as e:
+        logging.error(f"גריד | {symbol} | {side}@{price}: {e}")
+        results['error'] = str(e)
     return results
 
-# דוגמה להרצה מהירה – דו־צדדי FUTURES
+def execute_grid(symbol, budget=100, grid_count=6, grid_pct=0.5, leverage=1, futures=True, direction="BOTH", tp_pct=1, sl_pct=1):
+    """
+    פותח גריד (Futures/Spot) דו־צדדי — עם TP/SL אוטומטיים לכל רמה (חובה).
+    """
+    price = get_live_price(symbol, is_futures=futures)
+    if not price:
+        raise RuntimeError("⚠️ לא ניתן לקבל מחיר חי מה־API")
+    step = get_symbol_step(symbol, futures=futures)
+    quantity = round_step((budget * leverage / price) / grid_count, step)
+    if quantity <= 0:
+        raise RuntimeError("כמות לא חוקית לגריד (יתכן שתקציב קטן/stepSize בעייתי)")
+
+    levels = create_grid_levels(price, grid_size=4, grid_count=grid_count, grid_pct=grid_pct, direction=direction)
+    open_orders = []
+
+    for lvl in levels:
+        side = "BUY" if lvl < price else "SELL"
+        res = place_limit_order_with_sl_tp(
+            symbol, side, lvl, quantity, futures=futures, leverage=leverage,
+            tp_pct=tp_pct, sl_pct=sl_pct  # חובה תמיד!
+        )
+        open_orders.append({
+            "symbol": symbol, "side": side, "price": lvl, "quantity": quantity, "result": res
+        })
+
+    return open_orders
+
+# דוגמה להפעלה:
 if __name__ == "__main__":
-    grid_trade(
-        symbol="BTCUSDT",
-        entry_price=68000,
-        grid_size=4,
-        gap_pct=0.4,
-        budget_usd=200,
-        is_futures=True,
-        leverage=10,
-        auto_close=True,
-        two_sided=True,  # דו־כיווני
-        sl_pct=0.65,
-        tp_pct=0.55,
+    # פיוצ'רס — גריד דו־צדדי 8 רמות, עם TP/SL 1% (חובה בכל רמה!)
+    open_orders = execute_grid(
+        "BTCUSDT", budget=100, grid_count=8, grid_pct=0.5,
+        leverage=5, futures=True, direction="BOTH", tp_pct=1, sl_pct=1
     )
+    print("Grid orders:", open_orders)
+
