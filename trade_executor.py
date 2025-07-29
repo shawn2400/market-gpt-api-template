@@ -1,29 +1,4 @@
-import time
-import logging
-from math import floor
-import pandas as pd
-from binance.enums import *
-from utils.binance_client import client
-from utils.get_live_price import get_live_price
-from snapshot_utils import save_trade_snapshot  # ✅ snapshot_utils בתיקייה הראשית
-from utils.trade_storage import save_trade
-from utils.quality_score import compute_quality_score
-from utils.pnl_tracker import update_pnl
-from report_utils import send_email_alert
-from news_utils import fetch_crypto_news, analyze_news_impact
-from utils.ai_analysis import predict_optimal_sl_tp  # SL/TP AI
-
-EXCHANGE_INFO_CACHE = client.futures_exchange_info()
-
-def round_quantity(symbol, quantity):
-    try:
-        for s in EXCHANGE_INFO_CACHE["symbols"]:
-            if s["symbol"] == symbol:
-                step_size = float([f for f in s["filters"] if f["filterType"] == "LOT_SIZE"][0]["stepSize"])
-                return floor(quantity / step_size) * step_size
-    except Exception as e:
-        logging.error(f"[!] שגיאה בעיגול כמות: {e}")
-    return round(quantity, 3)
+from utils.quantity_utils import calculate_quantity, auto_risk_allocation
 
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None, take_snapshot=True):
     try:
@@ -46,9 +21,9 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             stop = sltp["sl"]
             tp = sltp["tp"]
 
-        # חישוב כמות
-        quantity = (budget_usd * leverage) / price
-        quantity = round_quantity(symbol, quantity)
+        # הקצאת סיכון וחישוב תקציב בפועל
+        capital_used = auto_risk_allocation(entry_price=entry, stop_price=stop, total_budget=budget_usd)
+        quantity = calculate_quantity(symbol, entry, leverage, capital_used)
         if quantity <= 0:
             raise ValueError("⚠️ כמות לא חוקית (יתכן תקציב או stepSize שגוי)")
 
@@ -110,7 +85,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 "direction": direction.upper()
             })
 
-        # חישוב איכות ו-confidence (דמה)
+        # חישוב איכות ו־confidence
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -139,7 +114,9 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "mock_quality": True,
             "type": "GRID" if use_grid else "REGULAR",
             "user_id": user_id or "default",
-            "news_score": news_score
+            "news_score": news_score,
+            "capital_used": round(capital_used, 2),
+            "quantity": quantity
         }
         save_trade(trade_data)
 
@@ -157,7 +134,9 @@ TP: {tp}
 Leverage: {leverage}
 Confidence: {confidence:.2f}%
 Quality: {quality}/10
-News Score: {news_score}"""
+News Score: {news_score}
+Capital Used: {capital_used:.2f}$
+Qty: {quantity}"""
         )
 
         return {
@@ -175,12 +154,14 @@ News Score: {news_score}"""
             "news_score": news_score,
             "snapshot": snapshot_path,
             "trailing": use_trailing,
-            "grid": use_grid
+            "grid": use_grid,
+            "capital_used": capital_used
         }
 
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
