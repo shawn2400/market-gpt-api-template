@@ -6,6 +6,8 @@ import os
 import asyncio
 import time
 
+from routes.ai import router as ai_router  # טיפול חדש
+
 __boot_start__ = time.time()
 load_dotenv()
 
@@ -15,7 +17,10 @@ app = FastAPI(
     version="1.3.0"
 )
 
-# === Data Models ===
+# שילוב מסלול מתוקי מתוך routes
+app.include_router(ai_router)
+
+
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -43,10 +48,6 @@ class TradeRequest(BaseModel):
     use_trailing: bool = False
     user_id: str = None
 
-class AIAnalysisRequest(BaseModel):
-    prices: list
-
-# === Routes ===
 
 @app.get("/", operation_id="checkServerStatus")
 async def home():
@@ -168,16 +169,6 @@ async def daily_report():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/ai-analyze", operation_id="aiAnalysis")
-async def ai_analyze(data: AIAnalysisRequest):
-    try:
-        from ai_analysis import analyze_with_ai
-        return analyze_with_ai(data.prices)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# === Startup Tasks ===
 @app.on_event("startup")
 async def start_background_tasks():
     try:
@@ -199,6 +190,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
