@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import asyncio
 import time
+
 from utils.ai_analysis import analyze_with_ai
 
 __boot_start__ = time.time()
@@ -12,7 +13,7 @@ load_dotenv()
 
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר אלגוריתמי עם Binance",
+    description="API למסחר אלגוריתמי עם Binance (Futures, Spot, Grid, AI, דוחות)",
     version="1.3.1"
 )
 
@@ -44,6 +45,7 @@ class TradeRequest(BaseModel):
     use_trailing: bool = False
     user_id: str = None
     take_snapshot: bool = True
+    grid_mode: str = "FUTURES"  # אפשרות עתידית: "SPOT", "FUTURES", "BOTH"
 
 class AIAnalysisRequest(BaseModel):
     rsi: float
@@ -131,22 +133,43 @@ async def backtest(request: BacktestRequest):
 
 @app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
+    """
+    תומך ב־Futures, Spot ו־Grid. 
+    ברירת מחדל: פיוצ'רס עם גריד/טריילינג אופציונלי. גריד תמיד עם TP/SL פר רמה!
+    """
     try:
-        from trade_executor import execute_trade_live
-        return await asyncio.to_thread(
-            execute_trade_live,
-            symbol=data.symbol,
-            entry=data.entry,
-            stop=data.stop,
-            tp=data.tp,
-            direction=data.direction,
-            leverage=data.leverage,
-            budget_usd=data.budget,
-            use_grid=data.use_grid,
-            use_trailing=data.use_trailing,
-            user_id=data.user_id,
-            take_snapshot=data.take_snapshot
-        )
+        if data.use_grid:
+            from utils.grid_utils import execute_grid
+            # אפשרות: grid_mode="FUTURES" / "SPOT" / "BOTH"
+            is_futures = (data.grid_mode or "FUTURES").upper() == "FUTURES"
+            return await asyncio.to_thread(
+                execute_grid,
+                symbol=data.symbol,
+                budget=data.budget,
+                grid_count=8,           # אפשר לעדכן לפי פרמטר
+                grid_pct=0.5,           # ברירת מחדל 0.5%
+                leverage=data.leverage,
+                futures=is_futures,
+                direction="BOTH",
+                tp_pct=1,               # תמיד! TP 1%
+                sl_pct=1                # תמיד! SL 1%
+            )
+        else:
+            from trade_executor import execute_trade_live
+            return await asyncio.to_thread(
+                execute_trade_live,
+                symbol=data.symbol,
+                entry=data.entry,
+                stop=data.stop,
+                tp=data.tp,
+                direction=data.direction,
+                leverage=data.leverage,
+                budget_usd=data.budget,
+                use_grid=data.use_grid,
+                use_trailing=data.use_trailing,
+                user_id=data.user_id,
+                take_snapshot=data.take_snapshot
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -201,6 +224,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
