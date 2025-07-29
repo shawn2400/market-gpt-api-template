@@ -5,8 +5,9 @@ from datetime import datetime
 
 def save_trade_snapshot(trade: dict) -> str | None:
     """
-    שומר גרף PNG של טרייד עם קווים ל־Entry, SL, TP, וכיוון,
-    בתיקייה static/snapshots. מחזיר את הנתיב לקובץ או None אם נכשל.
+    שומר גרף PNG של טרייד עם קווים ל־Entry, SL, TP, מחיר נוכחי, וכיוון.
+    בתיקייה static/snapshots.
+    מחזיר את הנתיב לקובץ או None אם נכשל.
     """
     try:
         symbol = trade.get("symbol", "UNKNOWN")
@@ -17,20 +18,22 @@ def save_trade_snapshot(trade: dict) -> str | None:
         price_now = float(trade.get("price_now", entry))
         budget = trade.get("budget", None)
         leverage = trade.get("leverage", None)
+        quality_score = trade.get("quality_score", None)
 
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-        # חישוב מרחקים
+        # חישוב טווח y
         range_top = max(entry, tp, price_now)
         range_bottom = min(entry, stop, price_now)
         buffer = (range_top - range_bottom) * 0.3 or entry * 0.02
-        y_min = range_bottom - buffer
+        y_min = max(range_bottom - buffer, 0)
         y_max = range_top + buffer
 
-        # ציור
+        # גרף
         fig, ax = plt.subplots(figsize=(8, 5))
         ax.set_facecolor("white")
 
+        # קווים
         ax.axhline(entry, color="blue", linestyle="--", linewidth=1.5, label=f"Entry: {entry}")
         ax.axhline(stop, color="red", linestyle="--", linewidth=1.5, label=f"Stop: {stop}")
         ax.axhline(tp, color="green", linestyle="--", linewidth=1.5, label=f"TP: {tp}")
@@ -43,8 +46,7 @@ def save_trade_snapshot(trade: dict) -> str | None:
         ax.set_ylabel("Price")
         ax.grid(True, linestyle=":")
 
-        # חץ לכיוון
-        arrow_y = entry
+        # חץ כיוון
         if direction == "LONG":
             ax.annotate("↑ LONG", xy=(0.01, entry), xycoords=("axes fraction", "data"),
                         color="green", fontsize=12, weight="bold")
@@ -52,26 +54,29 @@ def save_trade_snapshot(trade: dict) -> str | None:
             ax.annotate("↓ SHORT", xy=(0.01, entry), xycoords=("axes fraction", "data"),
                         color="red", fontsize=12, weight="bold")
 
-        # טקסט נוסף
-        extra = ""
+        # טקסט תחתון
+        extras = []
         if budget:
-            extra += f"Budget: {budget} USDT  "
+            extras.append(f"Budget: {budget} USDT")
         if leverage:
-            extra += f"Leverage: {leverage}x"
-        if extra:
-            ax.text(0.5, 0.02, extra, transform=ax.transAxes, fontsize=9, ha="center")
+            extras.append(f"Leverage: {leverage}x")
+        if quality_score is not None:
+            extras.append(f"QS: {quality_score}/10")
+        if extras:
+            ax.text(0.5, 0.02, "  |  ".join(extras), transform=ax.transAxes,
+                    fontsize=9, ha="center", color="gray")
 
         ax.legend(loc="upper left", fontsize=8)
 
-        # יצירת תיקייה
+        # תיקייה
         output_dir = "static/snapshots"
         os.makedirs(output_dir, exist_ok=True)
 
+        # שם קובץ
         clean_symbol = symbol.replace("/", "_")
         timestamp_file = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         filename = f"{output_dir}/{clean_symbol}_{direction}_{timestamp_file}.png"
 
-        # שמירה
         plt.tight_layout()
         plt.savefig(filename)
         plt.close(fig)
@@ -81,6 +86,10 @@ def save_trade_snapshot(trade: dict) -> str | None:
     except Exception as e:
         print(f"[!] שגיאה בשמירת snapshot: {e}")
         return None
+
+
+# תואם לגרסאות קודמות
+generate_trade_snapshot = save_trade_snapshot
 
 
 
