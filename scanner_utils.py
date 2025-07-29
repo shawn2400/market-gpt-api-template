@@ -25,18 +25,6 @@ def get_symbols(market_type="futures"):
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 
 
-def compute_quality_score(last):
-    score = 0
-    if 45 < last.get("rsi", 0) < 65: score += 1
-    if last.get("adx", 0) > 20: score += 1
-    if last.get("macd_hist", 0) > 0: score += 1
-    if last.get("close", 0) > last.get("ema_21", 0): score += 1
-    if 30 < last.get("stoch_k", 0) < 70: score += 1
-    if last.get("cci", 0) > 0: score += 1
-    if last.get("vwap", 0) < last.get("close", 0): score += 1
-    return score
-
-
 async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "1m", limit: int = 50, with_ai: bool = True):
     try:
         await asyncio.sleep(0.2)
@@ -100,6 +88,7 @@ async def scan_all(
     ]
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]
     return filtered
+
 
 
 
