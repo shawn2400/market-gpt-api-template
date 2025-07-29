@@ -3,6 +3,7 @@ import logging
 from math import floor
 import asyncio
 import pandas as pd
+import json
 from binance.enums import *
 from utils.binance_client import client
 from utils.get_live_price import get_live_price
@@ -14,8 +15,8 @@ from report_utils import send_email_alert
 from news_utils import fetch_crypto_news, analyze_news_impact
 from scanner_utils import scan_all_futures
 
-# שמירת מטמון exchange info
 EXCHANGE_INFO_CACHE = client.futures_exchange_info()
+
 
 def round_quantity(symbol, quantity):
     try:
@@ -135,9 +136,13 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         save_trade(trade_data)
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
+        with open("email_config.json", "r") as f:
+            cfg = json.load(f)
+            to_emails = [cfg.get("to_email", "shaharabecassis8@gmail.com")]
+
         send_email_alert(
             subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
-            body=f"""Symbol: {symbol}
+            message=f"""Symbol: {symbol}
 Direction: {direction}
 Entry: {entry}
 Stop: {stop}
@@ -145,7 +150,8 @@ TP: {tp}
 Leverage: {leverage}
 Confidence: {confidence:.2f}%
 Quality: {quality}/10
-News Score: {news_score}"""
+News Score: {news_score}""",
+            to_emails=to_emails
         )
 
         return {
@@ -171,7 +177,6 @@ News Score: {news_score}"""
         return {"status": "error", "message": str(e)}
 
 
-# === הפעלה אוטומטית ברקע לפי סריקה חיה ===
 async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
     while True:
         try:
@@ -204,6 +209,7 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
             logging.error(f"[AUTO_EXECUTOR] שגיאה: {e}")
 
         await asyncio.sleep(delay)
+
 
 
 
