@@ -1,5 +1,3 @@
-# scanner_utils.py – גרסה משודרגת עם טיפול ב־GPT Rate Limit ותמיכה בפרמטרים דינמיים
-
 import asyncio
 import aiohttp
 import pandas as pd
@@ -8,39 +6,38 @@ import os
 from dotenv import load_dotenv
 import logging
 from utils.quality_score import compute_quality_score
-from ai_analysis import analyze_with_ai
-from indicators_utils import compute_indicators
-from snapshot_utils import save_trade_snapshot
+from utils.ai_analysis import analyze_with_ai
+from utils.indicators import compute_indicators
+from utils.snapshot_utils import save_trade_snapshot
 import matplotlib.pyplot as plt
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-# הגדרות ברירת מחדל
+# ברירות מחדל
 DEFAULT_INTERVAL = "1m"
-SYMBOL_LIMIT = 300
 CANDLE_LIMIT = 100
-MIN_VOLUME = 10_000_000
-MIN_VOLATILITY_PERCENT = 2.0
+DEFAULT_SYMBOL_LIMIT = 300
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 5))
 
-# === סמלים של Binance Futures ===
-async def fetch_futures_symbols():
+
+async def fetch_futures_symbols(limit=DEFAULT_SYMBOL_LIMIT):
     try:
         client = await AsyncClient.create(API_KEY, API_SECRET)
         exchange_info = await client.futures_exchange_info()
         await client.close_connection()
-        return [
+        symbols = [
             s["symbol"] for s in exchange_info["symbols"]
             if s["contractType"] == "PERPETUAL" and s["status"] == "TRADING"
-        ][:SYMBOL_LIMIT]
+        ]
+        return symbols[:limit]
     except Exception as e:
         logging.error(f"[!] שגיאה בהבאת סמלים: {e}")
         return []
 
-# === נתוני נרות ===
-async def fetch_historical_klines(session, symbol, interval=DEFAULT_INTERVAL, limit=CANDLE_LIMIT):
+
+async def fetch_historical_klines(session, symbol, interval, limit=CANDLE_LIMIT):
     url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     for _ in range(3):
         try:
@@ -58,9 +55,9 @@ async def fetch_historical_klines(session, symbol, interval=DEFAULT_INTERVAL, li
             logging.warning(f"[!] נסיון כושל ({symbol}): {e}")
     return None
 
-# === ניתוח סמל בודד ===
-async def fetch_symbol_analysis(session, symbol):
-    kline_df = await fetch_historical_klines(session, symbol)
+
+async def fetch_symbol_analysis(session, symbol, interval):
+    kline_df = await fetch_historical_klines(session, symbol, interval)
     if kline_df is None or len(kline_df) < 30:
         return None
 
@@ -82,18 +79,15 @@ async def fetch_symbol_analysis(session, symbol):
     if not signal:
         return None
 
-    # חישוב SL/TP לפי ATR
     atr = last['atr']
     entry = last['close']
     sl = entry - atr * 2 if signal == "LONG" else entry + atr * 2
     tp = entry + atr * 3 if signal == "LONG" else entry - atr * 3
 
-    direction = signal
     quality_score = compute_quality_score(kline_df)
     if quality_score < MIN_QUALITY_SCORE:
         return None
 
-    # חיזוי AI – מוגן מ־Rate Limit
     try:
         ai_analysis = analyze_with_ai({
             "rsi": round(last['rsi'], 2),
@@ -104,19 +98,17 @@ async def fetch_symbol_analysis(session, symbol):
         })
         ai_result = ai_analysis.get("analysis", "N/A")
     except Exception as e:
-        logging.warning(f"[!] שגיאה ב־AI עבור {symbol}: {e}")
+        logging.warning(f"[!] שגיאה בּ‏AI עבור {symbol}: {e}")
         ai_result = "N/A"
 
-    # צילום snapshot
     snapshot_path = save_trade_snapshot({
         "symbol": symbol,
         "entry": entry,
         "stop": sl,
         "tp": tp,
-        "direction": direction
+        "direction": signal
     })
 
-    # שמירת גרף
     try:
         os.makedirs("static", exist_ok=True)
         plt.figure(figsize=(6, 4))
@@ -139,7 +131,7 @@ async def fetch_symbol_analysis(session, symbol):
         "entry": round(entry, 4),
         "stop": round(sl, 4),
         "tp": round(tp, 4),
-        "direction": direction,
+        "direction": signal,
         "price_now": round(entry, 4),
         "rsi": round(last['rsi'], 2),
         "adx": round(last['adx'], 2),
@@ -154,22 +146,22 @@ async def fetch_symbol_analysis(session, symbol):
         "chart": chart_path
     }
 
-# === סריקה חיה מלאה ===
-async def scan_all_futures():
-    symbols = await fetch_futures_symbols()
+
+async def scan_all_futures(interval=DEFAULT_INTERVAL, symbol_limit=DEFAULT_SYMBOL_LIMIT):
+    symbols = await fetch_futures_symbols(limit=symbol_limit)
     if not symbols:
         logging.warning("[!] לא נמצאו סמלים לסריקה.")
         return []
 
-    logging.info(f"🔍 סריקה על {len(symbols)} מטבעות מ-Binance Futures")
-
+    logging.info(f"🔍 סריקה על {len(symbols)} מטבעות עם interval={interval}")
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_symbol_analysis(session, symbol) for symbol in symbols]
+        tasks = [fetch_symbol_analysis(session, symbol, interval) for symbol in symbols]
         results = await asyncio.gather(*tasks)
         valid = [r for r in results if r]
 
     logging.info(f"✅ נמצאו {len(valid)} טריידים פוטנציאליים מתוך {len(symbols)}")
     return valid
+
 
 
 
