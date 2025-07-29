@@ -163,14 +163,20 @@ async def ai_analyze(data: AIAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# === Startup – secure async task ===
 @app.on_event("startup")
 async def start_background_tasks():
-    auto_run = os.getenv("AUTO_RUN", "true").lower()
-    min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
-    max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
+    try:
+        auto_run = os.getenv("AUTO_RUN", "true").lower()
+        min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
+        max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
 
-    if auto_run == "true":
-        asyncio.create_task(start_auto_executor(delay=30, min_quality=min_quality, max_budget=max_trade_budget))
+        if auto_run == "true":
+            print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
+            asyncio.create_task(start_auto_executor(delay=30, min_quality=min_quality, max_budget=max_trade_budget))
+    except Exception as e:
+        print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
