@@ -43,11 +43,11 @@ class AIAnalysisRequest(BaseModel):
     prices: list
 
 # === Routes ===
-@app.get("/")
+@app.get("/", operation_id="checkServerStatus")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-@app.post("/sl_tp")
+@app.post("/sl_tp", operation_id="calculateSLTP")
 async def sl_tp(request: SLTPRequest):
     try:
         from utils.sl_tp_utils import calculate_sl_tp
@@ -57,7 +57,7 @@ async def sl_tp(request: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/calculate-quantity")
+@app.post("/calculate-quantity", operation_id="calculateQuantity")
 async def calc_qty(data: QuantityRequest):
     try:
         from utils.quantity_utils import calculate_quantity
@@ -66,7 +66,7 @@ async def calc_qty(data: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/news")
+@app.get("/news", operation_id="fetchCryptoNews")
 async def news():
     try:
         from news_utils import fetch_crypto_news
@@ -74,7 +74,7 @@ async def news():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/analyze-news")
+@app.get("/analyze-news", operation_id="analyzeNewsImpact")
 async def analyze_news():
     try:
         from news_utils import fetch_crypto_news, analyze_news_impact
@@ -83,21 +83,18 @@ async def analyze_news():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/backtest")
+@app.post("/backtest", operation_id="runBacktest")
 async def backtest(request: BacktestRequest):
     try:
         from backtest_utils import run_backtest
 
         if not request.prices or len(request.prices) < 30:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Insufficient data – at least 30 candles are required",
-                    "symbol": request.symbol,
-                    "interval": request.interval,
-                    "code": "ERR_TOO_SHORT"
-                }
-            )
+            raise HTTPException(status_code=400, detail={
+                "error": "Insufficient data – at least 30 candles are required",
+                "symbol": request.symbol,
+                "interval": request.interval,
+                "code": "ERR_TOO_SHORT"
+            })
 
         df = pd.DataFrame(request.prices)
         for col in ['open', 'high', 'low', 'close', 'volume']:
@@ -122,7 +119,7 @@ async def backtest(request: BacktestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/execute-trade")
+@app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
     try:
         from trade_executor import execute_trade_live
@@ -142,16 +139,16 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/scan")
+@app.get("/scan", operation_id="scanMarket")
 async def scan():
     try:
         from scanner_utils import scan_all_futures
         results = await scan_all_futures()
-        return {"results": results}
+        return {"count": len(results), "results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/daily-report")
+@app.get("/daily-report", operation_id="generateDailyReport")
 async def daily_report():
     try:
         from report_utils import generate_daily_report
@@ -159,7 +156,7 @@ async def daily_report():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/ai-analyze")
+@app.post("/ai-analyze", operation_id="aiAnalysis")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
         from ai_analysis import analyze_with_ai
@@ -167,7 +164,7 @@ async def ai_analyze(data: AIAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Startup – secure async task ===
+# === Startup Tasks ===
 @app.on_event("startup")
 async def start_background_tasks():
     try:
@@ -186,6 +183,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
