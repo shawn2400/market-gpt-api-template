@@ -1,5 +1,3 @@
-# main.py
-
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -12,6 +10,7 @@ __boot_start__ = time.time()
 load_dotenv()
 
 from utils.ai_analysis import analyze_with_ai
+from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -209,16 +208,26 @@ async def ai_analyze(data: AIAnalysisRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# === Background Auto Executor (with loop) ===
+@app.post("/start-auto")
+def start_auto_executor():
+    start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100)
+    return {"status": "running"}
 
-async def start_auto_loop(delay=30, min_quality=6, max_budget=100):
-    from auto_executor import auto_execute_trade
-    while True:
-        try:
-            await auto_execute_trade()
-        except Exception as e:
-            print(f"[AUTO_EXECUTOR ERROR] {e}")
-        await asyncio.sleep(delay)
+
+@app.post("/stop-auto")
+def stop_auto_executor():
+    stop_executor_loop()
+    return {"status": "stopped"}
+
+
+@app.get("/status")
+def get_executor_status():
+    running = is_executor_running()
+    return {
+        "executor_running": running,
+        "message": "✅ פועל" if running else "🚩 לא פעיל"
+    }
+
 
 @app.on_event("startup")
 async def start_background_tasks():
@@ -230,7 +239,7 @@ async def start_background_tasks():
 
         if auto_run == "true":
             print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
-            asyncio.create_task(start_auto_loop(delay=delay, min_quality=min_quality, max_budget=max_trade_budget))
+            start_executor_loop(debug=False, delay=delay, min_quality=min_quality, max_budget=max_trade_budget)
 
         print(f"[BOOT TIME] Server ready in {time.time() - __boot_start__:.2f} seconds")
 
