@@ -1,94 +1,141 @@
-import os
+# auto_executor.py
+
 import asyncio
 import logging
-from dotenv import load_dotenv
-
-from utils.scan_futures import scan_all  # ✅ תיקון כאן
-from utils.get_live_price import get_live_price
-from utils.quantity_utils import auto_risk_allocation
-from utils.calculate_quantity import get_step_size
-from snapshot_utils import save_trade_snapshot
+from utils.get_live_price import get_price
+from utils.trade_storage import save_trade
+from utils.quality_score import compute_quality_score
+from utils.snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
+from scanner_utils import scan_all_futures
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.binance_client import client
+from utils.binance_trader import place_futures_order
 
-load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+_executor_task = None  # ניהול מצב הלולאה
 
-AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
-MIN_QUALITY = int(os.getenv("MIN_QUALITY_SCORE", 6))
-MAX_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
+async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
+    """
+    לולאת סריקה חיה עם ביצוע טריידים אוטומטיים בפועל
+    """
+    global _executor_task
 
-async def auto_execute_trade():
-    logging.info("🚀 סריקה חיה התחילה...")
-    results = await scan_all()  # ✅ גם כאן
+    while True:
+        try:
+            print(f"\n[AUTO_EXECUTOR] 🚀 סורק את שוק הפיוצ'רס...")
+            trades = await scan_all_futures()
 
-    good_trades = [t for t in results if t["quality_score"] >= MIN_QUALITY]
-    if not good_trades:
-        logging.info("❌ לא נמצאו טריידים מתאימים.")
-        return
+            filtered = [t for t in trades if t.get("quality_score", 0) >= min_quality]
+            if not filtered:
+                print(f"[AUTO_EXECUTOR] ⚠️ לא נמצאו טריידים איכותיים.")
+                if once:
+                    return
+                await asyncio.sleep(delay)
+                continue
 
-    trade = sorted(good_trades, key=lambda x: x["quality_score"], reverse=True)[0]
-    symbol = trade["symbol"]
-    direction = trade["direction"]
-    entry_price = get_live_price(symbol)
-    leverage = trade.get("leverage", 5)
+            trade = filtered[0]
+            symbol = trade["symbol"]
+            direction = trade["direction"]
+            leverage = 10
+            entry = float(await get_price(symbol))
 
-    sltp = predict_optimal_sl_tp(symbol, direction, entry_price)
-    stop_price = sltp["stop"]
-    tp_price = sltp["tp"]
+            # חיזוי SL/TP עם GPT
+            sltp = predict_optimal_sl_tp(symbol, entry, direction)
+            stop = sltp["sl"]
+            tp = sltp["tp"]
+            qty = round((max_budget * leverage) / entry, 3)
 
-    risk_allocation = auto_risk_allocation(entry_price, stop_price, total_budget=MAX_BUDGET, risk_percent=2)
-    step = get_step_size(symbol)
-    raw_qty = (risk_allocation * leverage) / entry_price
-    qty = (int(raw_qty / step)) * step
-    qty = round(qty, 6)
+            print(f"[AUTO_EXECUTOR] 📊 טרייד: {symbol} | {direction} @ {entry} | SL={stop} TP={tp} Qty={qty} QS={trade['quality_score']}")
 
-    if qty <= 0:
-        logging.warning("⚠️ כמות לא חוקית. דילוג.")
-        return
+            if debug:
+                print("[DEBUG] מצב בדיקה - פקודה לא נשלחת ל-Binance.")
+            else:
+                order = await place_futures_order(
+                    symbol=symbol,
+                    side="BUY" if direction == "LONG" else "SELL",
+                    quantity=qty,
+                    entry_price=entry,
+                    stop_loss=stop,
+                    take_profit=tp,
+                    leverage=leverage
+                )
 
-    try:
-        client.futures_create_order(
-            symbol=symbol,
-            side="BUY" if direction == "LONG" else "SELL",
-            type="MARKET",
-            quantity=qty
-        )
-        logging.info(f"✅ בוצע טרייד: {symbol} {direction} Qty: {qty}")
+                timestamp = str(order.get("timestamp", int(asyncio.get_running_loop().time())))
+                pnl = float(order.get("pnl", 0))
 
-        client.futures_create_order(
-            symbol=symbol,
-            side="SELL" if direction == "LONG" else "BUY",
-            type="STOP_MARKET",
-            stopPrice=stop_price,
-            quantity=qty,
-            timeInForce="GTC"
-        )
+                snapshot_path = save_trade_snapshot({
+                    "symbol": symbol,
+                    "entry": entry,
+                    "stop": stop,
+                    "tp": tp,
+                    "direction": direction,
+                    "price_now": entry,
+                    "budget": max_budget,
+                    "leverage": leverage
+                })
 
-        client.futures_create_order(
-            symbol=symbol,
-            side="SELL" if direction == "LONG" else "BUY",
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=tp_price,
-            quantity=qty,
-            timeInForce="GTC"
-        )
+                save_trade({
+                    "symbol": symbol,
+                    "entry": entry,
+                    "stop": stop,
+                    "tp": tp,
+                    "direction": direction,
+                    "quantity": qty,
+                    "timestamp": timestamp,
+                    "quality_score": trade.get("quality_score", 0),
+                    "snapshot": snapshot_path
+                })
 
-        snapshot_path = save_trade_snapshot(symbol, direction, entry_price, stop_price, tp_price)
-        update_pnl(symbol, direction, entry_price, tp_price, leverage, qty)
+                update_pnl(symbol, pnl, trade.get("quality_score", 0))
 
-        logging.info(f"📍 SL/TP נשלחו: SL={stop_price}, TP={tp_price}")
-        logging.info(f"📸 Snapshot נשמר: {snapshot_path}")
+                print(f"[AUTO_EXECUTOR] ✅ טרייד בוצע ונשמר: {symbol} {direction} @ {entry}")
 
-    except Exception as e:
-        logging.error(f"[!] שגיאה בביצוע אוטומטי: {e}")
+        except Exception as e:
+            print(f"❌ [AUTO_EXECUTOR] שגיאה כללית: {type(e).__name__} – {e}")
 
-if __name__ == "__main__":
-    if AUTO_RUN:
-        asyncio.run(auto_execute_trade())
+        if once:
+            print("[AUTO_EXECUTOR] 🛑 מצב once – סיום.")
+            break
+
+        print(f"[AUTO_EXECUTOR] ⏳ ממתין {delay} שניות לסריקה נוספת...")
+        await asyncio.sleep(delay)
+
+
+# === שליטה חיצונית דרך FastAPI ===
+
+def start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100):
+    """
+    מפעיל את הלולאה ברקע אם אינה פועלת כבר
+    """
+    global _executor_task
+    if _executor_task is None or _executor_task.done():
+        _executor_task = asyncio.create_task(run_executor(
+            debug=debug,
+            once=False,
+            delay=delay,
+            min_quality=min_quality,
+            max_budget=max_budget
+        ))
+        print("[AUTO_EXECUTOR] ✅ הופעלה לולאה חיה")
     else:
-        logging.info("AUTO_RUN מוגדר ל־false, לא מתבצעת פעולה.")
+        print("[AUTO_EXECUTOR] כבר רץ")
+
+def stop_executor_loop():
+    """
+    מפסיק את הלולאה אם פועלת
+    """
+    global _executor_task
+    if _executor_task and not _executor_task.done():
+        _executor_task.cancel()
+        print("[AUTO_EXECUTOR] ❌ הופסקה לולאת הסריקה")
+    else:
+        print("[AUTO_EXECUTOR] לא פעיל כרגע")
+
+def is_executor_running() -> bool:
+    """
+    מחזיר האם הלולאה פועלת כרגע
+    """
+    return _executor_task is not None and not _executor_task.done()
+
 
 
 
