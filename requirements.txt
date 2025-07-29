@@ -16,6 +16,11 @@ python-binance==1.0.17
 matplotlib==3.8.4
 fpdf==1.7.2
 
+# חסר לך:
+scikit-learn==1.4.2         # נדרש אם analyze_with_ai משתמש ב־ML
+scipy==1.13.1               # חלק מאינדיקטורים וניתוחים
+
+
 
 
 
