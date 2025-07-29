@@ -11,16 +11,17 @@ servers:
 
 tags:
   - name: Trades
-  - name: AI
-  - name: News
   - name: Reports
+  - name: AI
   - name: Config
+  - name: News
 
 paths:
   /:
     get:
       tags: [Config]
       summary: בדיקת סטטוס השרת
+      operationId: checkServerStatus
       responses:
         '200':
           description: השרת פועל
@@ -39,10 +40,11 @@ paths:
   /scan:
     get:
       tags: [Trades]
-      summary: סריקה חיה על Binance Futures עם אינדיקטורים
+      summary: סריקה חיה של שוק Binance Futures לפי אינדיקטורים
+      operationId: scanFutures
       responses:
         '200':
-          description: רשימת טריידים פוטנציאליים
+          description: רשימת סמלים עם ניתוחים טכניים
           content:
             application/json:
               schema:
@@ -52,27 +54,12 @@ paths:
                     type: array
                     items:
                       type: object
-                      properties:
-                        symbol: { type: string }
-                        entry_price: { type: number }
-                        sl: { type: number }
-                        tp: { type: number }
-                        direction: { type: string }
-                        price: { type: number }
-                        rsi: { type: number }
-                        adx: { type: number }
-                        atr: { type: number }
-                        macd_hist: { type: number }
-                        stoch_k: { type: number }
-                        volume: { type: number }
-                        signal: { type: string }
-                        quality_score: { type: number }
-                        ai_analysis: { type: string }
 
   /execute-trade:
     post:
       tags: [Trades]
-      summary: ביצוע טרייד בפועל כולל AI וניהול סיכונים
+      summary: ביצוע טרייד בפועל
+      operationId: executeLiveTrade
       requestBody:
         required: true
         content:
@@ -80,37 +67,37 @@ paths:
             schema:
               type: object
               properties:
-                symbol: { type: string }
-                entry: { type: number }
-                stop: { type: number }
-                tp: { type: number }
-                direction: { type: string, enum: [LONG, SHORT] }
-                leverage: { type: integer }
-                budget: { type: number }
-                use_grid: { type: boolean }
-                use_trailing: { type: boolean }
-                user_id: { type: string }
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                tp:
+                  type: number
+                direction:
+                  type: string
+                leverage:
+                  type: integer
+                budget:
+                  type: number
+                use_grid:
+                  type: boolean
+                use_trailing:
+                  type: boolean
+                user_id:
+                  type: string
       responses:
         '200':
-          description: טרייד בוצע
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status: { type: string }
-                  confidence: { type: number }
-                  quality_score: { type: number }
-                  quantity: { type: number }
-                  snapshot: { type: string }
-                  news_score: { type: number }
-                  ai_opinion: { type: string }
-        '500': { description: שגיאה בביצוע }
+          description: תוצאה מלאה מהשרת
+        '500':
+          description: שגיאת שרת
 
   /calculate-quantity:
     post:
       tags: [Trades]
-      summary: חישוב כמות לפי תקציב, מחיר ומינוף
+      summary: חישוב כמות לפי תקציב, מינוף ומחיר
+      operationId: calculateQuantity
       requestBody:
         required: true
         content:
@@ -118,10 +105,14 @@ paths:
             schema:
               type: object
               properties:
-                symbol: { type: string }
-                price: { type: number }
-                leverage: { type: number }
-                budget: { type: number }
+                symbol:
+                  type: string
+                price:
+                  type: number
+                leverage:
+                  type: number
+                budget:
+                  type: number
       responses:
         '200':
           description: כמות מחושבת
@@ -130,12 +121,14 @@ paths:
               schema:
                 type: object
                 properties:
-                  quantity: { type: number }
+                  quantity:
+                    type: number
 
   /sl_tp:
     post:
       tags: [Trades]
-      summary: חישוב SL/TP חכם לפי גרף וכיוון
+      summary: חישוב SL ו־TP על בסיס ניתוח גרפי
+      operationId: calculateSlTp
       requestBody:
         required: true
         content:
@@ -145,16 +138,21 @@ paths:
               properties:
                 df:
                   type: array
-                  items: { type: object }
-                direction: { type: string }
+                  items:
+                    type: object
+                direction:
+                  type: string
       responses:
-        '200': { description: חישוב SL/TP בוצע }
-        '500': { description: שגיאה }
+        '200':
+          description: תוצאה עם SL ו־TP
+        '500':
+          description: שגיאה פנימית
 
   /backtest:
     post:
       tags: [Trades]
-      summary: סימולציה על סדרת מחירים
+      summary: הרצת סימולציית Backtest
+      operationId: runBacktest
       requestBody:
         required: true
         content:
@@ -166,35 +164,23 @@ paths:
                   type: array
                   items:
                     type: object
-                    properties:
-                      open: { type: number }
-                      high: { type: number }
-                      low: { type: number }
-                      close: { type: number }
-                      volume: { type: number }
-                symbol: { type: string }
-                interval: { type: string }
+                symbol:
+                  type: string
+                interval:
+                  type: string
       responses:
         '200':
-          description: תוצאות סימולציה
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  symbol: { type: string }
-                  interval: { type: string }
-                  results:
-                    type: array
-                    items: { type: object }
-                  success_count: { type: integer }
-                  total_trades: { type: integer }
-                  avg_quality: { type: number }
+          description: תוצאות הסימולציה
+        '400':
+          description: חוסר נתונים
+        '500':
+          description: שגיאה כללית
 
   /ai-analyze:
     post:
       tags: [AI]
-      summary: ניתוח AI על סמך אינדיקטורים
+      summary: ניתוח שוק בעזרת GPT
+      operationId: analyzeWithAI
       requestBody:
         required: true
         content:
@@ -204,45 +190,60 @@ paths:
               properties:
                 prices:
                   type: array
-                  items: { type: number }
+                  items:
+                    type: number
       responses:
         '200':
-          description: תוצאה מה-AI
+          description: פלט GPT
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  analysis: { type: string }
+                  trend:
+                    type: string
+                  confidence:
+                    type: number
 
   /news:
     get:
       tags: [News]
-      summary: חדשות שוק קריפטו
+      summary: שליפת חדשות קריפטו
+      operationId: getNews
       responses:
-        '200': { description: רשימת חדשות }
+        '200':
+          description: רשימת חדשות
 
   /analyze-news:
     get:
       tags: [News]
-      summary: ניתוח סנטימנט חדשות
+      summary: ניתוח סנטימנט של החדשות
+      operationId: analyzeNews
       responses:
-        '200': { description: סנטימנט מחושב }
+        '200':
+          description: תוצאה ניתוח סנטימנט
 
   /daily-report:
     get:
       tags: [Reports]
-      summary: הפקת דוח יומי בפורמט PDF
+      summary: יצירת דוח יומי כולל base64 PDF
+      operationId: generateDailyReport
       responses:
         '200':
-          description: דוח ב-base64
+          description: דוח בפורמט base64
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  base64_pdf: { type: string }
-                  status: { type: string }
+                  base64_pdf:
+                    type: string
+                  status:
+                    type: string
+
+components:
+  schemas: {}
+
 
 
 
