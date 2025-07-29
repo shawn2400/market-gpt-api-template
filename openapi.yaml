@@ -54,6 +54,8 @@ paths:
                     type: array
                     items:
                       type: object
+        '500':
+          description: שגיאת שרת כללית
 
   /execute-trade:
     post:
@@ -69,29 +71,41 @@ paths:
               properties:
                 symbol:
                   type: string
+                  example: "BTCUSDT"
                 entry:
                   type: number
+                  example: 30000
                 stop:
                   type: number
+                  example: 29000
                 tp:
                   type: number
+                  example: 33000
                 direction:
                   type: string
+                  example: "LONG"
                 leverage:
                   type: integer
+                  example: 10
                 budget:
                   type: number
+                  example: 100
                 use_grid:
                   type: boolean
+                  example: false
                 use_trailing:
                   type: boolean
+                  example: true
                 user_id:
                   type: string
+                  example: "user123"
       responses:
         '200':
           description: תוצאה מלאה מהשרת
+        '400':
+          description: בקשה שגויה – נתונים חסרים או לא תקפים
         '500':
-          description: שגיאת שרת
+          description: שגיאת שרת כללית
 
   /calculate-quantity:
     post:
@@ -107,12 +121,16 @@ paths:
               properties:
                 symbol:
                   type: string
+                  example: "ETHUSDT"
                 price:
                   type: number
+                  example: 1800
                 leverage:
                   type: number
+                  example: 10
                 budget:
                   type: number
+                  example: 100
       responses:
         '200':
           description: כמות מחושבת
@@ -123,6 +141,9 @@ paths:
                 properties:
                   quantity:
                     type: number
+                    example: 0.55
+        '400':
+          description: שגיאת חישוב כמות
 
   /sl_tp:
     post:
@@ -140,8 +161,20 @@ paths:
                   type: array
                   items:
                     type: object
+                  example:
+                    - open: 30000
+                      high: 30200
+                      low: 29800
+                      close: 30100
+                      volume: 1500
+                    - open: 30100
+                      high: 30300
+                      low: 30000
+                      close: 30250
+                      volume: 1800
                 direction:
                   type: string
+                  example: "LONG"
       responses:
         '200':
           description: תוצאה עם SL ו־TP
@@ -164,10 +197,18 @@ paths:
                   type: array
                   items:
                     type: object
+                  example:
+                    - open: 100
+                      high: 105
+                      low: 95
+                      close: 102
+                      volume: 1000
                 symbol:
                   type: string
+                  example: "ADAUSDT"
                 interval:
                   type: string
+                  example: "15m"
       responses:
         '200':
           description: תוצאות הסימולציה
@@ -192,6 +233,7 @@ paths:
                   type: array
                   items:
                     type: number
+                  example: [30000, 30200, 30500, 30100]
       responses:
         '200':
           description: פלט GPT
@@ -202,8 +244,10 @@ paths:
                 properties:
                   trend:
                     type: string
+                    example: "UP"
                   confidence:
                     type: number
+                    example: 0.87
 
   /news:
     get:
@@ -258,17 +302,22 @@ paths:
                       properties:
                         Date:
                           type: string
+                          example: "2025-07-28"
                         Total PNL:
                           type: number
+                          example: 42.50
                         Trades:
                           type: integer
+                          example: 6
                         Success Rate:
                           type: number
+                          example: 83.3
         '500':
           description: שגיאת שרת כללית
 
 components:
   schemas: {}
+
 
 
 
