@@ -39,7 +39,7 @@ async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, ta
         return {
             "status": "success",
             "timestamp": int(time.time()),
-            "pnl": 0  # אם אין מעקב PNL חי, פשוט תחזיר 0
+            "pnl": 0  # תוכל לעדכן לפי צורך
         }
 
     except Exception as e:
