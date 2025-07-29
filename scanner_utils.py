@@ -1,5 +1,3 @@
-# utils/scanner_utils.py
-
 import asyncio
 import logging
 from utils.get_klines import get_klines
@@ -43,7 +41,6 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
     ניתוח סמבול בודד (כולל אינדיקטורים, כיוון טרייד, איכות) – תומך FUTURES/SPOT
     """
     try:
-        # שינוי כאן: הקריאה לפונקציה עם market_type במקום is_futures
         df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
@@ -116,6 +113,7 @@ if __name__ == "__main__":
     best_spot = asyncio.run(scan_all(market_type="spot", limit=10, min_quality=2))
     for x in best_spot:
         print(x)
+
 
 
 
