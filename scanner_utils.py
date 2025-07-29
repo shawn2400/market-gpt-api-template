@@ -6,9 +6,7 @@ from utils.binance_client import client
 from utils.quality_score import compute_quality_score
 from utils.ai_analysis import predict_optimal_sl_tp
 
-
 semaphore = asyncio.Semaphore(10)  # הגבלת כמות משימות בו זמנית
-
 
 def get_symbols(market_type="futures"):
     try:
@@ -24,11 +22,9 @@ def get_symbols(market_type="futures"):
         logging.error(f"[!] שגיאה בשליפת סמלים ({market_type}): {e}")
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 
-
 async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "1m", limit: int = 50, with_ai: bool = True):
     try:
         await asyncio.sleep(0.2)
-
         df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
@@ -40,7 +36,6 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
             return None
 
         last = df.iloc[-1]
-
         direction = (
             "LONG" if last["rsi"] < 35 and last["adx"] > 20 and last["close"] > last["ema_21"]
             else "SHORT" if last["rsi"] > 70 and last["adx"] > 20 and last["close"] < last["ema_21"]
@@ -67,7 +62,6 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         logging.warning(f"[{symbol}] analyze error ({market_type}): {type(e).__name__} – {e}")
         return None
 
-
 async def scan_all(
     market_type: str = "futures",
     interval: str = "1m",
@@ -79,7 +73,7 @@ async def scan_all(
 
     async def safe_analyze(s):
         async with semaphore:
-            return await analyze_symbol(s, market_type, interval, limit=50, with_ai=with_ai)
+            return await analyze_symbol(s, market_type, interval, limit=limit, with_ai=with_ai)
 
     tasks = [safe_analyze(s) for s in symbols]
     results = await asyncio.gather(*tasks)
