@@ -72,7 +72,7 @@ async def sl_tp(request: SLTPRequest):
 @app.post("/calculate-quantity", operation_id="calculateQuantity")
 async def calc_qty(data: QuantityRequest):
     try:
-        from utils.quantity_utils import calculate_quantity
+        from utils.calculate_quantity import calculate_quantity
         quantity = calculate_quantity(data.symbol, data.price, data.leverage, data.budget)
         return {"quantity": quantity}
     except Exception as e:
@@ -180,8 +180,8 @@ async def scan(
     limit: int = Query(300, description="מספר מטבעות לבדיקה")
 ):
     try:
-        from scanner_utils import scan_all_futures
-        results = await scan_all_futures(interval=interval, symbol_limit=limit)
+        from scanner_utils import scan_all
+        results = await scan_all(interval=interval, limit=limit)
         filtered = [r for r in results if r.get("quality_score", 0) >= min_quality]
         return {"count": len(filtered), "results": filtered}
     except Exception as e:
@@ -224,6 +224,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed to launch: {e}")
+
 
 
 
