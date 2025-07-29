@@ -7,30 +7,36 @@ def get_klines(
     symbol: str,
     interval: str = '15m',
     limit: int = 100,
-    is_futures: bool = True,
+    market_type: str = "futures",  # "futures" / "spot" / "grid"
+    grid_base_type: str = "futures",  # relevant if market_type == "grid"
     start_time: int = None,
     end_time: int = None
 ) -> pd.DataFrame:
     """
-    מחזיר DataFrame של נתוני נרות (Klines) מ־Binance (Futures/Spot) כולל תמיכה בטווח תאריכים.
+    מחזיר DataFrame של נתוני נרות (Klines) מ־Binance (Futures/Spot/לגריד לפי הגדרת השוק).
 
     Args:
-        symbol (str): סימול המטבע (למשל 'BTCUSDT')
-        interval (str): טיימפריים של הנר (למשל '1m', '15m', '1h')
-        limit (int): מספר נרות לשליפה (מקסימום 1500)
-        is_futures (bool): האם למשוך Futures (ברירת מחדל: True)
-        start_time (int): זמן התחלה ב־timestamp מילישניות (אופציונלי)
-        end_time (int): זמן סיום ב־timestamp מילישניות (אופציונלי)
-
+        symbol (str): לדוג' 'BTCUSDT'
+        interval (str): לדוג' '1m', '15m', '1h'
+        limit (int): מקסימום 1500
+        market_type (str): "futures" / "spot" / "grid"
+        grid_base_type (str): אם market_type=="grid", בוחר מקור ('futures'/'spot')
+        start_time (int): אופציונלי (ms)
+        end_time (int): אופציונלי (ms)
     Returns:
-        pd.DataFrame: טבלה עם עמודות timestamp, open, high, low, close, volume
+        pd.DataFrame: טבלה סטנדרטית עם עמודות timestamp, open, high, low, close, volume
     """
     if not client:
         print("⚠️ Binance client לא מחובר.")
         return pd.DataFrame()
 
+    # ניהול 'grid' כלוגיקה – רק בוחר שוק הבסיס
+    mt = market_type
+    if market_type == "grid":
+        mt = grid_base_type if grid_base_type in ("futures", "spot") else "futures"
+
     try:
-        if is_futures:
+        if mt == "futures":
             raw = client.futures_klines(
                 symbol=symbol,
                 interval=interval,
@@ -38,7 +44,7 @@ def get_klines(
                 startTime=start_time,
                 endTime=end_time
             )
-        else:
+        elif mt == "spot":
             raw = client.get_klines(
                 symbol=symbol,
                 interval=interval,
@@ -46,6 +52,9 @@ def get_klines(
                 startTime=start_time,
                 endTime=end_time
             )
+        else:
+            print(f"[!] סוג שוק לא נתמך: {mt}")
+            return pd.DataFrame()
 
         df = pd.DataFrame(raw, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
