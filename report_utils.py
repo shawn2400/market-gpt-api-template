@@ -1,3 +1,5 @@
+# report_utils.py
+
 import os
 import json
 import base64
@@ -40,14 +42,22 @@ def generate_daily_report(as_of_date=None):
         grouped.columns = ["Date", "Total PNL", "Trades", "Success Rate"]
         grouped["Success Rate"] = (grouped["Success Rate"] * 100).round(2)
 
+        # סינון לפי תאריך אם התקבל
         if as_of_date:
-            grouped = grouped[grouped["Date"] <= pd.to_datetime(as_of_date).date()]
+            cutoff = pd.to_datetime(as_of_date).date()
+            grouped = grouped[grouped["Date"] <= cutoff]
 
-        # PDF
+        if grouped.empty:
+            raise ValueError("📭 אין נתונים לתאריך המבוקש.")
+
+        # קביעת כותרת לפי התאריך האחרון המדווח
+        report_title_date = grouped["Date"].max() if not grouped.empty else datetime.today().date()
+
+        # יצירת PDF
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt=f"📊 Daily Performance Report – {datetime.today().date()}", ln=1, align="C")
+        pdf.cell(200, 10, txt=f"📊 Daily Performance Report – {report_title_date}", ln=1, align="C")
         pdf.ln(10)
 
         for _, row in grouped.iterrows():
@@ -68,6 +78,7 @@ def generate_daily_report(as_of_date=None):
     except Exception as e:
         print(f"❌ Error generating report: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
