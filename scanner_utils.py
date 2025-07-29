@@ -7,6 +7,9 @@ from utils.quality_score import compute_quality_score
 from utils.ai_analysis import predict_optimal_sl_tp
 
 
+semaphore = asyncio.Semaphore(10)  # הגבלת כמות משימות בו זמנית
+
+
 def get_symbols(market_type="futures"):
     try:
         if market_type == "futures":
@@ -34,7 +37,7 @@ def compute_quality_score(last):
     return score
 
 
-async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "1m", limit: int = 100):
+async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "1m", limit: int = 50, with_ai: bool = True):
     try:
         await asyncio.sleep(0.2)
 
@@ -60,7 +63,7 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         if direction == "NEUTRAL":
             return None
 
-        sltp = predict_optimal_sl_tp(symbol, last["close"], direction)
+        sltp = predict_optimal_sl_tp(symbol, last["close"], direction) if with_ai else {"sl": None, "tp": None}
 
         return {
             "symbol": symbol,
@@ -80,17 +83,24 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
 async def scan_all(
     market_type: str = "futures",
     interval: str = "1m",
-    limit: int = 80,
-    min_quality: int = 5
+    limit: int = 50,
+    min_quality: int = 5,
+    with_ai: bool = True
 ):
     symbols = get_symbols(market_type=market_type)[:limit]
-    tasks = [analyze_symbol(s, market_type, interval, limit) for s in symbols]
+
+    async def safe_analyze(s):
+        async with semaphore:
+            return await analyze_symbol(s, market_type, interval, limit=50, with_ai=with_ai)
+
+    tasks = [safe_analyze(s) for s in symbols]
     results = await asyncio.gather(*tasks)
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]
     return filtered
+
 
 
 
