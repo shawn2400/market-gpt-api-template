@@ -9,9 +9,6 @@ POPULAR_SYMBOLS = [
 ]
 
 def compute_quality_score(last):
-    """
-    דירוג איכות טרייד (0–7) לפי אינדיקטורים מרכזיים.
-    """
     score = 0
     if 45 < last.get("rsi", 0) < 65:
         score += 1
@@ -30,9 +27,6 @@ def compute_quality_score(last):
     return score
 
 async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
-    """
-    ניתוח אסינכרוני של סמבול בודד עם אינדיקטורים, כיוון טרייד ואיכות.
-    """
     try:
         df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type="futures")
         if df is None or df.empty or len(df) < 30:
@@ -40,7 +34,7 @@ async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
             return None
 
         df = compute_indicators(df)
-        if df.empty or len(df) < 1:
+        if df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין נתונים לאחר חישוב אינדיקטורים")
             return None
 
@@ -81,10 +75,6 @@ async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 100):
         return None
 
 async def scan_all(symbols: list = None, interval: str = "15m", limit: int = 100, min_quality: int = 5):
-    """
-    סריקה אסינכרונית לכל רשימת סמלים עם סינון לפי quality_score וכיוון.
-    מחזירה רק טריידים איכותיים (LONG/SHORT).
-    """
     if symbols is None:
         symbols = POPULAR_SYMBOLS
 
@@ -98,12 +88,6 @@ async def scan_all(symbols: list = None, interval: str = "15m", limit: int = 100
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
     return filtered
 
-# דוגמה להרצה עצמאית לבדיקה
-if __name__ == "__main__":
-    import asyncio
-    best = asyncio.run(scan_all())
-    for x in best:
-        print(x)
 
 
 
