@@ -2,28 +2,30 @@
 .env
 *.env
 
-# קבצי לוגים
-*.log
-
-# קבצים זמניים / קאש
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.sqlite3
-
-# קבצי מערכת
-.DS_Store
-Thumbs.db
-
-# דוחות
-*.pdf
-
 # קבצים רגישים
 *.key
 *.pem
 
-# תיקיות נוספות לא להכללה
+# קבצי לוגים
+*.log
+
+# קבצים זמניים / קאש / Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# דוחות PDF
+*.pdf
+
+# קבצים פרטיים / API keys
 saved_trades.json
 pnl_tracker.json
+
+# תיקיות סטטיות ומערכות תמונות
 static/
+
+# קובצי מערכת הפעלה
+.DS_Store
+Thumbs.db
+
