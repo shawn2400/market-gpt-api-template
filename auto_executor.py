@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from utils.scanner_utils import scan_all
+from scanner_utils import scan_all  # ← תיקון כאן
 from utils.trade_executor import execute_trade_live
 
 async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
@@ -34,6 +34,7 @@ async def start_auto_executor(delay=60, min_quality=6, max_budget=100):
             logging.error(f"[AUTO_EXECUTOR] שגיאה: {e}")
 
         await asyncio.sleep(delay)
+
 
 
 
