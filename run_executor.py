@@ -1,12 +1,13 @@
 import asyncio
 import argparse
-from utils.binance_client import place_futures_order
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
 from utils.snapshot_utils import generate_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from scanner_utils import scan_all_futures
+from utils.ai_analysis import predict_optimal_sl_tp  # ✅ AI SL/TP
+from utils.binance_client import place_futures_order
 
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
@@ -15,7 +16,6 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             print(f"[AUTO_EXECUTOR] סורק את השוק...")
             trades = await scan_all_futures()
 
-            # סינון לפי איכות
             filtered = [t for t in trades if t.get("quality_score", 0) >= min_quality]
             if not filtered:
                 print(f"[AUTO_EXECUTOR] לא נמצאו טריידים איכותיים.")
@@ -31,9 +31,10 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             leverage = 10
             entry = float(await get_price(symbol))
 
-            # SL/TP לפי כיוון
-            stop = entry * 0.985 if direction == "LONG" else entry * 1.015
-            tp = entry * 1.02 if direction == "LONG" else entry * 0.98
+            # ✅ חיזוי SL/TP לפי כיוון ומחיר
+            sltp = predict_optimal_sl_tp(symbol, entry, direction)
+            stop = sltp["sl"]
+            tp = sltp["tp"]
             qty = round((max_budget * leverage) / entry, 3)
 
             print(f"[AUTO_EXECUTOR] {direction} על {symbol} @ {entry} | SL: {stop}, TP: {tp}, Qty: {qty}, QS: {trade['quality_score']}")
@@ -51,7 +52,6 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     leverage=leverage
                 )
 
-                # גיבוי ל־timestamp
                 timestamp = str(order.get("timestamp", asyncio.get_event_loop().time()))
                 pnl = float(order.get("pnl", 0))
 
@@ -65,7 +65,8 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     "direction": direction,
                     "quantity": qty,
                     "timestamp": timestamp,
-                    "quality_score": trade.get("quality_score", 0)
+                    "quality_score": trade.get("quality_score", 0),
+                    "snapshot": snapshot_path
                 })
 
                 update_pnl(symbol, pnl, trade.get("quality_score", 0))
@@ -96,4 +97,5 @@ if __name__ == "__main__":
         min_quality=args.min_quality,
         max_budget=args.budget
     ))
+
 
