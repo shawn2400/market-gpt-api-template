@@ -1,8 +1,8 @@
 import asyncio
 import logging
-from utils.get_klines import get_klines
-from utils.indicators import compute_indicators
-from utils.binance_client import client
+from get_klines import get_klines
+from indicators import compute_indicators
+from binance_client import client
 
 def get_symbols(market_type="futures"):
     """
@@ -42,13 +42,12 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         if df is None or df.empty or len(df) < 30:
             logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח")
             return None
-        last = df.iloc[-1]
-        df = compute_indicators(df)
 
-        # אחרי חישוב אינדיקטורים, תמיד ודא שיש לפחות שורה אחת לפני גישה
+        df = compute_indicators(df)
         if df.empty or len(df) < 1:
             logging.warning(f"[{symbol}] אין נתונים לאחר חישוב אינדיקטורים")
             return None
+
         last = df.iloc[-1]
 
         direction = (
@@ -115,6 +114,7 @@ if __name__ == "__main__":
     best_spot = asyncio.run(scan_all(market_type="spot", limit=10, min_quality=2))
     for x in best_spot:
         print(x)
+
 
 
 
