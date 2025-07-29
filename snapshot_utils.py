@@ -3,7 +3,11 @@ import os
 from datetime import datetime
 
 
-def save_trade_snapshot(trade):
+def save_trade_snapshot(trade: dict) -> str | None:
+    """
+    שומר גרף PNG של טרייד עם קווים ל־Entry, Stop, TP (ולעיתים גם מחיר נוכחי),
+    בתיקייה static/snapshots. מחזיר את הנתיב לקובץ או None אם נכשלה שמירה.
+    """
     try:
         symbol = trade.get("symbol", "UNKNOWN")
         entry = float(trade.get("entry", 0))
@@ -13,8 +17,8 @@ def save_trade_snapshot(trade):
         price_now = float(trade.get("price_now", 0)) if "price_now" in trade else None
         timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
 
-        # גבולות Y עם buffer בטיחות
-        buffer = max(abs(entry - stop), abs(tp - entry)) * 1.5
+        # חישוב גבולות גרף עם buffer
+        buffer = max(abs(entry - stop), abs(tp - entry)) * 1.5 or entry * 0.02
         y_min = min(entry, stop, tp, price_now if price_now else entry) - buffer
         y_max = max(entry, stop, tp, price_now if price_now else entry) + buffer
 
@@ -23,8 +27,6 @@ def save_trade_snapshot(trade):
         ax.axhline(entry, color="blue", linestyle="--", linewidth=1.5, label=f"Entry: {entry}")
         ax.axhline(stop, color="red", linestyle="--", linewidth=1.5, label=f"Stop: {stop}")
         ax.axhline(tp, color="green", linestyle="--", linewidth=1.5, label=f"TP: {tp}")
-
-        # קו מחיר בפועל אם קיים
         if price_now:
             ax.axhline(price_now, color="orange", linestyle=":", linewidth=1.5, label=f"Price Now: {price_now}")
 
@@ -35,9 +37,12 @@ def save_trade_snapshot(trade):
         ax.legend()
         ax.grid(True)
 
-        # תיקיית שמירה
-        os.makedirs("static/snapshots", exist_ok=True)
-        filename = f"static/snapshots/{symbol}_{direction}_{timestamp}.png"
+        # תיקייה ל־snapshots
+        output_dir = "static/snapshots"
+        os.makedirs(output_dir, exist_ok=True)
+        filename = f"{output_dir}/{symbol}_{direction}_{timestamp}.png"
+
+        # שמירה
         plt.tight_layout()
         plt.savefig(filename)
         plt.close(fig)
@@ -45,8 +50,9 @@ def save_trade_snapshot(trade):
         return filename
 
     except Exception as e:
-        print(f"[!] שגיאה בשמירת Snapshot: {e}")
+        print(f"[!] Snapshot Save Error: {e}")
         return None
+
 
 
 
