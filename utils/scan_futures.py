@@ -6,28 +6,30 @@ from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
 
-SYMBOL_LIMIT = 300
-
-def get_symbols(limit=SYMBOL_LIMIT):
+def get_symbols(limit=30):
     """
-    מחזיר רשימת סימבולים זמינים למסחר ב־Binance Futures
+    מחזיר רשימת סימבולים זמינים למסחר ב־Binance Futures (מוגבל ל־30)
     """
     from utils.binance_client import client
-    info = client.futures_exchange_info()
-    symbols = [
-        s["symbol"] for s in info["symbols"]
-        if s["contractType"] == "PERPETUAL"
-        and s["quoteAsset"] == "USDT"
-        and s["status"] == "TRADING"
-    ]
-    return symbols[:limit]
+    try:
+        info = client.futures_exchange_info()
+        symbols = [
+            s["symbol"] for s in info["symbols"]
+            if s["contractType"] == "PERPETUAL"
+            and s["quoteAsset"] == "USDT"
+            and s["status"] == "TRADING"
+        ]
+        return symbols[:limit]
+    except Exception as e:
+        logging.error(f"[!] שגיאה בשליפת סמלים: {e}")
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 
 async def analyze_symbol(symbol: str, interval="1m", min_quality=6) -> dict:
     """
     סורק מטבע לפי אינדיקטורים ומחזיר נתונים אם עומד בקריטריונים
     """
     try:
-        await asyncio.sleep(0.2)  # ⏱️ הפחתת עומס על ה־API
+        await asyncio.sleep(0.2)
 
         df = get_klines(symbol=symbol, interval=interval, limit=100)
         if df is None or df.empty:
@@ -65,16 +67,17 @@ async def analyze_symbol(symbol: str, interval="1m", min_quality=6) -> dict:
         logging.warning(f"[!] שגיאה בניתוח {symbol}: {type(e).__name__} – {e}")
         return None
 
-async def scan_all(interval="1m", limit=SYMBOL_LIMIT, min_quality=6):
+async def scan_all(interval="1m", limit=30, min_quality=6):
     """
-    סורק את שוק ה־Futures ומחזיר את כל המטבעות שעומדים בקריטריונים
+    סורק את שוק ה־Futures (על עד 30 מטבעות) ומחזיר עד 5 טריידים איכותיים בלבד
     """
     symbols = get_symbols(limit)
     tasks = [analyze_symbol(symbol, interval, min_quality) for symbol in symbols]
     results = await asyncio.gather(*tasks)
     filtered = [r for r in results if r]
-    sorted_results = sorted(filtered, key=lambda x: x["quality_score"], reverse=True)
+    sorted_results = sorted(filtered, key=lambda x: x["quality_score"], reverse=True)[:5]
     return sorted_results
+
 
 
 
