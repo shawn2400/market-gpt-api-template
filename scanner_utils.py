@@ -3,6 +3,8 @@ import logging
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.binance_client import client
+from utils.quality_score import compute_quality_score
+from utils.ai_analysis import predict_optimal_sl_tp
 
 def get_symbols(market_type="futures"):
     try:
@@ -31,7 +33,7 @@ def compute_quality_score(last):
 
 async def analyze_symbol(symbol: str, market_type: str = "futures", interval: str = "15m", limit: int = 100):
     try:
-        await asyncio.sleep(0.2)  # 🕒 מרווח נגד עומס Binance
+        await asyncio.sleep(0.2)
 
         df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or df.empty or len(df) < 30:
@@ -52,28 +54,21 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
         )
         quality_score = compute_quality_score(last)
 
+        if direction == "NEUTRAL":
+            return None
+
+        # ניתוח SL/TP עם GPT
+        sltp = predict_optimal_sl_tp(symbol, last["close"], direction)
+
         return {
             "symbol": symbol,
             "market_type": market_type,
             "close": float(last["close"]),
             "volume": float(last["volume"]),
-            "rsi": round(float(last["rsi"]), 2),
-            "adx": round(float(last["adx"]), 2),
-            "macd": round(float(last["macd"]), 4),
-            "macd_hist": round(float(last["macd_hist"]), 4),
-            "ema_21": round(float(last["ema_21"]), 4),
-            "ema_50": round(float(last["ema_50"]), 4),
-            "vwap": round(float(last["vwap"]), 4),
-            "bb_upper": round(float(last["bb_upper"]), 4),
-            "bb_lower": round(float(last["bb_lower"]), 4),
-            "stoch_k": round(float(last["stoch_k"]), 2),
-            "stoch_d": round(float(last["stoch_d"]), 2),
-            "obv": round(float(last["obv"]), 2),
-            "cci": round(float(last["cci"]), 2),
-            "mfi": round(float(last["mfi"]), 2),
-            "atr": round(float(last["atr"]), 4),
             "direction": direction,
-            "quality_score": int(quality_score)
+            "quality_score": int(quality_score),
+            "sl": sltp.get("sl"),
+            "tp": sltp.get("tp")
         }
     except Exception as e:
         logging.warning(f"[{symbol}] analyze error ({market_type}): {type(e).__name__} – {e}")
@@ -82,7 +77,7 @@ async def analyze_symbol(symbol: str, market_type: str = "futures", interval: st
 async def scan_all(
     market_type: str = "futures",
     interval: str = "15m",
-    limit: int = 30,  # הגבלה ל־30 בלבד
+    limit: int = 30,
     min_quality: int = 5
 ):
     symbols = get_symbols(market_type=market_type)[:limit]
@@ -91,7 +86,7 @@ async def scan_all(
     filtered = [
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
-    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]  # החזרים עד 5
+    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))[:5]  # החזקים ביותר
     return filtered
 
 
