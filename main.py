@@ -1,3 +1,5 @@
+# main.py
+
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -17,6 +19,7 @@ app = FastAPI(
     version="1.3.1"
 )
 
+# === Data Models ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -53,9 +56,13 @@ class AIAnalysisRequest(BaseModel):
     volume: float
     pattern: str
 
+
+# === Routes ===
+
 @app.get("/", operation_id="checkServerStatus")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
+
 
 @app.post("/sl_tp", operation_id="calculateSLTP")
 async def sl_tp(request: SLTPRequest):
@@ -66,6 +73,7 @@ async def sl_tp(request: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/calculate-quantity", operation_id="calculateQuantity")
 async def calc_qty(data: QuantityRequest):
     try:
@@ -75,6 +83,7 @@ async def calc_qty(data: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @app.get("/news", operation_id="fetchCryptoNews")
 async def news():
     try:
@@ -82,6 +91,7 @@ async def news():
         return fetch_crypto_news()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/analyze-news", operation_id="analyzeNewsImpact")
 async def analyze_news():
@@ -91,6 +101,7 @@ async def analyze_news():
         return analyze_news_impact(news)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/backtest", operation_id="runBacktest")
 async def backtest(request: BacktestRequest):
@@ -127,6 +138,7 @@ async def backtest(request: BacktestRequest):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
@@ -165,6 +177,7 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/scan", operation_id="scanMarket")
 async def scan(
     min_quality: int = Query(0, description="ציון איכות מינימלי"),
@@ -178,6 +191,7 @@ async def scan(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/daily-report", operation_id="generateDailyReport")
 async def daily_report():
     try:
@@ -186,6 +200,7 @@ async def daily_report():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/ai-analyze", operation_id="aiAnalysis")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
@@ -193,11 +208,21 @@ async def ai_analyze(data: AIAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# === Background Auto Executor (with loop) ===
+
+async def start_auto_loop(delay=30, min_quality=6, max_budget=100):
+    from auto_executor import auto_execute_trade
+    while True:
+        try:
+            await auto_execute_trade()
+        except Exception as e:
+            print(f"[AUTO_EXECUTOR ERROR] {e}")
+        await asyncio.sleep(delay)
+
 @app.on_event("startup")
 async def start_background_tasks():
     try:
-        from auto_executor import start_auto_executor
-
         auto_run = os.getenv("AUTO_RUN", "true").lower()
         min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
         max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -205,11 +230,13 @@ async def start_background_tasks():
 
         if auto_run == "true":
             print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
-            asyncio.create_task(start_auto_executor(delay=delay, min_quality=min_quality, max_budget=max_trade_budget))
+            asyncio.create_task(start_auto_loop(delay=delay, min_quality=min_quality, max_budget=max_trade_budget))
 
         print(f"[BOOT TIME] Server ready in {time.time() - __boot_start__:.2f} seconds")
+
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed: {e}")
+
 
 
 
