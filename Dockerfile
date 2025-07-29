@@ -5,7 +5,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# System dependencies for typical Python libs
+# System dependencies only as needed
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libopenblas-dev \
@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir numpy cython
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app files
+# Copy all app code
 COPY . .
 
 # Expose port for Render
@@ -32,6 +32,7 @@ EXPOSE 5000
 
 # Run FastAPI with Gunicorn & Uvicorn worker
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:5000"]
+
 
 
 
