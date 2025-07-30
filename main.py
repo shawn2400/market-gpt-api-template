@@ -28,10 +28,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# === ייבוא לפי המודולים החדשים ===
 from utils.ai_analysis import analyze_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.watchlist_utils import load_watchlist, add_to_watchlist
 
+# === מודלים ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -180,18 +182,27 @@ async def execute_trade(data: TradeRequest):
 async def scan_market(
     min_quality: int = Query(0),
     interval: str   = Query("1m"),
-    limit: int      = Query(300),
+    limit: int      = Query(50),
     trending_only: bool = Query(False),
-    min_volume: int = Query(1_000_000)
+    min_volume: int = Query(1_000_000),
+    market_type: str = Query("futures"),
+    with_ai: bool = Query(True)
 ):
+    """
+    סורק את כל השוק (פיוצ’רס/ספוט) לפי quality_score, trending וכו’.
+    market_type: 'futures' או 'spot'
+    trending_only: סינון טרנדינג (True/False)
+    """
     try:
         from utils.scanner_utils import scan_all
         results = await scan_all(
+            market_type=market_type,
             interval=interval,
             limit=limit,
             min_quality=min_quality,
             trending_only=trending_only,
-            min_volume=min_volume
+            min_volume=min_volume,
+            with_ai=with_ai
         )
         return {"count": len(results), "results": results}
     except Exception as e:
@@ -231,7 +242,8 @@ async def auto_grid(
     direction: str = Query("BOTH", description="BOTH/BUY/SELL"),
     trending_only: bool = Query(True, description="לבחור רק סימבולים טרנדיים"),
     min_quality: int = Query(6, description="סף איכות סימבול"),
-    min_ai_score: float = Query(7.0, description="סף איכות AI (GPT)")
+    min_ai_score: float = Query(7.0, description="סף איכות AI (GPT)"),
+    market_type: str = Query("futures")
 ):
     """
     מוצא סימבול חם איכותי (טרנדינג, איכות גבוהה) ומבצע Grid אוטומטי בפועל! כולל ציון איכות AI (GPT)!
@@ -240,6 +252,7 @@ async def auto_grid(
     from utils.grid_utils import execute_grid
     try:
         symbols = await scan_all(
+            market_type=market_type,
             interval="5m",
             limit=150,
             min_quality=min_quality,
@@ -284,8 +297,12 @@ async def auto_grid(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from routes.multi_scan import router as multi_scan_router
-app.include_router(multi_scan_router)
+# === ROUTER לסריקה מרובת טיימפריימים (אם תרצה לשלב) ===
+try:
+    from routes.multi_scan import router as multi_scan_router
+    app.include_router(multi_scan_router)
+except Exception:
+    pass
 
 @app.get("/watchlist", operation_id="getWatchlist")
 async def get_watchlist():
@@ -359,6 +376,7 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "5000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
