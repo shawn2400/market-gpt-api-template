@@ -41,3 +41,4 @@ def auto_update_watchlist(trades, threshold=7):
                 t.get("quality_score", 0),
                 reason=f"עבר QS {threshold}+ Multi-TF"
             )
+
