@@ -1,25 +1,26 @@
-# auto_executor.py
-
 import asyncio
 import logging
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
-from utils.snapshot_utils import save_trade_snapshot
+from snapshot_utils import save_trade_snapshot  # תקן יבוא נכון
 from utils.pnl_tracker import update_pnl
-from scanner_utils import scan_all
+from scanner_utils import scan_all_futures
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.binance_trader import place_futures_order
 
 _executor_task = None  # ניהול מצב הלולאה
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
+    """
+    לולאת סריקה חיה עם ביצוע טריידים אוטומטיים בפועל
+    """
     global _executor_task
 
     while True:
         try:
             print(f"\n[AUTO_EXECUTOR] 🚀 סורק את שוק הפיוצ'רס...")
-            trades = await scan_all(market_type="futures", interval="1m", limit=50, min_quality=min_quality)
+            trades = await scan_all_futures()
 
             filtered = [t for t in trades if t.get("quality_score", 0) >= min_quality]
             if not filtered:
@@ -35,6 +36,7 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             leverage = 10
             entry = float(await get_price(symbol))
 
+            # חיזוי SL/TP עם GPT
             sltp = predict_optimal_sl_tp(symbol, entry, direction)
             stop = sltp["sl"]
             tp = sltp["tp"]
@@ -82,13 +84,14 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                 })
 
                 update_pnl(symbol, pnl, trade.get("quality_score", 0))
+
                 print(f"[AUTO_EXECUTOR] ✅ טרייד בוצע ונשמר: {symbol} {direction} @ {entry}")
 
         except Exception as e:
             print(f"❌ [AUTO_EXECUTOR] שגיאה כללית: {type(e).__name__} – {e}")
 
         if once:
-            print("[AUTO_EXECUTOR] 🛑 מצב once – סיום.")
+            print("[AUTO_EXECUTOR] 🚭 מצב once – סיום.")
             break
 
         print(f"[AUTO_EXECUTOR] ⏳ ממתין {delay} שניות לסריקה נוספת...")
@@ -98,6 +101,9 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
 # === שליטה חיצונית דרך FastAPI ===
 
 def start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100):
+    """
+    מפעיל את הלולאה ברקע אם אינה פועלת כבר
+    """
     global _executor_task
     if _executor_task is None or _executor_task.done():
         _executor_task = asyncio.create_task(run_executor(
@@ -112,6 +118,9 @@ def start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100):
         print("[AUTO_EXECUTOR] כבר רץ")
 
 def stop_executor_loop():
+    """
+    מפסיק את הלולאה אם פועלת
+    """
     global _executor_task
     if _executor_task and not _executor_task.done():
         _executor_task.cancel()
@@ -120,7 +129,11 @@ def stop_executor_loop():
         print("[AUTO_EXECUTOR] לא פעיל כרגע")
 
 def is_executor_running() -> bool:
+    """
+    מחזיר האם הלולאה פועלת כרגע
+    """
     return _executor_task is not None and not _executor_task.done()
+
 
 
 
