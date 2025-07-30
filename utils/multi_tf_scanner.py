@@ -1,13 +1,14 @@
-# utils/multi_tf_scanner.py — גרסה עדכנית
+# utils/multi_tf_scanner.py
 
 import asyncio
 from collections import defaultdict
 from utils.trending_utils import get_trending_symbols
 from utils.scanner_utils import analyze_symbol
+from utils.ai_analysis import analyze_with_ai
 
 async def multi_tf_scan_with_ai(
-    timeframes: tuple[str, ...] = ("1m","3m","5m","15m"),
-    markets: tuple[str, ...] = ("futures",),
+    timeframes: tuple[str, ...] = ("5m", "15m", "1h"),
+    markets: tuple[str, ...] = ("futures", "spot"),
     min_quality: int = 6,
     top: int = 10,
     trending_only: bool = False,
@@ -32,7 +33,7 @@ async def multi_tf_scan_with_ai(
                     interval=tf,
                     limit=50,
                     trending_only=trending_only,
-                    with_ai=True,
+                    with_ai=False,   # עדיין לא נשתמש ב־AI כאן
                     frames=[tf]
                 )
             )
@@ -49,17 +50,30 @@ async def multi_tf_scan_with_ai(
             dirs = [x["direction"] for x in lst]
             main = max(set(dirs), key=dirs.count)
             avg_q = sum(x["quality_score"] for x in lst if x["direction"] == main) / len(lst)
-            output.append({
-                "symbol": sym,
-                "confluence": len(lst),
-                "main_direction": main,
-                "avg_quality": round(avg_q, 2),
-                "frames": [x["frames"][0] for x in lst],
-                "details": lst
-            })
 
-    output.sort(key=lambda x: (-x["avg_quality"], -x["confluence"]))
-    return output[:top]
+            ai_data = {
+                "rsi": lst[-1].get("rsi", 50),
+                "adx": lst[-1].get("adx", 20),
+                "trend": main,
+                "pattern": "unknown",
+                "volume": lst[-1].get("volume", 1_000_000)
+            }
+            ai_res = analyze_with_ai(ai_data)
+            ai_ok = ai_res and not ai_res.get("error") and ("LONG" in ai_res["answer"] or "SHORT" in ai_res["answer"])
+
+            if ai_ok:
+                output.append({
+                    "symbol": sym,
+                    "confluence": len(lst),
+                    "main_direction": main,
+                    "avg_quality": round(avg_q, 2),
+                    "frames": [x["frames"][0] for x in lst],
+                    "ai_opinion": ai_res["answer"],
+                    "ai_score": ai_res.get("score", 1.0),
+                    "details": lst
+                })
+
+    output.sort(key=lambda x: (-x["avg]()
 
 
 
