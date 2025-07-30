@@ -34,6 +34,10 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
 # העתקת כל קוד המקור
 COPY . .
 
+# יצירת קובץ open_trades.json ריק וניתן לכתיבה (הוספה חשובה)
+RUN touch /app/open_trades.json && echo "[]" > /app/open_trades.json
+RUN chmod 666 /app/open_trades.json
+
 # פתיחת פורט 5000
 EXPOSE 5000
 
@@ -43,6 +47,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # הרצת Gunicorn עם uvicorn worker, 2 עובדים, timeout של 5 דקות
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "300"]
+
 
 
 
