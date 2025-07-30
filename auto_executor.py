@@ -1,15 +1,20 @@
 import asyncio
 import logging
+
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
-from snapshot_utils import save_trade_snapshot  # תקן יבוא נכון
+from snapshot_utils import save_trade_snapshot  # אם הקובץ בשורש
+# אם הקובץ נמצא בתוך utils, שנה ל:
+# from utils.snapshot_utils import save_trade_snapshot
+
 from utils.pnl_tracker import update_pnl
-from scanner_utils import scan_all_futures
+from scanner_utils import scan_all  # שימוש ב-scan_all (לא scan_all_futures)
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.binance_trader import place_futures_order
 
 _executor_task = None  # ניהול מצב הלולאה
+
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
     """
@@ -20,7 +25,7 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
     while True:
         try:
             print(f"\n[AUTO_EXECUTOR] 🚀 סורק את שוק הפיוצ'רס...")
-            trades = await scan_all_futures()
+            trades = await scan_all(market_type="futures", min_quality=min_quality)
 
             filtered = [t for t in trades if t.get("quality_score", 0) >= min_quality]
             if not filtered:
@@ -68,7 +73,8 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     "direction": direction,
                     "price_now": entry,
                     "budget": max_budget,
-                    "leverage": leverage
+                    "leverage": leverage,
+                    "quality_score": trade.get("quality_score", 0)
                 })
 
                 save_trade({
@@ -84,7 +90,6 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                 })
 
                 update_pnl(symbol, pnl, trade.get("quality_score", 0))
-
                 print(f"[AUTO_EXECUTOR] ✅ טרייד בוצע ונשמר: {symbol} {direction} @ {entry}")
 
         except Exception as e:
@@ -117,6 +122,7 @@ def start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100):
     else:
         print("[AUTO_EXECUTOR] כבר רץ")
 
+
 def stop_executor_loop():
     """
     מפסיק את הלולאה אם פועלת
@@ -128,11 +134,13 @@ def stop_executor_loop():
     else:
         print("[AUTO_EXECUTOR] לא פעיל כרגע")
 
+
 def is_executor_running() -> bool:
     """
     מחזיר האם הלולאה פועלת כרגע
     """
     return _executor_task is not None and not _executor_task.done()
+
 
 
 
