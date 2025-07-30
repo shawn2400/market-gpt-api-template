@@ -1,15 +1,16 @@
 # utils/ai_analysis.py
 
 import os
+import re
 from dotenv import load_dotenv
-from openai import OpenAI
+import openai
 from typing import Dict, Union
 from utils.calculate_quantity import get_precision_info
 
 load_dotenv()
 
-# יצירת לקוח GPT עם המפתח
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# הגדרת המפתח למערכת GPT
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def round_tick(value, tick):
     """עיגול ערך למחיר חוקי לפי tickSize (כלפי מטה)"""
@@ -23,8 +24,9 @@ def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, 
     ניתוח GPT על סמך RSI, ADX, מגמה, תבנית ונפח.
     מחזיר טקסט המלצה + ניקוד.
     """
-    if not client.api_key:
+    if not openai.api_key:
         return {"error": "⚠️ מפתח OpenAI לא מוגדר"}
+
     required_fields = ["rsi", "adx", "trend", "pattern", "volume"]
     if not all(k in data for k in required_fields):
         return {"error": "⚠️ נתונים חסרים לניתוח AI"}
@@ -41,7 +43,7 @@ def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, 
     """
 
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "אתה אנליסט טכני מקצועי. תן תשובה עניינית ומנומקת – בלי ניחושים."},
@@ -50,9 +52,8 @@ def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, 
             temperature=0.4,
             max_tokens=250
         )
-        content = response.choices[0].message.content.strip()
-        import re
-        match = re.search(r"\b([0-9](?:\.\d{1,2})?)\b\s*\/\s*10\b", content)
+        content = response.choices[0].message["content"].strip()
+        match = re.search(r"\b([0-9](?:\.\d{1,2})?)\b\s*/\s*10\b", content)
         score = float(match.group(1)) if match else 0.9
         return {
             "answer": content,
@@ -61,6 +62,7 @@ def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, 
 
     except Exception as e:
         return {"error": f"שגיאת GPT: {type(e).__name__} – {e}"}
+
 
 def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float = None) -> Dict[str, float]:
     """
@@ -101,6 +103,7 @@ def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float 
 
     except Exception as e:
         return {"error": f"שגיאה בחיזוי SL/TP: {type(e).__name__} – {e}"}
+
 
 
 
