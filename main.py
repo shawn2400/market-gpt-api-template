@@ -1,4 +1,4 @@
-# main.py — AlgoGPT PRO API (הדבק בשורש או app/)
+# main.py — AlgoGPT PRO ULTRA (הדבק בשורש או app/)
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -9,22 +9,14 @@ import sys
 import asyncio
 import time
 
-sys.path.append(os.path.dirname(__file__))  # ייבוא תמיד תקין
+sys.path.append(os.path.dirname(__file__))
 __boot_start__ = time.time()
 load_dotenv()
 
-# ייבוא מודולים
 from utils.ai_analysis import analyze_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.watchlist_utils import load_watchlist, add_to_watchlist
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
-# להוסיף import ל־save_trade אם תרצה route טריידים
-
-app = FastAPI(
-    title="AlgoGPT API Pro",
-    description="API למסחר אלגוריתמי (Binance, Multi-TF, AI, Watchlist, דוחות, REST)",
-    version="2.0.0"
-)
 
 # === Data Models ===
 class SLTPRequest(BaseModel):
@@ -63,7 +55,13 @@ class AIAnalysisRequest(BaseModel):
     volume: float
     pattern: str
 
-# === Routes ===
+# === ROUTES ===
+
+app = FastAPI(
+    title="AlgoGPT API PRO Ultra",
+    description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)",
+    version="2.0.1"
+)
 
 @app.get("/", operation_id="checkServerStatus")
 async def home():
@@ -115,15 +113,12 @@ async def backtest(request: BacktestRequest):
                 "interval": request.interval,
                 "code": "ERR_TOO_SHORT"
             })
-
         df = pd.DataFrame(request.prices)
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         df.dropna(inplace=True)
-
         if df.empty:
             raise HTTPException(status_code=400, detail="No valid rows after cleaning")
-
         results = run_backtest(df)
         return {
             "symbol": request.symbol,
@@ -133,7 +128,6 @@ async def backtest(request: BacktestRequest):
             "total_trades": len(results),
             "avg_quality": round(results["quality_score"].mean(), 2) if not results.empty else 0
         }
-
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -176,38 +170,59 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ========= סריקה רגילה =========
 @app.get("/scan", operation_id="scanMarket")
 async def scan(
     min_quality: int = Query(0, description="ציון איכות מינימלי"),
     interval: str = Query("1m", description="טיימפריים"),
-    limit: int = Query(300, description="מספר מטבעות לבדיקה")
+    limit: int = Query(300, description="מספר מטבעות לבדיקה"),
+    trending_only: bool = Query(False, description="Trending בלבד"),
+    min_volume: int = Query(1000000, description="נפח מינימלי ב-USDT")
 ):
+    """
+    סריקה רגילה – סינון חכם לפי trending, volume, טיימפריים.
+    """
     try:
         from scanner_utils import scan_all
-        results = await scan_all(interval=interval, limit=limit, min_quality=min_quality)
+        results = await scan_all(
+            interval=interval,
+            limit=limit,
+            min_quality=min_quality,
+            trending_only=trending_only,
+            min_volume=min_volume
+        )
         return {"count": len(results), "results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ========= סריקה רב־טיימפריימית ו־Trending =========
 @app.get("/scan/multi", operation_id="multiTFscan")
 async def scan_multi(
     min_quality: int = Query(6, description="סף איכות"),
-    top: int = Query(10, description="כמה טריידים להחזיר")
+    top: int = Query(10, description="כמה טריידים להחזיר"),
+    trending_only: bool = Query(False, description="Trending בלבד"),
+    frames: str = Query("1m,3m,5m,15m,1h", description="טיימפריימים מופרדים בפסיק"),
+    markets: str = Query("futures,spot", description="שווקים: futures,spot או רק futures")
 ):
     """
-    סורק שווקים במספר טיימפריימים (futures/spot + 5m/15m/1h) עם אישור כפול AI.
+    סורק שווקים במספר טיימפריימים ושווקים, עם Trending Only ותמיכת Confluence/AI.
     """
     try:
-        results = await multi_tf_scan_with_ai(min_quality=min_quality, top=top)
+        tf_list = tuple([f.strip() for f in frames.split(",")])
+        market_list = tuple([m.strip() for m in markets.split(",")])
+        results = await multi_tf_scan_with_ai(
+            timeframes=tf_list,
+            markets=market_list,
+            min_quality=min_quality,
+            top=top,
+            trending_only=trending_only
+        )
         return {"count": len(results), "results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/watchlist", operation_id="getWatchlist")
 async def get_watchlist():
-    """
-    מחזיר את כל ה־Watchlist הנוכחי.
-    """
     try:
         wl = load_watchlist()
         return {"count": len(wl), "watchlist": wl}
@@ -241,7 +256,7 @@ async def ai_analyze(data: AIAnalysisRequest):
 
 @app.post("/start-auto")
 def start_auto_executor():
-    start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100)
+    start_executor_loop(debug=False, delay=7, min_quality=6, max_budget=100)
     return {"status": "running"}
 
 @app.post("/stop-auto")
@@ -263,16 +278,18 @@ async def start_background_tasks():
         auto_run = os.getenv("AUTO_RUN", "true").lower()
         min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
         max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
-        delay = int(os.getenv("SCAN_INTERVAL", 30))
+        delay = int(os.getenv("SCAN_INTERVAL", 7))
+        trending_only = os.getenv("TRENDING_ONLY", "false").lower() == "true"
 
         if auto_run == "true":
-            print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget}")
+            print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget} TRENDING_ONLY={trending_only}")
             start_executor_loop(debug=False, delay=delay, min_quality=min_quality, max_budget=max_trade_budget)
 
         print(f"[BOOT TIME] Server ready in {time.time() - __boot_start__:.2f} seconds")
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed: {e}")
+
 
 
 
