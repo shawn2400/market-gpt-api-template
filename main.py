@@ -1,3 +1,5 @@
+# main.py — AlgoGPT PRO API (הדבק בשורש או app/)
+
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -7,17 +9,21 @@ import sys
 import asyncio
 import time
 
-sys.path.append(os.path.dirname(__file__))  # מאפשר ייבוא תקין בכל מצב
+sys.path.append(os.path.dirname(__file__))  # ייבוא תמיד תקין
 __boot_start__ = time.time()
 load_dotenv()
 
+# ייבוא מודולים
 from utils.ai_analysis import analyze_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
+from utils.watchlist_utils import load_watchlist, add_to_watchlist
+from utils.multi_tf_scanner import multi_tf_scan_with_ai
+# להוסיף import ל־save_trade אם תרצה route טריידים
 
 app = FastAPI(
-    title="AlgoGPT API",
-    description="API למסחר אלגוריתמי עם Binance (Futures, Spot, Grid, AI, דוחות)",
-    version="1.3.1"
+    title="AlgoGPT API Pro",
+    description="API למסחר אלגוריתמי (Binance, Multi-TF, AI, Watchlist, דוחות, REST)",
+    version="2.0.0"
 )
 
 # === Data Models ===
@@ -183,6 +189,41 @@ async def scan(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/scan/multi", operation_id="multiTFscan")
+async def scan_multi(
+    min_quality: int = Query(6, description="סף איכות"),
+    top: int = Query(10, description="כמה טריידים להחזיר")
+):
+    """
+    סורק שווקים במספר טיימפריימים (futures/spot + 5m/15m/1h) עם אישור כפול AI.
+    """
+    try:
+        results = await multi_tf_scan_with_ai(min_quality=min_quality, top=top)
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/watchlist", operation_id="getWatchlist")
+async def get_watchlist():
+    """
+    מחזיר את כל ה־Watchlist הנוכחי.
+    """
+    try:
+        wl = load_watchlist()
+        return {"count": len(wl), "watchlist": wl}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/watchlist/add", operation_id="addToWatchlist")
+async def add_watchlist_api(
+    symbol: str, direction: str, quality_score: int = 7, reason: str = "הוסף ידנית"
+):
+    try:
+        ok = add_to_watchlist(symbol, direction, quality_score, reason)
+        return {"status": "ok" if ok else "exists"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/daily-report", operation_id="generateDailyReport")
 async def daily_report():
     try:
@@ -232,6 +273,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed: {e}")
+
 
 
 
