@@ -9,12 +9,8 @@ PNL_FILE = "pnl_tracker.json"
 PDF_OUTPUT_PATH = "static/reports/pnl_report.pdf"
 
 def update_pnl(symbol, direction, entry, exit_price, leverage, qty):
-    """
-    מעדכן את קובץ ה-PNL לפי טרייד בוצע: חישוב רווח/הפסד לפי כיוון, מינוף וכמות.
-    """
     today = datetime.utcnow().strftime("%Y-%m-%d")
     data = {}
-
     try:
         if os.path.exists(PNL_FILE):
             with open(PNL_FILE, "r") as f:
@@ -52,11 +48,7 @@ def update_pnl(symbol, direction, entry, exit_price, leverage, qty):
         print(f"[!] שגיאה בחישוב או כתיבה של PNL: {e}")
         return 0
 
-
 def generate_pnl_pdf():
-    """
-    יוצר דוח PDF מסכם לכל הימים מהקובץ pnl_tracker.json ושומר בתיקייה static/reports.
-    """
     if not os.path.exists(PNL_FILE):
         print("[!] קובץ PNL לא נמצא.")
         return None
