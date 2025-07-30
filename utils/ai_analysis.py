@@ -11,11 +11,10 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, float]]:
     """
     ניתוח GPT על סמך RSI, ADX, מגמה, תבנית ונפח.
-    מחזיר טקסט המלצה עם סיכום ניתוח.
+    מחזיר טקסט המלצה + ניקוד.
     """
     if not openai.api_key:
         return {"error": "⚠️ מפתח OpenAI לא מוגדר"}
-
     required_fields = ["rsi", "adx", "trend", "pattern", "volume"]
     if not all(k in data for k in required_fields):
         return {"error": "⚠️ נתונים חסרים לניתוח AI"}
@@ -27,34 +26,40 @@ def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, 
     - מגמה: {data['trend']}
     - תבנית גרף: {data['pattern']}
     - נפח מסחר: {data['volume']}
-
     על סמך נתונים אלו בלבד – האם יש סבירות לטרייד LONG או SHORT?
-    הסבר את המסקנה בקצרה.
+    נא להסביר את המסקנה בקצרה ולדרג (0-10) את איכות הסט־אפ.
     """
 
     try:
         response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "אתה אנליסט טכני של שוק הקריפטו. תן תשובה תמציתית, מקצועית ולעניין בלבד – בלי ניחושים."},
+                {"role": "system", "content": "אתה אנליסט טכני מקצועי. תן תשובה עניינית ומנומקת – בלי ניחושים."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.4,
-            max_tokens=300
+            max_tokens=250
         )
         content = response.choices[0].message.content.strip()
+        # נסה לחלץ ניקוד מהתשובה (לא חובה, default ל־0.9)
+        score = 0.9
+        import re
+        match = re.search(r"\b([0-9](?:\.\d{1,2})?)\b\s*\/\s*10\b", content)
+        if match:
+            score = float(match.group(1))
         return {
             "answer": content,
-            "score": 0.9  # ניקוד סטטי, ניתן להרחיב בעתיד
+            "score": score
         }
 
-    except openai.error.OpenAIError as e:
-        return {"error": f"שגיאת GPT: {str(e)}"}
+    except Exception as e:
+        return {"error": f"שגיאת GPT: {type(e).__name__} – {e}"}
 
 
 def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float = None) -> Dict[str, float]:
     """
     חיזוי SL ו־TP חכם לפי כיוון, מחיר ו־ATR אם קיים.
+    מבצע ולידציה כפולה לערכים סופיים!
     """
     try:
         direction = direction.upper()
@@ -65,23 +70,31 @@ def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float 
             sl = price - atr if direction == "LONG" else price + atr
             tp = price + atr * 1.5 if direction == "LONG" else price - atr * 1.5
         else:
+            # SL/TP באחוזים – ריאלי, לא צמוד מדי
             sl = price * (0.99 if direction == "LONG" else 1.01)
-            tp = price * (1.015 if direction == "LONG" else 0.985)
+            tp = price * (1.018 if direction == "LONG" else 0.982)
 
-        # הבטחת מרווח מינימלי
+        # מרווח מינימלי
         min_gap = price * 0.005
         if abs(tp - sl) < min_gap:
             adjust = price * 0.01
             sl = price - adjust if direction == "LONG" else price + adjust
-            tp = price + adjust * 1.5 if direction == "LONG" else price - adjust * 1.5
+            tp = price + adjust * 1.6 if direction == "LONG" else price - adjust * 1.6
+
+        # ולידציה סופית – לא מאפשר tp==sl==entry
+        if direction == "LONG" and not (sl < price < tp):
+            sl, tp = price * 0.985, price * 1.025
+        if direction == "SHORT" and not (tp < price < sl):
+            sl, tp = price * 1.015, price * 0.975
 
         return {
-            "sl": round(sl, 4),
-            "tp": round(tp, 4)
+            "sl": round(sl, 6),
+            "tp": round(tp, 6)
         }
 
     except Exception as e:
-        return {"error": f"שגיאה בחיזוי SL/TP: {str(e)}"}
+        return {"error": f"שגיאה בחיזוי SL/TP: {type(e).__name__} – {e}"}
+
 
 
 
