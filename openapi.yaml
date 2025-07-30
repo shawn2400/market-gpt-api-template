@@ -63,11 +63,6 @@ paths:
           in: query
           schema:
             type: boolean
-        - name: trending_source
-          in: query
-          schema:
-            type: string
-            enum: [coingecko, coinmarketcap, watchlist]
       responses:
         "200":
           description: "תוצאות סריקה Multi-TF"
@@ -226,6 +221,7 @@ components:
           type: string
         saved:
           type: boolean
+
 
 
 
