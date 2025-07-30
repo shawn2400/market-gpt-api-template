@@ -5,9 +5,12 @@ services:
     plan: starter
     autoDeploy: true
     envVars:
-      - key: PORT
-        value: 5000
+      # first import everything from .env
       - fromDotEnv: true
+
+      # then explicitly override or add:
+      - key: PORT
+        value: "5000"
       - key: AUTO_RUN
         value: "true"
       - key: MIN_QUALITY_SCORE
@@ -18,7 +21,10 @@ services:
         value: "1"
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
-healthCheckPath: /
+
+    # health check belongs under the service:
+    healthCheckPath: /
+
 
 
 
