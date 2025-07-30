@@ -181,11 +181,11 @@ def get_combined_trending_symbols(
     # מחזיר רשימה ייחודית וממוינת
     return sorted(list(set(combined)))
 
-# === דוגמת שימוש בלייב ===
 if __name__ == "__main__":
     print("Trending (CoinGecko):", get_trending_symbols("coingecko", market_type="futures", top=5))
     print("Trending (Binance):", get_trending_symbols("binance", market_type="futures", top=5))
     print("Combined Trending:", get_combined_trending_symbols(market_type="futures", top=7))
+
 
 
 
