@@ -1,22 +1,20 @@
 # utils/trending_utils.py
-# פונקציות לשאיבת סמלים טרנדים מ־CoinGecko, Binance Trending, LunarCrush ועוד
-
-from typing import Optional, List, Dict
+# שאיבת סמלים טרנדיים ממקורות שונים (CoinGecko, Binance Trending, LunarCrush)
 import requests
 import os
 import logging
 import time
+from typing import Optional, List, Dict
 
 COINGECKO_API = "https://api.coingecko.com/api/v3/search/trending"
 COINGECKO_MARKET_API = "https://api.coingecko.com/api/v3/coins/markets"
 BINANCE_TRENDING_API = "https://www.binance.com/bapi/asset/v1/public/asset-service/product/get-trending"
 LUNARCRUSH_TRENDING_API = "https://api.lunarcrush.com/v2?data=assets&sort=galaxy_score&limit=20"
-
 LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY")
 
-# --- שמירת cache (10 דקות)
+# --- זיכרון cache (רק לזמן ריצה)
 _cache: Dict[str, tuple[List[str], float]] = {}
-CACHE_TTL = 600  # שניות
+CACHE_TTL = 600  # 10 דקות
 
 def _cached(key: str) -> tuple[List[str], float]:
     return _cache.get(key, ([], 0))
@@ -24,7 +22,7 @@ def _cached(key: str) -> tuple[List[str], float]:
 def _store_cache(key: str, value: List[str]) -> None:
     _cache[key] = (value, time.time())
 
-# --- מיפוי חלקי לשמות סמלים פופולריים כולל מידע על שוק
+# מיפוי טיקר → סימבול ביננס (ל־Futures, אפשר להרחיב)
 symbol_mapping: Dict[str, Dict[str, str]] = {
     "btc": {"symbol": "BTCUSDT", "market": "futures"},
     "eth": {"symbol": "ETHUSDT", "market": "futures"},
@@ -66,7 +64,9 @@ def get_trending_symbols(
     top: Optional[int] = None,
     min_change_percent: Optional[float] = None
 ) -> List[str]:
-    # ברירות מחדל
+    """
+    מחזיר רשימת סמלים טרנדיים ממקור שנבחר (coingecko, binance, lunarcrush)
+    """
     if not trending_source:
         logging.warning("⚠️ trending_source ריק – שימוש בברירת מחדל 'coingecko'")
         trending_source = "coingecko"
@@ -137,17 +137,19 @@ def get_trending_symbols(
         if min_volume is not None and volume_lookup is not None:
             symbols = [s for s in symbols if volume_lookup.get(s, 0) >= min_volume]
 
-        # הגבלת מספר התוצאות
+        # הגבלת מספר תוצאות
         if top is not None and len(symbols) > top:
             symbols = symbols[:top]
 
-        # אחסון cache
+        # אחסון cache בזיכרון
         result = symbols or ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
         _store_cache(cache_key, result)
         return result
 
     except Exception as e:
         logging.error(f"שגיאה בשליפת טרנדים מ-{trending_source}: {type(e).__name__} – {e}")
+        # Fallback אם הכל נכשל
+        _store_cache(cache_key, ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 
 def get_combined_trending_symbols(
@@ -158,19 +160,33 @@ def get_combined_trending_symbols(
     top: Optional[int] = None,
     min_change_percent: Optional[float] = None
 ) -> List[str]:
+    """
+    מחזיר רשימה מאוחדת של trending מכל המקורות (unique)
+    """
     combined: List[str] = []
     for source in sources:
-        combined.extend(
-            get_trending_symbols(
-                trending_source=source,
-                market_type=market_type,
-                min_volume=min_volume,
-                volume_lookup=volume_lookup,
-                top=top,
-                min_change_percent=min_change_percent
+        try:
+            combined.extend(
+                get_trending_symbols(
+                    trending_source=source,
+                    market_type=market_type,
+                    min_volume=min_volume,
+                    volume_lookup=volume_lookup,
+                    top=top,
+                    min_change_percent=min_change_percent
+                )
             )
-        )
+        except Exception as e:
+            logging.warning(f"⚠️ מקור {source} נכשל: {e}")
+    # מחזיר רשימה ייחודית וממוינת
     return sorted(list(set(combined)))
+
+# === דוגמת שימוש בלייב ===
+if __name__ == "__main__":
+    print("Trending (CoinGecko):", get_trending_symbols("coingecko", market_type="futures", top=5))
+    print("Trending (Binance):", get_trending_symbols("binance", market_type="futures", top=5))
+    print("Combined Trending:", get_combined_trending_symbols(market_type="futures", top=7))
+
 
 
 
