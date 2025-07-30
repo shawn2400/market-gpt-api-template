@@ -17,7 +17,18 @@ symbol_mapping = {
     "matic": "MATICUSDT",
     "avax": "AVAXUSDT",
     "ltc": "LTCUSDT",
-    "xrp": "XRPUSDT"
+    "xrp": "XRPUSDT",
+    "link": "LINKUSDT",
+    "ada": "ADAUSDT",
+    "uni": "UNIUSDT",
+    "pepe": "PEPEUSDT",
+    "ton": "TONUSDT",
+    "inj": "INJUSDT",
+    "op": "OPUSDT",
+    "rndr": "RNDRUSDT",
+    "tia": "TIAUSDT",
+    "floki": "FLOKIUSDT",
+    "grt": "GRTUSDT"
 }
 
 def get_trending_symbols(
@@ -26,6 +37,7 @@ def get_trending_symbols(
 ) -> List[str]:
     """
     מחזיר רשימת סמלים טרנדים לפי מקור מוגדר (כעת רק CoinGecko נתמך).
+    תומך ב־spot/futures/grid לפי סוג השוק.
     """
     if trending_source.lower() != "coingecko":
         return []
@@ -49,6 +61,7 @@ def get_trending_symbols(
 
     except Exception:
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+
 
 
 
