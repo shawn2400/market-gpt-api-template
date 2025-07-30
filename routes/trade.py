@@ -1,10 +1,74 @@
+# routes/trade.py
+
 from fastapi import APIRouter, Query, HTTPException
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
-from utils.trade_storage import find_trade, load_open_trades, update_trade
-from utils.get_live_price import get_live_price  # אתה צריך שתהיה לך פונקציה כזו, מחזירה מחיר עדכני
+from utils.trade_storage import find_trade, load_open_trades, update_trade, add_trade
+from utils.get_live_price import get_live_price
 
 router = APIRouter()
 trade_cache = []
+
+@router.get("/get-trade")
+async def get_trade(
+    budget: float = Query(100, description="סכום השקעה מוצע (אפשר לשנות)")
+):
+    """
+    מחזיר טרייד איכותי (quality 5+), בכל טיימפריים מ-5m עד 4h בלבד.
+    אם אין – מחזיר הודעה ברורה.
+    """
+    try:
+        frames = "5m,15m,30m,1h,4h"
+        min_quality = 5
+        timeframes = [f.strip() for f in frames.split(",")]
+        trades = await multi_tf_scan_with_ai(
+            timeframes=timeframes,
+            min_quality=min_quality,
+            top=25
+        )
+        # רק טריידים שה-AI תומך בכיוון (אם קיים AI)
+        smart_trades = [
+            t for t in trades
+            if t.get("ai_opinion") and t["main_direction"].lower() in t["ai_opinion"].lower() and "error" not in t["ai_opinion"].lower()
+        ] if trades else []
+        candidates = smart_trades if smart_trades else trades
+        for trade in candidates:
+            sig = (trade["symbol"], trade["main_direction"], trade["frames"][0])
+            if sig not in trade_cache:
+                trade_cache.append(sig)
+                if len(trade_cache) > 100: trade_cache.pop(0)
+                volume = trade.get("details", [{}])[0].get("volume", 1_000_000)
+                suggested_budget = min(max(100, float(volume) * 0.001), 1000)
+                # שמירה לטריידים פתוחים
+                add_trade({
+                    "symbol": trade["symbol"],
+                    "direction": trade["main_direction"],
+                    "entry": trade["details"][-1]["close"],
+                    "sl": trade["details"][-1].get("sl"),
+                    "tp": trade["details"][-1].get("tp"),
+                    "leverage": 20,
+                    "opened_at": trade["details"][-1].get("time", ""),
+                    "ai_opinion": trade.get("ai_opinion", ""),
+                    "status": "פעיל"
+                })
+                return {
+                    "symbol": trade["symbol"],
+                    "direction": trade["main_direction"],
+                    "entry": trade["details"][-1]["close"],
+                    "sl": trade["details"][-1].get("sl"),
+                    "tp": trade["details"][-1].get("tp"),
+                    "leverage": 20,
+                    "suggested_budget": round(suggested_budget, 2),
+                    "your_budget": budget,
+                    "quality": trade["avg_quality"],
+                    "frames": trade["frames"],
+                    "ai_opinion": trade.get("ai_opinion", ""),
+                    "details": trade["details"]
+                }
+        # אין quality 5+ בכל ה-frames
+        return {"message": "אין טריידים איכותיים כרגע (quality 5+). נסה שוב מאוחר יותר."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/get-trade-status")
 async def get_trade_status(
@@ -67,5 +131,6 @@ async def get_trade_status(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
