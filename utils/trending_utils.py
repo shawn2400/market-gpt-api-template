@@ -4,14 +4,27 @@
 from typing import Optional, List, Dict
 import requests
 import os
+import logging
+import time
 
 COINGECKO_API = "https://api.coingecko.com/api/v3/search/trending"
+COINGECKO_MARKET_API = "https://api.coingecko.com/api/v3/coins/markets"
 BINANCE_TRENDING_API = "https://www.binance.com/bapi/asset/v1/public/asset-service/product/get-trending"
 LUNARCRUSH_TRENDING_API = "https://api.lunarcrush.com/v2?data=assets&sort=galaxy_score&limit=20"
 
 LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY")
 
-# מיפוי חלקי לשמות סמלים פופולריים כולל מידע על שוק
+# --- שמירת cache (10 דקות)
+_cache = {}
+CACHE_TTL = 600  # שניות
+
+def _cached(key):
+    return _cache.get(key, (None, 0))
+
+def _store_cache(key, value):
+    _cache[key] = (value, time.time())
+
+# --- מיפוי חלקי לשמות סמלים פופולריים כולל מידע על שוק
 symbol_mapping: Dict[str, Dict[str, str]] = {
     "btc": {"symbol": "BTCUSDT", "market": "futures"},
     "eth": {"symbol": "ETHUSDT", "market": "futures"},
@@ -49,30 +62,43 @@ def get_trending_symbols(
     trending_source: Optional[str] = "coingecko",
     market_type: str = "spot",
     min_volume: Optional[float] = None,
-    volume_lookup: Optional[Dict[str, float]] = None
+    volume_lookup: Optional[Dict[str, float]] = None,
+    top: Optional[int] = None,
+    min_change_percent: Optional[float] = None
 ) -> List[str]:
-    """
-    מחזיר רשימת סמלים טרנדים לפי מקור מוגדר (coingecko, binance, lunarcrush).
-    תומך ב־spot/futures/grid לפי סוג השוק.
-    מאפשר גם סינון לפי נפח מסחר במידת הצורך.
-    """
     trending_source = trending_source.lower()
     market_type = market_type.lower()
+    base_market = "futures" if market_type == "grid" else market_type
+
+    cache_key = f"{trending_source}:{base_market}:{min_volume}:{top}:{min_change_percent}"
+    cached, timestamp = _cached(cache_key)
+    if cached and (time.time() - timestamp < CACHE_TTL):
+        return cached
 
     try:
         symbols = []
 
         if trending_source == "coingecko":
-            response = requests.get(COINGECKO_API, timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            coins = data.get("coins", [])
-            for coin in coins:
-                item = coin.get("item", {})
-                symbol = item.get("symbol", "").lower()
+            trending_resp = requests.get(COINGECKO_API, timeout=5)
+            trending_resp.raise_for_status()
+            trending_data = trending_resp.json()
+            trending_ids = [c['item']['id'] for c in trending_data.get("coins", [])]
+
+            market_resp = requests.get(COINGECKO_MARKET_API, params={
+                "vs_currency": "usd",
+                "ids": ','.join(trending_ids),
+                "price_change_percentage": "24h"
+            }, timeout=5)
+            market_resp.raise_for_status()
+            market_data = market_resp.json()
+
+            for coin in market_data:
+                symbol = coin.get("symbol", "").lower()
+                change = coin.get("price_change_percentage_24h", 0.0)
                 mapped = symbol_mapping.get(symbol)
-                if mapped and mapped.get("market") == market_type:
-                    symbols.append(mapped["symbol"])
+                if mapped and mapped.get("market") == base_market:
+                    if min_change_percent is None or change >= min_change_percent:
+                        symbols.append(mapped["symbol"])
 
         elif trending_source == "binance":
             response = requests.get(BINANCE_TRENDING_API, timeout=5)
@@ -84,10 +110,13 @@ def get_trending_symbols(
                 for key in symbol_mapping:
                     if key in title.lower():
                         mapped = symbol_mapping[key]
-                        if mapped["market"] == market_type:
+                        if mapped["market"] == base_market:
                             symbols.append(mapped["symbol"])
 
-        elif trending_source == "lunarcrush" and LUNARCRUSH_API_KEY:
+        elif trending_source == "lunarcrush":
+            if not LUNARCRUSH_API_KEY:
+                logging.warning("⚠️ חסר מפתח API עבור LunarCrush – דילוג")
+                return []
             url = f"{LUNARCRUSH_TRENDING_API}&key={LUNARCRUSH_API_KEY}"
             response = requests.get(url, timeout=5)
             response.raise_for_status()
@@ -96,38 +125,43 @@ def get_trending_symbols(
             for asset in assets:
                 symbol = asset.get("symbol", "").lower()
                 mapped = symbol_mapping.get(symbol)
-                if mapped and mapped.get("market") == market_type:
+                if mapped and mapped.get("market") == base_market:
                     symbols.append(mapped["symbol"])
 
-        # סינון לפי נפח אם הוגדר
         if min_volume is not None and volume_lookup is not None:
             symbols = [s for s in symbols if volume_lookup.get(s, 0) >= min_volume]
 
+        if top is not None and len(symbols) > top:
+            symbols = symbols[:top]
+
+        _store_cache(cache_key, symbols or ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
         return symbols or ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 
-    except Exception:
+    except Exception as e:
+        logging.error(f"שגיאה בשליפת טרנדים מ-{trending_source}: {type(e).__name__} – {e}")
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 
 def get_combined_trending_symbols(
     market_type: str = "futures",
     min_volume: Optional[float] = None,
-    volume_lookup: Optional[Dict[str, float]] = None
+    volume_lookup: Optional[Dict[str, float]] = None,
+    sources: List[str] = ["coingecko", "binance", "lunarcrush"],
+    top: Optional[int] = None,
+    min_change_percent: Optional[float] = None
 ) -> List[str]:
-    """
-    מאחד סמלים מטרנדינג מכל המקורות הנתמכים (coingecko + binance + lunarcrush)
-    """
-    sources = ["coingecko", "binance", "lunarcrush"]
     combined = []
     for source in sources:
         symbols = get_trending_symbols(
             trending_source=source,
             market_type=market_type,
             min_volume=min_volume,
-            volume_lookup=volume_lookup
+            volume_lookup=volume_lookup,
+            top=top,
+            min_change_percent=min_change_percent
         )
         combined.extend(symbols)
-    # החזרת רשימה ממוינת וייחודית
     return sorted(list(set(combined)))
+
 
 
 
