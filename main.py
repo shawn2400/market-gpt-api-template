@@ -1,4 +1,4 @@
-# main.py — AlgoGPT PRO ULTRA (הדבק בשורש או app/)
+# main.py — AlgoGPT PRO ULTRA
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -183,7 +183,7 @@ async def scan(
     סריקה רגילה – סינון חכם לפי trending, volume, טיימפריים.
     """
     try:
-        from scanner_utils import scan_all
+        from utils.scanner_utils import scan_all
         results = await scan_all(
             interval=interval,
             limit=limit,
@@ -289,6 +289,7 @@ async def start_background_tasks():
 
     except Exception as e:
         print(f"[ERROR on startup] Auto Executor failed: {e}")
+
 
 
 
