@@ -3,20 +3,40 @@ import sys
 import time
 import threading
 import asyncio
+
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import pandas as pd
 
+# מאפשר imports מתוך התיקייה הראשית
 sys.path.append(os.path.dirname(__file__))
 __boot_start__ = time.time()
 load_dotenv()
 
+# === FastAPI App ===
+app = FastAPI(
+    title="AlgoGPT API PRO Ultra",
+    version="2.0.1",
+    description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)"
+)
+
+# --- CORS (אם צריך Web או חיבור חיצוני)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# === ייבוא פונקציות ===
 from utils.ai_analysis import analyze_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.watchlist_utils import load_watchlist, add_to_watchlist
-from utils.multi_tf_scanner import multi_tf_scan_with_ai
 
+# === דגמי בקשות ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -53,17 +73,13 @@ class AIAnalysisRequest(BaseModel):
     volume: float
     pattern: str
 
-app = FastAPI(
-    title="AlgoGPT API PRO Ultra",
-    version="2.0.1",
-    description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)"
-)
-
-@app.get("/")
+# === ROOT HEALTH ===
+@app.get("/", operation_id="checkServerStatus")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-@app.post("/sl_tp")
+# === SL/TP Calculation ===
+@app.post("/sl_tp", operation_id="calculateSLTP")
 async def sl_tp(request: SLTPRequest):
     try:
         from utils.sl_tp_utils import calculate_sl_tp_adaptive
@@ -72,7 +88,8 @@ async def sl_tp(request: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/calculate-quantity")
+# === Quantity Calculation ===
+@app.post("/calculate-quantity", operation_id="calculateQuantity")
 async def calc_qty(data: QuantityRequest):
     try:
         from utils.calculate_quantity import calculate_quantity
@@ -81,7 +98,8 @@ async def calc_qty(data: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/news")
+# === News ===
+@app.get("/news", operation_id="fetchCryptoNews")
 async def news():
     try:
         from news_utils import fetch_crypto_news
@@ -89,7 +107,7 @@ async def news():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/analyze-news")
+@app.get("/analyze-news", operation_id="analyzeNewsImpact")
 async def analyze_news():
     try:
         from news_utils import fetch_crypto_news, analyze_news_impact
@@ -98,12 +116,18 @@ async def analyze_news():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/backtest")
+# === Backtest ===
+@app.post("/backtest", operation_id="runBacktest")
 async def backtest(request: BacktestRequest):
     try:
         from backtest_utils import run_backtest
         if not request.prices or len(request.prices) < 30:
-            raise HTTPException(status_code=400, detail="Insufficient data – at least 30 candles required")
+            raise HTTPException(status_code=400, detail={
+                "error": "Insufficient data – at least 30 candles required",
+                "symbol": request.symbol,
+                "interval": request.interval,
+                "code": "ERR_TOO_SHORT"
+            })
         df = pd.DataFrame(request.prices)
         for col in ['open','high','low','close','volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -119,10 +143,13 @@ async def backtest(request: BacktestRequest):
             "total_trades": len(results),
             "avg_quality": round(results.get("quality_score", []).mean(), 2) if not results.empty else 0
         }
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/execute-trade")
+# === Trade Execution ===
+@app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
     try:
         if data.use_grid:
@@ -159,11 +186,12 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/scan")
+# === Market Scanner ===
+@app.get("/scan", operation_id="scanMarket")
 async def scan_market(
     min_quality: int = Query(0),
-    interval: str = Query("1m"),
-    limit: int = Query(300),
+    interval: str   = Query("1m"),
+    limit: int      = Query(300),
     trending_only: bool = Query(False),
     min_volume: int = Query(1_000_000)
 ):
@@ -180,31 +208,12 @@ async def scan_market(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/scan/multi")
-async def scan_multi(
-    min_quality: int = Query(6),
-    top: int = Query(10),
-    trending_only: bool = Query(False),
-    frames: str = Query("1m,3m,5m,15m,1h"),
-    markets: str = Query("futures,spot"),
-    trending_source: str = Query("coingecko")
-):
-    try:
-        tf_list = tuple(f.strip() for f in frames.split(","))
-        mk_list = tuple(m.strip() for m in markets.split(","))
-        results = await multi_tf_scan_with_ai(
-            timeframes=tf_list,
-            markets=mk_list,
-            min_quality=min_quality,
-            top=top,
-            trending_only=trending_only,
-            trending_source=trending_source
-        )
-        return {"count": len(results), "results": results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# === Multi-TF Scanner ===
+from routes.multi_scan import router as multi_scan_router
+app.include_router(multi_scan_router)
 
-@app.get("/watchlist")
+# === Watchlist ===
+@app.get("/watchlist", operation_id="getWatchlist")
 async def get_watchlist():
     try:
         wl = load_watchlist()
@@ -212,7 +221,7 @@ async def get_watchlist():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/watchlist/add")
+@app.post("/watchlist/add", operation_id="addToWatchlist")
 async def add_watchlist_api(symbol: str, direction: str, quality_score: int=7, reason: str="הוסף ידנית"):
     try:
         ok = add_to_watchlist(symbol, direction, quality_score, reason)
@@ -220,7 +229,8 @@ async def add_watchlist_api(symbol: str, direction: str, quality_score: int=7, r
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/daily-report")
+# === Daily Report ===
+@app.get("/daily-report", operation_id="generateDailyReport")
 async def daily_report():
     try:
         from report_utils import generate_daily_report
@@ -228,14 +238,16 @@ async def daily_report():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/ai-analyze")
+# === AI Analysis ===
+@app.post("/ai-analyze", operation_id="aiAnalysis")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
         return analyze_with_ai(data.dict())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/start-auto")
+# === Auto Executor Control ===
+@app.post("/start-auto", operation_id="startAuto")
 async def start_auto():
     global _executor_thread
     if is_executor_running():
@@ -250,16 +262,17 @@ async def start_auto():
     _executor_thread.start()
     return {"status": "started"}
 
-@app.post("/stop-auto")
+@app.post("/stop-auto", operation_id="stopAuto")
 async def stop_auto():
     stop_executor_loop()
     return {"status": "stopped"}
 
-@app.get("/status")
+@app.get("/status", operation_id="executorStatus")
 async def executor_status():
     running = is_executor_running()
-    return {"executor_running": running, "message": "✅ פעל" if running else "🚩 לא פעיל"}
+    return {"executor_running": running, "message": "✅ פועל" if running else "🚩 לא פעיל"}
 
+# === Startup Auto Execution ===
 @app.on_event("startup")
 async def on_startup():
     print(f"[BOOT TIME] ready in {time.time() - __boot_start__:.2f}s")
@@ -272,6 +285,7 @@ async def on_startup():
             daemon=True
         ).start()
 
+# === Run if standalone ===
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "5000"))
