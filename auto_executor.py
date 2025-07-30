@@ -1,9 +1,9 @@
-# auto_executor.py — מבנה נפרד, לא חוסם את ה־event loop
+# auto_executor.py — מבנה נפרד, לא חוסם את event loop
 
 import os, asyncio, random
+from datetime import datetime
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade, get_open_trades, save_scanned_trade
-from utils.quality_score import compute_quality_score
 from snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from utils.scanner_utils import scan_all, get_symbols
@@ -42,8 +42,10 @@ async def run_executor(
         try:
             print(f"\n[AUTO_EXECUTOR] 🚀 scanning… min_quality={min_q}")
             syms = get_symbols("futures", MIN_VOLUME, TRENDING_ONLY)
-            batch = (random.choice(list(smart_batch(syms, TOP_SYMBOLS)))
-                     if ROTATE_SYMBOLS and len(syms)>TOP_SYMBOLS else syms[:TOP_SYMBOLS])
+            batch = (
+                random.choice(list(smart_batch(syms, TOP_SYMBOLS)))
+                if ROTATE_SYMBOLS and len(syms) > TOP_SYMBOLS else syms[:TOP_SYMBOLS]
+            )
 
             trades = await scan_all(
                 market_type="futures",
@@ -53,39 +55,72 @@ async def run_executor(
                 trending_only=TRENDING_ONLY,
                 min_volume=MIN_VOLUME
             )
+            # שמירת זמן הסריקה
             for t in trades:
-                t["scanned_at"] = asyncio.get_event_loop().time()
+                t["scanned_at"] = datetime.utcnow().isoformat()
                 save_scanned_trade(t)
 
+            # דינמיקת סף איכות
             if not trades:
                 fail_count += 1
-                if fail_count>=2 and min_q>MIN_MIN_QUALITY:
-                    min_q -=1; fail_count=0
-                    print(f"[DYN QS] lower threshold -> {min_q}")
+                if fail_count >= 2 and min_q > MIN_MIN_QUALITY:
+                    min_q -= 1
+                    fail_count = 0
+                    print(f"[DYN QS] lower threshold → {min_q}")
             else:
-                if len(trades)>5 and min_q<MAX_MIN_QUALITY:
-                    min_q +=1
-                    print(f"[DYN QS] raise threshold -> {min_q}")
-                fail_count=0
+                if len(trades) > 5 and min_q < MAX_MIN_QUALITY:
+                    min_q += 1
+                    print(f"[DYN QS] raise threshold → {min_q}")
+                fail_count = 0
 
-                # execute only top trade
-                trades.sort(key=lambda x:(x["quality_score"], x["volume"]), reverse=True)
+                # ביצוע ה־TOP
+                trades.sort(key=lambda x: (x["quality_score"], x["volume"]), reverse=True)
                 for tr in trades:
                     sym, dir_ = tr["symbol"], tr["direction"]
-                    if any(t["symbol"]==sym and t["direction"]==dir_ for t in get_open_trades()):
+                    if any(t["symbol"] == sym and t["direction"] == dir_ for t in get_open_trades()):
                         continue
-                    if len(tr.get("frames",[]))>=VIP_WATCHLIST_FRAMES:
+                    if len(tr.get("frames", [])) >= VIP_WATCHLIST_FRAMES:
                         add_to_watchlist(sym, dir_, tr["quality_score"], reason=f"frames:{tr['frames']}")
-                    price = float(await get_price(sym))
+
+                    # קריאה ל־get_price בסביבה אסינכרונית
+                    price = await asyncio.to_thread(get_price, sym)
                     sltp = predict_optimal_sl_tp(sym, price, dir_)
-                    qty = round((max_budget*10)/price,3)
+                    qty = round((max_budget * 10) / price, 3)
                     print(f"[TRADE] {sym} {dir_}@{price} SL={sltp['sl']} TP={sltp['tp']} Q={qty}")
+
                     if not debug:
                         from utils.binance_trader import place_futures_order
-                        order = await place_futures_order(sym, "BUY" if dir_=="LONG" else "SELL",
-                                                          qty, price, sltp["sl"], sltp["tp"], leverage=10)
-                        snapshot = save_trade_snapshot({"symbol":sym,"entry":price,"stop":sltp["sl"],"tp":sltp["tp"],"direction":dir_,"price_now":price,"budget":max_budget,"leverage":10,"quality_score":tr["quality_score"]})
-                        save_trade({"symbol":sym,"entry":price,"stop":sltp["sl"],"tp":sltp["tp"],"direction":dir_,"quantity":qty,"timestamp":order.get("timestamp"),"quality_score":tr["quality_score"],"snapshot":snapshot})
+                        order = await place_futures_order(
+                            symbol=sym,
+                            side="BUY" if dir_ == "LONG" else "SELL",
+                            quantity=qty,
+                            entry_price=price,
+                            stop_loss=sltp["sl"],
+                            take_profit=sltp["tp"],
+                            leverage=10
+                        )
+                        snapshot = save_trade_snapshot({
+                            "symbol": sym,
+                            "entry": price,
+                            "stop": sltp["sl"],
+                            "tp": sltp["tp"],
+                            "direction": dir_,
+                            "price_now": price,
+                            "budget": max_budget,
+                            "leverage": 10,
+                            "quality_score": tr["quality_score"]
+                        })
+                        save_trade({
+                            "symbol": sym,
+                            "entry": price,
+                            "stop": sltp["sl"],
+                            "tp": sltp["tp"],
+                            "direction": dir_,
+                            "quantity": qty,
+                            "timestamp": order.get("timestamp"),
+                            "quality_score": tr["quality_score"],
+                            "snapshot": snapshot
+                        })
                         update_pnl(sym, dir_, price, price, 10, qty)
                         print(f"[✅ EXECUTED] {sym}")
                     break
@@ -117,6 +152,7 @@ def stop_executor_loop():
 
 def is_executor_running() -> bool:
     return bool(_executor_task and not _executor_task.done())
+
 
 
 
