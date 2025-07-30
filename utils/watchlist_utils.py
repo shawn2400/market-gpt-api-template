@@ -42,3 +42,4 @@ def auto_update_watchlist(trades, threshold=7):
                 reason=f"עבר QS {threshold}+ Multi-TF"
             )
 
+
