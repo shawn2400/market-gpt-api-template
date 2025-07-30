@@ -63,6 +63,11 @@ paths:
           in: query
           schema:
             type: boolean
+        - name: trending_source
+          in: query
+          schema:
+            type: string
+            enum: [coingecko, coinmarketcap, watchlist]
       responses:
         "200":
           description: "תוצאות סריקה Multi-TF"
@@ -76,7 +81,7 @@ paths:
                   results:
                     type: array
                     items:
-                      $ref: "#/components/schemas/ScanSymbol"
+                      $ref: "#/components/schemas/MultiTFResult"
         "500":
           description: "שגיאת שרת"
 
@@ -125,6 +130,31 @@ components:
           type: string
         quality_score:
           type: integer
+
+    MultiTFResult:
+      type: object
+      properties:
+        symbol:
+          type: string
+        confluence:
+          type: integer
+        main_direction:
+          type: string
+        avg_quality:
+          type: number
+        frames:
+          type: array
+          items:
+            type: string
+        ai_opinion:
+          type: string
+        ai_score:
+          type: number
+        details:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScanSymbol"
+
 
 
 
