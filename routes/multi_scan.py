@@ -1,8 +1,7 @@
-# ===== קובץ: routes/multi_scan.py =====
+# routes/multi_scan.py
 
-from fastapi import APIRouter, Query
-from typing import List
-from utils.multi_tf_scan_with_ai import multi_tf_scan_with_ai
+from fastapi import APIRouter
+from utils.multi_tf_scanner import multi_tf_scan_with_ai
 
 router = APIRouter()
 
@@ -12,7 +11,8 @@ async def multi_tf_scan_api(
     top: int = 10,
     frames: str = "5m,15m,1h",
     markets: str = "futures,spot",
-    trending_only: bool = False
+    trending_only: bool = False,
+    trending_source: str = "coingecko"  # 🔧 חשוב! זה מה שהיה חסר
 ):
     timeframes = [f.strip() for f in frames.split(",")]
     market_list = [m.strip() for m in markets.split(",")]
@@ -22,10 +22,12 @@ async def multi_tf_scan_api(
         markets=market_list,
         min_quality=min_quality,
         top=top,
-        trending_only=trending_only
+        trending_only=trending_only,
+        trending_source=trending_source  # 🔧 מוסר לקוד הליבה
     )
     return {
         "count": len(results),
         "results": results
     }
+
 
