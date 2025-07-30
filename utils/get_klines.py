@@ -1,7 +1,5 @@
 import logging
 import pandas as pd
-import numpy as np
-import ta
 from utils.binance_client import client
 import requests.exceptions
 
@@ -17,11 +15,9 @@ def get_klines(
 ) -> pd.DataFrame:
     """
     מחזיר DataFrame עם נתוני נרות (klines) מ-Binance.
-    כולל טיפול בשגיאות, בדיקה וניקוי נתונים חסרים.
-    משדרג אוטומטית limit אם צריך לניתוח אמין.
+    כולל טיפול אוטומטי ב-NaN, בדיקת דאטה, ומניעת Rate Limit.
     """
-    # הגדרת מינימום נתונים לניתוח אינדיקטורים
-    MIN_REQUIRED = 120
+    MIN_LIMIT = 120
 
     if is_futures is not None:
         market_type = "futures" if is_futures else "spot"
@@ -31,13 +27,12 @@ def get_klines(
         return pd.DataFrame()
 
     mt = market_type
-    if market_type == "grid":
+    if mt == "grid":
         mt = grid_base_type if grid_base_type in ("futures", "spot") else "futures"
 
-    # מוודא limit מספיק גדול
-    if limit < MIN_REQUIRED:
-        logging.warning(f"[*] limit הוגדל אוטומטית ל-{MIN_REQUIRED} לניתוח תקין ({symbol}, {interval})")
-        limit = MIN_REQUIRED
+    if limit < MIN_LIMIT:
+        logging.info(f"[*] limit קטן מדי ({limit}) – הוגדל ל-{MIN_LIMIT} עבור {symbol}")
+        limit = MIN_LIMIT
 
     try:
         if mt == "futures":
@@ -61,10 +56,9 @@ def get_klines(
             return pd.DataFrame()
 
         if not raw or len(raw) < 10:
-            logging.warning(f"[!] נתוני Klines ריקים או מעטים ({len(raw) if raw else 0}) עבור {symbol} ({mt})")
+            logging.warning(f"[!] נתוני Klines ריקים/מעטים ({len(raw) if raw else 0}) עבור {symbol} ({mt})")
             return pd.DataFrame()
 
-        # בונה DataFrame
         df = pd.DataFrame(raw, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'quote_asset_volume', 'number_of_trades',
@@ -75,24 +69,20 @@ def get_klines(
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # מנקה ערכים חסרים
         nan_before = df.isnull().sum().sum()
         if nan_before > 0:
-            logging.warning(f"[!] נתוני Klines עבור {symbol} מכילים {nan_before} ערכים חסרים – מבצע ffill/bfill")
+            logging.warning(f"[!] {nan_before} ערכים חסרים בנתוני {symbol} – מבצע ffill/bfill")
             df = df.fillna(method='ffill').fillna(method='bfill')
-        # בודק שוב אם יש Nan (סופי)
         nan_after = df.isnull().sum().sum()
         if nan_after > 0:
-            logging.warning(f"[!] אחרי ניקוי, עדיין {nan_after} ערכים חסרים – מסיר שורות ריקות")
+            logging.warning(f"[!] עדיין {nan_after} NaN – הסרה סופית של שורות ריקות")
             df.dropna(inplace=True)
 
-        # מסנן אם נשארו מעט מדי נרות
-        if len(df) < MIN_REQUIRED // 2:
-            logging.warning(f"[!] אחרי ניקוי, מעט מדי נתונים ({len(df)}) עבור {symbol} לניתוח אמין")
+        if len(df) < MIN_LIMIT // 2:
+            logging.warning(f"[!] אחרי ניקוי, מעט מדי נתונים ({len(df)}) עבור {symbol} ({mt})")
             return pd.DataFrame()
 
-        # מדפיס דיאגנוסטיקה
-        logging.info(f"[get_klines] {symbol} ({interval}, {mt}): {len(df)} נרות אחרונים נטו")
+        logging.info(f"[get_klines] {symbol} ({interval}, {mt}): {len(df)} נרות")
         return df
 
     except requests.exceptions.RequestException as e:
@@ -100,8 +90,9 @@ def get_klines(
         return pd.DataFrame()
 
     except Exception as e:
-        logging.error(f"[!] שגיאה כללית בשליפת Klines עבור {symbol}: {type(e).__name__} – {e}")
+        logging.error(f"[!] שגיאה בשליפת Klines עבור {symbol}: {type(e).__name__} – {e}")
         return pd.DataFrame()
+
 
 
 
