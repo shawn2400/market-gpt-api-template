@@ -1,8 +1,7 @@
-# main.py — AlgoGPT PRO ULTRA
-
 import os
 import sys
 import time
+import threading
 import asyncio
 
 from fastapi import FastAPI, HTTPException, Query
@@ -66,6 +65,19 @@ app = FastAPI(
     description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)"
 )
 
+# === פונקציה לריצה ברקע של Auto Executor ===
+_executor_thread = None
+
+def _run_executor(debug: bool, delay: int, min_quality: int, budget: float):
+    start_executor_loop(
+        debug=debug,
+        once=False,
+        delay=delay,
+        min_quality=min_quality,
+        budget=budget,
+    )
+
+# === Health check ===
 @app.get("/", operation_id="checkServerStatus")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
@@ -131,9 +143,9 @@ async def backtest(request: BacktestRequest):
             "symbol": request.symbol,
             "interval": request.interval,
             "results": results.to_dict(orient="records"),
-            "success_count": int(results["success"].sum()),
+            "success_count": int(results.get("success", []).count(True)),
             "total_trades": len(results),
-            "avg_quality": round(results["quality_score"].mean(), 2) if not results.empty else 0
+            "avg_quality": round(results.get("quality_score", []).mean(), 2) if not results.empty else 0
         }
     except HTTPException as he:
         raise he
@@ -146,7 +158,7 @@ async def execute_trade(data: TradeRequest):
     try:
         if data.use_grid:
             from utils.grid_utils import execute_grid
-            is_fut = (data.grid_mode or "FUTURES").upper()=="FUTURES"
+            is_fut = data.grid_mode.upper() == "FUTURES"
             return await asyncio.to_thread(
                 execute_grid,
                 symbol=data.symbol,
@@ -260,7 +272,18 @@ async def ai_analyze(data: AIAnalysisRequest):
 # --- Auto-executor control endpoints ---
 @app.post("/start-auto", operation_id="startAuto")
 async def start_auto():
-    start_executor_loop(debug=False)
+    global _executor_thread
+    if is_executor_running():
+        return {"status": "already running"}
+    delay = int(os.getenv("SCAN_INTERVAL", "60"))
+    min_q = int(os.getenv("MIN_QUALITY_SCORE", "6"))
+    budget = float(os.getenv("MAX_TRADE_BUDGET", "100"))
+    _executor_thread = threading.Thread(
+        target=_run_executor,
+        kwargs={"debug": False, "delay": delay, "min_quality": min_q, "budget": budget},
+        daemon=True
+    )
+    _executor_thread.start()
     return {"status": "started"}
 
 @app.post("/stop-auto", operation_id="stopAuto")
@@ -276,13 +299,26 @@ async def executor_status():
 # --- Startup event: מפעיל רק אם AUTO_RUN=true ---
 @app.on_event("startup")
 async def on_startup():
-    auto = os.getenv("AUTO_RUN", "true").lower() == "true"
-    if auto:
-        min_q = int(os.getenv("MIN_QUALITY_SCORE", 6))
-        delay = int(os.getenv("SCAN_INTERVAL", 7))
-        budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
-        start_executor_loop(debug=False, delay=delay, min_quality=min_q, max_budget=budget)
-    print(f"[BOOT TIME] ready in {time.time()-__boot_start__:.2f}s")
+    print(f"[BOOT TIME] ready in {time.time() - __boot_start__:.2f}s")
+    if os.getenv("AUTO_RUN", "true").lower() == "true":
+        # spawn background thread for auto executor
+        delay = int(os.getenv("SCAN_INTERVAL", "60"))
+        min_q = int(os.getenv("MIN_QUALITY_SCORE", "6"))
+        budget = float(os.getenv("MAX_TRADE_BUDGET", "100"))
+        global _executor_thread
+        _executor_thread = threading.Thread(
+            target=_run_executor,
+            kwargs={"debug": False, "delay": delay, "min_quality": min_q, "budget": budget},
+            daemon=True
+        )
+        _executor_thread.start()
+
+# --- Gunicorn/Uvicorn entrypoint ---
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "5000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
