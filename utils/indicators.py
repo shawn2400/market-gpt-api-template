@@ -143,3 +143,5 @@ def compute_indicators(df, volume_window=20):
 
 
 
+
+
