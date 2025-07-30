@@ -1,37 +1,65 @@
+# utils/trade_executor.py
+
+import logging
+import time
+import pandas as pd
 from utils.quantity_utils import calculate_quantity, auto_risk_allocation
+from utils.ai_analysis import predict_optimal_sl_tp
+from utils.get_live_price import get_price
+from utils.trade_storage import save_trade
+from utils.quality_score import compute_quality_score
+from snapshot_utils import save_trade_snapshot
+from utils.pnl_tracker import update_pnl
+from utils.report_utils import send_email_alert
+from utils.binance_client import client
 
-def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=100, use_grid=False, use_trailing=False, user_id=None, take_snapshot=True):
+# הגדרות Binance — להחליף לפי הספריה/מודול שלך
+SIDE_BUY = "BUY"
+SIDE_SELL = "SELL"
+ORDER_TYPE_MARKET = "MARKET"
+ORDER_TYPE_LIMIT = "LIMIT"
+ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
+ORDER_TYPE_TRAILING_STOP_MARKET = "TRAILING_STOP_MARKET"
+TIME_IN_FORCE_GTC = "GTC"
+
+def execute_trade_live(
+    symbol,
+    entry,
+    stop,
+    tp,
+    direction,
+    leverage,
+    budget_usd=100,
+    use_grid=False,
+    use_trailing=False,
+    user_id=None,
+    take_snapshot=True
+):
     try:
-        # שליפת חדשות וסנטימנט
-        news = fetch_crypto_news()
-        sentiment = analyze_news_impact(news)
-        news_score = sum(n['impact_score'] for n in sentiment if symbol[:3].lower() in n['title'].lower())
-
-        # שינוי מינוף
+        # שינוי מינוף (לא חובה אם כבר במצב נכון)
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-
-        # מחיר עדכני
-        price = get_live_price(symbol)
-        if not price:
+        # שליפת מחיר עדכני
+        price = get_price(symbol)
+        if not price or price <= 0:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
-        # חיזוי SL/TP אם חסרים
+        # חישוב SL/TP אם חסרים
         if not stop or not tp:
             sltp = predict_optimal_sl_tp(symbol, price, direction)
             stop = sltp["sl"]
             tp = sltp["tp"]
 
-        # הקצאת סיכון וחישוב תקציב בפועל
-        capital_used = auto_risk_allocation(entry_price=entry, stop_price=stop, total_budget=budget_usd)
+        # חישוב כמות אמיתי
+        capital_used = auto_risk_allocation(entry_price=entry, stop_price=stop, total_budget=budget_usd, leverage=leverage, symbol=symbol)
         quantity = calculate_quantity(symbol, entry, leverage, capital_used)
         if quantity <= 0:
-            raise ValueError("⚠️ כמות לא חוקית (יתכן תקציב או stepSize שגוי)")
+            raise ValueError("⚠️ כמות לא חוקית (יתכן תקציב קטן מדי, או stepSize/minQty לא מתאים)")
 
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
-        # פתיחת פוזיציה
-        client.futures_create_order(
+        # פתיחת פוזיציה בפועל
+        order = client.futures_create_order(
             symbol=symbol,
             side=side,
             type=ORDER_TYPE_MARKET,
@@ -39,7 +67,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         )
         time.sleep(0.5)
 
-        # הגדרת SL
+        # SL (רגיל או Trailing)
         if use_trailing:
             activation_price = round(price * 1.005 if direction.upper() == "LONG" else price * 0.995, 4)
             client.futures_create_order(
@@ -61,7 +89,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 timeInForce=TIME_IN_FORCE_GTC
             )
 
-        # הגדרת TP
+        # TP (Limit, לא Market! אם נכשל — לא עוצרים את הטרייד)
         try:
             client.futures_create_order(
                 symbol=symbol,
@@ -85,7 +113,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
                 "direction": direction.upper()
             })
 
-        # חישוב איכות ו־confidence
+        # איכות + Confidence
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -99,7 +127,7 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "ema_50": price * 0.98
         }])
         quality = compute_quality_score(df)
-        confidence = round(70 + 3 * quality + news_score * 2, 2)
+        confidence = round(70 + 3 * quality, 2)
 
         # שמירת טרייד
         trade_data = {
@@ -111,12 +139,12 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
             "leverage": leverage,
             "confidence": confidence,
             "quality_score": quality,
-            "mock_quality": True,
             "type": "GRID" if use_grid else "REGULAR",
             "user_id": user_id or "default",
-            "news_score": news_score,
             "capital_used": round(capital_used, 2),
-            "quantity": quantity
+            "quantity": quantity,
+            "status": "OPEN",
+            "snapshot": snapshot_path
         }
         save_trade(trade_data)
 
@@ -124,9 +152,10 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage, budget_usd=
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
         # התראת מייל
-        send_email_alert(
-            subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
-            body=f"""Symbol: {symbol}
+        try:
+            send_email_alert(
+                subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
+                message=f"""Symbol: {symbol}
 Direction: {direction}
 Entry: {entry}
 Stop: {stop}
@@ -134,10 +163,11 @@ TP: {tp}
 Leverage: {leverage}
 Confidence: {confidence:.2f}%
 Quality: {quality}/10
-News Score: {news_score}
 Capital Used: {capital_used:.2f}$
 Qty: {quantity}"""
-        )
+            )
+        except Exception as e:
+            logging.warning(f"[!] שליחת אימייל נכשלה: {e}")
 
         return {
             "status": "success",
@@ -151,7 +181,6 @@ Qty: {quantity}"""
             "side": side,
             "confidence": confidence,
             "quality_score": quality,
-            "news_score": news_score,
             "snapshot": snapshot_path,
             "trailing": use_trailing,
             "grid": use_grid,
@@ -161,6 +190,7 @@ Qty: {quantity}"""
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
