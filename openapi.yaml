@@ -85,6 +85,29 @@ paths:
         "500":
           description: "שגיאת שרת"
 
+  /execute-trade:
+    post:
+      tags: [Trades]
+      summary: "ביצוע טרייד בפועל"
+      operationId: executeTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradeRequest"
+      responses:
+        "200":
+          description: "פרטי טרייד שבוצע"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeResponse"
+        "400":
+          description: "בקשה לא תקינה"
+        "500":
+          description: "שגיאת שרת"
+
 components:
   schemas:
     ScanSymbol:
@@ -154,6 +177,56 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ScanSymbol"
+
+    TradeRequest:
+      type: object
+      required:
+        - symbol
+        - entry
+        - stop
+        - tp
+        - direction
+        - leverage
+        - budget
+      properties:
+        symbol:
+          type: string
+        entry:
+          type: number
+        stop:
+          type: number
+        tp:
+          type: number
+        direction:
+          type: string
+          enum: [LONG, SHORT]
+        leverage:
+          type: integer
+        budget:
+          type: number
+
+    TradeResponse:
+      type: object
+      properties:
+        order_id:
+          type: string
+        status:
+          type: string
+        filled_price:
+          type: number
+        executed_qty:
+          type: number
+        sl_order_id:
+          type: string
+        tp_order_id:
+          type: string
+        pnl:
+          type: number
+        snapshot_url:
+          type: string
+        saved:
+          type: boolean
+
 
 
 
