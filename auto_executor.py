@@ -1,25 +1,26 @@
-# ===== קובץ: auto_executor.py =====
+# ===== auto_executor.py =====
 
 import asyncio
 import os
 import logging
+import random
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade, get_open_trades, save_scanned_trade
 from utils.quality_score import compute_quality_score
 from snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
-from scanner_utils import scan_all, get_symbols
+from utils.scanner_utils import scan_all, get_symbols  # כאן הייבוא הנכון
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.watchlist_utils import add_to_watchlist
-import random
 
+# קביעת קבועים מה־env
 START_MIN_QUALITY = int(os.getenv("MIN_QUALITY_SCORE", 7))
 MIN_MIN_QUALITY = 4
 MAX_MIN_QUALITY = 10
 SCAN_DELAY = int(os.getenv("SCAN_INTERVAL", 7))
-MIN_VOLUME = 1_000_000
+MIN_VOLUME = int(os.getenv("MIN_VOLUME", 1_000_000))
 ROTATE_SYMBOLS = True
-TOP_SYMBOLS = 60
+TOP_SYMBOLS = int(os.getenv("TOP_SYMBOLS", 60))
 VIP_WATCHLIST_FRAMES = 2
 TRENDING_ONLY = os.getenv("TRENDING_ONLY", "false").lower() == "true"
 
@@ -35,13 +36,16 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
 
     fail_count = 0
     min_quality_cur = min_quality
-    symbols_rotation = []
 
     while True:
         try:
             print(f"\n[AUTO_EXECUTOR] 🚀 סורק את שוק הפיוצ'רס... min_quality={min_quality_cur}")
             # Trending + Volume + Smart batching
-            all_symbols = get_symbols(market_type="futures", min_volume=MIN_VOLUME, trending_only=TRENDING_ONLY)
+            all_symbols = get_symbols(
+                market_type="futures",
+                min_volume=MIN_VOLUME,
+                trending_only=TRENDING_ONLY
+            )
             if ROTATE_SYMBOLS and len(all_symbols) > TOP_SYMBOLS:
                 batches = list(smart_batch(all_symbols, TOP_SYMBOLS))
                 symbols_batch = random.choice(batches)
@@ -54,7 +58,8 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
                 interval="1m",
                 limit=len(symbols_batch),
                 min_quality=min_quality_cur,
-                trending_only=TRENDING_ONLY
+                trending_only=TRENDING_ONLY,
+                min_volume=MIN_VOLUME
             )
 
             # Save all scanned trades
@@ -63,7 +68,7 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
                 t['scanned_at'] = datetime.utcnow().isoformat()
                 save_scanned_trade(t)
 
-            # Dynamic quality
+            # Dynamic quality (אם אין מספיק — מוריד סף; אם יש הרבה — מעלה)
             if not trades or len(trades) == 0:
                 fail_count += 1
                 if fail_count >= 2 and min_quality_cur > MIN_MIN_QUALITY:
@@ -183,6 +188,7 @@ def stop_executor_loop():
 
 def is_executor_running() -> bool:
     return _executor_task is not None and not _executor_task.done()
+
 
 
 
