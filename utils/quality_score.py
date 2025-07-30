@@ -9,7 +9,6 @@ def compute_quality_score(df, verbose=False) -> float:
     מחשב ציון איכות לטרייד (0–10) לפי אינדיקטורים טכניים.
     """
     try:
-        # תמיכה גם אם df הוא שורת DataFrame או Series
         last = df.iloc[-1] if isinstance(df, pd.DataFrame) else df
         if not hasattr(last, "get"):
             raise TypeError("שורת הנתונים לא כוללת מתודת get – סוג שגוי")
@@ -91,6 +90,7 @@ def compute_quality_score(df, verbose=False) -> float:
     except Exception as e:
         logging.error(f"[quality_score] שגיאה: {e}")
         return 0.0
+
 
 
 
