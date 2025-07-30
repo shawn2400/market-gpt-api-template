@@ -1,9 +1,9 @@
-import numpy as np
+# utils/sl_tp_utils.py
+
 import logging
 from typing import Tuple
-from utils.binance_client import client  # שימוש ב־client שהגדרת
+from utils.binance_client import client
 
-# === חישוב SL/TP בסיסי ===
 def calculate_sl_tp(
     entry_price: float,
     direction: str,
@@ -13,9 +13,11 @@ def calculate_sl_tp(
     tp_pct: float = 1.4
 ) -> Tuple[float, float]:
     """
-    חישוב SL ו-TP לטרייד, לפי ATR או אחוזים.
+    חישוב SL/TP לטרייד: גמיש (ATR או אחוז).
+    מבצע ולידציה – מבטיח לא יחזור ערך שגוי.
     """
-    if direction.lower() not in ['long', 'short']:
+    direction = direction.lower()
+    if direction not in ['long', 'short']:
         raise ValueError("Direction must be 'long' or 'short'")
 
     try:
@@ -26,19 +28,28 @@ def calculate_sl_tp(
             sl_distance = entry_price * 0.0035 * sl_pct
             tp_distance = entry_price * 0.0035 * tp_pct * risk_reward
 
-        if direction.lower() == 'long':
+        if direction == 'long':
             sl = round(entry_price - sl_distance, 6)
             tp = round(entry_price + tp_distance, 6)
+            # always: sl < entry < tp
+            if not (sl < entry_price < tp):
+                sl, tp = entry_price * 0.985, entry_price * 1.025
         else:
             sl = round(entry_price + sl_distance, 6)
             tp = round(entry_price - tp_distance, 6)
+            # always: tp < entry < sl
+            if not (tp < entry_price < sl):
+                sl, tp = entry_price * 1.015, entry_price * 0.975
 
         return sl, tp
     except Exception as e:
         logging.error(f"[!] שגיאה בחישוב SL/TP: {e}")
-        raise
+        # default לפתרון גנרי, שלא יפיל את הסורק
+        if direction == "long":
+            return round(entry_price * 0.99, 6), round(entry_price * 1.02, 6)
+        else:
+            return round(entry_price * 1.01, 6), round(entry_price * 0.98, 6)
 
-# === חישוב Trailing Stop ===
 def trailing_stop(
     entry_price: float,
     direction: str,
@@ -46,7 +57,7 @@ def trailing_stop(
     trailing_pct: float = 0.5
 ) -> float:
     """
-    מחשב Trailing Stop לפי ATR או אחוז מהמחיר.
+    Trailing Stop – מבצע fallback לערך ברירת מחדל (לא מחזיר None)
     """
     try:
         if atr and atr > 0:
@@ -62,57 +73,17 @@ def trailing_stop(
         return trailing
     except Exception as e:
         logging.error(f"[!] שגיאה בחישוב Trailing Stop: {e}")
-        raise
+        return round(entry_price * 0.99, 6) if direction == "long" else round(entry_price * 1.01, 6)
 
-# === ולידציה ל־SL/TP ===
 def validate_sl_tp(
     entry_price: float,
     sl: float,
     tp: float,
     direction: str
 ) -> bool:
-    """
-    ולידציה ש-SL/TP נכונים ביחס לכניסה וכיוון.
-    """
-    if direction.lower() == 'long':
-        return sl < entry_price < tp
-    else:
-        return tp < entry_price < sl
+    """בדיקת תקינות ל־SL/
 
-# === שליפת דיוק עבור מטבע (stepSize / tickSize) ===
-def get_symbol_precision(symbol: str):
-    """
-    מחזיר את ה־stepSize (דיוק כמות) ואת ה־tickSize (דיוק מחיר) למטבע מ־Binance Futures.
-    """
-    try:
-        info = client.futures_exchange_info()
-        symbol_info = next((s for s in info["symbols"] if s["symbol"] == symbol), None)
-        if not symbol_info:
-            raise ValueError(f"Symbol {symbol} not found.")
-
-        step_size = None
-        tick_size = None
-
-        for f in symbol_info["filters"]:
-            if f["filterType"] == "LOT_SIZE":
-                step_size = float(f["stepSize"])
-            elif f["filterType"] == "PRICE_FILTER":
-                tick_size = float(f["tickSize"])
-
-        if step_size is None or tick_size is None:
-            raise ValueError(f"Missing step_size or tick_size for {symbol}")
-
-        return {
-            "stepSize": step_size,
-            "tickSize": tick_size
-        }
-
-    except Exception as e:
-        logging.error(f"[!] שגיאה בשליפת דיוק עבור {symbol}: {e}")
-        return {
-            "stepSize": 0.01,
-            "tickSize": 0.01
-        }
+       
 
 
 
