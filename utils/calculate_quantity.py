@@ -1,5 +1,3 @@
-# utils/calculate_quantity.py
-
 import logging
 from math import floor
 from utils.binance_client import client
