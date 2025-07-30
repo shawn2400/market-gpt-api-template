@@ -37,32 +37,85 @@ paths:
                   message:
                     type: string
 
+  /scan:
+    get:
+      tags: [Trades]
+      summary: "סריקה טכנית חיה לפי Binance Futures/Spot"
+      operationId: scanMarket
+      parameters:
+        - name: min_quality
+          in: query
+          schema:
+            type: integer
+          description: "ציון איכות מינימלי (0–7)"
+        - name: interval
+          in: query
+          schema:
+            type: string
+          description: "טיימפריים לניתוח (כגון 1m, 5m, 15m)"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+          description: "מספר מטבעות לבדיקה"
+        - name: min_volume
+          in: query
+          schema:
+            type: integer
+          description: "נפח מינימלי"
+        - name: trending_only
+          in: query
+          schema:
+            type: boolean
+          description: "Trending בלבד"
+      responses:
+        "200":
+          description: "רשימת סמלים עם ניתוחים טכניים"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ScanSymbol"
+        "500":
+          description: "שגיאת שרת"
+
   /scan/multi:
     get:
       tags: [Trades]
-      summary: "סריקת Multi-TF עם GPT"
+      summary: "סריקת שווקים ב-Multi-TF עם AI"
       operationId: multiTFscan
       parameters:
         - name: min_quality
           in: query
           schema:
             type: integer
+          description: "סף איכות"
         - name: top
           in: query
           schema:
             type: integer
+          description: "מספר תוצאות להחזרה"
         - name: frames
           in: query
           schema:
             type: string
+          description: "טיימפריימים (comma-separated)"
         - name: markets
           in: query
           schema:
             type: string
+          description: "שווקים (comma-separated: futures,spot)"
         - name: trending_only
           in: query
           schema:
             type: boolean
+          description: "Trending בלבד"
       responses:
         "200":
           description: "תוצאות סריקה Multi-TF"
@@ -76,14 +129,14 @@ paths:
                   results:
                     type: array
                     items:
-                      $ref: "#/components/schemas/MultiTFResult"
+                      $ref: "#/components/schemas/ScanSymbol"
         "500":
           description: "שגיאת שרת"
 
   /execute-trade:
     post:
       tags: [Trades]
-      summary: "ביצוע טרייד בפועל"
+      summary: "ביצוע טרייד בפועל (Futures/Spot/Grid)"
       operationId: executeTrade
       requestBody:
         required: true
@@ -93,16 +146,188 @@ paths:
               $ref: "#/components/schemas/TradeRequest"
       responses:
         "200":
-          description: "פרטי טרייד שבוצע"
+          description: "פרטי הטרייד"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TradeResponse"
         "400":
-          description: "בקשה לא תקינה"
+          description: "שגיאה בבקשה"
         "500":
           description: "שגיאת שרת"
 
+  /calculate-quantity:
+    post:
+      tags: [Trades]
+      summary: "חישוב כמות לפי תקציב ומינוף"
+      operationId: calculateQuantity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuantityRequest"
+      responses:
+        "200":
+          description: "כמות מחושבת"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quantity:
+                    type: number
+        "400":
+          description: "שגיאת חישוב כמות"
+
+  /sl_tp:
+    post:
+      tags: [Trades]
+      summary: "חישוב SL ו-TP חכם"
+      operationId: calculateSlTp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SLTPRequest"
+      responses:
+        "200":
+          description: "תוצאת SL/TP"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sl:
+                    type: number
+                  tp:
+                    type: number
+        "500":
+          description: "שגיאה פנימית"
+
+  /backtest:
+    post:
+      tags: [Trades]
+      summary: "הרצת סימולציית Backtest"
+      operationId: runBacktest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BacktestRequest"
+      responses:
+        "200":
+          description: "תוצאות הסימולציה"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  interval:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BacktestResult"
+                  success_count:
+                    type: integer
+                  total_trades:
+                    type: integer
+                  avg_quality:
+                    type: number
+        "400":
+          description: "חוסר נתונים"
+        "500":
+          description: "שגיאה כללית"
+
+  /ai-analyze:
+    post:
+      tags: [AI]
+      summary: "ניתוח שוק בעזרת GPT"
+      operationId: aiAnalysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AIAnalysisRequest"
+      responses:
+        "200":
+          description: "תוצאה מ-AI"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+                  score:
+                    type: number
+
+  /news:
+    get:
+      tags: [News]
+      summary: "שליפת חדשות קריפטו"
+      operationId: fetchCryptoNews
+      responses:
+        "200":
+          description: "רשימת חדשות"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /analyze-news:
+    get:
+      tags: [News]
+      summary: "ניתוח סנטימנט חדשות"
+      operationId: analyzeNewsImpact
+      responses:
+        "200":
+          description: "תוצאת ניתוח סנטימנט"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /daily-report:
+    get:
+      tags: [Reports]
+      summary: "דוח יומי כולל base64 PDF"
+      operationId: generateDailyReport
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+          description: "תאריך סינון (YYYY-MM-DD)"
+      responses:
+        "200":
+          description: "דוח יומי"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  base64_pdf:
+                    type: string
+                  summary:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DailySummary"
+        "500":
+          description: "שגיאת שרת"
 components:
   schemas:
     ScanSymbol:
@@ -149,30 +374,6 @@ components:
         quality_score:
           type: integer
 
-    MultiTFResult:
-      type: object
-      properties:
-        symbol:
-          type: string
-        confluence:
-          type: integer
-        main_direction:
-          type: string
-        avg_quality:
-          type: number
-        frames:
-          type: array
-          items:
-            type: string
-        ai_opinion:
-          type: string
-        ai_score:
-          type: number
-        details:
-          type: array
-          items:
-            $ref: "#/components/schemas/ScanSymbol"
-
     TradeRequest:
       type: object
       required:
@@ -182,7 +383,6 @@ components:
         - tp
         - direction
         - leverage
-        - budget
       properties:
         symbol:
           type: string
@@ -194,33 +394,150 @@ components:
           type: number
         direction:
           type: string
-          enum: [LONG, SHORT]
+          enum:
+            - LONG
+            - SHORT
         leverage:
           type: integer
         budget:
           type: number
+        use_grid:
+          type: boolean
+        use_trailing:
+          type: boolean
+        user_id:
+          type: string
+        take_snapshot:
+          type: boolean
 
     TradeResponse:
       type: object
       properties:
-        order_id:
-          type: string
         status:
           type: string
-        filled_price:
-          type: number
-        executed_qty:
-          type: number
-        sl_order_id:
+        symbol:
           type: string
-        tp_order_id:
-          type: string
-        pnl:
+        entry:
           type: number
-        snapshot_url:
+        price_now:
+          type: number
+        quantity:
+          type: number
+        stop:
+          type: number
+        tp:
+          type: number
+        leverage:
+          type: number
+        side:
           type: string
-        saved:
+        confidence:
+          type: number
+        quality_score:
+          type: number
+        news_score:
+          type: number
+        snapshot:
+          type: string
+        trailing:
           type: boolean
+        grid:
+          type: boolean
+        message:
+          type: string
+
+    QuantityRequest:
+      type: object
+      required:
+        - symbol
+        - price
+        - leverage
+        - budget
+      properties:
+        symbol:
+          type: string
+        price:
+          type: number
+        leverage:
+          type: number
+        budget:
+          type: number
+
+    SLTPRequest:
+      type: object
+      required:
+        - df
+        - direction
+      properties:
+        df:
+          type: array
+          items:
+            type: object
+        direction:
+          type: string
+
+    BacktestRequest:
+      type: object
+      required:
+        - prices
+        - symbol
+        - interval
+      properties:
+        prices:
+          type: array
+          items:
+            type: object
+        symbol:
+          type: string
+        interval:
+          type: string
+
+    BacktestResult:
+      type: object
+      properties:
+        timestamp:
+          type: string
+        close:
+          type: number
+        signal:
+          type: string
+        quality_score:
+          type: number
+        success:
+          type: boolean
+
+    AIAnalysisRequest:
+      type: object
+      required:
+        - rsi
+        - adx
+        - trend
+        - volume
+        - pattern
+      properties:
+        rsi:
+          type: number
+        adx:
+          type: number
+        trend:
+          type: string
+        volume:
+          type: number
+        pattern:
+          type: string
+
+    DailySummary:
+      type: object
+      properties:
+        Date:
+          type: string
+        Total_PNL:
+          type: number
+        Trades:
+          type: integer
+        Success_Rate:
+          type: number
+
 
 
 
