@@ -1,193 +1,154 @@
-# ===== auto_executor.py =====
+# ===== scanner_utils.py =====
 
 import asyncio
-import os
 import logging
-import random
-from utils.get_live_price import get_price
-from utils.trade_storage import save_trade, get_open_trades, save_scanned_trade
+import os
+from utils.get_klines import get_klines
+from utils.indicators import compute_indicators
+from utils.binance_client import client
 from utils.quality_score import compute_quality_score
-from snapshot_utils import save_trade_snapshot
-from utils.pnl_tracker import update_pnl
-from utils.scanner_utils import scan_all, get_symbols  # כאן הייבוא הנכון
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.watchlist_utils import add_to_watchlist
+from utils.trending_utils import get_trending_symbols
 
-# קביעת קבועים מה־env
-START_MIN_QUALITY = int(os.getenv("MIN_QUALITY_SCORE", 7))
-MIN_MIN_QUALITY = 4
-MAX_MIN_QUALITY = 10
-SCAN_DELAY = int(os.getenv("SCAN_INTERVAL", 7))
-MIN_VOLUME = int(os.getenv("MIN_VOLUME", 1_000_000))
-ROTATE_SYMBOLS = True
-TOP_SYMBOLS = int(os.getenv("TOP_SYMBOLS", 60))
-VIP_WATCHLIST_FRAMES = 2
-TRENDING_ONLY = os.getenv("TRENDING_ONLY", "false").lower() == "true"
+semaphore = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_SCANS", 15)))
 
-def smart_batch(symbols, batch_size):
-    random.shuffle(symbols)
-    for i in range(0, len(symbols), batch_size):
-        yield symbols[i:i+batch_size]
+def get_symbols(
+    market_type="futures",
+    min_volume=1_000_000,
+    trending_only=False,
+    max_symbols=500
+):
+    """
+    מחזיר רשימת סמלים פעילים (TRADING) לפי שוק, Trending, ו־Volume.
+    """
+    try:
+        if market_type == "futures":
+            info = client.futures_exchange_info()
+        elif market_type == "spot":
+            info = client.get_exchange_info()
+        else:
+            raise ValueError("market_type must be 'futures' or 'spot'")
 
-_executor_task = None
+        all_symbols = [
+            x['symbol'] for x in info['symbols']
+            if x['quoteAsset'] == 'USDT' and x['status'] == 'TRADING'
+        ]
 
-async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=START_MIN_QUALITY, max_budget=100):
-    global _executor_task
+        # Trending Only
+        if trending_only:
+            trending = set(get_trending_symbols())
+            symbols = [s for s in all_symbols if s in trending]
+        else:
+            symbols = all_symbols
 
-    fail_count = 0
-    min_quality_cur = min_quality
-
-    while True:
-        try:
-            print(f"\n[AUTO_EXECUTOR] 🚀 סורק את שוק הפיוצ'רס... min_quality={min_quality_cur}")
-            # Trending + Volume + Smart batching
-            all_symbols = get_symbols(
-                market_type="futures",
-                min_volume=MIN_VOLUME,
-                trending_only=TRENDING_ONLY
-            )
-            if ROTATE_SYMBOLS and len(all_symbols) > TOP_SYMBOLS:
-                batches = list(smart_batch(all_symbols, TOP_SYMBOLS))
-                symbols_batch = random.choice(batches)
-            else:
-                symbols_batch = all_symbols[:TOP_SYMBOLS]
-
-            # Scan batch
-            trades = await scan_all(
-                market_type="futures",
-                interval="1m",
-                limit=len(symbols_batch),
-                min_quality=min_quality_cur,
-                trending_only=TRENDING_ONLY,
-                min_volume=MIN_VOLUME
-            )
-
-            # Save all scanned trades
-            for t in trades:
-                from datetime import datetime
-                t['scanned_at'] = datetime.utcnow().isoformat()
-                save_scanned_trade(t)
-
-            # Dynamic quality (אם אין מספיק — מוריד סף; אם יש הרבה — מעלה)
-            if not trades or len(trades) == 0:
-                fail_count += 1
-                if fail_count >= 2 and min_quality_cur > MIN_MIN_QUALITY:
-                    min_quality_cur -= 1
-                    print(f"[DYNAMIC QS] אין טריידים — מוריד סף איכות ל־{min_quality_cur}")
-                    fail_count = 0
-                await asyncio.sleep(delay)
-                if once:
-                    break
+        # Volume filter
+        filtered = []
+        for s in symbols[:max_symbols]:
+            try:
+                ticker = client.futures_ticker(symbol=s) if market_type == "futures" else client.get_ticker(symbol=s)
+                vol = float(ticker.get('quoteVolume', 0))
+                if vol >= min_volume:
+                    filtered.append(s)
+            except Exception:
                 continue
-            else:
-                if len(trades) > 5 and min_quality_cur < MAX_MIN_QUALITY:
-                    min_quality_cur += 1
-                    print(f"[DYNAMIC QS] יותר מדי טריידים — מעלה סף איכות ל־{min_quality_cur}")
-                fail_count = 0
+        return filtered
+    except Exception as e:
+        logging.error(f"[!] שגיאה בשליפת סמלים ({market_type}): {e}")
+        # ברירת מחדל ל־TOP4 כדי שהמערכת לא תקרוס
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 
-            # Pick the best trades only (TOP QS + Confluence)
-            trades = sorted(trades, key=lambda x: (x.get("quality_score", 0), x.get("volume", 0)), reverse=True)
-            for trade in trades:
-                symbol = trade["symbol"]
-                direction = trade["direction"]
-                # Double position prevention
-                open_trades = get_open_trades()
-                already_open = any(
-                    t["symbol"] == symbol and t["direction"] == direction and t.get("status") == "OPEN"
-                    for t in open_trades
-                )
-                if already_open:
-                    print(f"[SKIP] פוזיציה פתוחה קיימת ל־{symbol} {direction} — מדלג")
-                    continue
-                # VIP WATCHLIST — Confluence
-                if "frames" in trade and len(trade["frames"]) >= VIP_WATCHLIST_FRAMES:
-                    add_to_watchlist(
-                        symbol, direction, trade.get("quality_score", 0),
-                        reason=f"Confluence: {trade.get('frames', [])}"
-                    )
-                leverage = 10
-                entry = float(await get_price(symbol))
-                sltp = predict_optimal_sl_tp(symbol, entry, direction)
-                stop = sltp["sl"]
-                tp = sltp["tp"]
-                qty = round((max_budget * leverage) / entry, 3)
-                print(f"[AUTO_EXECUTOR] 📊 טרייד: {symbol} | {direction} @ {entry} | SL={stop} TP={tp} Qty={qty} QS={trade.get('quality_score', 0)}")
-                if debug:
-                    print("[DEBUG] מצב בדיקה בלבד — לא נשלחת פקודה ל-Binance.")
-                    continue
-                from utils.binance_trader import place_futures_order
-                order = await place_futures_order(
-                    symbol=symbol,
-                    side="BUY" if direction == "LONG" else "SELL",
-                    quantity=qty,
-                    entry_price=entry,
-                    stop_loss=stop,
-                    take_profit=tp,
-                    leverage=leverage
-                )
-                from datetime import datetime
-                timestamp = str(order.get("timestamp", int(asyncio.get_running_loop().time())))
-                pnl = float(order.get("pnl", 0))
-                snapshot_path = save_trade_snapshot({
-                    "symbol": symbol,
-                    "entry": entry,
-                    "stop": stop,
-                    "tp": tp,
-                    "direction": direction,
-                    "price_now": entry,
-                    "budget": max_budget,
-                    "leverage": leverage,
-                    "quality_score": trade.get("quality_score", 0)
-                })
-                save_trade({
-                    "symbol": symbol,
-                    "entry": entry,
-                    "stop": stop,
-                    "tp": tp,
-                    "direction": direction,
-                    "quantity": qty,
-                    "timestamp": timestamp,
-                    "quality_score": trade.get("quality_score", 0),
-                    "snapshot": snapshot_path
-                })
-                update_pnl(symbol, direction, entry, entry, leverage, qty)
-                print(f"[AUTO_EXECUTOR] ✅ טרייד בוצע ונשמר: {symbol} {direction} @ {entry}")
-                break
+async def safe_get_klines(symbol, interval="1m", limit=50, market_type="futures"):
+    try:
+        df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
+        if df is None or df.empty:
+            logging.warning(f"[{symbol}] אין נתוני נרות (empty).")
+            return None
+        return df
+    except Exception as e:
+        logging.warning(f"[{symbol}] שגיאה בשליפת נרות: {type(e).__name__} – {e}")
+        return None
 
-        except Exception as e:
-            print(f"❌ [AUTO_EXECUTOR] שגיאה כללית: {type(e).__name__} – {e}")
+async def analyze_symbol(
+    symbol: str,
+    market_type: str = "futures",
+    interval: str = "1m",
+    limit: int = 50,
+    min_volume: int = 1_000_000,
+    trending_only: bool = False,
+    with_ai: bool = True,
+    frames: list = None
+):
+    async with semaphore:
+        await asyncio.sleep(0.2)
+        df = await safe_get_klines(symbol, interval, limit, market_type)
+        if df is None or len(df) < 30:
+            logging.warning(f"[{symbol}] אין מספיק נתונים ({market_type}) לניתוח.")
+            return None
+        df = compute_indicators(df)
+        if df.empty:
+            logging.warning(f"[{symbol}] אין נתונים לאחר חישוב אינדיקטורים.")
+            return None
+        last = df.iloc[-1]
+        direction = (
+            "LONG" if last["rsi"] < 35 and last["adx"] > 20 and last["close"] > last["ema_21"]
+            else "SHORT" if last["rsi"] > 70 and last["adx"] > 20 and last["close"] < last["ema_21"]
+            else "NEUTRAL"
+        )
+        quality_score = compute_quality_score(df)
+        if direction == "NEUTRAL":
+            return None
+        sltp = predict_optimal_sl_tp(symbol, last["close"], direction) if with_ai else {"sl": None, "tp": None}
+        out = {
+            "symbol": symbol,
+            "market_type": market_type,
+            "close": float(last["close"]),
+            "volume": float(last["volume"]),
+            "direction": direction,
+            "quality_score": int(quality_score),
+            "sl": sltp.get("sl"),
+            "tp": sltp.get("tp"),
+            "frames": frames or [interval]
+        }
+        return out
 
-        if once:
-            print("[AUTO_EXECUTOR] מצב once — יציאה.")
-            break
+async def scan_all(
+    market_type: str = "futures",
+    interval: str = "1m",
+    limit: int = 50,
+    min_quality: int = 5,
+    trending_only: bool = False,
+    min_volume: int = 1_000_000,
+    with_ai: bool = True,
+    max_symbols: int = 500
+):
+    symbols = get_symbols(
+        market_type=market_type,
+        min_volume=min_volume,
+        trending_only=trending_only,
+        max_symbols=max_symbols
+    )[:limit]
 
-        print(f"[AUTO_EXECUTOR] ⏳ ממתין {delay} שניות לסריקה נוספת...")
-        await asyncio.sleep(delay)
+    tasks = [
+        analyze_symbol(
+            symbol=s,
+            market_type=market_type,
+            interval=interval,
+            limit=limit,
+            min_volume=min_volume,
+            trending_only=trending_only,
+            with_ai=with_ai,
+            frames=[interval]
+        ) for s in symbols
+    ]
+    results = await asyncio.gather(*tasks)
+    filtered = [
+        r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
+    ]
+    filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
+    return filtered[:10]  # תחזיר TOP 10
 
-def start_executor_loop(debug=False, delay=SCAN_DELAY, min_quality=START_MIN_QUALITY, max_budget=100):
-    global _executor_task
-    if _executor_task is None or _executor_task.done():
-        _executor_task = asyncio.create_task(run_executor(
-            debug=debug,
-            once=False,
-            delay=delay,
-            min_quality=min_quality,
-            max_budget=max_budget
-        ))
-        print("[AUTO_EXECUTOR] ✅ הופעלה לולאה חיה")
-    else:
-        print("[AUTO_EXECUTOR] כבר רץ")
+# אפשר להוסיף כאן גם scan_multi_tf לסריקת Multi Timeframes אם תרצה.
 
-def stop_executor_loop():
-    global _executor_task
-    if _executor_task and not _executor_task.done():
-        _executor_task.cancel()
-        print("[AUTO_EXECUTOR] ❌ הופסקה לולאת הסריקה")
-    else:
-        print("[AUTO_EXECUTOR] לא פעיל כרגע")
-
-def is_executor_running() -> bool:
-    return _executor_task is not None and not _executor_task.done()
 
 
 
