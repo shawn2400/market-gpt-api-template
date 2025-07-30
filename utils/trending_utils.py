@@ -66,6 +66,12 @@ def get_trending_symbols(
     top: Optional[int] = None,
     min_change_percent: Optional[float] = None
 ) -> List[str]:
+    if not trending_source:
+        logging.warning("⚠️ trending_source ריק – שימוש בברירת מחדל 'coingecko'")
+        trending_source = "coingecko"
+    if not market_type:
+        market_type = "spot"
+
     trending_source = trending_source.lower()
     market_type = market_type.lower()
     base_market = "futures" if market_type == "grid" else market_type
@@ -161,6 +167,7 @@ def get_combined_trending_symbols(
         )
         combined.extend(symbols)
     return sorted(list(set(combined)))
+
 
 
 
