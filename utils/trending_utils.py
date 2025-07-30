@@ -15,13 +15,13 @@ LUNARCRUSH_TRENDING_API = "https://api.lunarcrush.com/v2?data=assets&sort=galaxy
 LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY")
 
 # --- שמירת cache (10 דקות)
-_cache = {}
+_cache: Dict[str, tuple[List[str], float]] = {}
 CACHE_TTL = 600  # שניות
 
-def _cached(key):
-    return _cache.get(key, (None, 0))
+def _cached(key: str) -> tuple[List[str], float]:
+    return _cache.get(key, ([], 0))
 
-def _store_cache(key, value):
+def _store_cache(key: str, value: List[str]) -> None:
     _cache[key] = (value, time.time())
 
 # --- מיפוי חלקי לשמות סמלים פופולריים כולל מידע על שוק
@@ -66,6 +66,7 @@ def get_trending_symbols(
     top: Optional[int] = None,
     min_change_percent: Optional[float] = None
 ) -> List[str]:
+    # ברירות מחדל
     if not trending_source:
         logging.warning("⚠️ trending_source ריק – שימוש בברירת מחדל 'coingecko'")
         trending_source = "coingecko"
@@ -77,9 +78,9 @@ def get_trending_symbols(
     base_market = "futures" if market_type == "grid" else market_type
 
     cache_key = f"{trending_source}:{base_market}:{min_volume}:{top}:{min_change_percent}"
-    cached, timestamp = _cached(cache_key)
-    if cached and (time.time() - timestamp < CACHE_TTL):
-        return cached
+    symbols, timestamp = _cached(cache_key)
+    if symbols and (time.time() - timestamp < CACHE_TTL):
+        return symbols
 
     try:
         symbols = []
@@ -112,12 +113,10 @@ def get_trending_symbols(
             data = response.json()
             articles = data.get("data", {}).get("articles", [])
             for article in articles:
-                title = article.get("title", "")
-                for key in symbol_mapping:
-                    if key in title.lower():
-                        mapped = symbol_mapping[key]
-                        if mapped["market"] == base_market:
-                            symbols.append(mapped["symbol"])
+                title = article.get("title", "").lower()
+                for key, info in symbol_mapping.items():
+                    if key in title and info.get("market") == base_market:
+                        symbols.append(info["symbol"])
 
         elif trending_source == "lunarcrush":
             if not LUNARCRUSH_API_KEY:
@@ -134,14 +133,18 @@ def get_trending_symbols(
                 if mapped and mapped.get("market") == base_market:
                     symbols.append(mapped["symbol"])
 
+        # סינון לפי נפח אם זמין
         if min_volume is not None and volume_lookup is not None:
             symbols = [s for s in symbols if volume_lookup.get(s, 0) >= min_volume]
 
+        # הגבלת מספר התוצאות
         if top is not None and len(symbols) > top:
             symbols = symbols[:top]
 
-        _store_cache(cache_key, symbols or ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
-        return symbols or ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+        # אחסון cache
+        result = symbols or ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+        _store_cache(cache_key, result)
+        return result
 
     except Exception as e:
         logging.error(f"שגיאה בשליפת טרנדים מ-{trending_source}: {type(e).__name__} – {e}")
@@ -155,18 +158,20 @@ def get_combined_trending_symbols(
     top: Optional[int] = None,
     min_change_percent: Optional[float] = None
 ) -> List[str]:
-    combined = []
+    combined: List[str] = []
     for source in sources:
-        symbols = get_trending_symbols(
-            trending_source=source,
-            market_type=market_type,
-            min_volume=min_volume,
-            volume_lookup=volume_lookup,
-            top=top,
-            min_change_percent=min_change_percent
+        combined.extend(
+            get_trending_symbols(
+                trending_source=source,
+                market_type=market_type,
+                min_volume=min_volume,
+                volume_lookup=volume_lookup,
+                top=top,
+                min_change_percent=min_change_percent
+            )
         )
-        combined.extend(symbols)
     return sorted(list(set(combined)))
+
 
 
 
