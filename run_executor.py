@@ -3,7 +3,7 @@ import argparse
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
-from utils.snapshot_utils import save_trade_snapshot
+from snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from scanner_utils import scan_all_futures
 from utils.ai_analysis import predict_optimal_sl_tp
@@ -28,16 +28,16 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
             trade = filtered[0]
             symbol = trade["symbol"]
             direction = trade["signal"]
+            quality_score = trade.get("quality_score", 0)
             leverage = 10
             entry = float(await get_price(symbol))
 
-            # חיזוי SL/TP לפי AI
             sltp = predict_optimal_sl_tp(symbol, entry, direction)
             stop = sltp["sl"]
             tp = sltp["tp"]
             qty = round((max_budget * leverage) / entry, 3)
 
-            print(f"[AUTO_EXECUTOR] 📊 טרייד: {symbol} | {direction} @ {entry} | SL={stop} TP={tp} Qty={qty} QS={trade['quality_score']}")
+            print(f"[AUTO_EXECUTOR] 📊 טרייד: {symbol} | {direction} @ {entry} | SL={stop} TP={tp} Qty={qty} QS={quality_score}")
 
             if debug:
                 print("[DEBUG] מצב בדיקה פעיל - לא נשלחת פקודה ל-Binance.")
@@ -55,7 +55,6 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                 timestamp = str(order.get("timestamp", int(asyncio.get_running_loop().time())))
                 pnl = float(order.get("pnl", 0))
 
-                # יצירת snapshot
                 snapshot_path = save_trade_snapshot({
                     "symbol": symbol,
                     "entry": entry,
@@ -64,10 +63,10 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     "direction": direction,
                     "price_now": entry,
                     "budget": max_budget,
-                    "leverage": leverage
+                    "leverage": leverage,
+                    "quality_score": quality_score
                 })
 
-                # שמירת הטרייד
                 save_trade({
                     "symbol": symbol,
                     "entry": entry,
@@ -76,17 +75,16 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     "direction": direction,
                     "quantity": qty,
                     "timestamp": timestamp,
-                    "quality_score": trade.get("quality_score", 0),
+                    "quality_score": quality_score,
                     "snapshot": snapshot_path
                 })
 
-                # עדכון PNL
-                update_pnl(symbol, pnl, trade.get("quality_score", 0))
+                update_pnl(symbol, direction, entry, entry, leverage, qty)
 
                 print(f"[AUTO_EXECUTOR] ✅ טרייד בוצע ונשמר: {symbol} {direction} @ {entry}")
 
         except Exception as e:
-            print(f"❌ [AUTO_EXECUTOR] שגיאה כללית: {e}")
+            print(f"❌ [AUTO_EXECUTOR] שגיאה כללית: {type(e).__name__} – {e}")
 
         if once:
             print("[AUTO_EXECUTOR] 🛑 הרצה בודדת הושלמה. יציאה.")
