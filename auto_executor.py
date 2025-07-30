@@ -87,6 +87,44 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
 
                 # אם רוצים — אפשר לעצור אחרי אחד, או להמשיך לסרוק עוד טריידים
                 if once:
+                    print("[AUTO_EXECUTOR] 🚭 מצב once – סיום.")
+                    return
+
+            print(f"[AUTO_EXECUTOR] ⏳ ממתין {delay} שניות לסריקה נוספת...")
+            await asyncio.sleep(delay)
+
+        except Exception as e:
+            print(f"❌ [AUTO_EXECUTOR] שגיאה כללית: {type(e).__name__} – {e}")
+            if once:
+                break
+            await asyncio.sleep(delay)
+
+def start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100, market_type="futures"):
+    global _executor_task
+    if _executor_task is None or _executor_task.done():
+        _executor_task = asyncio.create_task(run_executor(
+            debug=debug,
+            once=False,
+            delay=delay,
+            min_quality=min_quality,
+            max_budget=max_budget,
+            market_type=market_type
+        ))
+        print("[AUTO_EXECUTOR] ✅ הופעלה לולאה חיה")
+    else:
+        print("[AUTO_EXECUTOR] כבר רץ")
+
+def stop_executor_loop():
+    global _executor_task
+    if _executor_task and not _executor_task.done():
+        _executor_task.cancel()
+        print("[AUTO_EXECUTOR] ❌ הופסקה לולאת הסריקה")
+    else:
+        print("[AUTO_EXECUTOR] לא פעיל כרגע")
+
+def is_executor_running() -> bool:
+    return _executor_task is not None and not _executor_task.done()
+
 
 
 
