@@ -6,16 +6,17 @@ from utils.ai_analysis import analyze_with_ai
 from utils.watchlist_utils import add_to_watchlist
 
 async def multi_tf_scan(
-    timeframes=("5m", "15m", "1h"),
+    timeframes=("1m", "3m", "5m", "15m", "1h"),
     markets=("futures", "spot"),
     min_quality=6,
-    top=10
+    top=10,
+    trending_only=False
 ):
     all_trades = []
     tasks = []
     for tf in timeframes:
         for market in markets:
-            tasks.append(scan_all(market_type=market, interval=tf, min_quality=min_quality, top=top))
+            tasks.append(scan_all(market_type=market, interval=tf, min_quality=min_quality, top=top, trending_only=trending_only))
     results = await asyncio.gather(*tasks)
     seen = set()
     merged = []
@@ -49,12 +50,13 @@ async def multi_tf_scan(
     return merged[:top]
 
 async def multi_tf_scan_with_ai(
-    timeframes=("5m", "15m", "1h"),
+    timeframes=("1m", "3m", "5m", "15m", "1h"),
     markets=("futures", "spot"),
     min_quality=6,
-    top=10
+    top=10,
+    trending_only=False
 ):
-    trades = await multi_tf_scan(timeframes=timeframes, markets=markets, min_quality=min_quality, top=top)
+    trades = await multi_tf_scan(timeframes=timeframes, markets=markets, min_quality=min_quality, top=top, trending_only=trending_only)
     filtered = []
     for t in trades:
         ai_data = {
@@ -70,4 +72,5 @@ async def multi_tf_scan_with_ai(
             t["ai_score"] = ai_res.get("score", 0.9)
             filtered.append(t)
     return filtered
+
 
