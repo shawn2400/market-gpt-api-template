@@ -1,4 +1,4 @@
-# auto_executor.py — גרסה מתוקנת מלאה עם תמיכה בלולאת Thread
+# auto_executor.py — גרסה משודרגת עם חישוב כמות מדויק + הערות
 
 import os, asyncio, random
 from datetime import datetime
@@ -11,6 +11,7 @@ from utils.pnl_tracker import update_pnl
 from utils.scanner_utils import scan_all, get_symbols
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.watchlist_utils import add_to_watchlist
+from utils.calculate_quantity import calculate_quantity  # חדש! חישוב כמות לפי מינוף/stepSize
 
 # תצורה מה־.env
 START_MIN_QUALITY = int(os.getenv("MIN_QUALITY_SCORE", 7))
@@ -85,7 +86,14 @@ async def run_executor(
 
                     price = await asyncio.to_thread(get_price, sym)
                     sltp = predict_optimal_sl_tp(sym, price, dir_)
-                    qty = round((max_budget * 10) / price, 3)
+
+                    # חישוב כמות מדויק לפי מינוף ותקציב
+                    leverage = 10
+                    qty = calculate_quantity(sym, price, leverage, max_budget)
+                    if qty == 0:
+                        print(f"[SKIP] כמות לא חוקית עבור {sym} @ {price} (max_budget={max_budget})")
+                        continue
+
                     print(f"[TRADE] {sym} {dir_}@{price} SL={sltp['sl']} TP={sltp['tp']} Q={qty}")
 
                     if not debug:
@@ -97,7 +105,7 @@ async def run_executor(
                             entry_price=price,
                             stop_loss=sltp["sl"],
                             take_profit=sltp["tp"],
-                            leverage=10
+                            leverage=leverage
                         )
                         snapshot = save_trade_snapshot({
                             "symbol": sym,
@@ -107,7 +115,7 @@ async def run_executor(
                             "direction": dir_,
                             "price_now": price,
                             "budget": max_budget,
-                            "leverage": 10,
+                            "leverage": leverage,
                             "quality_score": tr["quality_score"]
                         })
                         save_trade({
@@ -121,7 +129,7 @@ async def run_executor(
                             "quality_score": tr["quality_score"],
                             "snapshot": snapshot
                         })
-                        update_pnl(sym, dir_, price, price, 10, qty)
+                        update_pnl(sym, dir_, price, price, leverage, qty)
                         print(f"[✅ EXECUTED] {sym}")
                     break
 
@@ -155,6 +163,7 @@ def stop_executor_loop():
 
 def is_executor_running() -> bool:
     return bool(_executor_task and not _executor_task.done())
+
 
 
 
