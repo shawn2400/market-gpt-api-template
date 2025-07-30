@@ -4,9 +4,17 @@ import os
 from dotenv import load_dotenv
 import openai
 from typing import Dict, Union
+from utils.calculate_quantity import get_precision_info
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
+def round_tick(value, tick):
+    """עיגול ערך למחיר חוקי לפי tickSize (כלפי מטה)"""
+    try:
+        return round((value // tick) * tick, 6)
+    except Exception:
+        return round(value, 6)
 
 def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, float]]:
     """
@@ -55,17 +63,18 @@ def analyze_with_ai(data: Dict[str, Union[str, float]]) -> Dict[str, Union[str, 
     except Exception as e:
         return {"error": f"שגיאת GPT: {type(e).__name__} – {e}"}
 
-
 def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float = None) -> Dict[str, float]:
     """
     חיזוי SL ו־TP חכם לפי כיוון, מחיר ו־ATR אם קיים.
     מבצע ולידציה כפולה לערכים סופיים!
+    מעגל ל־tickSize החוקי של הסימבול.
     """
     try:
         direction = direction.upper()
         if direction not in ("LONG", "SHORT"):
             raise ValueError("כיוון לא חוקי (רק LONG או SHORT)")
 
+        # 1. חישוב ראשוני
         if atr and atr > 0:
             sl = price - atr if direction == "LONG" else price + atr
             tp = price + atr * 1.5 if direction == "LONG" else price - atr * 1.5
@@ -74,26 +83,32 @@ def predict_optimal_sl_tp(symbol: str, price: float, direction: str, atr: float 
             sl = price * (0.99 if direction == "LONG" else 1.01)
             tp = price * (1.018 if direction == "LONG" else 0.982)
 
-        # מרווח מינימלי
+        # 2. ולידציה – מרווח מינימלי
         min_gap = price * 0.005
         if abs(tp - sl) < min_gap:
             adjust = price * 0.01
             sl = price - adjust if direction == "LONG" else price + adjust
             tp = price + adjust * 1.6 if direction == "LONG" else price - adjust * 1.6
 
-        # ולידציה סופית – לא מאפשר tp==sl==entry
+        # 3. ולידציה סופית – לא מאפשר tp==sl==entry
         if direction == "LONG" and not (sl < price < tp):
             sl, tp = price * 0.985, price * 1.025
         if direction == "SHORT" and not (tp < price < sl):
             sl, tp = price * 1.015, price * 0.975
 
+        # 4. עיגול ל־tickSize החוקי
+        tick = get_precision_info(symbol).get("tickSize", 0.01)
+        sl = round_tick(sl, tick)
+        tp = round_tick(tp, tick)
+
         return {
-            "sl": round(sl, 6),
-            "tp": round(tp, 6)
+            "sl": sl,
+            "tp": tp
         }
 
     except Exception as e:
         return {"error": f"שגיאה בחיזוי SL/TP: {type(e).__name__} – {e}"}
+
 
 
 
