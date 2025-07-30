@@ -6,11 +6,11 @@ from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
 from snapshot_utils import save_trade_snapshot  # אם הקובץ בשורש
 from utils.pnl_tracker import update_pnl
-from scanner_utils import scan_all  # אם הקובץ בשורש
+from scanner_utils import scan_all  # אם scanner_utils.py בשורש
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.binance_trader import place_futures_order
 
-_executor_task = None  # ניהול מצב הלולאה
+_executor_task = None  # מצב הלולאה
 
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100):
@@ -82,7 +82,8 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     "snapshot": snapshot_path
                 })
 
-                update_pnl(symbol, pnl, quality_score)
+                update_pnl(symbol, direction, entry, entry, leverage, qty)
+
                 print(f"[AUTO_EXECUTOR] ✅ טרייד בוצע ונשמר: {symbol} {direction} @ {entry}")
 
         except Exception as e:
@@ -124,6 +125,7 @@ def stop_executor_loop():
 
 def is_executor_running() -> bool:
     return _executor_task is not None and not _executor_task.done()
+
 
 
 
