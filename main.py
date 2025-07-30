@@ -3,9 +3,11 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import pandas as pd
 import os
+import sys
 import asyncio
 import time
 
+sys.path.append(os.path.dirname(__file__))  # מאפשר ייבוא תקין בכל מצב
 __boot_start__ = time.time()
 load_dotenv()
 
@@ -55,13 +57,11 @@ class AIAnalysisRequest(BaseModel):
     volume: float
     pattern: str
 
-
 # === Routes ===
 
 @app.get("/", operation_id="checkServerStatus")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
-
 
 @app.post("/sl_tp", operation_id="calculateSLTP")
 async def sl_tp(request: SLTPRequest):
@@ -72,7 +72,6 @@ async def sl_tp(request: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/calculate-quantity", operation_id="calculateQuantity")
 async def calc_qty(data: QuantityRequest):
     try:
@@ -82,7 +81,6 @@ async def calc_qty(data: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.get("/news", operation_id="fetchCryptoNews")
 async def news():
     try:
@@ -90,7 +88,6 @@ async def news():
         return fetch_crypto_news()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/analyze-news", operation_id="analyzeNewsImpact")
 async def analyze_news():
@@ -101,12 +98,10 @@ async def analyze_news():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/backtest", operation_id="runBacktest")
 async def backtest(request: BacktestRequest):
     try:
         from backtest_utils import run_backtest
-
         if not request.prices or len(request.prices) < 30:
             raise HTTPException(status_code=400, detail={
                 "error": "Insufficient data – at least 30 candles are required",
@@ -137,7 +132,6 @@ async def backtest(request: BacktestRequest):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
@@ -176,7 +170,6 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/scan", operation_id="scanMarket")
 async def scan(
     min_quality: int = Query(0, description="ציון איכות מינימלי"),
@@ -190,7 +183,6 @@ async def scan(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/daily-report", operation_id="generateDailyReport")
 async def daily_report():
     try:
@@ -199,7 +191,6 @@ async def daily_report():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/ai-analyze", operation_id="aiAnalysis")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
@@ -207,18 +198,15 @@ async def ai_analyze(data: AIAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/start-auto")
 def start_auto_executor():
     start_executor_loop(debug=False, delay=60, min_quality=6, max_budget=100)
     return {"status": "running"}
 
-
 @app.post("/stop-auto")
 def stop_auto_executor():
     stop_executor_loop()
     return {"status": "stopped"}
-
 
 @app.get("/status")
 def get_executor_status():
@@ -227,7 +215,6 @@ def get_executor_status():
         "executor_running": running,
         "message": "✅ פועל" if running else "🚩 לא פעיל"
     }
-
 
 @app.on_event("startup")
 async def start_background_tasks():
