@@ -1,8 +1,6 @@
-# utils/quantity_utils.py
-
 import math
 import logging
-from utils.calculate_quantity import get_precision_info
+from utils.precision_utils import get_precision_info  # כאן מתקן את הייבוא
 
 def round_step(quantity: float, step: float) -> float:
     """
@@ -72,7 +70,6 @@ def apply_precision(symbol: str, quantity: float) -> float:
     except Exception as e:
         logging.error(f"[!] שגיאה ב־apply_precision: {e}")
         return 0.0
-
 
 
 
