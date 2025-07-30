@@ -1,4 +1,4 @@
-# main.py — AlgoGPT PRO ULTRA
+# main.py — AlgoGPT PRO Ultra (גרסה 2.0.1 מתוקנת)
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -55,8 +55,7 @@ class AIAnalysisRequest(BaseModel):
     volume: float
     pattern: str
 
-# === ROUTES ===
-
+# === FastAPI setup ===
 app = FastAPI(
     title="AlgoGPT API PRO Ultra",
     description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)",
@@ -80,8 +79,7 @@ async def sl_tp(request: SLTPRequest):
 async def calc_qty(data: QuantityRequest):
     try:
         from utils.calculate_quantity import calculate_quantity
-        quantity = calculate_quantity(data.symbol, data.price, data.leverage, data.budget)
-        return {"quantity": quantity}
+        return {"quantity": calculate_quantity(data.symbol, data.price, data.leverage, data.budget)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -108,25 +106,23 @@ async def backtest(request: BacktestRequest):
         from backtest_utils import run_backtest
         if not request.prices or len(request.prices) < 30:
             raise HTTPException(status_code=400, detail={
-                "error": "Insufficient data – at least 30 candles are required",
-                "symbol": request.symbol,
-                "interval": request.interval,
-                "code": "ERR_TOO_SHORT"
+                "error":"Insufficient data – at least 30 candles are required",
+                "symbol":request.symbol, "interval":request.interval, "code":"ERR_TOO_SHORT"
             })
         df = pd.DataFrame(request.prices)
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        for c in ['open','high','low','close','volume']:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
         df.dropna(inplace=True)
         if df.empty:
             raise HTTPException(status_code=400, detail="No valid rows after cleaning")
-        results = run_backtest(df)
+        res = run_backtest(df)
         return {
-            "symbol": request.symbol,
-            "interval": request.interval,
-            "results": results.to_dict(orient="records"),
-            "success_count": int(results["success"].sum()),
-            "total_trades": len(results),
-            "avg_quality": round(results["quality_score"].mean(), 2) if not results.empty else 0
+            "symbol":request.symbol,
+            "interval":request.interval,
+            "results":res.to_dict(orient="records"),
+            "success_count":int(res["success"].sum()),
+            "total_trades":len(res),
+            "avg_quality": round(res["quality_score"].mean(),2) if not res.empty else 0
         }
     except HTTPException as he:
         raise he
@@ -138,18 +134,13 @@ async def execute_trade(data: TradeRequest):
     try:
         if data.use_grid:
             from utils.grid_utils import execute_grid
-            is_futures = (data.grid_mode or "FUTURES").upper() == "FUTURES"
+            futures = (data.grid_mode or "FUTURES").upper()=="FUTURES"
             return await asyncio.to_thread(
                 execute_grid,
-                symbol=data.symbol,
-                budget=data.budget,
-                grid_count=8,
-                grid_pct=0.5,
-                leverage=data.leverage,
-                futures=is_futures,
-                direction="BOTH",
-                tp_pct=1,
-                sl_pct=1
+                symbol=data.symbol, budget=data.budget,
+                grid_count=8, grid_pct=0.5,
+                leverage=data.leverage, futures=futures,
+                direction="BOTH", tp_pct=1, sl_pct=1
             )
         else:
             from trade_executor import execute_trade_live
@@ -170,54 +161,43 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ========= סריקה רגילה =========
 @app.get("/scan", operation_id="scanMarket")
 async def scan(
-    min_quality: int = Query(0, description="ציון איכות מינימלי"),
-    interval: str = Query("1m", description="טיימפריים"),
-    limit: int = Query(300, description="מספר מטבעות לבדיקה"),
-    trending_only: bool = Query(False, description="Trending בלבד"),
-    min_volume: int = Query(1000000, description="נפח מינימלי ב-USDT")
+    min_quality: int=Query(0), interval:str=Query("1m"),
+    limit:int=Query(300), trending_only:bool=Query(False),
+    min_volume:int=Query(1_000_000)
 ):
-    """
-    סריקה רגילה – סינון חכם לפי trending, volume, טיימפריים.
-    """
     try:
         from utils.scanner_utils import scan_all
-        results = await scan_all(
-            interval=interval,
-            limit=limit,
+        res = await scan_all(
+            interval=interval, limit=limit,
             min_quality=min_quality,
             trending_only=trending_only,
             min_volume=min_volume
         )
-        return {"count": len(results), "results": results}
+        return {"count":len(res), "results":res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ========= סריקה רב־טיימפריימית ו־Trending =========
 @app.get("/scan/multi", operation_id="multiTFscan")
 async def scan_multi(
-    min_quality: int = Query(6, description="סף איכות"),
-    top: int = Query(10, description="כמה טריידים להחזיר"),
-    trending_only: bool = Query(False, description="Trending בלבד"),
-    frames: str = Query("1m,3m,5m,15m,1h", description="טיימפריימים מופרדים בפסיק"),
-    markets: str = Query("futures,spot", description="שווקים: futures,spot או רק futures")
+    min_quality:int=Query(6),
+    top:int=Query(10),
+    trending_only:bool=Query(False),
+    frames:str=Query("1m,3m,5m,15m,1h"),
+    markets:str=Query("futures,spot")
 ):
-    """
-    סורק שווקים במספר טיימפריימים ושווקים, עם Trending Only ותמיכת Confluence/AI.
-    """
     try:
-        tf_list = tuple([f.strip() for f in frames.split(",")])
-        market_list = tuple([m.strip() for m in markets.split(",")])
-        results = await multi_tf_scan_with_ai(
+        tf_list = tuple(f.strip() for f in frames.split(","))
+        mkt_list = tuple(m.strip() for m in markets.split(","))
+        res = await multi_tf_scan_with_ai(
             timeframes=tf_list,
-            markets=market_list,
+            markets=mkt_list,
             min_quality=min_quality,
             top=top,
             trending_only=trending_only
         )
-        return {"count": len(results), "results": results}
+        return {"count":len(res), "results":res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -225,17 +205,15 @@ async def scan_multi(
 async def get_watchlist():
     try:
         wl = load_watchlist()
-        return {"count": len(wl), "watchlist": wl}
+        return {"count":len(wl), "watchlist":wl}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/watchlist/add", operation_id="addToWatchlist")
-async def add_watchlist_api(
-    symbol: str, direction: str, quality_score: int = 7, reason: str = "הוסף ידנית"
-):
+async def add_watchlist_api(symbol:str, direction:str, quality_score:int=7, reason:str="הוסף ידנית"):
     try:
         ok = add_to_watchlist(symbol, direction, quality_score, reason)
-        return {"status": "ok" if ok else "exists"}
+        return {"status":"ok" if ok else "exists"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -248,47 +226,45 @@ async def daily_report():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/ai-analyze", operation_id="aiAnalysis")
-async def ai_analyze(data: AIAnalysisRequest):
+async def ai_analyze(data:AIAnalysisRequest):
     try:
         return analyze_with_ai(data.dict())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/start-auto")
-def start_auto_executor():
-    start_executor_loop(debug=False, delay=7, min_quality=6, max_budget=100)
-    return {"status": "running"}
+def start_auto():
+    start_executor_loop(
+        debug=False,
+        delay=int(os.getenv("SCAN_INTERVAL",7)),
+        min_quality=int(os.getenv("MIN_QUALITY_SCORE",6)),
+        max_budget=float(os.getenv("MAX_TRADE_BUDGET",100))
+    )
+    return {"status":"running"}
 
 @app.post("/stop-auto")
-def stop_auto_executor():
+def stop_auto():
     stop_executor_loop()
-    return {"status": "stopped"}
+    return {"status":"stopped"}
 
 @app.get("/status")
-def get_executor_status():
+def status():
     running = is_executor_running()
-    return {
-        "executor_running": running,
-        "message": "✅ פועל" if running else "🚩 לא פעיל"
-    }
+    return {"executor_running":running, "message":"✅ פועל" if running else "🚩 לא פעיל"}
 
 @app.on_event("startup")
-async def start_background_tasks():
-    try:
-        auto_run = os.getenv("AUTO_RUN", "true").lower()
-        min_quality = int(os.getenv("MIN_QUALITY_SCORE", 6))
-        max_trade_budget = float(os.getenv("MAX_TRADE_BUDGET", 100))
-        delay = int(os.getenv("SCAN_INTERVAL", 7))
-        trending_only = os.getenv("TRENDING_ONLY", "false").lower() == "true"
+async def startup_event():
+    auto = os.getenv("AUTO_RUN","true").lower()=="true"
+    await asyncio.sleep(0.1)
+    if auto:
+        start_executor_loop(
+            debug=False,
+            delay=int(os.getenv("SCAN_INTERVAL",7)),
+            min_quality=int(os.getenv("MIN_QUALITY_SCORE",6)),
+            max_budget=float(os.getenv("MAX_TRADE_BUDGET",100))
+        )
+    print(f"[BOOT TIME] Server ready in {time.time()-__boot_start__:.2f} seconds")
 
-        if auto_run == "true":
-            print(f"[AUTO_EXECUTOR] Running with MIN_QUALITY_SCORE={min_quality} MAX_TRADE_BUDGET={max_trade_budget} TRENDING_ONLY={trending_only}")
-            start_executor_loop(debug=False, delay=delay, min_quality=min_quality, max_budget=max_trade_budget)
-
-        print(f"[BOOT TIME] Server ready in {time.time() - __boot_start__:.2f} seconds")
-
-    except Exception as e:
-        print(f"[ERROR on startup] Auto Executor failed: {e}")
 
 
 
