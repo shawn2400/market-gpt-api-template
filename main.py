@@ -28,12 +28,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ייבוא לפי המודולים החדשים ===
 from utils.ai_analysis import analyze_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.watchlist_utils import load_watchlist, add_to_watchlist
 
-# === מודלים ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -297,7 +295,7 @@ async def auto_grid(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === ROUTER לסריקה מרובת טיימפריימים (אם תרצה לשלב) ===
+# === ROUTER לסריקה מרובת טיימפריימים (אם תבחר לשלב בעתיד) ===
 try:
     from routes.multi_scan import router as multi_scan_router
     app.include_router(multi_scan_router)
@@ -340,9 +338,9 @@ async def start_auto():
     global _executor_thread
     if is_executor_running():
         return {"status": "already running"}
-    delay = int(os.getenv("SCAN_INTERVAL", "60"))
-    min_q = int(os.getenv("MIN_QUALITY_SCORE", "6"))
-    budget = float(os.getenv("MAX_TRADE_BUDGET", "100"))
+    delay = int(os.getenv("SCAN_INTERVAL", "10"))
+    min_q = int(os.getenv("MIN_QUALITY_SCORE", "7"))
+    budget = float(os.getenv("MAX_TRADE_BUDGET", "250"))
     _executor_thread = threading.Thread(
         target=lambda: start_executor_loop(debug=False, delay=delay, min_quality=min_q, max_budget=budget),
         daemon=True
@@ -364,9 +362,9 @@ async def executor_status():
 async def on_startup():
     print(f"[BOOT TIME] ready in {time.time() - __boot_start__:.2f}s")
     if os.getenv("AUTO_RUN", "true").lower() == "true":
-        delay = int(os.getenv("SCAN_INTERVAL", "60"))
-        min_q = int(os.getenv("MIN_QUALITY_SCORE", "6"))
-        budget = float(os.getenv("MAX_TRADE_BUDGET", "100"))
+        delay = int(os.getenv("SCAN_INTERVAL", "10"))
+        min_q = int(os.getenv("MIN_QUALITY_SCORE", "7"))
+        budget = float(os.getenv("MAX_TRADE_BUDGET", "250"))
         threading.Thread(
             target=lambda: start_executor_loop(debug=False, delay=delay, min_quality=min_q, max_budget=budget),
             daemon=True
@@ -376,6 +374,7 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "5000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
