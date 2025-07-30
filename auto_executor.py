@@ -1,7 +1,9 @@
-# auto_executor.py — מבנה נפרד, לא חוסם את event loop
+# auto_executor.py — גרסה מתוקנת מלאה עם תמיכה בלולאת Thread
 
 import os, asyncio, random
 from datetime import datetime
+from threading import Thread
+
 from utils.get_live_price import get_price
 from utils.trade_storage import save_trade, get_open_trades, save_scanned_trade
 from snapshot_utils import save_trade_snapshot
@@ -55,7 +57,6 @@ async def run_executor(
                 trending_only=TRENDING_ONLY,
                 min_volume=MIN_VOLUME
             )
-            # שמירת זמן הסריקה
             for t in trades:
                 t["scanned_at"] = datetime.utcnow().isoformat()
                 save_scanned_trade(t)
@@ -73,7 +74,7 @@ async def run_executor(
                     print(f"[DYN QS] raise threshold → {min_q}")
                 fail_count = 0
 
-                # ביצוע ה־TOP
+                # ביצוע טרייד
                 trades.sort(key=lambda x: (x["quality_score"], x["volume"]), reverse=True)
                 for tr in trades:
                     sym, dir_ = tr["symbol"], tr["direction"]
@@ -82,7 +83,6 @@ async def run_executor(
                     if len(tr.get("frames", [])) >= VIP_WATCHLIST_FRAMES:
                         add_to_watchlist(sym, dir_, tr["quality_score"], reason=f"frames:{tr['frames']}")
 
-                    # קריאה ל־get_price בסביבה אסינכרונית
                     price = await asyncio.to_thread(get_price, sym)
                     sltp = predict_optimal_sl_tp(sym, price, dir_)
                     qty = round((max_budget * 10) / price, 3)
@@ -133,22 +133,25 @@ async def run_executor(
 
         await asyncio.sleep(delay)
 
+# === START / STOP LOOP ===
+
 def start_executor_loop(debug=False, delay=SCAN_DELAY, min_quality=START_MIN_QUALITY, max_budget=100):
-    global _executor_task
-    loop = asyncio.get_event_loop()
-    if not _executor_task or _executor_task.done():
-        _executor_task = loop.create_task(run_executor(debug, False, delay, min_quality, max_budget))
-        print("[AUTO_EXECUTOR] started")
-    else:
-        print("[AUTO_EXECUTOR] already running")
+    def runner():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_executor(debug, False, delay, min_quality, max_budget))
+
+    t = Thread(target=runner, daemon=True)
+    t.start()
+    print("[AUTO_EXECUTOR] ✅ הופעלה לולאה חיה")
 
 def stop_executor_loop():
     global _executor_task
     if _executor_task and not _executor_task.done():
         _executor_task.cancel()
-        print("[AUTO_EXECUTOR] stopped")
+        print("[AUTO_EXECUTOR] ❌ הופסקה")
     else:
-        print("[AUTO_EXECUTOR] not active")
+        print("[AUTO_EXECUTOR] לא רצה")
 
 def is_executor_running() -> bool:
     return bool(_executor_task and not _executor_task.done())
