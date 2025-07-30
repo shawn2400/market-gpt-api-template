@@ -65,18 +65,6 @@ app = FastAPI(
     description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)"
 )
 
-# === פונקציה לריצה ברקע של Auto Executor ===
-_executor_thread = None
-
-def _run_executor(debug: bool, delay: int, min_quality: int, budget: float):
-    start_executor_loop(
-        debug=debug,
-        once=False,
-        delay=delay,
-        min_quality=min_quality,
-        budget=budget,
-    )
-
 # === Health check ===
 @app.get("/", operation_id="checkServerStatus")
 async def home():
@@ -269,7 +257,7 @@ async def ai_analyze(data: AIAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Auto-executor control endpoints ---
+# === Auto‑executor control endpoints ===
 @app.post("/start-auto", operation_id="startAuto")
 async def start_auto():
     global _executor_thread
@@ -279,8 +267,7 @@ async def start_auto():
     min_q = int(os.getenv("MIN_QUALITY_SCORE", "6"))
     budget = float(os.getenv("MAX_TRADE_BUDGET", "100"))
     _executor_thread = threading.Thread(
-        target=_run_executor,
-        kwargs={"debug": False, "delay": delay, "min_quality": min_q, "budget": budget},
+        target=lambda: start_executor_loop(debug=False, delay=delay, min_quality=min_q, max_budget=budget),
         daemon=True
     )
     _executor_thread.start()
@@ -296,28 +283,25 @@ async def executor_status():
     running = is_executor_running()
     return {"executor_running": running, "message": "✅ פועל" if running else "🚩 לא פעיל"}
 
-# --- Startup event: מפעיל רק אם AUTO_RUN=true ---
+# === Startup event: מפעיל רק אם AUTO_RUN=true ===
 @app.on_event("startup")
 async def on_startup():
     print(f"[BOOT TIME] ready in {time.time() - __boot_start__:.2f}s")
     if os.getenv("AUTO_RUN", "true").lower() == "true":
-        # spawn background thread for auto executor
         delay = int(os.getenv("SCAN_INTERVAL", "60"))
         min_q = int(os.getenv("MIN_QUALITY_SCORE", "6"))
         budget = float(os.getenv("MAX_TRADE_BUDGET", "100"))
-        global _executor_thread
-        _executor_thread = threading.Thread(
-            target=_run_executor,
-            kwargs={"debug": False, "delay": delay, "min_quality": min_q, "budget": budget},
+        threading.Thread(
+            target=lambda: start_executor_loop(debug=False, delay=delay, min_quality=min_q, max_budget=budget),
             daemon=True
-        )
-        _executor_thread.start()
+        ).start()
 
 # --- Gunicorn/Uvicorn entrypoint ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "5000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
