@@ -197,7 +197,6 @@ async def scan_market(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# == GET GRID SIMULATION ==
 @app.get("/grid", operation_id="getGridSuggestion")
 async def get_grid(
     symbol: str = Query(..., description="סימבול (למשל BTCUSDT)"),
@@ -220,7 +219,7 @@ async def get_grid(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# == AUTO GRID (בוחר סימבול איכותי לבד ומבצע) ==
+# == AUTO GRID (עם AI ניתוח איכות!) ==
 @app.post("/auto-grid", operation_id="autoGridTrade")
 async def auto_grid(
     budget: float = Query(100, description="תקציב $"),
@@ -231,15 +230,15 @@ async def auto_grid(
     futures: bool = Query(True, description="פיוצ'רס בלבד (לרוב כן)"),
     direction: str = Query("BOTH", description="BOTH/BUY/SELL"),
     trending_only: bool = Query(True, description="לבחור רק סימבולים טרנדיים"),
-    min_quality: int = Query(6, description="סף איכות סימבול")
+    min_quality: int = Query(6, description="סף איכות סימבול"),
+    min_ai_score: float = Query(7.0, description="סף איכות AI (GPT)")
 ):
     """
-    מוצא סימבול חם איכותי (טרנדינג, איכות גבוהה) ומבצע Grid אוטומטי בפועל!
+    מוצא סימבול חם איכותי (טרנדינג, איכות גבוהה) ומבצע Grid אוטומטי בפועל! כולל ציון איכות AI (GPT)!
     """
     from utils.scanner_utils import scan_all
     from utils.grid_utils import execute_grid
     try:
-        # סורק שוק, בוחר את הסימבול הטוב ביותר
         symbols = await scan_all(
             interval="5m",
             limit=150,
@@ -249,21 +248,39 @@ async def auto_grid(
         )
         if not symbols:
             raise RuntimeError("לא נמצא סימבול מתאים ל־Grid כרגע")
-        # בחר את הראשון (או תרצה, תקח top/ random)
-        symbol = symbols[0]["symbol"]
-        # מבצע בפועל
-        grid = execute_grid(
-            symbol=symbol,
-            budget=budget,
-            grid_count=grid_count,
-            grid_pct=grid_pct,
-            leverage_min=leverage_min,
-            leverage_max=leverage_max,
-            futures=futures,
-            direction=direction
-        )
-        grid["executed"] = True
-        return grid
+        results = []
+        best = None
+        best_score = -1
+        for sym in symbols:
+            symbol = sym["symbol"]
+            grid = execute_grid(
+                symbol=symbol,
+                budget=budget,
+                grid_count=grid_count,
+                grid_pct=grid_pct,
+                leverage_min=leverage_min,
+                leverage_max=leverage_max,
+                futures=futures,
+                direction=direction
+            )
+            ai = grid.get("ai_quality", {})
+            score = ai.get("score", 0)
+            results.append({"symbol": symbol, "score": score, "grid": grid, "ai": ai})
+            if score > best_score and score >= min_ai_score:
+                best = {"symbol": symbol, "score": score, "grid": grid, "ai": ai}
+                best_score = score
+        if best:
+            return {
+                "status": "success",
+                "best": best,
+                "all_results": results
+            }
+        else:
+            return {
+                "status": "no_good_grid",
+                "message": "לא נמצא גריד איכותי מעל סף איכות.",
+                "all_results": results
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -342,6 +359,7 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "5000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
