@@ -1,3 +1,5 @@
+# utils/scanner_utils.py
+
 import asyncio
 import logging
 import os
@@ -8,6 +10,7 @@ from utils.quality_score import compute_quality_score
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.trending_utils import get_trending_symbols
 
+# הגדרת semaphore למניעת עומס יתר ב־async
 semaphore = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_SCANS", 15)))
 
 def get_symbols(market_type="futures", min_volume=1_000_000, trending_only=False):
@@ -64,7 +67,8 @@ async def analyze_symbol(
     limit: int = 50,
     min_volume: int = 1_000_000,
     trending_only: bool = False,
-    with_ai: bool = True
+    with_ai: bool = True,
+    frames: list = None
 ):
     async with semaphore:
         await asyncio.sleep(0.2)
@@ -95,7 +99,7 @@ async def analyze_symbol(
             "quality_score": int(quality_score),
             "sl": sltp.get("sl"),
             "tp": sltp.get("tp"),
-            "frames": [interval]
+            "frames": frames if frames else [interval]
         }
 
 async def scan_all(
@@ -124,7 +128,8 @@ async def scan_all(
         r for r in results if r and r["quality_score"] >= min_quality and r["direction"] in ("LONG", "SHORT")
     ]
     filtered = sorted(filtered, key=lambda x: (-x["quality_score"], -x["volume"]))
-    return filtered[:5]  # תחזיר את ה־TOP בלבד
+    return filtered[:limit]
+
 
 
 
