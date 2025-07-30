@@ -10,19 +10,16 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import pandas as pd
 
-# מאפשר imports מתוך התיקייה הראשית
 sys.path.append(os.path.dirname(__file__))
 __boot_start__ = time.time()
 load_dotenv()
 
-# === FastAPI App ===
 app = FastAPI(
     title="AlgoGPT API PRO Ultra",
     version="2.0.1",
     description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)"
 )
 
-# --- CORS (אם צריך Web או חיבור חיצוני)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,12 +28,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ייבוא פונקציות ===
 from utils.ai_analysis import analyze_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.watchlist_utils import load_watchlist, add_to_watchlist
 
-# === דגמי בקשות ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -73,12 +68,10 @@ class AIAnalysisRequest(BaseModel):
     volume: float
     pattern: str
 
-# === ROOT HEALTH ===
 @app.get("/", operation_id="checkServerStatus")
 async def home():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# === SL/TP Calculation ===
 @app.post("/sl_tp", operation_id="calculateSLTP")
 async def sl_tp(request: SLTPRequest):
     try:
@@ -88,7 +81,6 @@ async def sl_tp(request: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Quantity Calculation ===
 @app.post("/calculate-quantity", operation_id="calculateQuantity")
 async def calc_qty(data: QuantityRequest):
     try:
@@ -98,7 +90,6 @@ async def calc_qty(data: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# === News ===
 @app.get("/news", operation_id="fetchCryptoNews")
 async def news():
     try:
@@ -116,7 +107,6 @@ async def analyze_news():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Backtest ===
 @app.post("/backtest", operation_id="runBacktest")
 async def backtest(request: BacktestRequest):
     try:
@@ -148,7 +138,6 @@ async def backtest(request: BacktestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Trade Execution ===
 @app.post("/execute-trade", operation_id="executeTrade")
 async def execute_trade(data: TradeRequest):
     try:
@@ -161,7 +150,8 @@ async def execute_trade(data: TradeRequest):
                 budget=data.budget,
                 grid_count=8,
                 grid_pct=0.5,
-                leverage=data.leverage,
+                leverage_min=10,
+                leverage_max=35,
                 futures=is_fut,
                 direction="BOTH",
                 tp_pct=1,
@@ -186,7 +176,6 @@ async def execute_trade(data: TradeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Market Scanner ===
 @app.get("/scan", operation_id="scanMarket")
 async def scan_market(
     min_quality: int = Query(0),
@@ -208,11 +197,79 @@ async def scan_market(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Multi-TF Scanner ===
+# == GET GRID SIMULATION ==
+@app.get("/grid", operation_id="getGridSuggestion")
+async def get_grid(
+    symbol: str = Query(..., description="סימבול (למשל BTCUSDT)"),
+    budget: float = Query(100, description="תקציב $ לגריד"),
+    grid_count: int = Query(6, description="מספר רמות גריד"),
+    grid_pct: float = Query(0.5, description="מרווח בין רמות (%)"),
+    leverage_min: int = Query(10, description="מינוף מינימלי"),
+    leverage_max: int = Query(35, description="מינוף מקסימלי"),
+    futures: bool = Query(True, description="האם פיוצ'רס"),
+    direction: str = Query("BOTH", description="כיוון הגריד (BOTH/BUY/SELL)")
+):
+    from utils.grid_utils import execute_grid
+    try:
+        grid = execute_grid(
+            symbol, budget=budget, grid_count=grid_count, grid_pct=grid_pct,
+            leverage_min=leverage_min, leverage_max=leverage_max,
+            futures=futures, direction=direction
+        )
+        return grid
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# == AUTO GRID (בוחר סימבול איכותי לבד ומבצע) ==
+@app.post("/auto-grid", operation_id="autoGridTrade")
+async def auto_grid(
+    budget: float = Query(100, description="תקציב $"),
+    grid_count: int = Query(6, description="מספר רמות"),
+    grid_pct: float = Query(0.5, description="מרווח רמות (%)"),
+    leverage_min: int = Query(10, description="מינוף מינימלי"),
+    leverage_max: int = Query(35, description="מינוף מקסימלי"),
+    futures: bool = Query(True, description="פיוצ'רס בלבד (לרוב כן)"),
+    direction: str = Query("BOTH", description="BOTH/BUY/SELL"),
+    trending_only: bool = Query(True, description="לבחור רק סימבולים טרנדיים"),
+    min_quality: int = Query(6, description="סף איכות סימבול")
+):
+    """
+    מוצא סימבול חם איכותי (טרנדינג, איכות גבוהה) ומבצע Grid אוטומטי בפועל!
+    """
+    from utils.scanner_utils import scan_all
+    from utils.grid_utils import execute_grid
+    try:
+        # סורק שוק, בוחר את הסימבול הטוב ביותר
+        symbols = await scan_all(
+            interval="5m",
+            limit=150,
+            min_quality=min_quality,
+            trending_only=trending_only,
+            min_volume=1_000_000
+        )
+        if not symbols:
+            raise RuntimeError("לא נמצא סימבול מתאים ל־Grid כרגע")
+        # בחר את הראשון (או תרצה, תקח top/ random)
+        symbol = symbols[0]["symbol"]
+        # מבצע בפועל
+        grid = execute_grid(
+            symbol=symbol,
+            budget=budget,
+            grid_count=grid_count,
+            grid_pct=grid_pct,
+            leverage_min=leverage_min,
+            leverage_max=leverage_max,
+            futures=futures,
+            direction=direction
+        )
+        grid["executed"] = True
+        return grid
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 from routes.multi_scan import router as multi_scan_router
 app.include_router(multi_scan_router)
 
-# === Watchlist ===
 @app.get("/watchlist", operation_id="getWatchlist")
 async def get_watchlist():
     try:
@@ -229,7 +286,6 @@ async def add_watchlist_api(symbol: str, direction: str, quality_score: int=7, r
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Daily Report ===
 @app.get("/daily-report", operation_id="generateDailyReport")
 async def daily_report():
     try:
@@ -238,7 +294,6 @@ async def daily_report():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === AI Analysis ===
 @app.post("/ai-analyze", operation_id="aiAnalysis")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
@@ -246,7 +301,6 @@ async def ai_analyze(data: AIAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# === Auto Executor Control ===
 @app.post("/start-auto", operation_id="startAuto")
 async def start_auto():
     global _executor_thread
@@ -272,7 +326,6 @@ async def executor_status():
     running = is_executor_running()
     return {"executor_running": running, "message": "✅ פועל" if running else "🚩 לא פעיל"}
 
-# === Startup Auto Execution ===
 @app.on_event("startup")
 async def on_startup():
     print(f"[BOOT TIME] ready in {time.time() - __boot_start__:.2f}s")
@@ -285,11 +338,11 @@ async def on_startup():
             daemon=True
         ).start()
 
-# === Run if standalone ===
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "5000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
