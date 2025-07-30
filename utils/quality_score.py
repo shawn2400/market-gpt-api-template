@@ -2,13 +2,18 @@
 
 import logging
 import numpy as np
+import pandas as pd
 
 def compute_quality_score(df, verbose=False) -> float:
     """
     מחשב ציון איכות לטרייד (0–10) לפי אינדיקטורים טכניים.
     """
     try:
-        last = df.iloc[-1]
+        # תמיכה גם אם df הוא שורת DataFrame או Series
+        last = df.iloc[-1] if isinstance(df, pd.DataFrame) else df
+        if not hasattr(last, "get"):
+            raise TypeError("שורת הנתונים לא כוללת מתודת get – סוג שגוי")
+
         score = 0
         max_score = 10
         reasons = []
@@ -59,10 +64,11 @@ def compute_quality_score(df, verbose=False) -> float:
             reasons.append("מעל EMA50")
 
         # 8. EMA21 חוצה מעל EMA50
-        prev = df.iloc[-2] if len(df) > 1 else last
-        if last.get("ema_21", 0) > last.get("ema_50", 0) and prev.get("ema_21", 0) <= prev.get("ema_50", 0):
-            score += 1
-            reasons.append("חציית EMA21 מעל EMA50")
+        if isinstance(df, pd.DataFrame) and len(df) > 1:
+            prev = df.iloc[-2]
+            if last.get("ema_21", 0) > last.get("ema_50", 0) and prev.get("ema_21", 0) <= prev.get("ema_50", 0):
+                score += 1
+                reasons.append("חציית EMA21 מעל EMA50")
 
         # 9. MACD Histogram חיובי
         if last.get("macd_hist", 0) > 0:
@@ -85,6 +91,7 @@ def compute_quality_score(df, verbose=False) -> float:
     except Exception as e:
         logging.error(f"[quality_score] שגיאה: {e}")
         return 0.0
+
 
 
 
