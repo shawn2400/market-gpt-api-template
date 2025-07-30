@@ -1,17 +1,28 @@
 # utils/trending_utils.py
 # פונקציות לשאיבת סמלים טרנדים, ללא ייבוא חוזר
 
-def get_trending_symbols(trending_source: str = "coingecko", market_type: str = "spot") -> list[str]:
+from typing import Optional, List
+
+
+def get_trending_symbols(
+    trending_source: Optional[str] = "coingecko",
+    market_type: str = "spot"
+) -> List[str]:
     """
     מחזיר רשימת סמלים טרנדים לפי מקור מוגדר וסוג שוק (spot/futures).
     ניתן להרחיב לחדשות, API חיצוני וכו'.
     """
+    # טיפול במקרה שטרנינג סורס לא סופק
+    if not trending_source:
+        trending_source = "coingecko"
+
     # TODO: החלף בלוגיקה אמיתית לקריאה למקור הטרנדים
     if trending_source.lower() == "coingecko":
-        # דוגמה סטטית, ניתן למשוך מה-API של CoinGecko
+        # הדגמה סטטית, ניתן למשוך מה-API של CoinGecko
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-    else:
-        return []
+    # ניתן להוסיף מקורות נוספים בעתיד
+    return []
+
 
 
 
