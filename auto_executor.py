@@ -1,5 +1,3 @@
-# ===== קובץ: auto_executor.py =====
-
 import asyncio
 import os
 import logging
@@ -35,12 +33,11 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
 
     fail_count = 0
     min_quality_cur = min_quality
+    symbols_rotation = []
 
     while True:
         try:
             print(f"\n[AUTO_EXECUTOR] 🚀 סורק את שוק הפיוצ'רס... min_quality={min_quality_cur}")
-
-            # Trending + Volume + Smart batching
             all_symbols = get_symbols(market_type="futures", min_volume=MIN_VOLUME, trending_only=TRENDING_ONLY)
             if ROTATE_SYMBOLS and len(all_symbols) > TOP_SYMBOLS:
                 batches = list(smart_batch(all_symbols, TOP_SYMBOLS))
@@ -48,7 +45,6 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
             else:
                 symbols_batch = all_symbols[:TOP_SYMBOLS]
 
-            # Scan batch
             trades = await scan_all(
                 market_type="futures",
                 interval="1m",
@@ -57,13 +53,11 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
                 trending_only=TRENDING_ONLY
             )
 
-            # Save all scanned trades
             for t in trades:
                 from datetime import datetime
                 t['scanned_at'] = datetime.utcnow().isoformat()
                 save_scanned_trade(t)
 
-            # Dynamic quality
             if not trades or len(trades) == 0:
                 fail_count += 1
                 if fail_count >= 2 and min_quality_cur > MIN_MIN_QUALITY:
@@ -80,12 +74,10 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
                     print(f"[DYNAMIC QS] יותר מדי טריידים — מעלה סף איכות ל־{min_quality_cur}")
                 fail_count = 0
 
-            # Pick the best trades only (TOP QS + Confluence)
             trades = sorted(trades, key=lambda x: (x.get("quality_score", 0), x.get("volume", 0)), reverse=True)
             for trade in trades:
                 symbol = trade["symbol"]
                 direction = trade["direction"]
-                # Double position prevention
                 open_trades = get_open_trades()
                 already_open = any(
                     t["symbol"] == symbol and t["direction"] == direction and t.get("status") == "OPEN"
@@ -94,7 +86,6 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
                 if already_open:
                     print(f"[SKIP] פוזיציה פתוחה קיימת ל־{symbol} {direction} — מדלג")
                     continue
-                # VIP WATCHLIST — Confluence
                 if "frames" in trade and len(trade["frames"]) >= VIP_WATCHLIST_FRAMES:
                     add_to_watchlist(
                         symbol, direction, trade.get("quality_score", 0),
@@ -159,6 +150,8 @@ async def run_executor(debug=False, once=False, delay=SCAN_DELAY, min_quality=ST
         print(f"[AUTO_EXECUTOR] ⏳ ממתין {delay} שניות לסריקה נוספת...")
         await asyncio.sleep(delay)
 
+# === EXPORTS ===
+
 def start_executor_loop(debug=False, delay=SCAN_DELAY, min_quality=START_MIN_QUALITY, max_budget=100):
     global _executor_task
     if _executor_task is None or _executor_task.done():
@@ -183,6 +176,7 @@ def stop_executor_loop():
 
 def is_executor_running() -> bool:
     return _executor_task is not None and not _executor_task.done()
+
 
 
 
