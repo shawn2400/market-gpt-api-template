@@ -1,97 +1,71 @@
 # auto_executor.py
 
-import os
-import time
-import logging
+import threading
 import asyncio
-from dotenv import load_dotenv
-
 from utils.scanner_utils import scan_all
+from utils.get_live_price import get_live_price
+from utils.ai_analysis import predict_optimal_sl_tp
 from utils.trade_executor import execute_trade_live
-from utils.trade_storage import get_open_trades_count
+from utils.pnl_tracker import update_pnl
 
-load_dotenv()
+executor_thread = None
+executor_stop = False
 
-# === הגדרות קבועות ===
-DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
-DELAY = int(os.getenv("AUTO_RUN_DELAY", 60))
-MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
-MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", 4))
-BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
-TRENDING_SOURCE = os.getenv("TRENDING_SOURCE", "coingecko")
+def start_executor_loop(debug=False, once=False, delay=30, min_quality=7, budget=250):
+    global executor_thread, executor_stop
+    if executor_thread and executor_thread.is_alive():
+        return False
+    executor_stop = False
 
-_executor_running = False
-_executor_task = None
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(executor_loop(debug, once, delay, min_quality, budget))
 
-# === פונקציות בקרה חיצונית ===
-def is_executor_running():
-    return _executor_running
+    executor_thread = threading.Thread(target=run_loop)
+    executor_thread.start()
+    return True
 
 def stop_executor_loop():
-    global _executor_running
-    _executor_running = False
-    logging.info("🛑 הופסק Auto Executor")
+    global executor_stop
+    executor_stop = True
+    return True
 
-async def start_executor_loop():
-    global _executor_running
-    if _executor_running:
-        logging.info("🔁 Auto executor כבר רץ.")
-        return
+def is_executor_running():
+    return executor_thread is not None and executor_thread.is_alive()
 
-    _executor_running = True
-    logging.info("🚀 התחלת לולאת Auto Executor")
-
-    while _executor_running:
+async def executor_loop(debug=False, once=False, delay=30, min_quality=7, budget=250):
+    global executor_stop
+    while not executor_stop:
         try:
-            if get_open_trades_count() >= MAX_OPEN_TRADES:
-                logging.info("🔒 יש כבר יותר מדי טריידים פתוחים – דילוג.")
-                await asyncio.sleep(DELAY)
-                continue
-
-            best_trade = None
-            markets = ["futures", "spot", "grid"]
-
-            for market in markets:
-                logging.info(f"[AUTO_EXECUTOR] סריקה בשוק: {market}")
-                trades = await scan_all(
-                    market_type=market,
-                    interval="1m",
-                    limit=50,
-                    min_quality=MIN_QUALITY_SCORE,
-                    trending_only=True,
-                    trending_source=TRENDING_SOURCE,
-                    min_volume=1_000_000,
-                    with_ai=True,
-                    top=1
-                )
-                if trades:
-                    trade = trades[0]
-                    if not best_trade or trade["quality_score"] > best_trade["quality_score"]:
-                        best_trade = trade
-
-            if best_trade:
-                logging.info(f"🎯 טרייד נבחר: {best_trade['symbol']} | איכות: {best_trade['quality_score']}")
-                execute_trade_live(
-                    symbol=best_trade["symbol"],
-                    entry=best_trade["entry"],
-                    stop=best_trade["stop"],
-                    tp=best_trade["tp"],
-                    direction=best_trade["direction"],
-                    leverage=best_trade.get("leverage", 20),
-                    budget=BUDGET,
-                    use_grid=best_trade.get("use_grid", False),
-                    use_trailing=best_trade.get("use_trailing", False),
-                    user_id="auto",
-                    take_snapshot=True
-                )
-            else:
-                logging.info("⚠️ לא נמצאו טריידים איכותיים בסבב זה.")
-
+            print("[*] סריקה חיה...")
+            results = await scan_all(min_quality=min_quality, top=3, market="futures")
+            for trade in results:
+                if trade["avg_quality"] >= min_quality:
+                    sltp = predict_optimal_sl_tp(trade["main_direction"], trade["entry"])
+                    price = get_live_price(trade["symbol"])
+                    if price > 0:
+                        result = execute_trade_live(
+                            symbol=trade["symbol"],
+                            entry=price,
+                            stop=sltp["sl"],
+                            tp=sltp["tp"],
+                            direction=trade["main_direction"],
+                            leverage=20,
+                            budget_usd=budget
+                        )
+                        if debug:
+                            print("[Debug] Executed:", result)
+                        await asyncio.sleep(2)
+                    if once:
+                        executor_stop = True
+                        break
         except Exception as e:
-            logging.exception(f"[AUTO_EXECUTOR] ❌ שגיאה במהלך הרצה: {e}")
+            print(f"[Auto Executor Error] {e}")
+        if once:
+            break
+        await asyncio.sleep(delay)
 
-        await asyncio.sleep(DELAY)
 
 
 
