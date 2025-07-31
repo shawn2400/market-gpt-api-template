@@ -4,12 +4,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# ייבוא תקינים
+# ייבוא מודולים
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.ai_analysis import analyze_with_ai
-from news_utils import get_latest_news, analyze_news_sentiment  # ← נכון (נמצא בתיקייה הראשית)
-from backtest_utils import run_backtest  # ← תוקן כאן: הקובץ לא בתיקיית utils
+from news_utils import get_latest_news, analyze_news_sentiment
+from utils.backtest_utils import run_backtest
 from utils.report_utils import generate_daily_report
 from utils.trade_executor import execute_trade_live
 from utils.scanner_utils import scan_all
@@ -74,8 +74,7 @@ def root():
 @app.post("/sl_tp")
 def sl_tp(req: SLTPRequest):
     try:
-        result = calculate_sl_tp(req.df, req.direction)
-        return result
+        return calculate_sl_tp(req.df, req.direction)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -92,8 +91,7 @@ def backtest(req: BacktestRequest):
     try:
         import pandas as pd
         df = pd.DataFrame(req.prices)
-        result = run_backtest(df, req.symbol, req.interval)
-        return result
+        return run_backtest(df, req.symbol, req.interval)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -105,8 +103,7 @@ def ai_analyze(payload: dict):
         trend = payload.get("trend", "up")
         volume = payload.get("volume", "normal")
         pattern = payload.get("pattern", "none")
-        result = analyze_with_ai(rsi, adx, trend, volume, pattern)
-        return result
+        return analyze_with_ai(rsi, adx, trend, volume, pattern)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -127,36 +124,33 @@ def analyze_news():
 @app.post("/execute-trade")
 def execute_trade(req: TradeRequest):
     try:
-        trade_dict = req.dict()
-        return execute_trade_live(trade_dict)
+        return execute_trade_live(req.dict())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scan")
 def scan(req: ScanRequest):
     try:
-        results = scan_all(
+        return scan_all(
             market=req.market,
             min_quality=req.min_quality,
             top=req.top,
             trending_only=req.trending_only,
             trending_source=req.trending_source
         )
-        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scan/multi")
 async def scan_multi(req: MultiTFScanRequest):
     try:
-        results = await multi_tf_scan_with_ai(
+        return await multi_tf_scan_with_ai(
             markets=req.markets,
             timeframes=req.timeframes,
             trending_only=req.trending_only,
             top=req.top,
             trending_source=req.trending_source
         )
-        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -189,6 +183,7 @@ def executor_status():
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000)
+
 
 
 
