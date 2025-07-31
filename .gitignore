@@ -1,31 +1,46 @@
-# קבצי סביבה
+# === קבצי סביבה ===
 .env
 *.env
 
-# קבצים רגישים
+# === קבצים רגישים / אבטחה ===
 *.key
 *.pem
+saved_trades.json
+pnl_tracker.json
 
-# קבצי לוגים
+# === קבצי לוג ===
 *.log
 
-# קבצים זמניים / קאש / Python bytecode
+# === קבצי Python זמניים / קומפילציה ===
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.cache/
+*.sqlite3
 
-# דוחות PDF
+# === דוחות PDF שנוצרים אוטומטית ===
 *.pdf
+static/reports/
+static/snapshots/
 
-# קבצים פרטיים / API keys
-saved_trades.json
-pnl_tracker.json
-
-# תיקיות סטטיות ומערכות תמונות
+# === קבצים סטטיים שלא צריכים גרסה ===
 static/
+!static/logo.png     # שימור לוגו לפלאגין
 
-# קובצי מערכת הפעלה
+# === מערכת הפעלה ===
 .DS_Store
 Thumbs.db
+
+# === Docker / Build ===
+*.pid
+*.tar
+*.lock
+*.bak
+
+# === IDE / עורך קוד (Visual Studio Code, PyCharm וכו') ===
+.vscode/
+.idea/
+*.iml
+
 
