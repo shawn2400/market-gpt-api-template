@@ -7,7 +7,7 @@ import pandas as pd
 
 from utils.quantity_utils import calculate_quantity, auto_risk_allocation
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.get_live_price import get_live_price
+from utils.ws_fallback import get_price  # ← החליף את get_live_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
 from snapshot_utils import save_trade_snapshot
@@ -40,7 +40,7 @@ def execute_trade_live(
 ):
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        price = get_live_price(symbol, market_type=market_type)
+        price = get_price(symbol, market_type=market_type)
         if not price or price <= 0:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
