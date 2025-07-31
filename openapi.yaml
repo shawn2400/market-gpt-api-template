@@ -9,231 +9,13 @@ info:
 servers:
   - url: https://algogpt-docker.onrender.com
 
-tags:
-  - name: Trades
-  - name: Grid
-  - name: Reports
-  - name: AI
-  - name: Executor
-  - name: Config
-  - name: News
-
-paths:
-  /:
-    get:
-      tags: [Config]
-      summary: בדיקת סטטוס השרת
-      operationId: checkServerStatus
-      responses:
-        '200':
-          description: השרת פועל
-
-  /scan:
-    post:
-      tags: [Trades]
-      summary: סריקה טכנית חיה
-      operationId: scanMarket
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ScanRequest"
-      responses:
-        '200':
-          description: הצלחה
-
-  /scan/multi:
-    get:
-      tags: [Trades]
-      summary: סריקת Multi-TF עם AI
-      operationId: multiTfScan
-      parameters:
-        - name: market
-          in: query
-          schema:
-            type: string
-            enum: [futures, spot, grid]
-        - name: trending_only
-          in: query
-          schema:
-            type: boolean
-        - name: trending_source
-          in: query
-          schema:
-            type: string
-            enum: [binance, coingecko, lunarcrush]
-        - name: top
-          in: query
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: הצלחה
-
-  /execute-trade:
-    post:
-      tags: [Trades]
-      summary: ביצוע טרייד חי בפועל
-      operationId: executeTrade
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TradeRequest"
-      responses:
-        '200':
-          description: בוצע
-
-  /grid/trade:
-    post:
-      tags: [Grid]
-      summary: פתיחת גריד מול Binance
-      operationId: executeGrid
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GridTradeRequest"
-      responses:
-        '200':
-          description: פקודות הגריד נשלחו
-
-  /grid/status:
-    get:
-      tags: [Grid]
-      summary: סטטוס גרידים פעילים
-      operationId: gridStatus
-      responses:
-        '200':
-          description: סטטוס נשלף
-        '404':
-          description: אין גריד פעיל
-
-  /calculate-quantity:
-    post:
-      tags: [Trades]
-      summary: חישוב כמות לפי תקציב ומינוף
-      operationId: calculateQuantity
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/QuantityRequest"
-      responses:
-        '200':
-          description: הצלחה
-
-  /sl_tp:
-    post:
-      tags: [Trades]
-      summary: חישוב SL ו־TP
-      operationId: calcSLTP
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SLTPRequest"
-      responses:
-        '200':
-          description: חושב
-
-  /predict-sl-tp:
-    post:
-      tags: [AI]
-      summary: חיזוי SL/TP עם GPT
-      operationId: predictSLTP
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PredictSLTPRequest"
-      responses:
-        '200':
-          description: חוזה
-
-  /ai-analyze:
-    post:
-      tags: [AI]
-      summary: ניתוח שוק עם GPT
-      operationId: analyzeAI
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AiAnalyzeRequest"
-      responses:
-        '200':
-          description: ניתוח נוצר
-
-  /backtest:
-    post:
-      tags: [Trades]
-      summary: הרצת Backtest
-      operationId: runBacktest
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BacktestRequest"
-      responses:
-        '200':
-          description: הסתיים
-
-  /news:
-    get:
-      tags: [News]
-      summary: חדשות קריפטו
-      operationId: getNews
-      responses:
-        '200':
-          description: נשלפו
-
-  /analyze-news:
-    get:
-      tags: [News]
-      summary: ניתוח חדשות GPT
-      operationId: analyzeNews
-      responses:
-        '200':
-          description: ניתוח נשלח
-
-  /daily-report:
-    get:
-      tags: [Reports]
-      summary: הפקת דוח יומי PDF
-      operationId: dailyReport
-      responses:
-        '200':
-          description: נוצר
-
-  /executor/start:
-    get:
-      tags: [Executor]
-      summary: התחלת Auto Executor
-      operationId: startExecutor
-      responses:
-        '200':
-          description: התחיל
-
-  /executor/stop:
-    get:
-      tags: [Executor]
-      summary: עצירת Auto Executor
-      operationId: stopExecutor
-      responses:
-        '200':
-          description: נעצר
-
-  /executor/status:
-    get:
-      tags: [Executor]
-      summary: סטטוס Auto Executor
-      operationId: executorStatus
-      responses:
-        '200':
-          description: פועל/לא
-
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     ScanRequest:
       type: object
@@ -359,6 +141,230 @@ components:
           type: number
         futures:
           type: boolean
+
+paths:
+  /:
+    get:
+      tags: [Config]
+      summary: בדיקת סטטוס השרת
+      operationId: checkServerStatus
+      responses:
+        '200':
+          description: השרת פועל
+
+  /scan:
+    post:
+      tags: [Trades]
+      summary: סריקה טכנית חיה
+      operationId: scanMarket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScanRequest'
+      responses:
+        '200':
+          description: הצלחה
+
+  /scan/multi:
+    get:
+      tags: [Trades]
+      summary: סריקת Multi-TF עם AI
+      operationId: multiTfScan
+      parameters:
+        - name: market
+          in: query
+          schema:
+            type: string
+            enum: [futures, spot, grid]
+        - name: trending_only
+          in: query
+          schema:
+            type: boolean
+        - name: trending_source
+          in: query
+          schema:
+            type: string
+            enum: [binance, coingecko, lunarcrush]
+        - name: top
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: הצלחה
+
+  /execute-trade:
+    post:
+      tags: [Trades]
+      summary: ביצוע טרייד חי בפועל
+      operationId: executeTrade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TradeRequest'
+      responses:
+        '200':
+          description: בוצע
+
+  /grid/trade:
+    post:
+      tags: [Grid]
+      summary: פתיחת גריד מול Binance
+      operationId: executeGrid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GridTradeRequest'
+      responses:
+        '200':
+          description: פקודות הגריד נשלחו
+
+  /grid/status:
+    get:
+      tags: [Grid]
+      summary: סטטוס גרידים פעילים
+      operationId: gridStatus
+      responses:
+        '200':
+          description: סטטוס נשלף
+        '404':
+          description: אין גריד פעיל
+
+  /calculate-quantity:
+    post:
+      tags: [Trades]
+      summary: חישוב כמות לפי תקציב ומינוף
+      operationId: calculateQuantity
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuantityRequest'
+      responses:
+        '200':
+          description: הצלחה
+
+  /sl_tp:
+    post:
+      tags: [Trades]
+      summary: חישוב SL ו־TP
+      operationId: calcSLTP
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SLTPRequest'
+      responses:
+        '200':
+          description: חושב
+
+  /predict-sl-tp:
+    post:
+      tags: [AI]
+      summary: חיזוי SL/TP עם GPT
+      operationId: predictSLTP
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PredictSLTPRequest'
+      responses:
+        '200':
+          description: חוזה
+
+  /ai-analyze:
+    post:
+      tags: [AI]
+      summary: ניתוח שוק עם GPT
+      operationId: analyzeAI
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiAnalyzeRequest'
+      responses:
+        '200':
+          description: ניתוח נוצר
+
+  /backtest:
+    post:
+      tags: [Trades]
+      summary: הרצת Backtest
+      operationId: runBacktest
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BacktestRequest'
+      responses:
+        '200':
+          description: הסתיים
+
+  /news:
+    get:
+      tags: [News]
+      summary: חדשות קריפטו
+      operationId: getNews
+      responses:
+        '200':
+          description: נשלפו
+
+  /analyze-news:
+    get:
+      tags: [News]
+      summary: ניתוח חדשות GPT
+      operationId: analyzeNews
+      responses:
+        '200':
+          description: ניתוח נשלח
+
+  /daily-report:
+    get:
+      tags: [Reports]
+      summary: הפקת דוח יומי PDF
+      operationId: dailyReport
+      responses:
+        '200':
+          description: נוצר
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+
+  /executor/start:
+    get:
+      tags: [Executor]
+      summary: התחלת Auto Executor
+      operationId: startExecutor
+      responses:
+        '200':
+          description: התחיל
+
+  /executor/stop:
+    get:
+      tags: [Executor]
+      summary: עצירת Auto Executor
+      operationId: stopExecutor
+      responses:
+        '200':
+          description: נעצר
+
+  /executor/status:
+    get:
+      tags: [Executor]
+      summary: סטטוס Auto Executor
+      operationId: executorStatus
+      responses:
+        '200':
+          description: פועל/לא
+
+security:
+  - bearerAuth: []
+
 
 
 
