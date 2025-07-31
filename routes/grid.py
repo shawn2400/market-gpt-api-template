@@ -1,4 +1,4 @@
-# ✅ routes/grid.py
+# routes/grid.py
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -25,7 +25,7 @@ class GridTradeRequest(BaseModel):
 @router.post("/trade")
 def grid_trade(req: GridTradeRequest):
     """
-    מבצע פקודות גריד עם SL/TP ל-Binance ומעדכן את סטטוס הגריד האחרון.
+    מבצע פקודות גריד עם SL/TP ל־Binance ומעדכן את סטטוס הגריד האחרון.
     """
     global last_grid_result
     try:
@@ -44,7 +44,7 @@ def grid_trade(req: GridTradeRequest):
         last_grid_result = result
         return {"status": "success", "details": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e8\u05e6\u05ea \u05d2\u05e8\u05d9\u05d3: {e}")
+        raise HTTPException(status_code=500, detail=f"שגיאה בהרצת גריד: {e}")
 
 @router.get("/status")
 def grid_status():
@@ -52,7 +52,8 @@ def grid_status():
     מחזיר את הסטטוס האחרון של הגריד שבוצע.
     """
     if not last_grid_result:
-        raise HTTPException(status_code=404, detail="\u05dc\u05d0 \u05d1\u05d5\u05e6\u05e2 \u05d2\u05e8\u05d9\u05d3 \u05e2\u05d3\u05d9\u05df")
+        raise HTTPException(status_code=404, detail="לא בוצע גריד עדיין")
     return last_grid_result
+
 
 
