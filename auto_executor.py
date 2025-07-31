@@ -4,7 +4,7 @@ import logging
 import os
 
 from utils.scanner_utils import scan_all
-from utils.get_live_price import get_live_price
+from utils.ws_fallback import get_price  # ✅ WebSocket עם fallback אוטומטי
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.trade_executor import execute_trade_live
 from utils.pnl_tracker import update_pnl
@@ -14,7 +14,7 @@ executor_thread = None
 executor_stop = False
 MAX_OPEN_TRADES = 4
 
-# ✅ טעינה מהסביבה (Render / מקומית)
+# ✅ קריאה מה־ENV של Render
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
@@ -66,7 +66,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
             )
             for trade in results:
                 if trade["quality_score"] >= min_quality:
-                    price = get_live_price(trade["symbol"])
+                    price = get_price(trade["symbol"])
                     sltp = predict_optimal_sl_tp(trade["direction"], price)
                     if price and price > 0:
                         result = execute_trade_live(
@@ -91,6 +91,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
