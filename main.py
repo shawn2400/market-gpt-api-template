@@ -1,28 +1,8 @@
 # main.py
 
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ משתני סביבה חובה (Render ENV או .env מקומי)
-AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
-MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
-MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
-SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
-
-REQUIRED_ENV_VARS = [
-    "BINANCE_API_KEY",
-    "BINANCE_API_SECRET",
-    "OPENAI_API_KEY",
-    "AUTO_RUN",
-    "MIN_QUALITY_SCORE",
-    "MAX_TRADE_BUDGET",
-    "SCAN_INTERVAL"
-]
-for var in REQUIRED_ENV_VARS:
-    assert os.getenv(var), f"❌ Missing required environment variable: {var}"
-
-# ✅ הפעלת WebSocket למחירי שוק (ברירת מחדל BTCUSDT)
 from utils.ws_fallback import launch_websocket
 launch_websocket("BTCUSDT")
 
@@ -39,7 +19,6 @@ from auto_executor import (
     is_executor_running,
 )
 
-# 🌐 FastAPI Init
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
@@ -61,30 +40,27 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# 🔍 סטטוס
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# ▶️ התחלת AutoExecutor
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
     return {"status": "started" if started else "already running"}
 
-# ⏹ עצירה
 @app.get("/executor/stop")
 async def stop_executor():
     stopped = stop_executor_loop()
     return {"status": "stopped" if stopped else "not running"}
 
-# 📡 סטטוס Executor
 @app.get("/executor/status")
 async def executor_status():
     return {"running": is_executor_running()}
 
-# ▶️ הפעלה אוטומטית אם מופעל מהסביבה
-if AUTO_RUN:
+# הפעלה אוטומטית רק אם Render מפעיל את AUTO_RUN=true
+import os
+if os.getenv("AUTO_RUN", "false").lower() == "true":
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
