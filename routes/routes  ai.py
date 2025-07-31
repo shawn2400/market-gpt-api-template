@@ -1,4 +1,5 @@
 # routes/ai.py
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
@@ -31,17 +32,16 @@ def ai_analysis(request: AIAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analysis error: {e}")
 
-
 @router.post("/predict-sl-tp", tags=["AI"])
 def predict_sl_tp(request: PredictSLTPRequest):
     try:
         result = predict_optimal_sl_tp(
-            symbol=request.symbol,
-            entry_price=request.entry_price,
-            direction=request.direction
+            direction=request.direction,
+            entry=request.entry_price  # 🔧 שם נכון לפי ai_analysis.py
         )
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SL/TP prediction error: {e}")
+
 
 
