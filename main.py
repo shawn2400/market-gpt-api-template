@@ -1,9 +1,7 @@
-# main.py
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
 from dotenv import load_dotenv
+
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -18,6 +16,7 @@ app = FastAPI(
     version="2.0.3"
 )
 
+# CORS – נדרש לדשבורדים חיצוניים או לקוח Web
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,15 +25,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# רישום נתיבים
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
+# בדיקת סטטוס ראשי
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
+# בקרה על ה־Auto Executor
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -49,8 +51,6 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=10000, reload=True)
 
 
 
