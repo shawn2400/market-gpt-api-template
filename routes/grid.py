@@ -1,5 +1,4 @@
 # routes/grid.py
-
 from fastapi import APIRouter
 from pydantic import BaseModel
 from utils.grid_utils import execute_grid
@@ -32,6 +31,7 @@ async def grid_trade(data: GridTradeRequest):
         return {"status": "success", "orders": orders}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 
 
