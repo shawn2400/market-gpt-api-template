@@ -1,21 +1,18 @@
 # utils/get_live_price.py
-from utils.binance_client import client
-from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-def get_live_price(symbol: str, is_futures: bool = True) -> float:
+from utils.binance_client import client
+
+def get_live_price(symbol: str) -> float:
+    """
+    מחזיר את מחיר השוק החי של סימבול Futures (כמו BTCUSDT).
+    """
     try:
-        if is_futures:
-            data = client.futures_symbol_ticker(symbol=symbol)
-        else:
-            data = client.get_symbol_ticker(symbol=symbol)
-        return float(data["price"])
-    except BinanceAPIException as e:
-        print(f"[Binance API Error] {symbol}: {e}")
-    except BinanceRequestException as e:
-        print(f"[Binance Request Error] {symbol}: {e}")
+        res = client.futures_symbol_ticker(symbol=symbol)
+        return float(res["price"])
     except Exception as e:
-        print(f"[Live Price Error] {symbol}: {e}")
-    return 0.0
+        print(f"[get_live_price] שגיאה בשליפת מחיר עבור {symbol}: {e}")
+        return None
+
 
 
 
