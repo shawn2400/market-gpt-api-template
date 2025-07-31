@@ -2,21 +2,30 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+# 🚀 Routers
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
-from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 
+# ⚙️ Auto Executor Logic
+from auto_executor import (
+    start_executor_loop,
+    stop_executor_loop,
+    is_executor_running,
+)
+
+# 📦 Load environment variables
 load_dotenv()
 
+# 🚀 FastAPI App Init
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid) כולל ניתוחים, דוחות, AI, SL/TP ודשבורד.",
     version="2.0.3"
 )
 
-# CORS – נדרש לדשבורדים חיצוניים או לקוח Web
+# 🌐 CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,31 +34,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# רישום נתיבים
+# 🔌 Register API Routes
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# בדיקת סטטוס ראשי
+# ✅ Root Health Check
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# בקרה על ה־Auto Executor
+# ▶️ Start Auto Executor
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
     return {"status": "started" if started else "already running"}
 
+# ⏹ Stop Auto Executor
 @app.get("/executor/stop")
 async def stop_executor():
     stopped = stop_executor_loop()
     return {"status": "stopped" if stopped else "not running"}
 
+# 📡 Executor Status
 @app.get("/executor/status")
 async def executor_status():
     return {"running": is_executor_running()}
+
 
 
 
