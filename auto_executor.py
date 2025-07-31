@@ -43,8 +43,8 @@ async def executor_loop(debug=False, once=False, delay=30, min_quality=7, budget
             for trade in results:
                 if trade["avg_quality"] >= min_quality:
                     sltp = predict_optimal_sl_tp(trade["main_direction"], trade["entry"])
-                    price = get_live_price(trade["symbol"])
-                    if price > 0:
+                    price = get_live_price(trade["symbol"], market_type=trade.get("market", "futures"))
+                    if price and price > 0:
                         result = execute_trade_live(
                             symbol=trade["symbol"],
                             entry=price,
@@ -52,7 +52,8 @@ async def executor_loop(debug=False, once=False, delay=30, min_quality=7, budget
                             tp=sltp["tp"],
                             direction=trade["main_direction"],
                             leverage=20,
-                            budget_usd=budget
+                            budget_usd=budget,
+                            market_type=trade.get("market", "futures")
                         )
                         if debug:
                             print("[Debug] Executed:", result)
@@ -65,6 +66,7 @@ async def executor_loop(debug=False, once=False, delay=30, min_quality=7, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
