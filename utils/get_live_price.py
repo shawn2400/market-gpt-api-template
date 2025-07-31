@@ -6,10 +6,6 @@ from binance.exceptions import BinanceAPIException, BinanceRequestException
 def get_live_price(symbol: str, is_futures: bool = True) -> float:
     """
     מחזיר את המחיר החי (last price) מה־Binance API.
-    
-    :param symbol: לדוגמה "BTCUSDT"
-    :param is_futures: True אם לשלוף מ־Futures, אחרת מ־Spot
-    :return: מחיר כ־float או 0.0 במקרה של תקלה
     """
     try:
         if is_futures:
@@ -27,6 +23,7 @@ def get_live_price(symbol: str, is_futures: bool = True) -> float:
         print(f"[Live Price Error] {symbol}: {e}")
     
     return 0.0
+
 
 
 
