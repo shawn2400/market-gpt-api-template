@@ -21,7 +21,7 @@ REQUIRED_ENV_VARS = [
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-# ✅ הפעלת WebSocket חכם (BTCUSDT כ־default)
+# ✅ הפעלת WebSocket חכם (BTCUSDT כברירת מחדל)
 from utils.ws_fallback import launch_websocket
 launch_websocket("BTCUSDT")
 
@@ -82,13 +82,14 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-# ▶️ הפעלת Auto Executor אוטומטית אם מופעל מהסביבה
+# ▶️ הפעלת Auto Executor אוטומטית אם מוגדר מהסביבה
 if AUTO_RUN:
     started = start_executor_loop()
     if started:
         print("✅ AutoExecutor התחיל אוטומטית לפי הגדרה.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
