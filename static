@@ -1,2 +1,0 @@
-os.makedirs("static", exist_ok=True)
-
