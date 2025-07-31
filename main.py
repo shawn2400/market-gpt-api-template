@@ -26,8 +26,8 @@ load_dotenv()
 # === יצירת האפליקציה ===
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר חכם עם Binance, Grid, AI ודוחות בזמן אמת",
-    version="2.0.2"
+    description="API למסחר חכם עם Binance, Grid, Spot, Futures, AI ודוחות בזמן אמת",
+    version="2.0.3"
 )
 
 # === MODELS ===
@@ -53,8 +53,9 @@ class TradeRequest(BaseModel):
     target: float = None
     direction: str
     leverage: float = 10
-    market: str = "futures"
+    market: str = "futures"  # "futures", "spot", "grid"
     budget: float = 100
+    trailing: bool = False
 
 class ScanRequest(BaseModel):
     market: str = "futures"
@@ -102,7 +103,18 @@ def analyze_news():
 
 @app.post("/execute-trade")
 def execute_trade(req: TradeRequest):
-    return execute_trade_live(req.dict())
+    return execute_trade_live(
+        symbol=req.symbol,
+        entry=req.entry,
+        stop=req.stop,
+        tp=req.target,
+        direction=req.direction,
+        leverage=req.leverage,
+        budget_usd=req.budget,
+        use_grid=(req.market == "grid"),
+        use_trailing=req.trailing,
+        user_id="api_user"
+    )
 
 @app.post("/scan")
 def scan(req: ScanRequest):
@@ -141,6 +153,7 @@ app.include_router(grid.router)
 # === ENTRY POINT ===
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+
 
 
 
