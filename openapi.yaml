@@ -4,7 +4,7 @@ info:
   description: >
     AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance,
     מבצע ניתוחים טכניים, טריידים חיים, גרידים, דוחות, ניתוחים גרפיים ו־AI.
-  version: 2.0.2
+  version: 2.0.3
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -34,10 +34,8 @@ paths:
                 properties:
                   status:
                     type: string
-                    example: ok
                   message:
                     type: string
-                    example: AlgoGPT API is running ✅
 
   /scan:
     post:
@@ -49,23 +47,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                market:
-                  type: string
-                  example: futures
-                min_quality:
-                  type: integer
-                  example: 6
-                top:
-                  type: integer
-                  example: 1
-                trending_only:
-                  type: boolean
-                  example: false
-                trending_source:
-                  type: string
-                  example: coingecko
+              $ref: "#/components/schemas/ScanRequest"
       responses:
         '200':
           description: הצלחה
@@ -106,27 +88,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                entry:
-                  type: number
-                stop:
-                  type: number
-                target:
-                  type: number
-                direction:
-                  type: string
-                leverage:
-                  type: number
-                  default: 10
-                market:
-                  type: string
-                  default: futures
-                budget:
-                  type: number
-                  default: 100
+              $ref: "#/components/schemas/TradeRequest"
       responses:
         '200':
           description: טרייד בוצע
@@ -141,7 +103,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GridTradeRequest'
+              $ref: "#/components/schemas/GridTradeRequest"
       responses:
         '200':
           description: פקודות הגריד נשלחו לבורסה
@@ -167,16 +129,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                price:
-                  type: number
-                leverage:
-                  type: number
-                budget:
-                  type: number
+              $ref: "#/components/schemas/QuantityRequest"
       responses:
         '200':
           description: הכמות חושבה
@@ -191,68 +144,10 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                df:
-                  type: array
-                  items:
-                    type: object
-                direction:
-                  type: string
+              $ref: "#/components/schemas/SLTPRequest"
       responses:
         '200':
           description: סטופ וטייק חושבו
-
-  /backtest:
-    post:
-      tags: [Trades]
-      summary: הרצת Backtest
-      operationId: runBacktest
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                prices:
-                  type: array
-                  items:
-                    type: object
-                symbol:
-                  type: string
-                interval:
-                  type: string
-                  default: "15m"
-      responses:
-        '200':
-          description: backtest הושלם
-
-  /ai-analyze:
-    post:
-      tags: [AI]
-      summary: חיזוי AI גרפי
-      operationId: aiPricePrediction
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                rsi:
-                  type: number
-                adx:
-                  type: number
-                trend:
-                  type: string
-                volume:
-                  type: string
-                pattern:
-                  type: string
-      responses:
-        '200':
-          description: AI ניתח טווח
 
   /predict-sl-tp:
     post:
@@ -264,21 +159,40 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                  example: ETHUSDT
-                direction:
-                  type: string
-                  enum: [LONG, SHORT]
-                  example: LONG
-                entry:
-                  type: number
-                  example: 3010.25
+              $ref: "#/components/schemas/PredictSLTPRequest"
       responses:
         '200':
           description: SL/TP נוצרו
+
+  /ai-analyze:
+    post:
+      tags: [AI]
+      summary: חיזוי AI גרפי
+      operationId: aiPricePrediction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiAnalyzeRequest"
+      responses:
+        '200':
+          description: AI ניתח טווח
+
+  /backtest:
+    post:
+      tags: [Trades]
+      summary: הרצת Backtest
+      operationId: runBacktest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BacktestRequest"
+      responses:
+        '200':
+          description: backtest הושלם
 
   /news:
     get:
@@ -336,40 +250,136 @@ paths:
 
 components:
   schemas:
+    ScanRequest:
+      type: object
+      properties:
+        market:
+          type: string
+          example: futures
+        min_quality:
+          type: integer
+          example: 6
+        top:
+          type: integer
+          example: 1
+        trending_only:
+          type: boolean
+          example: false
+        trending_source:
+          type: string
+          example: coingecko
+
+    TradeRequest:
+      type: object
+      properties:
+        symbol:
+          type: string
+        entry:
+          type: number
+        stop:
+          type: number
+        target:
+          type: number
+        direction:
+          type: string
+        leverage:
+          type: number
+          default: 10
+        market:
+          type: string
+          default: futures
+        budget:
+          type: number
+          default: 100
+        trailing:
+          type: boolean
+          default: false
+
+    QuantityRequest:
+      type: object
+      properties:
+        symbol:
+          type: string
+        price:
+          type: number
+        leverage:
+          type: number
+        budget:
+          type: number
+
+    SLTPRequest:
+      type: object
+      properties:
+        df:
+          type: array
+          items:
+            type: object
+        direction:
+          type: string
+
+    PredictSLTPRequest:
+      type: object
+      properties:
+        symbol:
+          type: string
+        direction:
+          type: string
+          enum: [LONG, SHORT]
+        entry:
+          type: number
+
+    AiAnalyzeRequest:
+      type: object
+      properties:
+        rsi:
+          type: number
+        adx:
+          type: number
+        trend:
+          type: string
+        volume:
+          type: string
+        pattern:
+          type: string
+
+    BacktestRequest:
+      type: object
+      properties:
+        prices:
+          type: array
+          items:
+            type: object
+        symbol:
+          type: string
+        interval:
+          type: string
+          default: "15m"
+
     GridTradeRequest:
       type: object
       properties:
         symbol:
           type: string
-          example: ETHUSDT
         budget:
           type: number
-          example: 100
         grid_count:
           type: integer
-          example: 6
         grid_pct:
           type: number
-          example: 0.5
         leverage_min:
           type: integer
-          example: 10
         leverage_max:
           type: integer
-          example: 25
         direction:
           type: string
           enum: [BOTH, BUY, SELL]
-          example: BOTH
         tp_pct:
           type: number
-          example: 1.0
         sl_pct:
           type: number
-          example: 1.0
         futures:
           type: boolean
-          example: true
+
 
 
 
