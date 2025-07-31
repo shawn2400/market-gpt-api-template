@@ -1,175 +1,70 @@
-import os
-import uvicorn
-import time
-import pandas as pd
+# main.py
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+import os
+
 from dotenv import load_dotenv
-from pydantic import BaseModel
 
-# נתיבים
-from routes import ai, trade, multi_scan, grid
+from routes.ai import router as ai_router
+from routes.trade import router as trade_router
+from routes.grid import router as grid_router
+from routes.multi_scan import router as multi_router
 
-# ייבוא לוגיקה
-from utils.report_utils import generate_daily_report
-from utils.quantity_utils import calculate_quantity
-from utils.sl_tp_utils import calculate_sl_tp
-from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
-from news_utils import get_latest_news, analyze_news_sentiment
-from utils.backtest_utils import run_backtest
-from utils.trade_executor import execute_trade_live
-from utils.scanner_utils import scan_all
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-from utils.grid_tracker import get_open_grids
 
-# טעינת ENV
 load_dotenv()
 
-# === יצירת האפליקציה ===
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר חכם עם Binance, Grid, Spot, Futures, AI ודוחות בזמן אמת",
-    version="2.0.3"
+    description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid) כולל ניתוחים, דוחות, AI, SL/TP ודשבורד.",
+    version="2.0.2"
 )
 
-# === MODELS ===
-class SLTPRequest(BaseModel):
-    df: list
-    direction: str
+# אפשר CORS אם יש צורך להתחבר מה-Frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class QuantityRequest(BaseModel):
-    symbol: str
-    price: float
-    leverage: float
-    budget: float
+# === Routers עיקריים ===
+app.include_router(ai_router)
+app.include_router(trade_router)
+app.include_router(grid_router)
+app.include_router(multi_router)
 
-class BacktestRequest(BaseModel):
-    prices: list
-    symbol: str
-    interval: str = "15m"
 
-class TradeRequest(BaseModel):
-    symbol: str
-    entry: float
-    stop: float = None
-    target: float = None
-    direction: str
-    leverage: float = 10
-    market: str = "futures"  # "futures", "spot", "grid"
-    budget: float = 100
-    trailing: bool = False
-
-class ScanRequest(BaseModel):
-    market: str = "futures"
-    min_quality: int = 6
-    top: int = 1
-    trending_only: bool = False
-    trending_source: str = "coingecko"
-
-class PredictSLTPRequest(BaseModel):
-    symbol: str
-    direction: str
-    entry: float
-
-# === ROUTES ===
-
+# === Status Endpoint ===
 @app.get("/")
-def root():
+async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-@app.post("/sl_tp")
-def sl_tp(req: SLTPRequest):
-    return calculate_sl_tp(req.df, req.direction)
 
-@app.post("/calculate-quantity")
-def calc_qty(req: QuantityRequest):
-    qty = calculate_quantity(req.symbol, req.price, req.leverage, req.budget)
-    return {"quantity": qty}
-
-@app.post("/backtest")
-def backtest(req: BacktestRequest):
-    df = pd.DataFrame(req.prices)
-    return run_backtest(df, req.symbol, req.interval)
-
-@app.post("/ai-analyze")
-def ai_analyze(payload: dict):
-    rsi = payload.get("rsi", 50)
-    adx = payload.get("adx", 20)
-    trend = payload.get("trend", "up")
-    volume = payload.get("volume", "normal")
-    pattern = payload.get("pattern", "none")
-    return analyze_with_ai(rsi, adx, trend, volume, pattern)
-
-@app.post("/predict-sl-tp")
-def predict_sl_tp(req: PredictSLTPRequest):
-    return predict_optimal_sl_tp(req.symbol, req.direction, req.entry)
-
-@app.get("/news")
-def news():
-    return get_latest_news()
-
-@app.get("/analyze-news")
-def analyze_news():
-    return analyze_news_sentiment()
-
-@app.post("/execute-trade")
-def execute_trade(req: TradeRequest):
-    return execute_trade_live(
-        symbol=req.symbol,
-        entry=req.entry,
-        stop=req.stop,
-        tp=req.target,
-        direction=req.direction,
-        leverage=req.leverage,
-        budget_usd=req.budget,
-        use_grid=(req.market == "grid"),
-        use_trailing=req.trailing,
-        user_id="api_user"
-    )
-
-@app.post("/scan")
-def scan(req: ScanRequest):
-    return scan_all(
-        market=req.market,
-        min_quality=req.min_quality,
-        top=req.top,
-        trending_only=req.trending_only,
-        trending_source=req.trending_source
-    )
-
-@app.get("/daily-report")
-def daily_report():
-    return generate_daily_report()
-
+# === Auto Executor Controls ===
 @app.get("/executor/start")
 async def start_executor():
-    await start_executor_loop()
-    return {"status": "started"}
+    started = start_executor_loop()
+    return {"status": "started" if started else "already running"}
 
 @app.get("/executor/stop")
-def stop_executor():
-    stop_executor_loop()
-    return {"status": "stopped"}
+async def stop_executor():
+    stopped = stop_executor_loop()
+    return {"status": "stopped" if stopped else "not running"}
 
 @app.get("/executor/status")
-def executor_status():
-    return {"running": is_executor_running()}
+async def executor_status():
+    running = is_executor_running()
+    return {"running": running}
 
-@app.get("/grid/status")
-def grid_status():
-    grids = get_open_grids()
-    if not grids:
-        return {"status": "no active grids"}
-    return {"status": "active", "grids": grids}
 
-# === ROUTERS נוספים ===
-app.include_router(ai.router)
-app.include_router(trade.router)
-app.include_router(multi_scan.router)
-app.include_router(grid.router)
-
-# === ENTRY POINT ===
+# === הרצה ישירה אם צריך מקומית ===
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=10000, reload=True)
+
 
 
 
