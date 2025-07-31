@@ -1,95 +1,53 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
+  description: >
+    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance, מבצע ניתוחים טכניים,
+    טריידים בפועל, חיזוי AI, גרפים, דוחות וסטטיסטיקות חכמות.
   version: 2.0.1
-  description: |
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance,
-    מבצע ניתוחים טכניים, טריידים בפועל, חיזוי AI, גרפים, דוחות וסטטיסטיקות חכמות.
-
 servers:
   - url: https://algogpt-docker.onrender.com
 
 tags:
-  - name: Scan
   - name: Trades
-  - name: AI
-  - name: News
   - name: Reports
+  - name: AI
   - name: Executor
   - name: Config
+  - name: News
 
 paths:
   /:
     get:
-      tags: [Executor]
-      summary: בדיקת תקינות השרת
+      tags: [Config]
+      summary: בדיקת סטטוס השרת
       operationId: checkServerStatus
       responses:
         '200':
           description: השרת פועל
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
-                  message:
-                    type: string
-                    example: AlgoGPT API is running ✅
 
   /scan:
     post:
-      tags: [Scan]
-      summary: סריקה חיה של שוק הקריפטו לפי איכות וטרנד
-      operationId: runLiveScan
+      tags: [Trades]
+      summary: סריקה טכנית חיה
+      operationId: scanLiveMarket
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ScanRequest'
+        required: false
       responses:
         '200':
-          description: תוצאה של סריקה
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
+          description: הצלחה
 
   /scan/multi:
     get:
-      tags: [Scan]
-      summary: סריקה מרובת טיימפריימים עם AI
-      operationId: runMultiTFScan
+      tags: [Trades]
+      summary: סריקת Multi-TF עם AI
+      operationId: multiTfScan
       parameters:
-        - name: min_quality
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 6
-        - name: top
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 10
-        - name: frames
+        - name: market
           in: query
           required: false
           schema:
             type: string
-            default: 5m,15m,1h
-        - name: markets
-          in: query
-          required: false
-          schema:
-            type: string
-            default: futures,spot
         - name: trending_only
           in: query
           required: false
@@ -100,36 +58,25 @@ paths:
           required: false
           schema:
             type: string
-            default: coingecko
+        - name: top
+          in: query
+          required: false
+          schema:
+            type: integer
       responses:
         '200':
-          description: תוצאות מרובות טיימפריימים
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  count:
-                    type: integer
-                  results:
-                    type: array
-                    items:
-                      type: object
+          description: הצלחה
 
   /execute-trade:
     post:
       tags: [Trades]
-      summary: ביצוע טרייד בפועל
-      operationId: executeTradeLive
+      summary: ביצוע טרייד חי בפועל
+      operationId: executeTrade
       requestBody:
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TradeRequest'
       responses:
         '200':
-          description: תוצאת ביצוע
+          description: טרייד בוצע
 
   /calculate-quantity:
     post:
@@ -138,20 +85,9 @@ paths:
       operationId: calculateQuantity
       requestBody:
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/QuantityRequest'
       responses:
         '200':
-          description: כמות מחושבת
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  quantity:
-                    type: number
+          description: הכמות חושבה
 
   /sl_tp:
     post:
@@ -160,216 +96,97 @@ paths:
       operationId: calculateSLTP
       requestBody:
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SLTPRequest'
       responses:
         '200':
-          description: תוצאה של SL/TP
+          description: סטופ וטייק חושבו
 
   /backtest:
     post:
       tags: [Trades]
-      summary: הרצת Backtest על גרף
+      summary: הרצת Backtest
       operationId: runBacktest
       requestBody:
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BacktestRequest'
       responses:
         '200':
-          description: תוצאת הסימולציה
+          description: backtest הושלם
 
   /ai-analyze:
     post:
       tags: [AI]
-      summary: ניתוח טרייד לפי RSI, ADX, מגמה, תבנית
-      operationId: analyzeWithAI
+      summary: חיזוי AI גרפי
+      operationId: aiPricePrediction
       requestBody:
         required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                rsi:
-                  type: number
-                adx:
-                  type: number
-                pattern:
-                  type: string
-                trend:
-                  type: string
-                volume:
-                  type: number
       responses:
         '200':
-          description: ניתוח AI
+          description: AI ניתח טווח
 
   /predict-sl-tp:
     post:
       tags: [AI]
-      summary: חיזוי SL ו־TP אופטימלי לפי GPT
-      operationId: predictSLTP
+      summary: חיזוי SL ו־TP עם GPT
+      operationId: aiPredictSLTP
       requestBody:
         required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                entry_price:
-                  type: number
-                direction:
-                  type: string
       responses:
         '200':
-          description: SL ו־TP מוצעים
+          description: SL/TP נוצרו
 
   /news:
     get:
       tags: [News]
-      summary: שליפת חדשות קריפטו עדכניות
+      summary: קבלת חדשות קריפטו
       operationId: getCryptoNews
       responses:
         '200':
-          description: חדשות מוצגות
+          description: חדשות נשלפו
 
   /analyze-news:
     get:
       tags: [News]
       summary: ניתוח סנטימנט חדשות
-      operationId: analyzeNewsSentiment
+      operationId: analyzeNews
       responses:
         '200':
-          description: ניתוח סנטימנט
+          description: סנטימנט נוצר
 
   /daily-report:
     get:
       tags: [Reports]
-      summary: הפקת דוח יומי ב־PDF
-      operationId: generateDailyReport
+      summary: הפקת דוח יומי PDF
+      operationId: getDailyReport
       responses:
         '200':
-          description: דוח בסיס64
+          description: דוח PDF נוצר
 
   /executor/start:
     get:
       tags: [Executor]
-      summary: התחלת אוטו־אקסקיושן
-      operationId: startExecutorLoop
+      summary: התחלת Auto Executor
+      operationId: startAutoExecutor
       responses:
         '200':
-          description: הופעל
+          description: לולאה התחילה
 
   /executor/stop:
     get:
       tags: [Executor]
-      summary: עצירת האקסקיושן האוטומטי
-      operationId: stopExecutorLoop
+      summary: עצירת Auto Executor
+      operationId: stopAutoExecutor
       responses:
         '200':
-          description: נעצר
+          description: לולאה נעצרה
 
   /executor/status:
     get:
       tags: [Executor]
-      summary: בדיקת סטטוס של הלולאה
+      summary: בדיקת סטטוס Auto Executor
       operationId: getExecutorStatus
       responses:
         '200':
-          description: מצב פעיל/כבוי
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  running:
-                    type: boolean
+          description: סטטוס נשלף
 
-components:
-  schemas:
-    ScanRequest:
-      type: object
-      properties:
-        market:
-          type: string
-          example: futures
-        min_quality:
-          type: integer
-          example: 6
-        top:
-          type: integer
-          example: 1
-        trending_only:
-          type: boolean
-          example: true
-        trending_source:
-          type: string
-          example: coingecko
-
-    SLTPRequest:
-      type: object
-      properties:
-        df:
-          type: array
-          items:
-            type: object
-        direction:
-          type: string
-
-    QuantityRequest:
-      type: object
-      properties:
-        symbol:
-          type: string
-        price:
-          type: number
-        leverage:
-          type: number
-        budget:
-          type: number
-
-    BacktestRequest:
-      type: object
-      properties:
-        prices:
-          type: array
-          items:
-            type: object
-        symbol:
-          type: string
-        interval:
-          type: string
-          default: 15m
-
-    TradeRequest:
-      type: object
-      properties:
-        symbol:
-          type: string
-        entry:
-          type: number
-        stop:
-          type: number
-        target:
-          type: number
-        direction:
-          type: string
-        leverage:
-          type: number
-          default: 10
-        market:
-          type: string
-          default: futures
-        budget:
-          type: number
-          default: 100
 
 
 
