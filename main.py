@@ -7,22 +7,24 @@ import os
 
 from dotenv import load_dotenv
 
+# נתיבים
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
 
+# בקרת אוטומציה
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 
 load_dotenv()
 
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid) כולל ניתוחים, דוחות, AI, SL/TP ודשבורד.",
-    version="2.0.2"
+    description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid) כולל ניתוחים, AI, SL/TP, גרידים ודוחות.",
+    version="2.0.3"
 )
 
-# אפשר CORS אם יש צורך להתחבר מה-Frontend
+# CORS (מותר מכל מקור)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,12 +39,10 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-
-# === Status Endpoint ===
+# === Root Route ===
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
-
 
 # === Auto Executor Controls ===
 @app.get("/executor/start")
@@ -57,13 +57,13 @@ async def stop_executor():
 
 @app.get("/executor/status")
 async def executor_status():
-    running = is_executor_running()
-    return {"running": running}
+    return {"running": is_executor_running()}
 
 
-# === הרצה ישירה אם צריך מקומית ===
+# === Run Locally (optional) ===
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=10000, reload=True)
+
 
 
 
