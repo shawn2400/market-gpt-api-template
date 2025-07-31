@@ -3,14 +3,24 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# ✅ ראוטים
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
-from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
+
+# ✅ Executor
+from auto_executor import (
+    start_executor_loop,
+    stop_executor_loop,
+    is_executor_running
+)
+
+# ✅ WebSocket חי למחירים
 from utils.ws_fallback import launch_websocket
 
-# ✅ משתני סביבה (נמשכים מרנדר בלבד – אין שימוש ב־.env)
+# ✅ משתני סביבה מ־Render בלבד
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -28,13 +38,13 @@ REQUIRED_ENV_VARS = [
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-# ✅ WebSocket חי למחירי שוק
+# ✅ הפעלת WebSocket חי (כברירת מחדל BTCUSDT)
 launch_websocket("BTCUSDT")
 
 # 🌐 FastAPI Init
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
+    description="API למסחר אלגוריתמי בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
     version="2.0.4"
 )
 
@@ -44,21 +54,21 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
-# 📌 ראוטים ראשיים
+# 📌 ראוטים
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# 🔍 בדיקת שרת
+# 🔍 בדיקת סטטוס שרת
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# ▶️ הפעלת AutoExecutor
+# ▶️ הרצת AutoExecutor
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -73,12 +83,13 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-# ▶️ אם AUTO_RUN מופעל – הפעל לולאה אוטומטית
+# ▶️ הפעלה אוטומטית אם AUTO_RUN מופעל
 if AUTO_RUN:
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
