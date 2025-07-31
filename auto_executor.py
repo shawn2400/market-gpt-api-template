@@ -3,7 +3,7 @@
 import os
 import time
 import logging
-from utils.scan_futures import scan_all
+from utils.scanner_utils import scan_all
 from utils.trade_executor import execute_trade_live
 from utils.trade_storage import get_open_trades_count
 from dotenv import load_dotenv
@@ -53,6 +53,7 @@ def auto_executor_loop():
             logging.exception(f"[AUTO_EXECUTOR] ❌ שגיאה: {type(e).__name__} – {e}")
 
         time.sleep(DELAY)
+
 
 
 
