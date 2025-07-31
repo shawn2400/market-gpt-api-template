@@ -1,28 +1,24 @@
+# utils/scanner_utils.py
+
+import asyncio
 import logging
-from utils.indicators import get_klines, compute_indicators
+from utils.get_klines import get_klines
+from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
 from utils.ai_analysis import analyze_with_ai
 
-def get_symbols(market_type="futures"):
-    from utils.binance_client import client
-    if market_type == "spot":
-        exchange_info = client.get_exchange_info()
-        return [s['symbol'] for s in exchange_info['symbols'] if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING']
-    elif market_type == "futures":
-        exchange_info = client.futures_exchange_info()
-        return [s['symbol'] for s in exchange_info['symbols'] if s['contractType'] == 'PERPETUAL']
-    else:
-        return []
+semaphore = asyncio.Semaphore(5)
 
 def analyze_symbol(
     symbol,
     interval="15m",
     market_type="futures",
     limit=120,
+    trending_only=False,
     with_ai=False,
     min_quality=6,
     min_volume=0,
-    frames=None  # ✅ תמיכה ל-Multi-TF
+    frames=None
 ):
     try:
         df = get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
@@ -39,11 +35,10 @@ def analyze_symbol(
         close = last.get("close", 0)
 
         direction = "LONG" if close > ema21 and rsi > 50 and adx > 20 else "SHORT"
-
         pattern = last.get("pattern", "")
         trend = last.get("trend", "")
-        quality = compute_quality_score(df)
 
+        quality = compute_quality_score(df)
         if quality < min_quality:
             return None
         if volume < min_volume:
@@ -69,41 +64,66 @@ def analyze_symbol(
             "pattern": pattern,
             "quality_score": ai_result["score"],
             "ai_answer": ai_result["answer"],
-            "frames": frames or [interval]  # ✅ תוסף תואם multi_tf_scanner
+            "frames": frames or [interval]
         }
 
     except Exception as e:
-        logging.error(f"[analyze_symbol] {symbol} ❌ {e}")
+        logging.error(f"[analyze_symbol] ❌ {symbol} @ {interval}: {e}")
         return None
 
-def scan_all(
+
+async def scan_all(
     market_type="futures",
     interval="15m",
     limit=120,
-    top=1,
     min_quality=6,
-    with_ai=False,
     min_volume=0,
-    trending_only=False
+    trending_only=False,
+    with_ai=False,
+    top=3
 ):
-    symbols = get_symbols(market_type)
+    from utils.trending_utils import get_trending_symbols
+
+    logging.info(f"[scan_all] 🔍 סריקה: market={market_type}, tf={interval}, quality≥{min_quality}, trending={trending_only}")
+
+    try:
+        symbols = get_trending_symbols(trending_source="coingecko", market_type=market_type) if trending_only else []
+    except Exception as e:
+        logging.warning(f"[scan_all] ⚠️ שגיאה בשליפת טרנדינג: {e}")
+        symbols = []
+
+    if not symbols:
+        # ברירת מחדל – כל הסימבולים הנפוצים
+        from utils.watchlist_utils import get_default_watchlist
+        symbols = get_default_watchlist(market_type)
 
     results = []
-    for symbol in symbols:
-        result = analyze_symbol(
-            symbol=symbol,
-            interval=interval,
-            market_type=market_type,
-            limit=limit,
-            with_ai=with_ai,
-            min_quality=min_quality,
-            min_volume=min_volume
-        )
-        if result:
-            results.append(result)
 
-    sorted_results = sorted(results, key=lambda x: x["quality_score"], reverse=True)
-    return sorted_results[:top]
+    async def safe_analyze(symbol):
+        try:
+            async with semaphore:
+                result = analyze_symbol(
+                    symbol=symbol,
+                    interval=interval,
+                    market_type=market_type,
+                    limit=limit,
+                    trending_only=trending_only,
+                    with_ai=with_ai,
+                    min_quality=min_quality,
+                    min_volume=min_volume,
+                    frames=[interval]
+                )
+                if result:
+                    results.append(result)
+        except Exception as e:
+            logging.error(f"[scan_all] ❌ שגיאה עבור {symbol}: {e}")
+
+    tasks = [safe_analyze(sym) for sym in symbols]
+    await asyncio.gather(*tasks)
+
+    results.sort(key=lambda x: -x["quality_score"])
+    return results[:top]
+
 
 
 
