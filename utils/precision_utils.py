@@ -1,26 +1,24 @@
 # utils/precision_utils.py
 
-import logging
 from utils.binance_client import client
 
-def get_precision_info(symbol: str) -> tuple:
+_precision_cache = {}
+
+def get_precision_info(symbol: str):
     """
-    מחזיר את ה־stepSize ו־minQty לפי הנתונים של Binance Futures עבור סימבול נתון.
-    אם אין נתונים – מחזיר ברירות מחדל.
+    מחזיר מידע על דיוק חוזים (precision) מ־Binance עבור symbol.
     """
-    try:
-        info = client.futures_exchange_info()
-        for s in info["symbols"]:
-            if s["symbol"] == symbol:
-                step_size = 0.01
-                min_qty = 0.0
-                for f in s["filters"]:
-                    if f["filterType"] == "LOT_SIZE":
-                        step_size = float(f["stepSize"])
-                        min_qty = float(f["minQty"])
-                        break
-                return step_size, min_qty
-    except Exception as e:
-        logging.error(f"[precision_utils] שגיאה ב־get_precision_info: {e}")
-    return 0.01, 0.0
+    if symbol in _precision_cache:
+        return _precision_cache[symbol]
+
+    info = client.futures_exchange_info()
+    for s in info["symbols"]:
+        if s["symbol"] == symbol:
+            for f in s["filters"]:
+                if f["filterType"] == "LOT_SIZE":
+                    step_size = float(f["stepSize"])
+                    _precision_cache[symbol] = {"stepSize": step_size}
+                    return _precision_cache[symbol]
+    return {"stepSize": 0.01}  # ברירת מחדל
+
 
