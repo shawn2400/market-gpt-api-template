@@ -22,14 +22,17 @@ from utils.trade_executor import execute_trade_live
 from utils.scanner_utils import scan_all
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 
+# טעינת ENV
 load_dotenv()
+
+# === יצירת האפליקציה ===
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר חכם עם Binance, AI ודוחות בזמן אמת",
+    description="API למסחר חכם עם Binance, Grid, AI ודוחות בזמן אמת",
     version="2.0.1"
 )
 
-# === DATA MODELS ===
+# === MODELS ===
 
 class SLTPRequest(BaseModel):
     df: list
@@ -132,7 +135,7 @@ def stop_executor():
 def executor_status():
     return {"running": is_executor_running()}
 
-# נתיבים נוספים
+# === ROUTERS נוספים ===
 app.include_router(ai.router)
 app.include_router(trade.router)
 app.include_router(multi_scan.router)
@@ -141,6 +144,7 @@ app.include_router(grid.router)
 # === ENTRY POINT ===
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+
 
 
 
