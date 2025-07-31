@@ -1,60 +1,76 @@
-# utils/ws_fallback.py
-
-import threading
-import time
+import asyncio
 import json
+import time
+import aiohttp
+import threading
 import requests
-from websocket import WebSocketApp
 
-PRICE_CACHE = {}
-WS_THREADS = {}
+prices = {}
+ws_connected = False
 
 def get_price(symbol: str) -> float:
-    """שולף מחיר חי מה־cache או מבצע fallback ל־REST אם אין מידע"""
-    sym = symbol.lower()
-    if sym in PRICE_CACHE:
-        return PRICE_CACHE[sym]
+    """
+    מחזיר את המחיר האחרון של הסימבול, דרך WebSocket אם אפשר, ואם לא – דרך REST API.
+    """
+    symbol = symbol.lower()
+    if symbol in prices and prices[symbol] > 0:
+        return prices[symbol]
     try:
         url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol.upper()}"
         res = requests.get(url, timeout=5)
-        if res.ok:
-            return float(res.json()["price"])
+        return float(res.json()["price"])
     except Exception as e:
-        print(f"[Fallback] שגיאה ב־REST: {e}")
-    return 0.0
+        print(f"[WS Fallback] ❌ שגיאה ב־REST API: {e}")
+        return 0.0
 
-def _on_message(ws, msg, symbol):
-    try:
-        data = json.loads(msg)
-        PRICE_CACHE[symbol.lower()] = float(data["p"])
-    except Exception as e:
-        print(f"[WebSocket] שגיאה בפרמוס: {e}")
+def launch_websocket(symbols: list[str]):
+    """
+    משיק WebSocket חי ל־Binance עבור רשימת סימבולים. תוצאה מתעדכנת במילון prices.
+    """
+    def run_ws():
+        global ws_connected
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(ws_loop(symbols))
 
-def _on_error(ws, err):
-    print(f"[WebSocket] שגיאה: {err}")
+    thread = threading.Thread(target=run_ws, daemon=True)
+    thread.start()
 
-def _on_close(ws, code, reason):
-    print(f"[WebSocket] נסגר: {code} / {reason}")
+async def ws_loop(symbols: list[str]):
+    """
+    לולאת WebSocket אסינכרונית – מאזינה לעדכונים חיים של סימבולים.
+    """
+    global ws_connected
+    ws_connected = False
 
-def _run_ws(symbol: str):
-    stream = symbol.lower() + "@ticker"
-    url = f"wss://fstream.binance.com/ws/{stream}"
-    ws = WebSocketApp(
-        url,
-        on_message=lambda ws, msg: _on_message(ws, msg, symbol),
-        on_error=_on_error,
-        on_close=_on_close,
+    stream_url = "wss://fstream.binance.com/stream?streams=" + "/".join(
+        f"{symbol.lower()}@ticker" for symbol in symbols
     )
-    try:
-        ws.run_forever()
-    except Exception as e:
-        print(f"[WebSocket] כשל: {e}")
 
-def launch_websocket(symbol: str):
-    if symbol.lower() in WS_THREADS:
-        return
-    t = threading.Thread(target=_run_ws, args=(symbol,), daemon=True)
-    WS_THREADS[symbol.lower()] = t
-    t.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(stream_url) as ws:
+                ws_connected = True
+                print(f"[WS] ✅ מחובר ל־Binance WebSocket עם {len(symbols)} זוגות")
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(msg.data)
+                            stream = data.get("stream", "")
+                            payload = data.get("data", {})
+                            symbol = payload.get("s", "").lower()
+                            price = float(payload.get("c", 0))
+                            if symbol and price > 0:
+                                prices[symbol] = price
+                        except Exception as e:
+                            print(f"[WS] ⚠️ שגיאה בעיבוד הודעה: {e}")
+                    elif msg.type in [aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR]:
+                        print("[WS] ❌ החיבור נסגר או נכשל – מעבר ל־REST")
+                        break
+    except Exception as e:
+        print(f"[WS] ❌ חיבור WebSocket נכשל: {e}")
+    finally:
+        ws_connected = False
+
 
 
