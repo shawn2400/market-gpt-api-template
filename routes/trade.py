@@ -1,10 +1,12 @@
 # routes/trade.py
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
 from utils.trade_executor import execute_trade_live
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
-from utils.get_live_price import get_live_price  # ✅ תיקון נכון
+from utils.ws_fallback import get_price  # ✅ במקום get_live_price
 
 router = APIRouter(tags=["Trades"])
 
@@ -31,7 +33,7 @@ class SLTPRequest(BaseModel):
     direction: str
     entry: float
 
-# --- נקודות קצה ---
+# --- ביצוע טרייד ---
 @router.post("/execute-trade")
 def execute_trade(req: TradeRequest):
     result = execute_trade_live(
@@ -51,6 +53,7 @@ def execute_trade(req: TradeRequest):
         raise HTTPException(status_code=400, detail=result["message"])
     return result
 
+# --- חישוב כמות ---
 @router.post("/calculate-quantity")
 def calculate_quantity_route(req: QuantityRequest):
     try:
@@ -59,19 +62,22 @@ def calculate_quantity_route(req: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# --- מחיר חי (WebSocket או REST fallback) ---
 @router.get("/price/{symbol}")
 def get_price_route(symbol: str):
-    price = get_live_price(symbol)
+    price = get_price(symbol)
     if not price:
         raise HTTPException(status_code=404, detail="מחיר לא נמצא")
     return {"symbol": symbol, "price": price}
 
+# --- חישוב SL/TP ---
 @router.post("/sl_tp")
 def calculate_sl_tp_route(req: SLTPRequest):
     try:
         return calculate_sl_tp(req.entry, req.direction)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 
 
