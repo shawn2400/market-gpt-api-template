@@ -14,7 +14,16 @@ def get_symbols(market_type="futures"):
     else:
         return []
 
-def analyze_symbol(symbol, interval="15m", market_type="futures", limit=120, with_ai=False, min_quality=6, min_volume=0):
+def analyze_symbol(
+    symbol,
+    interval="15m",
+    market_type="futures",
+    limit=120,
+    with_ai=False,
+    min_quality=6,
+    min_volume=0,
+    frames=None  # ✅ תמיכה ל-Multi-TF
+):
     try:
         df = get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or df.empty:
@@ -60,13 +69,23 @@ def analyze_symbol(symbol, interval="15m", market_type="futures", limit=120, wit
             "pattern": pattern,
             "quality_score": ai_result["score"],
             "ai_answer": ai_result["answer"],
+            "frames": frames or [interval]  # ✅ תוסף תואם multi_tf_scanner
         }
 
     except Exception as e:
         logging.error(f"[analyze_symbol] {symbol} ❌ {e}")
         return None
 
-def scan_all(market_type="futures", interval="15m", limit=120, top=1, min_quality=6, with_ai=False, min_volume=0, trending_only=False):
+def scan_all(
+    market_type="futures",
+    interval="15m",
+    limit=120,
+    top=1,
+    min_quality=6,
+    with_ai=False,
+    min_volume=0,
+    trending_only=False
+):
     symbols = get_symbols(market_type)
 
     results = []
@@ -85,6 +104,7 @@ def scan_all(market_type="futures", interval="15m", limit=120, top=1, min_qualit
 
     sorted_results = sorted(results, key=lambda x: x["quality_score"], reverse=True)
     return sorted_results[:top]
+
 
 
 
