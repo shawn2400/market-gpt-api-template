@@ -64,7 +64,8 @@ def analyze_symbol(
             "pattern": pattern,
             "quality_score": ai_result["score"],
             "ai_answer": ai_result["answer"],
-            "frames": frames or [interval]
+            "frames": frames or [interval],
+            "market": market_type  # 🟢 חשוב עבור trade_executor
         }
 
     except Exception as e:
@@ -83,6 +84,7 @@ async def scan_all(
     top=3
 ):
     from utils.trending_utils import get_trending_symbols
+    from utils.watchlist_utils import get_default_watchlist
 
     logging.info(f"[scan_all] 🔍 סריקה: market={market_type}, tf={interval}, quality≥{min_quality}, trending={trending_only}")
 
@@ -93,8 +95,6 @@ async def scan_all(
         symbols = []
 
     if not symbols:
-        # ברירת מחדל – כל הסימבולים הנפוצים
-        from utils.watchlist_utils import get_default_watchlist
         symbols = get_default_watchlist(market_type)
 
     results = []
@@ -123,6 +123,7 @@ async def scan_all(
 
     results.sort(key=lambda x: -x["quality_score"])
     return results[:top]
+
 
 
 
