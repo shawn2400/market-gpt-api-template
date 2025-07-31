@@ -89,9 +89,10 @@ async def start_executor_loop():
                 logging.info("⚠️ לא נמצאו טריידים איכותיים בסבב זה.")
 
         except Exception as e:
-            logging.exception(f"[AUTO_EXECUTOR] ❌ שגיאה במהלך הריצה: {e}")
+            logging.exception(f"[AUTO_EXECUTOR] ❌ שגיאה במהלך הרצה: {e}")
 
         await asyncio.sleep(DELAY)
+
 
 
 
