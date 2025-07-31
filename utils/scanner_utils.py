@@ -1,4 +1,4 @@
-# utils/scanner_utils.py — גרסה עדכנית
+# utils/scanner_utils.py
 
 import asyncio, logging, os
 from utils.get_klines import get_klines
@@ -8,6 +8,7 @@ from utils.quality_score import compute_quality_score
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.trending_utils import get_trending_symbols
 
+# הגבלת סריקות במקביל (ברירת מחדל: 15)
 semaphore = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_SCANS", 15)))
 
 def get_symbols(market_type="futures", min_volume=1_000_000, trending_only=False):
@@ -31,7 +32,7 @@ def get_symbols(market_type="futures", min_volume=1_000_000, trending_only=False
         return out
     except Exception as e:
         logging.error(f"[scanner_utils] {e}")
-        return ["BTCUSDT","ETHUSDT","BNBUSDT"]
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 
 async def safe_get_klines(symbol, interval="1m", limit=50, market_type="futures"):
     try:
@@ -68,7 +69,7 @@ async def analyze_symbol(
         if direction == "NEUTRAL":
             return None
         qs = compute_quality_score(df)
-        sltp = predict_optimal_sl_tp(symbol, last["close"], direction) if with_ai else {"sl": None, "tp": None}
+        sltp = predict_optimal_sl_tp(direction, last["close"]) if with_ai else {"sl": None, "tp": None}
         return {
             "symbol": symbol,
             "market_type": market_type,
@@ -101,6 +102,7 @@ async def scan_all(
     filt = [r for r in raw if r and r["quality_score"] >= min_quality]
     filt.sort(key=lambda x: (-x["quality_score"], -x["volume"]))
     return filt[:5]
+
 
 
 
