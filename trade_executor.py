@@ -2,6 +2,7 @@
 
 import logging
 import time
+import os
 import pandas as pd
 from utils.quantity_utils import calculate_quantity, auto_risk_allocation
 from utils.ai_analysis import predict_optimal_sl_tp
@@ -12,6 +13,7 @@ from snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from utils.report_utils import send_email_alert
 from utils.binance_client import client
+from utils.precision_utils import round_to_precision, get_precision_info
 
 # הגדרות Binance
 SIDE_BUY = "BUY"
@@ -45,10 +47,15 @@ def execute_trade_live(
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
         # חישוב SL/TP אם חסרים
-        if not stop or not tp:
+        if stop is None or tp is None:
             sltp = predict_optimal_sl_tp(direction, entry)
             stop = sltp["sl"]
             tp = sltp["tp"]
+
+        # עיגול SL/TP לפי דיוק Binance
+        precision = get_precision_info(symbol)
+        stop = round_to_precision(stop, precision.get("pricePrecision", 4))
+        tp = round_to_precision(tp, precision.get("pricePrecision", 4))
 
         # חישוב הון בסיכון לפי סטופ
         capital_used = auto_risk_allocation(entry_price=entry, stop_price=stop, total_budget=budget_usd, leverage=leverage, symbol=symbol)
@@ -147,18 +154,20 @@ def execute_trade_live(
             "capital_used": round(capital_used, 2),
             "quantity": quantity,
             "status": "OPEN",
-            "snapshot": snapshot_path
+            "snapshot": snapshot_path,
+            "opened_at": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         save_trade(trade_data)
 
         # עדכון PNL
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
-        # שליחת התראת אימייל
-        try:
-            send_email_alert(
-                subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
-                message=f"""Symbol: {symbol}
+        # שליחת התראת אימייל (רק אם כתובות קיימות)
+        if os.getenv("ALERT_EMAIL_ADDRESS") and os.getenv("ALERT_TO_EMAIL"):
+            try:
+                send_email_alert(
+                    subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
+                    message=f"""Symbol: {symbol}
 Direction: {direction}
 Entry: {entry}
 Stop: {stop}
@@ -168,9 +177,9 @@ Confidence: {confidence:.2f}%
 Quality: {quality}/10
 Capital Used: {capital_used:.2f}$
 Qty: {quantity}"""
-            )
-        except Exception as e:
-            logging.warning(f"[!] שליחת אימייל נכשלה: {e}")
+                )
+            except Exception as e:
+                logging.warning(f"[!] שליחת אימייל נכשלה: {e}")
 
         return {
             "status": "success",
@@ -193,6 +202,7 @@ Qty: {quantity}"""
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
