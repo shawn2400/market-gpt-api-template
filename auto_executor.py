@@ -1,10 +1,12 @@
+# auto_executor.py
+
 import threading
 import asyncio
 import logging
 import os
 
 from utils.scanner_utils import scan_all
-from utils.ws_fallback import get_price  # ✅ WebSocket עם fallback אוטומטי
+from utils.ws_fallback import get_price  # ✅ שימוש במחיר חי
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.trade_executor import execute_trade_live
 from utils.pnl_tracker import update_pnl
@@ -14,7 +16,6 @@ executor_thread = None
 executor_stop = False
 MAX_OPEN_TRADES = 4
 
-# ✅ קריאה מה־ENV של Render
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
@@ -66,22 +67,25 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
             )
             for trade in results:
                 if trade["quality_score"] >= min_quality:
-                    price = get_price(trade["symbol"])
+                    price = get_price(trade["symbol"])  # ✅ WebSocket Price
+                    if not price or price <= 0:
+                        print(f"[AutoExecutor] ⚠️ מחיר לא תקין עבור {trade['symbol']}")
+                        continue
+
                     sltp = predict_optimal_sl_tp(trade["direction"], price)
-                    if price and price > 0:
-                        result = execute_trade_live(
-                            symbol=trade["symbol"],
-                            entry=price,
-                            stop=sltp["sl"],
-                            tp=sltp["tp"],
-                            direction=trade["direction"],
-                            leverage=20,
-                            budget_usd=budget,
-                            market_type=trade.get("market", "futures")
-                        )
-                        if debug:
-                            print("[Debug] Executed:", result)
-                        await asyncio.sleep(2)
+                    result = execute_trade_live(
+                        symbol=trade["symbol"],
+                        entry=price,
+                        stop=sltp["sl"],
+                        tp=sltp["tp"],
+                        direction=trade["direction"],
+                        leverage=20,
+                        budget_usd=budget,
+                        market_type=trade.get("market", "futures")
+                    )
+                    if debug:
+                        print("[Debug] Executed:", result)
+                    await asyncio.sleep(2)
 
                 if once:
                     executor_stop = True
@@ -91,6 +95,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
