@@ -4,10 +4,11 @@ from pydantic import BaseModel
 from utils.trade_executor import execute_trade_live
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
-from utils.get_live_price import get_live_price  # ✅ תיקון כאן
+from utils.get_live_price import get_live_price  # ✅ תיקון נכון
 
 router = APIRouter(tags=["Trades"])
 
+# --- מודלים ---
 class TradeRequest(BaseModel):
     symbol: str
     entry: float
@@ -26,6 +27,11 @@ class QuantityRequest(BaseModel):
     leverage: float
     budget: float
 
+class SLTPRequest(BaseModel):
+    direction: str
+    entry: float
+
+# --- נקודות קצה ---
 @router.post("/execute-trade")
 def execute_trade(req: TradeRequest):
     result = execute_trade_live(
@@ -60,16 +66,13 @@ def get_price_route(symbol: str):
         raise HTTPException(status_code=404, detail="מחיר לא נמצא")
     return {"symbol": symbol, "price": price}
 
-class SLTPRequest(BaseModel):
-    direction: str
-    entry: float
-
 @router.post("/sl_tp")
 def calculate_sl_tp_route(req: SLTPRequest):
     try:
         return calculate_sl_tp(req.entry, req.direction)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 
 
