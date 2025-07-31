@@ -15,10 +15,6 @@ services:
         value: "6"
       - key: MAX_TRADE_BUDGET
         value: "100"
-      - key: PYTHONUNBUFFERED
-        value: "1"
-      - key: PYTHONDONTWRITEBYTECODE
-        value: "1"
       - key: SCAN_INTERVAL
         value: "10"
       - key: TRENDING_ONLY
