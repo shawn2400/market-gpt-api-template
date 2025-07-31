@@ -3,6 +3,7 @@
 import os
 import time
 import logging
+import asyncio  # ✅ חובה!
 from dotenv import load_dotenv
 from utils.scanner_utils import scan_all
 from utils.trade_executor import execute_trade_live
@@ -84,6 +85,7 @@ async def start_executor_loop():
         except Exception as e:
             logging.exception(f"[AUTO_EXECUTOR] ❌ שגיאה: {e}")
         await asyncio.sleep(DELAY)
+
 
 
 
