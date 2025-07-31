@@ -5,7 +5,7 @@ import logging
 import re
 from openai import OpenAI
 
-# הגדר מפתח מהסביבה (דורש רק שהמפתח יהיה ב־.env)
+# אין צורך ב-api_key= אם מוגדר ב־.env
 client = OpenAI()
 
 def analyze_with_ai(rsi, adx, trend, volume, pattern):
