@@ -7,8 +7,8 @@ from utils.trending_utils import get_trending_symbols
 from utils.scanner_utils import analyze_symbol, semaphore
 from utils.ai_analysis import analyze_with_ai
 
-MAX_SYMBOLS = 20  # סימבולים מרביים לניתוח
-MAX_TFS = 3       # טיימפריימים מקסימליים לסריקה
+MAX_SYMBOLS = 20  # מקסימום סימבולים לניתוח
+MAX_TFS = 3       # מקסימום טיימפריימים לניתוח
 
 async def multi_tf_scan_with_ai(
     timeframes=("5m", "15m", "1h"),
@@ -20,7 +20,7 @@ async def multi_tf_scan_with_ai(
 ):
     logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}, trending_source={trending_source}")
 
-    # 1. שליפת סימבולים טרנדיים לכל מרקט
+    # 1. שליפת סימבולים טרנדיים לפי מקור
     symbols = set()
     for market in markets:
         try:
@@ -33,7 +33,7 @@ async def multi_tf_scan_with_ai(
         logging.warning("[multi_tf_scanner] ⚠️ לא נמצאו סימבולים לסריקה.")
         return []
 
-    # 2. הגבלת עומס סמלים וטיימפריימים
+    # 2. הגבלת עומס
     if len(symbols) > MAX_SYMBOLS:
         logging.warning(f"[multi_tf_scanner] ⚠️ סימבולים רבים מדי ({len(symbols)}) – חותך ל-{MAX_SYMBOLS}")
     symbols = list(symbols)[:MAX_SYMBOLS]
@@ -42,18 +42,18 @@ async def multi_tf_scan_with_ai(
         logging.warning(f"[multi_tf_scanner] ⚠️ טיימפריימים רבים מדי ({len(timeframes)}) – חותך ל-{MAX_TFS}")
     timeframes = list(timeframes)[:MAX_TFS]
 
-    # 3. בניית משימות אסינכרוניות
+    # 3. הרצת משימות
     tasks = []
     for tf in timeframes:
         for symbol in symbols:
-            async def safe_analyze(symbol=symbol, tf=tf, markets=markets):
+            async def safe_analyze(symbol=symbol, tf=tf, market=markets[0]):
                 try:
                     async with semaphore:
-                        return await analyze_symbol(
+                        return analyze_symbol(
                             symbol=symbol,
-                            market_type=markets[0],
+                            market_type=market,
                             interval=tf,
-                            limit=50,
+                            limit=100,
                             trending_only=trending_only,
                             with_ai=False,
                             frames=[tf]
@@ -63,24 +63,24 @@ async def multi_tf_scan_with_ai(
                     return None
             tasks.append(safe_analyze())
 
-    # 4. הרצת כל המשימות במקביל
     raw_results = await asyncio.gather(*tasks)
+
+    # 4. קיבוץ לפי סימבול
     grouped = defaultdict(list)
     for result in raw_results:
         if result and result.get("quality_score", 0) >= min_quality:
             grouped[result["symbol"]].append(result)
 
-    # 5. קונפלואנס + ניתוח AI
+    # 5. קונפלואנס + ניתוח GPT
     output = []
     for symbol, entries in grouped.items():
         if len(entries) < 2:
-            continue  # דרושה קונפלואנס
+            continue  # דרוש לפחות 2 טיימפריימים תואמים
 
         directions = [x["direction"] for x in entries]
         main_dir = max(set(directions), key=directions.count)
         avg_q = sum(x["quality_score"] for x in entries if x["direction"] == main_dir) / len(entries)
 
-        # ניתוח AI
         try:
             last = entries[-1]
             ai_result = analyze_with_ai(
@@ -88,14 +88,13 @@ async def multi_tf_scan_with_ai(
                 adx=last.get("adx", 20),
                 trend=main_dir,
                 volume=last.get("volume", 1_000_000),
-                pattern="unknown"
+                pattern=last.get("pattern", "unknown")
             )
         except Exception as e:
             logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
             ai_result = {}
 
-        # 6. סינון לפי AI
-        if ai_result and not ai_result.get("error") and (main_dir in ai_result.get("answer", "")):
+        if ai_result and not ai_result.get("error") and (main_dir.lower() in ai_result.get("answer", "").lower()):
             output.append({
                 "symbol": symbol,
                 "confluence": len(entries),
@@ -107,9 +106,9 @@ async def multi_tf_scan_with_ai(
                 "details": entries
             })
 
-    # 7. מיון לפי איכות ו־AI
     output.sort(key=lambda x: (-x["avg_quality"], -x["ai_score"]))
     return output[:top]
+
 
 
 
