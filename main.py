@@ -1,13 +1,8 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 
-# 📦 Load .env only if exists
-if os.path.exists(".env"):
-    load_dotenv(".env")
-
-# ✅ Required ENV Checks (fail fast if missing)
+# ✅ בדיקה של משתני סביבה – ייכשל מיידית אם חסר משהו
 REQUIRED_ENV_VARS = [
     "BINANCE_API_KEY",
     "BINANCE_API_SECRET",
@@ -33,14 +28,14 @@ from auto_executor import (
     is_executor_running,
 )
 
-# 🚀 FastAPI App Initialization
+# 🌐 FastAPI Init
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid) כולל ניתוחים, דוחות, AI, SL/TP ודשבורד.",
     version="2.0.4"
 )
 
-# 🌐 CORS Middleware – נדרש עבור Web/Dashboard
+# 🌍 CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,6 +71,7 @@ async def stop_executor():
 @app.get("/executor/status")
 async def executor_status():
     return {"running": is_executor_running()}
+
 
 
 
