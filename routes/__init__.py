@@ -1,2 +1,3 @@
-# This file marks the routes folder as a Python package
+touch routes/__init__.py
+
 
