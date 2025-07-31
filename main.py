@@ -1,10 +1,11 @@
+# main.py
+
 import os
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# ייבוא מודולים
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.ai_analysis import analyze_with_ai
@@ -162,9 +163,9 @@ def daily_report():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/executor/start")
-def start_executor():
+async def start_executor():
     try:
-        start_executor_loop()
+        await start_executor_loop()
         return {"status": "started"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -183,6 +184,7 @@ def executor_status():
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000)
+
 
 
 
