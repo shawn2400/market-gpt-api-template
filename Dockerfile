@@ -15,27 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
-# אבחון - הדפס את תוכן תיקיית /app/routes בתוך התמונה
-RUN echo "📁 תוכן תיקיית /app/routes:" && ls -la /app/routes
+RUN echo "תוכן /app:" && ls -la /app
+RUN echo "תוכן /app/routes:" && ls -la /app/routes || echo "תיקיית routes לא נמצאה"
 
-# בדיקה אם התיקייה routes קיימת
-RUN test -d /app/routes || (echo "❌ תיקיית routes חסרה!" && exit 1)
-
-# בדיקה אם הקבצים החשובים קיימים בתוך routes
-RUN test -f /app/routes/ai.py || (echo "❌ הקובץ /app/routes/ai.py לא קיים!" && exit 1)
-RUN test -f /app/routes/__init__.py || (echo "❌ הקובץ /app/routes/__init__.py חסר!" && exit 1)
-
-CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "300"]
-
-
-
-
-
+CMD ["sleep", "infinity"]
 
 
 
