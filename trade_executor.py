@@ -1,12 +1,13 @@
-# trade_executor.py
+# utils/trade_executor.py
 
 import logging
 import time
 import os
 import pandas as pd
+
 from utils.quantity_utils import calculate_quantity, auto_risk_allocation
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.get_live_price import get_price
+from utils.get_live_price import get_live_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
 from snapshot_utils import save_trade_snapshot
@@ -15,7 +16,6 @@ from utils.report_utils import send_email_alert
 from utils.binance_client import client
 from utils.precision_utils import round_to_precision, get_precision_info
 
-# הגדרות Binance
 SIDE_BUY = "BUY"
 SIDE_SELL = "SELL"
 ORDER_TYPE_MARKET = "MARKET"
@@ -38,29 +38,21 @@ def execute_trade_live(
     take_snapshot=True
 ):
     try:
-        # שינוי מינוף
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-
-        # שליפת מחיר עדכני
-        price = get_price(symbol)
+        price = get_live_price(symbol)
         if not price or price <= 0:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
-        # חישוב SL/TP אם חסרים
         if stop is None or tp is None:
             sltp = predict_optimal_sl_tp(direction, entry)
             stop = sltp["sl"]
             tp = sltp["tp"]
 
-        # עיגול SL/TP לפי דיוק Binance
         precision = get_precision_info(symbol)
         stop = round_to_precision(stop, precision.get("pricePrecision", 4))
         tp = round_to_precision(tp, precision.get("pricePrecision", 4))
 
-        # חישוב הון בסיכון לפי סטופ
         capital_used = auto_risk_allocation(entry_price=entry, stop_price=stop, total_budget=budget_usd, leverage=leverage, symbol=symbol)
-
-        # חישוב כמות בפועל לפי תקציב
         quantity = calculate_quantity(symbol, entry, leverage, capital_used)
         if quantity <= 0:
             raise ValueError("⚠️ כמות לא חוקית – אולי תקציב קטן מדי או הגדרות דיוק לא תואמות")
@@ -68,7 +60,6 @@ def execute_trade_live(
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
-        # פתיחת פוזיציה בפועל (Market)
         order = client.futures_create_order(
             symbol=symbol,
             side=side,
@@ -77,7 +68,6 @@ def execute_trade_live(
         )
         time.sleep(0.5)
 
-        # SL: Trailing או רגיל
         if use_trailing:
             activation_price = round(price * (1.005 if direction.upper() == "LONG" else 0.995), 4)
             client.futures_create_order(
@@ -99,7 +89,6 @@ def execute_trade_live(
                 timeInForce=TIME_IN_FORCE_GTC
             )
 
-        # TP: Limit רגיל
         try:
             client.futures_create_order(
                 symbol=symbol,
@@ -112,7 +101,6 @@ def execute_trade_live(
         except Exception as e:
             logging.warning(f"[!] טייק פרופיט נכשל: {e}")
 
-        # צילום Snapshot
         snapshot_path = None
         if take_snapshot:
             snapshot_path = save_trade_snapshot({
@@ -123,7 +111,6 @@ def execute_trade_live(
                 "direction": direction.upper()
             })
 
-        # חישוב איכות וביטחון
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -139,7 +126,6 @@ def execute_trade_live(
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality, 2)
 
-        # שמירת מידע טרייד
         trade_data = {
             "symbol": symbol,
             "entry": entry,
@@ -158,11 +144,8 @@ def execute_trade_live(
             "opened_at": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         save_trade(trade_data)
-
-        # עדכון PNL
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
-        # שליחת התראת אימייל (רק אם כתובות קיימות)
         if os.getenv("ALERT_EMAIL_ADDRESS") and os.getenv("ALERT_TO_EMAIL"):
             try:
                 send_email_alert(
@@ -202,6 +185,7 @@ Qty: {quantity}"""
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
