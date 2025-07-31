@@ -13,12 +13,13 @@ from routes import ai, trade, multi_scan, grid
 from utils.report_utils import generate_daily_report
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
-from utils.ai_analysis import analyze_with_ai
+from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
 from news_utils import get_latest_news, analyze_news_sentiment
 from utils.backtest_utils import run_backtest
 from utils.trade_executor import execute_trade_live
 from utils.scanner_utils import scan_all
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
+from utils.grid_tracker import get_open_grids
 
 # טעינת ENV
 load_dotenv()
@@ -64,6 +65,11 @@ class ScanRequest(BaseModel):
     trending_only: bool = False
     trending_source: str = "coingecko"
 
+class PredictSLTPRequest(BaseModel):
+    symbol: str
+    direction: str
+    entry: float
+
 # === ROUTES ===
 
 @app.get("/")
@@ -92,6 +98,10 @@ def ai_analyze(payload: dict):
     volume = payload.get("volume", "normal")
     pattern = payload.get("pattern", "none")
     return analyze_with_ai(rsi, adx, trend, volume, pattern)
+
+@app.post("/predict-sl-tp")
+def predict_sl_tp(req: PredictSLTPRequest):
+    return predict_optimal_sl_tp(req.symbol, req.direction, req.entry)
 
 @app.get("/news")
 def news():
@@ -144,6 +154,13 @@ def stop_executor():
 def executor_status():
     return {"running": is_executor_running()}
 
+@app.get("/grid/status")
+def grid_status():
+    grids = get_open_grids()
+    if not grids:
+        return {"status": "no active grids"}
+    return {"status": "active", "grids": grids}
+
 # === ROUTERS נוספים ===
 app.include_router(ai.router)
 app.include_router(trade.router)
@@ -153,6 +170,7 @@ app.include_router(grid.router)
 # === ENTRY POINT ===
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+
 
 
 
