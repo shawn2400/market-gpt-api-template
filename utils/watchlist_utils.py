@@ -42,4 +42,15 @@ def auto_update_watchlist(trades, threshold=7):
                 reason=f"עבר QS {threshold}+ Multi-TF"
             )
 
+def get_default_watchlist(market_type="futures"):
+    """
+    מחזיר רשימת ברירת מחדל של סמלים למקרה שאין טרנדינג זמין.
+    """
+    if market_type == "spot":
+        return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
+    elif market_type == "grid":
+        return ["BCHUSDT", "TRXUSDT", "LINKUSDT", "MATICUSDT", "LTCUSDT"]
+    return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "OPUSDT", "AVAXUSDT", "NEARUSDT"]
+
+
 
