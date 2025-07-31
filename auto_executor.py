@@ -1,8 +1,8 @@
-# auto_executor.py
-
 import threading
 import asyncio
 import logging
+import os
+
 from utils.scanner_utils import scan_all
 from utils.get_live_price import get_live_price
 from utils.ai_analysis import predict_optimal_sl_tp
@@ -14,11 +14,21 @@ executor_thread = None
 executor_stop = False
 MAX_OPEN_TRADES = 4
 
-def start_executor_loop(debug=False, once=False, delay=30, min_quality=7, budget=250):
+# ✅ קריאה מה־ENV של Render
+AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
+MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
+MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
+
+def start_executor_loop(debug=False, once=False, delay=None, min_quality=None, budget=None):
     global executor_thread, executor_stop
     if executor_thread and executor_thread.is_alive():
         return False
     executor_stop = False
+
+    delay = delay or SCAN_INTERVAL
+    min_quality = min_quality or MIN_QUALITY_SCORE
+    budget = budget or MAX_TRADE_BUDGET
 
     def run_loop():
         loop = asyncio.new_event_loop()
@@ -37,7 +47,7 @@ def stop_executor_loop():
 def is_executor_running():
     return executor_thread is not None and executor_thread.is_alive()
 
-async def executor_loop(debug=False, once=False, delay=30, min_quality=7, budget=250):
+async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget=100):
     global executor_stop
     while not executor_stop:
         try:
