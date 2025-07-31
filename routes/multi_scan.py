@@ -1,5 +1,4 @@
 # routes/multi_scan.py
-
 from fastapi import APIRouter, Query
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 
@@ -11,11 +10,8 @@ async def scan_multi(
     min_quality: int = Query(6),
     top: int = Query(10),
     trending_only: bool = Query(False),
-    trending_source: str = Query("binance", description="מקור טרנדינג: binance / lunarcrush / coingecko"),
+    trending_source: str = Query("binance", description="binance / lunarcrush / coingecko"),
 ):
-    """
-    סריקה חכמה לפי כמה טיימפריימים, כולל ניתוח AI.
-    """
     tf_list = [t.strip() for t in timeframes.split(",")]
     trades = await multi_tf_scan_with_ai(
         timeframes=tf_list,
