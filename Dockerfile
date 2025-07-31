@@ -1,26 +1,27 @@
 FROM python:3.11-slim as base
 
-# הגדרות סביבת ריצה מומלצות
+# סביבת ריצה חכמה
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# התקנות בסיסיות בלבד (ל־numpy, scipy, matplotlib)
+# התקנות מינימליות
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas-dev liblapack-dev libjpeg-dev libpng-dev curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# יצירת תיקיית עבודה
+# תיקייה ראשית
 WORKDIR /app
 
-# התקנת התלויות
+# התקנת תלויות
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# העתקת שאר הקבצים
+# העתקת כל הקוד
 COPY . .
 
-# הפעלת השרת עם Gunicorn ו-UvicornWorker
+# הרצת Gunicorn עם uvicorn
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "300"]
+
 
 
 
