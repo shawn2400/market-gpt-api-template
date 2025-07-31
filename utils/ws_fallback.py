@@ -1,76 +1,75 @@
-import asyncio
-import json
-import time
-import aiohttp
+# ✅ utils/ws_fallback.py
+
 import threading
+import time
+import json
+import websocket
 import requests
 
-prices = {}
-ws_connected = False
+_ws_data = {}
+_ws_threads = {}
+_rest_fallback_ttl = 20  # שניות בין קריאות REST במקרה כשל
+_last_rest_call = {}
+
+BINANCE_WS_URL = "wss://fstream.binance.com/ws"
+BINANCE_REST_URL = "https://fapi.binance.com/fapi/v1/ticker/price?symbol={}"
+
+def _on_message(ws, message, symbol):
+    try:
+        data = json.loads(message)
+        if "p" in data:
+            _ws_data[symbol] = float(data["p"])
+    except Exception as e:
+        print(f"[ws_fallback] שגיאה בפיענוח הודעה: {e}")
+
+def _on_error(ws, error):
+    print(f"[ws_fallback] WebSocket Error: {error}")
+
+def _on_close(ws, close_status_code, close_msg):
+    print(f"[ws_fallback] חיבור נסגר – קוד: {close_status_code}, הודעה: {close_msg}")
+
+def _ws_run(symbol):
+    try:
+        url = f"{BINANCE_WS_URL}/{symbol.lower()}@trade"
+        ws = websocket.WebSocketApp(
+            url,
+            on_message=lambda ws, msg: _on_message(ws, msg, symbol),
+            on_error=_on_error,
+            on_close=_on_close
+        )
+        ws.run_forever()
+    except Exception as e:
+        print(f"[ws_fallback] כשל בחיבור ל־WebSocket עבור {symbol}: {e}")
+
+def launch_websocket(symbol):
+    symbol = symbol.upper()
+    if symbol not in _ws_threads:
+        thread = threading.Thread(target=_ws_run, args=(symbol,), daemon=True)
+        _ws_threads[symbol] = thread
+        thread.start()
 
 def get_price(symbol: str) -> float:
-    """
-    מחזיר את המחיר האחרון של הסימבול, דרך WebSocket אם אפשר, ואם לא – דרך REST API.
-    """
-    symbol = symbol.lower()
-    if symbol in prices and prices[symbol] > 0:
-        return prices[symbol]
-    try:
-        url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol.upper()}"
-        res = requests.get(url, timeout=5)
-        return float(res.json()["price"])
-    except Exception as e:
-        print(f"[WS Fallback] ❌ שגיאה ב־REST API: {e}")
-        return 0.0
+    symbol = symbol.upper()
+    price = _ws_data.get(symbol)
+    if price:
+        return price
 
-def launch_websocket(symbols: list[str]):
-    """
-    משיק WebSocket חי ל־Binance עבור רשימת סימבולים. תוצאה מתעדכנת במילון prices.
-    """
-    def run_ws():
-        global ws_connected
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(ws_loop(symbols))
-
-    thread = threading.Thread(target=run_ws, daemon=True)
-    thread.start()
-
-async def ws_loop(symbols: list[str]):
-    """
-    לולאת WebSocket אסינכרונית – מאזינה לעדכונים חיים של סימבולים.
-    """
-    global ws_connected
-    ws_connected = False
-
-    stream_url = "wss://fstream.binance.com/stream?streams=" + "/".join(
-        f"{symbol.lower()}@ticker" for symbol in symbols
-    )
+    now = time.time()
+    last_call = _last_rest_call.get(symbol, 0)
+    if now - last_call < _rest_fallback_ttl:
+        return None
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(stream_url) as ws:
-                ws_connected = True
-                print(f"[WS] ✅ מחובר ל־Binance WebSocket עם {len(symbols)} זוגות")
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        try:
-                            data = json.loads(msg.data)
-                            stream = data.get("stream", "")
-                            payload = data.get("data", {})
-                            symbol = payload.get("s", "").lower()
-                            price = float(payload.get("c", 0))
-                            if symbol and price > 0:
-                                prices[symbol] = price
-                        except Exception as e:
-                            print(f"[WS] ⚠️ שגיאה בעיבוד הודעה: {e}")
-                    elif msg.type in [aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR]:
-                        print("[WS] ❌ החיבור נסגר או נכשל – מעבר ל־REST")
-                        break
+        res = requests.get(BINANCE_REST_URL.format(symbol), timeout=2)
+        res.raise_for_status()
+        data = res.json()
+        price = float(data["price"])
+        _last_rest_call[symbol] = now
+        return price
     except Exception as e:
-        print(f"[WS] ❌ חיבור WebSocket נכשל: {e}")
-    finally:
-        ws_connected = False
+        print(f"[ws_fallback] ❌ REST fallback נכשל עבור {symbol}: {e}")
+        return None
+
 
 
 
