@@ -4,11 +4,12 @@ services:
     env: docker
     plan: starter
     autoDeploy: true
+
     envVars:
-      # first import everything from .env
+      # ✅ טעינת כל המשתנים מתוך .env
       - fromDotEnv: true
 
-      # then explicitly override or add:
+      # ✅ הגדרות קריטיות שדורכות על הקודמים
       - key: PORT
         value: "5000"
       - key: AUTO_RUN
@@ -21,9 +22,19 @@ services:
         value: "1"
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
+      - key: SCAN_INTERVAL
+        value: "10"
+      - key: TRENDING_ONLY
+        value: "true"
+      - key: MIN_VOLUME
+        value: "1500000"
 
-    # health check belongs under the service:
+    # ✅ בדיקת בריאות – בודקת שהשרת מגיב
     healthCheckPath: /
+    healthCheckIntervalSeconds: 60
+    healthCheckTimeoutSeconds: 10
+    healthCheckSuccessThreshold: 1
+    healthCheckFailureThreshold: 3
 
 
 
