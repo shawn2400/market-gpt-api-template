@@ -35,11 +35,12 @@ def execute_trade_live(
     use_grid=False,
     use_trailing=False,
     user_id=None,
-    take_snapshot=True
+    take_snapshot=True,
+    market_type="futures"
 ):
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        price = get_live_price(symbol)
+        price = get_live_price(symbol, market_type=market_type)
         if not price or price <= 0:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
@@ -185,6 +186,7 @@ Qty: {quantity}"""
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
