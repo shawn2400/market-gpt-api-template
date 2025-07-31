@@ -7,7 +7,7 @@ import os
 import time
 from dotenv import load_dotenv
 
-from utils.scan_futures import scan_all
+from utils.scanner_utils import scan_all
 from utils.trade_executor import execute_trade_live
 from utils.trade_storage import get_open_trades_count
 
@@ -80,6 +80,7 @@ if __name__ == "__main__":
         max_budget=args.budget,
         market_type=args.market_type
     ))
+
 
 
 
