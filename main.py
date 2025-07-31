@@ -3,9 +3,15 @@
 import os
 import uvicorn
 import time
+import pandas as pd
 from fastapi import FastAPI
 from dotenv import load_dotenv
-from routes import ai, trade, multi_scan
+from pydantic import BaseModel
+
+# נתיבים
+from routes import ai, trade, multi_scan, grid
+
+# ייבוא לוגיקה
 from utils.report_utils import generate_daily_report
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
@@ -15,9 +21,6 @@ from utils.backtest_utils import run_backtest
 from utils.trade_executor import execute_trade_live
 from utils.scanner_utils import scan_all
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-
-from pydantic import BaseModel
-import pandas as pd
 
 load_dotenv()
 app = FastAPI(
@@ -129,14 +132,16 @@ def stop_executor():
 def executor_status():
     return {"running": is_executor_running()}
 
-# הוספת נתיבים חיצוניים (מתוך routes/)
+# נתיבים נוספים
 app.include_router(ai.router)
 app.include_router(trade.router)
 app.include_router(multi_scan.router)
+app.include_router(grid.router)
 
 # === ENTRY POINT ===
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+
 
 
 
