@@ -1,24 +1,30 @@
+# 🐍 בסיס רזה לפייתון 3.11
 FROM python:3.11-slim
 
-# ✅ משתנים חשובים – הגדרות סביבה
+# ✅ הגדרות סביבת ריצה
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-
-# ✅ מוודא שה-PYTHONPATH מוגדר כך ש-YOUR_MODULE יזוהה מכל מקום
 ENV PYTHONPATH=/app
 
-# ✅ תיקיית עבודה ראשית בתוך הקונטיינר
+# ✅ עדכון מערכת והתקנת תלותים בסיסיים
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc curl libpq-dev libffi-dev libssl-dev git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ✅ הגדרת תיקיית עבודה
 WORKDIR /app
 
-# ✅ התקנת תלותים
+# ✅ התקנת דרישות
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-# ✅ העתקת שאר הקבצים
+# ✅ העתקת כל הקוד
 COPY . .
 
-# ✅ הפעלת השרת
-CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:5000", "--timeout", "300"]
+# ✅ הפעלת Gunicorn עם UvicornWorker
+CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "300"]
+
 
 
 
