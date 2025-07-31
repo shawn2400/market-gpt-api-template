@@ -4,7 +4,7 @@ info:
   description: >
     AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance,
     מבצע ניתוחים טכניים, טריידים חיים, גרידים, דוחות, ניתוחים גרפיים ו־AI.
-  version: 2.0.1
+  version: 2.0.2
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -27,6 +27,17 @@ paths:
       responses:
         '200':
           description: השרת פועל
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  message:
+                    type: string
+                    example: AlgoGPT API is running ✅
 
   /scan:
     post:
@@ -130,39 +141,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                  example: ETHUSDT
-                budget:
-                  type: number
-                  example: 100
-                grid_count:
-                  type: integer
-                  example: 6
-                grid_pct:
-                  type: number
-                  example: 0.5
-                leverage_min:
-                  type: integer
-                  example: 10
-                leverage_max:
-                  type: integer
-                  example: 25
-                direction:
-                  type: string
-                  enum: [BOTH, BUY, SELL]
-                  example: BOTH
-                tp_pct:
-                  type: number
-                  example: 1.0
-                sl_pct:
-                  type: number
-                  example: 1.0
-                futures:
-                  type: boolean
-                  example: true
+              $ref: '#/components/schemas/GridTradeRequest'
       responses:
         '200':
           description: פקודות הגריד נשלחו לבורסה
@@ -354,6 +333,44 @@ paths:
       responses:
         '200':
           description: סטטוס נשלף
+
+components:
+  schemas:
+    GridTradeRequest:
+      type: object
+      properties:
+        symbol:
+          type: string
+          example: ETHUSDT
+        budget:
+          type: number
+          example: 100
+        grid_count:
+          type: integer
+          example: 6
+        grid_pct:
+          type: number
+          example: 0.5
+        leverage_min:
+          type: integer
+          example: 10
+        leverage_max:
+          type: integer
+          example: 25
+        direction:
+          type: string
+          enum: [BOTH, BUY, SELL]
+          example: BOTH
+        tp_pct:
+          type: number
+          example: 1.0
+        sl_pct:
+          type: number
+          example: 1.0
+        futures:
+          type: boolean
+          example: true
+
 
 
 
