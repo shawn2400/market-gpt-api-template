@@ -2,31 +2,31 @@
 
 import os
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+import time
+from fastapi import FastAPI
 from dotenv import load_dotenv
-
-# === Imports פנימיים ===
+from routes import ai, trade, multi_scan
+from utils.report_utils import generate_daily_report
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.ai_analysis import analyze_with_ai
-from utils.backtest_utils import run_backtest
-from utils.report_utils import generate_daily_report
-from utils.trade_executor import execute_trade_live
-from utils.scanner_utils import scan_all, analyze_symbol
-from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from news_utils import get_latest_news, analyze_news_sentiment
+from utils.backtest_utils import run_backtest
+from utils.trade_executor import execute_trade_live
+from utils.scanner_utils import scan_all
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 
-load_dotenv()
+from pydantic import BaseModel
+import pandas as pd
 
+load_dotenv()
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר חכם עם Binance, AI ודוחות בזמן אמת",
     version="2.0.1"
 )
 
-# === MODELS ===
+# === DATA MODELS ===
 
 class SLTPRequest(BaseModel):
     df: list
@@ -60,157 +60,83 @@ class ScanRequest(BaseModel):
     trending_only: bool = False
     trending_source: str = "coingecko"
 
-class MultiTFScanRequest(BaseModel):
-    markets: list = ["futures"]
-    timeframes: list = ["5m", "15m", "1h"]
-    trending_only: bool = False
-    top: int = 3
-    trending_source: str = "coingecko"
-
-class AnalyzeSymbolRequest(BaseModel):
-    symbol: str
-    interval: str = "15m"
-    market: str = "futures"
-    with_ai: bool = True
-    min_quality: int = 6
-    min_volume: float = 0
-
 # === ROUTES ===
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "AlgoGPT API is live ✅"}
+    return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-@app.post("/sl_tp", tags=["SL/TP"])
+@app.post("/sl_tp")
 def sl_tp(req: SLTPRequest):
-    try:
-        return calculate_sl_tp(req.df, req.direction)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return calculate_sl_tp(req.df, req.direction)
 
-@app.post("/calculate-quantity", tags=["Quantity"])
+@app.post("/calculate-quantity")
 def calc_qty(req: QuantityRequest):
-    try:
-        qty = calculate_quantity(req.symbol, req.price, req.leverage, req.budget)
-        return {"quantity": qty}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    qty = calculate_quantity(req.symbol, req.price, req.leverage, req.budget)
+    return {"quantity": qty}
 
-@app.post("/backtest", tags=["Backtest"])
+@app.post("/backtest")
 def backtest(req: BacktestRequest):
-    try:
-        import pandas as pd
-        df = pd.DataFrame(req.prices)
-        return run_backtest(df, req.symbol, req.interval)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    df = pd.DataFrame(req.prices)
+    return run_backtest(df, req.symbol, req.interval)
 
-@app.post("/ai-analyze", tags=["AI"])
+@app.post("/ai-analyze")
 def ai_analyze(payload: dict):
-    try:
-        rsi = payload.get("rsi", 50)
-        adx = payload.get("adx", 20)
-        trend = payload.get("trend", "up")
-        volume = payload.get("volume", "normal")
-        pattern = payload.get("pattern", "none")
-        return analyze_with_ai(rsi, adx, trend, volume, pattern)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    rsi = payload.get("rsi", 50)
+    adx = payload.get("adx", 20)
+    trend = payload.get("trend", "up")
+    volume = payload.get("volume", "normal")
+    pattern = payload.get("pattern", "none")
+    return analyze_with_ai(rsi, adx, trend, volume, pattern)
 
-@app.get("/news", tags=["News"])
+@app.get("/news")
 def news():
-    try:
-        return get_latest_news()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return get_latest_news()
 
-@app.get("/analyze-news", tags=["News"])
+@app.get("/analyze-news")
 def analyze_news():
-    try:
-        return analyze_news_sentiment()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return analyze_news_sentiment()
 
-@app.post("/execute-trade", tags=["Trade"])
+@app.post("/execute-trade")
 def execute_trade(req: TradeRequest):
-    try:
-        return execute_trade_live(req.dict())
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return execute_trade_live(req.dict())
 
-@app.post("/scan", tags=["Scan"])
+@app.post("/scan")
 def scan(req: ScanRequest):
-    try:
-        return scan_all(
-            market=req.market,
-            min_quality=req.min_quality,
-            top=req.top,
-            trending_only=req.trending_only,
-            trending_source=req.trending_source
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return scan_all(
+        market=req.market,
+        min_quality=req.min_quality,
+        top=req.top,
+        trending_only=req.trending_only,
+        trending_source=req.trending_source
+    )
 
-@app.post("/scan/multi", tags=["Scan"])
-async def scan_multi(req: MultiTFScanRequest):
-    try:
-        return await multi_tf_scan_with_ai(
-            markets=req.markets,
-            timeframes=req.timeframes,
-            trending_only=req.trending_only,
-            top=req.top,
-            trending_source=req.trending_source
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/analyze-symbol", tags=["Scan"])
-def analyze_symbol_post(req: AnalyzeSymbolRequest):
-    try:
-        result = analyze_symbol(
-            symbol=req.symbol,
-            interval=req.interval,
-            market_type=req.market,
-            with_ai=req.with_ai,
-            min_quality=req.min_quality,
-            min_volume=req.min_volume,
-            frames=[req.interval]
-        )
-        if not result:
-            raise HTTPException(status_code=404, detail="לא נמצא טרייד מתאים")
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/daily-report", tags=["Reports"])
+@app.get("/daily-report")
 def daily_report():
-    try:
-        return generate_daily_report()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return generate_daily_report()
 
-@app.get("/executor/start", tags=["Executor"])
+@app.get("/executor/start")
 async def start_executor():
-    try:
-        await start_executor_loop()
-        return {"status": "started"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    await start_executor_loop()
+    return {"status": "started"}
 
-@app.get("/executor/stop", tags=["Executor"])
+@app.get("/executor/stop")
 def stop_executor():
-    try:
-        stop_executor_loop()
-        return {"status": "stopped"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    stop_executor_loop()
+    return {"status": "stopped"}
 
-@app.get("/executor/status", tags=["Executor"])
+@app.get("/executor/status")
 def executor_status():
     return {"running": is_executor_running()}
 
+# הוספת נתיבים חיצוניים (מתוך routes/)
+app.include_router(ai.router)
+app.include_router(trade.router)
+app.include_router(multi_scan.router)
+
+# === ENTRY POINT ===
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5000)
+    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
 
 
 
