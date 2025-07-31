@@ -3,11 +3,13 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
+
+# ייבוא תקינים
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.ai_analysis import analyze_with_ai
-from news_utils import get_latest_news, analyze_news_sentiment  # ← תוקן כאן
-from utils.backtest_utils import run_backtest
+from news_utils import get_latest_news, analyze_news_sentiment  # ← נכון (נמצא בתיקייה הראשית)
+from backtest_utils import run_backtest  # ← תוקן כאן: הקובץ לא בתיקיית utils
 from utils.report_utils import generate_daily_report
 from utils.trade_executor import execute_trade_live
 from utils.scanner_utils import scan_all
