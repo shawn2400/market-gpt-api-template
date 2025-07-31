@@ -31,20 +31,17 @@ def calculate_sl_tp(
         if direction == 'long':
             sl = round(entry_price - sl_distance, 6)
             tp = round(entry_price + tp_distance, 6)
-            # always: sl < entry < tp
             if not (sl < entry_price < tp):
                 sl, tp = entry_price * 0.985, entry_price * 1.025
         else:
             sl = round(entry_price + sl_distance, 6)
             tp = round(entry_price - tp_distance, 6)
-            # always: tp < entry < sl
             if not (tp < entry_price < sl):
                 sl, tp = entry_price * 1.015, entry_price * 0.975
 
         return sl, tp
     except Exception as e:
         logging.error(f"[!] שגיאה בחישוב SL/TP: {e}")
-        # default לפתרון גנרי, שלא יפיל את הסורק
         if direction == "long":
             return round(entry_price * 0.99, 6), round(entry_price * 1.02, 6)
         else:
@@ -81,7 +78,17 @@ def validate_sl_tp(
     tp: float,
     direction: str
 ) -> bool:
-    """בדיקת תקינות ל־SL/
+    """
+    בדיקת תקינות ל־SL/TP עבור כיוון הטרייד.
+    מחזיר True אם תקין, אחרת False.
+    """
+    direction = direction.lower()
+    if direction == "long":
+        return sl < entry_price < tp
+    elif direction == "short":
+        return tp < entry_price < sl
+    return False
+
 
        
 
