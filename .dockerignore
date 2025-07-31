@@ -1,0 +1,24 @@
+# קבצים זמניים של פייתון
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# קבצי עורך
+*.log
+*.swp
+*.swo
+*.DS_Store
+
+# קבצים אישיים
+.env
+.vscode/
+.idea/
+
+# Git בלבד
+.git/
+.gitignore
+
+# דוחות ודברים שאינם קוד
+*.pdf
+render.yaml
