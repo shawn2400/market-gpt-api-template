@@ -1,4 +1,5 @@
 # utils/trending_utils.py
+
 import requests
 import os
 import logging
@@ -12,7 +13,7 @@ LUNARCRUSH_TRENDING_API = "https://api.lunarcrush.com/v2?data=assets&sort=galaxy
 LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY")
 
 _cache: Dict[str, tuple[List[str], float]] = {}
-CACHE_TTL = 600
+CACHE_TTL = 600  # 10 דקות
 
 def _cached(key: str) -> tuple[List[str], float]:
     return _cache.get(key, ([], 0))
@@ -20,48 +21,71 @@ def _cached(key: str) -> tuple[List[str], float]:
 def _store_cache(key: str, value: List[str]) -> None:
     _cache[key] = (value, time.time())
 
-# מיפוי סמלים לפי טיקר
 symbol_mapping: Dict[str, Dict[str, str]] = {
     "btc": {"symbol": "BTCUSDT", "market": "futures"},
     "eth": {"symbol": "ETHUSDT", "market": "futures"},
     "bnb": {"symbol": "BNBUSDT", "market": "futures"},
     "sol": {"symbol": "SOLUSDT", "market": "futures"},
-    "avax": {"symbol": "AVAXUSDT", "market": "futures"},
+    "xrp": {"symbol": "XRPUSDT", "market": "futures"},
     "ada": {"symbol": "ADAUSDT", "market": "futures"},
     "doge": {"symbol": "DOGEUSDT", "market": "futures"},
-    "shib": {"symbol": "SHIBUSDT", "market": "futures"},
-    "pepe": {"symbol": "PEPEUSDT", "market": "futures"},
+    "avax": {"symbol": "AVAXUSDT", "market": "futures"},
+    "dot": {"symbol": "DOTUSDT", "market": "futures"},
     "link": {"symbol": "LINKUSDT", "market": "futures"},
+    "matic": {"symbol": "MATICUSDT", "market": "futures"},
     "uni": {"symbol": "UNIUSDT", "market": "futures"},
+    "ltc": {"symbol": "LTCUSDT", "market": "futures"},
+    "shib": {"symbol": "SHIBUSDT", "market": "futures"},
     "near": {"symbol": "NEARUSDT", "market": "futures"},
-    "xlm": {"symbol": "XLMUSDT", "market": "futures"},
+    "fil": {"symbol": "FILUSDT", "market": "futures"},
     "atom": {"symbol": "ATOMUSDT", "market": "futures"},
-    "render": {"symbol": "RNDRUSDT", "market": "futures"},
-    "sand": {"symbol": "SANDUSDT", "market": "futures"},
-    "sui": {"symbol": "SUIUSDT", "market": "futures"},
-    "arkm": {"symbol": "ARKMUSDT", "market": "futures"},
-    "ena": {"symbol": "ENAUSDT", "market": "futures"},
-    "floki": {"symbol": "FLOKIUSDT", "market": "futures"},
-    "gala": {"symbol": "GALAUSDT", "market": "futures"},
-    "inj": {"symbol": "INJUSDT", "market": "futures"},
+    "egld": {"symbol": "EGLDUSDT", "market": "futures"},
+    "ar": {"symbol": "ARUSDT", "market": "futures"},
+    "blur": {"symbol": "BLURUSDT", "market": "futures"},
     "op": {"symbol": "OPUSDT", "market": "futures"},
-    "ron": {"symbol": "RONINUSDT", "market": "futures"},
+    "sui": {"symbol": "SUIUSDT", "market": "futures"},
+    "inj": {"symbol": "INJUSDT", "market": "futures"},
+    "gala": {"symbol": "GALAUSDT", "market": "futures"},
+    "rndr": {"symbol": "RNDRUSDT", "market": "futures"},
+    "rdnt": {"symbol": "RDNTUSDT", "market": "futures"},
+    "woo": {"symbol": "WOOUSDT", "market": "futures"},
+    "enj": {"symbol": "ENJUSDT", "market": "futures"},
+    "cake": {"symbol": "CAKEUSDT", "market": "futures"},
+    "chz": {"symbol": "CHZUSDT", "market": "futures"},
+    "alpha": {"symbol": "ALPHAUSDT", "market": "futures"},
+    "band": {"symbol": "BANDUSDT", "market": "futures"},
+    "mask": {"symbol": "MASKUSDT", "market": "futures"},
+    "agix": {"symbol": "AGIXUSDT", "market": "futures"},
+    "fet": {"symbol": "FETUSDT", "market": "futures"},
+    "ocean": {"symbol": "OCEANUSDT", "market": "futures"},
+    "rose": {"symbol": "ROSEUSDT", "market": "futures"},
+    "sxp": {"symbol": "SXPUSDT", "market": "futures"},
+    "flow": {"symbol": "FLOWUSDT", "market": "futures"},
+    "ens": {"symbol": "ENSUSDT", "market": "futures"},
+    "cfx": {"symbol": "CFXUSDT", "market": "futures"},
+    "lina": {"symbol": "LINAUSDT", "market": "futures"},
+    "trb": {"symbol": "TRBUSDT", "market": "futures"},
+    "ach": {"symbol": "ACHUSDT", "market": "futures"},
+    "magic": {"symbol": "MAGICUSDT", "market": "futures"},
+    "1000sats": {"symbol": "1000SATSUSDT", "market": "futures"},
+    "ena": {"symbol": "ENAUSDT", "market": "futures"},
+    "jup": {"symbol": "JUPUSDT", "market": "futures"},
+    "beam": {"symbol": "BEAMXUSDT", "market": "futures"},
+    "not": {"symbol": "NOTUSDT", "market": "futures"}
 }
 
 DEFAULT_SOURCES = ["binance", "lunarcrush", "coingecko"]
 
-def get_trending_symbols(
-    trending_source: Optional[str] = None,
-    market_type: str = "spot",
-    min_volume: Optional[float] = None,
-    volume_lookup: Optional[Dict[str, float]] = None,
-    top: Optional[int] = None,
-    min_change_percent: Optional[float] = None
-) -> List[str]:
+def get_trending_symbols(trending_source: Optional[str] = None,
+                         market_type: str = "spot",
+                         min_volume: Optional[float] = None,
+                         volume_lookup: Optional[Dict[str, float]] = None,
+                         top: Optional[int] = None,
+                         min_change_percent: Optional[float] = None) -> List[str]:
+
     if not trending_source:
         trending_source = DEFAULT_SOURCES[0]
     trending_source = trending_source.lower()
-    market_type = (market_type or "spot").lower()
     base_market = "futures" if market_type == "grid" else market_type
 
     cache_key = f"{trending_source}:{base_market}:{min_volume}:{top}:{min_change_percent}"
@@ -75,7 +99,6 @@ def get_trending_symbols(
     try:
         if trending_source == "binance":
             resp = requests.get(BINANCE_TRENDING_API, timeout=5)
-            resp.raise_for_status()
             data = resp.json().get("data", {}).get("articles", [])
             for art in data:
                 title = art.get("title", "").lower()
@@ -85,11 +108,10 @@ def get_trending_symbols(
 
         elif trending_source == "lunarcrush":
             if not LUNARCRUSH_API_KEY:
-                logging.warning("[trending] Missing LunarCrush API key, skipping")
+                logging.warning("[trending] Missing LunarCrush API key.")
             else:
                 url = f"{LUNARCRUSH_TRENDING_API}&key={LUNARCRUSH_API_KEY}"
                 resp = requests.get(url, timeout=5)
-                resp.raise_for_status()
                 for asset in resp.json().get("data", []):
                     sym = asset.get("symbol", "").lower()
                     mapped = symbol_mapping.get(sym)
@@ -98,13 +120,11 @@ def get_trending_symbols(
 
         elif trending_source == "coingecko":
             resp = requests.get(COINGECKO_API, timeout=5)
-            resp.raise_for_status()
             ids = [c['item']['id'] for c in resp.json().get("coins", [])]
             if ids:
                 mr = requests.get(COINGECKO_MARKET_API,
                                   params={"vs_currency": "usd", "ids": ",".join(ids),
                                           "price_change_percentage": "24h"}, timeout=5)
-                mr.raise_for_status()
                 for coin in mr.json():
                     sym = coin.get("symbol", "").lower()
                     change = coin.get("price_change_percentage_24h", 0.0)
@@ -113,10 +133,8 @@ def get_trending_symbols(
                         if min_change_percent is None or change >= min_change_percent:
                             symbols.append(mapped["symbol"])
 
-        if min_volume is not None and volume_lookup is not None:
-            original = len(symbols)
+        if min_volume and volume_lookup:
             symbols = [s for s in symbols if volume_lookup.get(s, 0) >= min_volume]
-            logging.info(f"[trending] Filtered by volume: {original}->{len(symbols)}")
 
         if top is not None and len(symbols) > top:
             symbols = symbols[:top]
@@ -128,28 +146,24 @@ def get_trending_symbols(
         logging.info(f"[trending] {trending_source} returned {len(symbols)} symbols")
         return symbols
 
-    except requests.HTTPError as he:
-        logging.error(f"[trending] HTTP error from {trending_source}: {he}")
     except Exception as e:
         logging.error(f"[trending] Error fetching {trending_source}: {e}")
 
     fallback = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
     _store_cache(cache_key, fallback)
-    logging.info(f"[trending] Fallback to default: {fallback}")
     return fallback
 
-def get_combined_trending_symbols(
-    market_type: str = "futures",
-    min_volume: Optional[float] = None,
-    volume_lookup: Optional[Dict[str, float]] = None,
-    sources: List[str] = None,
-    top: Optional[int] = None,
-    min_change_percent: Optional[float] = None
-) -> List[str]:
+def get_combined_trending_symbols(market_type: str = "futures",
+                                   min_volume: Optional[float] = None,
+                                   volume_lookup: Optional[Dict[str, float]] = None,
+                                   sources: List[str] = None,
+                                   top: Optional[int] = None,
+                                   min_change_percent: Optional[float] = None) -> List[str]:
+
     if sources is None:
         sources = DEFAULT_SOURCES
 
-    combined: List[str] = []
+    combined = []
     for src in sources:
         syms = get_trending_symbols(
             trending_source=src,
@@ -161,9 +175,8 @@ def get_combined_trending_symbols(
         )
         combined.extend(syms)
 
-    unique = sorted(set(combined))
-    logging.info(f"[trending] Combined total unique symbols: {len(unique)}")
-    return unique
+    return sorted(set(combined))
+
 
 
 
