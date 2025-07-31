@@ -2,9 +2,9 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   description: >
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance,
-    מבצע ניתוחים טכניים, טריידים חיים, גרידים, דוחות, ניתוחים גרפיים ו־AI.
-  version: 2.0.3
+    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance.
+    כולל תמיכה ב־Futures, Spot, Grid, ניתוחים טכניים, AI, דוחות ו־Auto Executor.
+  version: 2.0.4
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -27,23 +27,13 @@ paths:
       responses:
         '200':
           description: השרת פועל
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                  message:
-                    type: string
 
   /scan:
     post:
       tags: [Trades]
       summary: סריקה טכנית חיה
-      operationId: scanLiveMarket
+      operationId: scanMarket
       requestBody:
-        required: false
         content:
           application/json:
             schema:
@@ -62,6 +52,7 @@ paths:
           in: query
           schema:
             type: string
+            enum: [futures, spot, grid]
         - name: trending_only
           in: query
           schema:
@@ -70,6 +61,7 @@ paths:
           in: query
           schema:
             type: string
+            enum: [binance, coingecko, lunarcrush]
         - name: top
           in: query
           schema:
@@ -84,40 +76,38 @@ paths:
       summary: ביצוע טרייד חי בפועל
       operationId: executeTrade
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/TradeRequest"
       responses:
         '200':
-          description: טרייד בוצע
+          description: בוצע
 
   /grid/trade:
     post:
       tags: [Grid]
-      summary: פתיחת גריד חי מול Binance
-      operationId: executeGridTrade
+      summary: פתיחת גריד מול Binance
+      operationId: executeGrid
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/GridTradeRequest"
       responses:
         '200':
-          description: פקודות הגריד נשלחו לבורסה
+          description: פקודות הגריד נשלחו
 
   /grid/status:
     get:
       tags: [Grid]
-      summary: סטטוס הגריד האחרון שבוצע
-      operationId: getGridStatus
+      summary: סטטוס גרידים פעילים
+      operationId: gridStatus
       responses:
         '200':
           description: סטטוס נשלף
         '404':
-          description: לא בוצע גריד עדיין
+          description: אין גריד פעיל
 
   /calculate-quantity:
     post:
@@ -125,59 +115,55 @@ paths:
       summary: חישוב כמות לפי תקציב ומינוף
       operationId: calculateQuantity
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/QuantityRequest"
       responses:
         '200':
-          description: הכמות חושבה
+          description: הצלחה
 
   /sl_tp:
     post:
       tags: [Trades]
-      summary: חישוב SL ו־TP חכם
-      operationId: calculateSLTP
+      summary: חישוב SL ו־TP
+      operationId: calcSLTP
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/SLTPRequest"
       responses:
         '200':
-          description: סטופ וטייק חושבו
+          description: חושב
 
   /predict-sl-tp:
     post:
       tags: [AI]
-      summary: חיזוי SL ו־TP עם GPT
-      operationId: aiPredictSLTP
+      summary: חיזוי SL/TP עם GPT
+      operationId: predictSLTP
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/PredictSLTPRequest"
       responses:
         '200':
-          description: SL/TP נוצרו
+          description: חוזה
 
   /ai-analyze:
     post:
       tags: [AI]
-      summary: חיזוי AI גרפי
-      operationId: aiPricePrediction
+      summary: ניתוח שוק עם GPT
+      operationId: analyzeAI
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/AiAnalyzeRequest"
       responses:
         '200':
-          description: AI ניתח טווח
+          description: ניתוח נוצר
 
   /backtest:
     post:
@@ -185,68 +171,67 @@ paths:
       summary: הרצת Backtest
       operationId: runBacktest
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/BacktestRequest"
       responses:
         '200':
-          description: backtest הושלם
+          description: הסתיים
 
   /news:
     get:
       tags: [News]
-      summary: קבלת חדשות קריפטו
-      operationId: getCryptoNews
+      summary: חדשות קריפטו
+      operationId: getNews
       responses:
         '200':
-          description: חדשות נשלפו
+          description: נשלפו
 
   /analyze-news:
     get:
       tags: [News]
-      summary: ניתוח סנטימנט חדשות
+      summary: ניתוח חדשות GPT
       operationId: analyzeNews
       responses:
         '200':
-          description: סנטימנט נוצר
+          description: ניתוח נשלח
 
   /daily-report:
     get:
       tags: [Reports]
       summary: הפקת דוח יומי PDF
-      operationId: getDailyReport
+      operationId: dailyReport
       responses:
         '200':
-          description: דוח PDF נוצר
+          description: נוצר
 
   /executor/start:
     get:
       tags: [Executor]
       summary: התחלת Auto Executor
-      operationId: startAutoExecutor
+      operationId: startExecutor
       responses:
         '200':
-          description: לולאה התחילה
+          description: התחיל
 
   /executor/stop:
     get:
       tags: [Executor]
       summary: עצירת Auto Executor
-      operationId: stopAutoExecutor
+      operationId: stopExecutor
       responses:
         '200':
-          description: לולאה נעצרה
+          description: נעצר
 
   /executor/status:
     get:
       tags: [Executor]
-      summary: בדיקת סטטוס Auto Executor
-      operationId: getExecutorStatus
+      summary: סטטוס Auto Executor
+      operationId: executorStatus
       responses:
         '200':
-          description: סטטוס נשלף
+          description: פועל/לא
 
 components:
   schemas:
@@ -264,7 +249,6 @@ components:
           example: 1
         trending_only:
           type: boolean
-          example: false
         trending_source:
           type: string
           example: coingecko
@@ -282,18 +266,16 @@ components:
           type: number
         direction:
           type: string
+          enum: [LONG, SHORT]
         leverage:
           type: number
-          default: 10
-        market:
-          type: string
-          default: futures
         budget:
           type: number
-          default: 100
+        market:
+          type: string
+          enum: [futures, spot]
         trailing:
           type: boolean
-          default: false
 
     QuantityRequest:
       type: object
@@ -324,7 +306,6 @@ components:
           type: string
         direction:
           type: string
-          enum: [LONG, SHORT]
         entry:
           type: number
 
@@ -353,7 +334,6 @@ components:
           type: string
         interval:
           type: string
-          default: "15m"
 
     GridTradeRequest:
       type: object
@@ -372,13 +352,14 @@ components:
           type: integer
         direction:
           type: string
-          enum: [BOTH, BUY, SELL]
+          enum: [BUY, SELL, BOTH]
         tp_pct:
           type: number
         sl_pct:
           type: number
         futures:
           type: boolean
+
 
 
 
