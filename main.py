@@ -1,40 +1,39 @@
-# main.py
-
-import os
-import sys
-import time
-import threading
-import asyncio
-
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import pandas as pd
+import os
+import asyncio
+import time
+import logging
 
-sys.path.append(os.path.dirname(__file__))
+from utils.quantity_utils import calculate_quantity
+from utils.sl_tp_utils import calculate_sl_tp
+from utils.quality_score import compute_quality_score
+from utils.scanner_utils import scan_all
+from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
+from utils.trade_storage import save_trade_data
+from utils.get_live_price import get_live_price
+from utils.pnl_tracker import update_pnl
+from utils import report_utils
+from utils import snapshot_utils
+from trade_executor import execute_trade_live
+from backtest_utils import run_backtest
+from news_utils import get_crypto_news, analyze_news_sentiment
+from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
+from utils.multi_tf_scanner import multi_tf_scan_with_ai
+
+# === Bootstrapping ===
 __boot_start__ = time.time()
 load_dotenv()
-
+logging.basicConfig(level=logging.INFO)
 app = FastAPI(
-    title="AlgoGPT API PRO Ultra",
-    version="2.0.1",
-    description="API למסחר אלגוריתמי (Binance, Trending, Multi-TF, AI, Watchlist, דוחות, REST)"
+    title="AlgoGPT API",
+    description="API למסחר בזמן אמת ב-Binance כולל AI, SL/TP, טריידים, Backtest ודוחות",
+    version="2.0.1"
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-from utils.ai_analysis import analyze_with_ai
-from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-from utils.watchlist_utils import load_watchlist, add_to_watchlist
-
-# === MODELS ===
+# === Models ===
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -47,8 +46,8 @@ class QuantityRequest(BaseModel):
 
 class BacktestRequest(BaseModel):
     prices: list
-    symbol: str = "UNKNOWN"
-    interval: str = "15m"
+    symbol: str
+    interval: str
 
 class TradeRequest(BaseModel):
     symbol: str
@@ -60,217 +59,133 @@ class TradeRequest(BaseModel):
     budget: float = 100
     use_grid: bool = False
     use_trailing: bool = False
-    user_id: str = None
     take_snapshot: bool = True
-    grid_mode: str = "FUTURES"
+    user_id: str = "system"
 
-class AIAnalysisRequest(BaseModel):
-    rsi: float
-    adx: float
-    trend: str
-    volume: float
-    pattern: str
-
-# === ROUTES ===
-
+# === Routes ===
 @app.get("/")
-async def home():
+def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-@app.post("/sl_tp")
-async def sl_tp(request: SLTPRequest):
-    try:
-        from utils.sl_tp_utils import calculate_sl_tp_adaptive
-        df = pd.DataFrame(request.df)
-        return calculate_sl_tp_adaptive(df, request.direction)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/calculate-quantity")
-async def calc_qty(data: QuantityRequest):
-    try:
-        from utils.calculate_quantity import calculate_quantity
-        q = calculate_quantity(data.symbol, data.price, data.leverage, data.budget)
-        return {"quantity": q}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/news")
-async def news():
-    try:
-        from news_utils import fetch_crypto_news
-        return fetch_crypto_news()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/analyze-news")
-async def analyze_news():
-    try:
-        from news_utils import fetch_crypto_news, analyze_news_impact
-        news = fetch_crypto_news()
-        return analyze_news_impact(news)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/backtest")
-async def backtest(request: BacktestRequest):
-    try:
-        from backtest_utils import run_backtest
-        if not request.prices or len(request.prices) < 30:
-            raise HTTPException(status_code=400, detail="Insufficient data – 30 candles required")
-        df = pd.DataFrame(request.prices)
-        for col in ['open','high','low','close','volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df.dropna(inplace=True)
-        if df.empty:
-            raise HTTPException(status_code=400, detail="No valid rows after cleaning")
-        results = run_backtest(df)
-        return {
-            "symbol": request.symbol,
-            "interval": request.interval,
-            "results": results.to_dict(orient="records"),
-            "success_count": int(results.get("success", []).count(True)),
-            "total_trades": len(results),
-            "avg_quality": round(results.get("quality_score", []).mean(), 2) if not results.empty else 0
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/execute-trade")
-async def execute_trade(data: TradeRequest):
-    try:
-        if data.use_grid:
-            from utils.grid_utils import execute_grid
-            is_fut = data.grid_mode.upper() == "FUTURES"
-            return await asyncio.to_thread(
-                execute_grid,
-                symbol=data.symbol,
-                budget=data.budget,
-                grid_count=8,
-                grid_pct=0.5,
-                leverage_min=10,
-                leverage_max=35,
-                futures=is_fut,
-                direction="BOTH",
-                tp_pct=1,
-                sl_pct=1
-            )
-        else:
-            from trade_executor import execute_trade_live
-            return await asyncio.to_thread(
-                execute_trade_live,
-                symbol=data.symbol,
-                entry=data.entry,
-                stop=data.stop,
-                tp=data.tp,
-                direction=data.direction,
-                leverage=data.leverage,
-                budget_usd=data.budget,
-                use_grid=data.use_grid,
-                use_trailing=data.use_trailing,
-                user_id=data.user_id,
-                take_snapshot=data.take_snapshot
-            )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/scan")
-async def scan_market(
-    min_quality: int = Query(0),
-    interval: str = Query("1m"),
-    limit: int = Query(50),
-    trending_only: bool = Query(False),
-    min_volume: int = Query(1_000_000),
-    market_type: str = Query("futures"),
-    with_ai: bool = Query(True)
+async def scan(
+    market: str = "futures",
+    interval: str = "1m",
+    limit: int = 50,
+    min_quality: int = 6,
+    min_volume: int = 1_000_000,
+    trending_only: bool = False
 ):
     try:
-        from utils.scanner_utils import scan_all
-        results = await scan_all(
-            market_type=market_type,
-            interval=interval,
-            limit=limit,
+        results = await scan_all(market, interval, limit, min_quality, trending_only, min_volume)
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/scan/multi")
+async def scan_multi(
+    frames: str = "1m,5m,15m",
+    markets: str = "futures",
+    min_quality: int = 6,
+    top: int = 5,
+    trending_only: bool = False
+):
+    try:
+        results = await multi_tf_scan_with_ai(
+            timeframes=frames.split(","),
+            markets=markets.split(","),
             min_quality=min_quality,
-            trending_only=trending_only,
-            min_volume=min_volume,
-            with_ai=with_ai
+            top=top,
+            trending_only=trending_only
         )
         return {"count": len(results), "results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/ai-analyze")
-async def ai_analyze(data: AIAnalysisRequest):
+@app.post("/sl_tp")
+def sl_tp(req: SLTPRequest):
     try:
-        return analyze_with_ai(data.dict())
+        df = pd.DataFrame(req.df)
+        out = calculate_sl_tp(df, req.direction)
+        return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/calculate-quantity")
+def calc_quantity(req: QuantityRequest):
+    try:
+        q = calculate_quantity(req.symbol, req.price, req.leverage, req.budget)
+        return {"quantity": q}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/execute-trade")
+def execute_trade(req: TradeRequest):
+    try:
+        out = execute_trade_live(
+            symbol=req.symbol,
+            entry=req.entry,
+            stop=req.stop,
+            tp=req.tp,
+            direction=req.direction,
+            leverage=req.leverage,
+            budget=req.budget,
+            use_grid=req.use_grid,
+            use_trailing=req.use_trailing,
+            take_snapshot=req.take_snapshot,
+            user_id=req.user_id
+        )
+        return out
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/backtest")
+def backtest(req: BacktestRequest):
+    try:
+        df = pd.DataFrame(req.prices)
+        out = run_backtest(df, req.symbol, req.interval)
+        return out
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/news")
+def news():
+    return get_crypto_news()
+
+@app.get("/analyze-news")
+def analyze_news():
+    return analyze_news_sentiment()
 
 @app.get("/daily-report")
-async def daily_report():
+def daily_report(date: str = None):
     try:
-        from report_utils import generate_daily_report
-        return generate_daily_report()
+        result = report_utils.generate_daily_report(date)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/watchlist")
-async def get_watchlist():
+@app.post("/ai-analyze")
+def ai_analyze(payload: dict):
     try:
-        wl = load_watchlist()
-        return {"count": len(wl), "watchlist": wl}
+        out = analyze_with_ai(**payload)
+        return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/watchlist/add")
-async def add_watchlist_api(symbol: str, direction: str, quality_score: int = 7, reason: str = "הוסף ידנית"):
-    try:
-        ok = add_to_watchlist(symbol, direction, quality_score, reason)
-        return {"status": "ok" if ok else "exists"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/executor/status")
+def executor_status():
+    return {"running": is_executor_running()}
 
-@app.post("/start-auto")
-async def start_auto():
-    global _executor_thread
-    if is_executor_running():
-        return {"status": "already running"}
-    delay = int(os.getenv("SCAN_INTERVAL", "10"))
-    min_q = int(os.getenv("MIN_QUALITY_SCORE", "7"))
-    budget = float(os.getenv("MAX_TRADE_BUDGET", "250"))
-    _executor_thread = threading.Thread(
-        target=lambda: start_executor_loop(debug=False, delay=delay, min_quality=min_q, max_budget=budget),
-        daemon=True
-    )
-    _executor_thread.start()
+@app.post("/executor/start")
+def executor_start():
+    start_executor_loop()
     return {"status": "started"}
 
-@app.post("/stop-auto")
-async def stop_auto():
+@app.post("/executor/stop")
+def executor_stop():
     stop_executor_loop()
     return {"status": "stopped"}
 
-@app.get("/status")
-async def executor_status():
-    running = is_executor_running()
-    return {"executor_running": running, "message": "✅ פועל" if running else "🚩 לא פעיל"}
-
-@app.on_event("startup")
-async def on_startup():
-    print(f"[BOOT TIME] ready in {time.time() - __boot_start__:.2f}s")
-    if os.getenv("AUTO_RUN", "true").lower() == "true":
-        delay = int(os.getenv("SCAN_INTERVAL", "10"))
-        min_q = int(os.getenv("MIN_QUALITY_SCORE", "7"))
-        budget = float(os.getenv("MAX_TRADE_BUDGET", "250"))
-        threading.Thread(
-            target=lambda: start_executor_loop(debug=False, delay=delay, min_quality=min_q, max_budget=budget),
-            daemon=True
-        ).start()
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "5000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
 
 
 
