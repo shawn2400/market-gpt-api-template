@@ -1,50 +1,65 @@
+# utils/ai_analysis.py
+
 import os
 import openai
 import logging
 
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    logging.warning("⚠️ לא הוגדר OPENAI_API_KEY בסביבה")
-else:
-    openai.api_key = api_key
+# קריאת מפתח מהסביבה (Secrets ב־Render)
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def analyze_with_ai(rsi, adx, trend, volume, pattern):
-    if not openai.api_key:
-        return {"answer": "API key not found", "score": 0}
-    try:
-        prompt = (
-            f"ניתן ניתוח טכני: RSI={rsi}, ADX={adx}, מגמה={trend}, נפח={volume}, תבנית={pattern}. "
-            "האם זה נראה כמו טרייד טוב? הסבר בקצרה ודרג בין 1 ל־10."
-        )
-        response = openai.ChatCompletion.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-        )
-        msg = response.choices[0].message.content
-        score = next((int(s) for s in msg.split() if s.isdigit() and 1 <= int(s) <= 10), 0)
-        return {"answer": msg, "score": score}
-    except Exception as e:
-        return {"answer": f"שגיאה: {str(e)}", "score": 0}
+    prompt = f"""
+אתה מערכת מסחר חכמה. נתח שוק לפי הנתונים:
+- RSI: {rsi}
+- ADX: {adx}
+- מגמה: {trend}
+- נפח: {volume}
+- תבנית: {pattern}
 
-def predict_optimal_sl_tp(symbol, price, direction):
-    if not openai.api_key:
-        return {"sl": None, "tp": None}
+האם כדאי להיכנס לטרייד? ענה בקצרה מאוד והחזר גם ציון מ-0 עד 10.
+"""
+
     try:
-        prompt = (
-            f"הצג SL ו־TP מומלצים לסימבול {symbol} ב־{direction} סביב מחיר {price}. "
-            "החזר בפורמט JSON: {{\"sl\": ..., \"tp\": ...}}"
-        )
         response = openai.ChatCompletion.create(
             model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
+            messages=[
+                {"role": "system", "content": "אתה אנליסט שוק מתמחה בקריפטו."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5
         )
-        content = response.choices[0].message.content
-        out = eval(content.strip())
-        return out if isinstance(out, dict) else {"sl": None, "tp": None}
+
+        answer = response['choices'][0]['message']['content']
+        score = extract_score_from_text(answer)
+
+        return {
+            "answer": answer,
+            "score": score
+        }
     except Exception as e:
+        logging.error(f"[AI Error] {e}")
+        return {
+            "answer": "❌ לא ניתן לנתח כרגע – תקלה בשרת או במפתח.",
+            "score": 0
+        }
+
+def predict_optimal_sl_tp(direction: str, entry: float):
+    try:
+        sl = round(entry * 0.975, 4) if direction == "LONG" else round(entry * 1.025, 4)
+        tp = round(entry * 1.05, 4) if direction == "LONG" else round(entry * 0.95, 4)
+        return {"sl": sl, "tp": tp}
+    except Exception as e:
+        logging.error(f"[SL/TP Prediction Error] {e}")
         return {"sl": None, "tp": None}
+
+def extract_score_from_text(text):
+    import re
+    matches = re.findall(r"\b([0-9]{1,2})(?:\/10)?\b", text)
+    if matches:
+        score = int(matches[0])
+        return min(score, 10)
+    return 0
+
 
 
 
