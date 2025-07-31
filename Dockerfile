@@ -18,28 +18,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # === הגדרת תיקיית עבודה ===
 WORKDIR /app
 
-# === העתקת תלויות והתקנה ===
+# === העתקת קובץ דרישות והתקנת תלויות ===
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# === העתקת כל שאר הקבצים ===
+# === העתקת כל שאר הקבצים לתוך התמונה ===
 COPY . .
 
-# === בדיקות חשובות לפני build (למניעת קריסה ב־Render) ===
+# === הדפסת תוכן תיקיית העבודה הראשית (לאבחון) ===
+RUN echo "==== תוכן תיקיית העבודה הראשית (/app) ====" && ls -la
+
+# === בדיקות קיום תיקיית routes וקבצים חיוניים ===
 RUN test -d routes || (echo "❌ תיקיית routes חסרה!" && exit 1)
 RUN test -f routes/ai.py || (echo "❌ הקובץ routes/ai.py לא קיים!" && exit 1)
 RUN test -f routes/__init__.py || (echo "❌ הקובץ routes/__init__.py חסר!" && exit 1)
 
-# === הדפסת תוכן התיקיה routes (לאבחון שגיאות import) ===
-RUN echo "📁 routes content:" && ls -la routes
+# === הדפסת תוכן תיקיית routes (לאבחון) ===
+RUN echo "📁 תוכן תיקיית routes:" && ls -la routes
 
-# === הרצת שרת FastAPI ב־Gunicorn עם UvicornWorker ===
+# === פקודת הרצת השרת FastAPI ב-Gunicorn עם UvicornWorker ===
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "300"]
-
-
-
-
-
 
 
 
