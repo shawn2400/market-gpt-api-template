@@ -1,20 +1,37 @@
-aiohttp==3.9.5
-fpdf==1.7.2
+# FastAPI + שרתים
+fastapi==0.111.0
+uvicorn==0.30.1
 gunicorn==21.2.0
-matplotlib==3.8.4
-numpy==1.26.4
-openai==1.30.1
-pandas==2.2.2
-python-binance==1.0.17
+
+# סביבת עבודה ו־.env
 python-dotenv==1.0.1
 
-requests==2.31.0
-scikit-learn==1.4.2
+# Binance API
+python-binance==1.0.17
+
+# AI (GPT)
+openai==1.30.1
+
+# נתונים, מתמטיקה, ML
+pandas==2.2.2
+numpy==1.26.4
 scipy==1.13.1
+scikit-learn==1.4.2
+
+# אינדיקטורים טכניים
 ta==0.11.0
+
+# גרפים + דוחות
+matplotlib==3.8.4
+fpdf==1.7.2
+
+# רשת וביצועים
+requests==2.31.0
+aiohttp==3.9.5
 ujson==5.10.0
-uvicorn==0.30.1
-fastapi==0.111.0
+
+# תלויות אופציונליות לתמיכה בפורמטים נוספים (לפי הצורך)
+pytz==2024.1
 
 
 
