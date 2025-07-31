@@ -1,5 +1,3 @@
-# utils/quality_score.py
-
 import logging
 import numpy as np
 import pandas as pd
@@ -9,7 +7,11 @@ def compute_quality_score(df, verbose=False) -> float:
     מחשב ציון איכות לטרייד (0–10) לפי אינדיקטורים טכניים.
     """
     try:
-        last = df.iloc[-1] if isinstance(df, pd.DataFrame) else df
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            last = df.iloc[-1]
+        else:
+            last = df  # ייתכן שמועבר dict
+
         if not hasattr(last, "get"):
             raise TypeError("שורת הנתונים לא כוללת מתודת get – סוג שגוי")
 
@@ -45,27 +47,30 @@ def compute_quality_score(df, verbose=False) -> float:
         # 5. נפח גבוה
         vol = last.get("volume", 0)
         vol_mean = last.get("volume_mean", 1)
-        if vol > vol_mean * 1.5:
+        if isinstance(vol, (int, float)) and isinstance(vol_mean, (int, float)) and vol > vol_mean * 1.5:
             score += 1
             reasons.append("נפח גבוה")
 
         # 6. מחיר מעל EMA21
         close = last.get("close", 0)
         ema21 = last.get("ema_21", 0)
-        if close > ema21:
+        if isinstance(close, (int, float)) and isinstance(ema21, (int, float)) and close > ema21:
             score += 1
             reasons.append("מעל EMA21")
 
         # 7. מחיר מעל EMA50
         ema50 = last.get("ema_50", 0)
-        if close > ema50:
+        if isinstance(close, (int, float)) and isinstance(ema50, (int, float)) and close > ema50:
             score += 1
             reasons.append("מעל EMA50")
 
         # 8. EMA21 חוצה מעל EMA50
         if isinstance(df, pd.DataFrame) and len(df) > 1:
             prev = df.iloc[-2]
-            if last.get("ema_21", 0) > last.get("ema_50", 0) and prev.get("ema_21", 0) <= prev.get("ema_50", 0):
+            if (
+                last.get("ema_21", 0) > last.get("ema_50", 0) and
+                prev.get("ema_21", 0) <= prev.get("ema_50", 0)
+            ):
                 score += 1
                 reasons.append("חציית EMA21 מעל EMA50")
 
@@ -76,7 +81,7 @@ def compute_quality_score(df, verbose=False) -> float:
 
         # 10. VWAP – המחיר מעל
         vwap = last.get("vwap", 0)
-        if close > vwap:
+        if isinstance(close, (int, float)) and isinstance(vwap, (int, float)) and close > vwap:
             score += 1
             reasons.append("מעל VWAP")
 
@@ -90,6 +95,7 @@ def compute_quality_score(df, verbose=False) -> float:
     except Exception as e:
         logging.error(f"[quality_score] שגיאה: {e}")
         return 0.0
+
 
 
 
