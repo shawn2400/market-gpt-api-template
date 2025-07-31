@@ -6,13 +6,12 @@ from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# טעינת משתני סביבה מקובץ .env
+# טען משתני סביבה
 load_dotenv()
 
-# הגדרת לוגינג
+# לוגים
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s')
 
-# שליפת מפתחות Binance מהסביבה
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
@@ -22,32 +21,25 @@ def init_binance_client():
     global client
     try:
         if not API_KEY or not API_SECRET:
-            raise EnvironmentError("❌ מפתחות Binance API לא מוגדרים בקובץ .env")
+            raise EnvironmentError("❌ BINANCE_API_KEY ו־BINANCE_API_SECRET לא מוגדרים ב־.env")
 
-        # יצירת לקוח
         client = Client(API_KEY, API_SECRET)
 
-        # בדיקת ping
-        ping = client.ping()
-        if ping != {}:
-            raise ConnectionError(f"❌ שגיאה ב־ping ל־Binance: {ping}")
+        # בדיקת חיבור
+        client.ping()
+        client.futures_account()
 
-        # בדיקת גישה לחשבון
-        account_info = client.futures_account()
-        if "assets" not in account_info:
-            raise ConnectionError("❌ לא ניתן לגשת לחשבון Futures")
-
-        logging.info("✅ Binance client מחובר בהצלחה (Spot + Futures)")
+        logging.info("✅ Binance client מחובר (Spot + Futures)")
 
     except (BinanceAPIException, BinanceRequestException) as e:
-        logging.error(f"[Binance API Error] {type(e).__name__}: {e}")
+        logging.error(f"[Binance API Error] {e}")
         client = None
     except Exception as e:
-        logging.error(f"[Binance Client Init Error] {type(e).__name__}: {e}")
+        logging.error(f"[Binance Init Error] {e}")
         client = None
 
-# אתחול אוטומטי ברגע טעינת המודול
 init_binance_client()
+
 
 
 
