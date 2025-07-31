@@ -5,6 +5,9 @@ import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# ✅ ודא ש-PYTHONPATH כולל את השורש /app כדי שהייבוא יעבוד גם על Render וגם מקומית.
+# לדוגמה: export PYTHONPATH=$(pwd)
+
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -12,7 +15,7 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_websocket
 
-# ✅ משתני סביבה (רק מתוך Render)
+# ✅ משתני סביבה (נמשכים מרנדר בלבד – אין .env)
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -30,19 +33,19 @@ REQUIRED_ENV_VARS = [
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-# ✅ טעינת Watchlist (WebSocket)
+# ✅ טעינת Watchlist והרצת WebSocket חי
 def load_watchlist():
     try:
         with open("watchlist.json", "r") as f:
             symbols = json.load(f)
-            if isinstance(symbols, list):
+            if isinstance(symbols, list) and symbols:
                 return symbols
     except Exception as e:
         print(f"⚠️ שגיאה בקריאת watchlist.json: {e}")
     return ["BTCUSDT"]
 
-for sym in load_watchlist():
-    launch_websocket(sym)
+for symbol in load_watchlist():
+    launch_websocket(symbol)
 
 # 🌐 FastAPI Init
 app = FastAPI(
@@ -66,12 +69,12 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# 🔍 בריאות שרת
+# 🔍 בדיקת בריאות שרת
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# ▶️ שליטה ב־AutoExecutor
+# ▶️ שליטה ידנית ב־AutoExecutor
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -86,12 +89,13 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-# ▶️ הרצה אוטומטית
+# ▶️ הרצה אוטומטית לפי ENV
 if AUTO_RUN:
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
