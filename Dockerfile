@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY . .
+RUN ls -la /app/routes
 
 RUN echo "תוכן /app:" && ls -la /app
 RUN echo "תוכן /app/routes:" && ls -la /app/routes || echo "תיקיית routes לא נמצאה"
