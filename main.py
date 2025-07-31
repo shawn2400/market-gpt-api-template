@@ -1,11 +1,24 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# 📦 Load environment variables only if .env exists
 from dotenv import load_dotenv
+
+# 📦 Load .env only if exists
 if os.path.exists(".env"):
     load_dotenv(".env")
+
+# ✅ Required ENV Checks (fail fast if missing)
+REQUIRED_ENV_VARS = [
+    "BINANCE_API_KEY",
+    "BINANCE_API_SECRET",
+    "OPENAI_API_KEY",
+    "AUTO_RUN",
+    "MIN_QUALITY_SCORE",
+    "MAX_TRADE_BUDGET",
+    "SCAN_INTERVAL"
+]
+for var in REQUIRED_ENV_VARS:
+    assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
 # 🚀 Routers
 from routes.ai import router as ai_router
@@ -24,7 +37,7 @@ from auto_executor import (
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid) כולל ניתוחים, דוחות, AI, SL/TP ודשבורד.",
-    version="2.0.3"
+    version="2.0.4"
 )
 
 # 🌐 CORS Middleware – נדרש עבור Web/Dashboard
@@ -42,27 +55,28 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# ✅ בריאות בסיסית של השרת
+# ✅ Health check
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# ▶️ הפעלת Auto Executor
+# ▶️ Start Executor
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
     return {"status": "started" if started else "already running"}
 
-# ⏹ עצירת Auto Executor
+# ⏹ Stop Executor
 @app.get("/executor/stop")
 async def stop_executor():
     stopped = stop_executor_loop()
     return {"status": "stopped" if stopped else "not running"}
 
-# 📡 בדיקת סטטוס Executor
+# 📡 Executor Status
 @app.get("/executor/status")
 async def executor_status():
     return {"running": is_executor_running()}
+
 
 
 
