@@ -5,7 +5,6 @@ import logging
 import re
 from openai import OpenAI
 
-# שימוש בלקוח סינכרוני – מונע שגיאת proxies
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def analyze_with_ai(rsi, adx, trend, volume, pattern):
@@ -50,6 +49,7 @@ def extract_score_from_text(text):
         score = int(matches[0])
         return min(score, 10)
     return 0
+
 
 
 
