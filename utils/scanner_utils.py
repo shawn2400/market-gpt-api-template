@@ -4,20 +4,23 @@ import logging
 import asyncio
 import pandas as pd
 from typing import List, Optional
+
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
-from utils.get_live_price import get_live_price
+from utils.ws_fallback import get_price  # ✅ במקום get_live_price
 
-semaphore = asyncio.Semaphore(10)  # הגבלת קונקציות במקביל
+semaphore = asyncio.Semaphore(10)  # ✅ הגבלת מקביליות
 
-async def analyze_symbol(symbol: str,
-                         market_type: str = "futures",
-                         interval: str = "15m",
-                         limit: int = 100,
-                         trending_only: bool = False,
-                         with_ai: bool = False,
-                         frames: Optional[List[str]] = None) -> Optional[dict]:
+async def analyze_symbol(
+    symbol: str,
+    market_type: str = "futures",
+    interval: str = "15m",
+    limit: int = 100,
+    trending_only: bool = False,
+    with_ai: bool = False,
+    frames: Optional[List[str]] = None
+) -> Optional[dict]:
     try:
         df = get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
         if df.empty or len(df) < 50:
@@ -25,8 +28,8 @@ async def analyze_symbol(symbol: str,
             return None
 
         df = compute_indicators(df)
-
         latest = df.iloc[-1]
+
         rsi = latest.get("rsi", 0)
         macd = latest.get("macd", 0)
         signal = latest.get("macd_signal", 0)
@@ -44,7 +47,7 @@ async def analyze_symbol(symbol: str,
         elif rsi < 50 and macd < signal and adx > 20 and close < ema21:
             direction = "SHORT"
         else:
-            return None  # תנאים לא מתקיימים
+            return None  # ✅ אין תנאי ברור לכניסה
 
         quality_score = compute_quality_score(df)
 
@@ -63,15 +66,17 @@ async def analyze_symbol(symbol: str,
         }
 
     except Exception as e:
-        logging.error(f"[scanner_utils] Error analyzing {symbol} ({interval}): {e}")
+        logging.error(f"[scanner_utils] ❌ Error analyzing {symbol} ({interval}): {e}")
         return None
 
-async def scan_all(symbols: List[str],
-                   market_type: str = "futures",
-                   interval: str = "15m",
-                   min_quality: int = 6,
-                   top: int = 5) -> List[dict]:
-    logging.info(f"[scanner_utils] Scanning {len(symbols)} symbols in {interval}...")
+async def scan_all(
+    symbols: List[str],
+    market_type: str = "futures",
+    interval: str = "15m",
+    min_quality: int = 6,
+    top: int = 5
+) -> List[dict]:
+    logging.info(f"[scanner_utils] 🔍 Scanning {len(symbols)} symbols in {interval}...")
 
     tasks = []
     for symbol in symbols:
@@ -85,8 +90,9 @@ async def scan_all(symbols: List[str],
     filtered = [res for res in results if res and res["quality_score"] >= min_quality]
     filtered.sort(key=lambda x: -x["quality_score"])
 
-    logging.info(f"[scanner_utils] Found {len(filtered)} valid trades.")
+    logging.info(f"[scanner_utils] ✅ Found {len(filtered)} valid trades.")
     return filtered[:top]
+
 
 
 
