@@ -14,7 +14,7 @@ executor_thread = None
 executor_stop = False
 MAX_OPEN_TRADES = 4
 
-# ✅ קריאה מה־ENV של Render
+# ✅ טעינה מהסביבה (Render / מקומית)
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
