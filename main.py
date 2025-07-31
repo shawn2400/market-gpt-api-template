@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import uvicorn
 import time
@@ -29,11 +27,10 @@ load_dotenv()
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר חכם עם Binance, Grid, AI ודוחות בזמן אמת",
-    version="2.0.1"
+    version="2.0.2"
 )
 
 # === MODELS ===
-
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -144,6 +141,7 @@ app.include_router(grid.router)
 # === ENTRY POINT ===
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)
+
 
 
 
