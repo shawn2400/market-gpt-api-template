@@ -9,15 +9,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # 📂 יצירת תיקיית עבודה
 WORKDIR /app
 
-# 📄 העתקת קובץ דרישות והתקנת תלותים
+# 📄 התקנת תלותים
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 📂 העתקת כל קבצי הפרויקט
+# 📂 העתקת כל הפרויקט
 COPY . .
 
-# 🚀 הפעלת שרת FastAPI עם Gunicorn + UvicornWorker
+# 🚀 הרצת Gunicorn עם Uvicorn Worker
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:5000", "--timeout", "300"]
+
 
 
 
