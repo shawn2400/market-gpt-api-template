@@ -3,9 +3,9 @@
 import os
 import logging
 import re
-from openai import OpenAI
+import openai
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def analyze_with_ai(rsi, adx, trend, volume, pattern):
     prompt = f"""
@@ -19,7 +19,7 @@ def analyze_with_ai(rsi, adx, trend, volume, pattern):
 האם כדאי להיכנס לטרייד? ענה בקצרה מאוד והחזר גם ציון מ-0 עד 10.
 """
     try:
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "אתה אנליסט שוק מתמחה בקריפטו."},
@@ -49,6 +49,7 @@ def extract_score_from_text(text):
         score = int(matches[0])
         return min(score, 10)
     return 0
+
 
 
 
