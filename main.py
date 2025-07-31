@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.ai_analysis import analyze_with_ai
-from utils.news_utils import get_latest_news, analyze_news_sentiment
+from news_utils import get_latest_news, analyze_news_sentiment  # ← תוקן כאן
 from utils.backtest_utils import run_backtest
 from utils.report_utils import generate_daily_report
 from utils.trade_executor import execute_trade_live
@@ -187,6 +187,7 @@ def executor_status():
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000)
+
 
 
 
