@@ -2,14 +2,16 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   description: >
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance, מבצע ניתוחים טכניים,
-    טריידים בפועל, חיזוי AI, גרפים, דוחות וסטטיסטיקות חכמות.
+    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת המתחבר ל־Binance,
+    מבצע ניתוחים טכניים, טריידים חיים, גרידים, דוחות, ניתוחים גרפיים ו־AI.
   version: 2.0.1
+
 servers:
   - url: https://algogpt-docker.onrender.com
 
 tags:
   - name: Trades
+  - name: Grid
   - name: Reports
   - name: AI
   - name: Executor
@@ -33,6 +35,26 @@ paths:
       operationId: scanLiveMarket
       requestBody:
         required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                market:
+                  type: string
+                  example: futures
+                min_quality:
+                  type: integer
+                  example: 6
+                top:
+                  type: integer
+                  example: 1
+                trending_only:
+                  type: boolean
+                  example: false
+                trending_source:
+                  type: string
+                  example: coingecko
       responses:
         '200':
           description: הצלחה
@@ -45,22 +67,18 @@ paths:
       parameters:
         - name: market
           in: query
-          required: false
           schema:
             type: string
         - name: trending_only
           in: query
-          required: false
           schema:
             type: boolean
         - name: trending_source
           in: query
-          required: false
           schema:
             type: string
         - name: top
           in: query
-          required: false
           schema:
             type: integer
       responses:
@@ -74,9 +92,91 @@ paths:
       operationId: executeTrade
       requestBody:
         required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                entry:
+                  type: number
+                stop:
+                  type: number
+                target:
+                  type: number
+                direction:
+                  type: string
+                leverage:
+                  type: number
+                  default: 10
+                market:
+                  type: string
+                  default: futures
+                budget:
+                  type: number
+                  default: 100
       responses:
         '200':
           description: טרייד בוצע
+
+  /grid/trade:
+    post:
+      tags: [Grid]
+      summary: פתיחת גריד חי מול Binance
+      operationId: executeGridTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                  example: ETHUSDT
+                budget:
+                  type: number
+                  example: 100
+                grid_count:
+                  type: integer
+                  example: 6
+                grid_pct:
+                  type: number
+                  example: 0.5
+                leverage_min:
+                  type: integer
+                  example: 10
+                leverage_max:
+                  type: integer
+                  example: 25
+                direction:
+                  type: string
+                  enum: [BOTH, BUY, SELL]
+                  example: BOTH
+                tp_pct:
+                  type: number
+                  example: 1.0
+                sl_pct:
+                  type: number
+                  example: 1.0
+                futures:
+                  type: boolean
+                  example: true
+      responses:
+        '200':
+          description: פקודות הגריד נשלחו לבורסה
+
+  /grid/status:
+    get:
+      tags: [Grid]
+      summary: סטטוס הגריד האחרון שבוצע
+      operationId: getGridStatus
+      responses:
+        '200':
+          description: סטטוס נשלף
+        '404':
+          description: לא בוצע גריד עדיין
 
   /calculate-quantity:
     post:
@@ -85,6 +185,19 @@ paths:
       operationId: calculateQuantity
       requestBody:
         required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                price:
+                  type: number
+                leverage:
+                  type: number
+                budget:
+                  type: number
       responses:
         '200':
           description: הכמות חושבה
@@ -96,6 +209,17 @@ paths:
       operationId: calculateSLTP
       requestBody:
         required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                df:
+                  type: array
+                  items:
+                    type: object
+                direction:
+                  type: string
       responses:
         '200':
           description: סטופ וטייק חושבו
@@ -107,6 +231,20 @@ paths:
       operationId: runBacktest
       requestBody:
         required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prices:
+                  type: array
+                  items:
+                    type: object
+                symbol:
+                  type: string
+                interval:
+                  type: string
+                  default: "15m"
       responses:
         '200':
           description: backtest הושלם
@@ -118,6 +256,21 @@ paths:
       operationId: aiPricePrediction
       requestBody:
         required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rsi:
+                  type: number
+                adx:
+                  type: number
+                trend:
+                  type: string
+                volume:
+                  type: string
+                pattern:
+                  type: string
       responses:
         '200':
           description: AI ניתח טווח
@@ -129,6 +282,21 @@ paths:
       operationId: aiPredictSLTP
       requestBody:
         required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                  example: ETHUSDT
+                direction:
+                  type: string
+                  enum: [LONG, SHORT]
+                  example: LONG
+                entry:
+                  type: number
+                  example: 3010.25
       responses:
         '200':
           description: SL/TP נוצרו
@@ -186,6 +354,7 @@ paths:
       responses:
         '200':
           description: סטטוס נשלף
+
 
 
 
