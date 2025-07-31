@@ -1,35 +1,32 @@
 # main.py
 
 import os
-import time
 import uvicorn
 import asyncio
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
-from utils.pnl_tracker import generate_daily_report
-from utils.trade_storage import save_trade
-from utils.get_klines import get_klines
-from backtest_utils import run_backtest
-from trade_executor import execute_trade_live
-from news_utils import fetch_crypto_news, analyze_news_impact
+from utils.ai_analysis import analyze_with_ai
+from utils.news_utils import get_latest_news, analyze_news_sentiment
+from utils.backtest_utils import run_backtest
+from utils.report_utils import generate_daily_report
+from utils.trade_executor import execute_trade_live
 from utils.scanner_utils import scan_all
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 
-# טען משתנים מסביבה (אם קיימים)
 load_dotenv()
 
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר אלגוריתמי בזמן אמת – Binance (Futures, Spot, Grid, GPT, דוחות)",
+    description="API למסחר חכם עם Binance, AI ודוחות בזמן אמת",
     version="2.0.1"
 )
 
-# MODELS
+# === MODELS ===
+
 class SLTPRequest(BaseModel):
     df: list
     direction: str
@@ -42,170 +39,159 @@ class QuantityRequest(BaseModel):
 
 class BacktestRequest(BaseModel):
     prices: list
-    symbol: str = "UNKNOWN"
+    symbol: str
     interval: str = "15m"
 
 class TradeRequest(BaseModel):
     symbol: str
     entry: float
-    stop: float
-    tp: float
+    stop: float = None
+    target: float = None
     direction: str
-    leverage: int
+    leverage: float = 10
+    market: str = "futures"
     budget: float = 100
-    use_grid: bool = False
-    use_trailing: bool = False
-    user_id: str = None
-    take_snapshot: bool = True
 
-class AIAnalysisRequest(BaseModel):
-    rsi: float
-    adx: float
-    trend: str
-    volume: float
-    pattern: str
+class ScanRequest(BaseModel):
+    market: str = "futures"
+    min_quality: int = 6
+    top: int = 1
+    trending_only: bool = False
+    trending_source: str = "coingecko"
 
-# ROUTES
+class MultiTFScanRequest(BaseModel):
+    markets: list = ["futures"]
+    timeframes: list = ["5m", "15m", "1h"]
+    trending_only: bool = False
+    top: int = 3
+    trending_source: str = "coingecko"
+
+# === ROUTES ===
+
 @app.get("/")
-async def root():
-    return {"status": "ok", "message": "AlgoGPT API is running ✅"}
-
-@app.get("/scan")
-async def scan_route(
-    market: str = "futures",
-    interval: str = "1m",
-    limit: int = 50,
-    min_quality: int = 6,
-    min_volume: int = 1_000_000,
-    trending_only: bool = False
-):
-    try:
-        results = await scan_all(
-            market_type=market,
-            interval=interval,
-            limit=limit,
-            min_quality=min_quality,
-            trending_only=trending_only,
-            min_volume=min_volume,
-            with_ai=True
-        )
-        return {"count": len(results), "results": results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/scan/multi")
-async def scan_multi(
-    min_quality: int = 6,
-    top: int = 3,
-    frames: str = "1m,5m,15m",
-    markets: str = "futures",
-    trending_only: bool = False
-):
-    try:
-        timeframes = frames.split(",")
-        market_list = markets.split(",")
-        results = await multi_tf_scan_with_ai(
-            markets=market_list,
-            timeframes=timeframes,
-            min_quality=min_quality,
-            trending_only=trending_only,
-            top=top
-        )
-        return {"count": len(results), "results": results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/execute-trade")
-async def execute_trade(req: TradeRequest):
-    try:
-        result = execute_trade_live(
-            symbol=req.symbol,
-            entry=req.entry,
-            stop=req.stop,
-            tp=req.tp,
-            direction=req.direction,
-            leverage=req.leverage,
-            budget=req.budget,
-            use_grid=req.use_grid,
-            use_trailing=req.use_trailing,
-            user_id=req.user_id,
-            take_snapshot=req.take_snapshot
-        )
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/calculate-quantity")
-async def calc_quantity(q: QuantityRequest):
-    try:
-        qty = calculate_quantity(q.symbol, q.price, q.leverage, q.budget)
-        return {"quantity": qty}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+def root():
+    return {"status": "ok", "message": "AlgoGPT API is live ✅"}
 
 @app.post("/sl_tp")
-async def calc_sl_tp(req: SLTPRequest):
+def sl_tp(req: SLTPRequest):
     try:
         result = calculate_sl_tp(req.df, req.direction)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/backtest")
-async def run_backtest_route(req: BacktestRequest):
+@app.post("/calculate-quantity")
+def calc_qty(req: QuantityRequest):
     try:
-        df = get_klines(req.symbol, req.interval, limit=200, market_type="futures")
-        result = run_backtest(df)
+        qty = calculate_quantity(req.symbol, req.price, req.leverage, req.budget)
+        return {"quantity": qty}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/backtest")
+def backtest(req: BacktestRequest):
+    try:
+        import pandas as pd
+        df = pd.DataFrame(req.prices)
+        result = run_backtest(df, req.symbol, req.interval)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/ai-analyze")
-async def ai_analyze(req: AIAnalysisRequest):
+def ai_analyze(payload: dict):
     try:
-        result = analyze_with_ai(req.rsi, req.adx, req.trend, req.volume, req.pattern)
+        rsi = payload.get("rsi", 50)
+        adx = payload.get("adx", 20)
+        trend = payload.get("trend", "up")
+        volume = payload.get("volume", "normal")
+        pattern = payload.get("pattern", "none")
+        result = analyze_with_ai(rsi, adx, trend, volume, pattern)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/news")
-async def get_news():
-    return fetch_crypto_news()
-
-@app.get("/analyze-news")
-async def analyze_news():
-    return analyze_news_impact()
-
-@app.get("/daily-report")
-async def report_route(date: str = None):
+def news():
     try:
-        return generate_daily_report(date)
+        return get_latest_news()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/auto/start")
-async def start_auto():
-    if is_executor_running():
-        return {"status": "already running"}
-    asyncio.create_task(start_executor_loop())
-    return {"status": "started"}
+@app.get("/analyze-news")
+def analyze_news():
+    try:
+        return analyze_news_sentiment()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/auto/stop")
-async def stop_auto():
-    stop_executor_loop()
-    return {"status": "stopped"}
+@app.post("/execute-trade")
+def execute_trade(req: TradeRequest):
+    try:
+        trade_dict = req.dict()
+        return execute_trade_live(trade_dict)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/auto/status")
-async def auto_status():
-    return {"status": "running" if is_executor_running() else "stopped"}
+@app.post("/scan")
+def scan(req: ScanRequest):
+    try:
+        results = scan_all(
+            market=req.market,
+            min_quality=req.min_quality,
+            top=req.top,
+            trending_only=req.trending_only,
+            trending_source=req.trending_source
+        )
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# אפשור התחלה אוטומטית אם צריך
-if os.getenv("AUTO_RUN", "false").lower() == "true":
-    asyncio.create_task(start_executor_loop())
+@app.post("/scan/multi")
+def scan_multi(req: MultiTFScanRequest):
+    try:
+        results = multi_tf_scan_with_ai(
+            markets=req.markets,
+            timeframes=req.timeframes,
+            trending_only=req.trending_only,
+            top=req.top,
+            trending_source=req.trending_source
+        )
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# להרצה מקומית
+@app.get("/daily-report")
+def daily_report():
+    try:
+        return generate_daily_report()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/executor/start")
+def start_executor():
+    try:
+        start_executor_loop()
+        return {"status": "started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/executor/stop")
+def stop_executor():
+    try:
+        stop_executor_loop()
+        return {"status": "stopped"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/executor/status")
+def executor_status():
+    return {"running": is_executor_running()}
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    uvicorn.run("main:app", host="0.0.0.0", port=5000)
+
 
 
 
