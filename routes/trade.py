@@ -1,15 +1,13 @@
 # routes/trade.py
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from utils.trade_executor import execute_trade_live
 from utils.quantity_utils import calculate_quantity
 from utils.sl_tp_utils import calculate_sl_tp
-from utils.get_live_price import get_live_price
+from utils.get_live_price import get_live_price  # ✅ תיקון כאן
 
 router = APIRouter(tags=["Trades"])
 
-# === Models ===
 class TradeRequest(BaseModel):
     symbol: str
     entry: float
@@ -28,7 +26,6 @@ class QuantityRequest(BaseModel):
     leverage: float
     budget: float
 
-# === Routes ===
 @router.post("/execute-trade")
 def execute_trade(req: TradeRequest):
     result = execute_trade_live(
@@ -48,7 +45,6 @@ def execute_trade(req: TradeRequest):
         raise HTTPException(status_code=400, detail=result["message"])
     return result
 
-
 @router.post("/calculate-quantity")
 def calculate_quantity_route(req: QuantityRequest):
     try:
@@ -57,7 +53,6 @@ def calculate_quantity_route(req: QuantityRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @router.get("/price/{symbol}")
 def get_price_route(symbol: str):
     price = get_live_price(symbol)
@@ -65,18 +60,17 @@ def get_price_route(symbol: str):
         raise HTTPException(status_code=404, detail="מחיר לא נמצא")
     return {"symbol": symbol, "price": price}
 
-
 class SLTPRequest(BaseModel):
-    direction: str  # LONG or SHORT
+    direction: str
     entry: float
 
 @router.post("/sl_tp")
 def calculate_sl_tp_route(req: SLTPRequest):
     try:
-        result = calculate_sl_tp(req.entry, req.direction)
-        return result
+        return calculate_sl_tp(req.entry, req.direction)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 
 
