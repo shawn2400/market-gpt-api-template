@@ -21,6 +21,10 @@ REQUIRED_ENV_VARS = [
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
+# ✅ הפעלת WebSocket חכם (BTCUSDT כ־default)
+from utils.ws_fallback import launch_websocket
+launch_websocket("BTCUSDT")
+
 # 🚀 Routers
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
@@ -85,6 +89,7 @@ if AUTO_RUN:
         print("✅ AutoExecutor התחיל אוטומטית לפי הגדרה.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
