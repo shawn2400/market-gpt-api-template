@@ -1,5 +1,4 @@
 # utils/trending_utils.py
-# שאיבת סמלים טרנדיים ממקורות שונים (Binance Trending, LunarCrush, CoinGecko)
 import requests
 import os
 import logging
@@ -12,9 +11,8 @@ BINANCE_TRENDING_API = "https://www.binance.com/bapi/asset/v1/public/asset-servi
 LUNARCRUSH_TRENDING_API = "https://api.lunarcrush.com/v2?data=assets&sort=galaxy_score&limit=20"
 LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY")
 
-# --- זיכרון cache (רק לזמן ריצה)
 _cache: Dict[str, tuple[List[str], float]] = {}
-CACHE_TTL = 600  # 10 דקות
+CACHE_TTL = 600
 
 def _cached(key: str) -> tuple[List[str], float]:
     return _cache.get(key, ([], 0))
@@ -22,16 +20,35 @@ def _cached(key: str) -> tuple[List[str], float]:
 def _store_cache(key: str, value: List[str]) -> None:
     _cache[key] = (value, time.time())
 
-# מיפוי טיקר → סימבול ביננס (ל־Futures)
+# מיפוי סמלים לפי טיקר
 symbol_mapping: Dict[str, Dict[str, str]] = {
     "btc": {"symbol": "BTCUSDT", "market": "futures"},
     "eth": {"symbol": "ETHUSDT", "market": "futures"},
-    # ... המשך המיפוי כפי שהיה
+    "bnb": {"symbol": "BNBUSDT", "market": "futures"},
+    "sol": {"symbol": "SOLUSDT", "market": "futures"},
+    "avax": {"symbol": "AVAXUSDT", "market": "futures"},
+    "ada": {"symbol": "ADAUSDT", "market": "futures"},
+    "doge": {"symbol": "DOGEUSDT", "market": "futures"},
+    "shib": {"symbol": "SHIBUSDT", "market": "futures"},
+    "pepe": {"symbol": "PEPEUSDT", "market": "futures"},
+    "link": {"symbol": "LINKUSDT", "market": "futures"},
+    "uni": {"symbol": "UNIUSDT", "market": "futures"},
+    "near": {"symbol": "NEARUSDT", "market": "futures"},
+    "xlm": {"symbol": "XLMUSDT", "market": "futures"},
+    "atom": {"symbol": "ATOMUSDT", "market": "futures"},
+    "render": {"symbol": "RNDRUSDT", "market": "futures"},
+    "sand": {"symbol": "SANDUSDT", "market": "futures"},
+    "sui": {"symbol": "SUIUSDT", "market": "futures"},
+    "arkm": {"symbol": "ARKMUSDT", "market": "futures"},
+    "ena": {"symbol": "ENAUSDT", "market": "futures"},
+    "floki": {"symbol": "FLOKIUSDT", "market": "futures"},
+    "gala": {"symbol": "GALAUSDT", "market": "futures"},
+    "inj": {"symbol": "INJUSDT", "market": "futures"},
+    "op": {"symbol": "OPUSDT", "market": "futures"},
+    "ron": {"symbol": "RONINUSDT", "market": "futures"},
 }
 
-# סדר קריאת מקורות (fallback) משתנה כדי לא להעמיס על CoinGecko
 DEFAULT_SOURCES = ["binance", "lunarcrush", "coingecko"]
-
 
 def get_trending_symbols(
     trending_source: Optional[str] = None,
@@ -41,9 +58,6 @@ def get_trending_symbols(
     top: Optional[int] = None,
     min_change_percent: Optional[float] = None
 ) -> List[str]:
-    """
-    מחזיר רשימת סמלים טרנדיים ממקור נתון עם קאש, fallback ו־logging משודרג.
-    """
     if not trending_source:
         trending_source = DEFAULT_SOURCES[0]
     trending_source = trending_source.lower()
@@ -99,13 +113,11 @@ def get_trending_symbols(
                         if min_change_percent is None or change >= min_change_percent:
                             symbols.append(mapped["symbol"])
 
-        # סינון נפח
         if min_volume is not None and volume_lookup is not None:
             original = len(symbols)
             symbols = [s for s in symbols if volume_lookup.get(s, 0) >= min_volume]
             logging.info(f"[trending] Filtered by volume: {original}->{len(symbols)}")
 
-        # הגבלה
         if top is not None and len(symbols) > top:
             symbols = symbols[:top]
 
@@ -121,12 +133,10 @@ def get_trending_symbols(
     except Exception as e:
         logging.error(f"[trending] Error fetching {trending_source}: {e}")
 
-    # Fallback: טרנדים ברירת מחדל
     fallback = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
     _store_cache(cache_key, fallback)
     logging.info(f"[trending] Fallback to default: {fallback}")
     return fallback
-
 
 def get_combined_trending_symbols(
     market_type: str = "futures",
@@ -136,9 +146,6 @@ def get_combined_trending_symbols(
     top: Optional[int] = None,
     min_change_percent: Optional[float] = None
 ) -> List[str]:
-    """
-    מחזיר רשימה מאוחדת של תוצאות trend מכל המקורות (עם fallback אוטומטי).
-    """
     if sources is None:
         sources = DEFAULT_SOURCES
 
@@ -158,10 +165,6 @@ def get_combined_trending_symbols(
     logging.info(f"[trending] Combined total unique symbols: {len(unique)}")
     return unique
 
-
-if __name__ == "__main__":
-    print("Sources order:", DEFAULT_SOURCES)
-    print("Combined Trending:", get_combined_trending_symbols(market_type="futures", top=5))
 
 
 
