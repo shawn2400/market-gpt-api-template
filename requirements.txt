@@ -30,13 +30,15 @@ requests==2.31.0
 aiohttp==3.9.5
 ujson==5.10.0
 
+# ✅ נדרש עבור WebSocket חכם (ws_fallback.py)
+websocket-client==1.6.1
+
 # === אזורי זמן ותמיכה בתאריכים (אופציונלי) ===
 pytz==2024.1
 
 # === אופציונלי – BeautifulSoup לדוגמי Web (למשל LunarCrush אם תצטרך) ===
 # beautifulsoup4==4.12.3
 # lxml==5.2.1
-websocket-client==1.6.1
 
 
 
