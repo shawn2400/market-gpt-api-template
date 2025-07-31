@@ -1,10 +1,11 @@
 # utils/ai_analysis.py
 
 import os
-import openai
 import logging
+import re
+from openai import OpenAI
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def analyze_with_ai(rsi, adx, trend, volume, pattern):
     prompt = f"""
@@ -19,7 +20,7 @@ def analyze_with_ai(rsi, adx, trend, volume, pattern):
 """
 
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "אתה אנליסט שוק מתמחה בקריפטו."},
@@ -27,7 +28,7 @@ def analyze_with_ai(rsi, adx, trend, volume, pattern):
             ],
             temperature=0.5
         )
-        answer = response['choices'][0]['message']['content']
+        answer = response.choices[0].message.content
         score = extract_score_from_text(answer)
         return {"answer": answer, "score": score}
     except Exception as e:
@@ -44,12 +45,12 @@ def predict_optimal_sl_tp(direction: str, entry: float):
         return {"sl": None, "tp": None}
 
 def extract_score_from_text(text):
-    import re
     matches = re.findall(r"\b([0-9]{1,2})(?:\/10)?\b", text)
     if matches:
         score = int(matches[0])
         return min(score, 10)
     return 0
+
 
 
 
