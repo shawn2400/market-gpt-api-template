@@ -2,6 +2,12 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# ✅ קריאה מה־ENV של Render או .env (פיתוח)
+AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
+MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
+MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
+
 # ✅ בדיקה של משתני סביבה – ייכשל מיידית אם חסר משהו
 REQUIRED_ENV_VARS = [
     "BINANCE_API_KEY",
@@ -71,6 +77,15 @@ async def stop_executor():
 @app.get("/executor/status")
 async def executor_status():
     return {"running": is_executor_running()}
+
+# ▶️ הפעלת Auto Executor אוטומטית אם מופעל מהסביבה
+if AUTO_RUN:
+    started = start_executor_loop()
+    if started:
+        print("✅ AutoExecutor התחיל אוטומטית לפי הגדרה.")
+    else:
+        print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
