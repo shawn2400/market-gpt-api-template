@@ -38,36 +38,16 @@ paths:
                     type: string
 
   /scan:
-    get:
+    post:
       tags: [Trades]
       summary: "סריקה טכנית חיה לפי Binance Futures/Spot"
       operationId: scanMarket
-      parameters:
-        - name: min_quality
-          in: query
-          schema:
-            type: integer
-          description: "ציון איכות מינימלי (0–7)"
-        - name: interval
-          in: query
-          schema:
-            type: string
-          description: "טיימפריים לניתוח (כגון 1m, 5m, 15m)"
-        - name: limit
-          in: query
-          schema:
-            type: integer
-          description: "מספר מטבעות לבדיקה"
-        - name: min_volume
-          in: query
-          schema:
-            type: integer
-          description: "נפח מינימלי"
-        - name: trending_only
-          in: query
-          schema:
-            type: boolean
-          description: "Trending בלבד"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanRequest"
       responses:
         "200":
           description: "רשימת סמלים עם ניתוחים טכניים"
@@ -95,27 +75,22 @@ paths:
           in: query
           schema:
             type: integer
-          description: "סף איכות"
         - name: top
           in: query
           schema:
             type: integer
-          description: "מספר תוצאות להחזרה"
         - name: frames
           in: query
           schema:
             type: string
-          description: "טיימפריימים (comma-separated)"
         - name: markets
           in: query
           schema:
             type: string
-          description: "שווקים (comma-separated: futures,spot)"
         - name: trending_only
           in: query
           schema:
             type: boolean
-          description: "Trending בלבד"
       responses:
         "200":
           description: "תוצאות סריקה Multi-TF"
@@ -239,10 +214,6 @@ paths:
                     type: integer
                   avg_quality:
                     type: number
-        "400":
-          description: "חוסר נתונים"
-        "500":
-          description: "שגיאה כללית"
 
   /ai-analyze:
     post:
@@ -309,7 +280,6 @@ paths:
           schema:
             type: string
             format: date
-          description: "תאריך סינון (YYYY-MM-DD)"
       responses:
         "200":
           description: "דוח יומי"
@@ -326,10 +296,24 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/DailySummary"
-        "500":
-          description: "שגיאת שרת"
+
 components:
   schemas:
+    ScanRequest:
+      type: object
+      properties:
+        market:
+          type: string
+          enum: [futures, spot, grid]
+        min_quality:
+          type: integer
+        top:
+          type: integer
+        trending_only:
+          type: boolean
+        trending_source:
+          type: string
+
     ScanSymbol:
       type: object
       properties:
@@ -394,9 +378,7 @@ components:
           type: number
         direction:
           type: string
-          enum:
-            - LONG
-            - SHORT
+          enum: [LONG, SHORT]
         leverage:
           type: integer
         budget:
@@ -537,6 +519,7 @@ components:
           type: integer
         Success_Rate:
           type: number
+
 
 
 
