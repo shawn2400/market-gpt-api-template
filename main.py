@@ -1,8 +1,5 @@
-# main.py
-
 import os
 import uvicorn
-import asyncio
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -148,9 +145,9 @@ def scan(req: ScanRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/scan/multi")
-def scan_multi(req: MultiTFScanRequest):
+async def scan_multi(req: MultiTFScanRequest):
     try:
-        results = multi_tf_scan_with_ai(
+        results = await multi_tf_scan_with_ai(
             markets=req.markets,
             timeframes=req.timeframes,
             trending_only=req.trending_only,
@@ -187,7 +184,6 @@ def stop_executor():
 @app.get("/executor/status")
 def executor_status():
     return {"running": is_executor_running()}
-
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=5000)
