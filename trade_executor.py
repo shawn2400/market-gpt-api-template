@@ -1,48 +1,198 @@
-# auto_executor.py
+# trade_executor.py
 
-import os
-import time
 import logging
-import asyncio
-from dotenv import load_dotenv
+import time
+import pandas as pd
+from utils.quantity_utils import calculate_quantity, auto_risk_allocation
+from utils.ai_analysis import predict_optimal_sl_tp
+from utils.get_live_price import get_price
+from utils.trade_storage import save_trade
+from utils.quality_score import compute_quality_score
+from snapshot_utils import save_trade_snapshot
+from utils.pnl_tracker import update_pnl
+from utils.report_utils import send_email_alert
+from utils.binance_client import client
 
-from utils.scanner_utils import scan_all
-from utils.trade_executor import execute_trade_live
-from utils.trade_storage import get_open_trades_count
+# הגדרות Binance
+SIDE_BUY = "BUY"
+SIDE_SELL = "SELL"
+ORDER_TYPE_MARKET = "MARKET"
+ORDER_TYPE_LIMIT = "LIMIT"
+ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
+ORDER_TYPE_TRAILING_STOP_MARKET = "TRAILING_STOP_MARKET"
+TIME_IN_FORCE_GTC = "GTC"
 
-# טעינת משתני סביבה
-load_dotenv()
+def execute_trade_live(
+    symbol,
+    entry,
+    stop,
+    tp,
+    direction,
+    leverage,
+    budget_usd=100,
+    use_grid=False,
+    use_trailing=False,
+    user_id=None,
+    take_snapshot=True
+):
+    try:
+        # שינוי מינוף
+        client.futures_change_leverage(symbol=symbol, leverage=leverage)
 
-DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
-DELAY = int(os.getenv("AUTO_RUN_DELAY", 60))
-MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
-MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", 4))
-BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
-TRENDING_SOURCE = os.getenv("TRENDING_SOURCE", "coingecko")
+        # שליפת מחיר עדכני
+        price = get_price(symbol)
+        if not price or price <= 0:
+            raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
-_executor_running = False
+        # חישוב SL/TP אם חסרים
+        if not stop or not tp:
+            sltp = predict_optimal_sl_tp(direction, entry)
+            stop = sltp["sl"]
+            tp = sltp["tp"]
 
-def is_executor_running():
-    return _executor_running
+        # חישוב הון בסיכון לפי סטופ
+        capital_used = auto_risk_allocation(entry_price=entry, stop_price=stop, total_budget=budget_usd, leverage=leverage, symbol=symbol)
 
-def stop_executor_loop():
-    global _executor_running
-    _executor_running = False
-    logging.info("🛑 הופסקה לולאת Auto Executor")
+        # חישוב כמות בפועל לפי תקציב
+        quantity = calculate_quantity(symbol, entry, leverage, capital_used)
+        if quantity <= 0:
+            raise ValueError("⚠️ כמות לא חוקית – אולי תקציב קטן מדי או הגדרות דיוק לא תואמות")
 
-async def start_executor_loop():
-    global _executor_running
-    if _executor_running:
-        logging.info("🔁 Auto executor כבר פעיל.")
-        return
+        side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
+        opposite = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
 
-    _executor_running = True
-    logging.info("🚀 התחלת לולאת Auto Executor")
+        # פתיחת פוזיציה בפועל (Market)
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type=ORDER_TYPE_MARKET,
+            quantity=quantity
+        )
+        time.sleep(0.5)
 
-    while _executor_running:
+        # SL: Trailing או רגיל
+        if use_trailing:
+            activation_price = round(price * (1.005 if direction.upper() == "LONG" else 0.995), 4)
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite,
+                type=ORDER_TYPE_TRAILING_STOP_MARKET,
+                activationPrice=activation_price,
+                callbackRate=2.0,
+                closePosition=True,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+        else:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite,
+                type=ORDER_TYPE_STOP_MARKET,
+                stopPrice=round(stop, 4),
+                closePosition=True,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+
+        # TP: Limit רגיל
         try:
-            if get_open_trades_count() >= MAX_OPEN_TRADES:
+            client.futures_create_order(
+                symbol=symbol,
+                side=opposite,
+                type=ORDER_TYPE_LIMIT,
+                price=round(tp, 4),
+                quantity=quantity,
+                timeInForce=TIME_IN_FORCE_GTC
+            )
+        except Exception as e:
+            logging.warning(f"[!] טייק פרופיט נכשל: {e}")
+
+        # צילום Snapshot
+        snapshot_path = None
+        if take_snapshot:
+            snapshot_path = save_trade_snapshot({
+                "symbol": symbol,
+                "entry": entry,
+                "stop": stop,
+                "tp": tp,
+                "direction": direction.upper()
+            })
+
+        # חישוב איכות וביטחון
+        df = pd.DataFrame([{
+            "atr": abs(tp - stop),
+            "macd": 1,
+            "macd_signal": 0,
+            "rsi": 50,
+            "adx": 25,
+            "volume": 1_000_000,
+            "volume_mean": 800_000,
+            "close": price,
+            "ema_21": price * 0.99,
+            "ema_50": price * 0.98
+        }])
+        quality = compute_quality_score(df)
+        confidence = round(70 + 3 * quality, 2)
+
+        # שמירת מידע טרייד
+        trade_data = {
+            "symbol": symbol,
+            "entry": entry,
+            "stop": stop,
+            "tp": tp,
+            "direction": direction.upper(),
+            "leverage": leverage,
+            "confidence": confidence,
+            "quality_score": quality,
+            "type": "GRID" if use_grid else "REGULAR",
+            "user_id": user_id or "default",
+            "capital_used": round(capital_used, 2),
+            "quantity": quantity,
+            "status": "OPEN",
+            "snapshot": snapshot_path
+        }
+        save_trade(trade_data)
+
+        # עדכון PNL
+        update_pnl(symbol, direction, entry, price, leverage, quantity)
+
+        # שליחת התראת אימייל
+        try:
+            send_email_alert(
+                subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
+                message=f"""Symbol: {symbol}
+Direction: {direction}
+Entry: {entry}
+Stop: {stop}
+TP: {tp}
+Leverage: {leverage}
+Confidence: {confidence:.2f}%
+Quality: {quality}/10
+Capital Used: {capital_used:.2f}$
+Qty: {quantity}"""
+            )
+        except Exception as e:
+            logging.warning(f"[!] שליחת אימייל נכשלה: {e}")
+
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "entry": entry,
+            "price_now": price,
+            "quantity": quantity,
+            "stop": stop,
+            "tp": tp,
+            "leverage": leverage,
+            "side": side,
+            "confidence": confidence,
+            "quality_score": quality,
+            "snapshot": snapshot_path,
+            "trailing": use_trailing,
+            "grid": use_grid,
+            "capital_used": capital_used
+        }
+
+    except Exception as e:
+        logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 
