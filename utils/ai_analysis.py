@@ -1,10 +1,10 @@
 # utils/ai_analysis.py
 
 import os
+import re
 import openai
-from utils.binance_client import client
+from utils.binance_client import client  # or whichever client you use
 
-# Ensure OPENAI_API_KEY is set
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def analyze_with_ai(
@@ -16,8 +16,8 @@ def analyze_with_ai(
     volume: float
 ) -> dict:
     """
-    Performs an AI analysis call to OpenAI based on technical parameters.
-    Returns a dict like {'signal': 'BUY', 'confidence': 0.87}.
+    Calls OpenAI to get a recommendation based on technical params.
+    Returns something like: {'signal':'BUY','confidence':0.87}
     """
     prompt = (
         f"Analyze the following market data for {symbol}:\n"
@@ -33,7 +33,7 @@ def analyze_with_ai(
         model="gpt-4",
         messages=[
             {"role": "system", "content": "You are an expert crypto trading assistant."},
-            {"role": "user", "content": prompt}
+            {"role": "user",   "content": prompt}
         ],
         temperature=0.0,
         max_tokens=150
@@ -41,26 +41,19 @@ def analyze_with_ai(
 
     content = resp.choices[0].message.content
     lines = [line.strip() for line in content.splitlines() if line.strip()]
+
     result = {}
-    import re
     for line in lines:
         upper = line.upper()
-        if upper.startswith("BUY") or upper.startswith("SELL") or upper.startswith("HOLD"):
+        if upper.startswith(("BUY", "SELL", "HOLD")):
             result["signal"] = line
         if "confidence" in line.lower():
-            match = re.search(r"(\d+(\.\d+)?)", line)
-            if match:
-                result["confidence"] = float(match.group(1))
+            m = re.search(r"(\d+(\.\d+)?)", line)
+            if m:
+                result["confidence"] = float(m.group(1))
+
     return result
 
-
-def predict_optimal_sl_tp(symbol: str, text_analysis: dict) -> dict:
-    """
-    Placeholder for predicting optimal stop-loss and take-profit using AI.
-    Returns a dict like {'stop_loss': price, 'take_profit': price}.
-    """
-    # TODO: implement based on text_analysis, e.g., another OpenAI call
-    return {}
 
 
 
