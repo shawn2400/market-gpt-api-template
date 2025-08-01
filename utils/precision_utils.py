@@ -17,21 +17,20 @@ def get_precision_info(symbol: str) -> dict:
                     "pricePrecision": s.get("pricePrecision", 8),
                     "quantityPrecision": s.get("quantityPrecision", 8)
                 }
-        raise ValueError(f"Symbol not found in exchange info: {symbol}")
+        raise ValueError(f"Symbol not found: {symbol}")
     except Exception as e:
-        logging.error(f"[PrecisionUtils] failed to fetch precision for {symbol}: {e}")
-        # ברירת מחדל
+        logging.error(f"[precision_utils] failed for {symbol}: {e}")
         return {"pricePrecision": 8, "quantityPrecision": 8}
 
 def round_to_precision(value: float, precision: int) -> float:
     """
-    עיגול ערך float ל־precision ספרות אחרי הנקודה
+    עיגול ערך ל־precision ספרות אחרי הנקודה
     """
-    format_str = "{:0." + str(precision) + "f}"
+    fmt = "{:0." + str(precision) + "f}"
     try:
-        return float(format_str.format(value))
+        return float(fmt.format(value))
     except Exception as e:
-        logging.warning(f"[PrecisionUtils] round failed ({value} @ {precision}): {e}")
+        logging.warning(f"[precision_utils] round failed ({value}@{precision}): {e}")
         return value
 
 
