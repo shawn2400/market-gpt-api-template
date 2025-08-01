@@ -1,7 +1,6 @@
 # utils/binance_client.py
 import os
 import logging
-from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
@@ -58,6 +57,7 @@ def init_binance_client() -> None:
 
 # Automatically initialize on import
 init_binance_client()
+
 
 
 
