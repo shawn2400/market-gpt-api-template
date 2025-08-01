@@ -6,39 +6,52 @@ import logging
 
 def get_precision_info(symbol: str) -> dict:
     """
-    מחזיר את הגדרות הדיוק של הסימול (מחיר וכמות) לפי הגדרות הבורסה.
+    מחזיר מידע על דיוק המחיר וכמות הסימבול לפי הגדרות הבורסה.
+    מבוסס על ה־PRICE_FILTER ו־LOT_SIZE מה־exchange_info של Binance.
     """
     try:
-        info = client.get_symbol_info(symbol)
-        filters = info.get('filters', [])
+        info = client.futures_exchange_info()
+        # Exchange info returns dict with 'symbols' list
+        symbol_info = next((s for s in info['symbols'] if s['symbol'] == symbol), None)
+        if symbol_info is None:
+            raise ValueError(f"Symbol {symbol} not found in exchange info")
 
-        step_size = float(next(f['stepSize'] for f in filters if f['filterType'] == 'LOT_SIZE'))
-        tick_size = float(next(f['tickSize'] for f in filters if f['filterType'] == 'PRICE_FILTER'))
+        # בחרי את הפילטרים הרלוונטיים
+        filters = {f['filterType']: f for f in symbol_info['filters']}
+        tick_size = float(filters['PRICE_FILTER']['tickSize'])
+        step_size = float(filters['LOT_SIZE']['stepSize'])
 
-        quantity_precision = int(-math.log10(step_size)) if step_size < 1 else 0
-        price_precision = int(-math.log10(tick_size)) if tick_size < 1 else 0
+        # חשב את הדיוק כמספר הספרות אחרי הנקודה
+        price_precision = int(round(-math.log10(tick_size)))
+        quantity_precision = int(round(-math.log10(step_size)))
 
         return {
-            "stepSize": step_size,
-            "tickSize": tick_size,
-            "quantityPrecision": quantity_precision,
-            "pricePrecision": price_precision
+            'tickSize': tick_size,
+            'stepSize': step_size,
+            'pricePrecision': price_precision,
+            'quantityPrecision': quantity_precision
         }
+
     except Exception as e:
-        logging.error(f"❌ שגיאה ב־get_precision_info עבור {symbol}: {e}")
-        # ברירת מחדל
-        return {"stepSize": 1, "tickSize": 1, "quantityPrecision": 0, "pricePrecision": 0}
+        logging.error(f"[precision_utils] Failed to fetch precision info for {symbol}: {e}")
+        # ערכים ברירת מחדל
+        return {
+            'tickSize': 0.01,
+            'stepSize': 0.000001,
+            'pricePrecision': 2,
+            'quantityPrecision': 6
+        }
 
 
 def round_to_precision(value: float, precision: int) -> float:
     """
-    מעגל את value לפי מספר הספרות precision.
+    מעגל ערך לדיוק נתון (מספר ספרות אחרי הנקודה).
     """
-    fmt = "{:0." + str(precision) + "f}"
-    try:
-        return float(fmt.format(value))
-    except Exception:
-        return round(value, precision)
+    if precision < 0:
+        # לא עיגול במקרה של precision שלילי
+        return value
+    return round(value, precision)
+
 
 
 
