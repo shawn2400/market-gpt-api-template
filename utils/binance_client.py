@@ -1,16 +1,9 @@
 # utils/binance_client.py
+
 import os
 import logging
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
-
-# Attempt to load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    logging.info("Loaded .env file successfully.")
-except ImportError:
-    logging.warning("python-dotenv not installed; skipping .env load")
 
 # Configure logging
 logging.basicConfig(
@@ -18,13 +11,12 @@ logging.basicConfig(
     format='[%(asctime)s] [%(levelname)s] %(message)s'
 )
 
-# Retrieve API credentials
+# Retrieve API credentials from environment (e.g., Render secrets)
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 # Global Binance client instance
 client: Client | None = None
-
 
 def init_binance_client() -> None:
     """
@@ -54,9 +46,9 @@ def init_binance_client() -> None:
         logging.error(f"[Binance Init Error] {e}")
         client = None
 
-
 # Automatically initialize on import
 init_binance_client()
+
 
 
 
