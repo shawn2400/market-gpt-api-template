@@ -5,23 +5,26 @@ from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# Load environment variables from .env
+# Load environment variables from .env file
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s'
+)
 
 # Retrieve API credentials
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-# Global client instance
+# Global Binance client instance
 client: Client | None = None
 
 
 def init_binance_client() -> None:
     """
-    Initialize the Binance Client for Spot and Futures.
+    Initialize the Binance API client for both Spot and Futures.
     Raises EnvironmentError if API_KEY or API_SECRET are missing.
     """
     global client
@@ -31,12 +34,12 @@ def init_binance_client() -> None:
                 "❌ BINANCE_API_KEY and BINANCE_API_SECRET must be set in environment"
             )
 
-        # Initialize client; defaults to https://api.binance.com
+        # Initialize the client; defaults to https://api.binance.com
         client = Client(API_KEY, API_SECRET)
 
-        # Test connectivity
+        # Test connectivity endpoints
         client.ping()
-        client.futures_account()  # triggers Futures account endpoint
+        client.futures_account()  # ensures futures endpoints work
 
         logging.info("✅ Binance client connected (Spot + Futures)")
 
@@ -48,8 +51,10 @@ def init_binance_client() -> None:
         client = None
 
 
-# Initialize on import
-default_init = init_binance_client()
+# Automatically initialize on import
+init_binance_client()
+
+
 
 
 
