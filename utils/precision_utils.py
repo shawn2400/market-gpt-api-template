@@ -1,56 +1,38 @@
 # utils/precision_utils.py
 
-import math
-import logging
 from utils.binance_client import client
+import logging
 
 def get_precision_info(symbol: str) -> dict:
     """
-    מחזיר מידע על דיוק המחיר וכמות לפי הגדרות הבורסה (BINANCE futures).
-    מבוסס על ה־PRICE_FILTER ו־LOT_SIZE מה־exchange_info.
+    שולף מה-Binance את הפריסיז'ן המתאים לסימול:
+    - pricePrecision: מספר המקומות אחרי הנקודה למחיר
+    - quantityPrecision: מספר המקומות אחרי הנקודה לכמות
     """
     try:
-        info = client.futures_exchange_info()
-        symbol_info = next((s for s in info["symbols"] if s["symbol"] == symbol), None)
-        if symbol_info is None:
-            raise ValueError(f"Symbol {symbol} not found in exchange info")
-
-        filters = {f["filterType"]: f for f in symbol_info["filters"]}
-        tick_size = float(filters["PRICE_FILTER"]["tickSize"])
-        step_size = float(filters["LOT_SIZE"]["stepSize"])
-
-        price_precision = int(round(-math.log10(tick_size)))
-        quantity_precision = int(round(-math.log10(step_size)))
-
+        info = client.get_symbol_info(symbol)
+        # Binance v1: info['quotePrecision'], v2: info['pricePrecision']
+        price_prec = info.get('pricePrecision') or info.get('quotePrecision')
+        qty_prec = info.get('baseAssetPrecision')
         return {
-            "tickSize": tick_size,
-            "stepSize": step_size,
-            "pricePrecision": price_precision,
-            "quantityPrecision": quantity_precision
+            'pricePrecision': int(price_prec),
+            'quantityPrecision': int(qty_prec)
         }
-
     except Exception as e:
-        logging.error(f"[precision_utils] Failed to fetch precision for {symbol}: {e}")
-        # ברירת מחדל במקרה של כישלון
+        logging.error(f"❌ שגיאה בשליפת precision ל־{symbol}: {e}")
+        # נחזיר ברירת מחדל
         return {
-            "tickSize": 0.01,
-            "stepSize": 0.000001,
-            "pricePrecision": 2,
-            "quantityPrecision": 6
+            'pricePrecision': 8,
+            'quantityPrecision': 8
         }
-
 
 def round_to_precision(value: float, precision: int) -> float:
     """
-    מעגל ערך למספר הספרות אחרי הנקודה לפי precision.
+    עיגול ערך ל־precision נתון (מספר ספרות אחרי הנקודה).
     """
-    try:
-        if precision < 0:
-            return value
-        return round(value, precision)
-    except Exception as e:
-        logging.error(f"[precision_utils] round_to_precision failed: {e}")
-        return value
+    factor = 10 ** precision
+    return float(int(value * factor + 0.5 if value >= 0 else value * factor - 0.5) / factor)
+
 
 
 
