@@ -14,7 +14,9 @@ from utils.snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from utils.report_utils import send_email_alert
 from utils.binance_client import client
-from utils.precision_utils import round_to_precision, get_precision_info
+from .precision_utils import round_to_precision, get_precision_info
+
+
 
 SIDE_BUY = "BUY"
 SIDE_SELL = "SELL"
