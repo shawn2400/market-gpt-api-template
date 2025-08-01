@@ -1,5 +1,3 @@
-# tests/test_precision.py
-
 from utils.precision_utils import round_to_precision, get_precision_info
 
 def test_round_to_precision_simple():
@@ -15,6 +13,7 @@ def test_get_precision_info_structure():
     assert "quantityPrecision" in info
     assert isinstance(info["pricePrecision"], int)
     assert isinstance(info["quantityPrecision"], int)
+
 
 
 
