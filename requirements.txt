@@ -35,6 +35,7 @@ websocket-client==1.6.1
 
 # === זמן ותאריכים (אופציונלי)
 pytz==2024.1
+python-dotenv
 
 
 
