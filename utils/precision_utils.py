@@ -1,37 +1,26 @@
 # utils/precision_utils.py
 
-import logging
-from utils.binance_client import client
+def round_to_precision(value: float, digits: int) -> float:
+    """
+    Round a numeric value to 'digits' decimal places.
+    """
+    try:
+        return round(value, digits)
+    except Exception:
+        # במקרה קיצון, החזירו את הערך המקורי
+        return value
 
 def get_precision_info(symbol: str) -> dict:
     """
-    מחזיר dict עם שני שדות:
-    - pricePrecision: מספר הנקודות אחרי הנקודה במחיר
-    - quantityPrecision: מספר הנקודות אחרי הנקודה בכמות
+    דוגמה: החזרת פריסיית עיגול לפי סימול.
+    במקום הלוגיקה הזו, שלבו את הקריאה ל־Binance או מקור אחר.
     """
-    try:
-        info = client.futures_exchange_info()
-        for s in info.get("symbols", []):
-            if s["symbol"] == symbol:
-                return {
-                    "pricePrecision": s.get("pricePrecision", 8),
-                    "quantityPrecision": s.get("quantityPrecision", 8)
-                }
-        raise ValueError(f"Symbol not found: {symbol}")
-    except Exception as e:
-        logging.error(f"[precision_utils] failed for {symbol}: {e}")
-        return {"pricePrecision": 8, "quantityPrecision": 8}
+    # דיפולט, יש להחליף בלוגיקה אמיתית אם נדרש
+    return {
+        "pricePrecision": 2,
+        "quantityPrecision": 3
+    }
 
-def round_to_precision(value: float, precision: int) -> float:
-    """
-    מעגל את הערך ל־precision ספרות אחרי הנקודה.
-    """
-    fmt = "{:0." + str(precision) + "f}"
-    try:
-        return float(fmt.format(value))
-    except Exception as e:
-        logging.warning(f"[precision_utils] round failed ({value}@{precision}): {e}")
-        return value
 
 
 
