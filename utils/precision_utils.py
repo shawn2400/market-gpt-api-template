@@ -7,18 +7,18 @@ def round_to_precision(value: float, digits: int) -> float:
     try:
         return round(value, digits)
     except Exception:
-        # במקרה קיצון, החזירו את הערך המקורי
+        # Fallback: return original value on error
         return value
 
 def get_precision_info(symbol: str) -> dict:
     """
-    דוגמה: החזרת פריסיית עיגול לפי סימול.
-    במקום הלוגיקה הזו, שלבו את הקריאה ל־Binance או מקור אחר.
+    Example stub: return price & quantity precision settings for a given symbol.
+    Replace with real Binance‐API call or config lookup as needed.
     """
-    # דיפולט, יש להחליף בלוגיקה אמיתית אם נדרש
+    # TODO: fetch real info via client.exchange_info or similar
     return {
         "pricePrecision": 2,
-        "quantityPrecision": 3
+        "quantityPrecision": 3,
     }
 
 
