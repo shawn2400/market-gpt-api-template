@@ -1,3 +1,5 @@
+# utils/precision_utils.py
+
 import math
 from utils.binance_client import client
 
@@ -8,7 +10,7 @@ def get_precision_info(symbol: str) -> dict:
     info = client.get_symbol_info(symbol)
     filters = info.get('filters', [])
 
-    # שליפת ה-stepSize (לכמות) ו־tickSize (למחיר)
+    # שליפת ה-stepSize (לכמות) ו-tickSize (למחיר)
     step_size = float(next(f['stepSize'] for f in filters if f['filterType'] == 'LOT_SIZE'))
     tick_size = float(next(f['tickSize'] for f in filters if f['filterType'] == 'PRICE_FILTER'))
 
@@ -28,6 +30,7 @@ def round_to_precision(value: float, precision: int) -> float:
     מעגל את value לפי מספר הספרות precision.
     """
     return round(value, precision)
+
 
 
 
