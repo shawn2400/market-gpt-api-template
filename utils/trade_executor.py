@@ -7,10 +7,10 @@ import pandas as pd
 
 from utils.quantity_utils import calculate_quantity, auto_risk_allocation
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.ws_fallback import get_price  # ← החליף את get_live_price
+from utils.ws_fallback import get_price
 from utils.trade_storage import save_trade
 from utils.quality_score import compute_quality_score
-from snapshot_utils import save_trade_snapshot
+from utils.snapshot_utils import save_trade_snapshot
 from utils.pnl_tracker import update_pnl
 from utils.report_utils import send_email_alert
 from utils.binance_client import client
@@ -39,29 +39,35 @@ def execute_trade_live(
     market_type="futures"
 ):
     try:
+        # הגדרת מינוף
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
+
+        # קבלת המחיר העדכני
         price = get_price(symbol, market_type=market_type)
         if not price or price <= 0:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
+        # חישוב SL/TP אוטומטי אם לא סופק
         if stop is None or tp is None:
             sltp = predict_optimal_sl_tp(direction, entry)
             stop = sltp["sl"]
             tp = sltp["tp"]
 
+        # עיגול לפי הדיוק של הבורסה
         precision = get_precision_info(symbol)
         stop = round_to_precision(stop, precision.get("pricePrecision", 4))
         tp = round_to_precision(tp, precision.get("pricePrecision", 4))
 
-        capital_used = auto_risk_allocation(entry_price=entry, stop_price=stop, total_budget=budget_usd, leverage=leverage, symbol=symbol)
+        # חישוב גודל עמדה לפי שינוי סיכון (USD)
+        capital_used = auto_risk_allocation(symbol, budget_usd)
         quantity = calculate_quantity(symbol, entry, leverage, capital_used)
         if quantity <= 0:
-            raise ValueError("⚠️ כמות לא חוקית – אולי תקציב קטן מדי או הגדרות דיוק לא תואמות")
+            raise ValueError("⚠️ כמות לא חוקית – אולי תקציב קטן מדי או דיוק לא נכון")
 
+        # ביצוע הזמנה שוק
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
-
-        order = client.futures_create_order(
+        client.futures_create_order(
             symbol=symbol,
             side=side,
             type=ORDER_TYPE_MARKET,
@@ -69,6 +75,7 @@ def execute_trade_live(
         )
         time.sleep(0.5)
 
+        # Stop / trailing
         if use_trailing:
             activation_price = round(price * (1.005 if direction.upper() == "LONG" else 0.995), 4)
             client.futures_create_order(
@@ -90,6 +97,7 @@ def execute_trade_live(
                 timeInForce=TIME_IN_FORCE_GTC
             )
 
+        # Take-profit
         try:
             client.futures_create_order(
                 symbol=symbol,
@@ -102,6 +110,7 @@ def execute_trade_live(
         except Exception as e:
             logging.warning(f"[!] טייק פרופיט נכשל: {e}")
 
+        # שמירת סנאפשוט
         snapshot_path = None
         if take_snapshot:
             snapshot_path = save_trade_snapshot({
@@ -112,6 +121,7 @@ def execute_trade_live(
                 "direction": direction.upper()
             })
 
+        # חישוב איכות ומידת ביטחון
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -127,6 +137,7 @@ def execute_trade_live(
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality, 2)
 
+        # שמירת סחר במאגר
         trade_data = {
             "symbol": symbol,
             "entry": entry,
@@ -147,20 +158,23 @@ def execute_trade_live(
         save_trade(trade_data)
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
+        # שליחת התראה במייל (אופציונלי)
         if os.getenv("ALERT_EMAIL_ADDRESS") and os.getenv("ALERT_TO_EMAIL"):
             try:
                 send_email_alert(
                     subject=f"🔔 AlgoGPT Trade Executed: {symbol} {direction.upper()}",
-                    message=f"""Symbol: {symbol}
-Direction: {direction}
-Entry: {entry}
-Stop: {stop}
-TP: {tp}
-Leverage: {leverage}
-Confidence: {confidence:.2f}%
-Quality: {quality}/10
-Capital Used: {capital_used:.2f}$
-Qty: {quantity}"""
+                    message=(
+                        f"Symbol: {symbol}\n"
+                        f"Direction: {direction}\n"
+                        f"Entry: {entry}\n"
+                        f"Stop: {stop}\n"
+                        f"TP: {tp}\n"
+                        f"Leverage: {leverage}\n"
+                        f"Confidence: {confidence:.2f}%\n"
+                        f"Quality: {quality}/10\n"
+                        f"Capital Used: {capital_used:.2f}$\n"
+                        f"Qty: {quantity}"
+                    )
                 )
             except Exception as e:
                 logging.warning(f"[!] שליחת אימייל נכשלה: {e}")
