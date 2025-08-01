@@ -20,7 +20,6 @@ def get_precision_info(symbol: str) -> dict:
         raise ValueError(f"Symbol not found: {symbol}")
     except Exception as e:
         logging.error(f"[precision_utils] failed for {symbol}: {e}")
-        # במקרה של תקלה, נחזיר ברירות מחדל סבירות
         return {"pricePrecision": 8, "quantityPrecision": 8}
 
 def round_to_precision(value: float, precision: int) -> float:
@@ -33,6 +32,7 @@ def round_to_precision(value: float, precision: int) -> float:
     except Exception as e:
         logging.warning(f"[precision_utils] round failed ({value}@{precision}): {e}")
         return value
+
 
 
 
