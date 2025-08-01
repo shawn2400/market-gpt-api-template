@@ -5,8 +5,13 @@ from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# Load environment variables from .env file
-load_dotenv()
+# Attempt to load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.info("Loaded .env file successfully.")
+except ImportError:
+    logging.warning("python-dotenv not installed; skipping .env load")
 
 # Configure logging
 logging.basicConfig(
@@ -53,6 +58,7 @@ def init_binance_client() -> None:
 
 # Automatically initialize on import
 init_binance_client()
+
 
 
 
