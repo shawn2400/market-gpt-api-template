@@ -25,47 +25,46 @@ ORDER_TYPE_TRAILING_STOP_MARKET = "TRAILING_STOP_MARKET"
 TIME_IN_FORCE_GTC = "GTC"
 
 def execute_trade_live(
-    symbol: str,
-    entry: float,
-    stop: float | None,
-    tp: float | None,
-    direction: str,
-    leverage: int,
-    budget_usd: float = 100,
-    use_grid: bool = False,
-    use_trailing: bool = False,
-    user_id: str | None = None,
-    take_snapshot: bool = True,
-    market_type: str = "futures"
-) -> dict:
+    symbol,
+    entry,
+    stop,
+    tp,
+    direction,
+    leverage,
+    budget_usd=100,
+    use_grid=False,
+    use_trailing=False,
+    user_id=None,
+    take_snapshot=True,
+    market_type="futures"
+):
     try:
-        # 1. הגדרת מינוף
+        # הגדרת מינוף
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
 
-        # 2. שליפת מחיר
+        # קבלת המחיר העדכני
         price = get_price(symbol, market_type=market_type)
         if not price or price <= 0:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
 
-        # 3. חישוב SL/TP אוטומטי במידה ולא סופק
+        # חישוב SL/TP אוטומטי אם לא סופק
         if stop is None or tp is None:
             sltp = predict_optimal_sl_tp(direction, entry)
             stop = sltp["sl"]
             tp = sltp["tp"]
 
-        # 4. עיגול המחירים לפי דיוק הבורסה
-        prec = get_precision_info(symbol)
-        stop = round_to_precision(stop, prec["pricePrecision"])
-        tp = round_to_precision(tp, prec["pricePrecision"])
+        # עיגול לפי הדיוק של הבורסה
+        precision = get_precision_info(symbol)
+        stop = round_to_precision(stop, precision.get("pricePrecision", 4))
+        tp = round_to_precision(tp, precision.get("pricePrecision", 4))
 
-        # 5. חישוב כמות לפי סיכון והון
-        #    auto_risk_allocation מחזירה qty שתואם risk_usd = budget_usd
+        # חישוב גודל עמדה לפי שינוי סיכון (USD)
         capital_used = auto_risk_allocation(symbol, budget_usd)
         quantity = calculate_quantity(symbol, entry, leverage, capital_used)
         if quantity <= 0:
             raise ValueError("⚠️ כמות לא חוקית – אולי תקציב קטן מדי או דיוק לא נכון")
 
-        # 6. פקודת שוק ראשונה
+        # ביצוע הזמנה שוק
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
         client.futures_create_order(
@@ -76,7 +75,7 @@ def execute_trade_live(
         )
         time.sleep(0.5)
 
-        # 7. Stop or Trailing Stop
+        # Stop / trailing
         if use_trailing:
             activation_price = round(price * (1.005 if direction.upper() == "LONG" else 0.995), 4)
             client.futures_create_order(
@@ -98,7 +97,7 @@ def execute_trade_live(
                 timeInForce=TIME_IN_FORCE_GTC
             )
 
-        # 8. Take-profit
+        # Take-profit
         try:
             client.futures_create_order(
                 symbol=symbol,
@@ -111,7 +110,7 @@ def execute_trade_live(
         except Exception as e:
             logging.warning(f"[!] טייק פרופיט נכשל: {e}")
 
-        # 9. שמירת snapshot (אופציונלי)
+        # שמירת סנאפשוט
         snapshot_path = None
         if take_snapshot:
             snapshot_path = save_trade_snapshot({
@@ -122,7 +121,7 @@ def execute_trade_live(
                 "direction": direction.upper()
             })
 
-        # 10. חישוב איכות וביטחון
+        # חישוב איכות ומידת ביטחון
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -138,7 +137,7 @@ def execute_trade_live(
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality, 2)
 
-        # 11. שמירת הטרייד במסד
+        # שמירת סחר במאגר
         trade_data = {
             "symbol": symbol,
             "entry": entry,
@@ -159,7 +158,7 @@ def execute_trade_live(
         save_trade(trade_data)
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
-        # 12. שליחת התראה מייל אם מוגדר
+        # שליחת התראה במייל (אופציונלי)
         if os.getenv("ALERT_EMAIL_ADDRESS") and os.getenv("ALERT_TO_EMAIL"):
             try:
                 send_email_alert(
@@ -182,15 +181,26 @@ def execute_trade_live(
 
         return {
             "status": "success",
-            **trade_data,
+            "symbol": symbol,
+            "entry": entry,
             "price_now": price,
+            "quantity": quantity,
+            "stop": stop,
+            "tp": tp,
+            "leverage": leverage,
+            "side": side,
+            "confidence": confidence,
+            "quality_score": quality,
+            "snapshot": snapshot_path,
             "trailing": use_trailing,
-            "grid": use_grid
+            "grid": use_grid,
+            "capital_used": capital_used
         }
 
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
