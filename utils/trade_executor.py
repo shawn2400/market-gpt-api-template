@@ -1,3 +1,5 @@
+# utils/trade_executor.py
+
 import logging
 import time
 import os
@@ -156,7 +158,7 @@ def execute_trade_live(
         save_trade(trade_data)
         update_pnl(symbol, direction, entry, price, leverage, quantity)
 
-        # שליחת אימייל אם מוגדר
+        # שליחת התראה במייל (אופציונלי)
         if os.getenv("ALERT_EMAIL_ADDRESS") and os.getenv("ALERT_TO_EMAIL"):
             try:
                 send_email_alert(
@@ -198,6 +200,7 @@ def execute_trade_live(
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
