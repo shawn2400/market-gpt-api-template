@@ -1,65 +1,37 @@
-# utils/trade_storage.py
+from utils.binance_client import client
+import logging
 
-import json
-import os
+def get_precision_info(symbol: str) -> dict:
+    """
+    שולף מה-Binance את ה-precision המתאים לסימול:
+    - pricePrecision: מספר המקומות אחרי הנקודה למחיר
+    - quantityPrecision: מספר המקומות אחרי הנקודה לכמות
+    """
+    try:
+        info = client.get_symbol_info(symbol)
+        # Binance may use 'pricePrecision' or 'quotePrecision'
+        price_prec = info.get('pricePrecision') if info.get('pricePrecision') is not None else info.get('quotePrecision')
+        qty_prec = info.get('baseAssetPrecision')
+        return {
+            'pricePrecision': int(price_prec),
+            'quantityPrecision': int(qty_prec)
+        }
+    except Exception as e:
+        logging.error(f"❌ שגיאה בשליפת precision ל־{symbol}: {e}")
+        # ברירת מחדל לערכים סבירים
+        return {
+            'pricePrecision': 8,
+            'quantityPrecision': 8
+        }
 
-TRADES_FILE = "open_trades.json"
-SCANNED_FILE = "scanned_trades.json"
+def round_to_precision(value: float, precision: int) -> float:
+    """
+    עיגול ערך ל־precision נתון (מספר ספרות אחרי הנקודה).
+    """
+    factor = 10 ** precision
+    # שימוש בעיגול רגיל (חצי למעלה)
+    return float(round(value * factor) / factor)
 
-def load_open_trades():
-    if not os.path.exists(TRADES_FILE):
-        return []
-    with open(TRADES_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except Exception:
-            return []
-
-def save_open_trades(trades):
-    with open(TRADES_FILE, "w") as f:
-        json.dump(trades, f, indent=2)
-
-def add_trade(trade):
-    trades = load_open_trades()
-    trades.append(trade)
-    save_open_trades(trades)
-
-def find_trade(symbol, direction):
-    trades = load_open_trades()
-    for t in trades:
-        if t["symbol"].upper() == symbol.upper() and t["direction"].upper() == direction.upper():
-            return t
-    return None
-
-def update_trade(trade):
-    trades = load_open_trades()
-    for i, t in enumerate(trades):
-        if t["symbol"].upper() == trade["symbol"].upper() and t["direction"].upper() == trade["direction"].upper():
-            trades[i] = trade
-            save_open_trades(trades)
-            return True
-    return False
-
-# ======================
-# ALIAS & API TEMPLATES:
-# ======================
-
-# לאפשר ייבוא לפי שמות שמחפשים בשאר המערכת:
-save_trade = add_trade
-get_open_trades = load_open_trades
-
-def save_scanned_trade(trade):
-    """שומר טרייד שנסרק (לא בוצע בפועל)"""
-    trades = []
-    if os.path.exists(SCANNED_FILE):
-        with open(SCANNED_FILE, "r") as f:
-            try:
-                trades = json.load(f)
-            except Exception:
-                trades = []
-    trades.append(trade)
-    with open(SCANNED_FILE, "w") as f:
-        json.dump(trades, f, indent=2)
 
 
 
