@@ -1,29 +1,27 @@
-# utils/binance_client.py
-
 import os
 import logging
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# הגדרת לוגינג לקונסול
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s')
+# לוגים בפורמט פשוט באנגלית בלבד
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
-API_KEY    = os.environ.get("BINANCE_API_KEY")
-API_SECRET = os.environ.get("BINANCE_API_SECRET")
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 client = None
 
 def init_binance_client():
     global client
-    if not API_KEY or not API_SECRET:
-        logging.error("✖️ חסר ENV VAR: BINANCE_API_KEY או BINANCE_API_SECRET")
-        return
-
     try:
+        if not API_KEY or not API_SECRET:
+            raise EnvironmentError("BINANCE_API_KEY and BINANCE_API_SECRET must be set")
+
         client = Client(API_KEY, API_SECRET)
         client.ping()
         client.futures_account()
-        logging.info("✔️ התחבר לבייננס (Spot & Futures)")
+        logging.info("Binance client connected (Spot + Futures)")
+
     except (BinanceAPIException, BinanceRequestException) as e:
         logging.error(f"[Binance API Error] {e}")
         client = None
@@ -31,8 +29,8 @@ def init_binance_client():
         logging.error(f"[Binance Init Error] {e}")
         client = None
 
-# קריאה באימפורט
 init_binance_client()
+
 
 
 
