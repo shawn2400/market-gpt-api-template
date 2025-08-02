@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from utils.scanner_utils import scan_all
 from utils.trade_executor import execute_trade_live
 from utils.trade_storage import get_open_trades_count
-from utils.get_live_price import get_live_price
+from utils.ws_fallback import get_price  # ✅ WebSocket חכם למחיר חי
 from utils.ai_analysis import predict_optimal_sl_tp
 
 load_dotenv()
@@ -35,7 +35,7 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
         if trades:
             trade = trades[0]
             logging.info(f"🎯 טרייד נבחר: {trade['symbol']} | איכות: {trade['quality_score']}")
-            price = get_live_price(trade["symbol"])
+            price = get_price(trade["symbol"])
             sltp = predict_optimal_sl_tp(trade["direction"], price)
 
             if not debug and price:
@@ -76,6 +76,7 @@ if __name__ == "__main__":
         max_budget=args.budget,
         market_type=args.market_type
     ))
+
 
 
 
