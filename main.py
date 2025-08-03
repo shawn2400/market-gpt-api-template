@@ -12,6 +12,9 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_multi_websocket, get_price
 
+# === הגדרות לוג בסיסיות (INFO בפרודקשן, DEBUG בבדיקות)
+logging.basicConfig(level=logging.INFO)
+
 # === משתני סביבה עיקריים (נדרשים)
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
@@ -99,6 +102,7 @@ if AUTO_RUN:
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
