@@ -1,13 +1,18 @@
 import os
 import logging
+from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
+# Load .env variables
+load_dotenv()
+
+# Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
-BINANCE_API_KEY=TS2IvqKnUfv370onkdq9MvA7DYFF8gATAWetiSxWVmXC5crw71jf2HJ9DknWK9HW
-BINANCE_API_SECRET=FzmwOV59i3qoIgJ2862eJlQ9tHeq94SdZ9uvL5vrlP1trml0WwRlSm2RVBJb7Ki0
-
+# Get API keys from environment
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 client = None
 
@@ -19,11 +24,13 @@ def init_binance_client():
 
         client = Client(API_KEY, API_SECRET)
 
-        # ✅ פתרון עוקף – במידה וה־default URL מחזיר HTML
+        # Optional: alternate API endpoint
         client.API_URL = "https://api1.binance.com/api"
 
+        # Ping test
         client.ping()
         client.futures_account()
+
         logging.info("✅ Binance client connected (Spot + Futures)")
 
     except (BinanceAPIException, BinanceRequestException) as e:
@@ -34,6 +41,7 @@ def init_binance_client():
         client = None
 
 init_binance_client()
+
 
 
 
