@@ -1,4 +1,3 @@
-# routes/ai.py
 from fastapi import APIRouter
 from pydantic import BaseModel
 from utils.ai_analysis import analyze_with_ai
