@@ -1,109 +1,76 @@
-import threading
+import asyncio
+import websockets
 import json
-import time
-import requests
 import logging
-from websocket import WebSocketApp
-from typing import Dict
+import requests
+from typing import Dict, List
 
-# מחירי Live ועדכוני חיבור
 live_prices: Dict[str, float] = {}
-ws_connections: Dict[str, WebSocketApp] = {}
-MAX_CONNECTIONS = 20
-PING_INTERVAL = 30
+WS_CLIENT_STARTED = False
 
-# === WebSocket Events ===
-def _on_message(ws, message, symbol):
+def load_symbols_from_watchlist() -> List[str]:
     try:
-        data = json.loads(message)
-        if "p" in data:
-            price = float(data["p"])
-            live_prices[symbol] = price
-            logging.debug(f"[WS] {symbol} price updated: {price}")
-        else:
-            logging.debug(f"[WS] Received message without 'p': {data}")
+        with open("watchlist.json", "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return [entry["symbol"].lower() for entry in data if isinstance(entry, dict) and "symbol" in entry]
     except Exception as e:
-        logging.warning(f"[WS] Failed to parse message for {symbol}: {e}")
+        logging.warning(f"[ws_fallback] שגיאה בטעינת watchlist.json: {e}")
+    return ["btcusdt"]
 
-def _on_error(ws, error):
-    logging.warning(f"[WS] Error: {error}")
-
-def _on_close(ws, code, reason):
-    logging.warning(f"[WS] Closed: {code} / {reason}")
-
-def _on_open(ws):
-    logging.info("[WS] Connection opened")
-
-def _run_ws(symbol: str):
-    url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade"
-
-    def _create_ws():
-        return WebSocketApp(
-            url,
-            on_open=_on_open,
-            on_message=lambda ws, msg: _on_message(ws, msg, symbol),
-            on_error=_on_error,
-            on_close=lambda ws, code, reason: _on_close(ws, code, reason),
-        )
-
+async def ws_multi_stream(symbols: List[str]):
+    if not symbols:
+        symbols = ["btcusdt"]
+    # בניית ה-URL לכל הסימבולים
+    streams = "/".join([f"{s}@ticker" for s in symbols])
+    ws_url = f"wss://fstream.binance.com/stream?streams={streams}"
+    logging.info(f"[ws_fallback] WebSocket URL: {ws_url}")
     while True:
-        if len(ws_connections) >= MAX_CONNECTIONS:
-            logging.warning(f"[WS] Max connections ({MAX_CONNECTIONS}) reached. Skipping {symbol}")
-            return
-
-        logging.info(f"[WS] Connecting to {symbol}...")
-        ws = _create_ws()
-        ws_connections[symbol] = ws
-
-        def ping_loop():
-            while True:
-                try:
-                    if ws.sock and ws.sock.connected:
-                        ws.send(json.dumps({"method": "PING"}))
-                    time.sleep(PING_INTERVAL)
-                except Exception as e:
-                    logging.warning(f"[WS] Ping error for {symbol}: {e}")
-                    break
-
-        ping_thread = threading.Thread(target=ping_loop, daemon=True)
-        ping_thread.start()
-
         try:
-            ws.run_forever(ping_interval=PING_INTERVAL)
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
+                logging.info("[ws_fallback] Multi-stream WebSocket מחובר.")
+                async for msg in ws:
+                    data = json.loads(msg)
+                    symbol = data.get("data", {}).get("s")
+                    price = data.get("data", {}).get("c")
+                    if symbol and price:
+                        live_prices[symbol.upper()] = float(price)
         except Exception as e:
-            logging.warning(f"[WS] run_forever failed for {symbol}: {e}")
-        finally:
-            time.sleep(5)
-            logging.info(f"[WS] Reconnecting to {symbol}...")
+            logging.warning(f"[ws_fallback] שגיאת חיבור WS: {e}")
+        await asyncio.sleep(5)  # ניסיון להתחבר מחדש לאחר 5 שניות
 
-# === Public API ===
-def launch_websocket(symbol: str):
+def launch_websocket_multi():
     """
-    מחבר WebSocket חי לסימבול אחד. אם כבר קיים – לא מתחבר שוב.
+    הפעלת WebSocket Multi-stream לכל הסימבולים מה־watchlist.json.
+    אין להפעיל חיבור WS בודד לכל מטבע!
+    קריאה אחת בלבד בפרויקט (מה-main.py).
     """
-    if symbol in ws_connections:
-        logging.debug(f"[WS] Already connected to {symbol}")
+    global WS_CLIENT_STARTED
+    if WS_CLIENT_STARTED:
         return
-
-    thread = threading.Thread(target=_run_ws, args=(symbol,), daemon=True)
-    thread.start()
+    WS_CLIENT_STARTED = True
+    symbols = load_symbols_from_watchlist()
+    loop = asyncio.get_event_loop()
+    loop.create_task(ws_multi_stream(symbols))
+    logging.info(f"[ws_fallback] WebSocket Multi-Stream הופעל עבור {len(symbols)} סימבולים.")
 
 def get_price(symbol: str) -> float:
     """
-    מחזיר מחיר חי מסימבול. אם אין WebSocket פעיל, משתמש ב־REST fallback.
+    מחזיר מחיר חי מסימבול. אם אין WS פעיל, מבצע fallback ל-REST API.
     """
+    symbol = symbol.upper()
     price = live_prices.get(symbol)
     if price:
         return price
-
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
         resp = requests.get(url, timeout=3)
         resp.raise_for_status()
         return float(resp.json()["price"])
     except Exception as e:
-        logging.warning(f"[Fallback] Failed to fetch REST price for {symbol}: {e}")
+        logging.warning(f"[ws_fallback] Fallback REST price for {symbol}: {e}")
         return None
+
 
 
 
