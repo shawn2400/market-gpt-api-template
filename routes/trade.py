@@ -29,7 +29,7 @@ async def place_trade(req: TradeRequest):
             detail=f"❌ מחיר עדכני ({symbol}) לא נמצא/ישן מדי (>{int(now-ts) if ts else 'N/A'} שניות) – טרייד לא רץ"
         )
 
-    # שלב 2: שליחת הטרייד בפועל
+    # שלב 2: שליחת הטרייד בפועל עם הגנות נוספות מה-core
     trade_result = execute_trade_live(
         symbol=symbol,
         entry=price,
@@ -47,6 +47,7 @@ async def place_trade(req: TradeRequest):
         )
 
     return {"status": "success", "trade": trade_result["result"]}
+
 
 
 
