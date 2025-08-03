@@ -5,10 +5,10 @@ import os
 from utils.scanner_utils import scan_all
 from utils.ws_fallback import get_price
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.trade_executor import execute_trade_live
 from utils.pnl_tracker import update_pnl
 from utils.trade_storage import get_open_trades_count
 from utils.watchlist_utils import load_watchlist
+from utils.trade_execution_core import execute_trade_live   # <- לשים את הפונקציה כאן!
 
 executor_thread = None
 executor_stop = False
