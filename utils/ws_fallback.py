@@ -6,12 +6,15 @@ import time
 import requests
 import logging
 from websocket import WebSocketApp
+from typing import Dict
 
-# קאש למחירים חיים
-live_prices = {}
-ws_connections = {}
+# מחירי Live ועדכוני חיבור
+live_prices: Dict[str, float] = {}
+ws_connections: Dict[str, WebSocketApp] = {}
+MAX_CONNECTIONS = 20
+PING_INTERVAL = 30
 
-# === WebSocket Listener עבור Binance ===
+# === WebSocket Events ===
 def _on_message(ws, message, symbol):
     try:
         data = json.loads(message)
@@ -19,50 +22,80 @@ def _on_message(ws, message, symbol):
         live_prices[symbol] = price
         logging.debug(f"[WS] {symbol} price updated: {price}")
     except Exception as e:
-        logging.warning(f"[WS] Error parsing message for {symbol}: {e}")
+        logging.warning(f"[WS] Failed to parse message for {symbol}: {e}")
 
 def _on_error(ws, error):
     logging.warning(f"[WS] Error: {error}")
 
-def _on_close(ws, close_status_code, close_msg):
-    logging.warning(f"[WS] Closed: {close_status_code} / {close_msg}")
+def _on_close(ws, code, reason):
+    logging.warning(f"[WS] Closed: {code} / {reason}")
 
 def _on_open(ws):
-    logging.info(f"[WS] Connection opened")
+    logging.info("[WS] Connection opened")
 
-def launch_websocket(symbol: str):
-    """
-    מפעיל WebSocket עבור סמבול בודד (BTCUSDT וכו').
-    רצוי להריץ פעם אחת בלבד לכל סמבול.
-    """
-    if symbol in ws_connections:
-        return  # כבר רץ
+def _run_ws(symbol: str):
+    url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade"
 
-    def _run():
-        url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade"
-        ws = WebSocketApp(
+    def _create_ws():
+        return WebSocketApp(
             url,
+            on_open=_on_open,
             on_message=lambda ws, msg: _on_message(ws, msg, symbol),
             on_error=_on_error,
-            on_close=_on_close,
-            on_open=_on_open
+            on_close=lambda ws, code, reason: _on_close(ws, code, reason),
         )
-        ws_connections[symbol] = ws
-        ws.run_forever()
 
-    thread = threading.Thread(target=_run, daemon=True)
+    while True:
+        if len(ws_connections) >= MAX_CONNECTIONS:
+            logging.warning(f"[WS] Max connections ({MAX_CONNECTIONS}) reached. Skipping {symbol}")
+            return
+
+        logging.info(f"[WS] Connecting to {symbol}...")
+        ws = _create_ws()
+        ws_connections[symbol] = ws
+
+        def ping_loop():
+            while True:
+                try:
+                    if ws.sock and ws.sock.connected:
+                        ws.send(json.dumps({"method": "PING"}))
+                    time.sleep(PING_INTERVAL)
+                except Exception as e:
+                    logging.warning(f"[WS] Ping error for {symbol}: {e}")
+                    break
+
+        ping_thread = threading.Thread(target=ping_loop, daemon=True)
+        ping_thread.start()
+
+        try:
+            ws.run_forever(ping_interval=PING_INTERVAL)
+        except Exception as e:
+            logging.warning(f"[WS] run_forever failed for {symbol}: {e}")
+        finally:
+            time.sleep(5)
+            logging.info(f"[WS] Reconnecting to {symbol}...")
+            continue
+
+# === Public API ===
+def launch_websocket(symbol: str):
+    """
+    מחבר WebSocket חי לסימבול אחד. אם כבר קיים – לא מתחבר שוב.
+    """
+    if symbol in ws_connections:
+        logging.debug(f"[WS] Already connected to {symbol}")
+        return
+
+    thread = threading.Thread(target=_run_ws, args=(symbol,), daemon=True)
     thread.start()
 
-# === מחיר חי (מ־WebSocket או REST fallback) ===
 def get_price(symbol: str) -> float:
     """
-    מחזיר מחיר חי של סמבול נתון. מנסה קודם WebSocket ואם לא – REST רגיל.
+    מחזיר מחיר חי מסימבול. אם אין WebSocket פעיל, משתמש ב־REST fallback.
     """
     price = live_prices.get(symbol)
     if price:
         return price
 
-    # fallback ל־REST של Binance
     try:
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
         resp = requests.get(url, timeout=3)
