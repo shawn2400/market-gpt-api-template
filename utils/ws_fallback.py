@@ -6,26 +6,30 @@ import logging
 from websocket import WebSocketApp
 from typing import Dict, List
 
+# === חיבורי WS, מחירים חיים, ניהול מצב ===
 live_prices: Dict[str, float] = {}
-multi_ws: WebSocketApp = None
-stream_symbols: List[str] = []
+ws_status: Dict[str, bool] = {}
+MAX_CONNECTIONS = 1      # חיבור אחד בלבד ב־multi-stream!
 PING_INTERVAL = 30
 
-def _build_stream_url(symbols: List[str]) -> str:
-    streams = '/'.join(f"{s.lower()}@trade" for s in symbols)
-    return f"wss://stream.binance.com:9443/stream?streams={streams}"
-
-def _on_message(ws, message):
+def _on_message_multi(ws, message, symbol_map):
     try:
-        msg = json.loads(message)
-        data = msg.get("data", {})
-        symbol = data.get("s")
-        price = data.get("p")
-        if symbol and price:
-            live_prices[symbol] = float(price)
+        data = json.loads(message)
+        if "stream" in data and "data" in data:
+            stream = data["stream"]
+            d = data["data"]
+            symbol = stream.split('@')[0].upper()
+            if "p" in d:
+                price = float(d["p"])
+                live_prices[symbol] = price
+                logging.debug(f"[WS-MULTI] {symbol} price updated: {price}")
+        elif "p" in data and "s" in data:
+            symbol = data["s"].upper()
+            price = float(data["p"])
+            live_prices[symbol] = price
             logging.debug(f"[WS-MULTI] {symbol} price updated: {price}")
         else:
-            logging.debug(f"[WS-MULTI] Message missing data: {msg}")
+            logging.debug(f"[WS-MULTI] Received: {data}")
     except Exception as e:
         logging.warning(f"[WS-MULTI] Failed to parse message: {e}")
 
@@ -34,58 +38,66 @@ def _on_error(ws, error):
 
 def _on_close(ws, code, reason):
     logging.warning(f"[WS-MULTI] Closed: {code} / {reason}")
+    ws_status["multi"] = False
 
 def _on_open(ws):
     logging.info("[WS-MULTI] Connection opened")
+    ws_status["multi"] = True
 
-def _run_multi_ws(symbols: List[str]):
-    global multi_ws
-    url = _build_stream_url(symbols)
-    multi_ws = WebSocketApp(
-        url,
-        on_open=_on_open,
-        on_message=_on_message,
-        on_error=_on_error,
-        on_close=_on_close,
-    )
+def launch_multi_websocket(symbols: List[str]):
+    """
+    מחבר WebSocket Multi-Stream ל־Binance עבור רשימת סימבולים (trade).
+    """
+    if ws_status.get("multi", False):
+        logging.info("[WS-MULTI] Multi-stream already active")
+        return
 
-    def ping_loop():
+    # הכנה ל־multi-stream URL
+    streams = "/".join([f"{s.lower()}@trade" for s in symbols])
+    url = f"wss://stream.binance.com:9443/stream?streams={streams}"
+    symbol_map = {f"{s.lower()}@trade": s.upper() for s in symbols}
+
+    def ping_loop(ws):
         while True:
             try:
-                if multi_ws.sock and multi_ws.sock.connected:
-                    multi_ws.send(json.dumps({"method": "PING"}))
+                if ws.sock and ws.sock.connected:
+                    ws.send(json.dumps({"method": "PING"}))
                 time.sleep(PING_INTERVAL)
             except Exception as e:
                 logging.warning(f"[WS-MULTI] Ping error: {e}")
                 break
 
-    ping_thread = threading.Thread(target=ping_loop, daemon=True)
-    ping_thread.start()
-
-    while True:
+    def run_ws():
+        ws = WebSocketApp(
+            url,
+            on_open=_on_open,
+            on_message=lambda ws, msg: _on_message_multi(ws, msg, symbol_map),
+            on_error=_on_error,
+            on_close=_on_close,
+        )
+        ping_thread = threading.Thread(target=ping_loop, args=(ws,), daemon=True)
+        ping_thread.start()
         try:
-            logging.info("[WS-MULTI] Connecting multi-stream WebSocket...")
-            multi_ws.run_forever(ping_interval=PING_INTERVAL)
+            ws.run_forever(ping_interval=PING_INTERVAL)
         except Exception as e:
             logging.warning(f"[WS-MULTI] run_forever failed: {e}")
         finally:
+            ws_status["multi"] = False
             time.sleep(5)
-            logging.info("[WS-MULTI] Reconnecting...")
+            logging.info("[WS-MULTI] Reconnecting multi-stream...")
 
-def launch_multi_websocket(symbols: List[str]):
-    """הפעל WebSocket יחיד לכל הסימבולים."""
-    global stream_symbols
-    if not symbols:
-        raise ValueError("symbols list is empty")
-    stream_symbols = [s.upper() for s in symbols]
-    t = threading.Thread(target=_run_multi_ws, args=(stream_symbols,), daemon=True)
+    t = threading.Thread(target=run_ws, daemon=True)
     t.start()
+    ws_status["multi"] = True
 
 def get_price(symbol: str) -> float:
-    """מחזיר מחיר חי מסימבול. אם אין WS או מחיר – מנסה REST."""
+    """
+    מחזיר מחיר חי מסימבול. אם אין WebSocket פעיל, משתמש ב־REST fallback.
+    """
     price = live_prices.get(symbol.upper())
     if price is not None:
         return price
+
     try:
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
         resp = requests.get(url, timeout=3)
@@ -96,8 +108,10 @@ def get_price(symbol: str) -> float:
         return None
 
 def get_active_ws_symbols():
-    """החזר את כל הסימבולים עם WS פעיל (לבדיקה/דאשבורד)."""
-    return list(live_prices.keys())
+    """החזר את כל הסימבולים עם WS פעיל (רק למוניטורינג)."""
+    if ws_status.get("multi", False):
+        return list(live_prices.keys())
+    return []
 
 
 
