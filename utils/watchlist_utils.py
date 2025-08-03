@@ -2,52 +2,49 @@
 
 import json
 import os
-from datetime import datetime
+from typing import List, Dict
+from utils.trending_utils import get_trending_symbols
+from utils.multi_tf_scanner import analyze_symbol
 
 WATCHLIST_FILE = "watchlist.json"
 
-def load_watchlist():
+def load_watchlist() -> List[Dict]:
+    """ טוען את רשימת המעקב מהדיסק """
     if not os.path.exists(WATCHLIST_FILE):
         return []
-    with open(WATCHLIST_FILE, "r") as f:
+    with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_watchlist(watchlist):
-    with open(WATCHLIST_FILE, "w") as f:
-        json.dump(watchlist, f, indent=2)
+def save_watchlist(watchlist: List[Dict]) -> None:
+    """ שומר את רשימת המעקב לקובץ """
+    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+        json.dump(watchlist, f, ensure_ascii=False, indent=2)
 
-def add_to_watchlist(symbol, direction, quality_score, reason=None):
-    wl = load_watchlist()
-    item = {
-        "symbol": symbol,
-        "direction": direction,
-        "quality_score": quality_score,
-        "reason": reason or "",
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    if not any(x["symbol"] == symbol and x["direction"] == direction for x in wl):
-        wl.append(item)
-        save_watchlist(wl)
-        print(f"[WATCHLIST] הוסף: {symbol} {direction}")
-        return True
-    return False
+def generate_trending_watchlist(top: int = 15, market: str = "futures") -> None:
+    """
+    בונה אוטומטית רשימת מעקב לפי trending + ניתוח איכות.
+    שומר לקובץ watchlist.json בפורמט מלא.
+    """
+    symbols = get_trending_symbols(top=top, market=market)
+    watchlist = []
 
-def auto_update_watchlist(trades, threshold=7):
-    for t in trades:
-        if t.get("quality_score", 0) >= threshold:
-            add_to_watchlist(
-                t["symbol"],
-                t["direction"],
-                t.get("quality_score", 0),
-                reason=f"עבר QS {threshold}+ Multi-TF"
-            )
+    for symbol in symbols:
+        try:
+            result = analyze_symbol(symbol, market=market, interval1="15m", interval2="1h")
+            quality = result.get("quality_score")
+            direction = result.get("direction")
+            if quality is not None and direction:
+                watchlist.append({
+                    "symbol": symbol,
+                    "direction": direction,
+                    "quality_score": quality
+                })
+        except Exception as e:
+            print(f"[Watchlist] ⚠️ שגיאה בניתוח {symbol}: {e}")
 
-def get_default_watchlist(market_type="futures"):
-    if market_type == "spot":
-        return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
-    elif market_type == "grid":
-        return ["BCHUSDT", "TRXUSDT", "LINKUSDT", "MATICUSDT", "LTCUSDT"]
-    return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "OPUSDT", "AVAXUSDT", "NEARUSDT"]
+    save_watchlist(watchlist)
+    print(f"[Watchlist] ✅ נשמרו {len(watchlist)} סמלים לקובץ watchlist.json")
+
 
 
 
