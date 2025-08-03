@@ -13,9 +13,8 @@ pnl_tracker.json
 
 # === קבצי Python זמניים / קומפילציה ===
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*.so
 .cache/
 *.sqlite3
 
@@ -38,9 +37,13 @@ Thumbs.db
 *.lock
 *.bak
 
-# === IDE / עורך קוד (Visual Studio Code, PyCharm וכו') ===
+# === IDE / עורך קוד ===
 .vscode/
 .idea/
 *.iml
+
+# === סביבת וירטואלית ===
+.venv/
+venv/
 
 
