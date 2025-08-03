@@ -5,9 +5,6 @@ import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ ודא ש-PYTHONPATH כולל את השורש /app כדי שהייבוא יעבוד גם על Render וגם מקומית.
-# לדוגמה: export PYTHONPATH=$(pwd)
-
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -42,10 +39,13 @@ def load_watchlist():
                 return symbols
     except Exception as e:
         print(f"⚠️ שגיאה בקריאת watchlist.json: {e}")
-    return ["BTCUSDT"]
+    return [{"symbol": "BTCUSDT"}]  # fallback למבנה עם מפתח symbol
 
-for symbol in load_watchlist():
-    launch_websocket(symbol)
+# ⬅️ הרצת WebSocket עבור כל סימבול
+for item in load_watchlist():
+    symbol = item["symbol"] if isinstance(item, dict) and "symbol" in item else item
+    if isinstance(symbol, str):
+        launch_websocket(symbol)
 
 # 🌐 FastAPI Init
 app = FastAPI(
@@ -95,6 +95,7 @@ if AUTO_RUN:
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
