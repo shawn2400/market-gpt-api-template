@@ -9,6 +9,8 @@ services:
       - fromDotEnv: true
       - key: PORT
         value: "5000"
+
+      # 📊 פרמטרים למסחר אוטומטי
       - key: AUTO_RUN
         value: "true"
       - key: MIN_QUALITY_SCORE
