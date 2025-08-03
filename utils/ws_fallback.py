@@ -7,6 +7,7 @@ from websocket import WebSocketApp
 from typing import Dict, List
 
 live_prices: Dict[str, float] = {}
+live_prices_time: Dict[str, float] = {}  # <--- טיימסטמפ עדכון אחרון
 ws_status: Dict[str, bool] = {}
 MAX_CONNECTIONS = 1      # Multi-stream = 1 בלבד
 
@@ -18,6 +19,7 @@ def _on_message_multi(ws, message):
             symbol = data["data"]["s"].upper()
             price = float(data["data"]["p"])
             live_prices[symbol] = price
+            live_prices_time[symbol] = time.time()  # זמן עדכון
             logging.debug(f"[WS-MULTI] {symbol} price updated: {price}")
         else:
             logging.debug(f"[WS-MULTI] Received: {data}")
@@ -68,15 +70,35 @@ def launch_multi_websocket(symbols: List[str]):
     t.start()
     ws_status["multi"] = True
 
-def get_price(symbol: str) -> float:
-    price = live_prices.get(symbol.upper())
-    if price is not None:
+def is_price_fresh(symbol: str, max_age: int = 3) -> bool:
+    """
+    בדיקת עדכניות מחיר חי (max_age בשניות).
+    מחזיר True אם המחיר עודכן ב־max_age האחרונות, אחרת False.
+    """
+    now = time.time()
+    ts = live_prices_time.get(symbol.upper())
+    if ts is None:
+        return False
+    return now - ts <= max_age
+
+def get_price(symbol: str, max_age: int = 3) -> float:
+    """
+    מחזיר מחיר חי מסימבול רק אם הוא עדכני (max_age שניות), אחרת מנסה REST fallback.
+    """
+    symbol = symbol.upper()
+    price = live_prices.get(symbol)
+    if price is not None and is_price_fresh(symbol, max_age=max_age):
         return price
+    # מחיר WS לא עדכני — ננסה REST
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
         resp = requests.get(url, timeout=3)
         resp.raise_for_status()
-        return float(resp.json()["price"])
+        price = float(resp.json()["price"])
+        # נעדכן גם את cache כדי שהWS לא ישבור לנו
+        live_prices[symbol] = price
+        live_prices_time[symbol] = time.time()
+        return price
     except Exception as e:
         logging.warning(f"[Fallback] Failed to fetch REST price for {symbol}: {e}")
         return None
@@ -85,6 +107,7 @@ def get_active_ws_symbols():
     if ws_status.get("multi", False):
         return list(live_prices.keys())
     return []
+
 
 
 
