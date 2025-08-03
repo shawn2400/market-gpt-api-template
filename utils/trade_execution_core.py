@@ -1,24 +1,19 @@
-# utils/trade_execution_core.py
-
 import os
 import logging
 from utils.ws_fallback import get_price
 from utils.binance_trader import binance_futures_trade
 
-PRICE_PROTECT_PCT = float(os.getenv("PRICE_PROTECT_PCT", 0.25))  # אחוז סטיה מותקף
+PRICE_PROTECT_PCT = float(os.getenv("PRICE_PROTECT_PCT", 0.10))  # סטיית מחיר מקסימלית = 0.10%
 
 def execute_trade_live(
     symbol, entry, stop, tp, direction,
     leverage=20, budget_usd=100, market_type="futures",
     price_protect_pct=None
 ):
-    """
-    הגנת סטיה – מבצע טרייד חי רק אם המחיר באמת עדכני, עם חיתוך סטיות.
-    """
     price_protect_pct = price_protect_pct or PRICE_PROTECT_PCT
 
     try:
-        live_price = get_price(symbol)
+        live_price = get_price(symbol, max_age_sec=5)
         if not live_price or live_price <= 0:
             logging.error(f"[TRADE] ❌ מחיר חי לא תקין ל-{symbol}: {live_price}")
             return {"status": "error", "error": "live price unavailable"}
@@ -33,7 +28,7 @@ def execute_trade_live(
                 "live_price": live_price
             }
 
-        # ביצוע בפועל – תמיד לפי המחיר הכי עדכני (ולא נתון ישן)
+        # ביצוע בפועל לפי המחיר הכי עדכני
         result = binance_futures_trade(
             symbol=symbol,
             side=direction,  # "LONG" / "SHORT"
@@ -50,6 +45,7 @@ def execute_trade_live(
     except Exception as e:
         logging.error(f"[TRADE] שגיאה בביצוע טרייד {symbol}: {e}")
         return {"status": "error", "error": str(e)}
+
 
 
 
