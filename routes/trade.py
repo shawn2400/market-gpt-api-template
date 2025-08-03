@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-
-from utils.trade_executor import execute_trade_live
-from utils.ws_fallback import get_price  # ✅ WebSocket חכם למחיר חי
+from utils.trade_execution_core import execute_trade_live
+from utils.ws_fallback import get_price, live_timestamps
+import time
 
 router = APIRouter()
 
@@ -17,23 +17,36 @@ class TradeRequest(BaseModel):
 
 @router.post("/trade")
 async def place_trade(req: TradeRequest):
-    try:
-        price = req.entry or get_price(req.symbol)
-        if not price:
-            raise HTTPException(status_code=400, detail="❌ לא ניתן לקבל מחיר חי")
-        trade_result = execute_trade_live(
-            symbol=req.symbol,
-            direction=req.side,
-            entry=price,
-            stop=req.sl,
-            tp=req.tp,
-            leverage=req.leverage,
-            budget=req.budget
-        )
-        return {"status": "success", "trade": trade_result}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    symbol = req.symbol.upper()
+    now = time.time()
 
+    # שלב 1: הבאת מחיר נוכחי, בדיקת עדכניות (פחות מ־10 שניות)
+    price = req.entry or get_price(symbol, max_age_sec=10)
+    ts = live_timestamps.get(symbol)
+    if price is None or ts is None or (now - ts) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail=f"❌ מחיר עדכני ({symbol}) לא נמצא/ישן מדי (>{int(now-ts) if ts else 'N/A'} שניות) – טרייד לא רץ"
+        )
+
+    # שלב 2: שליחת הטרייד בפועל
+    trade_result = execute_trade_live(
+        symbol=symbol,
+        entry=price,
+        stop=req.sl,
+        tp=req.tp,
+        direction=req.side,
+        leverage=req.leverage,
+        budget_usd=req.budget
+    )
+
+    if trade_result["status"] == "error":
+        raise HTTPException(
+            status_code=400,
+            detail=trade_result.get("error", "שגיאה לא ידועה")
+        )
+
+    return {"status": "success", "trade": trade_result["result"]}
 
 
 
