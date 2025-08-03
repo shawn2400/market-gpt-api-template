@@ -20,10 +20,10 @@ def save_watchlist(watchlist: List[Dict]) -> None:
     with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
         json.dump(watchlist, f, ensure_ascii=False, indent=2)
 
-def generate_trending_watchlist(top: int = 15, market: str = "futures") -> None:
+def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str = "futures") -> None:
     """
     בונה אוטומטית רשימת מעקב לפי trending + ניתוח איכות.
-    שומר לקובץ watchlist.json בפורמט מלא.
+    סף איכות ברירת מחדל: 6
     """
     symbols = get_trending_symbols(top=top, market=market)
     watchlist = []
@@ -33,7 +33,7 @@ def generate_trending_watchlist(top: int = 15, market: str = "futures") -> None:
             result = analyze_symbol(symbol, market=market, interval1="15m", interval2="1h")
             quality = result.get("quality_score")
             direction = result.get("direction")
-            if quality is not None and direction:
+            if quality is not None and quality >= min_quality and direction:
                 watchlist.append({
                     "symbol": symbol,
                     "direction": direction,
@@ -44,6 +44,7 @@ def generate_trending_watchlist(top: int = 15, market: str = "futures") -> None:
 
     save_watchlist(watchlist)
     print(f"[Watchlist] ✅ נשמרו {len(watchlist)} סמלים לקובץ watchlist.json")
+
 
 
 
