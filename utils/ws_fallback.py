@@ -15,7 +15,7 @@ def _on_message_multi(ws, message):
         data = json.loads(message)
         # Multi-stream: {"stream": "btcusdt@trade", "data": {...}}
         if "data" in data and "s" in data["data"] and "p" in data["data"]:
-            symbol = data["data"]["s"]
+            symbol = data["data"]["s"].upper()
             price = float(data["data"]["p"])
             live_prices[symbol] = price
             logging.debug(f"[WS-MULTI] {symbol} price updated: {price}")
@@ -85,6 +85,7 @@ def get_active_ws_symbols():
     if ws_status.get("multi", False):
         return list(live_prices.keys())
     return []
+
 
 
 
