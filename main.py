@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-import asyncio
+import threading
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,9 +10,9 @@ from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-from utils.ws_fallback import launch_websocket_multi, get_price
+from utils.ws_fallback import launch_multi_websocket, get_price
 
-# קריאת משתני סביבה - הכל מוגדר ב־Render
+# === משתני סביבה עיקריים (נדרשים)
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -25,17 +25,25 @@ REQUIRED_ENV_VARS = [
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-# === הפעלת WebSocket Multi-stream עבור כל הסימבולים מ־watchlist.json ===
-def start_ws_background():
-    loop = None
+# === טעינת סימבולים מ־watchlist.json ===
+def load_watchlist_symbols():
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    loop.create_task(launch_websocket_multi())
+        with open("watchlist.json", "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
+    except Exception as e:
+        logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
+    return ["BTCUSDT"]
 
-start_ws_background()
+# === הפעלת WebSocket Multi-Stream לכל הסימבולים ===
+def start_ws_multi_background():
+    symbols = load_watchlist_symbols()
+    t = threading.Thread(target=launch_multi_websocket, args=(symbols,), daemon=True)
+    t.start()
+    logging.info(f"[main] 🚀 Multi-stream WebSocket launched for: {symbols}")
+
+start_ws_multi_background()
 
 # === FastAPI App ===
 app = FastAPI(
@@ -85,12 +93,13 @@ async def get_price_route(symbol: str = Query(..., description="Symbol like BTCU
     except Exception as e:
         return {"error": str(e)}
 
-# === הפעלת אוטו-אקסקיוטור אם נדרש ===
+# === הפעלת Auto Executor אם נדרש ===
 if AUTO_RUN:
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
