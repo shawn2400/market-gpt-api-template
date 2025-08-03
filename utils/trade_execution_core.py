@@ -1,8 +1,7 @@
 # utils/trade_execution_core.py
 
 import logging
-from utils.binance_trader import binance_futures_trade  # אם זו הפונקציה שלך
-# תוסיף כאן ייבוא כל פונקציה/מודול שאתה צריך (binance, בדיקות, לוגים וכו')
+from utils.binance_trader import binance_futures_trade
 
 def execute_trade_live(symbol, entry, stop, tp, direction, leverage=20, budget_usd=100, market_type="futures"):
     """
@@ -25,3 +24,4 @@ def execute_trade_live(symbol, entry, stop, tp, direction, leverage=20, budget_u
     except Exception as e:
         logging.error(f"[TRADE] שגיאה בביצוע טרייד {symbol}: {e}")
         return {"status": "error", "error": str(e)}
+
