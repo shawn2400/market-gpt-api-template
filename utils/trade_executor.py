@@ -1,5 +1,3 @@
-# utils/trade_executor.py
-
 import logging
 import time
 import os
@@ -15,8 +13,6 @@ from utils.pnl_tracker import update_pnl
 from utils.report_utils import send_email_alert
 from utils.binance_client import client
 from .precision_utils import round_to_precision, get_precision_info
-
-
 
 SIDE_BUY = "BUY"
 SIDE_SELL = "SELL"
@@ -41,34 +37,24 @@ def execute_trade_live(
     market_type="futures"
 ):
     try:
-        # Set leverage
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
-
-        # Get live price
         price = get_price(symbol, market_type=market_type)
         if not price or price <= 0:
             raise ValueError("⚠️ לא ניתן לשלוף מחיר עדכני")
-
-        # Auto-compute SL/TP if missing
         if stop is None or tp is None:
             sltp = predict_optimal_sl_tp(direction, entry)
             stop = sltp["sl"]
             tp = sltp["tp"]
-
-        # Round according to exchange precision
         precision = get_precision_info(symbol)
         stop = round_to_precision(stop, precision.get("pricePrecision", 4))
         tp = round_to_precision(tp, precision.get("pricePrecision", 4))
-
-        # Risk-based capital allocation + quantity calculation
         capital_used = auto_risk_allocation(symbol, budget_usd)
         quantity = calculate_quantity(symbol, entry, leverage, capital_used)
         if quantity <= 0:
             raise ValueError("⚠️ כמות לא חוקית – אולי תקציב קטן מדי או דיוק לא נכון")
-
-        # Market entry
         side = SIDE_BUY if direction.upper() == "LONG" else SIDE_SELL
         opposite = SIDE_SELL if side == SIDE_BUY else SIDE_BUY
+        # פתיחת פוזיציה אמיתית
         client.futures_create_order(
             symbol=symbol,
             side=side,
@@ -76,8 +62,7 @@ def execute_trade_live(
             quantity=quantity
         )
         time.sleep(0.5)
-
-        # Stop or trailing stop
+        # סטופ או טריילינג
         if use_trailing:
             activation_price = round(price * (1.005 if direction.upper() == "LONG" else 0.995), 4)
             client.futures_create_order(
@@ -98,8 +83,7 @@ def execute_trade_live(
                 closePosition=True,
                 timeInForce=TIME_IN_FORCE_GTC
             )
-
-        # Take-profit
+        # טייק פרופיט
         try:
             client.futures_create_order(
                 symbol=symbol,
@@ -111,8 +95,6 @@ def execute_trade_live(
             )
         except Exception as e:
             logging.warning(f"[!] טייק פרופיט נכשל: {e}")
-
-        # Snapshot
         snapshot_path = None
         if take_snapshot:
             snapshot_path = save_trade_snapshot({
@@ -122,8 +104,6 @@ def execute_trade_live(
                 "tp": tp,
                 "direction": direction.upper()
             })
-
-        # Quality & confidence scoring
         df = pd.DataFrame([{
             "atr": abs(tp - stop),
             "macd": 1,
@@ -138,8 +118,6 @@ def execute_trade_live(
         }])
         quality = compute_quality_score(df)
         confidence = round(70 + 3 * quality, 2)
-
-        # Save trade record & update PNL
         trade_data = {
             "symbol": symbol,
             "entry": entry,
@@ -159,8 +137,6 @@ def execute_trade_live(
         }
         save_trade(trade_data)
         update_pnl(symbol, direction, entry, price, leverage, quantity)
-
-        # Optional email alert
         if os.getenv("ALERT_EMAIL_ADDRESS") and os.getenv("ALERT_TO_EMAIL"):
             try:
                 send_email_alert(
@@ -180,7 +156,6 @@ def execute_trade_live(
                 )
             except Exception as e:
                 logging.warning(f"[!] שליחת אימייל נכשלה: {e}")
-
         return {
             "status": "success",
             "symbol": symbol,
@@ -198,10 +173,10 @@ def execute_trade_live(
             "grid": use_grid,
             "capital_used": capital_used
         }
-
     except Exception as e:
         logging.error(f"❌ שגיאה בביצוע טרייד ב־{symbol}: {e}")
         return {"status": "error", "message": str(e)}
+
 
 
 
