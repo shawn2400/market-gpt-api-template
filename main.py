@@ -12,8 +12,8 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_multi_websocket, get_price
 
-# === הגדרות לוג בסיסיות (INFO בפרודקשן, DEBUG בבדיקות)
-logging.basicConfig(level=logging.INFO)
+# === לוג בסיסי + רמת פרודקשן
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
 # === משתני סביבה עיקריים (נדרשים)
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
@@ -26,9 +26,11 @@ REQUIRED_ENV_VARS = [
     "AUTO_RUN", "MIN_QUALITY_SCORE", "MAX_TRADE_BUDGET", "SCAN_INTERVAL"
 ]
 for var in REQUIRED_ENV_VARS:
-    assert os.getenv(var), f"❌ Missing required environment variable: {var}"
+    if not os.getenv(var):
+        logging.error(f"❌ Missing required environment variable: {var}")
+        raise RuntimeError(f"❌ Missing required environment variable: {var}")
 
-# === טעינת סימבולים מ־watchlist.json ===
+# === טעינת watchlist.json בצורה בטוחה
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -39,12 +41,19 @@ def load_watchlist_symbols():
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
     return ["BTCUSDT"]
 
-# === הפעלת WebSocket Multi-Stream לכל הסימבולים ===
+# === הפעלת WS Multi-Stream רק פעם אחת (singleton)
+WS_LAUNCHED = False
+
 def start_ws_multi_background():
+    global WS_LAUNCHED
+    if WS_LAUNCHED:
+        logging.info("[main] WS Multi already running, skip.")
+        return
     symbols = load_watchlist_symbols()
     t = threading.Thread(target=launch_multi_websocket, args=(symbols,), daemon=True)
     t.start()
     logging.info(f"[main] 🚀 Multi-stream WebSocket launched for: {symbols}")
+    WS_LAUNCHED = True
 
 start_ws_multi_background()
 
@@ -70,38 +79,48 @@ app.include_router(multi_router)
 
 @app.get("/")
 async def root():
+    logging.info("[main] Root / ping called")
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
+    logging.info(f"[main] Executor started: {started}")
     return {"status": "started" if started else "already running"}
 
 @app.get("/executor/stop")
 async def stop_executor():
     stopped = stop_executor_loop()
+    logging.info(f"[main] Executor stopped: {stopped}")
     return {"status": "stopped" if stopped else "not running"}
 
 @app.get("/executor/status")
 async def executor_status():
-    return {"running": is_executor_running()}
+    running = is_executor_running()
+    logging.info(f"[main] Executor running status: {running}")
+    return {"running": running}
 
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="Symbol like BTCUSDT")):
     try:
         price = get_price(symbol)
+        logging.info(f"[main] Price fetch for {symbol}: {price}")
         if price is None:
             return {"error": "לא נמצא מחיר"}
         return {"symbol": symbol, "price": price}
     except Exception as e:
+        logging.error(f"[main] Price fetch error: {e}")
         return {"error": str(e)}
 
 # === הפעלת Auto Executor אם נדרש ===
 if AUTO_RUN:
     if start_executor_loop():
+        logging.info("✅ AutoExecutor הופעל אוטומטית.")
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
+        logging.info("ℹ️ AutoExecutor כבר רץ.")
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
