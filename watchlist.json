@@ -1,6 +1,6 @@
 [
-  "BTCUSDT",
-  "ETHUSDT",
-  "SOLUSDT",
-  "XRPUSDT"
+  { "symbol": "BTCUSDT", "direction": "LONG", "quality_score": 8 },
+  { "symbol": "ETHUSDT", "direction": "LONG", "quality_score": 7 },
+  { "symbol": "SOLUSDT", "direction": "SHORT", "quality_score": 7 },
+  { "symbol": "XRPUSDT", "direction": "LONG", "quality_score": 6 }
 ]
