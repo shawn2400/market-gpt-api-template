@@ -1,6 +1,152 @@
 [
-  { "symbol": "BTCUSDT", "direction": "LONG", "quality_score": 8 },
-  { "symbol": "ETHUSDT", "direction": "LONG", "quality_score": 7 },
-  { "symbol": "SOLUSDT", "direction": "SHORT", "quality_score": 7 },
-  { "symbol": "XRPUSDT", "direction": "LONG", "quality_score": 6 }
+  {
+    "symbol": "BTCUSDT",
+    "direction": "LONG",
+    "quality_score": 8
+  },
+  {
+    "symbol": "ETHUSDT",
+    "direction": "LONG",
+    "quality_score": 7
+  },
+  {
+    "symbol": "SOLUSDT",
+    "direction": "SHORT",
+    "quality_score": 7
+  },
+  {
+    "symbol": "XRPUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "BNBUSDT",
+    "direction": "LONG",
+    "quality_score": 7
+  },
+  {
+    "symbol": "DOGEUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "AVAXUSDT",
+    "direction": "LONG",
+    "quality_score": 8
+  },
+  {
+    "symbol": "MATICUSDT",
+    "direction": "LONG",
+    "quality_score": 7
+  },
+  {
+    "symbol": "ADAUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "INJUSDT",
+    "direction": "LONG",
+    "quality_score": 8
+  },
+  {
+    "symbol": "SUIUSDT",
+    "direction": "LONG",
+    "quality_score": 7
+  },
+  {
+    "symbol": "LTCUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "SHIBUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "RNDRUSDT",
+    "direction": "LONG",
+    "quality_score": 8
+  },
+  {
+    "symbol": "FILUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "NEARUSDT",
+    "direction": "LONG",
+    "quality_score": 7
+  },
+  {
+    "symbol": "FLOWUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "OPUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "ARUSDT",
+    "direction": "LONG",
+    "quality_score": 7
+  },
+  {
+    "symbol": "ATOMUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "ALGOUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "DOTUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "GALAUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "ENJUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "1000SATSUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "JUPUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "BEAMXUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "NOTUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  },
+  {
+    "symbol": "MAGICUSDT",
+    "direction": "SHORT",
+    "quality_score": 6
+  },
+  {
+    "symbol": "RDNTUSDT",
+    "direction": "LONG",
+    "quality_score": 6
+  }
 ]
