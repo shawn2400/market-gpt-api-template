@@ -5,8 +5,9 @@ from binance.exceptions import BinanceAPIException, BinanceRequestException
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
-API_KEY ="RkctQeBjGDncg0UEgYKRaCQ5dWZZczqW8QIpEOYfbIFYgL0LFnWFD9wxSWGw7bDo"
-API_SECRET = "9gpLTl4zAqxSUeiue5iiFSEYgpXYVu9ivnMFxVMOWEOGoBo0XpYbbYsuS3sU14qV"
+BINANCE_API_KEY=TS2IvqKnUfv370onkdq9MvA7DYFF8gATAWetiSxWVmXC5crw71jf2HJ9DknWK9HW
+BINANCE_API_SECRET=FzmwOV59i3qoIgJ2862eJlQ9tHeq94SdZ9uvL5vrlP1trml0WwRlSm2RVBJb7Ki0
+
 
 client = None
 
