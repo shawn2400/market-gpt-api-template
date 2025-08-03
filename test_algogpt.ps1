@@ -1,33 +1,33 @@
-﻿# test_algogpt.ps1
-# בדיקה סופית של כל ה־endpoints אל ה־AlgoGPT API המרוחק
+# test_algogpt.ps1
 
+# בדיקה סופית של כל ה־endpoints ל־AlgoGPT API מרוחק
 $baseUrl = 'https://algogpt-docker.onrender.com'
 
-Write-Host " בדיקת GET /..."
+Write-Host "בדיקת GET /..."
 try {
     $root = Invoke-RestMethod -Method Get -Uri "$baseUrl/"
     Write-Host "Response:" ($root | ConvertTo-Json -Depth 5)
 } catch {
-    Write-Error " שגיאה בבדיקה של / : $_"
+    Write-Error "שגיאה בבדיקה של / : $_"
 }
 
-Write-Host "`n בדיקת POST /scan..."
+Write-Host "`nבדיקת POST /scan..."
 $scanPayload = @{
-    market      = 'futures'
-    min_quality = 6
-    top         = 1
-    trending_only   = $false
-    trending_source = 'coingecko'
+    market            = 'futures'
+    min_quality       = 6
+    top               = 1
+    trending_only     = $false
+    trending_source   = 'coingecko'
 } | ConvertTo-Json
 try {
     $scan = Invoke-RestMethod -Method Post -Uri "$baseUrl/scan" `
         -Body $scanPayload -ContentType 'application/json'
     Write-Host "Response:" ($scan | ConvertTo-Json -Depth 5)
 } catch {
-    Write-Error " שגיאה בבדיקה של /scan : $_"
+    Write-Error "שגיאה בבדיקה של /scan : $_"
 }
 
-Write-Host "`n בדיקת POST /ai-analyze..."
+Write-Host "`nבדיקת POST /ai-analyze..."
 $aiPayload = @{
     rsi     = 50.0
     adx     = 25.0
@@ -40,10 +40,10 @@ try {
         -Body $aiPayload -ContentType 'application/json'
     Write-Host "Response:" ($ai | ConvertTo-Json -Depth 5)
 } catch {
-    Write-Error " שגיאה בבדיקה של /ai-analyze : $_"
+    Write-Error "שגיאה בבדיקה של /ai-analyze : $_"
 }
 
-Write-Host "`n בדיקת POST /calculate-quantity..."
+Write-Host "`nבדיקת POST /calculate-quantity..."
 $qtyPayload = @{
     symbol   = 'BTCUSDT'
     price    = 30000.0
@@ -55,7 +55,8 @@ try {
         -Body $qtyPayload -ContentType 'application/json'
     Write-Host "Response:" ($qty | ConvertTo-Json -Depth 5)
 } catch {
-    Write-Error " שגיאה בבדיקה של /calculate-quantity : $_"
+    Write-Error "שגיאה בבדיקה של /calculate-quantity : $_"
 }
 
-Write-Host "`n כל הבדיקות בוצעו."
+Write-Host "`nכל הבדיקות בוצעו."
+
