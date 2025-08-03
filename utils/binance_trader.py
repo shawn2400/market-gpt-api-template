@@ -1,7 +1,8 @@
 # utils/binance_trader.py
 
 import logging
-from utils.binance_client import client
+import asyncio
+from utils.binance_client import client, init_binance_client
 
 async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, take_profit, leverage=10):
     """
@@ -74,23 +75,57 @@ def binance_futures_trade(
     עטיפה נוחה – מחשב כמות לפי תקציב, שולח פקודה חיה.
     side: "LONG"/"SHORT"
     """
+    # ודא שה־client מאותחל
+    if client is None:
+        init_binance_client()
     order_side = "BUY" if side.upper() == "LONG" else "SELL"
     entry_price = float(entry)
     quantity = float(budget) / entry_price
-    quantity = round(quantity, 4)  # שים לב: אפשר לדייק יותר לפי precision מה־exchange
+    quantity = round(quantity, 4)  # דיוק בסיסי (אפשר לשפר לפי precision)
 
-    import asyncio
-    result = asyncio.run(
-        place_futures_order(
-            symbol=symbol,
-            side=order_side,
-            quantity=quantity,
-            entry_price=entry_price,
-            stop_loss=sl,
-            take_profit=tp,
-            leverage=leverage
+    # הפעלת async נכון גם בסביבה עם event loop (FastAPI/Gunicorn)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # רץ מתוך event loop, צריך להריץ ב-thread
+            fut = asyncio.run_coroutine_threadsafe(
+                place_futures_order(
+                    symbol=symbol,
+                    side=order_side,
+                    quantity=quantity,
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    leverage=leverage
+                ),
+                loop
+            )
+            return fut.result()
+        else:
+            # לולאה רגילה
+            return loop.run_until_complete(
+                place_futures_order(
+                    symbol=symbol,
+                    side=order_side,
+                    quantity=quantity,
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    leverage=leverage
+                )
+            )
+    except RuntimeError:
+        # אין event loop – fallback ל־asyncio.run
+        return asyncio.run(
+            place_futures_order(
+                symbol=symbol,
+                side=order_side,
+                quantity=quantity,
+                entry_price=entry_price,
+                stop_loss=sl,
+                take_profit=tp,
+                leverage=leverage
+            )
         )
-    )
-    return result
 
 
