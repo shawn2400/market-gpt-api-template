@@ -1,33 +1,25 @@
-# קבצים זמניים של פייתון
-__pycache__/
+﻿__pycache__/
 *.py[cod]
 *.so
 
-# עורך
 *.log
 *.swp
 *.swo
 *.DS_Store
 
-# קונפיג אישית
 .env
 .env.*
 .vscode/
 .idea/
 
-# קבצי מערכת
 .venv/
 venv/
 
-# Git
 .git/
 .gitignore
 
-# טסטים, דוחות ודברים שאינם קוד להרצה
 tests/
 *.pdf
-*.txt
+#tests/*.txt  # במקרה שרוצים להתעלם מטקסטים רק בתוך tests
 
-# קובצי הגדרה שרנדר לא צריך בתוך הקונטיינר
 render.yaml
-

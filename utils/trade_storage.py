@@ -1,48 +1,20 @@
-from utils.binance_client import client
-import logging
+﻿import json
+import os
+from typing import Dict, List
 
-def get_precision_info(symbol: str) -> dict:
-    """
-    שולף מה-Binance את ה-precision המתאים לסימול:
-    - pricePrecision: מספר המקומות אחרי הנקודה למחיר
-    - quantityPrecision: מספר המקומות אחרי הנקודה לכמות
-    """
-    try:
-        info = client.get_symbol_info(symbol)
-        # Binance may use 'pricePrecision' or 'quotePrecision'
-        price_prec = info.get('pricePrecision') if info.get('pricePrecision') is not None else info.get('quotePrecision')
-        qty_prec = info.get('baseAssetPrecision')
-        return {
-            'pricePrecision': int(price_prec),
-            'quantityPrecision': int(qty_prec)
-        }
-    except Exception as e:
-        logging.error(f"❌ שגיאה בשליפת precision ל־{symbol}: {e}")
-        # ברירת מחדל לערכים סבירים
-        return {
-            'pricePrecision': 8,
-            'quantityPrecision': 8
-        }
+TRADES_FILE = os.getenv("TRADES_FILE", "open_trades.json")
 
-def round_to_precision(value: float, precision: int) -> float:
-    """
-    עיגול ערך ל־precision נתון (מספר ספרות אחרי הנקודה).
-    """
-    factor = 10 ** precision
-    # שימוש בעיגול רגיל (חצי למעלה)
-    return float(round(value * factor) / factor)
+def load_open_trades() -> List[Dict]:
+    if not os.path.exists(TRADES_FILE):
+        return []
+    with open(TRADES_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
+def get_open_trades_count() -> int:
+    return len(load_open_trades())
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+def save_trade(trade: Dict) -> None:
+    trades = load_open_trades()
+    trades.append(trade)
+    with open(TRADES_FILE, "w", encoding="utf-8") as f:
+        json.dump(trades, f, ensure_ascii=False, indent=2)
