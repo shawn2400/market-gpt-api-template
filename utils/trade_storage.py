@@ -25,4 +25,7 @@ def save_trade(trade: Dict) -> None:
     with open(TRADES_FILE, "w", encoding="utf-8") as f:
         json.dump(trades, f, ensure_ascii=False, indent=2)
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 373037d (✅ Resolve merge conflicts and update ignored/tracked files)
