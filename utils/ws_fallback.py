@@ -1,30 +1,24 @@
-# utils/ws_fallback.py
-
 import threading
 import json
 import time
 import requests
 import logging
 from websocket import WebSocketApp
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-# === מחירים חיים + timestamps ===
 live_prices: Dict[str, float] = {}
-live_timestamps: Dict[str, float] = {}
+live_timestamps: Dict[str, float] = {}  # ← חותמת זמן מחיר חי
 ws_status: Dict[str, bool] = {}
-MAX_CONNECTIONS = 1  # Multi-stream = 1 בלבד
-
-# === WebSocket – Multi Stream (כל הסימבולים יחד) ===
+MAX_CONNECTIONS = 1      # Multi-stream = 1 בלבד
 
 def _on_message_multi(ws, message):
     try:
         data = json.loads(message)
-        # Multi-stream: {"stream": "btcusdt@trade", "data": {...}}
         if "data" in data and "s" in data["data"] and "p" in data["data"]:
             symbol = data["data"]["s"].upper()
             price = float(data["data"]["p"])
             live_prices[symbol] = price
-            live_timestamps[symbol] = time.time()
+            live_timestamps[symbol] = time.time()  # עדכון זמן קבלה
             logging.debug(f"[WS-MULTI] {symbol} price updated: {price}")
         else:
             logging.debug(f"[WS-MULTI] Received: {data}")
@@ -43,9 +37,6 @@ def _on_open(ws):
     ws_status["multi"] = True
 
 def launch_multi_websocket(symbols: List[str]):
-    """
-    הפעל WS multi-stream למסחר Binance – סמלים מ־watchlist.
-    """
     if ws_status.get("multi", False):
         logging.info("[WS-MULTI] Multi-stream already active")
         return
@@ -69,50 +60,33 @@ def launch_multi_websocket(symbols: List[str]):
             ws_status["multi"] = False
             time.sleep(5)
             logging.info("[WS-MULTI] Reconnecting multi-stream...")
-            launch_multi_websocket(symbols)  # רקונקט אוטומטי
+            launch_multi_websocket(symbols)  # אוטומטי ריקונקט
 
     t = threading.Thread(target=run_ws, daemon=True)
     t.start()
     ws_status["multi"] = True
 
-# === בדיקת עדכניות מחיר (anti-stale) ===
-
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
-    """
-    האם מחיר WS עודכן ב־max_age_sec שניות אחרונות?
-    """
+    now = time.time()
     ts = live_timestamps.get(symbol.upper())
-    return ts is not None and (time.time() - ts) < max_age_sec
+    return ts is not None and (now - ts) < max_age_sec
 
-# === שליפת מחיר (WS -> Fallback ל־REST) ===
-
-def get_price(symbol: str, max_age_sec: int = 10) -> Optional[float]:
-    """
-    מחזיר מחיר הכי עדכני – קודם WS אם קיים ועדכני, אחרת REST.
-    """
+def get_price(symbol: str, max_age_sec: int = 10) -> float:
     symbol = symbol.upper()
-    # קודם כל – מחיר WS אם עדכני
+    # מחיר WS עדכני (אם זמין)
     if is_price_fresh(symbol, max_age_sec=max_age_sec):
-        return live_prices[symbol]
-    # אחרת – REST API
+        return live_prices.get(symbol)
+    # Fallback – REST בלבד, אם אין WS עדכני
     try:
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-        resp = requests.get(url, timeout=3)
+        resp = requests.get(url, timeout=2)
         resp.raise_for_status()
-        price = float(resp.json()["price"])
-        # נעדכן גם את live_prices וה־timestamp
-        live_prices[symbol] = price
-        live_timestamps[symbol] = time.time()
-        logging.debug(f"[REST] {symbol} price fetched and updated: {price}")
-        return price
+        return float(resp.json()["price"])
     except Exception as e:
         logging.warning(f"[Fallback] Failed to fetch REST price for {symbol}: {e}")
         return None
 
 def get_active_ws_symbols():
-    """
-    החזר את כל הסימבולים עם WS פעיל (למוניטורינג בלבד).
-    """
     if ws_status.get("multi", False):
         return list(live_prices.keys())
     return []
