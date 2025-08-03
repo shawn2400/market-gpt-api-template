@@ -12,49 +12,38 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_websocket
 
-# ✅ משתני סביבה (נמשכים מרנדר בלבד – אין .env)
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
 
 REQUIRED_ENV_VARS = [
-    "BINANCE_API_KEY",
-    "BINANCE_API_SECRET",
-    "OPENAI_API_KEY",
-    "AUTO_RUN",
-    "MIN_QUALITY_SCORE",
-    "MAX_TRADE_BUDGET",
-    "SCAN_INTERVAL"
+    "BINANCE_API_KEY", "BINANCE_API_SECRET", "OPENAI_API_KEY",
+    "AUTO_RUN", "MIN_QUALITY_SCORE", "MAX_TRADE_BUDGET", "SCAN_INTERVAL"
 ]
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-# ✅ טעינת Watchlist והרצת WebSocket חי
-def load_watchlist():
+def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
-            symbols = json.load(f)
-            if isinstance(symbols, list) and symbols:
-                return symbols
+            data = json.load(f)
+            if isinstance(data, list):
+                return [item["symbol"] for item in data if isinstance(item, dict) and "symbol" in item]
     except Exception as e:
         print(f"⚠️ שגיאה בקריאת watchlist.json: {e}")
-    return [{"symbol": "BTCUSDT"}]  # fallback למבנה עם מפתח symbol
+    return ["BTCUSDT"]
 
-# ⬅️ הרצת WebSocket עבור כל סימבול
-for item in load_watchlist():
-    symbol = item["symbol"] if isinstance(item, dict) and "symbol" in item else item
-    if isinstance(symbol, str):
-        launch_websocket(symbol)
+# הפעלת WebSocket לכל סימבול ברשימה
+for symbol in load_watchlist_symbols():
+    launch_websocket(symbol)
 
-# 🌐 FastAPI Init
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
     version="2.0.4"
 )
 
-# 🌍 CORS פתוח
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -63,18 +52,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 📌 ראוטים
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# 🔍 בדיקת בריאות שרת
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# ▶️ שליטה ידנית ב־AutoExecutor
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -89,12 +75,12 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-# ▶️ הרצה אוטומטית לפי ENV
 if AUTO_RUN:
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
