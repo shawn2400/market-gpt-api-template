@@ -3,6 +3,48 @@
 import logging
 from utils.binance_client import client
 
+def calc_quantity(symbol, entry, budget, leverage):
+    # כאן צריך פונקציה שמחשבת כמות נכונה (ביטול עיגול יתר, תמיכה בתקני Binance).
+    qty = round(float(budget) * float(leverage) / float(entry), 3)
+    return qty
+
+def binance_futures_trade(symbol, side, entry, sl, tp, leverage=10, budget=100, market_type="futures"):
+    """
+    מבצע טרייד לייב בפיוצ'רס עם SL ו-TP דרך Binance API (Market).
+    """
+    try:
+        # מחשב כמות נכונה
+        qty = calc_quantity(symbol, entry, budget, leverage)
+
+        # קביעת כיוון (Buy/Long, Sell/Short)
+        if side.upper() == "LONG":
+            order_side = "BUY"
+        elif side.upper() == "SHORT":
+            order_side = "SELL"
+        else:
+            raise ValueError("Side must be 'LONG' or 'SHORT'")
+
+        # קריאה לפונקציה הא-סינכרונית (אפשר להריץ אותה כאן sync כי אין await)
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(
+            place_futures_order(symbol, order_side, qty, entry, sl, tp, leverage)
+        )
+        return result
+
+    except Exception as e:
+        logging.error(f"[BINANCE] ❌ שגיאה כללית: {e}")
+        return {
+            "symbol": symbol,
+            "quantity": 0,
+            "entry": entry,
+            "pnl": 0.0,
+            "timestamp": 0,
+            "error": str(e)
+        }
+
+
 async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, take_profit, leverage=10):
     """
     שולח פקודת פיוצ'רס עם SL ו־TP מסוג MARKET ל־Binance.
@@ -65,4 +107,5 @@ async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, ta
             "timestamp": 0,
             "error": str(e)
         }
+
 
