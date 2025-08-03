@@ -22,18 +22,14 @@ components:
       properties:
         market:
           type: string
-          example: futures
         min_quality:
           type: integer
-          example: 6
         top:
           type: integer
-          example: 1
         trending_only:
           type: boolean
         trending_source:
           type: string
-          example: coingecko
 
     TradeRequest:
       type: object
@@ -389,6 +385,7 @@ paths:
 
 security:
   - bearerAuth: []
+
 
 
 
