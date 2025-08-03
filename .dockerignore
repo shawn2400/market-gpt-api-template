@@ -1,25 +1,18 @@
-﻿__pycache__/
+# .dockerignore
+
+# Ignore Python cache and env
+__pycache__/
 *.py[cod]
-*.so
-
-*.log
-*.swp
-*.swo
-*.DS_Store
-
-.env
-.env.*
-.vscode/
-.idea/
-
-.venv/
 venv/
+.venv/
+.cache/
+.pytest_cache/
 
-.git/
-.gitignore
+# Ignore OS files
+.DS_Store
+Thumbs.db
 
-tests/
+# Ignore logs and reports
+*.log
 *.pdf
-#tests/*.txt  # במקרה שרוצים להתעלם מטקסטים רק בתוך tests
 
-render.yaml
