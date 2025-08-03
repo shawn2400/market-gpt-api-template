@@ -62,7 +62,7 @@ try {
     Write-Error "❌ שגיאה בבדיקה של /calculate-quantity : $_"
 }
 
-Write-Host "`n✅ כל הבדיקות הסתיימו בהצלחה."
+Write-Host n✅ כל הבדיקות הסתיימו בהצלחה.
 
 
 
