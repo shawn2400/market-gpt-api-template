@@ -1,48 +1,52 @@
-# === קבצי סביבה ===
+# .gitignore
+
+# === Environment files ===
 .env
 *.env
 
-# === קבצים רגישים / אבטחה ===
+# === Sensitive / Security ===
 *.key
 *.pem
 saved_trades.json
 pnl_tracker.json
 
-# === קבצי לוג ===
+# === Logs ===
 *.log
 
-# === Python virtual env & קומפילציה ===
-venv/
-.venv/
+# === Python build / temp ===
 __pycache__/
-.cache/
-.pytest_cache/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
+.cache/
+.pytest_cache/
 *.sqlite3
 
-# === דוחות PDF שנוצרים אוטומטית ===
+# === Virtual environments ===
+venv/
+.venv/
+
+# === IDE / Editor ===
+.vscode/
+.idea/
+*.iml
+
+# === OS / Misc ===
+.DS_Store
+Thumbs.db
+
+# === Static outputs ===
 *.pdf
 static/reports/
 static/snapshots/
 
-# === קבצים סטטיים שלא צריכים גרסה ===
-static/
-!static/logo.png     # שימור לוגו לפלאגין
-
-# === מערכת הפעלה ===
-.DS_Store
-Thumbs.db
-
-# === Docker / Build ===
+# === Docker build artifacts ===
 *.pid
 *.tar
 *.lock
 *.bak
 
-# === IDE / עורך קוד (Visual Studio Code, PyCharm וכו') ===
-.vscode/
-.idea/
-*.iml
+# === Tests artifacts ===
+tests/
+
 
