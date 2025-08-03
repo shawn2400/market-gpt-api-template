@@ -1,5 +1,3 @@
-# routes/trade.py
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -23,12 +21,11 @@ async def place_trade(req: TradeRequest):
         price = req.entry or get_price(req.symbol)
         if not price:
             raise HTTPException(status_code=400, detail="❌ לא ניתן לקבל מחיר חי")
-
         trade_result = execute_trade_live(
             symbol=req.symbol,
             direction=req.side,
             entry=price,
-            sl=req.sl,
+            stop=req.sl,
             tp=req.tp,
             leverage=req.leverage,
             budget=req.budget
