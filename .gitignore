@@ -11,11 +11,15 @@ pnl_tracker.json
 # === קבצי לוג ===
 *.log
 
-# === קבצי Python זמניים / קומפילציה ===
+# === Python virtual env & קומפילציה ===
+venv/
+.venv/
 __pycache__/
-*.py[cod]
-*.so
 .cache/
+.pytest_cache/
+*.py[cod]
+*.pyo
+*.pyd
 *.sqlite3
 
 # === דוחות PDF שנוצרים אוטומטית ===
@@ -37,13 +41,8 @@ Thumbs.db
 *.lock
 *.bak
 
-# === IDE / עורך קוד ===
+# === IDE / עורך קוד (Visual Studio Code, PyCharm וכו') ===
 .vscode/
 .idea/
 *.iml
-
-# === סביבת וירטואלית ===
-.venv/
-venv/
-
 
