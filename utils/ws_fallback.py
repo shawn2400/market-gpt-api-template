@@ -7,7 +7,7 @@ from websocket import WebSocketApp
 from typing import Dict, List
 
 live_prices: Dict[str, float] = {}
-live_prices_time: Dict[str, float] = {}   # שמירת זמן עדכון מחיר
+live_timestamps: Dict[str, float] = {}  # סימבול -> שנייה אחרונה שהגיע מחיר
 ws_status: Dict[str, bool] = {}
 MAX_CONNECTIONS = 1
 
@@ -18,7 +18,7 @@ def _on_message_multi(ws, message):
             symbol = data["data"]["s"].upper()
             price = float(data["data"]["p"])
             live_prices[symbol] = price
-            live_prices_time[symbol] = time.time()  # זמן עדכון אחרון
+            live_timestamps[symbol] = time.time()
             logging.debug(f"[WS-MULTI] {symbol} price updated: {price}")
         else:
             logging.debug(f"[WS-MULTI] Received: {data}")
@@ -40,6 +40,7 @@ def launch_multi_websocket(symbols: List[str]):
     if ws_status.get("multi", False):
         logging.info("[WS-MULTI] Multi-stream already active")
         return
+
     streams = "/".join(f"{s.lower()}@trade" for s in symbols)
     url = f"wss://stream.binance.com:9443/stream?streams={streams}"
 
@@ -65,23 +66,22 @@ def launch_multi_websocket(symbols: List[str]):
     t.start()
     ws_status["multi"] = True
 
-def get_price(symbol: str, max_age_sec: int = 10) -> float:
-    """
-    מחזיר מחיר חי מסימבול – רק אם עדכני מה־WS (לא ישן מ־max_age_sec).
-    אם אין WS – מנסה REST. אם ישן מדי – מחזיר None.
-    """
-    price = live_prices.get(symbol.upper())
-    ts = live_prices_time.get(symbol.upper(), 0)
-    age = time.time() - ts if ts else 1e9
-    if price is not None and age < max_age_sec:
+def get_price(symbol: str, max_age_sec=10) -> float:
+    symbol = symbol.upper()
+    price = live_prices.get(symbol)
+    ts = live_timestamps.get(symbol)
+    now = time.time()
+    # עדכניות מחיר מה־WS
+    if price is not None and ts is not None and now - ts < max_age_sec:
         return price
-    # ניסיון Fallback ל־REST
+    # Fallback: REST
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
         resp = requests.get(url, timeout=3)
         resp.raise_for_status()
         rest_price = float(resp.json()["price"])
-        logging.warning(f"[WS-Fallback] Using REST price for {symbol}: {rest_price}")
+        live_prices[symbol] = rest_price
+        live_timestamps[symbol] = now
         return rest_price
     except Exception as e:
         logging.warning(f"[Fallback] Failed to fetch REST price for {symbol}: {e}")
