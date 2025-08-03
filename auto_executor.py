@@ -2,7 +2,6 @@
 
 import threading
 import asyncio
-import logging
 import os
 
 from utils.scanner_utils import scan_all
@@ -64,9 +63,8 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                 await asyncio.sleep(delay)
                 continue
 
-            # ✅ טוען סמלים מרשימת מעקב
-            symbols_data = load_watchlist()
-            symbols = [x["symbol"] for x in symbols_data if "symbol" in x]
+            watchlist = load_watchlist()
+            symbols = [x["symbol"] for x in watchlist if "symbol" in x]
             if not symbols:
                 print("[AutoExecutor] ⚠️ אין סמלים ברשימת המעקב.")
                 await asyncio.sleep(delay)
@@ -113,6 +111,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
