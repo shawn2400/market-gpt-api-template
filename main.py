@@ -1,19 +1,15 @@
-# main.py
-
 import os
 import json
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-from utils.ws_fallback import launch_websocket
+from utils.ws_fallback import launch_websocket, get_price
 
-# === קונפיג סביבתי ===
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -26,7 +22,6 @@ REQUIRED_ENV_VARS = [
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-# === WebSocket לפי Watchlist ===
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -44,14 +39,12 @@ for symbol in load_watchlist_symbols():
     except Exception as e:
         logging.error(f"[main] ❌ שגיאה ב־launch_websocket עבור {symbol}: {e}")
 
-# === FastAPI Init ===
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
     version="2.0.5"
 )
 
-# === CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -60,18 +53,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Routers
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# === Health Check
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# === Executor Control
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -86,12 +76,22 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-# === Run Executor if AUTO_RUN
+@app.get("/price")
+async def get_price_route(symbol: str = Query(..., description="Symbol like BTCUSDT")):
+    try:
+        price = get_price(symbol)
+        if price is None:
+            return {"error": "לא נמצא מחיר"}
+        return {"symbol": symbol, "price": price}
+    except Exception as e:
+        return {"error": str(e)}
+
 if AUTO_RUN:
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
