@@ -1,5 +1,3 @@
-# utils/ws_fallback.py
-
 import threading
 import json
 import time
@@ -18,9 +16,12 @@ PING_INTERVAL = 30
 def _on_message(ws, message, symbol):
     try:
         data = json.loads(message)
-        price = float(data["p"])
-        live_prices[symbol] = price
-        logging.debug(f"[WS] {symbol} price updated: {price}")
+        if "p" in data:
+            price = float(data["p"])
+            live_prices[symbol] = price
+            logging.debug(f"[WS] {symbol} price updated: {price}")
+        else:
+            logging.debug(f"[WS] Received message without 'p': {data}")
     except Exception as e:
         logging.warning(f"[WS] Failed to parse message for {symbol}: {e}")
 
@@ -74,7 +75,6 @@ def _run_ws(symbol: str):
         finally:
             time.sleep(5)
             logging.info(f"[WS] Reconnecting to {symbol}...")
-            continue
 
 # === Public API ===
 def launch_websocket(symbol: str):
@@ -104,6 +104,7 @@ def get_price(symbol: str) -> float:
     except Exception as e:
         logging.warning(f"[Fallback] Failed to fetch REST price for {symbol}: {e}")
         return None
+
 
 
 
