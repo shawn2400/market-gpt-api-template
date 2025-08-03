@@ -4,7 +4,7 @@ info:
   description: >
     AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance.
     כולל תמיכה ב־Futures, Spot, Grid, ניתוחים טכניים, AI, דוחות ו־Auto Executor.
-  version: 2.0.4
+  version: 2.0.5
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -362,8 +362,34 @@ paths:
         '200':
           description: פועל/לא
 
+  /price:
+    get:
+      tags: [Trades]
+      summary: שליפת מחיר נוכחי מ־Binance
+      operationId: getPrice
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+            example: TWTUSDT
+      responses:
+        '200':
+          description: מחיר נשלף
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  price:
+                    type: number
+
 security:
   - bearerAuth: []
+
 
 
 
