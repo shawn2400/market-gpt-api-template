@@ -3,24 +3,27 @@ import logging
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# לוגים בפורמט פשוט באנגלית בלבד
+# לוגים פשוטים
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
-
-API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 client = None
 
 def init_binance_client():
     global client
     try:
-        if not API_KEY or not API_SECRET:
-            raise EnvironmentError("BINANCE_API_KEY and BINANCE_API_SECRET must be set")
+        api_key = os.getenv("BINANCE_API_KEY")
+        api_secret = os.getenv("BINANCE_API_SECRET")
 
-        client = Client(API_KEY, API_SECRET)
+        if not api_key or not api_secret:
+            raise EnvironmentError("❌ BINANCE_API_KEY and BINANCE_API_SECRET must be set in environment.")
+
+        client = Client(api_key, api_secret)
+
+        # בדיקת תקשורת בסיסית
         client.ping()
-        client.futures_account()
-        logging.info("Binance client connected (Spot + Futures)")
+        client.futures_account()  # ודא שיש הרשאות ל־Futures
+
+        logging.info("✅ Binance client connected (Spot + Futures)")
 
     except (BinanceAPIException, BinanceRequestException) as e:
         logging.error(f"[Binance API Error] {e}")
@@ -29,7 +32,9 @@ def init_binance_client():
         logging.error(f"[Binance Init Error] {e}")
         client = None
 
+# הפעלה מיידית
 init_binance_client()
+
 
 
 
