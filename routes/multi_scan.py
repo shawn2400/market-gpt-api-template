@@ -1,4 +1,3 @@
-# routes/multi_scan.py
 from fastapi import APIRouter, Query
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 
