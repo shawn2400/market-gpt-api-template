@@ -1,18 +1,54 @@
-# .dockerignore
+# === קבצי סביבה ===
+.env
+*.env
 
-# Ignore Python cache and env
+# === קבצים רגישים / אבטחה ===
+*.key
+*.pem
+saved_trades.json
+pnl_tracker.json
+!watchlist.json
+
+# === קבצי לוג ===
+*.log
+
+# === קבצי Python זמניים / קומפילציה ===
 __pycache__/
 *.py[cod]
-venv/
-.venv/
+*.pyo
+*.pyd
 .cache/
-.pytest_cache/
+*.sqlite3
 
-# Ignore OS files
+# === דוחות PDF שנוצרים אוטומטית ===
+*.pdf
+static/reports/
+static/snapshots/
+
+# === קבצים סטטיים שלא צריכים גרסה ===
+static/
+!static/logo.png
+
+# === תיקיות קאש של טסטים וסקריפטים לבדיקה ===
+.pytest_cache/
+test_algogpt.ps1
+
+# === תיקיות וירטואליות של Python ===
+.venv/
+venv/
+
+# === מערכת הפעלה ===
 .DS_Store
 Thumbs.db
 
-# Ignore logs and reports
-*.log
-*.pdf
+# === Docker / Build ===
+*.pid
+*.tar
+*.lock
+*.bak
+
+# === IDE / עורך קוד (VSCode, PyCharm) ===
+.vscode/
+.idea/
+*.iml
 
