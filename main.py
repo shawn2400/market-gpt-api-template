@@ -2,6 +2,7 @@
 
 import os
 import json
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,7 +13,7 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_websocket
 
-# === טעינת משתני סביבה מ־Render בלבד ===
+# === קונפיג סביבתי ===
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -23,35 +24,34 @@ REQUIRED_ENV_VARS = [
     "AUTO_RUN", "MIN_QUALITY_SCORE", "MAX_TRADE_BUDGET", "SCAN_INTERVAL"
 ]
 for var in REQUIRED_ENV_VARS:
-    assert os.getenv(var), f"❌ חסר משתנה סביבה: {var}"
+    assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-# === קריאת watchlist.json והפעלת WebSocket לכל מטבע
-def load_watchlist():
+# === WebSocket לפי Watchlist ===
+def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
             data = json.load(f)
             if isinstance(data, list):
-                symbols = [x["symbol"] for x in data if isinstance(x, dict) and "symbol" in x]
-                return list(set(symbols)) if symbols else ["BTCUSDT"]
+                return [entry["symbol"] for entry in data if isinstance(entry, dict) and "symbol" in entry]
     except Exception as e:
-        print(f"⚠️ שגיאה בקריאת watchlist.json: {e}")
+        logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
     return ["BTCUSDT"]
 
-# === חיבור WebSocket לכל סימבול ברשימה
-for symbol in load_watchlist():
+for symbol in load_watchlist_symbols():
     try:
         launch_websocket(symbol)
+        logging.info(f"[main] 🚀 WebSocket launched for {symbol}")
     except Exception as e:
-        print(f"⚠️ שגיאה ב־launch_websocket({symbol}): {e}")
+        logging.error(f"[main] ❌ שגיאה ב־launch_websocket עבור {symbol}: {e}")
 
-# === אתחול FastAPI
+# === FastAPI Init ===
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר בזמן אמת בביננס (Futures, Spot, Grid, AI, SL/TP)",
-    version="2.0.6"
+    description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
+    version="2.0.5"
 )
 
-# === CORS פתוח
+# === CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -60,18 +60,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ראוטים
+# === Routers
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# === בדיקת חיים
+# === Health Check
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# === שליטה ידנית על AutoExecutor
+# === Executor Control
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -86,12 +86,13 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-# === הרצה אוטומטית לפי משתני סביבה
+# === Run Executor if AUTO_RUN
 if AUTO_RUN:
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
 
 
 
