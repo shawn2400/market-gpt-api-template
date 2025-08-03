@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,7 +10,7 @@ from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-from utils.ws_fallback import launch_websocket, get_price
+from utils.ws_fallback import launch_websocket_multi, get_price
 
 # קריאת משתני סביבה - הכל מוגדר ב־Render
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
@@ -24,23 +25,19 @@ REQUIRED_ENV_VARS = [
 for var in REQUIRED_ENV_VARS:
     assert os.getenv(var), f"❌ Missing required environment variable: {var}"
 
-def load_watchlist_symbols():
+# === הפעלת WebSocket Multi-stream עבור כל הסימבולים מ־watchlist.json ===
+def start_ws_background():
+    loop = None
     try:
-        with open("watchlist.json", "r") as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                return [entry["symbol"] for entry in data if isinstance(entry, dict) and "symbol" in entry]
-    except Exception as e:
-        logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
-    return ["BTCUSDT"]
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    loop.create_task(launch_websocket_multi())
 
-for symbol in load_watchlist_symbols():
-    try:
-        launch_websocket(symbol)
-        logging.info(f"[main] 🚀 WebSocket launched for {symbol}")
-    except Exception as e:
-        logging.error(f"[main] ❌ שגיאה ב־launch_websocket עבור {symbol}: {e}")
+start_ws_background()
 
+# === FastAPI App ===
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
@@ -88,11 +85,14 @@ async def get_price_route(symbol: str = Query(..., description="Symbol like BTCU
     except Exception as e:
         return {"error": str(e)}
 
+# === הפעלת אוטו-אקסקיוטור אם נדרש ===
 if AUTO_RUN:
     if start_executor_loop():
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
+
+
 
 
 
