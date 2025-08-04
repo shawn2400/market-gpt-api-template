@@ -6,69 +6,20 @@ services:
     autoDeploy: true
 
     envVars:
-      - fromDotEnv: true           # ✅ טוען את כל המשתנים מתוך .env (אם מצורף)
+      - fromDotEnv: true        # ✅ טוען את כל המפתחות מקובץ .env (אם מצורף בפרויקט או מוגדר דרך Render UI)
+
+      # חובה להגדיר פורט ל־Gunicorn/Uvicorn
       - key: PORT
         value: "5000"
 
-      # 🔐 Binance API (לא בטוח להכניס ישירות — עדיף מה־.env או Render UI)
-      - key: BINANCE_API_KEY
-        value: ${BINANCE_API_KEY}
-      - key: BINANCE_API_SECRET
-        value: ${BINANCE_API_SECRET}
-
-      # 🤖 OpenAI API
-      - key: OPENAI_API_KEY
-        value: ${OPENAI_API_KEY}
-
-      # 📬 Email Alerts
-      - key: ALERT_EMAIL_ADDRESS
-        value: ${ALERT_EMAIL_ADDRESS}
-      - key: ALERT_EMAIL_PASSWORD
-        value: ${ALERT_EMAIL_PASSWORD}
-      - key: ALERT_TO_EMAIL
-        value: ${ALERT_TO_EMAIL}
-
-      # 📲 Telegram Alerts
-      - key: TELEGRAM_BOT_TOKEN
-        value: ${TELEGRAM_BOT_TOKEN}
-      - key: TELEGRAM_CHAT_ID
-        value: ${TELEGRAM_CHAT_ID}
-
-      # ⚙️ Auto Executor Settings
-      - key: AUTO_RUN
-        value: "true"
-      - key: MIN_QUALITY_SCORE
-        value: "7"
-      - key: MAX_TRADE_BUDGET
-        value: "100"
-      - key: SCAN_INTERVAL
-        value: "10"
-
-      # 📊 Volume & Trend Filters
-      - key: MIN_VOLUME
-        value: "1500000"
-      - key: TRENDING_ONLY
-        value: "true"
-
-      # 🌐 Scan Defaults
-      - key: TRENDING_SOURCE
-        value: "coingecko"
-      - key: DEFAULT_MARKET
-        value: "futures"
-      - key: DEFAULT_INTERVAL
-        value: "15m"
-      - key: TOP_SYMBOLS
-        value: "30"
-
-      # 🌐 Server URL
-      - key: SERVER_URL
-        value: https://algogpt-docker.onrender.com
+      # שאר המשתנים מנוהלים מתוך .env (לא חשופים בקובץ הזה)
 
     healthCheckPath: /
     healthCheckIntervalSeconds: 60
     healthCheckTimeoutSeconds: 10
     healthCheckSuccessThreshold: 1
     healthCheckFailureThreshold: 3
+
 
 
 
