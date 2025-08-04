@@ -5,6 +5,11 @@ import threading
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+# ✅ טעינת משתני סביבה מקובץ `.env`
+from dotenv import load_dotenv
+load_dotenv()
+
+# === ראוטים ויחידות עזר ===
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -12,10 +17,10 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_multi_websocket, get_price
 
-# === לוג בסיסי + רמת פרודקשן
+# === לוג בסיסי ===
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
-# === משתני סביבה עיקריים (נדרשים)
+# === משתני סביבה נדרשים ===
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -30,7 +35,7 @@ for var in REQUIRED_ENV_VARS:
         logging.error(f"❌ Missing required environment variable: {var}")
         raise RuntimeError(f"❌ Missing required environment variable: {var}")
 
-# === טעינת watchlist.json בצורה בטוחה
+# === טעינת סימבולים מ־watchlist.json ===
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -41,9 +46,8 @@ def load_watchlist_symbols():
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
     return ["BTCUSDT"]
 
-# === הפעלת WS Multi-Stream רק פעם אחת (singleton)
+# === WebSocket רק פעם אחת
 WS_LAUNCHED = False
-
 def start_ws_multi_background():
     global WS_LAUNCHED
     if WS_LAUNCHED:
@@ -55,8 +59,6 @@ def start_ws_multi_background():
     logging.info(f"[main] 🚀 Multi-stream WebSocket launched for: {symbols}")
     WS_LAUNCHED = True
 
-start_ws_multi_background()
-
 # === FastAPI App ===
 app = FastAPI(
     title="AlgoGPT API",
@@ -64,6 +66,7 @@ app = FastAPI(
     version="2.0.5"
 )
 
+# === CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -72,11 +75,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# === ראוטים
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
+# === WS + Executor רק לאחר טעינת ה־app
+@app.on_event("startup")
+async def startup_event():
+    start_ws_multi_background()
+    if AUTO_RUN:
+        if start_executor_loop():
+            logging.info("✅ AutoExecutor הופעל אוטומטית.")
+        else:
+            logging.info("ℹ️ AutoExecutor כבר רץ.")
+
+# === Endpoints ===
 @app.get("/")
 async def root():
     logging.info("[main] Root / ping called")
@@ -112,14 +127,6 @@ async def get_price_route(symbol: str = Query(..., description="Symbol like BTCU
         logging.error(f"[main] Price fetch error: {e}")
         return {"error": str(e)}
 
-# === הפעלת Auto Executor אם נדרש ===
-if AUTO_RUN:
-    if start_executor_loop():
-        logging.info("✅ AutoExecutor הופעל אוטומטית.")
-        print("✅ AutoExecutor הופעל אוטומטית.")
-    else:
-        logging.info("ℹ️ AutoExecutor כבר רץ.")
-        print("ℹ️ AutoExecutor כבר רץ.")
 
 
 
