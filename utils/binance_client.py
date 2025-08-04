@@ -5,18 +5,13 @@ import logging
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
-
- HEAD
 # Load .env variables
 load_dotenv()
-
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
-
 # Get API keys from environment
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
-=======
 # טען את קובץ .env רק אם קיים (מיותר ב-Render)
 load_dotenv()
 
@@ -32,7 +27,6 @@ client = None
 def init_binance_client():
     global client
     try:
-<<<<<<< HEAD
         if not API_KEY or not API_SECRET:
             raise EnvironmentError("❌ BINANCE_API_KEY or BINANCE_API_SECRET not set")
 
@@ -46,7 +40,6 @@ def init_binance_client():
         client.futures_account()
 
         logging.info("✅ Binance client connected (Spot + Futures)")
-=======
         api_key = os.getenv("BINANCE_API_KEY")
         api_secret = os.getenv("BINANCE_API_SECRET")
 
