@@ -1,52 +1,23 @@
-# === Environment files ===
 .env
 *.env
-
-# === Sensitive / Security ===
 *.key
 *.pem
 saved_trades.json
 pnl_tracker.json
-grid_tracker.json
-!watchlist.json        # ← כן לכלול אותו
-
-# === Logs ===
+!watchlist.json
 *.log
-
-# === Python build / temp ===
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 .cache/
-.pytest_cache/
-*.sqlite3
-
-# === Virtual environments ===
 venv/
-.venv/
-
-# === IDE / Editor ===
-.vscode/
 .idea/
+.vscode/
 *.iml
-
-# === OS / Misc ===
 .DS_Store
 Thumbs.db
-
-# === Static outputs ===
 *.pdf
 static/reports/
 static/snapshots/
-
-# === Docker build artifacts ===
-*.pid
-*.tar
-*.lock
-*.bak
-
-# === Test files & local scripts ===
 tests/
 test_*.py
 run_executor.py
@@ -54,9 +25,6 @@ scan_runner.py
 check_env.py
 get_chat_id.py
 
-# === Optional Jupyter / IPython ===
-*.ipynb
-.ipynb_checkpoints/
 
 
 
