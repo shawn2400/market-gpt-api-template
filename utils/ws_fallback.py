@@ -14,7 +14,7 @@ MAX_CONNECTIONS = 1      # Multi-stream בלבד
 def _on_message_multi(ws, message):
     try:
         data = json.loads(message)
-<<<<<<< HEAD
+ HEAD
         if "p" in data:
             price = float(data["p"])
             live_prices[symbol] = price
@@ -30,7 +30,7 @@ def _on_message_multi(ws, message):
             logging.debug(f"[WS-MULTI] {symbol} price updated: {price}")
         else:
             logging.debug(f"[WS-MULTI] Received: {data}")
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
     except Exception as e:
         logging.warning(f"[WS-MULTI] Failed to parse message: {e}")
 
@@ -45,7 +45,7 @@ def _on_open(ws):
     logging.info("[WS-MULTI] Connection opened")
     ws_status["multi"] = True
 
-<<<<<<< HEAD
+ HEAD
 def _run_ws(symbol: str):
     url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade"
 
@@ -99,7 +99,7 @@ def launch_websocket(symbol: str):
 def launch_multi_websocket(symbols: List[str]):
     if ws_status.get("multi", False):
         logging.info("[WS-MULTI] Multi-stream already active")
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
         return
 
     streams = "/".join(f"{s.lower()}@trade" for s in symbols)
@@ -168,7 +168,7 @@ def get_price(symbol: str, max_age_sec: int = 5) -> float:
 
 
 
-<<<<<<< HEAD
+ HEAD
 =======
 
 
