@@ -1,3 +1,5 @@
+# utils/trade_executor.py
+
 import os
 import logging
 from utils.ws_fallback import get_price
@@ -45,7 +47,6 @@ def execute_trade_live(
     except Exception as e:
         logging.error(f"[TRADE] שגיאה בביצוע טרייד {symbol}: {e}")
         return {"status": "error", "error": str(e)}
-
 
 
 
