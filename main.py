@@ -1,3 +1,5 @@
+# main.py
+
 import os
 import json
 import logging
@@ -79,7 +81,7 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# === התחלת WS ו־AutoExecutor באירוע הפעלה ===
+# === אירועי הפעלה ===
 @app.on_event("startup")
 async def startup_event():
     start_ws_multi_background()
@@ -106,8 +108,7 @@ async def stop_executor():
 
 @app.get("/executor/status")
 async def executor_status():
-    running = is_executor_running()
-    return {"running": running}
+    return {"running": is_executor_running()}
 
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="Symbol like BTCUSDT")):
@@ -119,6 +120,7 @@ async def get_price_route(symbol: str = Query(..., description="Symbol like BTCU
     except Exception as e:
         logging.error(f"[main] Price fetch error: {e}")
         return {"error": str(e)}
+
 
 
 
