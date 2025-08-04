@@ -1,18 +1,14 @@
 # utils/precision_utils.py
-
 def round_to_precision(value: float, digits: int) -> float:
-    """Round a numeric value to 'digits' decimal places."""
     try:
         return round(value, digits)
     except Exception:
         return value
 
 def get_precision_info(symbol: str) -> dict:
-    """Stub: return price & quantity precision settings for a given symbol."""
-    return {
-        "pricePrecision": 2,
-        "quantityPrecision": 3,
-    }
+    # Stub – החלף בשאיבה אמיתית מ־Binance אם צריך.
+    return {"pricePrecision": 2, "quantityPrecision": 3}
+
 
 
 
