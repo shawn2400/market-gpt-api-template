@@ -1,8 +1,6 @@
 import os
 import json
 import logging
- HEAD
-=======
 import threading
  482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 from fastapi import FastAPI, Query
@@ -18,17 +16,14 @@ from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-<<<<<<< HEAD
 from utils.ws_fallback import launch_websocket, get_price
-
-=======
 from utils.ws_fallback import launch_multi_websocket, get_price
 
 # === לוג בסיסי ===
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
 # === משתני סביבה עיקריים ===
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -42,11 +37,8 @@ for var in REQUIRED_ENV_VARS:
     if not os.getenv(var):
         logging.error(f"❌ Missing required environment variable: {var}")
         raise RuntimeError(f"❌ Missing required environment variable: {var}")
-
-HEAD
-=======
 # === קריאת watchlist.json ===
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -70,8 +62,7 @@ def start_ws_multi_background():
     logging.info(f"[main] 🚀 Multi-stream WebSocket launched for: {symbols}")
     WS_LAUNCHED = True
 
- HEAD
-=======
+
 # === FastAPI App ===
  482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 app = FastAPI(
@@ -93,8 +84,7 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
- HEAD
-=======
+
 # === אירועי הפעלה ===
 @app.on_event("startup")
 async def startup_event():
@@ -141,7 +131,6 @@ if AUTO_RUN:
         print("✅ AutoExecutor הופעל אוטומטית.")
     else:
         print("ℹ️ AutoExecutor כבר רץ.")
-=======
         logging.error(f"[main] Price fetch error: {e}")
         return {"error": str(e)}
 
