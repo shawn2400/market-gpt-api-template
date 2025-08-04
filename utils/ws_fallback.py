@@ -1,3 +1,5 @@
+# utils/ws_fallback.py
+
 import threading
 import json
 import time
@@ -9,7 +11,7 @@ from typing import Dict, List
 live_prices: Dict[str, float] = {}
 live_timestamps: Dict[str, float] = {}
 ws_status: Dict[str, bool] = {}
-MAX_CONNECTIONS = 1      # Multi-stream = 1 בלבד
+MAX_CONNECTIONS = 1  # Multi-stream = 1 בלבד
 
 def _on_message_multi(ws, message):
     try:
@@ -83,8 +85,8 @@ def get_book_ticker(symbol: str):
         return None, None
 
 def get_price(symbol: str, max_age_sec: int = 5) -> float:
-    # נסה קודם WS טרי
     symbol = symbol.upper()
+    # נסה קודם WS טרי
     if is_price_fresh(symbol, max_age_sec=max_age_sec):
         return live_prices.get(symbol)
     # Fallback ל־bookTicker (ממוצע bid/ask)
@@ -100,6 +102,7 @@ def get_price(symbol: str, max_age_sec: int = 5) -> float:
     except Exception as e:
         logging.warning(f"[Fallback] Failed to fetch REST price for {symbol}: {e}")
         return None
+
 
 
 
