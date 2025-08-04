@@ -5,13 +5,64 @@ services:
     plan: starter
     autoDeploy: true
 
-    # ✅ משתני סביבה מוזנים דרך Render UI בלבד – לא דרך קובץ .env
     envVars:
       - key: PORT
         value: "5000"
-      # מומלץ להוסיף את כל הערכים כאן או ידנית דרך Render UI
 
-    # ✅ בדיקת חיים של השרת
+      # 🔐 Binance API Keys (מוזן דרך Render UI)
+      - key: BINANCE_API_KEY
+        value: your_api_key_here
+      - key: BINANCE_API_SECRET
+        value: your_api_secret_here
+
+      # 🤖 OpenAI
+      - key: OPENAI_API_KEY
+        value: your_openai_key_here
+
+      # 📬 Email Alerts
+      - key: ALERT_EMAIL_ADDRESS
+        value: your@email.com
+      - key: ALERT_EMAIL_PASSWORD
+        value: your_email_password
+      - key: ALERT_TO_EMAIL
+        value: alert_target@email.com
+
+      # 📲 Telegram Alerts
+      - key: TELEGRAM_BOT_TOKEN
+        value: your_telegram_token
+      - key: TELEGRAM_CHAT_ID
+        value: your_telegram_chat_id
+
+      # ⚙️ Auto Executor Settings
+      - key: AUTO_RUN
+        value: "true"
+      - key: MIN_QUALITY_SCORE
+        value: "7"
+      - key: MAX_TRADE_BUDGET
+        value: "100"
+      - key: SCAN_INTERVAL
+        value: "10"
+
+      # 📊 Volume & Trend Filters
+      - key: MIN_VOLUME
+        value: "1500000"
+      - key: TRENDING_ONLY
+        value: "true"
+
+      # 🌐 Scan Defaults
+      - key: TRENDING_SOURCE
+        value: "coingecko"
+      - key: DEFAULT_MARKET
+        value: "futures"
+      - key: DEFAULT_INTERVAL
+        value: "15m"
+      - key: TOP_SYMBOLS
+        value: "30"
+
+      # 🌐 Server URL
+      - key: SERVER_URL
+        value: https://algogpt-docker.onrender.com
+
     healthCheckPath: /
     healthCheckIntervalSeconds: 60
     healthCheckTimeoutSeconds: 10
