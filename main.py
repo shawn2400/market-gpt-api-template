@@ -17,10 +17,10 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_multi_websocket, get_price
 
-# === לוג בסיסי ===
+# === לוג בסיסי
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
-# === משתני סביבה נדרשים ===
+# === משתני סביבה נדרשים
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -35,7 +35,7 @@ for var in REQUIRED_ENV_VARS:
         logging.error(f"❌ Missing required environment variable: {var}")
         raise RuntimeError(f"❌ Missing required environment variable: {var}")
 
-# === טעינת סימבולים מ־watchlist.json ===
+# === טעינת סימבולים מ־watchlist.json
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -59,14 +59,13 @@ def start_ws_multi_background():
     logging.info(f"[main] 🚀 Multi-stream WebSocket launched for: {symbols}")
     WS_LAUNCHED = True
 
-# === FastAPI App ===
+# === FastAPI App
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
     version="2.0.5"
 )
 
-# === CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -81,7 +80,7 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# === WS + Executor רק לאחר טעינת ה־app
+# === הרצה בעת עליית השרת
 @app.on_event("startup")
 async def startup_event():
     start_ws_multi_background()
@@ -91,7 +90,7 @@ async def startup_event():
         else:
             logging.info("ℹ️ AutoExecutor כבר רץ.")
 
-# === Endpoints ===
+# === Endpoints
 @app.get("/")
 async def root():
     logging.info("[main] Root / ping called")
@@ -126,6 +125,7 @@ async def get_price_route(symbol: str = Query(..., description="Symbol like BTCU
     except Exception as e:
         logging.error(f"[main] Price fetch error: {e}")
         return {"error": str(e)}
+
 
 
 
