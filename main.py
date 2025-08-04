@@ -4,7 +4,7 @@ import logging
 <<<<<<< HEAD
 =======
 import threading
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
