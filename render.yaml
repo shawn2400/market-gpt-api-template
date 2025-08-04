@@ -5,15 +5,15 @@ services:
     plan: starter
     autoDeploy: true
 
+    # ✅ טוען משתני סביבה מקובץ .env (אם מצורף ב־repo)
     envVars:
-      - fromDotEnv: true        # ✅ טוען את כל המפתחות מקובץ .env (אם מצורף בפרויקט או מוגדר דרך Render UI)
+      - fromDotEnv: true
 
-      # חובה להגדיר פורט ל־Gunicorn/Uvicorn
+      # ✅ פורט חשוף של Gunicorn
       - key: PORT
         value: "5000"
 
-      # שאר המשתנים מנוהלים מתוך .env (לא חשופים בקובץ הזה)
-
+    # ✅ ברירת מחדל לבדיקה ששרת מגיב
     healthCheckPath: /
     healthCheckIntervalSeconds: 60
     healthCheckTimeoutSeconds: 10
