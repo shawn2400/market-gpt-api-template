@@ -25,7 +25,7 @@ def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str
     בונה אוטומטית רשימת מעקב לפי trending + ניתוח איכות.
     סף איכות ברירת מחדל: 6
     """
-    symbols = get_trending_symbols(top=top, market=market)
+    symbols = get_trending_symbols(top=top, market_type=market)
     watchlist = []
 
     for symbol in symbols:
@@ -44,6 +44,7 @@ def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str
 
     save_watchlist(watchlist)
     print(f"[Watchlist] ✅ נשמרו {len(watchlist)} סמלים לקובץ watchlist.json")
+
 
 
 
