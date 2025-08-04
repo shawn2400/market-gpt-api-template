@@ -1,3 +1,4 @@
+# utils/ai_analysis.py
 import os
 import openai
 import logging
@@ -96,6 +97,7 @@ def predict_optimal_sl_tp(
     except Exception as e:
         logging.error(f"[AI] ❌ שגיאה ב־SL/TP OpenAI: {e}")
         return {"stop_loss": None, "take_profit": None, "error": str(e)}
+
 
 
 
