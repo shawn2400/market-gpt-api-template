@@ -24,9 +24,13 @@ async def ai_analyze(data: AIAnalysisRequest):
             pattern=data.pattern,
             volume=data.volume
         )
-        return {"analysis": result}
+        if "error" in result:
+            return {"status": "error", "message": result["error"]}
+        return {"status": "success", "analysis": result}
     except Exception as e:
-        return {"error": str(e)}
+        return {"status": "error", "message": str(e)}
+
+
 
 
 

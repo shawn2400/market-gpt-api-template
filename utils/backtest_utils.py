@@ -1,3 +1,5 @@
+# utils/backtest_utils.py
+
 import os
 import pandas as pd
 import requests
@@ -5,7 +7,7 @@ import smtplib
 from email.message import EmailMessage
 from dotenv import load_dotenv
 from utils.indicators_utils import prepare_indicators_for_backtest
-from utils.sl_tp_utils import calculate_sl_tp  # ✅ נוספה תמיכה בחישוב SL/TP חכם
+from utils.sl_tp_utils import calculate_sl_tp  # חישוב SL/TP חכם
 
 load_dotenv()
 
@@ -31,7 +33,6 @@ def compute_confidence(row):
 
 def backtest_strategy(df, rrr_target=2.5, min_adx=17):
     df = df.copy()
-
     if len(df) < 5:
         raise ValueError("Not enough data to run backtest. Need at least 5 candles.")
 
@@ -174,6 +175,7 @@ def send_email_alert(subject, body="See attached.", attachment=None):
 
 def run_backtest(df):
     return backtest_strategy(df)
+
 
 
 

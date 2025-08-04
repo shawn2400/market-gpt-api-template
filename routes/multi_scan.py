@@ -13,14 +13,19 @@ async def scan_multi(
     trending_source: str = Query("binance", description="binance / lunarcrush / coingecko"),
 ):
     tf_list = [t.strip() for t in timeframes.split(",")]
-    trades = await multi_tf_scan_with_ai(
-        timeframes=tf_list,
-        min_quality=min_quality,
-        top=top,
-        trending_only=trending_only,
-        trending_source=trending_source
-    )
-    return {"trades": trades}
+    try:
+        trades = await multi_tf_scan_with_ai(
+            timeframes=tf_list,
+            min_quality=min_quality,
+            top=top,
+            trending_only=trending_only,
+            trending_source=trending_source
+        )
+        return {"status": "success", "trades": trades}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 
 
 

@@ -8,11 +8,16 @@ def round_to_precision(value: float, digits: int) -> float:
         return value
 
 def get_precision_info(symbol: str) -> dict:
-    """Stub: return price & quantity precision settings for a given symbol."""
+    """
+    הפונקציה הזו דורשת החלפה בגרסה חיה שמביאה פרמטרים מהבורסה בפועל!
+    **הגרסה כאן היא placeholder** – בקוד רץ יש לשאוב מ־binance_client/get_exchange_info().
+    """
     return {
         "pricePrecision": 2,
         "quantityPrecision": 3,
     }
+
+
 
 
 

@@ -17,6 +17,7 @@ components:
       bearerFormat: JWT
 
   schemas:
+<<<<<<< HEAD
     ScanRequest:
       type: object
       properties:
@@ -31,90 +32,45 @@ components:
         trending_source:
           type: string
 
+=======
+>>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
     TradeRequest:
       type: object
+      required:
+        - symbol
+        - side
       properties:
         symbol:
           type: string
-        entry:
-          type: number
-        stop:
-          type: number
-        target:
-          type: number
-        direction:
+          description: סימבול (למשל BTCUSDT)
+        side:
           type: string
           enum: [LONG, SHORT]
-        leverage:
-          type: number
-        budget:
-          type: number
-        market:
-          type: string
-          enum: [futures, spot]
-        trailing:
-          type: boolean
-
-    QuantityRequest:
-      type: object
-      properties:
-        symbol:
-          type: string
-        price:
-          type: number
-        leverage:
-          type: number
-        budget:
-          type: number
-
-    SLTPRequest:
-      type: object
-      properties:
-        df:
-          type: array
-          items:
-            type: object
-        direction:
-          type: string
-
-    PredictSLTPRequest:
-      type: object
-      properties:
-        symbol:
-          type: string
-        direction:
-          type: string
+          description: כיוון טרייד
         entry:
           type: number
-
-    AiAnalyzeRequest:
-      type: object
-      properties:
-        rsi:
+          nullable: true
+          description: מחיר כניסה (אם ריק — ישתמש במחיר שוק)
+        sl:
           type: number
-        adx:
+          nullable: true
+          description: Stop Loss
+        tp:
           type: number
-        trend:
-          type: string
-        volume:
-          type: string
-        pattern:
-          type: string
-
-    BacktestRequest:
-      type: object
-      properties:
-        prices:
-          type: array
-          items:
-            type: object
-        symbol:
-          type: string
-        interval:
-          type: string
+          nullable: true
+          description: Take Profit
+        budget:
+          type: number
+          default: 100
+          description: תקציב ב־USDT
+        leverage:
+          type: number
+          default: 10
+          description: מינוף
 
     GridTradeRequest:
       type: object
+      required: [symbol, budget]
       properties:
         symbol:
           type: string
@@ -122,21 +78,57 @@ components:
           type: number
         grid_count:
           type: integer
+          default: 6
         grid_pct:
           type: number
-        leverage_min:
+          default: 0.4
+        leverage:
           type: integer
-        leverage_max:
-          type: integer
-        direction:
-          type: string
-          enum: [BUY, SELL, BOTH]
-        tp_pct:
-          type: number
-        sl_pct:
-          type: number
+          default: 20
         futures:
           type: boolean
+          default: true
+        tp_pct:
+          type: number
+          default: 1.5
+        sl_pct:
+          type: number
+          default: 1.0
+
+    AiAnalyzeRequest:
+      type: object
+      required: [symbol, rsi, adx, trend, pattern, volume]
+      properties:
+        symbol:
+          type: string
+        rsi:
+          type: number
+        adx:
+          type: number
+        trend:
+          type: string
+        pattern:
+          type: string
+        volume:
+          type: number
+
+    MultiTfScanParams:
+      type: object
+      properties:
+        timeframes:
+          type: string
+          default: 5m,15m,1h
+        min_quality:
+          type: integer
+          default: 6
+        top:
+          type: integer
+          default: 10
+        trending_only:
+          type: boolean
+        trending_source:
+          type: string
+          enum: [binance, coingecko, lunarcrush]
 
 paths:
   /:
@@ -148,31 +140,41 @@ paths:
         '200':
           description: השרת פועל
 
-  /scan:
+  /trade:
     post:
       tags: [Trades]
-      summary: סריקה טכנית חיה
-      operationId: scanMarket
+      summary: ביצוע טרייד חי בפועל
+      operationId: placeTrade
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ScanRequest'
+              $ref: '#/components/schemas/TradeRequest'
       responses:
         '200':
-          description: הצלחה
+          description: טרייד בוצע
 
   /scan/multi:
     get:
       tags: [Trades]
       summary: סריקת Multi-TF עם AI
-      operationId: multiTfScan
+      operationId: scanMulti
       parameters:
-        - name: market
+        - name: timeframes
           in: query
           schema:
             type: string
-            enum: [futures, spot, grid]
+            example: "5m,15m,1h"
+        - name: min_quality
+          in: query
+          schema:
+            type: integer
+            default: 6
+        - name: top
+          in: query
+          schema:
+            type: integer
+            default: 10
         - name: trending_only
           in: query
           schema:
@@ -182,27 +184,10 @@ paths:
           schema:
             type: string
             enum: [binance, coingecko, lunarcrush]
-        - name: top
-          in: query
-          schema:
-            type: integer
+            default: binance
       responses:
         '200':
           description: הצלחה
-
-  /execute-trade:
-    post:
-      tags: [Trades]
-      summary: ביצוע טרייד חי בפועל
-      operationId: executeTrade
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TradeRequest'
-      responses:
-        '200':
-          description: בוצע
 
   /grid/trade:
     post:
@@ -218,64 +203,11 @@ paths:
         '200':
           description: פקודות הגריד נשלחו
 
-  /grid/status:
-    get:
-      tags: [Grid]
-      summary: סטטוס גרידים פעילים
-      operationId: gridStatus
-      responses:
-        '200':
-          description: סטטוס נשלף
-        '404':
-          description: אין גריד פעיל
-
-  /calculate-quantity:
-    post:
-      tags: [Trades]
-      summary: חישוב כמות לפי תקציב ומינוף
-      operationId: calculateQuantity
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/QuantityRequest'
-      responses:
-        '200':
-          description: הצלחה
-
-  /sl_tp:
-    post:
-      tags: [Trades]
-      summary: חישוב SL ו־TP
-      operationId: calcSLTP
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SLTPRequest'
-      responses:
-        '200':
-          description: חושב
-
-  /predict-sl-tp:
-    post:
-      tags: [AI]
-      summary: חיזוי SL/TP עם GPT
-      operationId: predictSLTP
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PredictSLTPRequest'
-      responses:
-        '200':
-          description: חוזה
-
   /ai-analyze:
     post:
       tags: [AI]
       summary: ניתוח שוק עם GPT
-      operationId: analyzeAI
+      operationId: aiAnalyze
       requestBody:
         content:
           application/json:
@@ -285,51 +217,30 @@ paths:
         '200':
           description: ניתוח נוצר
 
-  /backtest:
-    post:
+  /price:
+    get:
       tags: [Trades]
-      summary: הרצת Backtest
-      operationId: runBacktest
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BacktestRequest'
+      summary: שליפת מחיר נוכחי מ־Binance
+      operationId: getPrice
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+            example: BTCUSDT
       responses:
         '200':
-          description: הסתיים
-
-  /news:
-    get:
-      tags: [News]
-      summary: חדשות קריפטו
-      operationId: getNews
-      responses:
-        '200':
-          description: נשלפו
-
-  /analyze-news:
-    get:
-      tags: [News]
-      summary: ניתוח חדשות GPT
-      operationId: analyzeNews
-      responses:
-        '200':
-          description: ניתוח נשלח
-
-  /daily-report:
-    get:
-      tags: [Reports]
-      summary: הפקת דוח יומי PDF
-      operationId: dailyReport
-      responses:
-        '200':
-          description: נוצר
+          description: מחיר נשלף
           content:
-            application/pdf:
+            application/json:
               schema:
-                type: string
-                format: binary
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  price:
+                    type: number
 
   /executor/start:
     get:
@@ -448,3 +359,9 @@ security:
 
 
 
+<<<<<<< HEAD
+=======
+
+
+
+>>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04

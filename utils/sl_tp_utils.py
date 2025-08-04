@@ -12,14 +12,9 @@ def calculate_sl_tp(
     sl_pct: float = 0.7,
     tp_pct: float = 1.4
 ) -> Tuple[float, float]:
-    """
-    חישוב SL/TP לטרייד: גמיש (ATR או אחוז).
-    מבצע ולידציה – מבטיח לא יחזור ערך שגוי.
-    """
     direction = direction.lower()
     if direction not in ['long', 'short']:
         raise ValueError("Direction must be 'long' or 'short'")
-
     try:
         if atr and atr > 0:
             sl_distance = atr * sl_pct
@@ -38,7 +33,6 @@ def calculate_sl_tp(
             tp = round(entry_price - tp_distance, 6)
             if not (tp < entry_price < sl):
                 sl, tp = entry_price * 1.015, entry_price * 0.975
-
         return sl, tp
     except Exception as e:
         logging.error(f"[!] שגיאה בחישוב SL/TP: {e}")
@@ -46,48 +40,6 @@ def calculate_sl_tp(
             return round(entry_price * 0.99, 6), round(entry_price * 1.02, 6)
         else:
             return round(entry_price * 1.01, 6), round(entry_price * 0.98, 6)
-
-def trailing_stop(
-    entry_price: float,
-    direction: str,
-    atr: float = None,
-    trailing_pct: float = 0.5
-) -> float:
-    """
-    Trailing Stop – מבצע fallback לערך ברירת מחדל (לא מחזיר None)
-    """
-    try:
-        if atr and atr > 0:
-            trailing_distance = atr * trailing_pct
-        else:
-            trailing_distance = entry_price * 0.003 * trailing_pct
-
-        if direction.lower() == 'long':
-            trailing = round(entry_price - trailing_distance, 6)
-        else:
-            trailing = round(entry_price + trailing_distance, 6)
-
-        return trailing
-    except Exception as e:
-        logging.error(f"[!] שגיאה בחישוב Trailing Stop: {e}")
-        return round(entry_price * 0.99, 6) if direction == "long" else round(entry_price * 1.01, 6)
-
-def validate_sl_tp(
-    entry_price: float,
-    sl: float,
-    tp: float,
-    direction: str
-) -> bool:
-    """
-    בדיקת תקינות ל־SL/TP עבור כיוון הטרייד.
-    מחזיר True אם תקין, אחרת False.
-    """
-    direction = direction.lower()
-    if direction == "long":
-        return sl < entry_price < tp
-    elif direction == "short":
-        return tp < entry_price < sl
-    return False
 
 
        

@@ -1,3 +1,5 @@
+# utils/news_utils.py
+
 import requests
 import smtplib
 from email.message import EmailMessage
@@ -6,13 +8,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# === משתנים נדרשים מה־.env ===
+# === משתנים מהסביבה ===
 CRYPTO_PANIC_API_KEY = os.getenv("CRYPTO_PANIC_API_KEY")
 EMAIL_ADDRESS = os.getenv("ALERT_EMAIL_ADDRESS")
 EMAIL_PASSWORD = os.getenv("ALERT_EMAIL_PASSWORD")
 TO_EMAIL = os.getenv("ALERT_TO_EMAIL", EMAIL_ADDRESS)
 
-# ✅ שליפת חדשות מ־CryptoPanic
 def fetch_crypto_news():
     try:
         if not CRYPTO_PANIC_API_KEY:
@@ -27,7 +28,6 @@ def fetch_crypto_news():
         print(f"[!] שגיאה בשליפת חדשות: {e}")
         return []
 
-# ✅ ניתוח סנטימנט לפי מילים חיוביות/שליליות
 def analyze_news_impact(news_list, positive_words=None, negative_words=None):
     scored_news = []
     seen_urls = set()
@@ -63,7 +63,6 @@ def analyze_news_impact(news_list, positive_words=None, negative_words=None):
 
     return scored_news
 
-# ✅ שליחת מייל (עם או בלי קובץ PDF)
 def send_email_alert(subject, body="See attached.", attachment=None):
     try:
         if not all([EMAIL_ADDRESS, EMAIL_PASSWORD, TO_EMAIL]):
@@ -102,16 +101,15 @@ def send_email_alert(subject, body="See attached.", attachment=None):
     except Exception as e:
         print(f"[!] Email failed: {e}")
 
-# ✅ עטיפת fetch_crypto_news בשם get_latest_news
 def get_latest_news():
     news = fetch_crypto_news()
     return news
 
-# ✅ ניתוח סנטימנט מובנה
 def analyze_news_sentiment():
     news = fetch_crypto_news()
     scored = analyze_news_impact(news)
     return {"analyzed_news": scored}
+
 
 
 

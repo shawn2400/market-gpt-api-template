@@ -1,3 +1,4 @@
+# utils/quality_score.py
 import logging
 import numpy as np
 import pandas as pd
@@ -19,52 +20,52 @@ def compute_quality_score(df, verbose=False) -> float:
         max_score = 10
         reasons = []
 
-        # 1. ATR קיים
+        # ATR
         atr = last.get("atr", 0)
         if atr and atr > 0:
             score += 1
             reasons.append("ATR תקין")
 
-        # 2. MACD מעל הסיגנל
+        # MACD מעל סיגנל
         macd = last.get("macd", 0)
         macd_signal = last.get("macd_signal", 0)
         if macd > macd_signal:
             score += 1
             reasons.append("MACD חיובי")
 
-        # 3. RSI נייטרלי (45–65)
+        # RSI נייטרלי (45–65)
         rsi = last.get("rsi", 0)
         if 45 <= rsi <= 65:
             score += 1
             reasons.append("RSI נייטרלי")
 
-        # 4. ADX מעל 20
+        # ADX
         adx = last.get("adx", 0)
         if adx > 20:
             score += 1
             reasons.append("ADX חזק")
 
-        # 5. נפח גבוה
+        # נפח גבוה
         vol = last.get("volume", 0)
         vol_mean = last.get("volume_mean", 1)
         if isinstance(vol, (int, float)) and isinstance(vol_mean, (int, float)) and vol > vol_mean * 1.5:
             score += 1
             reasons.append("נפח גבוה")
 
-        # 6. מחיר מעל EMA21
+        # מעל EMA21
         close = last.get("close", 0)
         ema21 = last.get("ema_21", 0)
         if isinstance(close, (int, float)) and isinstance(ema21, (int, float)) and close > ema21:
             score += 1
             reasons.append("מעל EMA21")
 
-        # 7. מחיר מעל EMA50
+        # מעל EMA50
         ema50 = last.get("ema_50", 0)
         if isinstance(close, (int, float)) and isinstance(ema50, (int, float)) and close > ema50:
             score += 1
             reasons.append("מעל EMA50")
 
-        # 8. EMA21 חוצה מעל EMA50
+        # חציית EMA21 מעל EMA50
         if isinstance(df, pd.DataFrame) and len(df) > 1:
             prev = df.iloc[-2]
             if (
@@ -74,12 +75,12 @@ def compute_quality_score(df, verbose=False) -> float:
                 score += 1
                 reasons.append("חציית EMA21 מעל EMA50")
 
-        # 9. MACD Histogram חיובי
+        # MACD Histogram חיובי
         if last.get("macd_hist", 0) > 0:
             score += 1
             reasons.append("MACD היסטוגרמה חיובי")
 
-        # 10. VWAP – המחיר מעל
+        # VWAP – המחיר מעל
         vwap = last.get("vwap", 0)
         if isinstance(close, (int, float)) and isinstance(vwap, (int, float)) and close > vwap:
             score += 1
@@ -95,6 +96,7 @@ def compute_quality_score(df, verbose=False) -> float:
     except Exception as e:
         logging.error(f"[quality_score] שגיאה: {e}")
         return 0.0
+
 
 
 

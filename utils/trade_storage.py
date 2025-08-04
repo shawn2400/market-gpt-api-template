@@ -4,7 +4,6 @@ import json
 import os
 from typing import Dict, List
 
-# נתיב לקובץ הטריידים הפתוחים (ניתן לשנות דרך ENV)
 TRADES_FILE = os.getenv("TRADES_FILE", "open_trades.json")
 
 def load_open_trades() -> List[Dict]:
@@ -24,4 +23,5 @@ def save_trade(trade: Dict) -> None:
     trades.append(trade)
     with open(TRADES_FILE, "w", encoding="utf-8") as f:
         json.dump(trades, f, ensure_ascii=False, indent=2)
+
 

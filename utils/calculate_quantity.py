@@ -1,14 +1,9 @@
 # utils/calculate_quantity.py
-
 import logging
 from math import floor
 from utils.binance_client import client
 
 def get_precision_info(symbol: str) -> dict:
-    """
-    שולף stepSize (כמות), minQty (כמות מינימלית), ו-tickSize (מחיר) ל-symbol מ-Binance Futures.
-    מחזיר תמיד dict מלא. נדרש לכל עיגול/בדיקה חוקית של הזנה.
-    """
     try:
         info = client.futures_exchange_info()
         for s in info.get("symbols", []):
@@ -20,7 +15,6 @@ def get_precision_info(symbol: str) -> dict:
                         data["minQty"] = float(f["minQty"])
                     if f["filterType"] == "PRICE_FILTER":
                         data["tickSize"] = float(f["tickSize"])
-                # ערכי ברירת מחדל אם חסרים
                 return {
                     "stepSize": data.get("stepSize", 0.01),
                     "minQty": data.get("minQty", 0.0),
@@ -31,56 +25,31 @@ def get_precision_info(symbol: str) -> dict:
     return {"stepSize": 0.01, "minQty": 0.0, "tickSize": 0.01}
 
 def round_step(value: float, step: float) -> float:
-    """
-    עיגול כלפי מטה לפי step חוקי (למשל stepSize לכמות, tickSize למחיר).
-    """
     return floor(value / step) * step
 
 def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_usdt: float) -> float:
-    """
-    מחשב כמות חוזים לפי תקציב, מחיר ומינוף – כולל עיגול חוקי לכמות לפי stepSize, ולוודא מעל minQty.
-    דוגמה: budget=100, leverage=10, entry_price=2.5 => (100*10)/2.5 = 400. נבדק מול step/min.
-    """
     try:
-        if entry_price <= 0:
-            raise ValueError("Entry price must be positive")
-
+        if entry_price <= 0: raise ValueError("Entry price must be positive")
         precision = get_precision_info(symbol)
         step_size = precision.get("stepSize", 0.01)
         min_qty = precision.get("minQty", 0.0)
-
         raw_qty = (budget_usdt * leverage) / entry_price
         qty = round_step(raw_qty, step_size)
-
         if qty < min_qty:
             logging.warning(f"[!] כמות נמוכה מהמינימום: {qty} < {min_qty} (symbol={symbol})")
             return 0.0
-
         return round(qty, 6)
     except Exception as e:
         logging.error(f"[!] שגיאה בחישוב כמות עבור {symbol}: {e}")
         return 0.0
 
 def round_tick(price: float, tick_size: float) -> float:
-    """
-    עיגול מחיר חוקי לפי tickSize (למשל, מחיר limit בגריד/פקודת limit).
-    """
     try:
         return floor(price / tick_size) * tick_size
     except Exception as e:
         logging.error(f"[!] שגיאה בעיגול מחיר לפי tickSize: {e}")
         return price
 
-# דוגמה לשימוש:
-if __name__ == "__main__":
-    symbol = "BTCUSDT"
-    entry_price = 63200.35
-    leverage = 15
-    budget = 220
-    qty = calculate_quantity(symbol, entry_price, leverage, budget)
-    info = get_precision_info(symbol)
-    tick = round_tick(entry_price, info["tickSize"])
-    print(f"Quantity: {qty} | Price rounded to tick: {tick}")
 
 
 
