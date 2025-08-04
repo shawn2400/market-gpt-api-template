@@ -17,7 +17,7 @@ components:
       bearerFormat: JWT
 
   schemas:
- HEAD
+
     ScanRequest:
       type: object
       properties:
@@ -32,7 +32,6 @@ components:
         trending_source:
           type: string
 
-=======
  482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
     TradeRequest:
       type: object
