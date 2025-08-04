@@ -1,3 +1,5 @@
+# main.py
+
 import os
 import json
 import logging
@@ -5,7 +7,7 @@ import threading
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ טעינת משתני סביבה מקובץ `.env`
+# ✅ טעינת משתני סביבה מקובץ `.env` (אם מקומית)
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -35,7 +37,7 @@ for var in REQUIRED_ENV_VARS:
         logging.error(f"❌ Missing required environment variable: {var}")
         raise RuntimeError(f"❌ Missing required environment variable: {var}")
 
-# === טעינת סימבולים מ־watchlist.json
+# === טעינת רשימת סימבולים מ־watchlist.json
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -46,7 +48,7 @@ def load_watchlist_symbols():
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
     return ["BTCUSDT"]
 
-# === WebSocket רק פעם אחת
+# === הרצת WebSocket ברקע (singleton)
 WS_LAUNCHED = False
 def start_ws_multi_background():
     global WS_LAUNCHED
@@ -59,13 +61,14 @@ def start_ws_multi_background():
     logging.info(f"[main] 🚀 Multi-stream WebSocket launched for: {symbols}")
     WS_LAUNCHED = True
 
-# === FastAPI App
+# === FastAPI App ===
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
     version="2.0.5"
 )
 
+# === CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -80,7 +83,7 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# === הרצה בעת עליית השרת
+# === WS + Executor לאחר טעינה
 @app.on_event("startup")
 async def startup_event():
     start_ws_multi_background()
@@ -125,6 +128,7 @@ async def get_price_route(symbol: str = Query(..., description="Symbol like BTCU
     except Exception as e:
         logging.error(f"[main] Price fetch error: {e}")
         return {"error": str(e)}
+
 
 
 
