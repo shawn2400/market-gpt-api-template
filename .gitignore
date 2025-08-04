@@ -7,6 +7,7 @@
 *.pem
 saved_trades.json
 pnl_tracker.json
+grid_tracker.json
 !watchlist.json        # ← כן לכלול אותו
 
 # === Logs ===
@@ -56,6 +57,7 @@ get_chat_id.py
 # === Optional Jupyter / IPython ===
 *.ipynb
 .ipynb_checkpoints/
+
 
 
 
