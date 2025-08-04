@@ -1,3 +1,4 @@
+# routes/multi_scan.py
 from fastapi import APIRouter, Query
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 
@@ -23,6 +24,7 @@ async def scan_multi(
         return {"status": "success", "trades": trades}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 
 
