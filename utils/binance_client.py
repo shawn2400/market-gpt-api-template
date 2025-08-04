@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-<<<<<<< HEAD
+ HEAD
 # Load .env variables
 load_dotenv()
 
@@ -25,7 +25,7 @@ logging.basicConfig(
     format='[%(asctime)s] [%(levelname)s] %(message)s',
     force=True
 )
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 
 client = None
 
@@ -62,7 +62,7 @@ def init_binance_client():
         _ = client.futures_account()
 
         logging.info("✅ Connected to Binance Spot + Futures API")
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 
     except (BinanceAPIException, BinanceRequestException) as e:
         logging.error(f"[Binance API Error] {e}")
