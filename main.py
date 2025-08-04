@@ -1,14 +1,12 @@
-# main.py
-
 import os
 import json
 import logging
 import threading
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-
-# ✅ טעינת משתני סביבה מקובץ `.env` (אם מקומית)
 from dotenv import load_dotenv
+
+# === טען משתני סביבה מתוך .env ===
 load_dotenv()
 
 # === ראוטים ויחידות עזר ===
@@ -19,10 +17,10 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_multi_websocket, get_price
 
-# === לוג בסיסי
+# === לוג בסיסי ===
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
-# === משתני סביבה נדרשים
+# === משתני סביבה עיקריים ===
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -37,7 +35,7 @@ for var in REQUIRED_ENV_VARS:
         logging.error(f"❌ Missing required environment variable: {var}")
         raise RuntimeError(f"❌ Missing required environment variable: {var}")
 
-# === טעינת רשימת סימבולים מ־watchlist.json
+# === קריאת watchlist.json ===
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -48,7 +46,7 @@ def load_watchlist_symbols():
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
     return ["BTCUSDT"]
 
-# === הרצת WebSocket ברקע (singleton)
+# === הפעלת WebSocket רק פעם אחת ===
 WS_LAUNCHED = False
 def start_ws_multi_background():
     global WS_LAUNCHED
@@ -68,7 +66,6 @@ app = FastAPI(
     version="2.0.5"
 )
 
-# === CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -77,13 +74,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ראוטים
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# === WS + Executor לאחר טעינה
+# === התחלת WS ו־AutoExecutor באירוע הפעלה ===
 @app.on_event("startup")
 async def startup_event():
     start_ws_multi_background()
@@ -93,41 +89,37 @@ async def startup_event():
         else:
             logging.info("ℹ️ AutoExecutor כבר רץ.")
 
-# === Endpoints
+# === Endpoints בסיסיים ===
 @app.get("/")
 async def root():
-    logging.info("[main] Root / ping called")
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
-    logging.info(f"[main] Executor started: {started}")
     return {"status": "started" if started else "already running"}
 
 @app.get("/executor/stop")
 async def stop_executor():
     stopped = stop_executor_loop()
-    logging.info(f"[main] Executor stopped: {stopped}")
     return {"status": "stopped" if stopped else "not running"}
 
 @app.get("/executor/status")
 async def executor_status():
     running = is_executor_running()
-    logging.info(f"[main] Executor running status: {running}")
     return {"running": running}
 
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="Symbol like BTCUSDT")):
     try:
         price = get_price(symbol)
-        logging.info(f"[main] Price fetch for {symbol}: {price}")
         if price is None:
             return {"error": "לא נמצא מחיר"}
         return {"symbol": symbol, "price": price}
     except Exception as e:
         logging.error(f"[main] Price fetch error: {e}")
         return {"error": str(e)}
+
 
 
 
