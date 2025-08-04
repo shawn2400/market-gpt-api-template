@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-<<<<<<< HEAD
+ HEAD
 =======
 import threading
 >>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
