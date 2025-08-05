@@ -4,8 +4,9 @@ import os
 import time
 
 from utils.scanner_utils import scan_all
-from utils.ws_fallback import get_price, is_price_fresh  # חובה!
-from utils.ai_analysis import predict_optimal_sl_tp
+from utils.ws_fallback import get_price, is_price_fresh
+# 🔴 השורה הבעייתית הוסרה:
+# from utils.ai_analysis import predict_optimal_sl_tp
 from utils.trade_executor import execute_trade_live
 from utils.pnl_tracker import update_pnl
 from utils.trade_storage import get_open_trades_count
@@ -19,7 +20,7 @@ AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
-PRICE_MAX_AGE = int(os.getenv("PRICE_MAX_AGE", 10))  # עד כמה שניות מחיר ייחשב "טרי"
+PRICE_MAX_AGE = int(os.getenv("PRICE_MAX_AGE", 10))
 
 def start_executor_loop(debug=False, once=False, delay=None, min_quality=None, budget=None):
     global executor_thread, executor_stop
@@ -79,7 +80,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                     continue
 
                 symbol = trade["symbol"]
-                # הגנה 1: המחיר חייב להיות עדכני מה־WS (לא ישן מדי!)
+
                 if not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE):
                     print(f"[AutoExecutor] ⚠️ מחיר ל־{symbol} לא עדכני (>{PRICE_MAX_AGE}s) – דילוג על הטרייד.")
                     continue
@@ -89,18 +90,20 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                     print(f"[AutoExecutor] ⚠️ מחיר לא תקין עבור {symbol}")
                     continue
 
-                sltp = predict_optimal_sl_tp(trade["direction"], price)
-                # הגנה 2: סטיית מחיר בתוך execute_trade_live (לא ירוץ אם יש סטיה מסוכנת)
+                # ⛔ בינתיים נשתמש ב־SL/TP שמרניים קבועים (עד שתוגדר פונקציה)
+                sl = round(price * 0.975, 4)
+                tp = round(price * 1.05, 4)
+                direction = trade["direction"]
+
                 result = execute_trade_live(
                     symbol=symbol,
                     entry=price,
-                    stop=sltp["sl"],
-                    tp=sltp["tp"],
-                    direction=trade["direction"],
+                    stop=sl,
+                    tp=tp,
+                    direction=direction,
                     leverage=20,
                     budget_usd=budget,
                     market_type=trade.get("market", "futures"),
-                    # תוכל להעביר price_protect_pct אם תרצה override
                 )
                 if debug:
                     print("[Debug] Executed:", result)
@@ -117,6 +120,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
