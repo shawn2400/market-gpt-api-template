@@ -8,6 +8,22 @@ from utils.ai_analysis import analyze_with_ai
 MAX_SYMBOLS = 20
 MAX_TFS = 3
 
+async def safe_analyze(symbol, tf, market, trending_only):
+    try:
+        async with semaphore:
+            return await analyze_symbol(
+                symbol=symbol,
+                market_type=market,
+                interval=tf,
+                limit=100,
+                trending_only=trending_only,
+                with_ai=False,
+                frames=[tf]
+            )
+    except Exception as e:
+        logging.error(f"[multi_tf_scanner] ❌ שגיאה ב־analyze_symbol עבור {symbol}@{tf}: {e}")
+        return None
+
 async def multi_tf_scan_with_ai(
     timeframes=("5m", "15m", "1h"),
     markets=("futures",),
@@ -39,22 +55,7 @@ async def multi_tf_scan_with_ai(
     tasks = []
     for tf in timeframes:
         for symbol in symbols:
-            async def safe_analyze(symbol=symbol, tf=tf, market=markets[0]):
-                try:
-                    async with semaphore:
-                        return await analyze_symbol(
-                            symbol=symbol,
-                            market_type=market,
-                            interval=tf,
-                            limit=100,
-                            trending_only=trending_only,
-                            with_ai=False,
-                            frames=[tf]
-                        )
-                except Exception as e:
-                    logging.error(f"[multi_tf_scanner] ❌ שגיאה ב־analyze_symbol עבור {symbol}@{tf}: {e}")
-                    return None
-            tasks.append(safe_analyze())
+            tasks.append(safe_analyze(symbol, tf, markets[0], trending_only))
 
     raw_results = await asyncio.gather(*tasks)
 
