@@ -41,7 +41,6 @@ venv/
 .DS_Store
 Thumbs.db
 
-
 # === Docker / Build ===
 *.pid
 *.tar
@@ -52,16 +51,4 @@ Thumbs.db
 .vscode/
 .idea/
 *.iml
-=======
->>>>>>> 373037d (✅ Resolve merge conflicts and update ignored/tracked files)
 
-# === Docker / Build ===
-*.pid
-*.tar
-*.lock
-*.bak
-
-# === IDE / עורך קוד (VSCode, PyCharm) ===
-.vscode/
-.idea/
-*.iml
