@@ -32,7 +32,6 @@ components:
         trending_source:
           type: string
 
- 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
     TradeRequest:
       type: object
       required:
@@ -268,99 +267,6 @@ paths:
         '200':
           description: פועל/לא
 
-  /price:
-    get:
-      tags: [Trades]
-      summary: שליפת מחיר נוכחי מ־Binance
-      operationId: getPrice
-      parameters:
-        - name: symbol
-          in: query
-          required: true
-          schema:
-            type: string
-            example: TWTUSDT
-      responses:
-        '200':
-          description: מחיר נשלף
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  symbol:
-                    type: string
-                  price:
-                    type: number
-
 security:
   - bearerAuth: []
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<<<<<<< HEAD
-=======
-
-
-
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
