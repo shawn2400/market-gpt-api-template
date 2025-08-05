@@ -1,9 +1,9 @@
-# utils/ai_analysis.py
 import os
 import openai
 import logging
-import re
+from dotenv import load_dotenv
 
+load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 async def analyze_with_ai(
@@ -28,7 +28,7 @@ async def analyze_with_ai(
         "Please provide a trading recommendation (BUY/SELL/HOLD) and a confidence score."
     )
     try:
-        resp = await openai.ChatCompletion.acreate(
+        resp = await openai.ChatCompletion.acreate(  # ✅ async גרסה
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are an expert crypto trading assistant."},
@@ -39,19 +39,21 @@ async def analyze_with_ai(
         )
         content = resp.choices[0].message.content
         lines = [line.strip() for line in content.splitlines() if line.strip()]
-        result = {"answer": content}
+        result = {}
         for line in lines:
             up = line.upper()
             if up.startswith(("BUY", "SELL", "HOLD")):
                 result["signal"] = up.split()[0]
             if "CONFIDENCE" in up:
+                import re
                 m = re.search(r"(\d+(\.\d+)?)", line)
                 if m:
-                    result["score"] = float(m.group(1)) / 100  # normalize 0.85
+                    result["confidence"] = float(m.group(1))
         return result
     except Exception as e:
         logging.error(f"[AI] ❌ שגיאה בקריאת OpenAI: {e}")
         return {"error": str(e)}
+
 
 
 
