@@ -16,29 +16,32 @@ logging.basicConfig(
     force=True
 )
 
-# Get API keys from environment and strip whitespace
+# Get API keys from environment
 API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
-
-# DEBUG
-print(f"[DEBUG] API_KEY: {repr(API_KEY)}")
-print(f"[DEBUG] API_SECRET: {repr(API_SECRET)}")
 
 client = None
 
 def init_binance_client():
+    """
+    מאתחל את הלקוח של Binance (Spot + Futures) אם קיימים מפתחות תקינים.
+    """
     global client
     try:
         if not API_KEY or not API_SECRET:
             raise EnvironmentError("❌ BINANCE_API_KEY or BINANCE_API_SECRET not set")
 
-        client = Client(API_KEY, API_SECRET)
-        client.API_URL = "https://api1.binance.com/api"
+        logging.info("[Binance] 🔑 מפתחות נמצאו – מתחבר...")
+        temp_client = Client(API_KEY, API_SECRET)
+        temp_client.API_URL = "https://api1.binance.com/api"
 
-        # Basic connectivity tests
-        client.ping()
-        client.futures_account()
-        logging.info("✅ Connected to Binance Spot + Futures API")
+        # בדיקת תקשורת בסיסית
+        temp_client.ping()
+        temp_client.futures_account()
+
+        client = temp_client
+        logging.info("✅ חיבור ל־Binance הצליח (Spot + Futures)")
+
     except (BinanceAPIException, BinanceRequestException) as e:
         logging.error(f"[Binance API Error] {e}")
         client = None
@@ -46,12 +49,13 @@ def init_binance_client():
         logging.error(f"[Binance Init Error] {e}")
         client = None
 
-# Auto-init at import
+# Init on import
 init_binance_client()
 
 # Warn if not initialized
 if not client:
     logging.warning("⚠️ Binance client לא מאותחל – בדוק מפתחות או חיבור")
+
 
 
 
