@@ -22,6 +22,7 @@ client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 _ws_connections = {}
 _ws_prices = defaultdict(lambda: None)
 _ws_last_ping = {}
+live_timestamps = {}
 
 MAX_WS_CONNECTIONS = 20
 
@@ -58,6 +59,7 @@ def _on_message(ws, message, symbol):
             price = float(data["c"])
         if price:
             _ws_prices[symbol] = price
+            live_timestamps[symbol] = time.time()
     except Exception as e:
         logging.warning(f"[ws_fallback] Message error ({symbol}): {e}")
 
@@ -128,6 +130,15 @@ def get_price(symbol):
     if price:
         return price
     return _get_rest_price(symbol)
+
+def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
+    """
+    בדיקה אם המחיר האחרון של symbol נחשב עדכני (ב־max_age_sec האחרונות).
+    """
+    ts = live_timestamps.get(symbol)
+    if not ts:
+        return False
+    return (time.time() - ts) <= max_age_sec
 
 
 
