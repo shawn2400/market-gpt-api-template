@@ -3,11 +3,11 @@
 import os
 import logging
 from utils.ws_fallback import get_price
-from utils.binance_trader import binance_futures_trade
+from utils.binance_trader import binance_futures_trade  # נניח שהיא async!
 
 PRICE_PROTECT_PCT = float(os.getenv("PRICE_PROTECT_PCT", 0.10))  # סטיית מחיר מקסימלית = 0.10%
 
-def execute_trade_live(
+async def execute_trade_live(
     symbol, entry, stop, tp, direction,
     leverage=20, budget_usd=100, market_type="futures",
     price_protect_pct=None
@@ -30,8 +30,8 @@ def execute_trade_live(
                 "live_price": live_price
             }
 
-        # ביצוע בפועל לפי המחיר הכי עדכני
-        result = binance_futures_trade(
+        # הרצת טרייד בפועל (עם await!)
+        result = await binance_futures_trade(
             symbol=symbol,
             side=direction,  # "LONG" / "SHORT"
             entry=live_price,
@@ -41,12 +41,14 @@ def execute_trade_live(
             budget=budget_usd,
             market_type=market_type
         )
+
         logging.info(f"[TRADE] {direction} {symbol} בוצע במחיר {live_price} (סטיה {deviation:.4f}%) - תוצאה: {result}")
         return {"status": "success", "result": result}
 
     except Exception as e:
         logging.error(f"[TRADE] שגיאה בביצוע טרייד {symbol}: {e}")
         return {"status": "error", "error": str(e)}
+
 
 
 
