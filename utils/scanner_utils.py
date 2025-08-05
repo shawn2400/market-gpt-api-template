@@ -8,9 +8,10 @@ from typing import List, Optional
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
-from utils.ws_fallback import get_price  # ✅ במקום get_live_price
+from utils.ws_fallback import get_price  # ✅ WS + fallback
 
-semaphore = asyncio.Semaphore(10)  # ✅ הגבלת מקביליות
+# הגבלה על מקביליות
+semaphore = asyncio.Semaphore(10)
 
 async def analyze_symbol(
     symbol: str,
@@ -24,7 +25,7 @@ async def analyze_symbol(
     try:
         df = get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
         if df.empty or len(df) < 50:
-            logging.warning(f"[scanner_utils] No data for {symbol} ({interval})")
+            logging.warning(f"[scanner_utils] ⚠️ No data for {symbol} ({interval})")
             return None
 
         df = compute_indicators(df)
@@ -39,6 +40,7 @@ async def analyze_symbol(
         close = latest.get("close")
 
         if close is None or close == 0:
+            logging.warning(f"[scanner_utils] ⚠️ מחיר סגירה לא תקין עבור {symbol}")
             return None
 
         direction = None
@@ -47,7 +49,7 @@ async def analyze_symbol(
         elif rsi < 50 and macd < signal and adx > 20 and close < ema21:
             direction = "SHORT"
         else:
-            return None  # ✅ אין תנאי ברור לכניסה
+            return None  # ✅ לא נמצא תנאי כניסה ברור
 
         quality_score = compute_quality_score(df)
 
@@ -76,21 +78,19 @@ async def scan_all(
     min_quality: int = 6,
     top: int = 5
 ) -> List[dict]:
-    logging.info(f"[scanner_utils] 🔍 Scanning {len(symbols)} symbols in {interval}...")
+    logging.info(f"[scanner_utils] 🔍 סריקה של {len(symbols)} סמלים ב־{interval}...")
 
-    tasks = []
-    for symbol in symbols:
-        async def safe_analyze(symbol=symbol):
-            async with semaphore:
-                return await analyze_symbol(symbol, market_type, interval)
+    async def safe_analyze_wrapper(symbol: str):
+        async with semaphore:
+            return await analyze_symbol(symbol, market_type, interval)
 
-        tasks.append(safe_analyze())
-
+    tasks = [safe_analyze_wrapper(symbol) for symbol in symbols]
     results = await asyncio.gather(*tasks)
+
     filtered = [res for res in results if res and res["quality_score"] >= min_quality]
     filtered.sort(key=lambda x: -x["quality_score"])
 
-    logging.info(f"[scanner_utils] ✅ Found {len(filtered)} valid trades.")
+    logging.info(f"[scanner_utils] ✅ נמצאו {len(filtered)} טריידים איכותיים.")
     return filtered[:top]
 
 
