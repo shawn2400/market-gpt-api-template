@@ -1,13 +1,7 @@
 # test_algogpt.ps1
-<<<<<<< HEAD
-# בדיקה סופית של כל ה־endpoints אל ה־AlgoGPT API המרוחק
-
-$baseUrl = 'https://algogpt-docker.onrender.com'
-=======
 # בדיקת כל ה־endpoints אל ה־AlgoGPT API המרוחק
 
-$baseUrl = 'http://127.0.0.1:5000'  # או כתובת ה-Render שלך
->>>>>>> 373037d (✅ Resolve merge conflicts and update ignored/tracked files)
+$baseUrl = 'https://algogpt-docker.onrender.com'  # שנה ל-localhost אם תרצה לבדוק לוקאלי
 
 Write-Host "📡 בדיקת GET /..."
 try {
@@ -35,18 +29,11 @@ try {
 
 Write-Host "`n🧠 בדיקת POST /ai-analyze..."
 $aiPayload = @{
-<<<<<<< HEAD
-    rsi     = 50.0
-    adx     = 25.0
-    trend   = 'up'
-    volume  = '1000000'
-=======
     symbol  = 'BTCUSDT'
     rsi     = 50.0
     adx     = 25.0
     trend   = 'up'
     volume  = 1000000
->>>>>>> 373037d (✅ Resolve merge conflicts and update ignored/tracked files)
     pattern = 'none'
 } | ConvertTo-Json
 try {
