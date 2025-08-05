@@ -16,9 +16,13 @@ logging.basicConfig(
     force=True
 )
 
-# Get API keys from environment
-API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET = os.getenv("BINANCE_API_SECRET")
+# Get API keys from environment and strip whitespace
+API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+
+# DEBUG
+print(f"[DEBUG] API_KEY: {repr(API_KEY)}")
+print(f"[DEBUG] API_SECRET: {repr(API_SECRET)}")
 
 client = None
 
@@ -48,6 +52,7 @@ init_binance_client()
 # Warn if not initialized
 if not client:
     logging.warning("⚠️ Binance client לא מאותחל – בדוק מפתחות או חיבור")
+
 
 
 
