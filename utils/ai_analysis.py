@@ -1,6 +1,7 @@
 import os
 import openai
 import logging
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,22 +41,30 @@ async def analyze_with_ai(
             temperature=0.0,
             max_tokens=150
         )
+
+        if not resp.choices:
+            logging.warning(f"[AI] ⚠️ לא התקבלה תשובה מ־OpenAI עבור {symbol}")
+            return {"signal": "HOLD", "confidence": 0.0}
+
         content = resp.choices[0].message.content
         lines = [line.strip() for line in content.splitlines() if line.strip()]
-        result = {}
+        result = {"signal": "HOLD", "confidence": 0.0}
+
         for line in lines:
             up = line.upper()
             if up.startswith(("BUY", "SELL", "HOLD")):
                 result["signal"] = up.split()[0]
             if "CONFIDENCE" in up:
-                import re
                 m = re.search(r"(\d+(\.\d+)?)", line)
                 if m:
                     result["confidence"] = float(m.group(1))
+
+        logging.info(f"[AI] 🧠 המלצה ל-{symbol}: {result}")
         return result
+
     except Exception as e:
         logging.error(f"[AI] ❌ שגיאה בקריאת OpenAI: {e}")
-        return {"error": str(e)}
+        return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
 
 
 
