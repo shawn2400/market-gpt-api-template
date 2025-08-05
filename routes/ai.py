@@ -1,4 +1,3 @@
-# routes/ai.py
 from fastapi import APIRouter
 from pydantic import BaseModel
 from utils.ai_analysis import analyze_with_ai
@@ -16,7 +15,7 @@ class AIAnalysisRequest(BaseModel):
 @router.post("/ai-analyze")
 async def ai_analyze(data: AIAnalysisRequest):
     try:
-        result = analyze_with_ai(
+        result = await analyze_with_ai(  # ✅ חובה await
             symbol=data.symbol,
             rsi=data.rsi,
             adx=data.adx,
