@@ -49,7 +49,7 @@ async def multi_tf_scan_with_ai(
             async def safe_analyze(symbol=symbol, tf=tf, market=markets[0]):
                 try:
                     async with semaphore:
-                        return analyze_symbol(
+                        return await analyze_symbol(  # ✅ זה היה חסר
                             symbol=symbol,
                             market_type=market,
                             interval=tf,
@@ -84,6 +84,7 @@ async def multi_tf_scan_with_ai(
         try:
             last = entries[-1]
             ai_result = analyze_with_ai(
+                symbol=symbol,
                 rsi=last.get("rsi", 50),
                 adx=last.get("adx", 20),
                 trend=main_dir,
