@@ -40,7 +40,7 @@ venv/
 # === מערכת הפעלה ===
 .DS_Store
 Thumbs.db
-<<<<<<< HEAD
+
 
 # === Docker / Build ===
 *.pid
