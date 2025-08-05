@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from utils.trade_execution_core import execute_trade_live
-from utils.ws_fallback import get_price, live_timestamps
+from utils.ws_fallback import get_price
 import time
 
 router = APIRouter()
@@ -19,15 +19,13 @@ class TradeRequest(BaseModel):
 @router.post("/trade")
 async def place_trade(req: TradeRequest):
     symbol = req.symbol.upper()
-    now = time.time()
 
-    # שלב 1: הבאת מחיר נוכחי, בדיקת עדכניות (פחות מ־10 שניות)
+    # שלב 1: הבאת מחיר נוכחי
     price = req.entry or get_price(symbol, max_age_sec=10)
-    ts = live_timestamps.get(symbol)
-    if price is None or ts is None or (now - ts) > 10:
+    if price is None:
         raise HTTPException(
             status_code=400,
-            detail=f"❌ מחיר עדכני ({symbol}) לא נמצא/ישן מדי (>{int(now-ts) if ts else 'N/A'} שניות) – טרייד לא רץ"
+            detail=f"❌ לא ניתן לקבל מחיר עדכני עבור {symbol} – טרייד לא בוצע"
         )
 
     # שלב 2: שליחת הטרייד בפועל עם הגנות נוספות מה-core
@@ -48,6 +46,7 @@ async def place_trade(req: TradeRequest):
         )
 
     return {"status": "success", "trade": trade_result["result"]}
+
 
 
 
