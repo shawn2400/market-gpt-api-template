@@ -1,6 +1,7 @@
+# routes/trade.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from utils.trade_execution_core import execute_trade_live
+from utils.trade_executor import execute_trade_live
 from utils.ws_fallback import get_price
 import asyncio
 
@@ -9,7 +10,7 @@ router = APIRouter()
 class TradeRequest(BaseModel):
     symbol: str
     side: str  # LONG / SHORT
-    entry: float = None  # אם לא ניתן, יילקח מחיר שוק
+    entry: float = None
     sl: float = None
     tp: float = None
     budget: float = 100
@@ -27,7 +28,7 @@ async def place_trade(req: TradeRequest):
             detail=f"❌ לא ניתן לקבל מחיר עדכני עבור {symbol} – טרייד לא בוצע"
         )
 
-    # שלב 2: שליחת הטרייד בצורה בטוחה מתוך Event Loop
+    # שלב 2: שליחת הטרייד בפועל עם הגנות נוספות מה-core
     trade_result = await asyncio.get_running_loop().run_in_executor(
         None,
         lambda: execute_trade_live(
@@ -48,6 +49,7 @@ async def place_trade(req: TradeRequest):
         )
 
     return {"status": "success", "trade": trade_result["result"]}
+
 
 
 
