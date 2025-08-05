@@ -5,7 +5,6 @@ services:
     plan: starter
     autoDeploy: true
 
-    # Docker Port sync – FastAPI מאזין על 5000
     envVars:
       - key: PORT
         value: "5000"
@@ -36,8 +35,8 @@ services:
       - key: TRENDING_ONLY
         value: "true"
 
-    # 🩺 ברירת מחדל – משנה ל־/ אם אין לך /healthz
     healthCheckPath: /
+
 
 
 
