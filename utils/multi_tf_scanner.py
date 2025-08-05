@@ -1,5 +1,3 @@
-# utils/multi_tf_scanner.py
-
 import asyncio
 import logging
 from collections import defaultdict
@@ -49,7 +47,7 @@ async def multi_tf_scan_with_ai(
             async def safe_analyze(symbol=symbol, tf=tf, market=markets[0]):
                 try:
                     async with semaphore:
-                        return await analyze_symbol(  # ✅ זה היה חסר
+                        return await analyze_symbol(
                             symbol=symbol,
                             market_type=market,
                             interval=tf,
@@ -83,7 +81,7 @@ async def multi_tf_scan_with_ai(
 
         try:
             last = entries[-1]
-            ai_result = analyze_with_ai(
+            ai_result = await analyze_with_ai(  # ✅ תיקון קריטי
                 symbol=symbol,
                 rsi=last.get("rsi", 50),
                 adx=last.get("adx", 20),
@@ -95,20 +93,21 @@ async def multi_tf_scan_with_ai(
             logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
             ai_result = {}
 
-        if ai_result and not ai_result.get("error") and (main_dir.lower() in ai_result.get("answer", "").lower()):
+        if ai_result and not ai_result.get("error") and (main_dir.lower() in ai_result.get("signal", "").lower()):
             output.append({
                 "symbol": symbol,
                 "confluence": len(entries),
                 "main_direction": main_dir,
                 "avg_quality": round(avg_q, 2),
                 "frames": [x["frames"][0] for x in entries],
-                "ai_opinion": ai_result.get("answer"),
-                "ai_score": ai_result.get("score", 1.0),
+                "ai_opinion": ai_result.get("signal"),
+                "ai_score": ai_result.get("confidence", 1.0),
                 "details": entries
             })
 
     output.sort(key=lambda x: (-x["avg_quality"], -x["ai_score"]))
     return output[:top]
+
 
 
 
