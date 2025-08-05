@@ -18,6 +18,8 @@ async def analyze_with_ai(
         logging.error("[AI] ❌ לא הוגדר מפתח OpenAI.")
         return {"error": "No OpenAI API key configured"}
 
+    logging.info(f"[AI] 🔍 התחיל ניתוח GPT עבור {symbol}")
+
     prompt = (
         f"Analyze the following market data for {symbol}:\n"
         f"- RSI: {rsi}\n"
@@ -27,12 +29,13 @@ async def analyze_with_ai(
         f"- Volume: {volume}\n\n"
         "Please provide a trading recommendation (BUY/SELL/HOLD) and a confidence score."
     )
+
     try:
-        resp = await openai.ChatCompletion.acreate(  # ✅ async גרסה
+        resp = await openai.ChatCompletion.acreate(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are an expert crypto trading assistant."},
-                {"role": "user",   "content": prompt}
+                {"role": "user", "content": prompt}
             ],
             temperature=0.0,
             max_tokens=150
@@ -53,6 +56,7 @@ async def analyze_with_ai(
     except Exception as e:
         logging.error(f"[AI] ❌ שגיאה בקריאת OpenAI: {e}")
         return {"error": str(e)}
+
 
 
 
