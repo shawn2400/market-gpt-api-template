@@ -5,20 +5,23 @@ from utils.binance_client import client
 
 async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, take_profit, leverage=10):
     """
-    שולח פקודת פיוצ'רס עם SL ו־TP מסוג MARKET ל־Binance.
+    שולח פקודת פיוצ'רס עם SL ו־TP ל־Binance (MARKET).
     """
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
+
+        # פקודת שוק ראשית
         order = client.futures_create_order(
             symbol=symbol,
             side=side,
             type="MARKET",
             quantity=quantity
         )
-        logging.info(f"[BINANCE] ✅ פקודת שוק נשלחה: {symbol} {side} {quantity}")
+        logging.info(f"[BINANCE] ✅ פקודת שוק: {symbol} {side} {quantity}")
 
         opposite_side = "SELL" if side.upper() == "BUY" else "BUY"
 
+        # SL
         client.futures_create_order(
             symbol=symbol,
             side=opposite_side,
@@ -28,8 +31,9 @@ async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, ta
             timeInForce="GTC",
             workingType="MARK_PRICE"
         )
-        logging.info(f"[BINANCE] 📉 SL נשלח: {stop_loss}")
+        logging.info(f"[BINANCE] 📉 SL: {stop_loss}")
 
+        # TP
         client.futures_create_order(
             symbol=symbol,
             side=opposite_side,
@@ -39,7 +43,7 @@ async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, ta
             timeInForce="GTC",
             workingType="MARK_PRICE"
         )
-        logging.info(f"[BINANCE] 📈 TP נשלח: {take_profit}")
+        logging.info(f"[BINANCE] 📈 TP: {take_profit}")
 
         return {
             "symbol": symbol,
@@ -60,31 +64,28 @@ async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, ta
             "error": str(e)
         }
 
-def binance_futures_trade(
+async def binance_futures_trade(
     symbol, side, entry, sl, tp, leverage, budget, market_type="futures"
 ):
     """
-    עטיפה נוחה – מחשב כמות לפי תקציב, שולח פקודה חיה.
-    side: "LONG"/"SHORT"
+    עטיפה נוחה – מחשבת כמות לפי תקציב, שולחת פקודה חיה. (ASYNC)
     """
     order_side = "BUY" if side.upper() == "LONG" else "SELL"
     entry_price = float(entry)
     quantity = float(budget) / entry_price
-    quantity = round(quantity, 4)  # לשפר ל־stepSize בפועל אם תרצה
+    quantity = round(quantity, 4)  # שיפור עתידי: dynamic לפי stepSize
 
-    import asyncio
-    result = asyncio.run(
-        place_futures_order(
-            symbol=symbol,
-            side=order_side,
-            quantity=quantity,
-            entry_price=entry_price,
-            stop_loss=sl,
-            take_profit=tp,
-            leverage=leverage
-        )
+    result = await place_futures_order(
+        symbol=symbol,
+        side=order_side,
+        quantity=quantity,
+        entry_price=entry_price,
+        stop_loss=sl,
+        take_profit=tp,
+        leverage=leverage
     )
     return result
+
 
 
 
