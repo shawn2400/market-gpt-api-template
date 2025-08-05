@@ -18,7 +18,7 @@ from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-<<<<<<< HEAD
+ HEAD
 from utils.ws_fallback import launch_websocket, get_price
 
 =======
@@ -28,7 +28,7 @@ from utils.ws_fallback import launch_multi_websocket, get_price
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
 # === משתני סביבה עיקריים ===
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
@@ -43,10 +43,10 @@ for var in REQUIRED_ENV_VARS:
         logging.error(f"❌ Missing required environment variable: {var}")
         raise RuntimeError(f"❌ Missing required environment variable: {var}")
 
-<<<<<<< HEAD
+ HEAD
 =======
 # === קריאת watchlist.json ===
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -70,10 +70,10 @@ def start_ws_multi_background():
     logging.info(f"[main] 🚀 Multi-stream WebSocket launched for: {symbols}")
     WS_LAUNCHED = True
 
-<<<<<<< HEAD
+ HEAD
 =======
 # === FastAPI App ===
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
@@ -93,7 +93,7 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-<<<<<<< HEAD
+ HEAD
 =======
 # === אירועי הפעלה ===
 @app.on_event("startup")
@@ -106,7 +106,7 @@ async def startup_event():
             logging.info("ℹ️ AutoExecutor כבר רץ.")
 
 # === Endpoints בסיסיים ===
->>>>>>> 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
+ 482a0dc2c1505e9f0ec5c361f3d8b43672d6fb04
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
@@ -133,7 +133,7 @@ async def get_price_route(symbol: str = Query(..., description="Symbol like BTCU
             return {"error": "לא נמצא מחיר"}
         return {"symbol": symbol, "price": price}
     except Exception as e:
-<<<<<<< HEAD
+ HEAD
         return {"error": str(e)}
 
 if AUTO_RUN:
