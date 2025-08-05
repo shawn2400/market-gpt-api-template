@@ -5,8 +5,8 @@ from utils.trending_utils import get_trending_symbols
 from utils.scanner_utils import analyze_symbol, semaphore
 from utils.ai_analysis import analyze_with_ai
 
-MAX_SYMBOLS = 20  # מקסימום סימבולים לניתוח
-MAX_TFS = 3       # מקסימום טיימפריימים לניתוח
+MAX_SYMBOLS = 20
+MAX_TFS = 3
 
 async def multi_tf_scan_with_ai(
     timeframes=("5m", "15m", "1h"),
@@ -18,7 +18,7 @@ async def multi_tf_scan_with_ai(
 ):
     logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}, trending_source={trending_source}")
 
-    # 1. שליפת סימבולים טרנדיים לפי מקור
+    # שליפת סימבולים
     symbols = set()
     for market in markets:
         try:
@@ -31,16 +31,11 @@ async def multi_tf_scan_with_ai(
         logging.warning("[multi_tf_scanner] ⚠️ לא נמצאו סימבולים לסריקה.")
         return []
 
-    # 2. הגבלת עומס
-    if len(symbols) > MAX_SYMBOLS:
-        logging.warning(f"[multi_tf_scanner] ⚠️ סימבולים רבים מדי ({len(symbols)}) – חותך ל-{MAX_SYMBOLS}")
+    # הגבלת עומס
     symbols = list(symbols)[:MAX_SYMBOLS]
-
-    if len(timeframes) > MAX_TFS:
-        logging.warning(f"[multi_tf_scanner] ⚠️ טיימפריימים רבים מדי ({len(timeframes)}) – חותך ל-{MAX_TFS}")
     timeframes = list(timeframes)[:MAX_TFS]
 
-    # 3. הרצת משימות
+    # משימות אסינכרוניות
     tasks = []
     for tf in timeframes:
         for symbol in symbols:
@@ -63,17 +58,17 @@ async def multi_tf_scan_with_ai(
 
     raw_results = await asyncio.gather(*tasks)
 
-    # 4. קיבוץ לפי סימבול
+    # קיבוץ לפי סימבול
     grouped = defaultdict(list)
     for result in raw_results:
-        if result and result.get("quality_score", 0) >= min_quality:
+        if result and isinstance(result, dict) and result.get("quality_score", 0) >= min_quality:
             grouped[result["symbol"]].append(result)
 
-    # 5. קונפלואנס + ניתוח GPT
+    # ניתוח AI
     output = []
     for symbol, entries in grouped.items():
         if len(entries) < 2:
-            continue  # דרוש לפחות 2 טיימפריימים תואמים
+            continue
 
         directions = [x["direction"] for x in entries]
         main_dir = max(set(directions), key=directions.count)
@@ -81,7 +76,7 @@ async def multi_tf_scan_with_ai(
 
         try:
             last = entries[-1]
-            ai_result = await analyze_with_ai(  # ✅ תיקון קריטי
+            ai_result = await analyze_with_ai(
                 symbol=symbol,
                 rsi=last.get("rsi", 50),
                 adx=last.get("adx", 20),
