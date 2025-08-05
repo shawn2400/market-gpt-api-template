@@ -2,27 +2,31 @@
 
 import logging
 from utils.binance_client import client
+import asyncio
 
 async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, take_profit, leverage=10):
     """
     שולח פקודת פיוצ'רס עם SL ו־TP ל־Binance (MARKET).
     """
     try:
-        client.futures_change_leverage(symbol=symbol, leverage=leverage)
+        loop = asyncio.get_running_loop()
+
+        # שינוי מינוף
+        await loop.run_in_executor(None, lambda: client.futures_change_leverage(symbol=symbol, leverage=leverage))
 
         # פקודת שוק ראשית
-        order = client.futures_create_order(
+        order = await loop.run_in_executor(None, lambda: client.futures_create_order(
             symbol=symbol,
             side=side,
             type="MARKET",
             quantity=quantity
-        )
+        ))
         logging.info(f"[BINANCE] ✅ פקודת שוק: {symbol} {side} {quantity}")
 
         opposite_side = "SELL" if side.upper() == "BUY" else "BUY"
 
         # SL
-        client.futures_create_order(
+        await loop.run_in_executor(None, lambda: client.futures_create_order(
             symbol=symbol,
             side=opposite_side,
             type="STOP_MARKET",
@@ -30,11 +34,11 @@ async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, ta
             closePosition=True,
             timeInForce="GTC",
             workingType="MARK_PRICE"
-        )
+        ))
         logging.info(f"[BINANCE] 📉 SL: {stop_loss}")
 
         # TP
-        client.futures_create_order(
+        await loop.run_in_executor(None, lambda: client.futures_create_order(
             symbol=symbol,
             side=opposite_side,
             type="TAKE_PROFIT_MARKET",
@@ -42,7 +46,7 @@ async def place_futures_order(symbol, side, quantity, entry_price, stop_loss, ta
             closePosition=True,
             timeInForce="GTC",
             workingType="MARK_PRICE"
-        )
+        ))
         logging.info(f"[BINANCE] 📈 TP: {take_profit}")
 
         return {
@@ -85,6 +89,7 @@ async def binance_futures_trade(
         leverage=leverage
     )
     return result
+
 
 
 
