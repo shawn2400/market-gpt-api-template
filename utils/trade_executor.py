@@ -15,7 +15,8 @@ async def execute_trade_live(
     price_protect_pct = price_protect_pct or PRICE_PROTECT_PCT
 
     try:
-        live_price = get_price(symbol, max_age_sec=5)
+        # ✅ הוספנו await כאן:
+        live_price = await get_price(symbol, max_age_sec=5)
         if not live_price or live_price <= 0:
             logging.error(f"[TRADE] ❌ מחיר חי לא תקין ל-{symbol}: {live_price}")
             return {"status": "error", "error": "live price unavailable"}
@@ -30,10 +31,9 @@ async def execute_trade_live(
                 "live_price": live_price
             }
 
-        # הרצת טרייד בפועל (עם await!)
         result = await binance_futures_trade(
             symbol=symbol,
-            side=direction,  # "LONG" / "SHORT"
+            side=direction,
             entry=live_price,
             sl=stop,
             tp=tp,
