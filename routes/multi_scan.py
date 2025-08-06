@@ -2,26 +2,26 @@
 
 from fastapi import APIRouter, Query
 from typing import Optional
-from utils.multi_tf_scanner import multi_tf_scan_with_ai
+from utils.scanner_utils import scan_all
 
 router = APIRouter()
 
 @router.get("/scan/multi")
 async def scan_multi(
-    timeframes: Optional[str] = Query("5m,15m,1h"),
-    min_quality: int = Query(6, ge=1, le=10),
-    top: int = Query(10, ge=1),
-    trending_only: Optional[bool] = Query(False),
-    trending_source: Optional[str] = Query("binance")
+    interval: str = Query("15m", description="טיימפריים לסריקה (למשל 15m, 1h)"),
+    min_quality: int = Query(6, ge=1, le=10, description="סף איכות מינימלי"),
+    top: int = Query(10, ge=1, description="מספר טריידים שברצונך לקבל"),
+    market_type: str = Query("futures", regex="^(futures|spot)$", description="סוג שוק: futures או spot")
 ):
+    """
+    סריקה טכנית חיה עם אינדיקטורים וציון איכות. מחזיר את הטריידים הטובים ביותר לפי Quality Score.
+    """
     try:
-        tfs = tuple(tf.strip() for tf in timeframes.split(","))
-        results = await multi_tf_scan_with_ai(
-            timeframes=tfs,
+        results = await scan_all(
+            interval=interval,
             min_quality=min_quality,
             top=top,
-            trending_only=trending_only,
-            trending_source=trending_source
+            market_type=market_type
         )
         return {"results": results}
     except Exception as e:
