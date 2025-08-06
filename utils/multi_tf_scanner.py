@@ -3,14 +3,63 @@
 import asyncio
 import logging
 from collections import defaultdict
+from typing import Optional, Dict, List
 from utils.trending_utils import get_trending_symbols
-from utils.scanner_utils import analyze_symbol
-from utils.semaphore_manager import semaphore
 from utils.ai_analysis import analyze_with_ai
+from utils.get_klines import get_klines
+from utils.indicators import compute_indicators
+from utils.quality_score import calculate_quality_score
+
+# ✅ Semaphore פנימי למניעת עומס
+semaphore = asyncio.Semaphore(10)
 
 MAX_SYMBOLS = 20
 MAX_TFS = 3
 
+# ✅ פונקציית ניתוח סימבול בודד
+async def analyze_symbol(
+    symbol: str,
+    market_type: str = "futures",
+    interval: str = "15m",
+    limit: int = 100,
+    trending_only: bool = True,
+    with_ai: bool = False,
+    frames: Optional[List[str]] = None
+) -> Optional[Dict]:
+    try:
+        df = await get_klines(symbol, interval, market=market_type, limit=limit)
+        if df is None or len(df) < 50:
+            logging.warning(f"[analyze_symbol] אין מספיק נתונים ל־{symbol}")
+            return None
+
+        indicators = compute_indicators(df)
+        if not indicators or indicators.get("volume", 0) < 100_000:
+            return None
+
+        direction = (
+            "LONG" if indicators["macd"] > 0 and indicators["rsi"] > 50 else
+            "SHORT" if indicators["macd"] < 0 and indicators["rsi"] < 50 else
+            "NEUTRAL"
+        )
+
+        quality_score = calculate_quality_score(indicators)
+
+        return {
+            "symbol": symbol,
+            "interval": interval,
+            "direction": direction,
+            "indicators": indicators,
+            "quality_score": quality_score,
+            "frames": frames or [interval],
+            "volume": indicators.get("volume", 0),
+            "pattern": indicators.get("pattern", "unknown")
+        }
+
+    except Exception as e:
+        logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}")
+        return None
+
+# ✅ ניתוח סריקה מרובה עם AI
 async def safe_analyze(symbol, tf, market, trending_only):
     try:
         async with semaphore:
@@ -123,9 +172,10 @@ async def multi_tf_scan_with_ai(
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
 
-# ✅ פונקציית scan_all לשימוש מ־auto_executor או API
+# ✅ פונקציה חיצונית לשימוש מה־API
 async def scan_all():
     return await multi_tf_scan_with_ai()
+
 
 
 
