@@ -19,7 +19,7 @@ async def analyze_with_ai(
 ) -> dict:
     if not openai.api_key:
         logging.error("[AI] ❌ לא הוגדר מפתח OpenAI.")
-        return {"error": "No OpenAI API key configured"}
+        return {"error": "No OpenAI API key configured", "signal": "HOLD", "confidence": 0.0}
 
     logging.info(f"[AI] 🔍 התחיל ניתוח GPT עבור {symbol}")
 
@@ -71,6 +71,7 @@ async def analyze_with_ai(
     except Exception as e:
         logging.error(f"[AI] ❌ שגיאה בקריאת OpenAI: {e}")
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
+
 
 
 
