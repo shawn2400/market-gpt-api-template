@@ -10,6 +10,7 @@ from websocket import WebSocketApp
 from binance.client import Client
 from dotenv import load_dotenv
 import os
+import asyncio
 
 load_dotenv()
 
@@ -124,12 +125,13 @@ def launch_multi_websocket(symbols):
         launch_websocket(symbol)
         count += 1
 
-def get_price(symbol):
+# ✅ מתוקן – גרסה אסינכרונית של get_price
+async def get_price(symbol):
     symbol = symbol.upper()
     price = _ws_prices.get(symbol)
     if price:
         return price
-    return _get_rest_price(symbol)
+    return await asyncio.to_thread(_get_rest_price, symbol)
 
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
     """
@@ -139,6 +141,7 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
     if not ts:
         return False
     return (time.time() - ts) <= max_age_sec
+
 
 
 
