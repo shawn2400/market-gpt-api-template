@@ -1,0 +1,18 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "AlgoGPT",
+  "name_for_model": "algogpt",
+  "description_for_human": "AlgoGPT מבצע ניתוחים טכניים ו־AI בזמן אמת עבור שוק הקריפטו.",
+  "description_for_model": "AlgoGPT מנתח שוק הקריפטו, כולל RSI, ADX, מגמה, נרות ו־AI (GPT) כדי להפיק המלצות טרייד בזמן אמת.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://market-gpt-api-template.railway.app/openapi.yaml",
+    "is_user_authenticated": false
+  },
+  "logo_url": "https://market-gpt-api-template.railway.app/static/logo.png",
+  "contact_email": "support@algogpt.ai",
+  "legal_info_url": "https://market-gpt-api-template.railway.app/legal"
+}
