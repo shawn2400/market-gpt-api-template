@@ -4,7 +4,7 @@ info:
   description: >
     AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance.
     כולל תמיכה ב־Futures, Spot, Grid, ניתוחים טכניים, AI, דוחות ו־Auto Executor.
-  version: 2.0.5
+  version: 2.0.6
 
 servers:
   - url: https://market-gpt-api-template.railway.app
@@ -33,9 +33,7 @@ components:
 
     TradeRequest:
       type: object
-      required:
-        - symbol
-        - side
+      required: [symbol, side]
       properties:
         symbol:
           type: string
@@ -268,6 +266,7 @@ paths:
 
 security:
   - bearerAuth: []
+
 
 
 
