@@ -1,3 +1,5 @@
+# utils/ai_analysis.py
+
 import os
 import openai
 import logging
@@ -22,44 +24,48 @@ async def analyze_with_ai(
     logging.info(f"[AI] 🔍 התחיל ניתוח GPT עבור {symbol}")
 
     prompt = (
-        f"Analyze the following market data for {symbol}:\n"
-        f"- RSI: {rsi}\n"
-        f"- ADX: {adx}\n"
-        f"- Trend: {trend}\n"
-        f"- Pattern: {pattern}\n"
-        f"- Volume: {volume}\n\n"
-        "Please provide a trading recommendation (BUY/SELL/HOLD) and a confidence score."
+        f"You are an expert crypto trading assistant.\n"
+        f"Analyze the following market conditions for the symbol {symbol}:\n"
+        f"- RSI: {rsi:.2f}\n"
+        f"- ADX: {adx:.2f}\n"
+        f"- Volume: {volume:,.0f}\n"
+        f"- Trend Direction: {trend.upper()}\n"
+        f"- Candlestick Pattern: {pattern}\n\n"
+        f"Based on this data:\n"
+        f"1. Recommend a clear trading action (BUY, SELL or HOLD).\n"
+        f"2. Estimate your confidence level in percentage (0–100%).\n"
+        f"3. Write in a single concise paragraph.\n"
+        f"4. Use this format exactly: Signal: BUY | Confidence: 75% | Reason: ...\n"
     )
 
     try:
         resp = await openai.ChatCompletion.acreate(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are an expert crypto trading assistant."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.0,
-            max_tokens=150
+            max_tokens=200
         )
 
         if not resp.choices:
             logging.warning(f"[AI] ⚠️ לא התקבלה תשובה מ־OpenAI עבור {symbol}")
             return {"signal": "HOLD", "confidence": 0.0}
 
-        content = resp.choices[0].message.content
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-        result = {"signal": "HOLD", "confidence": 0.0}
+        content = resp.choices[0].message.content.strip()
+        result = {"signal": "HOLD", "confidence": 0.0, "raw": content}
 
-        for line in lines:
-            up = line.upper()
-            if up.startswith(("BUY", "SELL", "HOLD")):
-                result["signal"] = up.split()[0]
-            if "CONFIDENCE" in up:
-                m = re.search(r"(\d+(\.\d+)?)", line)
-                if m:
-                    result["confidence"] = float(m.group(1))
+        # דוגמת פורמט: Signal: BUY | Confidence: 72% | Reason: RSI rising, ADX > 25, strong trend
+        signal_match = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
+        confidence_match = re.search(r"Confidence:\s*(\d+(\.\d+)?)", content)
 
-        logging.info(f"[AI] 🧠 המלצה ל-{symbol}: {result}")
+        if signal_match:
+            result["signal"] = signal_match.group(1).upper()
+
+        if confidence_match:
+            result["confidence"] = float(confidence_match.group(1))
+
+        logging.info(f"[AI] 🧠 המלצה ל־{symbol}: {result}")
         return result
 
     except Exception as e:
