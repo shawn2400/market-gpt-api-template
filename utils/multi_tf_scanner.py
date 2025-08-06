@@ -1,3 +1,5 @@
+# utils/multi_tf_scanner.py
+
 import asyncio
 import logging
 from collections import defaultdict
@@ -11,7 +13,7 @@ MAX_TFS = 3
 async def safe_analyze(symbol, tf, market, trending_only):
     try:
         async with semaphore:
-            result = await analyze_symbol(
+            return await analyze_symbol(
                 symbol=symbol,
                 market_type=market,
                 interval=tf,
@@ -20,7 +22,6 @@ async def safe_analyze(symbol, tf, market, trending_only):
                 with_ai=False,
                 frames=[tf]
             )
-            return result
     except Exception as e:
         logging.error(f"[multi_tf_scanner] ❌ analyze_symbol נכשל עבור {symbol}@{tf}: {e}")
         return None
@@ -40,12 +41,8 @@ async def multi_tf_scan_with_ai(
         symbols = set()
         for market in markets:
             try:
-                syms = get_trending_symbols(trending_source=trending_source, market_type=market)
-                # השורה הבאה מגנה מפני coroutine שדלף!
-                if asyncio.iscoroutine(syms):
-                    syms = await syms
-                if isinstance(syms, list) or isinstance(syms, set):
-                    symbols.update(syms)
+                syms = await get_trending_symbols(trending_source=trending_source, market_type=market)
+                symbols.update(syms)
             except Exception as e:
                 logging.warning(f"[multi_tf_scanner] שגיאה בשליפת סימבולים ל-{market}: {e}")
 
@@ -82,7 +79,7 @@ async def multi_tf_scan_with_ai(
 
             try:
                 last = entries[-1]
-                ai_result = analyze_with_ai(
+                ai_result = await analyze_with_ai(
                     symbol=symbol,
                     rsi=last.get("rsi", 50),
                     adx=last.get("adx", 20),
@@ -90,12 +87,6 @@ async def multi_tf_scan_with_ai(
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
                 )
-                # ודא שממתינים לכל coroutine!
-                if asyncio.iscoroutine(ai_result):
-                    ai_result = await ai_result
-                # הגנה נוספת — במקרה נדיר שעדיין קיבלת coroutine
-                if asyncio.iscoroutine(ai_result):
-                    raise RuntimeError("ai_result עדיין coroutine!")
             except Exception as e:
                 logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
                 ai_result = {}
@@ -118,6 +109,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
