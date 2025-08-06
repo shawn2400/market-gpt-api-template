@@ -98,6 +98,11 @@ def compute_quality_score(df, verbose=False) -> float:
         logging.error(f"[quality_score] ❌ שגיאה: {e}")
         return 0.0
 
+# === עטיפת compute_quality_score עבור תאימות ===
+def calculate_quality_score(indicators: dict) -> float:
+    return compute_quality_score(indicators, verbose=False)
+
+
 
 
 
