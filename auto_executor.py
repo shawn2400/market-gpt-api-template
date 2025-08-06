@@ -1,10 +1,10 @@
-# === auto_executor.py (מתוקן) ===
+# === auto_executor.py ===
 import threading
 import asyncio
 import os
 import time
 
-from utils.scanner_utils import scan_all, analyze_symbol  # ✅ תיקון כאן
+from utils.scanner_utils import scan_all
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.trade_executor import execute_trade_live
 from utils.pnl_tracker import update_pnl
@@ -55,7 +55,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
             print("[AutoExecutor] 🔎 סריקה חיה...")
 
             if get_open_trades_count() >= MAX_OPEN_TRADES:
-                print("🔒 יש כבר פריי 4 טריידים פתוחים – דילוג.")
+                print("🔒 יש כבר 4 טריידים פתוחים – דילוג.")
                 await asyncio.sleep(delay)
                 continue
 
@@ -66,9 +66,8 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                 await asyncio.sleep(delay)
                 continue
 
-            # ✔️ תיקון: הסרת "symbols=" אם scan_all לא תומך בזה
+            # ✔️ סריקה חיה
             results = await scan_all(
-                market_type="futures",
                 interval="15m",
                 min_quality=min_quality,
                 top=3
@@ -81,10 +80,10 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                 symbol = trade["symbol"]
 
                 if not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE):
-                    print(f"[AutoExecutor] ⚠️ מחיר לַיש {symbol} לא עדכני (> {PRICE_MAX_AGE}s) – דילוג על הטרייד.")
+                    print(f"[AutoExecutor] ⚠️ מחיר {symbol} לא עדכני (> {PRICE_MAX_AGE}s) – דילוג.")
                     continue
 
-                price = get_price(symbol)
+                price = await get_price(symbol)
                 if not price or price <= 0:
                     print(f"[AutoExecutor] ⚠️ מחיר לא תקין עבור {symbol}")
                     continue
@@ -103,6 +102,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                     budget_usd=budget,
                     market_type=trade.get("market", "futures"),
                 )
+
                 if debug:
                     print("[Debug] Executed:", result)
 
@@ -118,6 +118,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
