@@ -1,106 +1,121 @@
-# utils/scanner_utils.py
-import logging
+# utils/multi_tf_scanner.py
+
 import asyncio
-import pandas as pd
-from typing import List, Optional
-import functools
+import logging
+from collections import defaultdict
+from utils.trending_utils import get_trending_symbols
+from utils.scanner_utils import analyze_symbol, semaphore
+from utils.ai_analysis import analyze_with_ai
 
-from utils.get_klines import get_klines
-from utils.indicators import compute_indicators
-from utils.quality_score import compute_quality_score
-from utils.ws_fallback import get_price  # ✅ WS + fallback
+MAX_SYMBOLS = 20
+MAX_TFS = 3
 
-# הגבלה על מקביליות
-semaphore = asyncio.Semaphore(10)
-
-async def analyze_symbol(
-    symbol: str,
-    market_type: str = "futures",
-    interval: str = "15m",
-    limit: int = 100,
-    trending_only: bool = False,
-    with_ai: bool = False,
-    frames: Optional[List[str]] = None
-) -> Optional[dict]:
+async def safe_analyze(symbol, tf, market, trending_only):
     try:
-        # ✅ הפעלה בטוחה בתוך thread
-        loop = asyncio.get_event_loop()
-        df = await loop.run_in_executor(None, functools.partial(
-            get_klines,
-            symbol=symbol,
-            interval=interval,
-            limit=limit,
-            market_type=market_type
-        ))
-
-        if df.empty or len(df) < 50:
-            logging.warning(f"[scanner_utils] ⚠️ No data for {symbol} ({interval})")
-            return None
-
-        df = compute_indicators(df)
-        latest = df.iloc[-1]
-
-        rsi = latest.get("rsi", 0)
-        macd = latest.get("macd", 0)
-        signal = latest.get("macd_signal", 0)
-        adx = latest.get("adx", 0)
-        volume = latest.get("volume", 0)
-        ema21 = latest.get("ema21", latest.get("close"))
-        close = latest.get("close")
-
-        if close is None or close == 0:
-            logging.warning(f"[scanner_utils] ⚠️ מחיר סגירה לא תקין עבור {symbol}")
-            return None
-
-        direction = None
-        if rsi > 50 and macd > signal and adx > 20 and close > ema21:
-            direction = "LONG"
-        elif rsi < 50 and macd < signal and adx > 20 and close < ema21:
-            direction = "SHORT"
-        else:
-            return None  # ✅ לא נמצא תנאי כניסה ברור
-
-        quality_score = compute_quality_score(df)
-
-        return {
-            "symbol": symbol,
-            "interval": interval,
-            "direction": direction,
-            "quality_score": round(quality_score, 2),
-            "rsi": round(rsi, 2),
-            "macd": round(macd, 4),
-            "adx": round(adx, 2),
-            "volume": volume,
-            "price": close,
-            "frames": frames or [interval],
-            "market": market_type,
-        }
-
+        async with semaphore:
+            return await analyze_symbol(
+                symbol=symbol,
+                market_type=market,
+                interval=tf,
+                limit=100,
+                trending_only=trending_only,
+                with_ai=False,
+                frames=[tf]
+            )
     except Exception as e:
-        logging.error(f"[scanner_utils] ❌ Error analyzing {symbol} ({interval}): {e}")
+        logging.error(f"[multi_tf_scanner] ❌ {symbol}@{tf} נכשל: {e}")
         return None
 
-async def scan_all(
-    symbols: List[str],
-    market_type: str = "futures",
-    interval: str = "15m",
-    min_quality: int = 6,
-    top: int = 5
-) -> List[dict]:
-    logging.info(f"[scanner_utils] 🔍 סריקה של {len(symbols)} סמלים ב־{interval}...")
+async def multi_tf_scan_with_ai(
+    timeframes=("5m", "15m", "1h"),
+    markets=("futures",),
+    min_quality=6,
+    top=10,
+    trending_only=True,
+    trending_source="coingecko"
+):
+    try:
+        logging.info(f"[multi_tf_scanner] התחלת סריקה | tf={timeframes} markets={markets} trending={trending_only}")
 
-    async def safe_analyze_wrapper(symbol: str):
-        async with semaphore:
-            return await analyze_symbol(symbol, market_type, interval)
+        symbols = set()
+        for market in markets:
+            try:
+                syms = get_trending_symbols(trending_source, market)
+                symbols.update(syms)
+            except Exception as e:
+                logging.warning(f"[multi_tf_scanner] שגיאה בשליפת טרנדינג: {e}")
 
-    tasks = [safe_analyze_wrapper(symbol) for symbol in symbols]
-    results = await asyncio.gather(*tasks)
+        if not symbols:
+            logging.warning("[multi_tf_scanner] ⚠️ אין סימבולים לסריקה.")
+            return []
 
-    filtered = [res for res in results if res and res["quality_score"] >= min_quality]
-    filtered.sort(key=lambda x: -x["quality_score"])
+        symbols = list(symbols)[:MAX_SYMBOLS]
+        timeframes = list(timeframes)[:MAX_TFS]
 
-    logging.info(f"[scanner_utils] ✅ נמצאו {len(filtered)} טריידים איכותיים.")
-    return filtered[:top]
+        tasks = [
+            safe_analyze(symbol, tf, markets[0], trending_only)
+            for tf in timeframes
+            for symbol in symbols
+        ]
+        raw_results = await asyncio.gather(*tasks)
+
+        grouped = defaultdict(list)
+        for result in raw_results:
+            if result and isinstance(result, dict) and result.get("quality_score", 0) >= min_quality:
+                grouped[result["symbol"]].append(result)
+
+        output = []
+        for symbol, entries in grouped.items():
+            if len(entries) < 2:
+                continue
+
+            directions = [x["direction"] for x in entries]
+            if not directions:
+                continue
+            main_dir = max(set(directions), key=directions.count)
+            filtered_entries = [x for x in entries if x["direction"] == main_dir]
+            if not filtered_entries:
+                continue
+
+            try:
+                avg_q = sum(x["quality_score"] for x in filtered_entries) / len(filtered_entries)
+                last = entries[-1]
+                ind = last.get("indicators", {})
+                ai_result = await analyze_with_ai(
+                    symbol=symbol,
+                    rsi=ind.get("rsi", 50),
+                    adx=ind.get("adx", 20),
+                    trend=main_dir,
+                    volume=last.get("volume", 1_000_000),
+                    pattern=last.get("pattern", "unknown")
+                )
+            except Exception as e:
+                logging.error(f"[multi_tf_scanner] שגיאה בניתוח AI עבור {symbol}: {e}")
+                ai_result = {}
+
+            if (
+                ai_result and isinstance(ai_result, dict)
+                and not ai_result.get("error")
+                and main_dir.lower() in ai_result.get("signal", "").lower()
+            ):
+                output.append({
+                    "symbol": symbol,
+                    "confluence": len(entries),
+                    "main_direction": main_dir,
+                    "avg_quality": round(avg_q, 2),
+                    "frames": [x["frames"][0] for x in entries],
+                    "ai_opinion": ai_result.get("signal"),
+                    "ai_score": ai_result.get("confidence", 1.0),
+                    "details": entries
+                })
+
+        output.sort(key=lambda x: (-x["avg_quality"], -x["ai_score"]))
+        return output[:top]
+
+    except Exception as outer_e:
+        logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בסריקה: {outer_e}")
+        return []
+
 
 
 
