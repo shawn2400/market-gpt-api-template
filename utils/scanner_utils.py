@@ -1,9 +1,9 @@
 # utils/scanner_utils.py
-
 import logging
 import asyncio
 import pandas as pd
 from typing import List, Optional
+import functools
 
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
@@ -23,7 +23,16 @@ async def analyze_symbol(
     frames: Optional[List[str]] = None
 ) -> Optional[dict]:
     try:
-        df = await get_klines(symbol, interval=interval, limit=limit, market_type=market_type)  # ✅ תיקון await
+        # ✅ הפעלה בטוחה בתוך thread
+        loop = asyncio.get_event_loop()
+        df = await loop.run_in_executor(None, functools.partial(
+            get_klines,
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+            market_type=market_type
+        ))
+
         if df.empty or len(df) < 50:
             logging.warning(f"[scanner_utils] ⚠️ No data for {symbol} ({interval})")
             return None
@@ -92,6 +101,7 @@ async def scan_all(
 
     logging.info(f"[scanner_utils] ✅ נמצאו {len(filtered)} טריידים איכותיים.")
     return filtered[:top]
+
 
 
 
