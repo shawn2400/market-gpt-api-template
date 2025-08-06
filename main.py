@@ -1,17 +1,16 @@
-# main.py
-
 import os
 import json
 import logging
 import threading
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-# טעינת משתני סביבה
+# === טעינת ENV ===
 load_dotenv()
 
-# ייבוא ראוטרים ו־פונקציות מערכת
+# === ייבוא לוגיקה ===
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -19,20 +18,14 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_multi_websocket, get_price
 
-# לוגים
+# === לוגים ===
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)s] %(message)s',
     force=True
 )
 
-# קריאת משתנים מה־ENV
-AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
-MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
-MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
-SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
-
-# בדיקת ENV קריטיים
+# === בדיקת ENV קריטיים ===
 REQUIRED_ENV_VARS = [
     "BINANCE_API_KEY", "BINANCE_API_SECRET", "OPENAI_API_KEY",
     "AUTO_RUN", "MIN_QUALITY_SCORE", "MAX_TRADE_BUDGET", "SCAN_INTERVAL"
@@ -42,7 +35,13 @@ for var in REQUIRED_ENV_VARS:
         logging.error(f"❌ Missing required environment variable: {var}")
         raise RuntimeError(f"❌ Missing required environment variable: {var}")
 
-# טעינת סימבולים מרשימת מעקב
+# === משתנים מערכתיים ===
+AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
+MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
+MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
+
+# === קריאת רשימת מעקב ===
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -52,7 +51,7 @@ def load_watchlist_symbols():
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
         return ["BTCUSDT"]
 
-# הפעלת WebSocket חכם
+# === WebSocket חכם ===
 WS_LAUNCHED = False
 def start_ws_multi_background():
     global WS_LAUNCHED
@@ -65,14 +64,18 @@ def start_ws_multi_background():
     logging.info(f"[main] 🚀 WebSocket הופעל עבור: {symbols}")
     WS_LAUNCHED = True
 
-# יצירת אפליקציית FastAPI
+# === יצירת FastAPI ===
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
-    version="2.0.5"
+    version="2.0.6"
 )
 
-# הגדרות CORS
+# === קבצים סטטיים – חובה ל־plugin ===
+app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# === CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -81,13 +84,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# רישום ראוטים
+# === ראוטים ===
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# אירוע אתחול (הפעלת WS ו־AutoExecutor)
+# === אתחול רקע ===
 @app.on_event("startup")
 async def startup_event():
     start_ws_multi_background()
@@ -97,12 +100,12 @@ async def startup_event():
         else:
             logging.info("ℹ️ AutoExecutor כבר פעיל.")
 
-# ברירת מחדל
+# === ראוט ברירת מחדל ===
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# שליטה ידנית באוטו-אקזקיוטר
+# === שליטה באוטו-אקזקיוטר ===
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -117,7 +120,7 @@ async def stop_executor():
 async def executor_status():
     return {"running": is_executor_running()}
 
-# מחיר חי
+# === שליפת מחיר ===
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="Symbol כמו BTCUSDT")):
     try:
@@ -128,6 +131,7 @@ async def get_price_route(symbol: str = Query(..., description="Symbol כמו BT
     except Exception as e:
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
+
 
 
 
