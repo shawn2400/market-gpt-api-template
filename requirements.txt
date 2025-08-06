@@ -4,12 +4,15 @@ gunicorn==21.2.0
 python-dotenv==1.0.1
 requests==2.31.0
 pandas==2.2.2
-python-binance==1.0.19
+numpy==1.26.4
+matplotlib==3.8.4
 ta==0.11.0
 aiohttp==3.9.5
-openai==1.30.1
 websocket-client==1.7.0
+openai==1.30.1
+python-binance==1.0.19
 fpdf==1.7.2
+
 
 
 
