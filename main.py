@@ -101,12 +101,12 @@ async def startup_event():
         else:
             logging.info("ℹ️ AutoExecutor כבר פעיל.")
 
-# === ראוט ברירת מחדל ===
+# === ברירת מחדל ===
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# === שליטה באוטו-אקזקיוטר ===
+# === שליטה ב־AutoExecutor ===
 @app.get("/executor/start")
 async def start_executor():
     started = start_executor_loop()
@@ -132,6 +132,16 @@ async def get_price_route(symbol: str = Query(..., description="Symbol כמו BT
     except Exception as e:
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
+
+
+
+
+
+
+
+
+
+
 
 
 
