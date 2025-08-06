@@ -1,4 +1,4 @@
-# utils/multi_tf_scanner.py
+# ✅ multi_tf_scanner.py — גרסה מתוקנת, עם await מלא
 
 import asyncio
 import logging
@@ -37,7 +37,6 @@ async def multi_tf_scan_with_ai(
     try:
         logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}, trending_source={trending_source}")
 
-        # שליפת סימבולים (SYNC)
         symbols = set()
         for market in markets:
             try:
@@ -53,7 +52,6 @@ async def multi_tf_scan_with_ai(
         symbols = list(symbols)[:MAX_SYMBOLS]
         timeframes = list(timeframes)[:MAX_TFS]
 
-        # משימות סריקה
         tasks = [
             safe_analyze(symbol, tf, markets[0], trending_only)
             for tf in timeframes
@@ -61,7 +59,6 @@ async def multi_tf_scan_with_ai(
         ]
         raw_results = await asyncio.gather(*tasks)
 
-        # קיבוץ לפי סימבול
         grouped = defaultdict(list)
         for result in raw_results:
             if result and isinstance(result, dict) and result.get("quality_score", 0) >= min_quality:
@@ -74,28 +71,21 @@ async def multi_tf_scan_with_ai(
 
             directions = [x["direction"] for x in entries]
             if not directions:
-                logging.warning(f"[multi_tf_scanner] אין כיוונים ל-{symbol}")
                 continue
-            main_dir = max(set(directions), key=directions.count)
 
+            main_dir = max(set(directions), key=directions.count)
             filtered_entries = [x for x in entries if x["direction"] == main_dir]
             if not filtered_entries:
-                logging.warning(f"[multi_tf_scanner] אין entries עם הכיוון {main_dir} עבור {symbol}")
+                continue
+
+            avg_q = sum(x["quality_score"] for x in filtered_entries) / len(filtered_entries)
+            last = entries[-1]
+            ind = last.get("indicators") or {}
+
+            if not isinstance(ind, dict):
                 continue
 
             try:
-                avg_q = sum(x["quality_score"] for x in filtered_entries) / len(filtered_entries)
-            except Exception as e:
-                logging.error(f"[multi_tf_scanner] שגיאה בחישוב ממוצע איכות עבור {symbol}: {e}")
-                continue
-
-            try:
-                last = entries[-1]
-                ind = last.get("indicators") or {}
-                if not isinstance(ind, dict):
-                    logging.warning(f"[multi_tf_scanner] ❌ indicators לא dict עבור {symbol}: {ind}")
-                    continue
-
                 ai_result = await analyze_with_ai(
                     symbol=symbol,
                     rsi=ind.get("rsi", 50),
@@ -104,11 +94,6 @@ async def multi_tf_scan_with_ai(
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
                 )
-
-                if asyncio.iscoroutine(ai_result):
-                    logging.error(f"[multi_tf_scanner] ❌ analyze_with_ai החזיר coroutine במקום dict עבור {symbol}")
-                    continue
-
             except Exception as e:
                 logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
                 ai_result = {}
@@ -136,6 +121,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
