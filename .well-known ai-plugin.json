@@ -2,8 +2,8 @@
   "schema_version": "v1",
   "name_for_human": "AlgoGPT",
   "name_for_model": "algogpt",
-  "description_for_human": "סוחר אלגוריתמי בזמן אמת ל־Binance: סריקה, טריידים, דוחות, ניתוחים.",
-  "description_for_model": "Plugin לחיבור ל־Binance. כולל סריקת שוק, ביצוע טריידים, Backtest, גרפים, ניתוחי חדשות ודוחות PDF.",
+  "description_for_human": "סוחר אלגוריתמי בזמן אמת ל-Binance: סריקה, טריידים, דוחות, ניתוחים.",
+  "description_for_model": "Plugin לחיבור ל-Binance. כולל סריקת שוק, ביצוע טריידים, Backtest, גרפים, ניתוחי חדשות ודוחות PDF.",
   "auth": {
     "type": "none"
   },
@@ -17,4 +17,5 @@
   "terms_of_service_url": "https://algogpt.ai/terms",
   "privacy_policy_url": "https://algogpt.ai/privacy"
 }
+
 
