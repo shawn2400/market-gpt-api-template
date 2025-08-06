@@ -53,6 +53,7 @@ def load_watchlist_symbols():
 
 # === WebSocket חכם ===
 WS_LAUNCHED = False
+
 def start_ws_multi_background():
     global WS_LAUNCHED
     if WS_LAUNCHED:
