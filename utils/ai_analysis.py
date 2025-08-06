@@ -1,5 +1,3 @@
-# utils/ai_analysis.py
-
 import os
 import openai
 import logging
@@ -52,7 +50,6 @@ async def analyze_with_ai(
         content = resp.choices[0].message.content.strip()
         result = {"signal": "HOLD", "confidence": 0.0, "raw": content}
 
-        # פורמט צפוי: Signal: BUY | Confidence: 72% | Reason: ...
         signal_match = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
         confidence_match = re.search(r"Confidence:\s*(\d+(\.\d+)?)", content)
 
@@ -67,6 +64,7 @@ async def analyze_with_ai(
     except Exception as e:
         logging.error(f"[AI] ❌ שגיאת GPT: {e}")
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
+
 
 
 
