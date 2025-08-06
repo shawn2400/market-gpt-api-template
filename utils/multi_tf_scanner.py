@@ -1,5 +1,3 @@
-# ✅ multi_tf_scanner.py — גרסה מתוקנת, עם await מלא
-
 import asyncio
 import logging
 from collections import defaultdict
@@ -70,22 +68,22 @@ async def multi_tf_scan_with_ai(
                 continue
 
             directions = [x["direction"] for x in entries]
-            if not directions:
-                continue
-
             main_dir = max(set(directions), key=directions.count)
+
             filtered_entries = [x for x in entries if x["direction"] == main_dir]
             if not filtered_entries:
                 continue
 
-            avg_q = sum(x["quality_score"] for x in filtered_entries) / len(filtered_entries)
-            last = entries[-1]
-            ind = last.get("indicators") or {}
-
-            if not isinstance(ind, dict):
+            try:
+                avg_q = sum(x["quality_score"] for x in filtered_entries) / len(filtered_entries)
+            except Exception as e:
+                logging.error(f"[multi_tf_scanner] שגיאה בחישוב ממוצע איכות עבור {symbol}: {e}")
                 continue
 
             try:
+                last = entries[-1]
+                ind = last.get("indicators") or {}
+
                 ai_result = await analyze_with_ai(
                     symbol=symbol,
                     rsi=ind.get("rsi", 50),
@@ -94,9 +92,10 @@ async def multi_tf_scan_with_ai(
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
                 )
+
             except Exception as e:
-                logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
-                ai_result = {}
+                logging.error(f"[multi_tf_scanner] ❌ שגיאה ב־analyze_with_ai עבור {symbol}: {e}")
+                continue
 
             if (
                 ai_result
@@ -121,6 +120,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
