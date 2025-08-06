@@ -1,3 +1,5 @@
+# utils/multi_tf_scanner.py
+
 import asyncio
 import logging
 from collections import defaultdict
@@ -35,7 +37,7 @@ async def multi_tf_scan_with_ai(
     try:
         logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}, trending_source={trending_source}")
 
-        # שליפת סימבולים (SYNC - אין await!)
+        # שליפת סימבולים (SYNC!)
         symbols = set()
         for market in markets:
             try:
@@ -65,15 +67,28 @@ async def multi_tf_scan_with_ai(
             if result and isinstance(result, dict) and result.get("quality_score", 0) >= min_quality:
                 grouped[result["symbol"]].append(result)
 
-        # ניתוח AI
+        # ניתוח AI והגנות על entries ריקות/חסרות
         output = []
         for symbol, entries in grouped.items():
             if len(entries) < 2:
                 continue
 
             directions = [x["direction"] for x in entries]
+            if not directions:
+                logging.warning(f"[multi_tf_scanner] no directions for {symbol}")
+                continue
             main_dir = max(set(directions), key=directions.count)
-            avg_q = sum(x["quality_score"] for x in entries if x["direction"] == main_dir) / len(entries)
+
+            filtered_entries = [x for x in entries if x["direction"] == main_dir]
+            if not filtered_entries:
+                logging.warning(f"[multi_tf_scanner] אין entries עם הכיוון {main_dir} עבור {symbol}")
+                continue
+
+            try:
+                avg_q = sum(x["quality_score"] for x in filtered_entries) / len(filtered_entries)
+            except Exception as e:
+                logging.error(f"[multi_tf_scanner] שגיאה בחישוב ממוצע איכות עבור {symbol}: {e}")
+                continue
 
             try:
                 last = entries[-1]
@@ -89,7 +104,12 @@ async def multi_tf_scan_with_ai(
                 logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
                 ai_result = {}
 
-            if ai_result and isinstance(ai_result, dict) and not ai_result.get("error") and (main_dir.lower() in ai_result.get("signal", "").lower()):
+            if (
+                ai_result
+                and isinstance(ai_result, dict)
+                and not ai_result.get("error")
+                and main_dir.lower() in ai_result.get("signal", "").lower()
+            ):
                 output.append({
                     "symbol": symbol,
                     "confluence": len(entries),
@@ -107,6 +127,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
