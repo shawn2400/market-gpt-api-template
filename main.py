@@ -28,13 +28,11 @@ logging.basicConfig(
 
 # === בדיקת ENV קריטיים ===
 REQUIRED_ENV_VARS = [
-    "BINANCE_API_KEY", "BINANCE_API_SECRET", "OPENAI_API_KEY",
-    "AUTO_RUN", "MIN_QUALITY_SCORE", "MAX_TRADE_BUDGET", "SCAN_INTERVAL"
+    "BINANCE_API_KEY", "BINANCE_API_SECRET", "OPENAI_API_KEY"
 ]
-for var in REQUIRED_ENV_VARS:
-    if not os.getenv(var):
-        logging.error(f"❌ Missing required environment variable: {var}")
-        raise RuntimeError(f"❌ Missing required environment variable: {var}")
+for v in REQUIRED_ENV_VARS:
+    if not os.environ.get(v):
+        print(f" Environment variable missing: {v}")
 
 # === משתנים מערכתיים ===
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
@@ -109,13 +107,10 @@ app.include_router(multi_router)
 
 # === אתחול רקע ===
 @app.on_event("startup")
-async def startup_event():
-    start_ws_multi_background()
-    if AUTO_RUN:
-        if start_executor_loop():
-            logging.info("✅ AutoExecutor הופעל אוטומטית.")
-        else:
-            logging.info("ℹ️ AutoExecutor כבר רץ.")
+def startup_event():
+    global WS_LAUNCHED
+    if not WS_LAUNCHED:
+        start_ws_multi_background()
 
 # === בדיקת חיים ===
 @app.get("/healthz")
@@ -982,3 +977,9 @@ def get_routes():
 
 
 
+
+=======
+def price(symbol: str):
+    price = get_price(symbol)
+    return {"symbol": symbol, "price": price}
+>>>>>>> 7179d67 ( הוספת נתיב /scan/multi עם Multi-TF Scan)

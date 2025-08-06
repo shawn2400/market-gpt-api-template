@@ -282,8 +282,12 @@ paths:
 security:
   - bearerAuth: []
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+OPENAI_API_KEY=sk-your-real-openai-key-here
+>>>>>>> 7179d67 ( הוספת נתיב /scan/multi עם Multi-TF Scan)

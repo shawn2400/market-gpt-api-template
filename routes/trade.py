@@ -1,7 +1,9 @@
+# routes/trade.py
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from utils.trade_executor import execute_trade_live
-from utils.ws_fallback import get_price
+from utils.trade_executor import execute_trade_live  # ✅ גרסה רשמית שלך
+from utils.ws_fallback import get_price  # ✅ לשליפת מחיר חי
 
 router = APIRouter()
 
@@ -12,13 +14,13 @@ class TradeRequest(BaseModel):
     sl: float = None
     tp: float = None
     budget: float = 100
-    leverage: float = 10
+    leverage: int = 10
 
 @router.post("/trade")
 async def place_trade(req: TradeRequest):
     symbol = req.symbol.upper()
 
-    # מחיר עדכני (אם לא ניתן)
+    # אם לא סופק מחיר כניסה – נשלוף מה־WebSocket
     price = req.entry or await get_price(symbol)
     if price is None:
         raise HTTPException(
@@ -26,7 +28,7 @@ async def place_trade(req: TradeRequest):
             detail=f"❌ לא ניתן לקבל מחיר עדכני עבור {symbol} – טרייד לא בוצע"
         )
 
-    # שליחת הטרייד בפועל – await ישיר
+    # ביצוע טרייד חי בפועל
     trade_result = await execute_trade_live(
         symbol=symbol,
         entry=price,
@@ -37,28 +39,10 @@ async def place_trade(req: TradeRequest):
         budget_usd=req.budget
     )
 
-    if trade_result["status"] == "error":
+    if trade_result.get("status") == "error":
         raise HTTPException(
             status_code=400,
             detail=trade_result.get("error", "שגיאה לא ידועה")
         )
 
     return {"status": "success", "trade": trade_result["result"]}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
