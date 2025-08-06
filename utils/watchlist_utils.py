@@ -4,7 +4,7 @@ import json
 import os
 from typing import List, Dict
 from utils.trending_utils import get_trending_symbols
-from utils.multi_tf_scanner import analyze_symbol
+from utils.scanner_utils import analyze_symbol  # ✅ ייבוא מתוקן
 
 WATCHLIST_FILE = "watchlist.json"
 
