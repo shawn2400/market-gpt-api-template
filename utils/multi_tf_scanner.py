@@ -39,11 +39,9 @@ async def multi_tf_scan_with_ai(
         symbols = set()
         for market in markets:
             try:
-                if asyncio.iscoroutinefunction(get_trending_symbols):
-                    syms = await get_trending_symbols(trending_source=trending_source, market_type=market)
-                else:
-                    syms = get_trending_symbols(trending_source=trending_source, market_type=market)
-
+                syms = get_trending_symbols(trending_source=trending_source, market_type=market)
+                if asyncio.iscoroutine(syms):  # ✅ קריטי
+                    syms = await syms
                 symbols.update(syms)
             except Exception as e:
                 logging.warning(f"[multi_tf_scanner] שגיאה בשליפת סימבולים ל-{market}: {e}")
@@ -89,7 +87,7 @@ async def multi_tf_scan_with_ai(
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
                 )
-                if asyncio.iscoroutine(ai_result):
+                if asyncio.iscoroutine(ai_result):  # ✅ קריטי
                     ai_result = await ai_result
             except Exception as e:
                 logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
@@ -113,6 +111,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
