@@ -40,3 +40,4 @@ def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה",
         print(f"[static_utils] ❌ שגיאה ביצירת גרף: {e}")
         return None
 
+
