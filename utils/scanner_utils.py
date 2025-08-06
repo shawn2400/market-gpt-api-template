@@ -2,68 +2,84 @@
 
 import asyncio
 import logging
-from utils.quality_score import calculate_quality_score
-from utils.indicators import analyze_indicators
 from utils.get_klines import get_klines
+from utils.indicators import compute_indicators
+from utils.quality_score import compute_quality_score
 
-# Semaphore להגבלת כמות בקשות במקביל
-semaphore = asyncio.Semaphore(10)
+# Semaphore להגבלת מקביליות
+semaphore = asyncio.Semaphore(5)
 
-async def analyze_symbol(symbol: str, interval: str = "15m", limit: int = 120) -> dict:
+async def analyze_symbol(symbol: str, interval: str = "15m", market_type: str = "futures") -> dict:
     """
-    מנתח סימבול לפי אינדיקטורים ומחזיר dict עם ציון איכות, מגמה וכו'
+    מבצע ניתוח טכני מלא לסימבול ומחזיר טרייד עם איכות וניתוח.
     """
     try:
         async with semaphore:
-            klines = await get_klines(symbol=symbol, interval=interval, limit=limit)
-            if not klines:
-                raise ValueError(f"No klines for {symbol} @ {interval}")
+            df = await get_klines(symbol=symbol, interval=interval, limit=150, market_type=market_type)
+            if df.empty:
+                logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}")
+                return None
 
-            indicators = analyze_indicators(klines)
-            quality_score = calculate_quality_score(indicators)
+            df = compute_indicators(df)
+            if df.empty or "rsi" not in df.columns:
+                logging.warning(f"[analyze_symbol] ⚠️ ניתוח אינדיקטורים נכשל עבור {symbol}")
+                return None
+
+            score = compute_quality_score(df)
 
             return {
                 "symbol": symbol,
                 "interval": interval,
-                "quality_score": quality_score,
-                "direction": indicators.get("trend", "LONG"),  # ברירת מחדל
-                "rsi": indicators.get("rsi"),
-                "adx": indicators.get("adx"),
-                "volume": indicators.get("volume"),
-                "market": "futures",
+                "quality_score": score,
+                "rsi": round(df["rsi"].iloc[-1], 2),
+                "adx": round(df["adx"].iloc[-1], 2),
+                "trend": "UP" if df["supertrend_dir"].iloc[-1] == 1 else "DOWN",
+                "direction": "LONG" if df["supertrend_dir"].iloc[-1] == 1 else "SHORT",
+                "volume": round(df["volume"].iloc[-1], 2),
+                "market": market_type
             }
 
     except Exception as e:
-        logging.error(f"[scanner_utils] ❌ שגיאה בניתוח {symbol}@{interval}: {e}")
+        logging.error(f"[analyze_symbol] ❌ שגיאה ב־{symbol}: {e}")
         return None
 
-async def scan_all(interval: str = "15m", min_quality: int = 6, top: int = 10, symbols: list = None):
+async def scan_all(
+    interval: str = "15m",
+    min_quality: int = 6,
+    top: int = 10,
+    symbols: list = None,
+    market_type: str = "futures"
+):
     """
-    סריקה חכמה של רשימת סמלים עם ניתוח איכות וסינון לפי ציון.
+    מבצע סריקה לכל הסימבולים לפי ניתוח טכני ומחזיר את ה־top באיכות.
     """
+    from utils.watchlist_utils import load_watchlist
+
     try:
         if not symbols:
-            from utils.watchlist_utils import load_watchlist
             raw_watchlist = load_watchlist()
             symbols = [x["symbol"] for x in raw_watchlist if "symbol" in x]
 
         if not symbols:
-            logging.warning("[scanner_utils] ⚠️ אין סמלים לסריקה.")
+            logging.warning("[scan_all] ⚠️ אין סמלים לסריקה.")
             return []
 
-        logging.info(f"[scanner_utils] 🔎 התחלת סריקה של {len(symbols)} סימבולים...")
+        logging.info(f"[scan_all] 🚀 סורק {len(symbols)} סמלים ({market_type})...")
 
-        tasks = [analyze_symbol(sym, interval=interval) for sym in symbols]
+        tasks = [
+            analyze_symbol(symbol=sym, interval=interval, market_type=market_type)
+            for sym in symbols
+        ]
+
         results = await asyncio.gather(*tasks)
-
         filtered = [r for r in results if r and r["quality_score"] >= min_quality]
         sorted_results = sorted(filtered, key=lambda x: x["quality_score"], reverse=True)
 
-        logging.info(f"[scanner_utils] ✅ נמצאו {len(sorted_results)} טריידים מעל ציון {min_quality}")
+        logging.info(f"[scan_all] ✅ נמצאו {len(sorted_results)} טריידים מעל ציון {min_quality}")
         return sorted_results[:top]
 
     except Exception as e:
-        logging.error(f"[scanner_utils] ❌ שגיאה בסריקה: {e}")
+        logging.error(f"[scan_all] ❌ שגיאה בסריקה: {e}")
         return []
 
 
