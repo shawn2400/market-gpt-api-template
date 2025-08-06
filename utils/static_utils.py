@@ -1,18 +1,25 @@
 # utils/static_utils.py
-import matplotlib.pyplot as plt
+
 import os
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')  # שימוש במצב ללא GUI לצורך הפקה על שרת
+import matplotlib.pyplot as plt
 
 def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה", filename: str = "chart.png") -> str:
     """
     יוצר ושומר גרף פשוט מהנתונים שסופקו בתיקייה static.
-    מחזיר את הנתיב המלא של הקובץ.
+    מחזיר את הנתיב המלא של הקובץ או None אם יש שגיאה.
     """
     try:
+        # ודא שהתיקייה קיימת
         os.makedirs("static", exist_ok=True)
+
+        # צור שם ייחודי לפי תאריך
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         full_path = os.path.join("static", f"{timestamp}_{filename}")
 
+        # ציור הגרף
         plt.figure(figsize=(6, 4))
         plt.plot(x, y, marker='o', linestyle='-', label="קו מגמה")
         plt.title(title, fontsize=14)
@@ -21,11 +28,15 @@ def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה",
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(full_path)
+
+        # שמירה
+        plt.savefig(full_path, dpi=150)
         plt.close()
 
-        print(f"✅ גרף נשמר: {full_path}")
+        print(f"✅ גרף נשמר בהצלחה: {full_path}")
         return full_path
+
     except Exception as e:
-        print(f"[!] שגיאה ביצירת הגרף: {e}")
+        print(f"[static_utils] ❌ שגיאה ביצירת גרף: {e}")
         return None
+
