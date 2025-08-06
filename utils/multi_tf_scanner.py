@@ -1,5 +1,3 @@
-# utils/multi_tf_scanner.py
-
 import asyncio
 import logging
 from collections import defaultdict
@@ -37,11 +35,11 @@ async def multi_tf_scan_with_ai(
     try:
         logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}, trending_source={trending_source}")
 
-        # שליפת סימבולים
+        # שליפת סימבולים (SYNC - אין await!)
         symbols = set()
         for market in markets:
             try:
-                syms = await get_trending_symbols(trending_source=trending_source, market_type=market)
+                syms = get_trending_symbols(trending_source=trending_source, market_type=market)
                 symbols.update(syms)
             except Exception as e:
                 logging.warning(f"[multi_tf_scanner] שגיאה בשליפת סימבולים ל-{market}: {e}")
@@ -109,6 +107,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
