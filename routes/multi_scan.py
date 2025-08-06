@@ -10,18 +10,15 @@ router = APIRouter()
 @router.get("/scan/multi")
 async def scan_multi(
     timeframes: str = Query("5m,15m,1h", description="טיימפריימים מופרדים בפסיק"),
-    min_quality: int = Query(6, ge=0, le=10, description="ציון איכות מינימלי (0–10)"),
-    top: int = Query(10, ge=1, le=50, description="מספר מקסימלי של טריידים להחזרה"),
-    trending_only: bool = Query(False, description="האם לסנן לפי סימבולים טרנדיים בלבד"),
-    trending_source: str = Query("binance", description="מקור טרנדינג: binance / lunarcrush / coingecko"),
+    min_quality: int = Query(6, ge=0, le=10, description="ציון איכות מינימלי"),
+    top: int = Query(10, ge=1, le=50, description="כמה טריידים להחזיר"),
+    trending_only: bool = Query(False, description="רק טרנדינג"),
+    trending_source: str = Query("binance", description="binance | lunarcrush | coingecko"),
 ):
     try:
         tf_list = [t.strip() for t in timeframes.split(",") if t.strip()]
         if not tf_list:
-            return JSONResponse(
-                status_code=400,
-                content={"status": "error", "message": "אין טיימפריימים חוקיים לסריקה."}
-            )
+            return JSONResponse(status_code=400, content={"status": "error", "message": "טיימפריימים לא חוקיים."})
 
         trades = await multi_tf_scan_with_ai(
             timeframes=tf_list,
@@ -31,18 +28,12 @@ async def scan_multi(
             trending_source=trending_source
         )
 
-        return {
-            "status": "success",
-            "count": len(trades),
-            "trades": trades
-        }
+        return {"status": "success", "count": len(trades), "trades": trades}
 
     except Exception as e:
         logging.exception("[multi_scan] ❌ שגיאה כללית בסריקה")
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
 
 
 
