@@ -37,7 +37,7 @@ async def multi_tf_scan_with_ai(
     try:
         logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}, trending_source={trending_source}")
 
-        # שליפת סימבולים (SYNC!)
+        # שליפת סימבולים (SYNC)
         symbols = set()
         for market in markets:
             try:
@@ -53,7 +53,7 @@ async def multi_tf_scan_with_ai(
         symbols = list(symbols)[:MAX_SYMBOLS]
         timeframes = list(timeframes)[:MAX_TFS]
 
-        # משימות אסינכרוניות
+        # משימות סריקה
         tasks = [
             safe_analyze(symbol, tf, markets[0], trending_only)
             for tf in timeframes
@@ -67,7 +67,6 @@ async def multi_tf_scan_with_ai(
             if result and isinstance(result, dict) and result.get("quality_score", 0) >= min_quality:
                 grouped[result["symbol"]].append(result)
 
-        # ניתוח AI והגנות על entries ריקות/חסרות
         output = []
         for symbol, entries in grouped.items():
             if len(entries) < 2:
@@ -92,10 +91,11 @@ async def multi_tf_scan_with_ai(
 
             try:
                 last = entries[-1]
+                ind = last.get("indicators", {})
                 ai_result = await analyze_with_ai(
                     symbol=symbol,
-                    rsi=last.get("rsi", 50),
-                    adx=last.get("adx", 20),
+                    rsi=ind.get("rsi", 50),
+                    adx=ind.get("adx", 20),
                     trend=main_dir,
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
