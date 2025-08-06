@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 
-from utils.scanner_utils import scan_all
+from utils.scanner_utils import scan_all, analyze_symbol  # ✅ תיקון כאן
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.trade_executor import execute_trade_live
 from utils.pnl_tracker import update_pnl
@@ -81,7 +81,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                 symbol = trade["symbol"]
 
                 if not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE):
-                    print(f"[AutoExecutor] ⚠️ מחיר לַיש {symbol} לא עדכני (>{PRICE_MAX_AGE}s) – דילוג על הטרייד.")
+                    print(f"[AutoExecutor] ⚠️ מחיר לַיש {symbol} לא עדכני (> {PRICE_MAX_AGE}s) – דילוג על הטרייד.")
                     continue
 
                 price = get_price(symbol)
@@ -118,6 +118,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
