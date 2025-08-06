@@ -1,3 +1,5 @@
+# main.py
+
 import os
 import json
 import logging
@@ -15,7 +17,11 @@ from routes.multi_scan import router as multi_router
 from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
 from utils.ws_fallback import launch_multi_websocket, get_price
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+    force=True
+)
 
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
@@ -102,7 +108,7 @@ async def executor_status():
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="Symbol like BTCUSDT")):
     try:
-        price = get_price(symbol)
+        price = await get_price(symbol)  # ✅ קריאה אסינכרונית תקינה
         if price is None:
             return {"error": "לא נמצא מחיר"}
         return {"symbol": symbol, "price": price}
