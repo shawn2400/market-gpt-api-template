@@ -18,10 +18,10 @@ async def analyze_with_ai(
     volume: float
 ) -> dict:
     if not openai.api_key:
-        logging.error("[AI] ❌ לא הוגדר מפתח OpenAI.")
-        return {"error": "No OpenAI API key configured", "signal": "HOLD", "confidence": 0.0}
+        logging.error("[AI] ❌ מפתח OpenAI לא מוגדר.")
+        return {"error": "OpenAI API key not configured"}
 
-    logging.info(f"[AI] 🔍 התחיל ניתוח GPT עבור {symbol}")
+    logging.info(f"[AI] 🔍 ניתוח GPT עבור {symbol}")
 
     prompt = (
         f"You are an expert crypto trading assistant.\n"
@@ -41,36 +41,33 @@ async def analyze_with_ai(
     try:
         resp = await openai.ChatCompletion.acreate(
             model="gpt-4",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=200
         )
 
         if not resp.choices:
-            logging.warning(f"[AI] ⚠️ לא התקבלה תשובה מ־OpenAI עבור {symbol}")
-            return {"signal": "HOLD", "confidence": 0.0}
+            return {"signal": "HOLD", "confidence": 0.0, "reason": "No response from AI"}
 
         content = resp.choices[0].message.content.strip()
         result = {"signal": "HOLD", "confidence": 0.0, "raw": content}
 
-        # דוגמת פורמט: Signal: BUY | Confidence: 72% | Reason: RSI rising, ADX > 25, strong trend
+        # פורמט צפוי: Signal: BUY | Confidence: 72% | Reason: ...
         signal_match = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
         confidence_match = re.search(r"Confidence:\s*(\d+(\.\d+)?)", content)
 
         if signal_match:
             result["signal"] = signal_match.group(1).upper()
-
         if confidence_match:
             result["confidence"] = float(confidence_match.group(1))
 
-        logging.info(f"[AI] 🧠 המלצה ל־{symbol}: {result}")
+        logging.info(f"[AI] 🧠 פלט: {result}")
         return result
 
     except Exception as e:
-        logging.error(f"[AI] ❌ שגיאה בקריאת OpenAI: {e}")
+        logging.error(f"[AI] ❌ שגיאת GPT: {e}")
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
+
 
 
 
