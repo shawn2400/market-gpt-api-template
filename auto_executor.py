@@ -1,3 +1,4 @@
+# === auto_executor.py (מתוקן) ===
 import threading
 import asyncio
 import os
@@ -5,8 +6,6 @@ import time
 
 from utils.scanner_utils import scan_all
 from utils.ws_fallback import get_price, is_price_fresh
-# 🔴 השורה הבעייתית הוסרה:
-# from utils.ai_analysis import predict_optimal_sl_tp
 from utils.trade_executor import execute_trade_live
 from utils.pnl_tracker import update_pnl
 from utils.trade_storage import get_open_trades_count
@@ -56,7 +55,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
             print("[AutoExecutor] 🔎 סריקה חיה...")
 
             if get_open_trades_count() >= MAX_OPEN_TRADES:
-                print("🔒 יש כבר 4 טריידים פתוחים – דילוג.")
+                print("🔒 יש כבר פריי 4 טריידים פתוחים – דילוג.")
                 await asyncio.sleep(delay)
                 continue
 
@@ -67,8 +66,8 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                 await asyncio.sleep(delay)
                 continue
 
+            # ✔️ תיקון: הסרת "symbols=" אם scan_all לא תומך בזה
             results = await scan_all(
-                symbols=symbols,
                 market_type="futures",
                 interval="15m",
                 min_quality=min_quality,
@@ -82,7 +81,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                 symbol = trade["symbol"]
 
                 if not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE):
-                    print(f"[AutoExecutor] ⚠️ מחיר ל־{symbol} לא עדכני (>{PRICE_MAX_AGE}s) – דילוג על הטרייד.")
+                    print(f"[AutoExecutor] ⚠️ מחיר לַיש {symbol} לא עדכני (>{PRICE_MAX_AGE}s) – דילוג על הטרייד.")
                     continue
 
                 price = get_price(symbol)
@@ -90,7 +89,6 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
                     print(f"[AutoExecutor] ⚠️ מחיר לא תקין עבור {symbol}")
                     continue
 
-                # ⛔ בינתיים נשתמש ב־SL/TP שמרניים קבועים (עד שתוגדר פונקציה)
                 sl = round(price * 0.975, 4)
                 tp = round(price * 1.05, 4)
                 direction = trade["direction"]
@@ -120,6 +118,7 @@ async def executor_loop(debug=False, once=False, delay=60, min_quality=6, budget
         if once:
             break
         await asyncio.sleep(delay)
+
 
 
 
