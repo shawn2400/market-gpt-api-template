@@ -1,11 +1,9 @@
-# utils/static_utils.py
-
 import os
 from datetime import datetime
 import matplotlib
 matplotlib.use('Agg')  # שימוש במצב ללא GUI לצורך הפקה על שרת
 import matplotlib.pyplot as plt
-
+import pandas as pd
 
 def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה", filename: str = "chart.png") -> str:
     """
@@ -41,17 +39,17 @@ def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה",
         print(f"[static_utils] ❌ שגיאה ביצירת גרף: {e}")
         return None
 
-
-def detect_pattern(candle: dict) -> str:
+def detect_pattern(df: pd.DataFrame) -> str:
     """
-    מזהה תבנית נר בסיסית מתוך נתוני OHLC.
-    מחזיר אחד מ־["Doji", "Hammer", "Shooting Star", ""].
+    מזהה תבנית נר מהשורה האחרונה של DataFrame.
+    מחזיר אחת מהתבניות: ["Doji", "Hammer", "Shooting Star", ""].
     """
     try:
-        open_price = candle.get("open", 0)
-        close_price = candle.get("close", 0)
-        high = candle.get("high", 0)
-        low = candle.get("low", 0)
+        last = df.iloc[-1]
+        open_price = last["open"]
+        close_price = last["close"]
+        high = last["high"]
+        low = last["low"]
 
         body = abs(close_price - open_price)
         candle_range = high - low
@@ -61,6 +59,7 @@ def detect_pattern(candle: dict) -> str:
         upper_shadow = high - max(open_price, close_price)
         lower_shadow = min(open_price, close_price) - low
 
+        # זיהוי תבניות
         if body < candle_range * 0.2:
             return "Doji"
         elif lower_shadow > body * 2 and body > upper_shadow:
@@ -71,6 +70,7 @@ def detect_pattern(candle: dict) -> str:
             return ""
     except Exception:
         return ""
+
 
 
 
