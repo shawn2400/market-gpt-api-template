@@ -6,6 +6,7 @@ import matplotlib
 matplotlib.use('Agg')  # שימוש במצב ללא GUI לצורך הפקה על שרת
 import matplotlib.pyplot as plt
 
+
 def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה", filename: str = "chart.png") -> str:
     """
     יוצר ושומר גרף פשוט מהנתונים שסופקו בתיקייה static.
@@ -39,5 +40,37 @@ def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה",
     except Exception as e:
         print(f"[static_utils] ❌ שגיאה ביצירת גרף: {e}")
         return None
+
+
+def detect_pattern(candle: dict) -> str:
+    """
+    מזהה תבנית נר בסיסית מתוך נתוני OHLC.
+    מחזיר אחד מ־["Doji", "Hammer", "Shooting Star", ""].
+    """
+    try:
+        open_price = candle.get("open", 0)
+        close_price = candle.get("close", 0)
+        high = candle.get("high", 0)
+        low = candle.get("low", 0)
+
+        body = abs(close_price - open_price)
+        candle_range = high - low
+        if candle_range == 0:
+            return ""
+
+        upper_shadow = high - max(open_price, close_price)
+        lower_shadow = min(open_price, close_price) - low
+
+        if body < candle_range * 0.2:
+            return "Doji"
+        elif lower_shadow > body * 2 and body > upper_shadow:
+            return "Hammer"
+        elif upper_shadow > body * 2 and body > lower_shadow:
+            return "Shooting Star"
+        else:
+            return ""
+    except Exception:
+        return ""
+
 
 
