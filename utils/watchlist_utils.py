@@ -30,7 +30,10 @@ def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str
 
     for symbol in symbols:
         try:
-            result = analyze_symbol(symbol, market=market, interval1="15m", interval2="1h")
+            result = analyze_symbol(symbol=symbol, market=market, interval1="15m", interval2="1h")
+            if not isinstance(result, dict):
+                print(f"[Watchlist] ⚠️ תוצאה לא תקינה עבור {symbol}: {result}")
+                continue
             quality = result.get("quality_score")
             direction = result.get("direction")
             if quality is not None and quality >= min_quality and direction:
@@ -44,6 +47,7 @@ def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str
 
     save_watchlist(watchlist)
     print(f"[Watchlist] ✅ נשמרו {len(watchlist)} סמלים לקובץ watchlist.json")
+
 
 
 
