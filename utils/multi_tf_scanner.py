@@ -1,8 +1,11 @@
+# utils/multi_tf_scanner.py
+
 import asyncio
 import logging
 from collections import defaultdict
 from utils.trending_utils import get_trending_symbols
-from utils.scanner_utils import analyze_symbol, semaphore
+from utils.scanner_utils import analyze_symbol
+from utils.semaphore_manager import semaphore
 from utils.ai_analysis import analyze_with_ai
 
 MAX_SYMBOLS = 20
@@ -92,7 +95,6 @@ async def multi_tf_scan_with_ai(
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
                 )
-
             except Exception as e:
                 logging.error(f"[multi_tf_scanner] ❌ שגיאה ב־analyze_with_ai עבור {symbol}: {e}")
                 continue
@@ -120,6 +122,10 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
+# ✅ פונקציית scan_all לשימוש מ־auto_executor או API
+async def scan_all():
+    return await multi_tf_scan_with_ai()
 
 
 
