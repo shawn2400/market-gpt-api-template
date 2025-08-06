@@ -2,8 +2,9 @@ import asyncio
 import logging
 from collections import defaultdict
 from utils.trending_utils import get_trending_symbols
-from utils.scanner_utils import analyze_symbol, semaphore
 from utils.ai_analysis import analyze_with_ai
+from utils.semaphore_manager import semaphore  # נניח שקיים
+from utils.symbol_analysis import analyze_symbol  # נניח שקיים
 
 MAX_SYMBOLS = 20
 MAX_TFS = 3
@@ -124,6 +125,7 @@ async def multi_tf_scan_with_ai(
 # ✅ פונקציית scan_all לשימוש מ־auto_executor או API
 async def scan_all():
     return await multi_tf_scan_with_ai()
+
 
 
 
