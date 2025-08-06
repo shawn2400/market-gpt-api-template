@@ -6,6 +6,7 @@ services:
     autoDeploy: true
 
     envVars:
+      # 🌐 פורט להרצת השרת
       - key: PORT
         value: "5000"
 
@@ -29,13 +30,15 @@ services:
       - key: SCAN_INTERVAL
         value: "10"
 
-      # 📊 Volume & Trend Filters
+      # 📊 Volume & Trending Filters
       - key: MIN_VOLUME
         value: "1000000"
       - key: TRENDING_ONLY
         value: "true"
 
+    # 🩺 בדיקת בריאות לשרת
     healthCheckPath: /
+
 
 
 
