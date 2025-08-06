@@ -72,9 +72,16 @@ app = FastAPI(
     version="2.0.6"
 )
 
-# === קבצים סטטיים – חובה ל־plugin ===
-app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# === קבצים סטטיים – mount רק אם קיימות תיקיות ===
+if os.path.isdir(".well-known"):
+    app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
+else:
+    logging.info("ℹ️ התיקייה '.well-known' לא קיימת – לא בוצע mount.")
+
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+else:
+    logging.info("ℹ️ התיקייה 'static' לא קיימת – לא בוצע mount.")
 
 # === CORS ===
 app.add_middleware(
@@ -132,6 +139,7 @@ async def get_price_route(symbol: str = Query(..., description="Symbol כמו BT
     except Exception as e:
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
+
 
 
 
