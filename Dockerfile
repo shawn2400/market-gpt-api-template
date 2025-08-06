@@ -1,11 +1,11 @@
-# Dockerfile לפרויקט AlgoGPT עם תמיכה מלאה ב־matplotlib, pandas, ו־TA
+# בסיס: Python 3.11 בגרסה רזה
 FROM python:3.11-slim
 
-# מניעת קבצי bytecode + הדפסת לוגים מיד
+# מניעת קבצי bytecode ולוגים מידיים
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# התקנת ספריות מערכת נדרשות עבור pandas, numpy, TA-Lib, matplotlib ועוד
+# התקנת תלויות מערכת עבור pandas, numpy, matplotlib, TA ועוד
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc build-essential libpq-dev libssl-dev libffi-dev \
     libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev \
@@ -16,20 +16,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # הגדרת תיקיית עבודה
 WORKDIR /app
 
-# התקנת תלויות פייתון
+# העתקת קובץ הדרישות והתקנת תלויות
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# העתקת כל קבצי הפרויקט
+# העתקת שאר קבצי הפרויקט
 COPY . .
 
-# הפעלת FastAPI עם Gunicorn ו־Uvicorn Worker
-CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "90"]
-
-
-
-
-
+# פקודת הרצה – הפעלת Gunicorn עם UvicornWorker
+CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "120"]
 
 
 
