@@ -23,10 +23,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # העתקת שאר קבצי הפרויקט
 COPY . .
 
+# ודא שהתיקיות הסטטיות קיימות (גם אם ריקות)
+RUN mkdir -p .well-known static
+
 # פקודת הרצה – הפעלת Gunicorn עם UvicornWorker
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:5000", "--timeout", "120"]
-
-
 
 
 
