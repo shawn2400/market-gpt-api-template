@@ -39,9 +39,11 @@ async def multi_tf_scan_with_ai(
         symbols = set()
         for market in markets:
             try:
-                syms = get_trending_symbols(trending_source=trending_source, market_type=market)
-                if asyncio.iscoroutine(syms):  # אם הפונקציה בטעות async
-                    syms = await syms
+                if asyncio.iscoroutinefunction(get_trending_symbols):
+                    syms = await get_trending_symbols(trending_source=trending_source, market_type=market)
+                else:
+                    syms = get_trending_symbols(trending_source=trending_source, market_type=market)
+
                 symbols.update(syms)
             except Exception as e:
                 logging.warning(f"[multi_tf_scanner] שגיאה בשליפת סימבולים ל-{market}: {e}")
@@ -79,7 +81,7 @@ async def multi_tf_scan_with_ai(
 
             try:
                 last = entries[-1]
-                ai_result = await analyze_with_ai(
+                ai_result = analyze_with_ai(
                     symbol=symbol,
                     rsi=last.get("rsi", 50),
                     adx=last.get("adx", 20),
@@ -87,11 +89,13 @@ async def multi_tf_scan_with_ai(
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
                 )
+                if asyncio.iscoroutine(ai_result):
+                    ai_result = await ai_result
             except Exception as e:
                 logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
                 ai_result = {}
 
-            if ai_result and not ai_result.get("error") and (main_dir.lower() in ai_result.get("signal", "").lower()):
+            if ai_result and isinstance(ai_result, dict) and not ai_result.get("error") and (main_dir.lower() in ai_result.get("signal", "").lower()):
                 output.append({
                     "symbol": symbol,
                     "confluence": len(entries),
@@ -109,6 +113,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
