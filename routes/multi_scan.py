@@ -1,3 +1,5 @@
+# routes/multi_scan.py
+
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 import logging
@@ -16,7 +18,10 @@ async def scan_multi(
     try:
         tf_list = [t.strip() for t in timeframes.split(",") if t.strip()]
         if not tf_list:
-            return JSONResponse(status_code=400, content={"status": "error", "message": "אין טיימפריימים חוקיים לסריקה."})
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "אין טיימפריימים חוקיים לסריקה."}
+            )
 
         trades = await multi_tf_scan_with_ai(
             timeframes=tf_list,
@@ -25,10 +30,20 @@ async def scan_multi(
             trending_only=trending_only,
             trending_source=trending_source
         )
-        return {"status": "success", "count": len(trades), "trades": trades}
+
+        return {
+            "status": "success",
+            "count": len(trades),
+            "trades": trades
+        }
+
     except Exception as e:
         logging.exception("[multi_scan] ❌ שגיאה כללית בסריקה")
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
 
 
 
