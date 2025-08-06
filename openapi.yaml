@@ -4,7 +4,7 @@ info:
   description: >
     AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance.
     כולל תמיכה ב־Futures, Spot, Grid, ניתוחים טכניים, AI, דוחות ו־Auto Executor.
-  version: 2.0.6
+  version: 2.0.7
 
 servers:
   - url: https://market-gpt-api-template.railway.app
@@ -17,20 +17,6 @@ components:
       bearerFormat: JWT
 
   schemas:
-    ScanRequest:
-      type: object
-      properties:
-        market:
-          type: string
-        min_quality:
-          type: integer
-        top:
-          type: integer
-        trending_only:
-          type: boolean
-        trending_source:
-          type: string
-
     TradeRequest:
       type: object
       required: [symbol, side]
@@ -107,24 +93,6 @@ components:
         volume:
           type: number
 
-    MultiTfScanParams:
-      type: object
-      properties:
-        timeframes:
-          type: string
-          default: 5m,15m,1h
-        min_quality:
-          type: integer
-          default: 6
-        top:
-          type: integer
-          default: 10
-        trending_only:
-          type: boolean
-        trending_source:
-          type: string
-          enum: [binance, coingecko, lunarcrush]
-
 paths:
   /:
     get:
@@ -152,37 +120,71 @@ paths:
   /scan/multi:
     get:
       tags: [Trades]
-      summary: סריקת Multi-TF עם AI
+      summary: סריקת שוק לפי ניתוח טכני וציון איכות
       operationId: scanMulti
       parameters:
-        - name: timeframes
+        - name: interval
           in: query
+          required: false
           schema:
             type: string
-            example: "5m,15m,1h"
+            default: "15m"
+          description: טיימפריים לסריקה (למשל "15m", "1h")
         - name: min_quality
           in: query
+          required: false
           schema:
             type: integer
             default: 6
+            minimum: 1
+            maximum: 10
+          description: סף ציון איכות מינימלי (0–10)
         - name: top
           in: query
+          required: false
           schema:
             type: integer
             default: 10
-        - name: trending_only
+            minimum: 1
+          description: מספר הטריידים הטובים ביותר להחזיר
+        - name: market_type
           in: query
-          schema:
-            type: boolean
-        - name: trending_source
-          in: query
+          required: false
           schema:
             type: string
-            enum: [binance, coingecko, lunarcrush]
-            default: binance
+            enum: [futures, spot]
+            default: futures
+          description: סוג שוק לסריקה
       responses:
         '200':
-          description: הצלחה
+          description: רשימת טריידים מסוננים לפי איכות
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        symbol:
+                          type: string
+                        quality_score:
+                          type: number
+                        direction:
+                          type: string
+                          enum: [LONG, SHORT]
+                        trend:
+                          type: string
+                        rsi:
+                          type: number
+                        adx:
+                          type: number
+                        volume:
+                          type: number
+                        market:
+                          type: string
 
   /grid/trade:
     post:
@@ -266,6 +268,7 @@ paths:
 
 security:
   - bearerAuth: []
+
 
 
 
