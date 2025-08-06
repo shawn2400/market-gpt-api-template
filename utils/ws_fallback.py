@@ -1,42 +1,27 @@
-# utils/ws_fallback.py
-
-import threading
-import time
+import asyncio
+import websockets
 import json
 import logging
-import requests
-from collections import defaultdict
-from websocket import WebSocketApp
+import time
+import os
 from binance.client import Client
 from dotenv import load_dotenv
-import os
-import asyncio
 
+# --- טעינת ENV ---
 load_dotenv()
-
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-MARKET_TYPE = os.getenv("MARKET_TYPE", "futures")  # אפשר גם spot
+MARKET_TYPE = os.getenv("MARKET_TYPE", "futures").lower()
 
+# --- Binance REST Client ---
 client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 
-_ws_connections = {}
-_ws_prices = defaultdict(lambda: None)
-_ws_last_ping = {}
+# --- מחירים חיים ---
+_ws_prices = {}
 live_timestamps = {}
-
-MAX_WS_CONNECTIONS = 20
-
-def _futures_ws_url(symbol):
-    return f"wss://fstream.binance.com/ws/{symbol.lower()}@ticker"
-
-def _spot_ws_url(symbol):
-    return f"wss://stream.binance.com:9443/ws/{symbol.lower()}@ticker"
-
-def _get_ws_url(symbol):
-    if MARKET_TYPE == "spot":
-        return _spot_ws_url(symbol)
-    return _futures_ws_url(symbol)
+_ws_task = None
+_ws_symbols = set()
+_WS_RUNNING = False
 
 def _get_rest_price(symbol):
     try:
@@ -50,87 +35,82 @@ def _get_rest_price(symbol):
         logging.warning(f"[ws_fallback] REST price error for {symbol}: {e}")
         return None
 
-def _on_message(ws, message, symbol):
+async def _multi_stream_ws(symbols):
+    global _WS_RUNNING
+    streams = "/".join([f"{s.lower()}@ticker" for s in symbols])
+    url = f"wss://fstream.binance.com/stream?streams={streams}"
+    logging.info(f"[ws_fallback] Connecting Multi-Stream WS: {url}")
+
     try:
-        data = json.loads(message)
-        price = None
-        if "p" in data:
-            price = float(data["p"])
-        elif "c" in data:
-            price = float(data["c"])
-        if price:
-            _ws_prices[symbol] = price
-            live_timestamps[symbol] = time.time()
+        async with websockets.connect(url, ping_interval=None) as ws:
+            _WS_RUNNING = True
+
+            async def ping_forever():
+                while _WS_RUNNING:
+                    try:
+                        await ws.ping()
+                        await asyncio.sleep(25)
+                    except Exception as e:
+                        logging.warning(f"[ws_fallback] Ping error: {e}")
+                        break
+
+            ping_task = asyncio.create_task(ping_forever())
+
+            async for msg in ws:
+                try:
+                    data = json.loads(msg)
+                    payload = data.get("data", {})
+                    symbol = payload.get("s")
+                    price = payload.get("c")
+                    if symbol and price:
+                        _ws_prices[symbol] = float(price)
+                        live_timestamps[symbol] = time.time()
+                except Exception as e:
+                    logging.warning(f"[ws_fallback] Message error: {e}")
+
     except Exception as e:
-        logging.warning(f"[ws_fallback] Message error ({symbol}): {e}")
+        logging.error(f"[ws_fallback] WS connection failed: {e}")
+    finally:
+        _WS_RUNNING = False
+        logging.warning(f"[ws_fallback] WS closed. Will try to reconnect in 5s...")
+        await asyncio.sleep(5)
+        await launch_multi_websocket(list(_ws_symbols))
 
-def _on_error(ws, error, symbol):
-    logging.error(f"[ws_fallback] WebSocket error ({symbol}): {error}")
+async def launch_multi_websocket(symbols):
+    """
+    מפעיל את חיבור ה־Multi-Stream ל־Binance עבור רשימת סימבולים (עד 100).
+    """
+    global _ws_task, _ws_symbols, _WS_RUNNING
+    symbols = [s.upper() for s in symbols]
+    # אם אין שינוי ברשימת הסימבולים, לא מפעיל מחדש
+    if set(symbols) == _ws_symbols and _WS_RUNNING:
+        logging.info("[ws_fallback] WS already running for same symbols, skipping relaunch.")
+        return
+    _ws_symbols = set(symbols)
+    _WS_RUNNING = False
+    await asyncio.sleep(0.2)  # זמן קצר לשחרור WS קודם
 
-def _on_close(ws, close_status_code, close_msg, symbol):
-    logging.warning(f"[ws_fallback] WS closed ({symbol}): {close_status_code} {close_msg}")
-    time.sleep(5)
-    launch_websocket(symbol, force=True)
-
-def _on_open(ws, symbol):
-    logging.info(f"[ws_fallback] WS opened for {symbol}")
-    _ws_last_ping[symbol] = time.time()
-
-def _ping_forever(ws, symbol):
-    while True:
+    # מפסיק חיבור קודם (אם היה)
+    if _ws_task and not _ws_task.done():
+        _ws_task.cancel()
         try:
-            time.sleep(30)
-            if ws.sock and ws.sock.connected:
-                ws.send(json.dumps({"method": "PING"}))
-                _ws_last_ping[symbol] = time.time()
-        except Exception as e:
-            logging.warning(f"[ws_fallback] Ping error ({symbol}): {e}")
-            break
+            await _ws_task
+        except Exception:
+            pass
 
-def launch_websocket(symbol, force=False):
-    symbol = symbol.upper()
-    if not force and symbol in _ws_connections and _ws_connections[symbol].sock and _ws_connections[symbol].sock.connected:
-        logging.info(f"[ws_fallback] WS for {symbol} already running")
-        return
+    # מפעיל WS חדש
+    _ws_task = asyncio.create_task(_multi_stream_ws(symbols))
+    logging.info(f"[ws_fallback] Multi-Stream WS launched for: {', '.join(symbols)}")
 
-    if len(_ws_connections) >= MAX_WS_CONNECTIONS:
-        logging.warning(f"[ws_fallback] Max connections ({MAX_WS_CONNECTIONS}) reached. Skipping {symbol}")
-        return
-
-    ws_url = _get_ws_url(symbol)
-
-    def _run():
-        ws = WebSocketApp(
-            ws_url,
-            on_open=lambda ws: _on_open(ws, symbol),
-            on_message=lambda ws, msg: _on_message(ws, msg, symbol),
-            on_error=lambda ws, err: _on_error(ws, err, symbol),
-            on_close=lambda ws, code, msg: _on_close(ws, code, msg, symbol)
-        )
-        _ws_connections[symbol] = ws
-        ping_thread = threading.Thread(target=_ping_forever, args=(ws, symbol), daemon=True)
-        ping_thread.start()
-        ws.run_forever(ping_interval=20, ping_timeout=10)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    logging.info(f"[ws_fallback] WS thread launched for {symbol}")
-
-def launch_multi_websocket(symbols):
-    count = 0
-    for symbol in symbols:
-        if count >= MAX_WS_CONNECTIONS:
-            logging.warning(f"[ws_fallback] Max WS connections reached. Skipping {symbol}")
-            break
-        launch_websocket(symbol)
-        count += 1
-
-# ✅ מתוקן – גרסה אסינכרונית של get_price
 async def get_price(symbol):
+    """
+    מחזיר מחיר חי (מה־WS). אם אין — נופל ל־REST אוטומטי.
+    """
     symbol = symbol.upper()
     price = _ws_prices.get(symbol)
     if price:
         return price
+    # fallback ל־REST (לא חוסם event loop)
     return await asyncio.to_thread(_get_rest_price, symbol)
 
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
@@ -141,6 +121,11 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
     if not ts:
         return False
     return (time.time() - ts) <= max_age_sec
+
+# דוגמה להפעלה (פשוט תייבא וקרא):
+# await launch_multi_websocket(["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+# price = await get_price("BTCUSDT")
+
 
 
 
