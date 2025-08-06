@@ -1,8 +1,11 @@
+# routes/multi_scan.py
+
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 import logging
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 
+# ❗ חשוב – לא להשתמש ב־prefix כאן
 router = APIRouter()
 
 @router.get("/scan/multi")
@@ -30,6 +33,7 @@ async def scan_multi(
     except Exception as e:
         logging.exception("[multi_scan] ❌ שגיאה כללית בסריקה")
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
 
 
 
