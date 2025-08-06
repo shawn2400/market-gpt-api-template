@@ -23,7 +23,7 @@ async def analyze_symbol(
     frames: Optional[List[str]] = None
 ) -> Optional[dict]:
     try:
-        df = get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
+        df = await get_klines(symbol, interval=interval, limit=limit, market_type=market_type)  # ✅ תיקון await
         if df.empty or len(df) < 50:
             logging.warning(f"[scanner_utils] ⚠️ No data for {symbol} ({interval})")
             return None
@@ -92,6 +92,7 @@ async def scan_all(
 
     logging.info(f"[scanner_utils] ✅ נמצאו {len(filtered)} טריידים איכותיים.")
     return filtered[:top]
+
 
 
 
