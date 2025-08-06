@@ -74,7 +74,7 @@ async def multi_tf_scan_with_ai(
 
             directions = [x["direction"] for x in entries]
             if not directions:
-                logging.warning(f"[multi_tf_scanner] no directions for {symbol}")
+                logging.warning(f"[multi_tf_scanner] אין כיוונים ל-{symbol}")
                 continue
             main_dir = max(set(directions), key=directions.count)
 
@@ -91,7 +91,11 @@ async def multi_tf_scan_with_ai(
 
             try:
                 last = entries[-1]
-                ind = last.get("indicators", {})
+                ind = last.get("indicators") or {}
+                if not isinstance(ind, dict):
+                    logging.warning(f"[multi_tf_scanner] ❌ indicators לא dict עבור {symbol}: {ind}")
+                    continue
+
                 ai_result = await analyze_with_ai(
                     symbol=symbol,
                     rsi=ind.get("rsi", 50),
@@ -100,6 +104,11 @@ async def multi_tf_scan_with_ai(
                     volume=last.get("volume", 1_000_000),
                     pattern=last.get("pattern", "unknown")
                 )
+
+                if asyncio.iscoroutine(ai_result):
+                    logging.error(f"[multi_tf_scanner] ❌ analyze_with_ai החזיר coroutine במקום dict עבור {symbol}")
+                    continue
+
             except Exception as e:
                 logging.error(f"[multi_tf_scanner] שגיאה בניתוח GPT עבור {symbol}: {e}")
                 ai_result = {}
@@ -127,6 +136,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בכל הסריקה: {outer_e}")
         return []
+
 
 
 
