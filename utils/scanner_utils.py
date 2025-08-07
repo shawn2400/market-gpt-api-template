@@ -9,13 +9,14 @@ from utils.quality_score import compute_quality_score
 # Semaphore להגבלת מקביליות
 semaphore = asyncio.Semaphore(5)
 
-async def analyze_symbol(symbol: str, interval: str = "15m", market_type: str = "futures") -> dict:
+async def analyze_symbol(symbol: str, interval: str = "15m", market_type: str = "futures", limit: int = 150, trending_only: bool = False, with_ai: bool = False, frames: list = None) -> dict:
     """
     מבצע ניתוח טכני מלא לסימבול ומחזיר טרייד עם איכות וניתוח.
     """
     try:
         async with semaphore:
-            df = await get_klines(symbol=symbol, interval=interval, limit=150, market_type=market_type)
+            # ✅ get_klines היא סינכרונית – אין await
+            df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
             if df.empty:
                 logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}")
                 return None
@@ -36,7 +37,13 @@ async def analyze_symbol(symbol: str, interval: str = "15m", market_type: str = 
                 "trend": "UP" if df["supertrend_dir"].iloc[-1] == 1 else "DOWN",
                 "direction": "LONG" if df["supertrend_dir"].iloc[-1] == 1 else "SHORT",
                 "volume": round(df["volume"].iloc[-1], 2),
-                "market": market_type
+                "market": market_type,
+                "frames": frames or [],
+                "indicators": {
+                    "rsi": round(df["rsi"].iloc[-1], 2),
+                    "adx": round(df["adx"].iloc[-1], 2),
+                    "pattern": df.get("pattern", ["unknown"])[-1] if "pattern" in df else "unknown"
+                }
             }
 
     except Exception as e:
@@ -81,6 +88,7 @@ async def scan_all(
     except Exception as e:
         logging.error(f"[scan_all] ❌ שגיאה בסריקה: {e}")
         return []
+
 
 
 
