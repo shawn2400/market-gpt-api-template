@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from utils.ws_fallback import launch_multi_websocket, get_price
+from auto_executor import start_executor, stop_executor, is_executor_running
 
 # === טעינת ENV ===
 load_dotenv()
@@ -74,7 +75,6 @@ from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
-from auto_executor import start_executor, stop_executor, is_executor_running
 
 app.include_router(ai_router)
 app.include_router(trade_router)
@@ -87,6 +87,7 @@ async def startup_event():
     logging.info("[main] Server startup event triggered")
     symbols = load_watchlist_symbols()
     await launch_multi_websocket(symbols)
+    logging.info(f"[main] WebSocket started for symbols: {symbols}")
 
 # === בדיקת חיים ===
 @app.get("/healthz")
@@ -131,6 +132,7 @@ def get_routes():
     routes_info = [{"path": route.path, "name": route.name} for route in app.router.routes]
     logging.info(f"[debug] Registered routes: {routes_info}")
     return routes_info
+
 
 
 
