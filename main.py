@@ -30,13 +30,13 @@ logging.info(f"[ENV] OpenAI API Key Loaded: {'Yes' if OPENAI_API_KEY else 'No'}"
 logging.info(f"[ENV] Max WS Symbols: {MAX_WS_SYMBOLS}")
 
 # === קריאת רשימת מעקב עם חיתוך לפי הגבלה ===
-def load_watchlist_symbols():
+def load_watchlist_symbols() -> list[str]:
     try:
-        with open("watchlist.json", "r") as f:
+        with open("watchlist.json", "r", encoding="utf-8") as f:
             data = json.load(f)
             symbols = [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
             if not symbols:
-                raise ValueError("רשימה ריקה")
+                raise ValueError("רשימת המעקב ריקה")
             logging.info(f"[watchlist] Loaded {len(symbols)} symbols, trimming to {MAX_WS_SYMBOLS}")
             return symbols[:MAX_WS_SYMBOLS]
     except Exception as e:
@@ -132,6 +132,7 @@ def get_routes():
     routes_info = [{"path": route.path, "name": route.name} for route in app.router.routes]
     logging.info(f"[debug] Registered routes: {routes_info}")
     return routes_info
+
 
 
 
