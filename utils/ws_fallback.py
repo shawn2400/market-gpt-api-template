@@ -42,12 +42,12 @@ async def _multi_stream_ws(symbols):
     max_backoff = 60
 
     symbols = [s.upper() for s in symbols]
-    while True:
-        streams = "/".join([f"{s.lower()}@ticker" for s in symbols])
-        url = f"wss://fstream.binance.com/stream?streams={streams}"
-        logging.info(f"[ws_fallback] Connecting Multi-Stream WS: {url}")
+    try:
+        while True:
+            streams = "/".join([f"{s.lower()}@ticker" for s in symbols])
+            url = f"wss://fstream.binance.com/stream?streams={streams}"
+            logging.info(f"[ws_fallback] Connecting Multi-Stream WS: {url}")
 
-        try:
             async with websockets.connect(url, ping_interval=None) as ws:
                 _WS_RUNNING = True
 
@@ -56,32 +56,47 @@ async def _multi_stream_ws(symbols):
                         try:
                             await ws.ping()
                             await asyncio.sleep(25)
+                        except asyncio.CancelledError:
+                            logging.info("[ws_fallback] Ping task cancelled.")
+                            break
                         except Exception as e:
                             logging.warning(f"[ws_fallback] Ping error: {e}")
                             break
 
                 ping_task = asyncio.create_task(ping_forever())
 
-                async for msg in ws:
+                try:
+                    async for msg in ws:
+                        try:
+                            data = json.loads(msg)
+                            payload = data.get("data", {})
+                            symbol = payload.get("s")
+                            price = payload.get("c")
+                            if symbol and price:
+                                _ws_prices[symbol] = float(price)
+                                live_timestamps[symbol] = time.time()
+                        except Exception as e:
+                            logging.warning(f"[ws_fallback] Message error: {e}")
+                except asyncio.CancelledError:
+                    logging.info("[ws_fallback] WebSocket listener cancelled.")
+                    await ws.close()
+                    break
+                finally:
+                    ping_task.cancel()
                     try:
-                        data = json.loads(msg)
-                        payload = data.get("data", {})
-                        symbol = payload.get("s")
-                        price = payload.get("c")
-                        if symbol and price:
-                            _ws_prices[symbol] = float(price)
-                            live_timestamps[symbol] = time.time()
-                    except Exception as e:
-                        logging.warning(f"[ws_fallback] Message error: {e}")
+                        await ping_task
+                    except asyncio.CancelledError:
+                        pass
 
-        except Exception as e:
-            logging.error(f"[ws_fallback] WS connection failed: {e}")
-
+            _WS_RUNNING = False
+            wait_time = backoff + random.uniform(0, 2)  # jitter
+            logging.warning(f"[ws_fallback] WS closed. Will try to reconnect in {wait_time:.1f}s...")
+            await asyncio.sleep(wait_time)
+            backoff = min(backoff * 2, max_backoff)
+    except asyncio.CancelledError:
+        logging.info("[ws_fallback] _multi_stream_ws cancelled, exiting cleanly.")
         _WS_RUNNING = False
-        wait_time = backoff + random.uniform(0, 2)  # jitter to avoid sync retries
-        logging.warning(f"[ws_fallback] WS closed. Will try to reconnect in {wait_time:.1f}s...")
-        await asyncio.sleep(wait_time)
-        backoff = min(backoff * 2, max_backoff)
+        raise
 
 async def launch_multi_websocket(symbols):
     global _ws_task, _ws_symbols, _WS_RUNNING
@@ -116,7 +131,6 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
         return False
     return (time.time() - ts) <= max_age_sec
 
-
 async def launch_filtered_websocket(trade_data: list, min_quality: float = 6.0, max_symbols: int = 15):
     """
     מפעיל WebSocket רק עבור סמלים עם ציון איכות מעל סף.
@@ -136,6 +150,7 @@ async def launch_filtered_websocket(trade_data: list, min_quality: float = 6.0, 
 
     except Exception as e:
         logging.error(f"[ws_fallback] ❌ שגיאה ב-launch_filtered_websocket: {e}")
+
 
 
 
