@@ -1,52 +1,53 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from enum import Enum
-from utils.trade_executor import execute_trade_live
-from utils.ws_fallback import get_price
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
+from utils.multi_tf_scanner import multi_tf_scan_with_ai
+from utils.ai_analysis import predict_optimal_sl_tp
 
 router = APIRouter()
 
-class SideEnum(str, Enum):
-    LONG = "LONG"
-    SHORT = "SHORT"
-
-class TradeRequest(BaseModel):
-    symbol: str
-    side: SideEnum  # רק LONG או SHORT
-    entry: float = None  # אם לא ניתן – יילקח מחיר שוק
-    sl: float = None
-    tp: float = None
-    budget: float = 100
-    leverage: int = 10
-
-@router.post("/trade")
-async def place_trade(req: TradeRequest):
-    symbol = req.symbol.upper()
-
-    # אם לא סופק מחיר כניסה – נשלוף מה־WebSocket
-    price = req.entry or await get_price(symbol)
-    if price is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"❌ לא ניתן לקבל מחיר עדכני עבור {symbol} – טרייד לא בוצע"
-        )
-
-    # ביצוע טרייד חי בפועל
-    trade_result = await execute_trade_live(
-        symbol=symbol,
-        entry=price,
-        stop=req.sl,
-        tp=req.tp,
-        direction=req.side.value,
-        leverage=req.leverage,
-        budget_usd=req.budget
+@router.get("/trade/best")
+async def get_best_trade(
+    min_quality: int = Query(6, ge=1, le=10, description="ציון איכות מינימלי"),
+    top: int = Query(1, ge=1, description="מספר הטריידים שברצונך לקבל"),
+    timeframes: Optional[str] = Query("5m,15m,1h", description="טיימפריימים"),
+    market_type: Optional[str] = Query("futures", description="סוג שוק"),
+    trending_only: Optional[bool] = Query(True, description="האם לסנן רק טרנדים"),
+    trending_source: Optional[str] = Query("coingecko", description="מקור טרנדים")
+):
+    tfs = tuple(tf.strip() for tf in timeframes.split(","))
+    results = await multi_tf_scan_with_ai(
+        timeframes=tfs,
+        markets=(market_type,),
+        min_quality=min_quality,
+        top=top,
+        trending_only=trending_only,
+        trending_source=trending_source
     )
 
-    if trade_result.get("status") == "error":
-        raise HTTPException(
-            status_code=400,
-            detail=trade_result.get("error", "שגיאה לא ידועה")
-        )
+    if not results:
+        raise HTTPException(status_code=404, detail="לא נמצאו טריידים איכותיים כרגע")
 
-    return {"status": "success", "trade": trade_result["result"]}
+    best_trade = results[0]
+
+    # חישוב SL/TP חכם בעזרת GPT או fallback
+    sl, tp = await predict_optimal_sl_tp(
+        symbol=best_trade["symbol"],
+        direction=best_trade["direction"],
+        entry_price=best_trade.get("entry") or 0,
+        atr=best_trade.get("atr")
+    )
+
+    trade_info = {
+        "symbol": best_trade["symbol"],
+        "direction": best_trade["direction"],
+        "quality_score": best_trade["quality_score"],
+        "entry": best_trade.get("entry") or "שימוש במחיר שוק",
+        "sl": sl,
+        "tp": tp,
+        "leverage": 10,
+        "budget_usd": 100,
+    }
+
+    return {"best_trade": trade_info}
+
 
