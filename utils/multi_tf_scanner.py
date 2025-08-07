@@ -1,5 +1,3 @@
-# utils/multi_tf_scanner.py
-
 import asyncio
 import logging
 from collections import defaultdict
@@ -40,6 +38,28 @@ async def safe_ai_analyze(tf_results):
         logging.error(f"[safe_ai_analyze] ❌ שגיאת AI: {e}")
         return None
 
+async def fallback_scan_manual(symbol: str, timeframes: Tuple[str] = ("15m", "1h"), market: str = "futures", trending_only: bool = False):
+    """
+    סריקה ידנית לפי סימבול יחיד, לטיפול במצב שאין נתונים חיים או כשל בסריקה האוטומטית.
+    מחזירה ניתוח דומה ל־multi_tf_scan_with_ai עבור סימבול בודד.
+    """
+    logging.info(f"[multi_tf_scanner] 🔄 fallback_scan_manual עבור {symbol}")
+
+    tf_results = []
+    for tf in timeframes[:MAX_TFS]:
+        result = await safe_analyze(symbol, tf, market, trending_only)
+        if result:
+            tf_results.append(result)
+
+    if not tf_results:
+        logging.warning(f"[multi_tf_scanner] ⚠️ לא נמצאו תוצאות ל־{symbol} ב־fallback_scan_manual")
+        return []
+
+    combined_result = await safe_ai_analyze(tf_results)
+    if combined_result and isinstance(combined_result, dict):
+        return [combined_result]
+    return []
+
 async def multi_tf_scan_with_ai(
     timeframes: Tuple[str] = ("5m", "15m", "1h"),
     markets: Tuple[str] = ("futures",),
@@ -78,6 +98,12 @@ async def multi_tf_scan_with_ai(
                     if combined_result and isinstance(combined_result, dict) and combined_result.get("quality_score", 0) >= min_quality:
                         results.append(combined_result)
 
+        if not results:
+            logging.warning("[multi_tf_scanner] ⚠️ לא נמצאו תוצאות בסריקה החיה, מפעילים fallback ידני")
+            # לדוגמה: ניתן לסרוק סימבול מוביל ידנית (למשל BTCUSDT)
+            fallback_results = await fallback_scan_manual("BTCUSDT", timeframes=timeframes, market=markets[0], trending_only=trending_only)
+            results.extend(fallback_results)
+
         sorted_results = sorted(results, key=lambda x: x.get("quality_score", 0), reverse=True)
         top_results = sorted_results[:top]
 
@@ -87,6 +113,7 @@ async def multi_tf_scan_with_ai(
     except Exception as e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה כללית: {e}")
         return []
+
 
 
 
