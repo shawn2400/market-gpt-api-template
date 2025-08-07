@@ -4,9 +4,12 @@ from fastapi import APIRouter, Query
 from typing import Optional
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/scan",
+    tags=["Multi-TF Scanner"]
+)
 
-@router.get("/scan/multi")
+@router.get("/multi")
 async def scan_multi(
     interval: Optional[str] = Query("5m,15m,1h", description="רשימת טיימפריימים מופרדים בפסיקים"),
     min_quality: int = Query(6, ge=1, le=10, description="ציון איכות מינימלי (0–10)"),
