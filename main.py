@@ -32,7 +32,7 @@ REQUIRED_ENV_VARS = [
 ]
 for v in REQUIRED_ENV_VARS:
     if not os.environ.get(v):
-        print(f" Environment variable missing: {v}")
+        raise SystemExit(f"❌ Environment variable missing: {v}")
 
 # === משתנים מערכתיים ===
 AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
@@ -54,23 +54,27 @@ def load_watchlist_symbols():
         return ["BTCUSDT"]
 
 # === WebSocket חכם ===
-WS_LAUNCHED = False
+WS_LOCK_PATH = "/tmp/ws_running.lock"
 
 def start_ws_multi_background():
-    global WS_LAUNCHED
-    if WS_LAUNCHED:
-        logging.info("[main] WebSocket כבר פעיל – דילוג.")
+    if os.path.exists(WS_LOCK_PATH):
+        logging.info("[main] 🔒 WebSocket כבר מופעל בתהליך אחר – דילוג.")
         return
 
     symbols = load_watchlist_symbols()
 
     def runner():
-        asyncio.run(launch_multi_websocket(symbols))
+        try:
+            with open(WS_LOCK_PATH, "w") as f:
+                f.write("active")
+            asyncio.run(launch_multi_websocket(symbols))
+        finally:
+            if os.path.exists(WS_LOCK_PATH):
+                os.remove(WS_LOCK_PATH)
 
     t = threading.Thread(target=runner, daemon=True)
     t.start()
     logging.info(f"[main] 🚀 WebSocket הופעל עבור: {symbols}")
-    WS_LAUNCHED = True
 
 # === יצירת FastAPI ===
 app = FastAPI(
@@ -108,9 +112,7 @@ app.include_router(multi_router)
 # === אתחול רקע ===
 @app.on_event("startup")
 def startup_event():
-    global WS_LAUNCHED
-    if not WS_LAUNCHED:
-        start_ws_multi_background()
+    start_ws_multi_background()
 
 # === בדיקת חיים ===
 @app.get("/healthz")
@@ -153,3 +155,4 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
