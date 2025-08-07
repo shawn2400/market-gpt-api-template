@@ -84,7 +84,7 @@ from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.multi_scan import router as multi_router
-from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
+from auto_executor import start_executor, stop_executor, is_executor_running
 
 app.include_router(ai_router)
 app.include_router(trade_router)
@@ -108,13 +108,13 @@ async def root():
 
 # === שליטה ב־AutoExecutor ===
 @app.get("/executor/start")
-async def start_executor():
-    started = start_executor_loop()
+async def start_executor_route():
+    started = start_executor()
     return {"status": "started" if started else "already running"}
 
 @app.get("/executor/stop")
-async def stop_executor():
-    stopped = stop_executor_loop()
+async def stop_executor_route():
+    stopped = stop_executor()
     return {"status": "stopped" if stopped else "not running"}
 
 @app.get("/executor/status")
@@ -137,6 +137,7 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
 
 
 
