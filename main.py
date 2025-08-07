@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # === טעינת ENV ===
 load_dotenv()
 
-# === ייבוא לוגיקה ===
+# === ייבוא ראוטים ולוגיקה ===
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -92,7 +92,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ראוטים ===
+# === ראוטים ראשיים ===
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
@@ -139,6 +139,12 @@ async def get_price_route(symbol: str = Query(..., description="Symbol כמו BT
     except Exception as e:
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
+
+# === בדיקת ראוטים פעילים ===
+@app.get("/debug/routes")
+def get_routes():
+    return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
 
 
 
