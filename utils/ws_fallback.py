@@ -117,3 +117,25 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
     return (time.time() - ts) <= max_age_sec
 
 
+async def launch_filtered_websocket(trade_data: list, min_quality: float = 6.0, max_symbols: int = 15):
+    """
+    מפעיל WebSocket רק עבור סמלים עם ציון איכות מעל סף.
+    trade_data: רשימת מילונים עם keys 'symbol' ו- 'quality_score'
+    """
+    try:
+        filtered_symbols = [entry["symbol"].upper() for entry in trade_data if entry.get("quality_score", 0) >= min_quality]
+        symbols_to_launch = filtered_symbols[:max_symbols]
+
+        if not symbols_to_launch:
+            logging.warning("[ws_fallback] ⚠️ לא נמצאו סמלים שעומדים בסף האיכות להפעלה")
+            return
+
+        logging.info(f"[ws_fallback] מפעיל WebSocket עבור סמלים (מסונן): {symbols_to_launch}")
+
+        await launch_multi_websocket(symbols_to_launch)
+
+    except Exception as e:
+        logging.error(f"[ws_fallback] ❌ שגיאה ב-launch_filtered_websocket: {e}")
+
+
+
