@@ -12,19 +12,14 @@ MAX_TFS = 3
 async def safe_analyze(symbol, tf, market, trending_only):
     try:
         async with semaphore:
-            # ✅ assume analyze_symbol is סינכרונית – לכן נריץ ב־Thread Pool
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: analyze_symbol(
-                    symbol=symbol,
-                    market_type=market,
-                    interval=tf,
-                    limit=100,
-                    trending_only=trending_only,
-                    with_ai=False,
-                    frames=[tf]
-                )
+            result = await analyze_symbol(
+                symbol=symbol,
+                market_type=market,
+                interval=tf,
+                limit=100,
+                trending_only=trending_only,
+                with_ai=False,
+                frames=[tf]
             )
             return result
     except Exception as e:
@@ -42,6 +37,7 @@ async def multi_tf_scan_with_ai(
     try:
         logging.info(f"[multi_tf_scanner] התחלת סריקה | tf={timeframes} markets={markets} trending={trending_only}")
 
+        # --- שליפת סימבולים טרנדיים ---
         symbols = set()
         for market in markets:
             try:
@@ -57,6 +53,7 @@ async def multi_tf_scan_with_ai(
         symbols = list(symbols)[:MAX_SYMBOLS]
         timeframes = list(timeframes)[:MAX_TFS]
 
+        # --- הרצת סריקות ---
         tasks = [
             safe_analyze(symbol, tf, markets[0], trending_only)
             for tf in timeframes
@@ -64,6 +61,7 @@ async def multi_tf_scan_with_ai(
         ]
         raw_results = await asyncio.gather(*tasks)
 
+        # --- מיון לפי איכות ---
         grouped = defaultdict(list)
         for result in raw_results:
             if result and isinstance(result, dict) and result.get("quality_score", 0) >= min_quality:
@@ -72,8 +70,9 @@ async def multi_tf_scan_with_ai(
         output = []
         for symbol, entries in grouped.items():
             if len(entries) < 2:
-                continue
+                continue  # נדרש לפחות 2 טיימפריימים
 
+            # מציאת כיוון דומיננטי
             directions = [x["direction"] for x in entries]
             if not directions:
                 continue
@@ -86,13 +85,14 @@ async def multi_tf_scan_with_ai(
                 avg_q = sum(x["quality_score"] for x in filtered_entries) / len(filtered_entries)
                 last = entries[-1]
                 ind = last.get("indicators", {})
+
                 ai_result = await analyze_with_ai(
                     symbol=symbol,
                     rsi=ind.get("rsi", 50),
                     adx=ind.get("adx", 20),
                     trend=main_dir,
                     volume=last.get("volume", 1_000_000),
-                    pattern=last.get("pattern", "unknown")
+                    pattern=ind.get("pattern", "unknown")
                 )
             except Exception as e:
                 logging.error(f"[multi_tf_scanner] שגיאה בניתוח AI עבור {symbol}: {e}")
@@ -120,6 +120,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בסריקה: {outer_e}")
         return []
+
 
 
 
