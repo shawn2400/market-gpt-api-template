@@ -1,57 +1,25 @@
 # utils/watchlist_utils.py
-
 import json
-import os
-import asyncio
-from typing import List, Dict
-from utils.trending_utils import get_trending_symbols
-from utils.scanner_utils import analyze_symbol  # ✅ ייבוא async
+import logging
 
-WATCHLIST_FILE = "watchlist.json"
-
-def load_watchlist() -> List[Dict]:
-    """ טוען את רשימת המעקב מהדיסק """
-    if not os.path.exists(WATCHLIST_FILE):
+def load_watchlist(min_quality: int = 6) -> list[dict]:
+    """
+    טוען את קובץ watchlist.json ומסנן לפי ציון איכות מינימלי.
+    מחזיר רשימה של מילונים עם keys: symbol, direction, quality_score.
+    """
+    try:
+        with open("watchlist.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+            filtered = [
+                entry for entry in data
+                if isinstance(entry, dict) and entry.get("quality_score", 0) >= min_quality
+            ]
+            logging.info(f"[watchlist] Loaded {len(filtered)} symbols with quality >= {min_quality}")
+            return filtered
+    except Exception as e:
+        logging.warning(f"[watchlist] ⚠️ Error loading watchlist.json: {e} – returning empty list")
         return []
-    with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
 
-def save_watchlist(watchlist: List[Dict]) -> None:
-    """ שומר את רשימת המעקב לקובץ """
-    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-        json.dump(watchlist, f, ensure_ascii=False, indent=2)
-
-async def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str = "futures") -> None:
-    """
-    בונה אוטומטית רשימת מעקב לפי trending + ניתוח איכות.
-    סף איכות ברירת מחדל: 6
-    """
-    symbols = get_trending_symbols(top=top, market_type=market)
-    watchlist = []
-
-    for symbol in symbols:
-        try:
-            result = await analyze_symbol(symbol=symbol, market_type=market, interval="15m")
-            if not isinstance(result, dict):
-                print(f"[Watchlist] ⚠️ תוצאה לא תקינה עבור {symbol}: {result}")
-                continue
-            quality = result.get("quality_score")
-            direction = result.get("direction")
-            if quality is not None and quality >= min_quality and direction:
-                watchlist.append({
-                    "symbol": symbol,
-                    "direction": direction,
-                    "quality_score": quality
-                })
-        except Exception as e:
-            print(f"[Watchlist] ⚠️ שגיאה בניתוח {symbol}: {e}")
-
-    save_watchlist(watchlist)
-    print(f"[Watchlist] ✅ נשמרו {len(watchlist)} סמלים לקובץ watchlist.json")
-
-# אם אתה מריץ ישירות — זה מאפשר להריץ:
-if __name__ == "__main__":
-    asyncio.run(generate_trending_watchlist())
 
 
 
