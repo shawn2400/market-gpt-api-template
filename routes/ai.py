@@ -1,33 +1,15 @@
-from fastapi import APIRouter
-from pydantic import BaseModel
-from utils.ai_analysis import analyze_with_ai
+from fastapi import APIRouter, Query, HTTPException
+from utils.multi_tf_scanner import fallback_scan_manual
 
 router = APIRouter()
 
-class AIAnalysisRequest(BaseModel):
-    symbol: str
-    rsi: float
-    adx: float
-    trend: str
-    pattern: str
-    volume: float
+@router.get("/manual-scan")
+async def manual_scan(symbol: str = Query(..., description="סימבול לקריאת ניתוח ידני")):
+    results = await fallback_scan_manual(symbol.upper())
+    if not results:
+        raise HTTPException(status_code=404, detail=f"לא נמצאו תוצאות עבור {symbol}")
+    return {"results": results}
 
-@router.post("/ai-analyze")
-async def ai_analyze(data: AIAnalysisRequest):
-    try:
-        result = await analyze_with_ai(  # ✅ חובה await
-            symbol=data.symbol,
-            rsi=data.rsi,
-            adx=data.adx,
-            trend=data.trend,
-            pattern=data.pattern,
-            volume=data.volume
-        )
-        if "error" in result:
-            return {"status": "error", "message": result["error"]}
-        return {"status": "success", "analysis": result}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 
