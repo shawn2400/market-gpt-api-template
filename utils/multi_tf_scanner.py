@@ -1,28 +1,32 @@
-# utils/multi_tf_scanner.py
-
 import asyncio
 import logging
 from collections import defaultdict
 
 from utils.trending_utils import get_trending_symbols
 from utils.ai_analysis import analyze_with_ai
-from utils import scanner_utils
+from utils.scanner_utils import analyze_symbol, semaphore
 
 MAX_SYMBOLS = 20
 MAX_TFS = 3
 
 async def safe_analyze(symbol, tf, market, trending_only):
     try:
-        async with scanner_utils.semaphore:
-            return await scanner_utils.analyze_symbol(
-                symbol=symbol,
-                market_type=market,
-                interval=tf,
-                limit=100,
-                trending_only=trending_only,
-                with_ai=False,
-                frames=[tf]
+        async with semaphore:
+            # ✅ assume analyze_symbol is סינכרונית – לכן נריץ ב־Thread Pool
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: analyze_symbol(
+                    symbol=symbol,
+                    market_type=market,
+                    interval=tf,
+                    limit=100,
+                    trending_only=trending_only,
+                    with_ai=False,
+                    frames=[tf]
+                )
             )
+            return result
     except Exception as e:
         logging.error(f"[multi_tf_scanner] ❌ {symbol}@{tf} נכשל: {e}")
         return None
@@ -116,6 +120,7 @@ async def multi_tf_scan_with_ai(
     except Exception as outer_e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה קריטית בסריקה: {outer_e}")
         return []
+
 
 
 
