@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from typing import List, Tuple
+import inspect
 
 from utils.trending_utils import get_trending_symbols
 from utils.scanner_utils import analyze_symbol, semaphore
@@ -15,8 +16,7 @@ MAX_TFS = 3
 async def safe_analyze(symbol, tf, market, trending_only):
     try:
         async with semaphore:
-            logging.info(f"[safe_analyze] 🚀 Start analyzing {symbol}@{tf}")
-            result = await analyze_symbol(
+            return await analyze_symbol(
                 symbol=symbol,
                 market_type=market,
                 interval=tf,
@@ -25,10 +25,19 @@ async def safe_analyze(symbol, tf, market, trending_only):
                 with_ai=False,
                 frames=[tf]
             )
-            logging.info(f"[safe_analyze] ✅ Finished analyzing {symbol}@{tf}")
-            return result
     except Exception as e:
-        logging.error(f"[safe_analyze] ❌ analyze_symbol נכשל עבור {symbol}@{tf}: {e}")
+        logging.error(f"[multi_tf_scanner] ❌ analyze_symbol נכשל עבור {symbol}@{tf}: {e}")
+        return None
+
+async def safe_ai_analyze(tf_results):
+    try:
+        result = await analyze_with_ai(tf_results)
+        if inspect.iscoroutine(result):
+            logging.warning("[safe_ai_analyze] ⚠️ קיבלנו coroutine – מבצעים await נוסף")
+            result = await result
+        return result
+    except Exception as e:
+        logging.error(f"[safe_ai_analyze] ❌ שגיאת AI: {e}")
         return None
 
 async def multi_tf_scan_with_ai(
@@ -40,24 +49,19 @@ async def multi_tf_scan_with_ai(
     trending_source: str = "coingecko"
 ) -> List[dict]:
     try:
-        logging.info(f"[multi_tf_scanner] ▶️ התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}")
+        logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}")
+
         results = []
 
         for market in markets:
-            # 🔍 שליפת סמלים טרנדיים עם טיפול שגיאה
-            try:
-                symbols = get_trending_symbols(
-                    trending_source=trending_source,
-                    market_type=market,
-                    top=MAX_SYMBOLS
-                )
-                logging.info(f"[multi_tf_scanner] ✅ {len(symbols)} סמלים נטענו מ־{trending_source} ({market})")
-            except Exception as e:
-                logging.error(f"[multi_tf_scanner] ❌ שגיאה ב־get_trending_symbols: {e}")
-                symbols = []
+            symbols = get_trending_symbols(
+                trending_source=trending_source,
+                market_type=market,
+                top=MAX_SYMBOLS
+            )
 
             if not symbols:
-                logging.warning(f"[multi_tf_scanner] ⚠️ אין סמלים לסריקה בשוק {market}")
+                logging.warning(f"[multi_tf_scanner] ⚠️ לא נמצאו סמלים למרקט {market}")
                 continue
 
             for symbol in symbols:
@@ -69,30 +73,21 @@ async def multi_tf_scan_with_ai(
                         tf_results.append(result)
 
                 if tf_results:
-                    try:
-                        combined_result = await analyze_with_ai(tf_results)
-                        if asyncio.iscoroutine(combined_result):
-                            logging.error(f"[multi_tf_scanner] ❗ analyze_with_ai החזיר coroutine! חסר await?")
-                            combined_result = await combined_result
+                    combined_result = await safe_ai_analyze(tf_results)
 
-                        score = combined_result.get("quality_score", 0)
-                        logging.info(f"[multi_tf_scanner] 🎯 {symbol} קיבל ציון: {score}")
+                    if combined_result and isinstance(combined_result, dict) and combined_result.get("quality_score", 0) >= min_quality:
+                        results.append(combined_result)
 
-                        if score >= min_quality:
-                            results.append(combined_result)
-                    except Exception as e:
-                        logging.error(f"[multi_tf_scanner] ❌ analyze_with_ai נכשל עבור {symbol}: {e}")
-
-        # ✅ סידור וסינון לפי ציון איכות
         sorted_results = sorted(results, key=lambda x: x.get("quality_score", 0), reverse=True)
         top_results = sorted_results[:top]
 
-        logging.info(f"[multi_tf_scanner] 🟢 סיום סריקה: נמצאו {len(top_results)} טריידים מתאימים")
+        logging.info(f"[multi_tf_scanner] ✅ נמצאו {len(top_results)} טריידים מעל ציון {min_quality}")
         return top_results
 
     except Exception as e:
-        logging.exception(f"[multi_tf_scanner] ❌ שגיאה כללית: {e}")
+        logging.error(f"[multi_tf_scanner] ❌ שגיאה כללית: {e}")
         return []
+
 
 
 
