@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from utils.ws_fallback import launch_multi_websocket, get_price
 from auto_executor import start_executor, stop_executor, is_executor_running
 
-# === טעינת ENV ===
+# === טעינת משתני סביבה ===
 load_dotenv()
 
 # === הגדרת לוגים מפורטים ===
@@ -18,7 +18,7 @@ logging.basicConfig(
     force=True
 )
 
-# === קריאת מפתחות והגדרות ===
+# === קריאת מפתחות API והגדרות כלליות ===
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -29,7 +29,7 @@ logging.info(f"[ENV] Binance API Secret Loaded: {'Yes' if BINANCE_API_SECRET els
 logging.info(f"[ENV] OpenAI API Key Loaded: {'Yes' if OPENAI_API_KEY else 'No'}")
 logging.info(f"[ENV] Max WS Symbols: {MAX_WS_SYMBOLS}")
 
-# === קריאת רשימת מעקב עם חיתוך לפי הגבלה ===
+# === פונקציה לקריאת רשימת מעקב עם הגבלת כמות סימבולים ===
 def load_watchlist_symbols() -> list[str]:
     try:
         with open("watchlist.json", "r", encoding="utf-8") as f:
@@ -43,14 +43,14 @@ def load_watchlist_symbols() -> list[str]:
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e} – נטען BTCUSDT בלבד")
         return ["BTCUSDT"]
 
-# === יצירת FastAPI ===
+# === יצירת מופע FastAPI ===
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב-Binance (Futures, Spot, Grid, AI, SL/TP)",
     version="2.0.7"
 )
 
-# === קבצים סטטיים ===
+# === הגדרת קבצים סטטיים אם קיימים ===
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
 else:
@@ -61,7 +61,7 @@ if os.path.isdir("static"):
 else:
     logging.info("ℹ️ התיקייה 'static' לא קיימת – mount לא בוצע.")
 
-# === CORS ===
+# === הגדרת Middleware ל-CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -70,7 +70,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ראוטים ===
+# === ייבוא ראוטרים והוספתם לאפליקציה ===
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -81,7 +81,7 @@ app.include_router(trade_router)
 app.include_router(grid_router)
 app.include_router(multi_router)
 
-# === אתחול WebSocket אסינכרוני ב־startup ===
+# === אתחול WebSocket אסינכרוני בעת עליית השרת ===
 @app.on_event("startup")
 async def startup_event():
     logging.info("[main] Server startup event triggered")
@@ -89,17 +89,17 @@ async def startup_event():
     await launch_multi_websocket(symbols)
     logging.info(f"[main] WebSocket started for symbols: {symbols}")
 
-# === בדיקת חיים ===
+# === בדיקת בריאות השירות ===
 @app.get("/healthz")
 async def healthz():
     return {"status": "healthy ✅"}
 
-# === ברירת מחדל ===
+# === נתיב ברירת מחדל ===
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅"}
 
-# === שליטה ב־AutoExecutor ===
+# === שליטה על AutoExecutor ===
 @app.get("/executor/start")
 async def start_executor_route():
     started = start_executor()
@@ -114,7 +114,7 @@ async def stop_executor_route():
 async def executor_status_route():
     return {"running": is_executor_running()}
 
-# === שליפת מחיר ===
+# === שליפת מחיר חי לסימבול ===
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="סימבול כמו BTCUSDT")):
     try:
@@ -126,12 +126,13 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
 
-# === ראוטים לבדיקה ===
+# === נתיב בדיקה לקבלת רשימת ראוטים רשומים ===
 @app.get("/debug/routes")
 def get_routes():
     routes_info = [{"path": route.path, "name": route.name} for route in app.router.routes]
     logging.info(f"[debug] Registered routes: {routes_info}")
     return routes_info
+
 
 
 
