@@ -4,8 +4,7 @@ import logging
 
 def load_watchlist(min_quality: int = 6) -> list[dict]:
     """
-    טוען את קובץ watchlist.json ומסנן לפי ציון איכות מינימלי.
-    מחזיר רשימה של מילונים עם keys: symbol, direction, quality_score.
+    טוען את קובץ watchlist.json ומחזיר רק את הסמלים שעומדים בסף איכות מינימלי.
     """
     try:
         with open("watchlist.json", "r", encoding="utf-8") as f:
@@ -19,6 +18,7 @@ def load_watchlist(min_quality: int = 6) -> list[dict]:
     except Exception as e:
         logging.warning(f"[watchlist] ⚠️ Error loading watchlist.json: {e} – returning empty list")
         return []
+
 
 
 
