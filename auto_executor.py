@@ -5,10 +5,12 @@ import asyncio
 import logging
 import threading
 from dotenv import load_dotenv
+
 from utils.watchlist_utils import load_watchlist
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.trade_executor import execute_trade_live
 from utils.ai_analysis import predict_optimal_sl_tp
+from utils.ws_fallback import get_price, is_price_fresh
 
 # === הגדרות סביבתיות ===
 load_dotenv()
@@ -48,11 +50,19 @@ async def executor_loop():
 
             for trade in scan_results:
                 symbol = trade["symbol"]
-                entry = trade["entry"]
                 direction = trade["main_direction"].upper()
 
-                sl_tp = await predict_optimal_sl_tp(entry_price=entry, direction=direction, symbol=symbol)
+                # מחיר כניסה חי
+                entry = await get_price(symbol)
+                if not entry:
+                    logging.warning(f"[AUTO] ⚠️ מחיר לא זמין עבור {symbol}, מדלג.")
+                    continue
 
+                if not is_price_fresh(symbol, max_age_sec=10):
+                    logging.warning(f"[AUTO] ⏳ מחיר לא עדכני עבור {symbol}, מדלג.")
+                    continue
+
+                sl_tp = await predict_optimal_sl_tp(entry_price=entry, direction=direction, symbol=symbol)
                 if "error" in sl_tp:
                     logging.warning(f"[AUTO] ❌ חיזוי SL/TP נכשל עבור {symbol}: {sl_tp['error']}")
                     continue
@@ -72,10 +82,11 @@ async def executor_loop():
                     budget_usd=MAX_TRADE_BUDGET,
                     market_type="futures"
                 )
+
                 logging.info(f"[AUTO] 💸 תוצאה: {result}")
 
         except Exception as e:
-            logging.error(f"[AUTO] שגיאה בלולאת ביצוע: {e}")
+            logging.error(f"[AUTO] ❗ שגיאה בלולאת ביצוע: {e}")
 
         await asyncio.sleep(SCAN_INTERVAL)
 
