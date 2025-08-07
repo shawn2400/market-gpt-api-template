@@ -1,4 +1,5 @@
-<<<<<<< HEAD
+# utils/ws_fallback.py
+
 import asyncio
 import websockets
 import json
@@ -34,30 +35,6 @@ def _get_rest_price(symbol):
             return float(ticker["price"])
     except Exception as e:
         logging.warning(f"[ws_fallback] REST price error for {symbol}: {e}")
-=======
-import time
-import threading
-import requests
-import json
-from websocket import WebSocketApp
-
-BINANCE_WS_URL = "wss://stream.binance.com:9443/ws"
-BINANCE_REST_URL = "https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-
-price_cache = {}
-ws_connections = {}
-
-def get_price(symbol):
-    symbol = symbol.upper()
-    if symbol in price_cache:
-        return price_cache[symbol]
-    # fallback ??REST ?? ??? ???? ??
-    try:
-        resp = requests.get(BINANCE_REST_URL.format(symbol=symbol))
-        data = resp.json()
-        return float(data['price'])
-    except Exception:
->>>>>>> 7179d67 ( הוספת נתיב /scan/multi עם Multi-TF Scan)
         return None
 
 async def _multi_stream_ws(symbols):
@@ -67,7 +44,6 @@ async def _multi_stream_ws(symbols):
     logging.info(f"[ws_fallback] Connecting Multi-Stream WS: {url}")
 
     try:
-<<<<<<< HEAD
         async with websockets.connect(url, ping_interval=None) as ws:
             _WS_RUNNING = True
 
@@ -108,15 +84,13 @@ async def launch_multi_websocket(symbols):
     """
     global _ws_task, _ws_symbols, _WS_RUNNING
     symbols = [s.upper() for s in symbols]
-    # אם אין שינוי ברשימת הסימבולים, לא מפעיל מחדש
     if set(symbols) == _ws_symbols and _WS_RUNNING:
         logging.info("[ws_fallback] WS already running for same symbols, skipping relaunch.")
         return
     _ws_symbols = set(symbols)
     _WS_RUNNING = False
-    await asyncio.sleep(0.2)  # זמן קצר לשחרור WS קודם
+    await asyncio.sleep(0.2)
 
-    # מפסיק חיבור קודם (אם היה)
     if _ws_task and not _ws_task.done():
         _ws_task.cancel()
         try:
@@ -124,7 +98,6 @@ async def launch_multi_websocket(symbols):
         except Exception:
             pass
 
-    # מפעיל WS חדש
     _ws_task = asyncio.create_task(_multi_stream_ws(symbols))
     logging.info(f"[ws_fallback] Multi-Stream WS launched for: {', '.join(symbols)}")
 
@@ -136,7 +109,6 @@ async def get_price(symbol):
     price = _ws_prices.get(symbol)
     if price:
         return price
-    # fallback ל־REST (לא חוסם event loop)
     return await asyncio.to_thread(_get_rest_price, symbol)
 
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
@@ -148,62 +120,3 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
         return False
     return (time.time() - ts) <= max_age_sec
 
-# דוגמה להפעלה (פשוט תייבא וקרא):
-# await launch_multi_websocket(["BTCUSDT", "ETHUSDT", "SOLUSDT"])
-# price = await get_price("BTCUSDT")
-
-
-
-
-
-
-
-
-
-
-
-
-
- 
-=======
-        msg = json.loads(message)
-        if 'p' in msg:
-            price = float(msg['p'])
-            price_cache[symbol] = price
-    except Exception:
-        pass
-
-def _on_error(ws, error, symbol):
-    print(f"[WS ERROR] {symbol}: {error}")
-
-def _on_close(ws, close_status_code, close_msg, symbol):
-    print(f"[WS CLOSED] {symbol}. Reconnecting in 10s.")
-    time.sleep(10)
-    launch_websocket(symbol)
-
-def _on_open(ws, symbol):
-    def run_ping():
-        while ws.sock and ws.sock.connected:
-            ws.send(json.dumps({"method": "PING"}))
-            time.sleep(30)
-    threading.Thread(target=run_ping, daemon=True).start()
-
-def launch_websocket(symbol):
-    symbol = symbol.lower()
-    stream = f"{symbol}@trade"
-    url = f"{BINANCE_WS_URL}/{stream}"
-    ws = WebSocketApp(
-        url,
-        on_message=lambda ws, msg: _on_message(ws, msg, symbol.upper()),
-        on_error=lambda ws, err: _on_error(ws, err, symbol.upper()),
-        on_close=lambda ws, c, m: _on_close(ws, c, m, symbol.upper()),
-        on_open=lambda ws: _on_open(ws, symbol.upper())
-    )
-    ws_connections[symbol] = ws
-    threading.Thread(target=ws.run_forever, daemon=True).start()
-
-def launch_multi_websocket(symbols):
-    for symbol in symbols:
-        if symbol.lower() not in ws_connections:
-            launch_websocket(symbol)
->>>>>>> 7179d67 ( הוספת נתיב /scan/multi עם Multi-TF Scan)
