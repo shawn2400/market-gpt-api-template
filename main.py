@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+import asyncio
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -59,8 +60,13 @@ def start_ws_multi_background():
     if WS_LAUNCHED:
         logging.info("[main] WS Multi כבר רץ, מדלג.")
         return
+
     symbols = load_watchlist_symbols()
-    t = threading.Thread(target=launch_multi_websocket, args=(symbols,), daemon=True)
+
+    def run_ws():
+        asyncio.run(launch_multi_websocket(symbols))
+
+    t = threading.Thread(target=run_ws, daemon=True)
     t.start()
     logging.info(f"[main] 🚀 WebSocket הופעל עבור: {symbols}")
     WS_LAUNCHED = True
@@ -144,6 +150,7 @@ async def get_price_route(symbol: str = Query(..., description="Symbol כמו BT
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
 
 
 
