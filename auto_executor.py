@@ -1,12 +1,14 @@
 import os
 import asyncio
 import logging
+import signal
 from dotenv import load_dotenv
 from utils.watchlist_utils import load_watchlist
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.trade_executor import execute_trade_live
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.ws_fallback import get_price, is_price_fresh
+from fastapi import FastAPI
 
 load_dotenv()
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
@@ -115,6 +117,26 @@ def stop_executor():
 
 def is_executor_running():
     return _running
+
+# --- טיפול אותות מערכת (SIGTERM, SIGINT) להפסקה נקייה ---
+def _signal_handler(signum, frame):
+    logging.info(f"[AUTO] 📴 Signal {signum} received, stopping executor...")
+    stop_executor()
+
+def setup_signal_handlers():
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+# --- אם יש FastAPI, אפשר לחבר את זה לאירוע shutdown ---
+app = FastAPI()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logging.info("[AUTO] FastAPI shutdown event triggered, stopping executor")
+    stop_executor()
+
+# חשוב לקרוא את הפונקציה הזו בתחילת הריצה שלך (למשל ב-main.py)
+setup_signal_handlers()
 
 
 
