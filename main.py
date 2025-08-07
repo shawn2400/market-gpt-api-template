@@ -47,9 +47,12 @@ def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
             data = json.load(f)
-            return [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
+            symbols = [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
+            if not symbols:
+                raise ValueError("רשימה ריקה")
+            return symbols
     except Exception as e:
-        logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e}")
+        logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e} – נטען BTCUSDT בלבד")
         return ["BTCUSDT"]
 
 # === WebSocket חכם ===
@@ -58,15 +61,15 @@ WS_LAUNCHED = False
 def start_ws_multi_background():
     global WS_LAUNCHED
     if WS_LAUNCHED:
-        logging.info("[main] WS Multi כבר רץ, מדלג.")
+        logging.info("[main] WebSocket כבר פעיל – דילוג.")
         return
 
     symbols = load_watchlist_symbols()
 
-    def run_ws():
+    def runner():
         asyncio.run(launch_multi_websocket(symbols))
 
-    t = threading.Thread(target=run_ws, daemon=True)
+    t = threading.Thread(target=runner, daemon=True)
     t.start()
     logging.info(f"[main] 🚀 WebSocket הופעל עבור: {symbols}")
     WS_LAUNCHED = True
@@ -74,20 +77,20 @@ def start_ws_multi_background():
 # === יצירת FastAPI ===
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר בזמן אמת ב‎Binance (Futures, Spot, Grid, AI, SL/TP)",
-    version="2.0.6"
+    description="API למסחר בזמן אמת ב-Binance (Futures, Spot, Grid, AI, SL/TP)",
+    version="2.0.7"
 )
 
 # === קבצים סטטיים ===
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
 else:
-    logging.info("ℹ️ התיקייה '.well-known' לא קיימת – לא בוצע mount.")
+    logging.info("ℹ️ התיקייה '.well-known' לא קיימת – mount לא בוצע.")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 else:
-    logging.info("ℹ️ התיקייה 'static' לא קיימת – לא בוצע mount.")
+    logging.info("ℹ️ התיקייה 'static' לא קיימת – mount לא בוצע.")
 
 # === CORS ===
 app.add_middleware(
@@ -112,7 +115,12 @@ async def startup_event():
         if start_executor_loop():
             logging.info("✅ AutoExecutor הופעל אוטומטית.")
         else:
-            logging.info("ℹ️ AutoExecutor כבר פעיל.")
+            logging.info("ℹ️ AutoExecutor כבר רץ.")
+
+# === בדיקת חיים ===
+@app.get("/healthz")
+async def healthz():
+    return {"status": "healthy ✅"}
 
 # === ברירת מחדל ===
 @app.get("/")
@@ -136,17 +144,17 @@ async def executor_status():
 
 # === שליפת מחיר ===
 @app.get("/price")
-async def get_price_route(symbol: str = Query(..., description="Symbol כמו BTCUSDT")):
+async def get_price_route(symbol: str = Query(..., description="סימבול כמו BTCUSDT")):
     try:
         price = await get_price(symbol)
         if price is None:
             return {"error": "לא נמצא מחיר"}
-        return {"symbol": symbol, "price": price}
+        return {"symbol": symbol.upper(), "price": price}
     except Exception as e:
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
 
-# === בדיקת ראוטים קיימים ===
+# === ראוטים קיימים לבדיקה ידנית ===
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
