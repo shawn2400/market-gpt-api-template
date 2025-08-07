@@ -2,8 +2,7 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   description: >
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance.
-    כולל תמיכה ב־Futures, Spot, Grid, ניתוחים טכניים, AI, דוחות ו־Auto Executor.
+    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance. כולל תמיכה ב־Futures, Spot, Grid, ניתוחים טכניים, AI, דוחות ו־Auto Executor.
   version: 2.0.7
 
 servers:
@@ -74,7 +73,7 @@ components:
           default: 1.5
         sl_pct:
           type: number
-          default: 1.0
+          default: 1
 
     AiAnalyzeRequest:
       type: object
@@ -100,7 +99,7 @@ paths:
       summary: בדיקת סטטוס השרת
       operationId: checkServerStatus
       responses:
-        '200':
+        "200":
           description: השרת פועל
 
   /trade:
@@ -112,9 +111,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TradeRequest'
+              $ref: "#/components/schemas/TradeRequest"
       responses:
-        '200':
+        "200":
           description: טרייד בוצע
 
   /scan/multi:
@@ -128,8 +127,8 @@ paths:
           required: false
           schema:
             type: string
-            default: "15m"
-          description: טיימפריים לסריקה (למשל "15m", "1h")
+            default: 15m
+          description: טיימפריימים מופרדים בפסיקים (למשל "5m,15m,1h")
         - name: min_quality
           in: query
           required: false
@@ -146,7 +145,7 @@ paths:
             type: integer
             default: 10
             minimum: 1
-          description: מספר הטריידים הטובים ביותר להחזיר
+          description: מספר הטריידים המובילים
         - name: market_type
           in: query
           required: false
@@ -155,8 +154,22 @@ paths:
             enum: [futures, spot]
             default: futures
           description: סוג שוק לסריקה
+        - name: trending_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: האם לסרוק רק מטבעות טרנדיים
+        - name: trending_source
+          in: query
+          required: false
+          schema:
+            type: string
+            default: coingecko
+          description: מקור המטבעות הטרנדיים (binance / coingecko / lunarcrush)
       responses:
-        '200':
+        "200":
           description: רשימת טריידים מסוננים לפי איכות
           content:
             application/json:
@@ -195,9 +208,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GridTradeRequest'
+              $ref: "#/components/schemas/GridTradeRequest"
       responses:
-        '200':
+        "200":
           description: פקודות הגריד נשלחו
 
   /ai-analyze:
@@ -209,9 +222,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AiAnalyzeRequest'
+              $ref: "#/components/schemas/AiAnalyzeRequest"
       responses:
-        '200':
+        "200":
           description: ניתוח נוצר
 
   /price:
@@ -227,7 +240,7 @@ paths:
             type: string
             example: BTCUSDT
       responses:
-        '200':
+        "200":
           description: מחיר נשלף
           content:
             application/json:
@@ -245,7 +258,7 @@ paths:
       summary: התחלת Auto Executor
       operationId: startExecutor
       responses:
-        '200':
+        "200":
           description: התחיל
 
   /executor/stop:
@@ -254,7 +267,7 @@ paths:
       summary: עצירת Auto Executor
       operationId: stopExecutor
       responses:
-        '200':
+        "200":
           description: נעצר
 
   /executor/status:
@@ -263,11 +276,12 @@ paths:
       summary: סטטוס Auto Executor
       operationId: executorStatus
       responses:
-        '200':
+        "200":
           description: פועל/לא
 
 security:
   - bearerAuth: []
+
 
 
 
