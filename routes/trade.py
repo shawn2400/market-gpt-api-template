@@ -1,15 +1,18 @@
-# routes/trade.py
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from utils.trade_executor import execute_trade_live  # ✅ גרסה רשמית שלך
-from utils.ws_fallback import get_price  # ✅ לשליפת מחיר חי
+from enum import Enum
+from utils.trade_executor import execute_trade_live
+from utils.ws_fallback import get_price
 
 router = APIRouter()
 
+class SideEnum(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+
 class TradeRequest(BaseModel):
     symbol: str
-    side: str  # LONG / SHORT
+    side: SideEnum  # רק LONG או SHORT
     entry: float = None  # אם לא ניתן – יילקח מחיר שוק
     sl: float = None
     tp: float = None
@@ -34,7 +37,7 @@ async def place_trade(req: TradeRequest):
         entry=price,
         stop=req.sl,
         tp=req.tp,
-        direction=req.side,
+        direction=req.side.value,
         leverage=req.leverage,
         budget_usd=req.budget
     )
@@ -46,3 +49,4 @@ async def place_trade(req: TradeRequest):
         )
 
     return {"status": "success", "trade": trade_result["result"]}
+
