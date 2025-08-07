@@ -1,7 +1,6 @@
-# utils/scanner_utils.py
-
 import asyncio
 import logging
+
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
@@ -9,21 +8,28 @@ from utils.quality_score import compute_quality_score
 # Semaphore להגבלת מקביליות
 semaphore = asyncio.Semaphore(5)
 
-async def analyze_symbol(symbol: str, interval: str = "15m", market_type: str = "futures", limit: int = 150, trending_only: bool = False, with_ai: bool = False, frames: list = None) -> dict:
+async def analyze_symbol(
+    symbol: str,
+    interval: str = "15m",
+    market_type: str = "futures",
+    limit: int = 150,
+    trending_only: bool = False,
+    with_ai: bool = False,
+    frames: list = None
+) -> dict:
     """
     מבצע ניתוח טכני מלא לסימבול ומחזיר טרייד עם איכות וניתוח.
     """
     try:
         async with semaphore:
-            # ✅ get_klines היא סינכרונית – אין await
             df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
-            if df.empty:
+            if df is None or df.empty:
                 logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}")
                 return None
 
             df = compute_indicators(df)
-            if df.empty or "rsi" not in df.columns:
-                logging.warning(f"[analyze_symbol] ⚠️ ניתוח אינדיקטורים נכשל עבור {symbol}")
+            if df.empty or "rsi" not in df.columns or "adx" not in df.columns or "supertrend_dir" not in df.columns:
+                logging.warning(f"[analyze_symbol] ⚠️ אינדיקטורים חסרים עבור {symbol}")
                 return None
 
             score = compute_quality_score(df)
@@ -42,13 +48,14 @@ async def analyze_symbol(symbol: str, interval: str = "15m", market_type: str = 
                 "indicators": {
                     "rsi": round(df["rsi"].iloc[-1], 2),
                     "adx": round(df["adx"].iloc[-1], 2),
-                    "pattern": df.get("pattern", ["unknown"])[-1] if "pattern" in df else "unknown"
+                    "pattern": df["pattern"].iloc[-1] if "pattern" in df.columns else "unknown"
                 }
             }
 
     except Exception as e:
-        logging.error(f"[analyze_symbol] ❌ שגיאה ב־{symbol}: {e}")
+        logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}: {e}")
         return None
+
 
 async def scan_all(
     interval: str = "15m",
@@ -78,8 +85,8 @@ async def scan_all(
             for sym in symbols
         ]
 
-        results = await asyncio.gather(*tasks)
-        filtered = [r for r in results if r and r["quality_score"] >= min_quality]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        filtered = [r for r in results if r and r.get("quality_score", 0) >= min_quality]
         sorted_results = sorted(filtered, key=lambda x: x["quality_score"], reverse=True)
 
         logging.info(f"[scan_all] ✅ נמצאו {len(sorted_results)} טריידים מעל ציון {min_quality}")
