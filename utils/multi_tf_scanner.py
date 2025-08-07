@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from collections import defaultdict
 from typing import List, Tuple
 import inspect
 
@@ -39,10 +38,6 @@ async def safe_ai_analyze(tf_results):
         return None
 
 async def fallback_scan_manual(symbol: str, timeframes: Tuple[str] = ("15m", "1h"), market: str = "futures", trending_only: bool = False):
-    """
-    סריקה ידנית לפי סימבול יחיד, לטיפול במצב שאין נתונים חיים או כשל בסריקה האוטומטית.
-    מחזירה ניתוח דומה ל־multi_tf_scan_with_ai עבור סימבול בודד.
-    """
     logging.info(f"[multi_tf_scanner] 🔄 fallback_scan_manual עבור {symbol}")
 
     tf_results = []
@@ -100,7 +95,6 @@ async def multi_tf_scan_with_ai(
 
         if not results:
             logging.warning("[multi_tf_scanner] ⚠️ לא נמצאו תוצאות בסריקה החיה, מפעילים fallback ידני")
-            # לדוגמה: ניתן לסרוק סימבול מוביל ידנית (למשל BTCUSDT)
             fallback_results = await fallback_scan_manual("BTCUSDT", timeframes=timeframes, market=markets[0], trending_only=trending_only)
             results.extend(fallback_results)
 
@@ -113,6 +107,7 @@ async def multi_tf_scan_with_ai(
     except Exception as e:
         logging.error(f"[multi_tf_scanner] ❌ שגיאה כללית: {e}")
         return []
+
 
 
 
