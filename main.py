@@ -12,8 +12,23 @@ from utils.ws_fallback import launch_multi_websocket, get_price
 # === טעינת ENV ===
 load_dotenv()
 
-# === משתנים מערכתיים ===
+# === הגדרת לוגים עם פורמט מפורט ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+    force=True
+)
+
+# === בדיקת מפתחות קריטיים בסביבה ===
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MAX_WS_SYMBOLS = int(os.getenv("MAX_WS_SYMBOLS", 15))  # ברירת מחדל 15
+
+logging.info(f"[ENV] Binance API Key Loaded: {'Yes' if BINANCE_API_KEY else 'No'}")
+logging.info(f"[ENV] Binance API Secret Loaded: {'Yes' if BINANCE_API_SECRET else 'No'}")
+logging.info(f"[ENV] OpenAI API Key Loaded: {'Yes' if OPENAI_API_KEY else 'No'}")
+logging.info(f"[ENV] Max WS Symbols: {MAX_WS_SYMBOLS}")
 
 # === קריאת רשימת מעקב עם הגבלה ===
 def load_watchlist_symbols():
@@ -23,7 +38,7 @@ def load_watchlist_symbols():
             symbols = [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
             if not symbols:
                 raise ValueError("רשימה ריקה")
-            # חיתוך לפי MAX_WS_SYMBOLS
+            logging.info(f"[watchlist] Loaded {len(symbols)} symbols, trimming to {MAX_WS_SYMBOLS}")
             return symbols[:MAX_WS_SYMBOLS]
     except Exception as e:
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e} – נטען BTCUSDT בלבד")
@@ -38,19 +53,24 @@ def start_ws_multi_background():
         return
 
     symbols = load_watchlist_symbols()
+    logging.info(f"[main] Starting WebSocket for symbols: {symbols}")
 
     def runner():
         try:
             with open(WS_LOCK_PATH, "w") as f:
                 f.write("active")
+            logging.info("[main] WebSocket runner thread started")
             asyncio.run(launch_multi_websocket(symbols))
+        except Exception as e:
+            logging.error(f"[main] ❌ שגיאה בריצת WebSocket: {e}")
         finally:
             if os.path.exists(WS_LOCK_PATH):
                 os.remove(WS_LOCK_PATH)
+                logging.info("[main] WebSocket lock file removed")
 
     t = threading.Thread(target=runner, daemon=True)
     t.start()
-    logging.info(f"[main] 🚀 WebSocket הופעל עבור: {symbols}")
+    logging.info("[main] WebSocket background thread launched")
 
 # === יצירת FastAPI ===
 app = FastAPI(
@@ -94,6 +114,7 @@ app.include_router(multi_router)
 # === אתחול רקע ===
 @app.on_event("startup")
 def startup_event():
+    logging.info("[main] Server startup event triggered")
     start_ws_multi_background()
 
 # === בדיקת חיים ===
@@ -136,7 +157,10 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
 # === ראוטים לבדיקה ===
 @app.get("/debug/routes")
 def get_routes():
-    return [{"path": route.path, "name": route.name} for route in app.router.routes]
+    routes_info = [{"path": route.path, "name": route.name} for route in app.router.routes]
+    logging.info(f"[debug] Registered routes: {routes_info}")
+    return routes_info
+
 
 
 
