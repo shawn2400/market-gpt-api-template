@@ -1,22 +1,20 @@
-# utils/ai_analysis.py
-
 import os
 import openai
 import logging
 import re
+import traceback
 from typing import Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-
 async def analyze_with_ai(tf_results: list) -> dict:
     """
-    ניתוח GPT עבור תוצאות טכנייות לפי מספר טיימפריימים.
+    ניתוח GPT עבור תוצאות טכניות לפי מספר טיימפריימים.
     """
-    if not openai.api_key:
-        logging.error("[AI] ❌ מפתח OpenAI לא מוגדר.")
+    if not openai.api_key or openai.api_key.strip() == "":
+        logging.error("[AI] ❌ מפתח OpenAI לא מוגדר או ריק.")
         return {"error": "OpenAI API key not configured"}
 
     try:
@@ -40,6 +38,7 @@ async def analyze_with_ai(tf_results: list) -> dict:
         )
 
         logging.info(f"[AI] 🔍 ניתוח GPT עבור {symbol} (frames={frames})")
+        logging.debug(f"[AI] ▶️ שליחת בקשה ל־OpenAI GPT עם prompt:\n{prompt}")
 
         resp = await openai.ChatCompletion.acreate(
             model="gpt-4",
@@ -49,9 +48,12 @@ async def analyze_with_ai(tf_results: list) -> dict:
         )
 
         if not resp.choices:
+            logging.warning("[AI] ⚠️ תגובת GPT ריקה, מחזירים HOLD כברירת מחדל")
             return {"signal": "HOLD", "confidence": 0.0, "reason": "No response from AI"}
 
         content = resp.choices[0].message.content.strip()
+        logging.debug(f"[AI] 📩 תגובת GPT מלאה:\n{content}")
+
         result = {"signal": "HOLD", "confidence": 0.0, "raw": content}
 
         signal_match = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
@@ -72,9 +74,8 @@ async def analyze_with_ai(tf_results: list) -> dict:
         return result
 
     except Exception as e:
-        logging.error(f"[AI] ❌ שגיאת GPT: {e}")
+        logging.error(f"[AI] ❌ שגיאת GPT: {e}\n{traceback.format_exc()}")
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
-
 
 async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: float = None) -> Tuple[float, float]:
     """
@@ -93,6 +94,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
         )
 
         logging.info(f"[AI] 🔁 ניתוח GPT עבור SL/TP של {symbol}...")
+        logging.debug(f"[AI] ▶️ שליחת בקשה ל־OpenAI GPT עם prompt:\n{prompt}")
 
         response = await openai.ChatCompletion.acreate(
             model="gpt-4",
@@ -102,17 +104,20 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
         )
 
         content = response.choices[0].message.content.strip()
+        logging.debug(f"[AI] 📩 תגובת GPT מלאה ל-SL/TP:\n{content}")
+
         match = re.search(r"SL:\s*([\d.]+)[,\s]+TP:\s*([\d.]+)", content)
         if match:
             sl, tp = float(match.group(1)), float(match.group(2))
             return round(sl, 6), round(tp, 6)
 
     except Exception as e:
-        logging.warning(f"[AI-SLTP] ⚠️ Fallback to classic SL/TP: {e}")
+        logging.warning(f"[AI-SLTP] ⚠️ Fallback to classic SL/TP: {e}\n{traceback.format_exc()}")
 
     # fallback לחישוב רגיל
     from utils.sl_tp_utils import calculate_sl_tp
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+
 
 
 
