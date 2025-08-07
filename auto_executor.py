@@ -3,7 +3,6 @@
 import os
 import asyncio
 import logging
-import threading
 from dotenv import load_dotenv
 
 from utils.watchlist_utils import load_watchlist
@@ -14,21 +13,20 @@ from utils.ws_fallback import get_price, is_price_fresh
 
 # === הגדרות סביבתיות ===
 load_dotenv()
-AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
 
 # === מצב הרצה ===
-running = False
+_running = False
+_task = None
 
-# === לולאת אקזקיוטר ===
 async def executor_loop():
-    global running
-    running = True
+    global _running
+    _running = True
     logging.info("[AUTO] 🚀 Auto Executor התחיל לרוץ...")
 
-    while running:
+    while _running:
         try:
             watchlist = load_watchlist()
             symbols = [s["symbol"] for s in watchlist if s["quality_score"] >= MIN_QUALITY_SCORE]
@@ -90,17 +88,31 @@ async def executor_loop():
 
         await asyncio.sleep(SCAN_INTERVAL)
 
-# === הרצה ברקע ===
-def start_executor_loop():
-    thread = threading.Thread(target=lambda: asyncio.run(executor_loop()), daemon=True)
-    thread.start()
+def start_executor():
+    global _task
+    if _task is None or _task.done():
+        _task = asyncio.create_task(executor_loop())
+        logging.info("[AUTO] ✅ Auto Executor started")
+        return True
+    else:
+        logging.info("[AUTO] ⚠️ Auto Executor already running")
+        return False
 
-def stop_executor_loop():
-    global running
-    running = False
+def stop_executor():
+    global _running, _task
+    if _running:
+        _running = False
+        if _task:
+            _task.cancel()
+            _task = None
+        logging.info("[AUTO] ⏹️ Auto Executor stopped")
+        return True
+    else:
+        logging.info("[AUTO] ⚠️ Auto Executor was not running")
+        return False
 
 def is_executor_running():
-    return running
+    return _running
 
 
 
