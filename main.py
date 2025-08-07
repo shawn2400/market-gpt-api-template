@@ -118,7 +118,7 @@ async def stop_executor_route():
     return {"status": "stopped" if stopped else "not running"}
 
 @app.get("/executor/status")
-async def executor_status():
+async def executor_status_route():
     return {"running": is_executor_running()}
 
 # === שליפת מחיר ===
@@ -137,6 +137,7 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
 
 
 
