@@ -68,11 +68,11 @@ def start_ws_multi_background():
 # === יצירת FastAPI ===
 app = FastAPI(
     title="AlgoGPT API",
-    description="API למסחר בזמן אמת ב־Binance (Futures, Spot, Grid, AI, SL/TP)",
+    description="API למסחר בזמן אמת ב‎Binance (Futures, Spot, Grid, AI, SL/TP)",
     version="2.0.6"
 )
 
-# === קבצים סטטיים – mount רק אם קיימות תיקיות ===
+# === קבצים סטטיים ===
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
 else:
@@ -92,7 +92,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ראוטים ראשיים ===
+# === ראוטים ===
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
@@ -140,10 +140,11 @@ async def get_price_route(symbol: str = Query(..., description="Symbol כמו BT
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
 
-# === בדיקת ראוטים פעילים ===
+# === בדיקת ראוטים קיימים ===
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
 
 
 
