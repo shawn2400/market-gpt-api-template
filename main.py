@@ -39,8 +39,9 @@ AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
 MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
 MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
+MAX_WS_SYMBOLS = int(os.getenv("MAX_WS_SYMBOLS", 15))  # הגבלת מספר סימבולים ב-WS, ברירת מחדל 15
 
-# === קריאת רשימת מעקב ===
+# === קריאת רשימת מעקב עם הגבלת מספר סימבולים ל־MAX_WS_SYMBOLS ===
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -48,7 +49,7 @@ def load_watchlist_symbols():
             symbols = [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
             if not symbols:
                 raise ValueError("רשימה ריקה")
-            return symbols
+            return symbols[:MAX_WS_SYMBOLS]  # כאן ההגבלה
     except Exception as e:
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e} – נטען BTCUSDT בלבד")
         return ["BTCUSDT"]
@@ -155,4 +156,5 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
 
