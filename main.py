@@ -7,41 +7,15 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
+from utils.ws_fallback import launch_multi_websocket, get_price
 
 # === טעינת ENV ===
 load_dotenv()
 
-# === ייבוא ראוטים ולוגיקה ===
-from routes.ai import router as ai_router
-from routes.trade import router as trade_router
-from routes.grid import router as grid_router
-from routes.multi_scan import router as multi_router
-from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
-from utils.ws_fallback import launch_multi_websocket, get_price
-
-# === לוגים ===
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)s] %(message)s',
-    force=True
-)
-
-# === בדיקת ENV קריטיים ===
-REQUIRED_ENV_VARS = [
-    "BINANCE_API_KEY", "BINANCE_API_SECRET", "OPENAI_API_KEY"
-]
-for v in REQUIRED_ENV_VARS:
-    if not os.environ.get(v):
-        raise SystemExit(f"❌ Environment variable missing: {v}")
-
 # === משתנים מערכתיים ===
-AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
-MIN_QUALITY_SCORE = int(os.getenv("MIN_QUALITY_SCORE", 6))
-MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
-SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
-MAX_WS_SYMBOLS = int(os.getenv("MAX_WS_SYMBOLS", 15))  # הגבלת מספר סימבולים ב-WS, ברירת מחדל 15
+MAX_WS_SYMBOLS = int(os.getenv("MAX_WS_SYMBOLS", 15))  # ברירת מחדל 15
 
-# === קריאת רשימת מעקב עם הגבלת מספר סימבולים ל־MAX_WS_SYMBOLS ===
+# === קריאת רשימת מעקב עם הגבלה ===
 def load_watchlist_symbols():
     try:
         with open("watchlist.json", "r") as f:
@@ -49,12 +23,13 @@ def load_watchlist_symbols():
             symbols = [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
             if not symbols:
                 raise ValueError("רשימה ריקה")
-            return symbols[:MAX_WS_SYMBOLS]  # כאן ההגבלה
+            # חיתוך לפי MAX_WS_SYMBOLS
+            return symbols[:MAX_WS_SYMBOLS]
     except Exception as e:
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e} – נטען BTCUSDT בלבד")
         return ["BTCUSDT"]
 
-# === WebSocket חכם ===
+# === WebSocket חכם עם הגבלה ===
 WS_LOCK_PATH = "/tmp/ws_running.lock"
 
 def start_ws_multi_background():
@@ -105,6 +80,12 @@ app.add_middleware(
 )
 
 # === ראוטים ===
+from routes.ai import router as ai_router
+from routes.trade import router as trade_router
+from routes.grid import router as grid_router
+from routes.multi_scan import router as multi_router
+from auto_executor import start_executor_loop, stop_executor_loop, is_executor_running
+
 app.include_router(ai_router)
 app.include_router(trade_router)
 app.include_router(grid_router)
@@ -152,9 +133,10 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
 
-# === ראוטים קיימים לבדיקה ידנית ===
+# === ראוטים לבדיקה ===
 @app.get("/debug/routes")
 def get_routes():
     return [{"path": route.path, "name": route.name} for route in app.router.routes]
+
 
 
