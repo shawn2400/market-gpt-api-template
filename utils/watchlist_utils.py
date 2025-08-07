@@ -2,9 +2,10 @@
 
 import json
 import os
+import asyncio
 from typing import List, Dict
 from utils.trending_utils import get_trending_symbols
-from utils.scanner_utils import analyze_symbol  # ✅ ייבוא מתוקן
+from utils.scanner_utils import analyze_symbol  # ✅ ייבוא async
 
 WATCHLIST_FILE = "watchlist.json"
 
@@ -20,7 +21,7 @@ def save_watchlist(watchlist: List[Dict]) -> None:
     with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
         json.dump(watchlist, f, ensure_ascii=False, indent=2)
 
-def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str = "futures") -> None:
+async def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str = "futures") -> None:
     """
     בונה אוטומטית רשימת מעקב לפי trending + ניתוח איכות.
     סף איכות ברירת מחדל: 6
@@ -30,7 +31,7 @@ def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str
 
     for symbol in symbols:
         try:
-            result = analyze_symbol(symbol=symbol, market=market, interval1="15m", interval2="1h")
+            result = await analyze_symbol(symbol=symbol, market_type=market, interval="15m")
             if not isinstance(result, dict):
                 print(f"[Watchlist] ⚠️ תוצאה לא תקינה עבור {symbol}: {result}")
                 continue
@@ -47,6 +48,11 @@ def generate_trending_watchlist(top: int = 30, min_quality: int = 6, market: str
 
     save_watchlist(watchlist)
     print(f"[Watchlist] ✅ נשמרו {len(watchlist)} סמלים לקובץ watchlist.json")
+
+# אם אתה מריץ ישירות — זה מאפשר להריץ:
+if __name__ == "__main__":
+    asyncio.run(generate_trending_watchlist())
+
 
 
 
