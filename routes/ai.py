@@ -17,3 +17,4 @@ async def manual_scan(symbol: str = Query(..., description="סימבול לקר�
 
 
 
+
