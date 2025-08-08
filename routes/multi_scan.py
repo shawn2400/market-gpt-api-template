@@ -1,8 +1,6 @@
-# routes/multi_scan.py
 from fastapi import APIRouter, Query
 from typing import Optional
-from utils.multi_tf_scanner import multi_tf_scan_with_ai
-from utils.watchlist_utils import load_watchlist
+from utils.multi_tf_scanner import multi_tf_scan_with_ai, fallback_scan_manual
 
 router = APIRouter(
     prefix="/scan",
@@ -19,25 +17,28 @@ async def scan_multi(
     trending_source: Optional[str] = Query("coingecko", description="מקור למטבעות טרנדיים")
 ):
     """
-    סריקת שוק לפי מספר טיימפריימים + AI, עם עדיפות ל־watchlist.json אם קיים.
+    סריקת שוק חכמה עם Multi-TF + ניתוח AI, כולל fallback במקרה של כשל ב־API חיצוני.
     """
-    # טעינת רשימת המעקב
-    watchlist_symbols = load_watchlist(min_quality=min_quality)
-    if watchlist_symbols:
-        trending_only = False  # אם יש watchlist, לא נכריח טרנדינג בלבד
+    try:
+        timeframes = tuple(interval.split(","))
+        results = await multi_tf_scan_with_ai(
+            timeframes=timeframes,
+            markets=(market_type,),
+            min_quality=min_quality,
+            top=top,
+            trending_only=trending_only,
+            trending_source=trending_source
+        )
 
-    timeframes = tuple(interval.split(","))
+        if not results:
+            return {"warning": "לא נמצאו טריידים איכותיים, הופעל fallback ידני", 
+                    "results": await fallback_scan_manual("BTCUSDT")}
 
-    results = await multi_tf_scan_with_ai(
-        timeframes=timeframes,
-        markets=(market_type,),
-        min_quality=min_quality,
-        top=top,
-        trending_only=trending_only,
-        trending_source=trending_source
-    )
+        return {"results": results}
 
-    return {"count": len(results), "results": results}
+    except Exception as e:
+        return {"error": str(e), "results": await fallback_scan_manual("BTCUSDT")}
+
 
 
 
