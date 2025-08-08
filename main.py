@@ -6,20 +6,15 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
+
+# לוגיקת WS/מחיר + אוטו־אקסקיוטור
 from utils.ws_fallback import launch_multi_websocket, get_price
 from auto_executor import start_executor, stop_executor, is_executor_running
 
-# === טעינת ENV ===
+# === ENV ===
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
 
-# === לוגים ===
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)s] %(message)s',
-    force=True
-)
-
-# === ENV קריטיים ===
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -30,18 +25,16 @@ logging.info(f"[ENV] Binance API Secret Loaded: {'Yes' if BINANCE_API_SECRET els
 logging.info(f"[ENV] OpenAI API Key Loaded: {'Yes' if OPENAI_API_KEY else 'No'}")
 logging.info(f"[ENV] Max WS Symbols: {MAX_WS_SYMBOLS}")
 
-# === קריאת Watchlist ===
+# === Watchlist ===
 def load_watchlist_symbols() -> list[str]:
     try:
         with open("watchlist.json", "r", encoding="utf-8") as f:
             data = json.load(f)
-            symbols = [str(entry["symbol"]).upper()
-                       for entry in data
-                       if isinstance(entry, dict) and "symbol" in entry]
-            if not symbols:
-                raise ValueError("רשימת המעקב ריקה")
-            logging.info(f"[watchlist] Loaded {len(symbols)} symbols, trimming to {MAX_WS_SYMBOLS}")
-            return symbols[:MAX_WS_SYMBOLS]
+        symbols = [str(x.get("symbol", "")).upper() for x in data if isinstance(x, dict) and x.get("symbol")]
+        if not symbols:
+            raise ValueError("רשימת המעקב ריקה")
+        logging.info(f"[watchlist] Loaded {len(symbols)} symbols, trimming to {MAX_WS_SYMBOLS}")
+        return symbols[:MAX_WS_SYMBOLS]
     except Exception as e:
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e} – נטען BTCUSDT בלבד")
         return ["BTCUSDT"]
@@ -56,13 +49,13 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
-# === Static mounts (לא על ROOT) ===
+# Static (לא על ROOT)
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# === CORS ===
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -71,7 +64,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Routers ===
+# Routers
 try:
     from routes.ai import router as ai_router
     from routes.trade import router as trade_router
@@ -86,26 +79,24 @@ try:
 except Exception as e:
     logging.exception(f"[main] Failed to include routers: {e}")
 
-# === Startup: אל תחסום את השרת ===
+# Startup (לא חוסם)
 @app.on_event("startup")
 async def startup_event():
     logging.info("[main] Server startup event triggered")
     symbols = load_watchlist_symbols()
-    # מרימים את ה־WS כרקע, לא await
     asyncio.create_task(launch_multi_websocket(symbols))
     logging.info(f"[main] WebSocket task spawned for symbols: {symbols}")
 
-# === Health ===
-@app.get("/healthz")
-async def healthz():
-    return {"status": "healthy ✅"}
-
-# === Root ===
+# Root/Health
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅", "docs": "/docs"}
 
-# === AutoExecutor ===
+@app.get("/healthz")
+async def healthz():
+    return {"status": "healthy ✅"}
+
+# AutoExecutor
 @app.get("/executor/start")
 async def start_executor_route():
     started = start_executor()
@@ -120,7 +111,7 @@ async def stop_executor_route():
 async def executor_status_route():
     return {"running": is_executor_running()}
 
-# === מחיר חי ===
+# מחיר חי
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="סימבול כמו BTCUSDT")):
     try:
@@ -132,12 +123,13 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
 
-# === Debug ===
+# Debug routes
 @app.get("/debug/routes")
 def get_routes():
-    routes_info = [{"path": route.path, "name": route.name} for route in app.router.routes]
-    logging.info(f"[debug] Registered routes: {routes_info}")
-    return routes_info
+    info = [{"path": r.path, "name": r.name} for r in app.router.routes]
+    logging.info(f"[debug] Registered routes: {info}")
+    return info
+
 
 
 
