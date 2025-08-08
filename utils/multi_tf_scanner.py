@@ -39,8 +39,8 @@ async def multi_tf_scan_with_ai(
         symbols = await get_trending_symbols(source=trending_source)
         logging.info(f"[multi_tf_scanner] סמלים טרנדיים נבחרו: {symbols}")
     else:
-        # TODO: החלף לטעינת רשימת מעקב או כל מקור סמלים אחר
-        symbols = await get_trending_symbols(source=trending_source)  # לדוגמה - עדיין להשתמש בטרנדינג
+        # כאן מומלץ להחליף לטעינת רשימת מעקב או מקור סמלים אחר במידת הצורך
+        symbols = await get_trending_symbols(source=trending_source)  # לדוגמה עדיין משתמשים בטרנדינג
 
     if not symbols:
         logging.warning("[multi_tf_scanner] אין סמלים לסריקה")
@@ -61,7 +61,29 @@ async def multi_tf_scan_with_ai(
     # קיבוץ תוצאות לפי סימבול
     grouped = {}
     for r in results_raw:
-        sym = r["
+        sym = r["symbol"]
+        if sym not in grouped:
+            grouped[sym] = []
+        grouped[sym].append(r)
+
+    # עיבוד תוצאות עם AI לכל סימבול
+    final_results = []
+    for sym, data in grouped.items():
+        avg_quality = sum(d.get("quality_score", 0) for d in data) / len(data)
+        if avg_quality < min_quality:
+            continue
+
+        ai_analysis = await analyze_with_ai(data)
+        if "error" in ai_analysis:
+            logging.warning(f"[multi_tf_scanner] ניתוח AI נכשל עבור {sym}: {ai_analysis['error']}")
+            continue
+
+        final_results.append(ai_analysis)
+
+    # מיון לפי ציון איכות ולקיחת top N
+    final_results.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
+    return final_results[:top]
+
 
 
 
