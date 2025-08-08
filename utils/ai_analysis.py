@@ -41,7 +41,7 @@ async def analyze_with_ai(tf_results: list) -> dict:
         logging.debug(f"[AI] ▶️ שליחת בקשה ל־OpenAI GPT עם prompt:\n{prompt}")
 
         resp = await openai.ChatCompletion.acreate(
-            model="gpt-4",
+            model="gpt-5",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=200
@@ -97,7 +97,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
         logging.debug(f"[AI] ▶️ שליחת בקשה ל־OpenAI GPT עם prompt:\n{prompt}")
 
         response = await openai.ChatCompletion.acreate(
-            model="gpt-4",
+            model="gpt-5",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=100
