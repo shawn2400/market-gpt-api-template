@@ -1,4 +1,3 @@
-# auto_executor.py
 import os
 import asyncio
 import logging
@@ -117,6 +116,7 @@ def stop_executor():
 
 def is_executor_running():
     return _running
+
 
 
 
