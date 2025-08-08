@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,33 +9,35 @@ from dotenv import load_dotenv
 from utils.ws_fallback import launch_multi_websocket, get_price
 from auto_executor import start_executor, stop_executor, is_executor_running
 
-# === טעינת משתני סביבה ===
+# === טעינת ENV ===
 load_dotenv()
 
-# === הגדרת לוגים מפורטים ===
+# === לוגים ===
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)s] %(message)s',
     force=True
 )
 
-# === קריאת מפתחות API והגדרות כלליות ===
+# === ENV קריטיים ===
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MAX_WS_SYMBOLS = int(os.getenv("MAX_WS_SYMBOLS", 15))  # ברירת מחדל 15
+MAX_WS_SYMBOLS = int(os.getenv("MAX_WS_SYMBOLS", 15))
 
 logging.info(f"[ENV] Binance API Key Loaded: {'Yes' if BINANCE_API_KEY else 'No'}")
 logging.info(f"[ENV] Binance API Secret Loaded: {'Yes' if BINANCE_API_SECRET else 'No'}")
 logging.info(f"[ENV] OpenAI API Key Loaded: {'Yes' if OPENAI_API_KEY else 'No'}")
 logging.info(f"[ENV] Max WS Symbols: {MAX_WS_SYMBOLS}")
 
-# === פונקציה לקריאת רשימת מעקב עם הגבלת כמות סימבולים ===
+# === קריאת Watchlist ===
 def load_watchlist_symbols() -> list[str]:
     try:
         with open("watchlist.json", "r", encoding="utf-8") as f:
             data = json.load(f)
-            symbols = [entry["symbol"].upper() for entry in data if isinstance(entry, dict) and "symbol" in entry]
+            symbols = [str(entry["symbol"]).upper()
+                       for entry in data
+                       if isinstance(entry, dict) and "symbol" in entry]
             if not symbols:
                 raise ValueError("רשימת המעקב ריקה")
             logging.info(f"[watchlist] Loaded {len(symbols)} symbols, trimming to {MAX_WS_SYMBOLS}")
@@ -43,25 +46,23 @@ def load_watchlist_symbols() -> list[str]:
         logging.warning(f"[main] ⚠️ שגיאה בקריאת watchlist.json: {e} – נטען BTCUSDT בלבד")
         return ["BTCUSDT"]
 
-# === יצירת מופע FastAPI ===
+# === FastAPI ===
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב-Binance (Futures, Spot, Grid, AI, SL/TP)",
-    version="2.0.7"
+    version="2.0.8",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
-# === הגדרת קבצים סטטיים אם קיימים ===
+# === Static mounts (לא על ROOT) ===
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="well-known")
-else:
-    logging.info("ℹ️ התיקייה '.well-known' לא קיימת – mount לא בוצע.")
-
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
-else:
-    logging.info("ℹ️ התיקייה 'static' לא קיימת – mount לא בוצע.")
 
-# === הגדרת Middleware ל-CORS ===
+# === CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -70,36 +71,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === ייבוא ראוטרים והוספתם לאפליקציה ===
-from routes.ai import router as ai_router
-from routes.trade import router as trade_router
-from routes.grid import router as grid_router
-from routes.multi_scan import router as multi_router
+# === Routers ===
+try:
+    from routes.ai import router as ai_router
+    from routes.trade import router as trade_router
+    from routes.grid import router as grid_router
+    from routes.multi_scan import router as multi_router
 
-app.include_router(ai_router)
-app.include_router(trade_router)
-app.include_router(grid_router)
-app.include_router(multi_router)
+    app.include_router(ai_router)
+    app.include_router(trade_router)
+    app.include_router(grid_router)
+    app.include_router(multi_router)
+    logging.info("[main] Routers included successfully")
+except Exception as e:
+    logging.exception(f"[main] Failed to include routers: {e}")
 
-# === אתחול WebSocket אסינכרוני בעת עליית השרת ===
+# === Startup: אל תחסום את השרת ===
 @app.on_event("startup")
 async def startup_event():
     logging.info("[main] Server startup event triggered")
     symbols = load_watchlist_symbols()
-    await launch_multi_websocket(symbols)
-    logging.info(f"[main] WebSocket started for symbols: {symbols}")
+    # מרימים את ה־WS כרקע, לא await
+    asyncio.create_task(launch_multi_websocket(symbols))
+    logging.info(f"[main] WebSocket task spawned for symbols: {symbols}")
 
-# === בדיקת בריאות השירות ===
+# === Health ===
 @app.get("/healthz")
 async def healthz():
     return {"status": "healthy ✅"}
 
-# === נתיב ברירת מחדל ===
+# === Root ===
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "AlgoGPT API is running ✅"}
+    return {"status": "ok", "message": "AlgoGPT API is running ✅", "docs": "/docs"}
 
-# === שליטה על AutoExecutor ===
+# === AutoExecutor ===
 @app.get("/executor/start")
 async def start_executor_route():
     started = start_executor()
@@ -114,7 +120,7 @@ async def stop_executor_route():
 async def executor_status_route():
     return {"running": is_executor_running()}
 
-# === שליפת מחיר חי לסימבול ===
+# === מחיר חי ===
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="סימבול כמו BTCUSDT")):
     try:
@@ -126,12 +132,13 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
 
-# === נתיב בדיקה לקבלת רשימת ראוטים רשומים ===
+# === Debug ===
 @app.get("/debug/routes")
 def get_routes():
     routes_info = [{"path": route.path, "name": route.name} for route in app.router.routes]
     logging.info(f"[debug] Registered routes: {routes_info}")
     return routes_info
+
 
 
 
