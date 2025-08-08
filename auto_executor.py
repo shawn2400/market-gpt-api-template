@@ -45,7 +45,7 @@ async def executor_loop():
 
                 for trade in scan_results:
                     symbol = trade["symbol"]
-                    direction = trade["main_direction"].upper()
+                    direction = trade.get("direction", trade.get("main_direction", "LONG")).upper()
 
                     entry = await get_price(symbol)
                     if not entry:
@@ -57,12 +57,14 @@ async def executor_loop():
                         continue
 
                     sl_tp = await predict_optimal_sl_tp(entry_price=entry, direction=direction, symbol=symbol)
-                    if "error" in sl_tp:
+                    if isinstance(sl_tp, dict) and "error" in sl_tp:
                         logging.warning(f"[AUTO] ❌ חיזוי SL/TP נכשל עבור {symbol}: {sl_tp['error']}")
                         continue
 
-                    stop = sl_tp["sl"]
-                    tp = sl_tp["tp"]
+                    stop, tp = sl_tp if isinstance(sl_tp, tuple) else (None, None)
+                    if stop is None or tp is None:
+                        logging.warning(f"[AUTO] ⚠️ SL/TP לא תקינים עבור {symbol}, מדלג.")
+                        continue
 
                     logging.info(f"[AUTO] 📈 טרייד מומלץ: {symbol} | {direction} | כניסה: {entry} | SL: {stop} | TP: {tp}")
 
@@ -116,6 +118,7 @@ def stop_executor():
 
 def is_executor_running():
     return _running
+
 
 
 
