@@ -84,6 +84,20 @@ async def multi_tf_scan_with_ai(
     final_results.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
     return final_results[:top]
 
+# פונקציה fallback לסריקה ידנית פשוטה ללא AI ומulti-TF
+async def fallback_scan_manual(symbol: str) -> List[dict]:
+    logging.info(f"[multi_tf_scanner] ביצוע סריקה ידנית fallback עבור {symbol}")
+    try:
+        # בדיקה טכנית פשוטה ב־15m בלבד, שוק פיוצ'רס
+        result = await analyze_symbol(symbol, interval="15m", market_type="futures")
+        if result:
+            return [result]
+        else:
+            return []
+    except Exception as e:
+        logging.error(f"[multi_tf_scanner] ❌ שגיאה ב-fallback_scan_manual עבור {symbol}: {e}")
+        return []
+
 
 
 
