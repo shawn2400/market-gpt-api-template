@@ -5,22 +5,11 @@ services:
     plan: starter
     autoDeploy: true
 
+    # Render מספק PORT אוטומטית → לא להגדיר PORT ידנית כאן
+    healthCheckPath: /healthz
+
     envVars:
-      # 🌐 פורט – מוגדר ב־Dockerfile
-      - key: PORT
-        value: "5000"
-
-      # 🔐 Binance API Keys (שים את הערכים האמיתיים בפאנל של Render/Railway)
-      - key: BINANCE_API_KEY
-        value: REPLACE_WITH_REAL_KEY
-      - key: BINANCE_API_SECRET
-        value: REPLACE_WITH_REAL_SECRET
-
-      # 🤖 OpenAI
-      - key: OPENAI_API_KEY
-        value: REPLACE_WITH_OPENAI_KEY
-
-      # ⚙️ Auto Executor Settings
+      # את המפתחות לא לשים כאן; הזן ב-Dashboard כסוד (Secret)
       - key: AUTO_RUN
         value: "true"
       - key: MIN_QUALITY_SCORE
@@ -29,15 +18,10 @@ services:
         value: "100"
       - key: SCAN_INTERVAL
         value: "10"
-
-      # 📊 Volume & Trending Filters
       - key: MIN_VOLUME
         value: "1000000"
       - key: TRENDING_ONLY
         value: "true"
-
-    # 🩺 בדיקת בריאות
-    healthCheckPath: /
 
 
 
