@@ -1,4 +1,3 @@
-# utils/ws_fallback.py
 import asyncio
 import json
 import logging
@@ -8,12 +7,11 @@ from typing import Dict, List, Optional
 import aiohttp
 import websockets
 
-# קונפיג
 FAPI_WS = "wss://fstream.binance.com/stream"
 FAPI_REST = "https://fapi.binance.com"
 PING_INTERVAL = 20
 RECONNECT_DELAY = 5
-PRICE_TTL = 10  # שניות – מקס גיל מחיר מה־cache
+PRICE_TTL = 10  # שניות – מקס גיל מחיר ב-cache
 
 _price_cache: Dict[str, float] = {}
 _price_ts: Dict[str, float] = {}
@@ -23,14 +21,14 @@ def _norm(symbol: str) -> str:
     return symbol.upper()
 
 def _stream_path(symbols: List[str]) -> str:
-    # stream מרובה סמבולים: symbol@bookTicker כדי לקבל מחיר עדכני
     parts = [f"{s.lower()}@bookTicker" for s in symbols]
     return "/".join(parts)
 
 async def _set_price(symbol: str, price: float):
     async with _cache_lock:
-        _price_cache[_norm(symbol)] = price
-        _price_ts[_norm(symbol)] = time.time()
+        s = _norm(symbol)
+        _price_cache[s] = price
+        _price_ts[s] = time.time()
 
 async def _get_cached_price(symbol: str) -> Optional[float]:
     async with _cache_lock:
@@ -45,9 +43,8 @@ async def _get_cached_price(symbol: str) -> Optional[float]:
 
 async def _rest_price(session: aiohttp.ClientSession, symbol: str) -> Optional[float]:
     url = f"{FAPI_REST}/fapi/v1/ticker/price"
-    params = {"symbol": _norm(symbol)}
     try:
-        async with session.get(url, params=params, timeout=10) as r:
+        async with session.get(url, params={"symbol": _norm(symbol)}, timeout=10) as r:
             if r.status != 200:
                 logging.warning(f"[ws_fallback] REST price {symbol} status={r.status}")
                 return None
@@ -60,10 +57,6 @@ async def _rest_price(session: aiohttp.ClientSession, symbol: str) -> Optional[f
         return None
 
 async def get_price(symbol: str) -> Optional[float]:
-    """
-    מחזיר מחיר מ־cache אם טרי, אחרת מנסה REST.
-    """
-    symbol = _norm(symbol)
     p = await _get_cached_price(symbol)
     if p is not None:
         return p
@@ -71,25 +64,20 @@ async def get_price(symbol: str) -> Optional[float]:
         return await _rest_price(session, symbol)
 
 async def _ws_loop(symbols: List[str]):
-    """
-    לולאת WS מתמשכת. מאזין ל-bookTicker לכל הסימבולים.
-    על כשל – מנסה להתחבר מחדש.
-    """
     stream = _stream_path(symbols)
     url = f"{FAPI_WS}?streams={stream}"
     logging.info(f"[ws_fallback] Connecting WS: {url}")
 
-    async for _ in _reconnect_backoff():
+    while True:
         try:
             async with websockets.connect(url, ping_interval=PING_INTERVAL, ping_timeout=10) as ws:
                 logging.info("[ws_fallback] WS connected")
                 while True:
                     msg = await ws.recv()
                     data = json.loads(msg)
-                    # מבנה multi-stream: {"stream": "...", "data": {...}}
-                    payload = data.get("data") or data
-                    # bookTicker: bid/bidQty/ask/askQty, נשתמש ב-ask כ"מחיר"
+                    payload = data.get("data") or data  # multi-stream
                     s = payload.get("s")
+                    # bookTicker מחזיר ask/bid; ניקח ask כמחיר עדכני
                     a = payload.get("a")
                     if s and a:
                         try:
@@ -101,25 +89,13 @@ async def _ws_loop(symbols: List[str]):
             await asyncio.sleep(RECONNECT_DELAY)
             logging.info("[ws_fallback] Reconnecting WS...")
 
-async def _reconnect_backoff():
-    """
-    גנרטור פשוט לריבוי ניסיונות (ניתן להחליף ל-backoff חכם).
-    """
-    while True:
-        yield True
-
 async def launch_multi_websocket(symbols: List[str]):
-    """
-    מפעיל WS כרקע עבור רשימת סימבולים.
-    לא חוסם: היוצר אמור לקרוא עם asyncio.create_task(...).
-    """
     if not symbols:
         symbols = ["BTCUSDT"]
-    # סינון כפילויות ונרמול
-    uniq = sorted(list({_norm(s) for s in symbols}))
-    # מפעיל לולאה אחת לכל הסימבולים (multi-stream)
+    uniq = sorted({ _norm(s) for s in symbols })
     asyncio.create_task(_ws_loop(uniq))
     logging.info(f"[ws_fallback] Multi-WS started for {len(uniq)} symbols: {uniq}")
+
 
 
 
