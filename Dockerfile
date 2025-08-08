@@ -1,11 +1,8 @@
-# בסיס: Python 3.11 בגרסה רזה
 FROM python:3.11-slim
 
-# מניעת קבצי bytecode ולוגים מידיים
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# התקנת תלויות מערכת עבור pandas, numpy, matplotlib, TA ועוד
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc build-essential libpq-dev libssl-dev libffi-dev \
     libxml2-dev libxslt1-dev libjpeg-dev zlib1g-dev \
@@ -13,20 +10,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreetype6-dev libpng-dev libopenblas-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# הגדרת תיקיית עבודה
 WORKDIR /app
 
-# העתקת קובץ הדרישות והתקנת תלויות
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# העתקת שאר קבצי הפרויקט
 COPY . .
 
-# ודא שהתיקיות הסטטיות קיימות (גם אם ריקות)
+# תיקיות סטטיות (לא חובה, אבל לא מזיק)
 RUN mkdir -p .well-known static
 
-# 🟢 הפעלת Gunicorn עם פורט דינמי בהתאם ל־Railway
-CMD ["sh", "-c", "gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:${PORT} --timeout 120"]
+# Gunicorn מאזין ל-$PORT (Railway)
+CMD ["bash", "-lc", "gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:${PORT} --timeout 300"]
+
 
 
