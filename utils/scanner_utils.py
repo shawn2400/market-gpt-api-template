@@ -5,7 +5,7 @@ from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
 
-# Semaphore להגבלת מקביליות
+# Semaphore להגבלת מקביליות לביצוע אסינכרוני בטוח
 semaphore = asyncio.Semaphore(5)
 
 async def analyze_symbol(
@@ -16,24 +16,29 @@ async def analyze_symbol(
     trending_only: bool = False,
     with_ai: bool = False,
     frames: list = None
-) -> dict:
+) -> dict | None:
     """
-    מבצע ניתוח טכני מלא לסימבול ומחזיר טרייד עם איכות וניתוח.
+    מבצע ניתוח טכני מלא לסימבול בטיימפריים נתון.
+    מחזיר dict עם פרטי ניתוח, כולל אינדיקטורים, כיוון, ציון איכות.
+    במקרה של כשל מחזיר None.
     """
     try:
         async with semaphore:
             df = get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
             if df is None or df.empty:
-                logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}")
+                logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}@{interval}")
                 return None
 
             df = compute_indicators(df)
-            if df.empty or "rsi" not in df.columns or "adx" not in df.columns or "supertrend_dir" not in df.columns:
-                logging.warning(f"[analyze_symbol] ⚠️ אינדיקטורים חסרים עבור {symbol}")
+            # בדיקה שהאינדיקטורים הבסיסיים קיימים
+            required_cols = {"rsi", "adx", "supertrend_dir"}
+            if df.empty or not required_cols.issubset(df.columns):
+                logging.warning(f"[analyze_symbol] ⚠️ אינדיקטורים חסרים עבור {symbol}@{interval}")
                 return None
 
             score = compute_quality_score(df)
 
+            # מבנה התוצאה
             return {
                 "symbol": symbol,
                 "interval": interval,
@@ -53,19 +58,19 @@ async def analyze_symbol(
             }
 
     except Exception as e:
-        logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}: {e}")
+        logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
-
 
 async def scan_all(
     interval: str = "15m",
     min_quality: int = 6,
     top: int = 10,
-    symbols: list = None,
+    symbols: list | None = None,
     market_type: str = "futures"
-):
+) -> list[dict]:
     """
-    מבצע סריקה לכל הסימבולים לפי ניתוח טכני ומחזיר את ה־top באיכות.
+    מבצע סריקה אסינכרונית לכל הסימבולים בטיימפריים מסוים.
+    מחזיר את הטריידים עם ציון איכות גבוה, ממוינים ועם מגבלת top.
     """
     from utils.watchlist_utils import load_watchlist
 
@@ -78,7 +83,7 @@ async def scan_all(
             logging.warning("[scan_all] ⚠️ אין סמלים לסריקה.")
             return []
 
-        logging.info(f"[scan_all] 🚀 סורק {len(symbols)} סמלים ({market_type})...")
+        logging.info(f"[scan_all] 🚀 סורק {len(symbols)} סמלים ({market_type}) בטיימפריים {interval}...")
 
         tasks = [
             analyze_symbol(symbol=sym, interval=interval, market_type=market_type)
@@ -86,15 +91,18 @@ async def scan_all(
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=False)
+        # סינון לפי איכות
         filtered = [r for r in results if r and r.get("quality_score", 0) >= min_quality]
+        # מיון יורד לפי איכות
         sorted_results = sorted(filtered, key=lambda x: x["quality_score"], reverse=True)
 
-        logging.info(f"[scan_all] ✅ נמצאו {len(sorted_results)} טריידים מעל ציון {min_quality}")
+        logging.info(f"[scan_all] ✅ נמצאו {len(sorted_results)} טריידים עם ציון מעל {min_quality}")
         return sorted_results[:top]
 
     except Exception as e:
-        logging.error(f"[scan_all] ❌ שגיאה בסריקה: {e}")
+        logging.error(f"[scan_all] ❌ שגיאה בסריקה: {e}", exc_info=True)
         return []
+
 
 
 
