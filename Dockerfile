@@ -17,11 +17,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# תיקיות סטטיות (לא חובה, אבל לא מזיק)
 RUN mkdir -p .well-known static
 
-# Gunicorn מאזין ל-$PORT (Railway)
+# חשוב: מאזין ל-$PORT של Railway
 CMD ["bash", "-lc", "gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:${PORT} --timeout 300"]
+
 
 
 
