@@ -1,3 +1,30 @@
+import asyncio
+import logging
+from typing import List
+from utils.trending_utils import get_trending_symbols
+from utils.scanner_utils import analyze_symbol, semaphore
+from utils.ai_analysis import analyze_with_ai
+from utils.watchlist_utils import load_watchlist  # חדש
+
+MAX_SYMBOLS = 20
+
+async def safe_analyze(symbol: str, tf: str, market: str, trending_only: bool):
+    try:
+        async with semaphore:
+            return await analyze_symbol(
+                symbol=symbol,
+                market_type=market,
+                interval=tf,
+                limit=100,
+                trending_only=trending_only,
+                with_ai=False,
+                frames=[tf]
+            )
+    except Exception as e:
+        logging.error(f"[multi_tf_scanner] ❌ analyze_symbol נכשל עבור {symbol}@{tf}: {e}")
+        return None
+
+
 async def multi_tf_scan_with_ai(
     timeframes=("5m", "15m", "1h"),
     markets=("futures",),
@@ -8,13 +35,20 @@ async def multi_tf_scan_with_ai(
 ):
     logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}")
 
-    # שליפת סמלים טרנדיים (קריאה סינכרונית, בלי await)
     if trending_only:
+        # שימוש ב־API ל־Trending
         symbols = get_trending_symbols(trending_source=trending_source, market_type=markets[0])
         logging.info(f"[multi_tf_scanner] סמלים טרנדיים נבחרו: {symbols}")
     else:
-        # אפשר להחליף כאן לטעינת watchlist אם רוצים
-        symbols = get_trending_symbols(trending_source=trending_source, market_type=markets[0])
+        # טעינת רשימת מעקב מקובץ
+        watchlist = load_watchlist()
+        symbols = [item["symbol"] for item in watchlist if item.get("symbol")]
+        logging.info(f"[multi_tf_scanner] טעינת {len(symbols)} סמלים מ־watchlist.json")
+
+        # fallback אם הרשימה ריקה
+        if not symbols:
+            logging.warning("[multi_tf_scanner] watchlist ריק — נופל ל־get_trending_symbols")
+            symbols = get_trending_symbols(trending_source=trending_source, market_type=markets[0])
 
     if not symbols:
         logging.warning("[multi_tf_scanner] אין סמלים לסריקה")
@@ -51,6 +85,20 @@ async def multi_tf_scan_with_ai(
     # מיון לפי ציון איכות ולקיחת top N
     final_results.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
     return final_results[:top]
+
+
+async def fallback_scan_manual(symbol: str) -> List[dict]:
+    logging.info(f"[multi_tf_scanner] ביצוע סריקה ידנית fallback עבור {symbol}")
+    try:
+        result = await analyze_symbol(symbol, interval="15m", market_type="futures")
+        if result:
+            return [result]
+        else:
+            return []
+    except Exception as e:
+        logging.error(f"[multi_tf_scanner] ❌ שגיאה ב-fallback_scan_manual עבור {symbol}: {e}")
+        return []
+
 
 
 
