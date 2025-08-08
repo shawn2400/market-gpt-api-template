@@ -1,62 +1,43 @@
-from fastapi import APIRouter, Query, HTTPException
-from typing import Tuple
-import logging
-
-# ודא שקיימות הפונקציות הבאות:
-# - utils.multi_tf_scanner.multi_tf_scan_with_ai(timeframes, markets, min_quality, top, trending_only, trending_source)
+# routes/multi_scan.py
+from fastapi import APIRouter, Query
+from typing import Optional
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
+from utils.watchlist_utils import load_watchlist
 
 router = APIRouter(
     prefix="/scan",
-    tags=["Multi-TF Scanner"],
+    tags=["Multi-TF Scanner"]
 )
-
-@router.get("/ping")
-async def scan_ping():
-    return {"ok": True, "endpoint": "/scan/multi"}
 
 @router.get("/multi")
 async def scan_multi(
-    interval: str = Query("5m,15m,1h", description="טיימפריימים בפסיק, לדוגמה: 5m,15m,1h"),
-    min_quality: int = Query(6, ge=1, le=10),
-    top: int = Query(10, ge=1),
-    market_type: str = Query("futures", description="futures או spot"),
-    trending_only: bool = Query(False),
-    trending_source: str = Query("coingecko"),
+    interval: Optional[str] = Query("5m,15m,1h", description="רשימת טיימפריימים מופרדים בפסיקים"),
+    min_quality: int = Query(6, ge=1, le=10, description="ציון איכות מינימלי (0–10)"),
+    top: int = Query(10, ge=1, description="מספר הטריידים המובילים"),
+    market_type: Optional[str] = Query("futures", description="סוג שוק: futures או spot"),
+    trending_only: Optional[bool] = Query(False, description="האם לסנן רק מטבעות טרנדיים"),
+    trending_source: Optional[str] = Query("coingecko", description="מקור למטבעות טרנדיים")
 ):
     """
-    סריקה מרובת טיימפריימים (עם AI אם זמין).
+    סריקת שוק לפי מספר טיימפריימים + AI, עם עדיפות ל־watchlist.json אם קיים.
     """
-    try:
-        tfs: Tuple[str, ...] = tuple([t.strip() for t in interval.split(",") if t.strip()])
-        if not tfs:
-            raise HTTPException(status_code=422, detail="interval ריק או לא חוקי")
+    # טעינת רשימת המעקב
+    watchlist_symbols = load_watchlist(min_quality=min_quality)
+    if watchlist_symbols:
+        trending_only = False  # אם יש watchlist, לא נכריח טרנדינג בלבד
 
-        results = await multi_tf_scan_with_ai(
-            timeframes=tfs,
-            markets=(market_type,),
-            min_quality=min_quality,
-            top=top,
-            trending_only=trending_only,
-            trending_source=trending_source,
-        )
-        return {
-            "ok": True,
-            "params": {
-                "timeframes": tfs,
-                "market_type": market_type,
-                "min_quality": min_quality,
-                "top": top,
-                "trending_only": trending_only,
-                "trending_source": trending_source,
-            },
-            "results": results,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.exception(f"[scan/multi] error: {e}")
-        raise HTTPException(status_code=500, detail=f"scan failed: {e}")
+    timeframes = tuple(interval.split(","))
+
+    results = await multi_tf_scan_with_ai(
+        timeframes=timeframes,
+        markets=(market_type,),
+        min_quality=min_quality,
+        top=top,
+        trending_only=trending_only,
+        trending_source=trending_source
+    )
+
+    return {"count": len(results), "results": results}
 
 
 
