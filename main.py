@@ -2,18 +2,21 @@ import os
 import json
 import logging
 import asyncio
+from typing import Optional
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-# לוגיקת WS/מחיר + אוטו־אקסקיוטור
 from utils.ws_fallback import launch_multi_websocket, get_price
 from auto_executor import start_executor, stop_executor, is_executor_running
 
-# === ENV ===
+# === ENV & LOGGING ===
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s', force=True)
+logging.basicConfig(level=logging.INFO,
+                    format='[%(asctime)s] [%(levelname)s] %(message)s',
+                    force=True)
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
@@ -30,7 +33,9 @@ def load_watchlist_symbols() -> list[str]:
     try:
         with open("watchlist.json", "r", encoding="utf-8") as f:
             data = json.load(f)
-        symbols = [str(x.get("symbol", "")).upper() for x in data if isinstance(x, dict) and x.get("symbol")]
+        symbols = [str(x.get("symbol", "")).upper()
+                   for x in data
+                   if isinstance(x, dict) and x.get("symbol")]
         if not symbols:
             raise ValueError("רשימת המעקב ריקה")
         logging.info(f"[watchlist] Loaded {len(symbols)} symbols, trimming to {MAX_WS_SYMBOLS}")
@@ -43,7 +48,7 @@ def load_watchlist_symbols() -> list[str]:
 app = FastAPI(
     title="AlgoGPT API",
     description="API למסחר בזמן אמת ב-Binance (Futures, Spot, Grid, AI, SL/TP)",
-    version="2.0.8",
+    version="2.0.9",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -79,15 +84,31 @@ try:
 except Exception as e:
     logging.exception(f"[main] Failed to include routers: {e}")
 
-# Startup (לא חוסם)
+# === WS lifecycle (singleton per process) ===
+_ws_task: Optional[asyncio.Task] = None
+
 @app.on_event("startup")
 async def startup_event():
     logging.info("[main] Server startup event triggered")
     symbols = load_watchlist_symbols()
-    asyncio.create_task(launch_multi_websocket(symbols))
-    logging.info(f"[main] WebSocket task spawned for symbols: {symbols}")
+    # לא חוסם – WS כרקע
+    global _ws_task
+    _ws_task = asyncio.create_task(launch_multi_websocket(symbols))
+    logging.info(f"[main] WS task spawned for {len(symbols)} symbols")
 
-# Root/Health
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _ws_task
+    if _ws_task and not _ws_task.done():
+        _ws_task.cancel()
+        try:
+            await asyncio.wait_for(_ws_task, timeout=5)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logging.warning(f"[main] WS task cancel error: {e}")
+
+# === Root/Health ===
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "AlgoGPT API is running ✅", "docs": "/docs"}
@@ -96,7 +117,7 @@ async def root():
 async def healthz():
     return {"status": "healthy ✅"}
 
-# AutoExecutor
+# === AutoExecutor ===
 @app.get("/executor/start")
 async def start_executor_route():
     started = start_executor()
@@ -111,7 +132,7 @@ async def stop_executor_route():
 async def executor_status_route():
     return {"running": is_executor_running()}
 
-# מחיר חי
+# === מחיר חי ===
 @app.get("/price")
 async def get_price_route(symbol: str = Query(..., description="סימבול כמו BTCUSDT")):
     try:
@@ -123,12 +144,13 @@ async def get_price_route(symbol: str = Query(..., description="סימבול כ�
         logging.error(f"[main] שגיאה בשליפת מחיר: {e}")
         return {"error": str(e)}
 
-# Debug routes
+# === Debug ===
 @app.get("/debug/routes")
 def get_routes():
     info = [{"path": r.path, "name": r.name} for r in app.router.routes]
     logging.info(f"[debug] Registered routes: {info}")
     return info
+
 
 
 
