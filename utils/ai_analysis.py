@@ -10,9 +10,6 @@ load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 async def analyze_with_ai(tf_results: list) -> dict:
-    """
-    ניתוח GPT עבור תוצאות טכניות לפי מספר טיימפריימים.
-    """
     if not openai.api_key or openai.api_key.strip() == "":
         logging.error("[AI] ❌ מפתח OpenAI לא מוגדר או ריק.")
         return {"error": "OpenAI API key not configured"}
@@ -41,7 +38,7 @@ async def analyze_with_ai(tf_results: list) -> dict:
         logging.debug(f"[AI] ▶️ שליחת בקשה ל־OpenAI GPT עם prompt:\n{prompt}")
 
         resp = await openai.chat.completions.acreate(
-            model="gpt-4",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=200
@@ -78,10 +75,6 @@ async def analyze_with_ai(tf_results: list) -> dict:
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
 
 async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: float = None) -> Tuple[float, float]:
-    """
-    ניתוח GPT לחישוב SL ו־TP חכמים בהתבסס על מגמה, ATR ו־entry.
-    אם ה-GPT נכשל — fallback לחישוב קלאסי.
-    """
     try:
         prompt = (
             f"You are a crypto trading assistant.\n"
@@ -97,7 +90,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
         logging.debug(f"[AI] ▶️ שליחת בקשה ל־OpenAI GPT עם prompt:\n{prompt}")
 
         response = await openai.chat.completions.acreate(
-            model="gpt-4",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=100
@@ -116,6 +109,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
 
     from utils.sl_tp_utils import calculate_sl_tp
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+
 
 
 
