@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List, Optional
+from typing import List
 from utils.trending_utils import get_trending_symbols
 from utils.watchlist_utils import load_watchlist
 from utils.scanner_utils import analyze_symbol, semaphore
@@ -35,17 +35,15 @@ async def multi_tf_scan_with_ai(
 ):
     logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}")
 
-    # 1️⃣ ניסיון ראשון – טעינת watchlist.json
     symbols = []
     try:
         watchlist = load_watchlist()
         if watchlist:
-            symbols = [item["symbol"] for item in watchlist if isinstance(item, dict) and "symbol" in item]
+            symbols = [item["symbol"] for item in watchlist]
             logging.info(f"[multi_tf_scanner] סמלים נטענו מ־watchlist.json: {symbols}")
     except Exception as e:
         logging.warning(f"[multi_tf_scanner] שגיאה בטעינת watchlist.json: {e}")
 
-    # 2️⃣ ניסיון שני – trending API
     if not symbols:
         try:
             symbols = get_trending_symbols(trending_source, markets[0])
@@ -53,35 +51,27 @@ async def multi_tf_scan_with_ai(
         except Exception as e:
             logging.error(f"[multi_tf_scanner] שגיאה בקבלת סמלים מטרנדינג: {e}")
 
-    # 3️⃣ ניסיון שלישי – fallback קבוע
     if not symbols:
         symbols = FALLBACK_SYMBOLS
         logging.warning(f"[multi_tf_scanner] שימוש ב־fallback: {symbols}")
 
-    # הגבלת מספר סמלים
     symbols = symbols[:MAX_SYMBOLS]
 
-    # סריקה אסינכרונית
     tasks = []
     for symbol in symbols:
         for tf in timeframes:
             tasks.append(safe_analyze(symbol, tf, markets[0], trending_only))
 
     results_raw = await asyncio.gather(*tasks)
-    results_raw = [r for r in results_raw if r and isinstance(r, dict)]
+    results_raw = [r for r in results_raw if r]
 
-    # קיבוץ תוצאות לפי סמל
     grouped = {}
     for r in results_raw:
-        sym = r.get("symbol")
-        if not sym:
-            logging.warning(f"[multi_tf_scanner] תוצאה חסרה מפתח 'symbol': {r}")
-            continue
+        sym = r["symbol"]
         if sym not in grouped:
             grouped[sym] = []
         grouped[sym].append(r)
 
-    # ניתוח AI לכל סמל
     final_results = []
     for sym, data in grouped.items():
         avg_quality = sum(d.get("quality_score", 0) for d in data) / len(data)
@@ -89,9 +79,6 @@ async def multi_tf_scan_with_ai(
             continue
 
         ai_analysis = await analyze_with_ai(data)
-        if not isinstance(ai_analysis, dict):
-            logging.warning(f"[multi_tf_scanner] ניתוח AI החזיר תוצאה לא תקינה עבור {sym}: {ai_analysis}")
-            continue
         if "error" in ai_analysis:
             logging.warning(f"[multi_tf_scanner] ניתוח AI נכשל עבור {sym}: {ai_analysis['error']}")
             continue
@@ -99,14 +86,9 @@ async def multi_tf_scan_with_ai(
         final_results.append(ai_analysis)
 
     final_results.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
-    logging.debug(f"[multi_tf_scanner] סיום סריקה: מצא {len(final_results)} תוצאות מתאימות")
     return final_results[:top]
 
 async def fallback_scan_manual(symbol: str):
-    """
-    פונקציה לעבודה ידנית עם סמל יחיד.
-    מפעילה סריקה עם פרמטרים מוגדרים מראש רק עבור אותו סמל.
-    """
     logging.info(f"[multi_tf_scanner] fallback_scan_manual ל־symbol: {symbol}")
     results = await multi_tf_scan_with_ai(
         timeframes=("5m", "15m", "1h"),
@@ -115,8 +97,9 @@ async def fallback_scan_manual(symbol: str):
         top=20,
         trending_only=False
     )
-    filtered = [r for r in results if isinstance(r, dict) and r.get("symbol") == symbol.upper()]
+    filtered = [r for r in results if r.get("symbol") == symbol.upper()]
     return filtered
+
 
 
 
