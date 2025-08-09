@@ -6,7 +6,7 @@ info:
   version: 2.0.7
 
 servers:
-  - url: https://market-gpt-api-template.railway.app
+  - url: https://algogpt-docker.onrender.com
 
 components:
   securitySchemes:
@@ -281,4 +281,5 @@ paths:
 
 security:
   - bearerAuth: []
+
 
