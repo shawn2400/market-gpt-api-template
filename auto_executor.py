@@ -26,7 +26,15 @@ async def executor_loop():
         while _running:
             try:
                 watchlist = load_watchlist(min_quality=MIN_QUALITY_SCORE)
-                symbols = [entry["symbol"] for entry in watchlist]
+                if not isinstance(watchlist, list):
+                    logging.error(f"[AUTO] watchlist is not a list: {type(watchlist)} content: {watchlist}")
+                    watchlist = []
+
+                for entry in watchlist:
+                    if not isinstance(entry, dict):
+                        logging.error(f"[AUTO] watchlist entry not dict: {type(entry)} content: {entry}")
+
+                symbols = [entry["symbol"] for entry in watchlist if isinstance(entry, dict) and "symbol" in entry]
 
                 if not symbols:
                     logging.info("[AUTO] No symbols with sufficient quality found.")
@@ -116,6 +124,7 @@ def stop_executor():
 
 def is_executor_running():
     return _running
+
 
 
 
