@@ -1,5 +1,5 @@
-import asyncio
 import logging
+import asyncio
 from utils.trending_utils import get_trending_symbols
 from utils.watchlist_utils import load_watchlist
 from utils.scanner_utils import analyze_symbol, semaphore
@@ -63,7 +63,11 @@ async def multi_tf_scan_with_ai(
 
     grouped = {}
     for r in results_raw:
-        grouped.setdefault(r["symbol"], []).append(r)
+        sym = r.get("symbol")
+        if not sym:
+            logging.warning(f"[multi_tf_scanner] Skipping result without symbol: {r}")
+            continue
+        grouped.setdefault(sym, []).append(r)
 
     final_results = []
     for sym, data in grouped.items():
@@ -72,13 +76,26 @@ async def multi_tf_scan_with_ai(
             continue
 
         ai_analysis = await analyze_with_ai(data)
-        if "error" in ai_analysis:
-            logging.warning(f"[multi_tf_scanner] AI analysis failed for {sym}: {ai_analysis['error']}")
+
+        # בדיקות תקינות על תוצאת ה-AI:
+        if not isinstance(ai_analysis, dict):
+            logging.warning(f"[multi_tf_scanner] AI analysis result not dict for {sym}: {ai_analysis}")
             continue
+
+        required_keys = {"symbol", "quality_score", "direction", "signal", "confidence"}
+        if not required_keys.issubset(ai_analysis.keys()):
+            logging.warning(f"[multi_tf_scanner] AI analysis missing keys for {sym}: {ai_analysis.keys()}")
+            continue
+
+        if "error" in ai_analysis:
+            logging.warning(f"[multi_tf_scanner] AI analysis error for {sym}: {ai_analysis['error']}")
+            continue
+
         final_results.append(ai_analysis)
 
     final_results.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
     return final_results[:top]
+
 
 
 
