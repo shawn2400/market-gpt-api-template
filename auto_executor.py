@@ -43,22 +43,12 @@ async def executor_loop():
                     trending_only=False
                 )
 
-                logging.info(f"[AUTO] 📊 דוגמת תוצאות סריקה: {scan_results[:3]}")
-
                 for trade in scan_results:
-                    if not isinstance(trade, dict):
-                        logging.warning(f"[AUTO] ⚠️ פריט לא תקין בסריקה (לא dict): {trade}")
-                        continue
-
-                    symbol = trade.get("symbol")
-                    if not symbol:
-                        logging.warning(f"[AUTO] ⚠️ פריט חסר מפתח symbol: {trade}")
-                        continue
-
+                    symbol = trade["symbol"]
                     direction = trade.get("direction", trade.get("main_direction", "LONG")).upper()
 
                     entry = await get_price(symbol)
-                    if not entry:
+                    if entry is None:
                         logging.warning(f"[AUTO] ⚠️ מחיר לא זמין עבור {symbol}, מדלג.")
                         continue
 
@@ -128,6 +118,7 @@ def stop_executor():
 
 def is_executor_running():
     return _running
+
 
 
 
