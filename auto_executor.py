@@ -20,7 +20,7 @@ _task = None
 async def executor_loop():
     global _running
     _running = True
-    logging.info("[AUTO] 🚀 Auto Executor התחיל לרוץ...")
+    logging.info("[AUTO] Auto Executor started")
 
     try:
         while _running:
@@ -29,11 +29,11 @@ async def executor_loop():
                 symbols = [entry["symbol"] for entry in watchlist]
 
                 if not symbols:
-                    logging.info("[AUTO] ⏳ אין סימבולים עם איכות מספקת בסריקה הנוכחית.")
+                    logging.info("[AUTO] No symbols with sufficient quality found.")
                     await asyncio.sleep(SCAN_INTERVAL)
                     continue
 
-                logging.info(f"[AUTO] 📊 התחלת סריקה על {len(symbols)} סימבולים...")
+                logging.info(f"[AUTO] Scanning {len(symbols)} symbols...")
 
                 scan_results = await multi_tf_scan_with_ai(
                     timeframes=("15m", "1h"),
@@ -49,24 +49,24 @@ async def executor_loop():
 
                     entry = await get_price(symbol)
                     if not entry:
-                        logging.warning(f"[AUTO] ⚠️ מחיר לא זמין עבור {symbol}, מדלג.")
+                        logging.warning(f"[AUTO] Price not available for {symbol}, skipping.")
                         continue
 
                     if not is_price_fresh(symbol, max_age_sec=10):
-                        logging.warning(f"[AUTO] ⏳ מחיר לא עדכני עבור {symbol}, מדלג.")
+                        logging.warning(f"[AUTO] Price stale for {symbol}, skipping.")
                         continue
 
-                    sl_tp = await predict_optimal_sl_tp(entry_price=entry, direction=direction, symbol=symbol)
+                    sl_tp = await predict_optimal_sl_tp(symbol, direction, entry)
                     if isinstance(sl_tp, dict) and "error" in sl_tp:
-                        logging.warning(f"[AUTO] ❌ חיזוי SL/TP נכשל עבור {symbol}: {sl_tp['error']}")
+                        logging.warning(f"[AUTO] SL/TP prediction failed for {symbol}: {sl_tp['error']}")
                         continue
 
                     stop, tp = sl_tp if isinstance(sl_tp, tuple) else (None, None)
                     if stop is None or tp is None:
-                        logging.warning(f"[AUTO] ⚠️ SL/TP לא תקינים עבור {symbol}, מדלג.")
+                        logging.warning(f"[AUTO] Invalid SL/TP for {symbol}, skipping.")
                         continue
 
-                    logging.info(f"[AUTO] 📈 טרייד מומלץ: {symbol} | {direction} | כניסה: {entry} | SL: {stop} | TP: {tp}")
+                    logging.info(f"[AUTO] Trade recommended: {symbol} | {direction} | Entry: {entry} | SL: {stop} | TP: {tp}")
 
                     result = await execute_trade_live(
                         symbol=symbol,
@@ -78,29 +78,27 @@ async def executor_loop():
                         budget_usd=MAX_TRADE_BUDGET,
                         market_type="futures"
                     )
-
-                    logging.info(f"[AUTO] 💸 תוצאה: {result}")
+                    logging.info(f"[AUTO] Trade result: {result}")
 
             except asyncio.CancelledError:
-                logging.info("[AUTO] 🔴 Auto Executor בוטל.")
+                logging.info("[AUTO] Executor cancelled")
                 break
             except Exception as e:
-                logging.error(f"[AUTO] ❗ שגיאה בלולאת ביצוע: {e}")
+                logging.error(f"[AUTO] Loop error: {e}")
 
             await asyncio.sleep(SCAN_INTERVAL)
-
     finally:
         _running = False
-        logging.info("[AUTO] Auto Executor סיים ריצה.")
+        logging.info("[AUTO] Executor stopped")
 
 def start_executor():
     global _task
     if _task is None or _task.done():
         _task = asyncio.create_task(executor_loop())
-        logging.info("[AUTO] ✅ Auto Executor started")
+        logging.info("[AUTO] Executor started")
         return True
     else:
-        logging.info("[AUTO] ⚠️ Auto Executor already running")
+        logging.info("[AUTO] Executor already running")
         return False
 
 def stop_executor():
@@ -110,14 +108,15 @@ def stop_executor():
         if _task:
             _task.cancel()
             _task = None
-        logging.info("[AUTO] ⏹️ Auto Executor stopped")
+        logging.info("[AUTO] Executor stopped")
         return True
     else:
-        logging.info("[AUTO] ⚠️ Auto Executor was not running")
+        logging.info("[AUTO] Executor was not running")
         return False
 
 def is_executor_running():
     return _running
+
 
 
 
