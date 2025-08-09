@@ -37,12 +37,14 @@ def init_binance_client():
 
         logging.info("[Binance] 🔑 מפתחות נמצאו – מנסה להתחבר ל-Binance API...")
         temp_client = Client(API_KEY, API_SECRET)
-        # שינוי ל-API URL אם יש צורך (אפשר להשאיר את ברירת המחדל)
+        # ברירת מחדל, אפשר לשנות אם רוצים URL שונה
         temp_client.API_URL = "https://api1.binance.com/api"
 
         # בדיקות תקשורת בסיסיות
         temp_client.ping()
-        temp_client.futures_account()  # מוודא גישה ל-Futures
+        # מוודא שיש גישה ל-Futures
+        futures_acc_info = temp_client.futures_account()
+        logging.info(f"[Binance] futures_account info sample: {str(futures_acc_info)[:200]}")
 
         client = temp_client
         logging.info("✅ חיבור ל־Binance הצליח (Spot + Futures)")
@@ -75,11 +77,11 @@ def check_binance_client():
         logging.error(f"[Binance Client] Ping failed: {e}")
         return False
 
-
-# לאפשר בדיקה ידנית בקוד אחר
+# לאפשר בדיקה ישירה בעת הרצה ישירה של הקובץ
 if __name__ == "__main__":
     if check_binance_client():
         logging.info("Binance Client ready to use.")
     else:
         logging.error("Binance Client not ready. Check your API keys and environment variables.")
+
 
