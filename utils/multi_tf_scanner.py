@@ -97,6 +97,28 @@ async def multi_tf_scan_with_ai(
 
 
 
+# **הגדרה נלווית שתחליף את fallback_scan_manual**
+# במידה ואתה רוצה לקרוא לפונקציה בשם fallback_scan_manual, אפשר להגדיר עטיפה פשוטה כזו:
+async def fallback_scan_manual(symbol: str):
+    """
+    פונקציה לעבודה ידנית עם סמל יחיד.
+    מפעילה סריקה עם פרמטרים מוגדרים מראש רק עבור אותו סמל.
+    """
+    logging.info(f"[multi_tf_scanner] fallback_scan_manual ל־symbol: {symbol}")
+    # קוראת לסריקה עם timeframes סטנדרטיים על שוק הפיוצ'רס
+    results = await multi_tf_scan_with_ai(
+        timeframes=("5m", "15m", "1h"),
+        markets=("futures",),
+        min_quality=0,
+        top=20,
+        trending_only=False
+    )
+    # מסננת רק את התוצאות עבור הסמל המבוקש
+    filtered = [r for r in results if r.get("symbol") == symbol.upper()]
+    return filtered
+
+
+
 
 
 
