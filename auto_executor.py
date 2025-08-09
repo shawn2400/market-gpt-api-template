@@ -26,16 +26,19 @@ async def executor_loop():
         while _running:
             try:
                 watchlist = load_watchlist(min_quality=MIN_QUALITY_SCORE)
-                logging.info(f"[AUTO] Loaded watchlist type: {type(watchlist)}, length: {len(watchlist)}")
 
+                if not isinstance(watchlist, list):
+                    logging.error(f"[AUTO] watchlist is not a list: {type(watchlist)} content: {watchlist}")
+                    watchlist = []
+
+                # וידוא שכל פריט הוא dict עם מפתחות תקינים
                 symbols = []
-                for i, entry in enumerate(watchlist):
-                    logging.debug(f"[AUTO] Watchlist entry {i} type: {type(entry)}, content: {entry}")
+                for entry in watchlist:
                     if not isinstance(entry, dict):
-                        logging.error(f"[AUTO] Invalid watchlist entry at index {i}: not a dict")
+                        logging.error(f"[AUTO] watchlist entry not dict: {type(entry)} content: {entry}")
                         continue
-                    if "symbol" not in entry:
-                        logging.error(f"[AUTO] Watchlist entry at index {i} missing 'symbol' key")
+                    if "symbol" not in entry or "direction" not in entry:
+                        logging.error(f"[AUTO] watchlist entry missing keys: {entry}")
                         continue
                     symbols.append(entry["symbol"])
 
@@ -55,12 +58,12 @@ async def executor_loop():
                 )
 
                 for trade in scan_results:
-                    # ודא ש-trade הוא dict ושיש מפתח symbol
+                    # וידוא ש-trade הוא dict עם מפתחות
                     if not isinstance(trade, dict):
-                        logging.error(f"[AUTO] Invalid trade item (not dict): {trade}")
+                        logging.error(f"[AUTO] scan result item not dict: {type(trade)} content: {trade}")
                         continue
                     if "symbol" not in trade:
-                        logging.error(f"[AUTO] Trade missing 'symbol': {trade}")
+                        logging.error(f"[AUTO] scan result missing symbol: {trade}")
                         continue
 
                     symbol = trade["symbol"]
