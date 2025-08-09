@@ -1,75 +1,39 @@
-import os
-import logging
+# utils/binance_client.py
+import os, logging
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# === טעינת משתני סביבה ===
 load_dotenv()
 
-# === קונפיגורציית לוגים ===
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)s] %(message)s',
-    force=True
-)
+API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
+API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 
-# === טעינת מפתחות עם ניקוי רווחים מיותרים ===
-API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
-API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+if any(c in API_KEY+API_SECRET for c in ["\n", "\r", "\t", " "]):
+    logging.error("[Env] BINANCE keys contain whitespace/newlines -> fix Railway variables.")
+    
+# הערה: Public (לסריקות/klines) לא דורש מפתח. הפקודות (Orders) כן.
+if API_KEY and API_SECRET:
+    client = Client(API_KEY, API_SECRET, tld="com")
+else:
+    logging.warning("[Binance] No API keys loaded -> public-only mode enabled.")
+    client = Client(None, None, tld="com")
 
-logging.info(f"[Env Check] BINANCE_API_KEY Loaded: {'Yes' if API_KEY else 'No'} (starts with: {API_KEY[:4] + '...' if API_KEY else 'None'})")
-logging.info(f"[Env Check] BINANCE_API_SECRET Loaded: {'Yes' if API_SECRET else 'No'} (starts with: {API_SECRET[:4] + '...' if API_SECRET else 'None'})")
+# Futures base (ליתר בטחון)
+client.FUTURES_URL = "https://fapi.binance.com"
 
-client = None
-
-def init_binance_client():
-    global client
+def ping_and_info():
     try:
-        if not API_KEY or not API_SECRET:
-            raise EnvironmentError("❌ BINANCE_API_KEY או BINANCE_API_SECRET לא הוגדרו או ריקים")
-
-        logging.info("[Binance] 🔑 מפתחות נמצאו – מנסה להתחבר ל-Binance API...")
-        temp_client = Client(API_KEY, API_SECRET)
-        temp_client.API_URL = "https://api1.binance.com/api"
-
-        # בדיקות תקשורת בסיסיות
-        temp_client.ping()
-        futures_acc_info = temp_client.futures_account()
-        logging.info(f"[Binance] futures_account info sample: {str(futures_acc_info)[:200]}")
-
-        client = temp_client
-        logging.info("✅ חיבור ל־Binance הצליח (Spot + Futures)")
-
-    except (BinanceAPIException, BinanceRequestException) as e:
-        logging.error(f"[Binance API Error] {e}")
-        client = None
-    except EnvironmentError as ee:
-        logging.error(f"[Binance Env Error] {ee}")
-        client = None
-    except Exception as e:
-        logging.error(f"[Binance Init Error] {e}")
-        client = None
-
-init_binance_client()
-
-def check_binance_client():
-    if client is None:
-        logging.error("[Binance Client] Client is None - API keys probably invalid or not loaded.")
-        return False
-    try:
-        res = client.ping()
-        logging.info(f"[Binance Client] Ping successful: {res}")
+        client.ping()                # Public
+        ei = client.futures_exchange_info()
+        logging.info(f"[Binance] futures tz={ei.get('timezone')}, symbols={len(ei.get('symbols', []))}")
         return True
-    except Exception as e:
-        logging.error(f"[Binance Client] Ping failed: {e}")
+    except (BinanceAPIException, BinanceRequestException) as e:
+        logging.error(f"[Binance] API error: {e}")
         return False
 
-if __name__ == "__main__":
-    if check_binance_client():
-        logging.info("Binance Client ready to use.")
-    else:
-        logging.error("Binance Client not ready. Check your API keys and environment variables.")
+BINANCE_READY = ping_and_info()
+
 
 
 
