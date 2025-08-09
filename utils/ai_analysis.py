@@ -114,9 +114,9 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
     except Exception as e:
         logging.warning(f"[AI-SLTP] ⚠️ Fallback to classic SL/TP: {e}\n{traceback.format_exc()}")
 
-    # fallback לחישוב רגיל
     from utils.sl_tp_utils import calculate_sl_tp
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+
 
 
 
