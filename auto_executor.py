@@ -26,15 +26,18 @@ async def executor_loop():
         while _running:
             try:
                 watchlist = load_watchlist(min_quality=MIN_QUALITY_SCORE)
-                if not isinstance(watchlist, list):
-                    logging.error(f"[AUTO] watchlist is not a list: {type(watchlist)} content: {watchlist}")
-                    watchlist = []
+                logging.info(f"[AUTO] Loaded watchlist type: {type(watchlist)}, length: {len(watchlist)}")
 
-                for entry in watchlist:
+                symbols = []
+                for i, entry in enumerate(watchlist):
+                    logging.debug(f"[AUTO] Watchlist entry {i} type: {type(entry)}, content: {entry}")
                     if not isinstance(entry, dict):
-                        logging.error(f"[AUTO] watchlist entry not dict: {type(entry)} content: {entry}")
-
-                symbols = [entry["symbol"] for entry in watchlist if isinstance(entry, dict) and "symbol" in entry]
+                        logging.error(f"[AUTO] Invalid watchlist entry at index {i}: not a dict")
+                        continue
+                    if "symbol" not in entry:
+                        logging.error(f"[AUTO] Watchlist entry at index {i} missing 'symbol' key")
+                        continue
+                    symbols.append(entry["symbol"])
 
                 if not symbols:
                     logging.info("[AUTO] No symbols with sufficient quality found.")
@@ -51,25 +54,17 @@ async def executor_loop():
                     trending_only=False
                 )
 
-                if not isinstance(scan_results, list):
-                    logging.error(f"[AUTO] scan_results is not a list: {type(scan_results)} content: {scan_results}")
-                    await asyncio.sleep(SCAN_INTERVAL)
-                    continue
-
                 for trade in scan_results:
+                    # ודא ש-trade הוא dict ושיש מפתח symbol
                     if not isinstance(trade, dict):
-                        logging.warning(f"[AUTO] Skipping non-dict trade result: {trade}")
+                        logging.error(f"[AUTO] Invalid trade item (not dict): {trade}")
                         continue
                     if "symbol" not in trade:
-                        logging.warning(f"[AUTO] Skipping trade without symbol: {trade}")
+                        logging.error(f"[AUTO] Trade missing 'symbol': {trade}")
                         continue
 
                     symbol = trade["symbol"]
-                    direction = trade.get("direction", trade.get("main_direction", "LONG"))
-                    if not isinstance(direction, str):
-                        logging.warning(f"[AUTO] Invalid direction for {symbol}: {direction}, defaulting to LONG")
-                        direction = "LONG"
-                    direction = direction.upper()
+                    direction = trade.get("direction", trade.get("main_direction", "LONG")).upper()
 
                     entry = await get_price(symbol)
                     if not entry:
