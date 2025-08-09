@@ -51,9 +51,25 @@ async def executor_loop():
                     trending_only=False
                 )
 
+                if not isinstance(scan_results, list):
+                    logging.error(f"[AUTO] scan_results is not a list: {type(scan_results)} content: {scan_results}")
+                    await asyncio.sleep(SCAN_INTERVAL)
+                    continue
+
                 for trade in scan_results:
+                    if not isinstance(trade, dict):
+                        logging.warning(f"[AUTO] Skipping non-dict trade result: {trade}")
+                        continue
+                    if "symbol" not in trade:
+                        logging.warning(f"[AUTO] Skipping trade without symbol: {trade}")
+                        continue
+
                     symbol = trade["symbol"]
-                    direction = trade.get("direction", trade.get("main_direction", "LONG")).upper()
+                    direction = trade.get("direction", trade.get("main_direction", "LONG"))
+                    if not isinstance(direction, str):
+                        logging.warning(f"[AUTO] Invalid direction for {symbol}: {direction}, defaulting to LONG")
+                        direction = "LONG"
+                    direction = direction.upper()
 
                     entry = await get_price(symbol)
                     if not entry:
@@ -92,7 +108,7 @@ async def executor_loop():
                 logging.info("[AUTO] Executor cancelled")
                 break
             except Exception as e:
-                logging.error(f"[AUTO] Loop error: {e}")
+                logging.error(f"[AUTO] Loop error: {e}", exc_info=True)
 
             await asyncio.sleep(SCAN_INTERVAL)
     finally:
@@ -124,6 +140,7 @@ def stop_executor():
 
 def is_executor_running():
     return _running
+
 
 
 
