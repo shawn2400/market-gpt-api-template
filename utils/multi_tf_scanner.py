@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from typing import List
 from utils.trending_utils import get_trending_symbols
 from utils.watchlist_utils import load_watchlist
 from utils.scanner_utils import analyze_symbol, semaphore
@@ -16,13 +15,13 @@ async def safe_analyze(symbol: str, tf: str, market: str, trending_only: bool):
                 symbol=symbol,
                 market_type=market,
                 interval=tf,
-                limit=100,
+                limit=120,
                 trending_only=trending_only,
                 with_ai=False,
                 frames=[tf]
             )
     except Exception as e:
-        logging.error(f"[multi_tf_scanner] ❌ analyze_symbol נכשל עבור {symbol}@{tf}: {e}")
+        logging.error(f"[multi_tf_scanner] analyze_symbol failed for {symbol}@{tf}: {e}")
         return None
 
 async def multi_tf_scan_with_ai(
@@ -33,44 +32,38 @@ async def multi_tf_scan_with_ai(
     trending_only=False,
     trending_source="coingecko"
 ):
-    logging.info(f"[multi_tf_scanner] התחלת סריקה: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}")
+    logging.info(f"[multi_tf_scanner] Starting scan: tf={timeframes}, markets={markets}, min_quality={min_quality}, top={top}, trending_only={trending_only}")
 
     symbols = []
     try:
         watchlist = load_watchlist()
         if watchlist:
             symbols = [item["symbol"] for item in watchlist]
-            logging.info(f"[multi_tf_scanner] סמלים נטענו מ־watchlist.json: {symbols}")
+            logging.info(f"[multi_tf_scanner] Symbols loaded from watchlist.json: {symbols}")
     except Exception as e:
-        logging.warning(f"[multi_tf_scanner] שגיאה בטעינת watchlist.json: {e}")
+        logging.warning(f"[multi_tf_scanner] Error loading watchlist.json: {e}")
 
     if not symbols:
         try:
             symbols = get_trending_symbols(trending_source, markets[0])
-            logging.info(f"[multi_tf_scanner] סמלים מטרנדינג: {symbols}")
+            logging.info(f"[multi_tf_scanner] Trending symbols: {symbols}")
         except Exception as e:
-            logging.error(f"[multi_tf_scanner] שגיאה בקבלת סמלים מטרנדינג: {e}")
+            logging.error(f"[multi_tf_scanner] Trending fetch error: {e}")
 
     if not symbols:
         symbols = FALLBACK_SYMBOLS
-        logging.warning(f"[multi_tf_scanner] שימוש ב־fallback: {symbols}")
+        logging.warning(f"[multi_tf_scanner] Using fallback symbols: {symbols}")
 
     symbols = symbols[:MAX_SYMBOLS]
 
-    tasks = []
-    for symbol in symbols:
-        for tf in timeframes:
-            tasks.append(safe_analyze(symbol, tf, markets[0], trending_only))
+    tasks = [safe_analyze(sym, tf, markets[0], trending_only) for sym in symbols for tf in timeframes]
 
     results_raw = await asyncio.gather(*tasks)
     results_raw = [r for r in results_raw if r]
 
     grouped = {}
     for r in results_raw:
-        sym = r["symbol"]
-        if sym not in grouped:
-            grouped[sym] = []
-        grouped[sym].append(r)
+        grouped.setdefault(r["symbol"], []).append(r)
 
     final_results = []
     for sym, data in grouped.items():
@@ -80,25 +73,13 @@ async def multi_tf_scan_with_ai(
 
         ai_analysis = await analyze_with_ai(data)
         if "error" in ai_analysis:
-            logging.warning(f"[multi_tf_scanner] ניתוח AI נכשל עבור {sym}: {ai_analysis['error']}")
+            logging.warning(f"[multi_tf_scanner] AI analysis failed for {sym}: {ai_analysis['error']}")
             continue
-
         final_results.append(ai_analysis)
 
     final_results.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
     return final_results[:top]
 
-async def fallback_scan_manual(symbol: str):
-    logging.info(f"[multi_tf_scanner] fallback_scan_manual ל־symbol: {symbol}")
-    results = await multi_tf_scan_with_ai(
-        timeframes=("5m", "15m", "1h"),
-        markets=("futures",),
-        min_quality=0,
-        top=20,
-        trending_only=False
-    )
-    filtered = [r for r in results if r.get("symbol") == symbol.upper()]
-    return filtered
 
 
 
