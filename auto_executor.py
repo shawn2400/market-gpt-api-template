@@ -48,7 +48,7 @@ async def executor_loop():
                     direction = trade.get("direction", trade.get("main_direction", "LONG")).upper()
 
                     entry = await get_price(symbol)
-                    if entry is None:
+                    if not entry:
                         logging.warning(f"[AUTO] ⚠️ מחיר לא זמין עבור {symbol}, מדלג.")
                         continue
 
