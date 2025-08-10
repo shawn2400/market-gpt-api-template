@@ -20,8 +20,14 @@ from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
 from utils.trending_utils import get_trending_symbols
 from utils.binance_client import ping_and_info
 
-# === AI health ===
+# === AI health (SDK) ===
 from utils.ai_client import ai_healthcheck
+
+# ננסה להביא גם בדיקת HTTP ישירה אם קיימת (לא חובה)
+try:
+    from utils.ai_health import ping_openai
+except Exception:
+    ping_openai = None  # בדיקת HTTP ישירה אופציונלית
 
 # === אוטו-אקזקיוטר ===
 from auto_executor import start_executor, stop_executor, is_executor_running
@@ -53,7 +59,7 @@ else:
     _allow_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -181,14 +187,24 @@ async def health():
 @app.get("/ai/health", tags=["Config"])
 async def ai_health():
     """
-    בדיקת חיבור ולטנסי ל-GPT (עם timeouts/ריטריי לפי utils.ai_client).
+    בדיקת חיבור ולטנסי ל-GPT:
+    - sdk: דרך ה-SDK (utils.ai_client)
+    - http: בדיקת HTTP ישירה אם זמינה (utils.ai_health.ping_openai)
+    אם ה-SDK נכשל → נחזיר 503 (כדי שתוכל לנטר); אחרת 200.
     """
-    res = await ai_healthcheck()
-    code = 200 if res.get("ok") else 503
-    if not res.get("ok"):
-        # לא מפילים את השרת — רק יחזיר 503 כדי שתוכל לנטר.
-        logging.warning(f"[ai_health] failed: {res}")
-    return res if code == 200 else HTTPException(status_code=503, detail=res)
+    sdk = await ai_healthcheck()
+    http = None
+    if callable(ping_openai):
+        try:
+            http = await ping_openai(timeout_sec=6)
+        except Exception as e:
+            http = {"ok": False, "error": f"http_probe_failed: {e}"}
+
+    payload = {"sdk": sdk, "http": http}
+    if not sdk.get("ok"):
+        # חשוב: לזרוק, לא להחזיר אובייקט של HTTPException
+        raise HTTPException(status_code=503, detail=payload)
+    return payload
 
 @app.get("/config", tags=["Config"], dependencies=[Depends(verify_token)])
 async def get_config():
@@ -269,6 +285,7 @@ async def scan_multi(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))))
+
 
 
 
