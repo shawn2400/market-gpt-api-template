@@ -26,13 +26,13 @@ MAX_TRADE_BUDGET=100
 MAX_LEVERAGE=35
 
 # --- Security / API Gateway ---
-API_BEARER_TOKEN=<PASTE_STRONG_RANDOM_TOKEN>
+API_BEARER_TOKEN=GrwpXpkRWunC7SPZGFrhaizBwcaZzpWLYJ9kv4W7u6aTx_EXu0VGfpBKaBhThLD2
 
-# --- Binance Keys (הדבק מפתחות אמיתיים) ---
+# --- Binance Keys ---
 BINANCE_API_KEY=<PUT_YOUR_REAL_KEY>
 BINANCE_API_SECRET=<PUT_YOUR_REAL_SECRET>
 
-# --- Binance Endpoints (אל תשנה אלא אם יש צורך) ---
+# --- Binance Endpoints ---
 BINANCE_SPOT_HTTP_BASE=https://api.binance.com
 BINANCE_FUTURES_HTTP_BASE=https://fapi.binance.com
 BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com
@@ -43,24 +43,23 @@ BINANCE_BACKOFF_BASE=0.7
 BINANCE_MAX_RETRIES=5
 BINANCE_RECV_WINDOW=10000
 BINANCE_TIME_SYNC_INTERVAL_SEC=900
-BINANCE_EXCHANGE_INFO_ON_START=false   # למנוע 418/403 בעלייה כשיש רגישות
+BINANCE_EXCHANGE_INFO_ON_START=false
 
 # --- Account modes ---
-BINANCE_FORCE_HEDGE_MODE=false         # true אם החשבון על Hedge Mode ורוצים לאכוף
-BINANCE_SKIP_ACCOUNT_MUTATIONS=false   # למסחר חי חייב להיות false
+BINANCE_FORCE_HEDGE_MODE=false
+BINANCE_SKIP_ACCOUNT_MUTATIONS=false
 
 # --- Egress IP helper ---
-# מומלץ: קודם הפעל את השרות, קבל IP דרך /net/ip, ועדכן כאן בהתאם (ואז הוסף ב-Binance "Trusted IPs").
-# אל תשאיר IPs ישנים; Render עלול להחליף.
 BINANCE_ALLOWED_EGRESS_IPS=
 EGRESS_IP_ENDPOINT=https://algogpt-docker.onrender.com/net/ip
 
-# --- OpenAI (אופציונלי לסריקות/ניתוח) ---
+# --- OpenAI ---
 OPENAI_API_KEY=<PUT_YOUR_OPENAI_KEY>
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT_SECONDS=30.0
 OPENAI_MAX_CONCURRENCY=4
 # OPENAI_BASE_URL=
+
 
 
 
