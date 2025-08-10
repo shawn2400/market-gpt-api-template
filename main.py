@@ -1,4 +1,4 @@
-# server/main.py
+# main.py
 import os
 import logging
 from typing import Optional, List
@@ -26,19 +26,7 @@ from utils.ai_client import ai_healthcheck
 try:
     from utils.ai_health import ping_openai  # HTTP probe אופציונלי
 except Exception:
-    ping_openai = None
-
-# === Health endpoints (livez/healthz/readyz) ===
-try:
-    from server.healthz import register_fastapi as register_health_endpoints
-except Exception:
-    register_health_endpoints = None
-
-# === Prometheus /metrics ===
-try:
-    from server.metrics import register_fastapi as register_metrics
-except Exception:
-    register_metrics = None
+    ping_openai = None  # לא חובה
 
 # === אוטו-אקזקיוטר ===
 from auto_executor import start_executor, stop_executor, is_executor_running
@@ -49,9 +37,8 @@ logging.basicConfig(
     level=getattr(logging, _LOG_LEVEL, logging.INFO),
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
-# הדפס סיכום קונפיג קצר (ללא סודות)
 try:
-    config.log_config_summary()
+    config.log_config_summary()  # סיכום קונפיג ללא סודות
 except Exception:
     pass
 
@@ -71,14 +58,6 @@ _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cor
 # ---------- אפליקציה ----------
 APP_VERSION = "2.5.0"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
-
-# רישום health endpoints (livez/healthz/readyz)
-if callable(register_health_endpoints):
-    register_health_endpoints(app)
-
-# רישום /metrics + middleware לאיסוף מטריקות
-if callable(register_metrics):
-    register_metrics(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -294,7 +273,7 @@ async def scan_multi(
     timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
     results = await multi_tf_scan_with_ai(
         timeframes=timeframes,
-        markets=(market_type,),
+        markets=(market_type,  ),
         min_quality=min_quality,
         top=top,
         trending_only=trending_only,
@@ -322,6 +301,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0",
                 port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))))
+
 
 
 
