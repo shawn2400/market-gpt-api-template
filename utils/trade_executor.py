@@ -9,13 +9,24 @@ from utils.binance_trader import binance_futures_trade  # async
 
 PRICE_PROTECT_PCT = float(getattr(config, "PRICE_PROTECT_PCT", 0.25))
 PRICE_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
-SKIP_MUTATIONS = (str(getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
-                              os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))).lower() == "true")
+
+# --- שליטה מרכזית על כתיבה לבורסה ---
+EXECUTE_TRADES = bool(getattr(config, "EXECUTE_TRADES", False))
+# ניתן לשמר בלם נוסף דרך ENV/קונפיג (עדיין ינעל גם אם EXECUTE_TRADES=true)
+BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV = str(
+    getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
+            os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))
+).lower() in ("1", "true", "yes", "y", "on")
+
+# אם אחד משני הבלמים פעיל -> אין כתיבה
+MUTATIONS_DISABLED = (not EXECUTE_TRADES) or BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV
 
 def _norm_direction(d: str) -> str:
     d = (d or "").strip().upper()
-    if d in ("LONG", "BUY"): return "LONG"
-    if d in ("SHORT", "SELL"): return "SHORT"
+    if d in ("LONG", "BUY"):
+        return "LONG"
+    if d in ("SHORT", "SELL"):
+        return "SHORT"
     return "LONG"
 
 async def execute_trade_live(
@@ -30,16 +41,29 @@ async def execute_trade_live(
     price_protect_pct: Optional[float] = None,
     quantity: Optional[float] = None,
 ) -> Dict[str, Any]:
+    """
+    ביצוע טרייד חי עם הגנות:
+    - אימות מחיר לייב + טריות (WS)
+    - Price deviation guard מול entry המבוקש
+    - כיבוד EXECUTE_TRADES/BINANCE_SKIP_ACCOUNT_MUTATIONS
+    """
     try:
         symbol = str(symbol).upper()
         direction = _norm_direction(direction)
         pprotect = float(price_protect_pct or PRICE_PROTECT_PCT)
 
-        if SKIP_MUTATIONS:
-            msg = "BINANCE_SKIP_ACCOUNT_MUTATIONS=true — פעולות כתיבה מושבתות עד שה-IP יאושר ב-Binance."
-            logging.error(f"[TRADE] {msg}")
-            return {"status": "error", "error": msg, "code": "mutations_disabled"}
+        # בלוק כתיבה אם הדגלים מחייבים
+        if MUTATIONS_DISABLED:
+            reason = []
+            if not EXECUTE_TRADES:
+                reason.append("EXECUTE_TRADES=false")
+            if BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV:
+                reason.append("BINANCE_SKIP_ACCOUNT_MUTATIONS=true")
+            msg = " פעולות כתיבה מושבתות: " + " & ".join(reason)
+            logging.error("[TRADE]%s", msg)
+            return {"status": "error", "error": msg.strip(), "code": "mutations_disabled"}
 
+        # מחיר חי
         live_price = await get_price(symbol)
         if live_price is None or not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC):
             logging.error(f"[TRADE] ❌ מחיר חי לא תקין/לא עדכני ל-{symbol}: {live_price}")
@@ -63,28 +87,32 @@ async def execute_trade_live(
         deviation = abs((live_price - entry) / entry) * 100.0
         if deviation > pprotect:
             logging.warning(f"[TRADE] ⚠️ סטיית מחיר {deviation:.4f}% בין תוכנית ({entry}) ללייב ({live_price}) – נחסם")
-            return {"status": "error", "error": f"price deviation {deviation:.4f}% > {pprotect}%", "entry": entry, "live_price": live_price}
+            return {
+                "status": "error",
+                "error": f"price deviation {deviation:.4f}% > {pprotect}%",
+                "entry": entry,
+                "live_price": live_price
+            }
 
-        try:
-            result = await binance_futures_trade(
-                symbol=symbol, side=direction, entry=entry, sl=stop, tp=tp,
-                leverage=int(leverage), budget=float(budget_usd),
-                quantity=quantity, market_type=market_type
-            )
-            logging.info(f"[TRADE] {direction} {symbol} live={live_price} entry={entry} (dev={deviation:.4f}%) -> {result}")
-            return {"status": "success", "result": result}
-        except Exception as e:
-            msg = str(e)
-            # פירוק שגיאות נפוצות והכוונה
-            if "quantity too small" in msg and "minQty" in msg:
-                return {"status": "error", "error": "quantity_below_minQty", "hint": "הגדל תקציב או הפחת מינוף/סימבול עם step קטן יותר", "raw": msg}
-            if "notional too small" in msg:
-                return {"status": "error", "error": "notional_too_small", "hint": "הגדל תקציב או בחר סימבול זול יותר", "raw": msg}
-            raise
+        # ביצוע בפועל (כתיבה לבורסה)
+        result = await binance_futures_trade(
+            symbol=symbol,
+            side=direction,
+            entry=entry,
+            sl=stop,
+            tp=tp,
+            leverage=int(leverage),
+            budget=float(budget_usd),
+            quantity=quantity,
+            market_type=market_type
+        )
+        logging.info(f"[TRADE] {direction} {symbol} live={live_price} entry={entry} (dev={deviation:.4f}%) -> {result}")
+        return {"status": "success", "result": result}
 
     except Exception as e:
         logging.error("[TRADE] שגיאה בביצוע טרייד %s: %s", symbol, e, exc_info=True)
         return {"status": "error", "error": str(e)}
+
 
 
 
