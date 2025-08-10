@@ -1,32 +1,36 @@
 # =========================
-# AlgoGPT — Manual Trading
+# AlgoGPT — Manual/Auto Trading
 # =========================
 
 # --- Runtime ---
-AUTO_RUN=false                 # מסחר ידני (האוטומציה כבויה)
-SCAN_INTERVAL=60               # לא רלוונטי כש-AUTO_RUN=false
+AUTO_RUN=true
+SCAN_INTERVAL=60
 DEFAULT_INTERVAL=15m
 
 MIN_QUALITY_SCORE=6
 MIN_VOLUME=1000000
 TOP_SYMBOLS=30
-TRENDING_ONLY=false            # למסחר ידני עדיף false; הסורק יוכל לראות יותר סימבולים
+TRENDING_ONLY=false
+
+# --- Auto Trading Controls ---
+ENABLE_AUTO_TRADING=false
+EXECUTE_TRADES=false
 
 # --- Price freshness / guards ---
-PRICE_PROTECT_PCT=0.25         # מקס' סטייה (%) בין entry לייב לתוכנית
-PRICE_MAX_AGE_SEC=10           # גיל מקס' לנתון WS טרי
+PRICE_PROTECT_PCT=0.25
+PRICE_MAX_AGE_SEC=10
 
 # --- API / Server ---
 LOG_LEVEL=INFO
-CORS_ALLOW_ORIGINS=*           # או רשימת דומיינים מופרדת בפסיק
-PORT=8000                      # Render מתעלם; נשאר לצורך לוקאלי
+CORS_ALLOW_ORIGINS=*
+PORT=8000
 
 # --- Trading budget/limits ---
 MAX_TRADE_BUDGET=100
 MAX_LEVERAGE=35
 
 # --- Security / API Gateway ---
-API_BEARER_TOKEN=GrwpXpkRWunC7SPZGFrhaizBwcaZzpWLYJ9kv4W7u6aTx_EXu0VGfpBKaBhThLD2
+API_BEARER_TOKEN=REPLACE_WITH_STRONG_TOKEN
 
 # --- Binance Keys ---
 BINANCE_API_KEY=<PUT_YOUR_REAL_KEY>
@@ -59,6 +63,7 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT_SECONDS=30.0
 OPENAI_MAX_CONCURRENCY=4
 # OPENAI_BASE_URL=
+
 
 
 
