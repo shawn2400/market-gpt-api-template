@@ -1,7 +1,7 @@
 # auto_executor.py
 import asyncio
 import logging
-from typing import Optional, Set, List
+from typing import Optional, List
 
 from utils import config
 from utils.watchlist_utils import load_watchlist, get_symbols_list
@@ -10,13 +10,20 @@ from utils.trade_executor import execute_trade_live
 from utils.ai_analysis import predict_optimal_sl_tp
 from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
 
-SCAN_INTERVAL = int(config.SCAN_INTERVAL)
-MIN_QUALITY_SCORE = int(config.MIN_QUALITY_SCORE)
-MAX_TRADE_BUDGET = float(config.MAX_TRADE_BUDGET)
-PRICE_MAX_AGE_SEC = int(config.PRICE_MAX_AGE_SEC)
+SCAN_INTERVAL        = max(5, int(getattr(config, "SCAN_INTERVAL", 60)))  # נימוס לרשת
+MIN_QUALITY_SCORE    = int(getattr(config, "MIN_QUALITY_SCORE", 6))
+MAX_TRADE_BUDGET     = float(getattr(config, "MAX_TRADE_BUDGET", 100.0))
+PRICE_MAX_AGE_SEC    = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
+
+# מצב "יבש": לא מבצע פקודות חתומות לבייננס (לניטור/דמו/בדיקות)
+SKIP_MUTATIONS = bool(
+    getattr(config, "BINANCE_SKIP_MUTATIONS", False) or
+    getattr(config, "SKIP_BINANCE_MUTATIONS", False)
+)
 
 _running = False
 _task: Optional[asyncio.Task] = None
+
 
 async def _init_ws_symbols() -> List[str]:
     """
@@ -28,10 +35,13 @@ async def _init_ws_symbols() -> List[str]:
         if not syms:
             # fallback מינימלי כדי שתהיה תנועת מחירים
             syms = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-        return sorted(set(syms))
+        # ייחוד וסידור
+        out = sorted({s.upper() for s in syms if s})
+        return out
     except Exception as e:
         logging.warning(f"[AUTO] WS symbol init failed: {e}")
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+
 
 async def executor_loop():
     """
@@ -41,10 +51,11 @@ async def executor_loop():
     - מריצה multi_tf_scan_with_ai
     - מאמתת מחיר / טריות / SL-TP
     - מבצעת טרייד עם הגנות (price deviation guard)
+    - מכבדת מצב 'יבש' (SKIP_MUTATIONS) לביצוע ללא שליחת הזמנות
     """
     global _running
     _running = True
-    logging.info("[AUTO] Auto Executor started")
+    logging.info("[AUTO] Auto Executor started (skip_mutations=%s)", SKIP_MUTATIONS)
 
     # === הפעלת WS פעם אחת בתחילת הריצה ===
     try:
@@ -55,11 +66,12 @@ async def executor_loop():
         logging.warning(f"[AUTO] WS launch warning: {e}")
 
     try:
+        # לולאת סריקה אינסופית (עד stop)
         while _running:
             try:
-                # --- בניית רשימת סמלים מתוך watchlist (לא חובה; הסורק יודע להביא בעצמו אם אין) ---
+                # --- בניית רשימת סמלים מתוך watchlist (אופציונלי) ---
                 watchlist = load_watchlist(min_quality=MIN_QUALITY_SCORE)
-                symbols = []
+                symbols: List[str] = []
                 for entry in watchlist:
                     if isinstance(entry, dict) and entry.get("symbol"):
                         symbols.append(str(entry["symbol"]).upper())
@@ -69,12 +81,13 @@ async def executor_loop():
                     timeframes=("15m", "1h"),
                     markets=("futures",),
                     min_quality=MIN_QUALITY_SCORE,
-                    top=min(5, int(config.TOP_SYMBOLS)),
-                    trending_only=bool(config.TRENDING_ONLY),
+                    top=min(5, int(getattr(config, "TOP_SYMBOLS", 30))),
+                    trending_only=bool(getattr(config, "TRENDING_ONLY", True)),
                     symbols=symbols or None
                 )
 
-                for trade in scan_results:
+                # נרווח מעט בין מועמדים כדי להפחית 403/WAF כשיש כמה פעולות רצוף
+                for idx, trade in enumerate(scan_results):
                     if not isinstance(trade, dict) or "symbol" not in trade:
                         logging.error(f"[AUTO] invalid scan result item: {trade}")
                         continue
@@ -93,7 +106,12 @@ async def executor_loop():
                         continue
 
                     # חישוב SL/TP (עם AI או fallback)
-                    sl, tp = await predict_optimal_sl_tp(symbol, direction, float(entry_price))
+                    try:
+                        sl, tp = await predict_optimal_sl_tp(symbol, direction, float(entry_price))
+                    except Exception as e:
+                        logging.warning(f"[AUTO] SL/TP calc failed for {symbol}: {e}")
+                        continue
+
                     if sl is None or tp is None:
                         logging.warning(f"[AUTO] Invalid SL/TP for {symbol}, skipping.")
                         continue
@@ -102,18 +120,27 @@ async def executor_loop():
                         f"[AUTO] Trade candidate: {symbol} | {direction} | Entry: {entry_price} | SL: {sl} | TP: {tp}"
                     )
 
-                    # ביצוע הטרייד
-                    result = await execute_trade_live(
-                        symbol=symbol,
-                        entry=float(entry_price),
-                        stop=float(sl),
-                        tp=float(tp),
-                        direction=direction,
-                        leverage=20,
-                        budget_usd=MAX_TRADE_BUDGET,
-                        market_type="futures"
-                    )
-                    logging.info(f"[AUTO] Trade result: {result}")
+                    if SKIP_MUTATIONS:
+                        # מצב יבשות: לא נוגעים בחשבון בבייננס
+                        logging.info(f"[AUTO] SKIP_MUTATIONS=on → not placing real order for {symbol}")
+                    else:
+                        # jitter קצר לפני ביצוע להזמנות חתומות
+                        await asyncio.sleep(0.25)
+                        result = await execute_trade_live(
+                            symbol=symbol,
+                            entry=float(entry_price),
+                            stop=float(sl),
+                            tp=float(tp),
+                            direction=direction,
+                            leverage=20,
+                            budget_usd=MAX_TRADE_BUDGET,
+                            market_type="futures"
+                        )
+                        logging.info(f"[AUTO] Trade result: {result}")
+
+                    # רווח קטן גם בין מועמד למועמד
+                    if idx < len(scan_results) - 1:
+                        await asyncio.sleep(0.35)
 
             except asyncio.CancelledError:
                 logging.info("[AUTO] Executor cancelled")
@@ -126,6 +153,7 @@ async def executor_loop():
         _running = False
         logging.info("[AUTO] Auto Executor stopped")
 
+
 def start_executor():
     global _task
     if _task is None or _task.done():
@@ -134,6 +162,7 @@ def start_executor():
         return True
     logging.info("[AUTO] Executor already running")
     return False
+
 
 def stop_executor():
     global _running, _task
@@ -146,6 +175,7 @@ def stop_executor():
         return True
     logging.info("[AUTO] Executor was not running")
     return False
+
 
 def is_executor_running():
     return _running
