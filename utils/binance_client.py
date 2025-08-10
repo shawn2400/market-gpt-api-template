@@ -56,7 +56,7 @@ _session.headers.update({
     "Accept-Encoding": "gzip",
     "Accept-Language": "en-US,en;q=0.9",
 })
-# לא מוסיפים X-MBX-APIKEY גלובלית; python-binance יוסיף בקריאות החתומות.
+# הערה: X-MBX-APIKEY לא מוגדר גלובלית – python-binance מוסיף בבקשות חתומות.
 
 _retry = Retry(
     total=_MAX_RETRIES,
@@ -65,7 +65,7 @@ _retry = Retry(
     status=_MAX_RETRIES,
     backoff_factor=_BACKOFF_BASE,
     status_forcelist=[403, 418, 429, 500, 502, 503, 504],
-    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),  # POST לא בטוח לאידמפוטנטיות
     raise_on_status=False,
 )
 _adapter = HTTPAdapter(max_retries=_retry, pool_connections=50, pool_maxsize=50)
@@ -118,7 +118,7 @@ def check_outbound_ip_against_allowlist():
     if ip in allowlist:
         logging.info(f"[Binance] 🌐 Outbound IP OK: {ip} נמצא ב-Allowlist.")
     else:
-        logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. עלול לגרום ל-403.")
+        logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. עלול לגרום ל-403/CloudFront.")
 
 # === יצירת לקוח ===
 def _make_client() -> Client:
@@ -129,8 +129,17 @@ def _make_client() -> Client:
         logging.warning("[Binance] ללא מפתחות – מצב Public-Only (market data בלבד).")
         c = Client(None, None, tld="com", requests_params=_requests_params)
 
+    # כתובות בסיס
     c.API_URL = _SPOT_HTTP
     c.FUTURES_URL = _FAPI_HTTP
+
+    # חלון קבלה וזמן
+    try:
+        c.RECV_WINDOW = _RECV_WINDOW
+    except Exception:
+        pass
+
+    # שימוש בסשן הקשיח שלנו
     c.session = _session
     return c
 
@@ -143,6 +152,7 @@ def get_client() -> Client:
             check_outbound_ip_against_allowlist()
         except Exception as e:
             logging.debug(f"[Binance] check_outbound_ip_against_allowlist skipped: {e}")
+        # סנכרון זמן ראשוני
         try:
             sync_server_time()
         except Exception as e:
@@ -158,7 +168,7 @@ def sync_server_time() -> None:
     סנכרון זמן עם שרת Binance Futures ומדידת offset.
     מפחית false 401/403 מסוג Timestamp/recvWindow.
     """
-    global _client  # ← חשוב: להכריז לפני שימוש
+    global _client
     c = _client or _make_client()
 
     url = f"{_FAPI_HTTP}/fapi/v1/time"
@@ -203,7 +213,7 @@ def _retry_call(fn: Callable, *, name: str):
             if e.status_code in (401, 403, 404, 418, 429, 500, 502, 503, 504) or "CloudFront" in str(e):
                 delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
                 logging.warning(f"[Binance] API {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s ({txt})")
-                if attempt == 0 and (e.status_code in (401, 403) or "Timestamp" in e.message):
+                if attempt == 0 and (e.status_code in (401, 403) or "Timestamp" in getattr(e, "message", "")):
                     try:
                         sync_server_time()
                     except Exception:
@@ -212,8 +222,9 @@ def _retry_call(fn: Callable, *, name: str):
             logging.error(f"[Binance] API error in {name}: {txt}")
             raise
         except (BinanceRequestException, requests.exceptions.RequestException) as e:
+            # שים לב: כאן תופסים גם 403/CloudFront שמגיע דרך REST ישיר (premiumIndex וכד')
             delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
-            logging.warning(f"[Binance] Network {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s: {e}")
+            logging.warning(f"[Binance] Network/HTTP {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s: {e}")
             time.sleep(delay); last_exc = e; continue
         except Exception as e:
             logging.error(f"[Binance] Unexpected in {name}: {type(e).__name__}: {e}")
@@ -235,14 +246,22 @@ def futures_exchange_info_safe():
 def futures_mark_price(symbol: str):
     """
     קריאת Mark Price בפאבליק (לא חתום), עם ריטריי ידידותי ל-WAF.
+    מזהה תשובת HTML של CloudFront (403) ומחלץ הודעה.
     """
     url = f"{_FAPI_HTTP}/fapi/v1/premiumIndex"
     params = {"symbol": symbol.upper()}
+
     def _do():
-        resp = _session.get(url, params=params, timeout=5)
+        resp = _session.get(url, params=params, timeout=6)
         if resp.status_code != 200:
-            raise BinanceRequestException(resp, f"HTTP {resp.status_code}")
+            # אם זו תגובת HTML, נסמן 'CloudFront' לטובת ה-logger של הריטריי
+            text_snip = (resp.text or "")[:200]
+            if "<HTML>" in text_snip.upper() or "CLOUDFRONT" in text_snip.upper():
+                raise requests.HTTPError(f"HTTP {resp.status_code} CloudFront HTML: {text_snip}")
+            raise requests.HTTPError(f"HTTP {resp.status_code}: {text_snip}")
+        # resp.json עלול לזרוק; ניתן לו לעבור ל-except הכללי
         return resp.json()
+
     return _retry_call(_do, name=f"premiumIndex({symbol})")
 
 # ---- Ping ישיר ל-Spot/Futures ----
@@ -275,6 +294,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
