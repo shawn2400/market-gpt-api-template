@@ -1,63 +1,67 @@
 # =========================
-# .env — MANUAL TRADING
+# AlgoGPT — Manual Trading
 # =========================
 
 # --- Runtime ---
 AUTO_RUN=false                 # מסחר ידני (האוטומציה כבויה)
 SCAN_INTERVAL=60               # לא רלוונטי כש-AUTO_RUN=false
 DEFAULT_INTERVAL=15m
+
 MIN_QUALITY_SCORE=6
 MIN_VOLUME=1000000
 TOP_SYMBOLS=30
-TRENDING_ONLY=true
+TRENDING_ONLY=false            # למסחר ידני עדיף false; הסורק יוכל לראות יותר סימבולים
 
-# הגנות מחיר/טריות ללייב
-PRICE_PROTECT_PCT=0.25         # אחוז סטיית מחיר מקס' בין entry חי ל"תוכנית"
-PRICE_MAX_AGE_SEC=10           # גיל מקס' לנתון מחיר מה-WS
+# --- Price freshness / guards ---
+PRICE_PROTECT_PCT=0.25         # מקס' סטייה (%) בין entry לייב לתוכנית
+PRICE_MAX_AGE_SEC=10           # גיל מקס' לנתון WS טרי
 
-# PORT=                     # Render קובע אוטומטית
+# --- API / Server ---
+LOG_LEVEL=INFO
+CORS_ALLOW_ORIGINS=*           # או רשימת דומיינים מופרדת בפסיק
+PORT=8000                      # Render מתעלם; נשאר לצורך לוקאלי
 
 # --- Trading budget/limits ---
 MAX_TRADE_BUDGET=100
 MAX_LEVERAGE=35
 
 # --- Security / API Gateway ---
-API_BEARER_TOKEN=<PASTE_YOUR_STRONG_TOKEN_HERE>
+API_BEARER_TOKEN=<PASTE_STRONG_RANDOM_TOKEN>
 
-# --- Binance (שים מפתחות אמיתיים) ---
+# --- Binance Keys (הדבק מפתחות אמיתיים) ---
 BINANCE_API_KEY=<PUT_YOUR_REAL_KEY>
 BINANCE_API_SECRET=<PUT_YOUR_REAL_SECRET>
 
-# נקודות קצה
+# --- Binance Endpoints (אל תשנה אלא אם יש צורך) ---
 BINANCE_SPOT_HTTP_BASE=https://api.binance.com
 BINANCE_FUTURES_HTTP_BASE=https://fapi.binance.com
+BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com
+BINANCE_WS_STREAM_SUFFIX=/stream?streams=
 
-# ריטריי/בקוֹף/טיימינג
+# --- Binance Timing / Retries ---
 BINANCE_BACKOFF_BASE=0.7
 BINANCE_MAX_RETRIES=5
 BINANCE_RECV_WINDOW=10000
 BINANCE_TIME_SYNC_INTERVAL_SEC=900
-BINANCE_EXCHANGE_INFO_ON_START=false
+BINANCE_EXCHANGE_INFO_ON_START=false   # למנוע 418/403 בעלייה כשיש רגישות
 
-# Account modes
-BINANCE_FORCE_HEDGE_MODE=false
-
-# ⚠️ למסחר ידני חי חייב להיות false כדי לאפשר פעולות כתיבה
-BINANCE_SKIP_ACCOUNT_MUTATIONS=false
+# --- Account modes ---
+BINANCE_FORCE_HEDGE_MODE=false         # true אם החשבון על Hedge Mode ורוצים לאכוף
+BINANCE_SKIP_ACCOUNT_MUTATIONS=false   # למסחר חי חייב להיות false
 
 # --- Egress IP helper ---
-# בזמן זיהוי אפשר 0.0.0.0 (נראה בלוגים את ה-IP), אבל מומלץ לקבע:
-# הוסף את כל הכתובות הבאות ל-"Trusted IPs" של מפתח ה-Binance שלך:
-BINANCE_ALLOWED_EGRESS_IPS=18.156.158.53,18.156.42.200,52.59.103.54
-# אופציונלי: נקודת קצה לבדיקת ה-IP היוצא של השירות
+# מומלץ: קודם הפעל את השרות, קבל IP דרך /net/ip, ועדכן כאן בהתאם (ואז הוסף ב-Binance "Trusted IPs").
+# אל תשאיר IPs ישנים; Render עלול להחליף.
+BINANCE_ALLOWED_EGRESS_IPS=
 EGRESS_IP_ENDPOINT=https://algogpt-docker.onrender.com/net/ip
 
-# --- OpenAI ---
+# --- OpenAI (אופציונלי לסריקות/ניתוח) ---
 OPENAI_API_KEY=<PUT_YOUR_OPENAI_KEY>
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT_SECONDS=30.0
 OPENAI_MAX_CONCURRENCY=4
 # OPENAI_BASE_URL=
+
 
 
 
