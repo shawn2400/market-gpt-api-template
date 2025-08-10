@@ -28,9 +28,9 @@ def _ensure_df(df: pd.DataFrame) -> pd.DataFrame:
         missing = need - set(df.columns)
         logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
         return pd.DataFrame()
-    # טיפוסי float
     out = df.copy()
-    for c in ("open","high","low","close","volume"):
+    # טיפוסי float
+    for c in ("open", "high", "low", "close", "volume"):
         out[c] = pd.to_numeric(out[c], errors="coerce")
     # אינדקס זמן מסודר
     if not isinstance(out.index, pd.DatetimeIndex):
@@ -42,70 +42,83 @@ def _ensure_df(df: pd.DataFrame) -> pd.DataFrame:
     out.sort_index(inplace=True)
     # ניקוי ראשוני
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
-    out.dropna(subset=["open","high","low","close","volume"], inplace=True)
+    out.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
     return out
+
+def _vwap(df: pd.DataFrame) -> pd.Series:
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    vol = df["volume"].astype(float)
+    # VWAP מוגדר רק כשיש נפח מצטבר חיובי
+    cum_vol = vol.replace(0, np.nan).fillna(0).cumsum()
+    cum_pv = (tp * vol).fillna(0).cumsum()
+    vwap = cum_pv / cum_vol.replace(0, np.nan)
+    return vwap
 
 def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
     """
-    מימוש Supertrend קלאסי: מחזיר קו ה-ST עצמו; כיוון נגזר לפי close>st (1) או אחרת (-1).
+    מימוש Supertrend קלאסי:
+    - UB/LB בסיסיים מה-ATR
+    - FUB/FLB (פסים סופיים) מתעדכנים יחסית לערך הקודם ולסגירה קודמת
+    - ST נבחר לפי חציה של המחיר את הפס הנוכחי
     """
-    # ATR נחוץ ל-ST
-    atr = AverageTrueRange(high=df["high"], low=df["low"], close=df["close"], window=period, fillna=False).average_true_range()
+    # חשוב: ממלאים ערכים התחלתיים כדי למנוע NaN בתחילת הסדרה
+    atr = AverageTrueRange(
+        high=df["high"], low=df["low"], close=df["close"],
+        window=period, fillna=True
+    ).average_true_range()
 
     hl2 = (df["high"] + df["low"]) / 2.0
     upper_basic = hl2 + multiplier * atr
     lower_basic = hl2 - multiplier * atr
 
-    upper = upper_basic.copy()
-    lower = lower_basic.copy()
+    fub = upper_basic.copy()
+    flb = lower_basic.copy()
 
     for i in range(1, len(df)):
-        # upper band rule
-        if (upper.iloc[i] < upper.iloc[i-1]) or (df["close"].iloc[i-1] > upper.iloc[i-1]):
-            upper.iloc[i] = upper.iloc[i]
+        # Final Upper Band
+        if (upper_basic.iloc[i] < fub.iloc[i-1]) or (df["close"].iloc[i-1] > fub.iloc[i-1]):
+            fub.iloc[i] = upper_basic.iloc[i]
         else:
-            upper.iloc[i] = upper.iloc[i-1]
-        # lower band rule
-        if (lower.iloc[i] > lower.iloc[i-1]) or (df["close"].iloc[i-1] < lower.iloc[i-1]):
-            lower.iloc[i] = lower.iloc[i]
+            fub.iloc[i] = fub.iloc[i-1]
+
+        # Final Lower Band
+        if (lower_basic.iloc[i] > flb.iloc[i-1]) or (df["close"].iloc[i-1] < flb.iloc[i-1]):
+            flb.iloc[i] = lower_basic.iloc[i]
         else:
-            lower.iloc[i] = lower.iloc[i-1]
+            flb.iloc[i] = flb.iloc[i-1]
 
     st = pd.Series(index=df.index, dtype=float)
-    dir_up = True  # דיפולט
-    for i in range(len(df)):
-        if i == 0:
-            st.iloc[i] = upper.iloc[i]
-            dir_up = df["close"].iloc[i] >= lower.iloc[i]
-            continue
+    trend = pd.Series(index=df.index, dtype=int)
 
-        prev_st = st.iloc[i-1]
-        if df["close"].iloc[i] > prev_st:
-            dir_up = True
-        elif df["close"].iloc[i] < prev_st:
-            dir_up = False
+    # אתחול מגמה ראשונית
+    trend.iloc[0] = 1 if df["close"].iloc[0] >= flb.iloc[0] else -1
+    st.iloc[0] = flb.iloc[0] if trend.iloc[0] == 1 else fub.iloc[0]
 
-        st.iloc[i] = lower.iloc[i] if dir_up else upper.iloc[i]
-        # שינוי צד: נוודא שהסט לא חוצה מיידית באופן לא עקבי
-        if dir_up and st.iloc[i] < lower.iloc[i]:
-            st.iloc[i] = lower.iloc[i]
-        if (not dir_up) and st.iloc[i] > upper.iloc[i]:
-            st.iloc[i] = upper.iloc[i]
+    for i in range(1, len(df)):
+        if trend.iloc[i-1] == 1:
+            # במגמת UP: מעבר ל-DOWN כשסגירה נופלת מתחת FUB
+            if df["close"].iloc[i] <= fub.iloc[i]:
+                trend.iloc[i] = -1
+                st.iloc[i] = fub.iloc[i]
+            else:
+                trend.iloc[i] = 1
+                st.iloc[i] = flb.iloc[i]
+        else:
+            # במגמת DOWN: מעבר ל-UP כשסגירה עוברת מעל FLB
+            if df["close"].iloc[i] >= flb.iloc[i]:
+                trend.iloc[i] = 1
+                st.iloc[i] = flb.iloc[i]
+            else:
+                trend.iloc[i] = -1
+                st.iloc[i] = fub.iloc[i]
 
     return st
-
-def _vwap(df: pd.DataFrame) -> pd.Series:
-    tp = (df["high"] + df["low"] + df["close"]) / 3.0
-    vol = df["volume"].replace(0, np.nan)
-    cum_vol = vol.cumsum()
-    vwap = (tp * vol).cumsum() / cum_vol
-    return vwap
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     מחזיר DF עם כל האינדיקטורים הנדרשים:
       rsi, adx, atr, macd/macd_signal/macd_hist, ema_21, ema_50, vwap, supertrend_dir, pattern (אופציונלי)
-    לעולם לא מחזיר ריק אם יש די נתונים בסיסיים (100+ נרות).
+    לעולם לא מחזיר ריק אם יש די נתונים בסיסיים (100+ נרות) והסדרה תקינה.
     """
     base = _ensure_df(df)
     if base.empty:
@@ -120,21 +133,23 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     try:
         # EMA
-        out["ema_21"] = EMAIndicator(close=out["close"], window=_EMA_FAST, fillna=False).ema_indicator()
-        out["ema_50"] = EMAIndicator(close=out["close"], window=_EMA_SLOW, fillna=False).ema_indicator()
+        out["ema_21"] = EMAIndicator(close=out["close"], window=_EMA_FAST, fillna=True).ema_indicator()
+        out["ema_50"] = EMAIndicator(close=out["close"], window=_EMA_SLOW, fillna=True).ema_indicator()
 
         # RSI
-        out["rsi"] = RSIIndicator(close=out["close"], window=_RSI, fillna=False).rsi()
+        out["rsi"] = RSIIndicator(close=out["close"], window=_RSI, fillna=True).rsi()
 
         # ADX
-        adx_ind = ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=_ADX, fillna=False)
+        adx_ind = ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=_ADX, fillna=True)
         out["adx"] = adx_ind.adx()
 
         # ATR
-        out["atr"] = AverageTrueRange(high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=False).average_true_range()
+        out["atr"] = AverageTrueRange(
+            high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=True
+        ).average_true_range()
 
         # MACD
-        macd = MACD(close=out["close"], window_fast=_MACD_FAST, window_slow=_MACD_SLOW, window_sign=_MACD_SIGNAL, fillna=False)
+        macd = MACD(close=out["close"], window_fast=_MACD_FAST, window_slow=_MACD_SLOW, window_sign=_MACD_SIGNAL, fillna=True)
         out["macd"] = macd.macd()
         out["macd_signal"] = macd.macd_signal()
         out["macd_hist"] = macd.macd_diff()
@@ -169,6 +184,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
         return pd.DataFrame()
+
 
 
 
