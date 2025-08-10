@@ -1,4 +1,5 @@
 # utils/trade_executor.py
+import os
 import logging
 from typing import Dict, Any, Optional
 
@@ -8,6 +9,7 @@ from utils.binance_trader import binance_futures_trade  # async
 
 PRICE_PROTECT_PCT = float(getattr(config, "PRICE_PROTECT_PCT", 0.25))
 PRICE_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
+SKIP_MUTATIONS = (str(getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS", os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))).lower() == "true")
 
 def _norm_direction(d: str) -> str:
     d = (d or "").strip().upper()
@@ -27,27 +29,31 @@ async def execute_trade_live(
     budget_usd: float = 100,
     market_type: str = "futures",
     price_protect_pct: Optional[float] = None,
-    quantity: Optional[float] = None,   # ← חדש: אפשר לכפות כמות
+    quantity: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     ביצוע טרייד חי עם הגנות:
     - אימות מחיר לייב + טריות (WS)
     - Price deviation guard מול entry המבוקש
-    - החזרה תמיד dict עם status
+    - כיבוד דגל BINANCE_SKIP_ACCOUNT_MUTATIONS לבטיחות בזמן WAF/403
     """
-    pprotect = float(price_protect_pct or PRICE_PROTECT_PCT)
-
     try:
         symbol = str(symbol).upper()
         direction = _norm_direction(direction)
+        pprotect = float(price_protect_pct or PRICE_PROTECT_PCT)
 
-        # מחיר חי (חובה)
+        # בלוק Mutations אם דגל פעיל
+        if SKIP_MUTATIONS:
+            msg = "BINANCE_SKIP_ACCOUNT_MUTATIONS=true — פעולות כתיבה מושבתות עד שה-IP יאושר ב-Binance."
+            logging.error(f"[TRADE] {msg}")
+            return {"status": "error", "error": msg, "code": "mutations_disabled"}
+
+        # מחיר חי
         live_price = await get_price(symbol)
         if live_price is None or not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC):
             logging.error(f"[TRADE] ❌ מחיר חי לא תקין/לא עדכני ל-{symbol}: {live_price}")
             return {"status": "error", "error": "live price unavailable or stale"}
 
-        # אם לא נשלח entry – ניכנס לפי לייב המאומת
         if entry is None:
             entry = float(live_price)
 
@@ -55,16 +61,14 @@ async def execute_trade_live(
         stop  = float(stop) if stop is not None else None
         tp    = float(tp)   if tp is not None else None
 
-        # ולידציה לפי כיוון
         if stop is None or tp is None:
-            return {"status": "error", "error": "sl/tp required (predict them before calling or supply explicitly)"}
+            return {"status": "error", "error": "sl/tp required (supply or predict before calling)"}
 
         if direction == "LONG" and not (stop < entry < tp):
             return {"status": "error", "error": f"levels invalid for LONG (entry={entry}, stop={stop}, tp={tp})"}
         if direction == "SHORT" and not (tp < entry < stop):
             return {"status": "error", "error": f"levels invalid for SHORT (entry={entry}, stop={stop}, tp={tp})"}
 
-        # סטיית מחיר מול התוכנית (לא מול לייב לעצמו)
         deviation = abs((live_price - entry) / entry) * 100.0
         if deviation > pprotect:
             logging.warning(f"[TRADE] ⚠️ סטיית מחיר {deviation:.4f}% בין תוכנית ({entry}) ללייב ({live_price}) – נחסם")
@@ -75,11 +79,11 @@ async def execute_trade_live(
                 "live_price": live_price
             }
 
-        # ביצוע בפועל — נכנסים במחיר עגול ע"י הטריידר (הוא יכבד quantity אם הועבר)
+        # ביצוע בפועל
         result = await binance_futures_trade(
             symbol=symbol,
             side=direction,
-            entry=entry,   # הטריידר יעגל ל-tick
+            entry=entry,
             sl=stop,
             tp=tp,
             leverage=int(leverage),
@@ -91,8 +95,9 @@ async def execute_trade_live(
         return {"status": "success", "result": result}
 
     except Exception as e:
-        logging.error(f"[TRADE] שגיאה בביצוע טרייד {symbol}: {e}", exc_info=True)
+        logging.error(f("[TRADE] שגיאה בביצוע טרייד %s: %s", symbol, e), exc_info=True)
         return {"status": "error", "error": str(e)}
+
 
 
 
