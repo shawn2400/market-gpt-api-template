@@ -22,10 +22,13 @@ SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
 # כמה זמן מחיר נחשב "טרי"
 DEFAULT_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
 
+_UA = {"User-Agent": "AlgoGPT/2 (Render) ws_fallback", "Accept": "application/json"}
+
 class BinanceWSManager:
     def __init__(self, symbols: List[str]):
         self.symbols = [str(s).lower() for s in symbols if s]
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._session: Optional[aiohttp.ClientSession] = None
         self.prices: Dict[str, float] = {}
         self.ts: Dict[str, float] = {}
         self.connected: bool = False
@@ -33,38 +36,48 @@ class BinanceWSManager:
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
 
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                headers=_UA,
+                trust_env=True,  # מאפשר שימוש ב-HTTP(S)_PROXY מהסביבה
+            )
+        return self._session
+
     async def _run(self):
         backoff = 0.6
         while not self._stop.is_set():
             streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
             url = BINANCE_WS_URL_PREFIX + streams
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.ws_connect(url, heartbeat=15) as ws:
-                        self.ws = ws
-                        self.connected = True
-                        logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
-                        async for msg in ws:
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                try:
-                                    data = json.loads(msg.data)
-                                    payload = data.get("data") or {}
-                                    symbol = str(payload.get("s") or "").upper()
-                                    ask = payload.get("a")
-                                    if symbol and ask is not None:
-                                        price = float(ask)
-                                        async with self._lock:
-                                            self.prices[symbol] = price
-                                            self.ts[symbol] = time.time()
-                                except Exception as e:
-                                    logging.debug(f"[ws_fallback] parse error: {e}")
-                            elif msg.type == aiohttp.WSMsgType.ERROR:
-                                logging.error(f"[ws_fallback] WS error: {msg.data}")
-                                break
+                session = await self._ensure_session()
+                async with session.ws_connect(url, heartbeat=20) as ws:
+                    self.ws = ws
+                    self.connected = True
+                    backoff = 0.6  # אפס את הבאק-אוף אחרי התחברות מוצלחת
+                    logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                data = json.loads(msg.data)
+                                payload = data.get("data") or {}
+                                symbol = str(payload.get("s") or "").upper()
+                                ask = payload.get("a")
+                                if symbol and ask is not None:
+                                    price = float(ask)
+                                    async with self._lock:
+                                        self.prices[symbol] = price
+                                        self.ts[symbol] = time.time()
+                            except Exception as e:
+                                logging.debug(f"[ws_fallback] parse error: {e}")
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
+                            logging.error(f"[ws_fallback] WS error: {msg.data}")
+                            break
             except Exception as e:
                 self.connected = False
-                logging.warning(f"[ws_fallback] WS connect/reconnect failed: {e}")
-                await asyncio.sleep(backoff)
+                d = min(10.0, backoff)
+                logging.warning(f"[ws_fallback] WS connect/reconnect failed: {e} → sleep {d:.2f}s")
+                await asyncio.sleep(d)
                 backoff = min(10.0, backoff * 2.0)
                 continue
             # נפלנו מהלולאה (סגירה רגילה) – ננסה להתחבר מחדש
@@ -87,6 +100,11 @@ class BinanceWSManager:
         if self._task:
             try:
                 await self._task
+            except Exception:
+                pass
+        if self._session is not None and not self._session.closed:
+            try:
+                await self._session.close()
             except Exception:
                 pass
         self.connected = False
@@ -151,10 +169,7 @@ def _rest_klines(
     last = None
     for attempt in range(retries + 1):
         try:
-            r = requests.get(url, params=params, timeout=timeout, headers={
-                "User-Agent": "AlgoGPT/2 (Render) ws_fallback",
-                "Accept": "application/json",
-            })
+            r = requests.get(url, params=params, timeout=timeout, headers=_UA)
             if r.status_code == 200:
                 return r.json()
             # CloudFront / WAF
@@ -207,6 +222,7 @@ def snapshot_klines_df(
     except Exception as e:
         logging.error(f"[ws_fallback] snapshot_klines_df error {symbol}@{interval}: {e}")
         return pd.DataFrame()
+
 
 
 
