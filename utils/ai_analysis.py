@@ -9,7 +9,12 @@ from utils.ai_client import chat
 from utils.sl_tp_utils import calculate_sl_tp
 
 def _avg(vals, default: float = 0.0) -> float:
-    xs = [float(v) for v in vals if isinstance(v, (int, float))]
+    xs = []
+    for v in vals:
+        try:
+            xs.append(float(v))
+        except Exception:
+            pass
     return round(sum(xs) / len(xs), 4) if xs else float(default)
 
 def _parse_signal_conf(text: str) -> Dict[str, Any]:
@@ -18,7 +23,7 @@ def _parse_signal_conf(text: str) -> Dict[str, Any]:
         m_sig = re.search(r"Signal:\s*(BUY|SELL|HOLD)", text, re.IGNORECASE)
         if m_sig:
             out["signal"] = m_sig.group(1).upper()
-        m_conf = re.search(r"Confidence:\s*([0-9]+(?:\.[0-9]+)?)", text)
+        m_conf = re.search(r"Confidence:\s*(\d+(\.\d+)?)", text)
         if m_conf:
             out["confidence"] = float(m_conf.group(1))
         m_reason = re.search(r"Reason:\s*(.+)$", text)
@@ -26,6 +31,20 @@ def _parse_signal_conf(text: str) -> Dict[str, Any]:
             out["reason"] = m_reason.group(1).strip()
     except Exception:
         pass
+    return out
+
+def _get_metric(d: Dict[str, Any], key: str):
+    if key in d:
+        return d.get(key)
+    return (d.get("indicators") or {}).get(key)
+
+def _dedup(seq: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for s in seq:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
     return out
 
 async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -37,16 +56,14 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not tf_results or not isinstance(tf_results, list):
             return {"error": "empty tf_results", "signal": "HOLD", "confidence": 0.0}
 
-        symbol = (tf_results[0].get("symbol") or "UNKNOWN").upper()
-        direction = (tf_results[0].get("direction") or "LONG").upper()
+        symbol = str(tf_results[0].get("symbol", "UNKNOWN")).upper()
+        direction = str(tf_results[0].get("direction", "LONG")).upper()
+        frames = _dedup([str(x.get("interval", "?")) for x in tf_results if x])
 
-        # דה-דופ תקין של המסגרות (הבאג היה כאן)
-        frames = [str(x.get("interval") or "?") for x in tf_results if x]
-        frames = list(dict.fromkeys(frames))
-
-        avg_rsi = _avg([x.get("indicators", {}).get("rsi") or x.get("rsi") for x in tf_results], default=50.0)
-        avg_adx = _avg([x.get("indicators", {}).get("adx") or x.get("adx") for x in tf_results], default=20.0)
-        avg_volume = _avg([x.get("volume") or x.get("indicators", {}).get("volume") for x in tf_results], default=1_000_000.0)
+        avg_rsi = _avg([_get_metric(x, "rsi") for x in tf_results], default=50.0)
+        avg_adx = _avg([_get_metric(x, "adx") for x in tf_results], default=20.0)
+        # volume לפעמים בטופ-לבל, לפעמים בתוך indicators
+        avg_volume = _avg([(x.get("volume") if x.get("volume") is not None else _get_metric(x, "volume")) for x in tf_results], default=1_000_000.0)
         q_scores = [float(x.get("quality_score", 0.0) or 0.0) for x in tf_results]
         avg_q = round(sum(q_scores) / len(q_scores), 2) if q_scores else 0.0
 
@@ -59,7 +76,7 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
             f"- Avg Volume: {avg_volume:,.0f}\n"
             f"- Avg Quality: {avg_q:.2f}\n\n"
             f"Return exactly this format on a single line:\n"
-            f"Signal: BUY/SELL/HOLD | Confidence: <0-100>% | Reason: <short reason>\n"
+            f"Signal: BUY/SELL/HOLD | Confidence: <0-100> | Reason: <short reason>\n"
         )
 
         logging.info(f"[AI] analyze_with_ai prompt for {symbol} (frames={frames})")
@@ -72,25 +89,19 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
             retries=2,
         )
 
-        parsed = _parse_signal_conf(content or "")
-        # sanity
-        sig = parsed.get("signal", "HOLD")
-        if sig not in ("BUY", "SELL", "HOLD"):
-            sig = "HOLD"
-        conf = float(parsed.get("confidence") or 0.0)
-        conf = max(0.0, min(100.0, conf))
-
-        return {
+        parsed = _parse_signal_conf(content)
+        result = {
             "symbol": symbol,
             "direction": direction,
             "quality_score": avg_q,
             "frames": frames,
-            "signal": sig,
-            "confidence": conf,
+            "signal": parsed["signal"],
+            "confidence": parsed["confidence"],
             "raw": content,
             "details": tf_results,
             "reason": parsed.get("reason", ""),
         }
+        return result
 
     except Exception as e:
         logging.error(f"[AI] analyze_with_ai exception: {e}\n{traceback.format_exc()}")
@@ -121,7 +132,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
             retries=2,
         )
 
-        m = re.search(r"SL:\s*([0-9]*\.?[0-9]+)\s*,\s*TP:\s*([0-9]*\.?[0-9]+)", content or "")
+        m = re.search(r"SL:\s*([0-9]*\.?[0-9]+)\s*,\s*TP:\s*([0-9]*\.?[0-9]+)", content)
         if m:
             sl, tp = float(m.group(1)), float(m.group(2))
             return round(sl, 6), round(tp, 6)
@@ -133,6 +144,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
 
     # Fallback דטרמיניסטי
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+
 
 
 
