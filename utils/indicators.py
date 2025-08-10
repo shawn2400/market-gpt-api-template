@@ -2,11 +2,13 @@
 import numpy as np
 import pandas as pd
 import logging
+from typing import Optional
 
 from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, MACD, EMAIndicator
 from ta.volatility import AverageTrueRange
 
+# --- פרמטרים דיפולטיים ---
 _RSI = 14
 _ADX = 14
 _ATR = 14
@@ -18,29 +20,56 @@ _MACD_SIGNAL = 9
 _ST_PERIOD = 10
 _ST_MULT = 3.0
 
-def _ensure_df(df: pd.DataFrame) -> pd.DataFrame:
+_MIN_ROWS_ABS = 100  # מינימום כללי
+# נדרוש גם שהדאטה גדול מהחלון הכי ארוך + שוליים
+_LONGEST_WIN = max(_EMA_SLOW, _MACD_SLOW, _ATR, _ADX, _RSI, _ST_PERIOD) + 20
+
+def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """מאחד, מנרמל ומוודא שה־DataFrame מוכן לחישוב אינדיקטורים."""
     if df is None or df.empty:
         return pd.DataFrame()
+
     need = {"open", "high", "low", "close", "volume"}
     if not need.issubset(df.columns):
         missing = need - set(df.columns)
         logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
         return pd.DataFrame()
+
     out = df.copy()
+
+    # טיפוסים
     for c in ("open", "high", "low", "close", "volume"):
-        out[c] = pd.to_numeric(out[c], errors="coerce")
+        out[c] = pd.to_numeric(out[c], errors="coerce").astype("float64")
+
+    # אינדקס זמן (UTC, מונוטוני)
     if not isinstance(out.index, pd.DatetimeIndex):
         if "timestamp" in out.columns:
             out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
             out.set_index("timestamp", inplace=True)
         else:
             out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
+
     out.sort_index(inplace=True)
+    out = out[~out.index.duplicated(keep="last")]
+
+    # ניקוי ראשוני
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     out.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
+
     return out
 
+def _enough_rows(df: pd.DataFrame) -> bool:
+    n = len(df)
+    if n < _MIN_ROWS_ABS or n < _LONGEST_WIN:
+        logging.warning(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({ _MIN_ROWS_ABS }, {_LONGEST_WIN})")
+        return False
+    return True
+
 def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
+    """
+    חישוב קו SuperTrend בסיסי מבוסס ATR.
+    שומר על לוגיקה איטרטיבית קצרה (O(n)) לשמירה על דיוק מעבר מצבים.
+    """
     atr = AverageTrueRange(
         high=df["high"], low=df["low"], close=df["close"],
         window=period, fillna=True
@@ -52,44 +81,52 @@ def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = 
 
     upper = upper_basic.copy()
     lower = lower_basic.copy()
-
-    # במקום fillna(method="ffill")
     upper.ffill(inplace=True)
     lower.ffill(inplace=True)
 
-    st = pd.Series(index=df.index, dtype=float)
-    dir_up = True
-    for i in range(len(df)):
-        if i == 0:
-            st.iloc[i] = lower.iloc[i] if df["close"].iloc[i] >= lower.iloc[i] else upper.iloc[i]
-            dir_up = df["close"].iloc[i] >= lower.iloc[i]
-            continue
+    st = pd.Series(index=df.index, dtype="float64")
+    # מצב התחלתי
+    close0 = df["close"].iloc[0]
+    lower0 = lower.iloc[0]
+    upper0 = upper.iloc[0]
+    dir_up = close0 >= lower0
+    st.iloc[0] = lower0 if dir_up else upper0
 
+    # מעבר איטרטיבי
+    closes = df["close"].to_numpy()
+    up_vals = upper.to_numpy()
+    low_vals = lower.to_numpy()
+
+    for i in range(1, len(df)):
         prev_st = st.iloc[i - 1]
-        if df["close"].iloc[i] > prev_st:
+        c = closes[i]
+        if c > prev_st:
             dir_up = True
-        elif df["close"].iloc[i] < prev_st:
+        elif c < prev_st:
             dir_up = False
+        st.iloc[i] = low_vals[i] if dir_up else up_vals[i]
 
-        st.iloc[i] = lower.iloc[i] if dir_up else upper.iloc[i]
-
-    # במקום fillna(method="ffill")
     st.ffill(inplace=True)
     return st
 
 def _vwap(df: pd.DataFrame) -> pd.Series:
     tp = (df["high"] + df["low"] + df["close"]) / 3.0
-    vol = df["volume"].replace(0, np.nan)
+    vol = df["volume"].astype("float64")
+    vol = vol.where(vol > 0, np.nan)  # הימנע מחלוקה ב-0
     cum_vol = vol.cumsum()
     vwap = (tp * vol).cumsum() / cum_vol
     return vwap
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """
+    מחזיר DataFrame עם העמודות:
+    rsi, adx, atr, macd, macd_signal, macd_hist, ema_21, ema_50, vwap, supertrend, supertrend_dir, pattern
+    אם אין מספיק נתונים – מחזיר DF ריק.
+    """
     base = _ensure_df(df)
     if base.empty:
         return pd.DataFrame()
-    if len(base) < 100:
-        logging.warning(f"[indicators] מעט מדי נרות ({len(base)}). דרוש לפחות 100.")
+    if not _enough_rows(base):
         return pd.DataFrame()
 
     out = base.copy()
@@ -125,12 +162,12 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         # VWAP
         out["vwap"] = _vwap(out)
 
-        # SuperTrend
+        # SuperTrend + כיוון
         st_line = _supertrend(out, period=_ST_PERIOD, multiplier=_ST_MULT)
         out["supertrend"] = st_line
-        out["supertrend_dir"] = np.where(out["close"] >= st_line, 1, -1)
+        out["supertrend_dir"] = np.where(out["close"] >= st_line, 1, -1).astype("int8")
 
-        # ניקוי ותיקון NaN/Inf
+        # ניקוי/איחוד NaN/Inf
         cols_needed = [
             "rsi", "adx", "atr", "macd", "macd_signal", "macd_hist",
             "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir"
@@ -143,12 +180,14 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
             return pd.DataFrame()
 
-        # שדה דמה לתבנית (אם יש לך מחולל דפוסים – תוכל לעדכן כאן)
+        # שדה תבנית (placeholder)
         out["pattern"] = "unknown"
+
         return out
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
         return pd.DataFrame()
+
 
 
 
