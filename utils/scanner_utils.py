@@ -5,12 +5,25 @@ from typing import Optional, Dict, List, Any
 
 import pandas as pd
 
+from utils import config
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
 
-# מקביליות בטוחה לניתוחים (לכל תהליך)
-semaphore = asyncio.Semaphore(5)
+# --- מקביליות נשלטת קונפיג ---
+# ניתן להגדיר ב-ENV/קונפיג: SCAN_CONCURRENCY (למשל 5-20)
+try:
+    _CONC = int(getattr(config, "SCAN_CONCURRENCY", 5))
+except Exception:
+    _CONC = 5
+# שמירה על גבולות סבירים
+if _CONC < 1:
+    _CONC = 1
+if _CONC > 50:
+    _CONC = 50
+
+semaphore = asyncio.Semaphore(_CONC)
+logging.info(f"[scanner_utils] Scan concurrency set to {_CONC}")
 
 def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
     """
@@ -156,12 +169,12 @@ async def analyze_symbol(
                 },
             }
 
-            # (אופציונלי) trending_only – לא מסננים כאן כדי להשאיר החלטה לאגרגטור
             return result
 
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
