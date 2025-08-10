@@ -1,5 +1,5 @@
 # utils/binance_client.py
-import time, random, logging
+import os, time, random, logging
 import requests
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
@@ -7,35 +7,45 @@ import requests.exceptions
 
 from utils import config
 
-API_KEY = config.BINANCE_API_KEY
-API_SECRET = config.BINANCE_API_SECRET
-EXCHANGE_INFO_ON_START = config.BINANCE_EXCHANGE_INFO_ON_START
-_BASE_BACKOFF = config.BINANCE_BACKOFF_BASE
-_MAX_RETRIES = config.BINANCE_MAX_RETRIES
+API_KEY = (config.BINANCE_API_KEY or "").strip()
+API_SECRET = (config.BINANCE_API_SECRET or "").strip()
+EXCHANGE_INFO_ON_START = bool(config.BINANCE_EXCHANGE_INFO_ON_START)
+_BASE_BACKOFF = float(config.BINANCE_BACKOFF_BASE)
+_MAX_RETRIES = int(config.BINANCE_MAX_RETRIES)
 
-# Session עם User-Agent וטיים-אאוטים (משותף לכל הקריאות)
+# ---- Session עם User-Agent וטיים-אאוטים ----
 _session = requests.Session()
 _session.headers.update({"User-Agent": "AlgoGPT/1.0 (+render) python-binance"})
 _requests_params = {"timeout": 10}
 
 def _make_client():
+    # שים לב: לא מעבירים session= בבנאי (גרסאות רבות לא תומכות)
     if API_KEY and API_SECRET:
         logging.info("[Binance] 🔑 מפתחות נמצאו – מנסה להתחבר…")
-        c = Client(API_KEY, API_SECRET, tld="com", requests_params=_requests_params, session=_session)
+        c = Client(API_KEY, API_SECRET, tld="com", requests_params=_requests_params)
     else:
         logging.warning("[Binance] ללא מפתחות – מצב Public-Only (klines בלבד).")
-        c = Client(None, None, tld="com", requests_params=_requests_params, session=_session)
-    # בסיס Futures
-    c.FUTURES_URL = "https://fapi.binance.com"
+        c = Client(None, None, tld="com", requests_params=_requests_params)
+
+    # הצמדה ידנית של ה-Session המוגדר שלנו (UA/connection pooling)
+    try:
+        c.session = _session  # שימוש ישיר בסשן שלנו
+    except Exception as e:
+        logging.debug(f"[Binance] could not attach custom session: {e}")
+
+    # ודא בסיס Futures
+    try:
+        c.FUTURES_URL = "https://fapi.binance.com"
+    except Exception:
+        pass
     return c
 
 client = _make_client()
 
 def _retry_call(fn, *, name: str):
     """
-    ריטריי אקספוננציאלי עם ג׳יטר.
+    ריטריי אקספוננציאלי עם ג'יטר לקריאות בינאנס.
     מטפל ב-403/CloudFront, RateLimit (-1003/-1015), 418/429/503 ושגיאות רשת.
-    מחזיר תוצאה או None אם מוצו כל הניסיונות.
     """
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
@@ -65,7 +75,10 @@ def _retry_call(fn, *, name: str):
         logging.error(f"[Binance] ❌ Exhausted retries for {name}: {last_exc}")
     return None
 
-# עטיפות עם ריטריי לשימוש חיצוני
+# חשיפה "פומבית" לשימוש ממודולים אחרים
+def retry_call(fn, *, name: str):
+    return _retry_call(fn, name=name)
+
 def ping_safe():
     return _retry_call(lambda: client.ping(), name="ping")
 
@@ -80,8 +93,8 @@ def get_client():
 
 def ping_and_info():
     """
-    בדיקת חיבור בהפעלה.
-    - לא מפילה את התהליך.
+    בדיקת חיבור בהפעלה:
+    - לא מפילה את התהליך אם נכשל.
     - מחזירה False אם ping נכשל אחרי ריטריי.
     """
     try:
@@ -104,12 +117,6 @@ def ping_and_info():
         return False
 
 BINANCE_READY = ping_and_info()
-
-# נקודת לוג מרכזית להגדרות (אופציונלי)
-try:
-    config.log_config_summary()
-except Exception:
-    pass
 
 
 
