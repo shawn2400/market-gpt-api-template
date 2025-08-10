@@ -1,32 +1,115 @@
 # utils/get_klines.py
 import time
 import logging
-from typing import Optional
+from typing import Optional, List, Any
 import pandas as pd
 
+from utils import config
+from utils.ws_fallback import snapshot_klines_df  # ← גיבוי REST ישיר ומהיר
+
+# נסה להשתמש בלקוח הגלובלי (אם קיים)
 try:
     from utils.binance_client import client as _GLOBAL_CLIENT
 except Exception:
     _GLOBAL_CLIENT = None
 
+# שגיאות רשת/בינאנס
 from binance.client import Client as _BinanceClient
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 import requests.exceptions
 
-from utils.ws_fallback import snapshot_klines_df  # ← WS fallback (ללא await)
-
 MIN_LIMIT = 120
 MAX_LIMIT = 1500  # תקרת בטיחות
 
-# === עזר: יצירת לקוח במצב Public-Only במקרה שאין client ===
+# === עזר: יצירת לקוח Public-Only במקרה שאין client ===
 def _ensure_client():
+    """
+    מייצר לקוח python-binance רק אם אין גלובלי — Public בלבד (מספיק ל-klines).
+    לא מעביר session מותאם כדי להימנע מבעיות תאימות בין גרסאות.
+    """
     if _GLOBAL_CLIENT is not None:
         return _GLOBAL_CLIENT
-    # Fallback בטוח – Public בלבד (מספיק ל־klines)
     c = _BinanceClient(None, None, tld="com")
-    c.FUTURES_URL = "https://fapi.binance.com"
+    # ודא בסיס Futures נכון
+    try:
+        c.FUTURES_URL = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+    except Exception:
+        c.FUTURES_URL = "https://fapi.binance.com"
     logging.warning("[get_klines] ⚠️ Binance client לא מאותחל – מפעיל Public-Only fallback.")
     return c
+
+def _normalize(
+    symbol: str,
+    interval: str,
+    limit: Optional[int],
+    market_type: str,
+    grid_base_type: str,
+    is_futures: Optional[bool],
+):
+    # קביעת סוג שוק
+    if is_futures is not None:
+        mt = "futures" if is_futures else "spot"
+    else:
+        mt = (market_type or "futures").lower().strip()
+
+    if mt == "grid":
+        mt = grid_base_type if grid_base_type in ("futures", "spot") else "futures"
+
+    if mt not in ("futures", "spot"):
+        raise ValueError(f"Unsupported market_type: {mt}")
+
+    # סימבול/אינטרוול/לימיט
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        raise ValueError("Empty symbol")
+
+    itv = (interval or getattr(config, "DEFAULT_INTERVAL", "15m")).strip()
+
+    lim = int(limit or MIN_LIMIT)
+    if lim < MIN_LIMIT:
+        logging.info(f"[get_klines] ℹ️ limit קטן מדי ({lim}); מגדיל ל-{MIN_LIMIT} עבור {sym}")
+        lim = MIN_LIMIT
+    if lim > MAX_LIMIT:
+        logging.info(f"[get_klines] ℹ️ limit גדול מאוד ({lim}); חותך ל-{MAX_LIMIT} עבור {sym}")
+        lim = MAX_LIMIT
+
+    return sym, itv, lim, mt
+
+def _to_df(raw: List[List[Any]]) -> pd.DataFrame:
+    """
+    המרה לרשימת נרות → DataFrame סטנדרטי ומנוקה.
+    """
+    if not raw or len(raw) < 5:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(raw, columns=[
+        "timestamp", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
+    ])[["timestamp", "open", "high", "low", "close", "volume"]].copy()
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    for col in ("open", "high", "low", "close", "volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # מיון/הסרת כפילויות/ניקוי
+    df.sort_values("timestamp", inplace=True)
+    df.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+
+    # מילוי שמרני אם צריך
+    nan_before = df.isna().sum().sum()
+    if nan_before > 0:
+        logging.warning(f"[get_klines] ⚠️ נמצאו {nan_before} NaN – ממלא ffill/bfill")
+        df.ffill(inplace=True)
+        df.bfill(inplace=True)
+
+    df.dropna(inplace=True)
+    if len(df) < MIN_LIMIT // 2:
+        logging.warning(f"[get_klines] ⚠️ מעט מדי נרות לאחר סינון ({len(df)})")
+        return pd.DataFrame()
+
+    df.set_index("timestamp", inplace=True)
+    return df
 
 def _fetch_klines_with_retry(
     client,
@@ -36,11 +119,11 @@ def _fetch_klines_with_retry(
     limit: int,
     start_time: Optional[int],
     end_time: Optional[int],
-    max_retries: int = 4,
+    max_retries: int = 5,
     base_backoff: float = 0.6
 ):
     """
-    קריאת klines עם ריטריי אקספוננציאלי לשגיאות רשת/RateLimit.
+    קריאת klines עם ריטריי אקספוננציאלי לשגיאות רשת/CloudFront/RateLimit.
     """
     attempt = 0
     last_exc = None
@@ -54,7 +137,7 @@ def _fetch_klines_with_retry(
                     startTime=start_time,
                     endTime=end_time
                 )
-            elif market == "spot":
+            else:
                 return client.get_klines(
                     symbol=symbol,
                     interval=interval,
@@ -62,8 +145,6 @@ def _fetch_klines_with_retry(
                     startTime=start_time,
                     endTime=end_time
                 )
-            else:
-                raise ValueError(f"Unsupported market_type: {market}")
         except (requests.exceptions.RequestException, BinanceRequestException) as e:
             last_exc = e
             delay = base_backoff * (2 ** attempt)
@@ -73,16 +154,12 @@ def _fetch_klines_with_retry(
         except BinanceAPIException as e:
             last_exc = e
             txt = str(e)
-            # קודי Rate Limit/זמנית – כדאי לנסות שוב
-            if e.code in (-1003, -1015) or e.status_code in (418, 429, 503) or "Too many" in txt:
+            # CloudFront / WAF או RateLimit
+            if e.code in (-1003, -1015) or e.status_code in (403, 418, 429, 503) or "CloudFront" in txt or "Invalid JSON error message" in txt:
                 delay = base_backoff * (2 ** attempt)
-                logging.warning(f"[get_klines] ⏳ RateLimit/API (attempt {attempt+1}/{max_retries+1}) עבור {symbol}@{interval}: {e}. ממתין {delay:.2f}s...")
+                logging.warning(f"[get_klines] ⏳ זמני/חסימה (attempt {attempt+1}/{max_retries+1}) עבור {symbol}@{interval}: http={getattr(e,'status_code',0)} code={getattr(e,'code',0)} → {delay:.2f}s")
                 time.sleep(delay)
                 attempt += 1
-            # CloudFront/WAF – ננסה WS snapshot
-            elif e.status_code == 403 or "CloudFront" in txt or "Invalid JSON error message" in txt:
-                logging.warning(f"[get_klines] 🚧 403/WAF עבור {symbol}@{interval} – WS snapshot fallback יופעל")
-                raise  # ניתפס למטה ונפיל לפולי-בק
             else:
                 logging.error(f"[get_klines] ❌ BinanceAPIException לא ניתן לשחזור עבור {symbol}@{interval}: code={e.code}, msg={e.message}")
                 raise
@@ -103,137 +180,68 @@ def get_klines(
     grid_base_type: str = "futures",
     start_time: Optional[int] = None,
     end_time: Optional[int] = None,
-    is_futures: Optional[bool] = None,
-    try_ws_fallback: bool = True
+    is_futures: Optional[bool] = None
 ) -> pd.DataFrame:
     """
-    שליפת Klines (spot/futures) עם ריטריי, נורמליזציה וניקוי.
-    מחזיר DataFrame עם עמודות: timestamp, open, high, low, close, volume (Index=timestamp, tz=UTC)
-    בעת 403/WAF או רשת — מנסה WS snapshot fallback (אם זמין).
+    שליפת Klines (spot/futures) באופן חסין:
+    1) ניסיון ראשון: REST ישיר דרך snapshot_klines_df (גיבוי מהיר).
+    2) אם נכשל/נחסם: python-binance עם ריטריי ו־backoff.
+    מחזיר DataFrame עם עמודות: open, high, low, close, volume (Index=timestamp, tz=UTC).
     """
-    # --- קביעת סוג שוק ---
-    if is_futures is not None:
-        market_type = "futures" if is_futures else "spot"
-
-    mt = (market_type or "futures").lower().strip()
-    if mt == "grid":
-        mt = grid_base_type if grid_base_type in ("futures", "spot") else "futures"
-
-    if mt not in ("futures", "spot"):
-        logging.error(f"[get_klines] ❌ סוג שוק לא נתמך: {mt}")
+    try:
+        sym, itv, lim, mt = _normalize(symbol, interval, limit, market_type, grid_base_type, is_futures)
+    except Exception as e:
+        logging.error(f"[get_klines] ❌ נורמליזציה נכשלה: {e}")
         return pd.DataFrame()
 
-    # --- נורמליזציה של פרמטרים ---
-    sym = (symbol or "").upper().strip()
-    if not sym:
-        logging.error("[get_klines] ❌ סימבול ריק.")
-        return pd.DataFrame()
+    # --- שלב 1: REST ישיר מהיר (פחות תלות ב־python-binance) ---
+    try:
+        df_rest = snapshot_klines_df(symbol=sym, interval=itv, limit=lim, market_type=mt)
+        if not df_rest.empty:
+            logging.info(f"[get_klines] ✅ {sym} ({itv}, {mt} via REST): {len(df_rest)} נרות")
+            return df_rest
+        else:
+            logging.warning(f"[get_klines] ⚠️ REST ריק/נחסם עבור {sym}@{itv} ({mt}), נופל ל-python-binance")
+    except Exception as e:
+        logging.warning(f"[get_klines] ⚠️ REST snapshot נכשל עבור {sym}@{itv}: {e} — נופל ל-python-binance")
 
-    itv = (interval or "15m").strip()
-    if limit is None or limit < MIN_LIMIT:
-        logging.info(f"[get_klines] ℹ️ limit קטן מדי ({limit}); מגדיל ל-{MIN_LIMIT} עבור {sym}")
-        limit = MIN_LIMIT
-    if limit > MAX_LIMIT:
-        logging.info(f"[get_klines] ℹ️ limit גדול מאוד ({limit}); חותך ל-{MAX_LIMIT} עבור {sym}")
-        limit = MAX_LIMIT
-
+    # --- שלב 2: python-binance עם ריטריי ---
     client = _ensure_client()
     if client is None:
         logging.error("[get_klines] ❌ אין Binance client זמין כלל.")
         return pd.DataFrame()
 
-    # --- ניסיון REST עם ריטריי ---
     try:
         raw = _fetch_klines_with_retry(
             client=client,
             market=mt,
             symbol=sym,
             interval=itv,
-            limit=limit,
+            limit=lim,
             start_time=start_time,
             end_time=end_time
         )
 
         if not raw or len(raw) < 10:
             logging.warning(f"[get_klines] ⚠️ נתוני Klines ריקים/מועטים ({len(raw) if raw else 0}) עבור {sym} ({mt})")
-            # ננסה פולי-בק WS
-            if try_ws_fallback:
-                df_ws = snapshot_klines_df(sym, itv, limit=limit)
-                if df_ws is not None and not df_ws.empty:
-                    logging.info(f"[get_klines] ✅ WS snapshot fallback OK עבור {sym}@{itv} ({len(df_ws)})")
-                    return df_ws
             return pd.DataFrame()
 
-        # בניית DataFrame
-        df = pd.DataFrame(raw, columns=[
-            "timestamp", "open", "high", "low", "close", "volume",
-            "close_time", "quote_asset_volume", "number_of_trades",
-            "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
-        ])[["timestamp", "open", "high", "low", "close", "volume"]].copy()
-
-        # טיפוסי נתונים וניקוי
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-        for col in ("open", "high", "low", "close", "volume"):
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        # מיון, הסרת כפילויות, מילוי חסרים שמרני
-        df.sort_values("timestamp", inplace=True)
-        df.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-
-        nan_before = df.isna().sum().sum()
-        if nan_before > 0:
-            logging.warning(f"[get_klines] ⚠️ נמצאו {nan_before} NaN עבור {sym} – ממלא ffill/bfill")
-            df.ffill(inplace=True)
-            df.bfill(inplace=True)
-
-        df.dropna(inplace=True)
-
-        if len(df) < MIN_LIMIT // 2:
-            logging.warning(f"[get_klines] ⚠️ מעט מדי נרות לאחר סינון ({len(df)}) עבור {sym} ({mt})")
-            # פולי-בק ל-WS אם אפשר
-            if try_ws_fallback:
-                df_ws = snapshot_klines_df(sym, itv, limit=limit)
-                if df_ws is not None and not df_ws.empty:
-                    logging.info(f"[get_klines] ✅ WS snapshot fallback OK עבור {sym}@{itv} ({len(df_ws)})")
-                    return df_ws
+        df = _to_df(raw)
+        if df.empty:
+            logging.warning(f"[get_klines] ⚠️ לאחר ניקוי — אין מספיק נתונים עבור {sym}@{itv}")
             return pd.DataFrame()
 
-        # הצבה כאינדקס
-        df.set_index("timestamp", inplace=True)
-
-        logging.info(f"[get_klines] ✅ {sym} ({itv}, {mt}): {len(df)} נרות")
+        logging.info(f"[get_klines] ✅ {sym} ({itv}, {mt} via python-binance): {len(df)} נרות")
         return df
 
-    except BinanceAPIException as e:
-        # 403/WAF → נסה WS snapshot
-        txt = str(e)
-        if e.status_code == 403 or "CloudFront" in txt or "Invalid JSON error message" in txt:
-            if try_ws_fallback:
-                logging.warning(f"[get_klines] 🚧 403/WAF – WS snapshot fallback עבור {sym}@{itv}")
-                df_ws = snapshot_klines_df(sym, itv, limit=limit)
-                if df_ws is not None and not df_ws.empty:
-                    logging.info(f"[get_klines] ✅ WS snapshot fallback OK עבור {sym}@{itv} ({len(df_ws)})")
-                    return df_ws
-        logging.error(f"[get_klines] ❌ BinanceAPIException עבור {sym}@{itv}: code={e.code}, msg={e.message}")
-        return pd.DataFrame()
     except (requests.exceptions.RequestException, BinanceRequestException) as e:
-        # רשת/טיימאאוט – ננסה WS
-        if try_ws_fallback:
-            logging.warning(f"[get_klines] 🌐 שגיאת רשת – WS snapshot fallback עבור {sym}@{itv}: {e}")
-            df_ws = snapshot_klines_df(sym, itv, limit=limit)
-            if df_ws is not None and not df_ws.empty:
-                logging.info(f"[get_klines] ✅ WS snapshot fallback OK עבור {sym}@{itv} ({len(df_ws)})")
-                return df_ws
         logging.error(f"[get_klines] ❌ שגיאת רשת עבור {sym}@{itv}: {e}")
+        return pd.DataFrame()
+    except BinanceAPIException as e:
+        logging.error(f"[get_klines] ❌ BinanceAPIException עבור {sym}@{itv}: code={e.code}, msg={e.message}")
         return pd.DataFrame()
     except Exception as e:
         logging.error(f"[get_klines] ❌ שגיאה לא צפויה עבור {sym}@{itv}: {type(e).__name__} – {e}")
-        # ניסיון אחרון ל-WS
-        if try_ws_fallback:
-            df_ws = snapshot_klines_df(sym, itv, limit=limit)
-            if df_ws is not None and not df_ws.empty:
-                logging.info(f"[get_klines] ✅ WS snapshot fallback OK עבור {sym}@{itv} ({len(df_ws)})")
-                return df_ws
         return pd.DataFrame()
 
 
