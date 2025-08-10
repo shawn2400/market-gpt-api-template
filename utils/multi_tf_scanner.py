@@ -1,10 +1,10 @@
 # utils/multi_tf_scanner.py
 import logging
 import asyncio
-from typing import Sequence, List, Dict, Optional
+from typing import Sequence, List, Dict, Optional, Any
 
 from utils import config
-from utils.watchlist_utils import get_symbols_list
+from utils.watchlist_utils import load_watchlist
 from utils.trending_utils import get_trending_symbols
 from utils.scanner_utils import analyze_symbol  # שים/י לב: לא מייבאים semaphore כאן!
 from utils.ai_analysis import analyze_with_ai
@@ -14,27 +14,7 @@ MAX_SYMBOLS = max(1, min(int(getattr(config, "TOP_SYMBOLS", 30)), 50))
 FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 
 
-async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) -> Optional[Dict]:
-    """
-    עטיפה בטוחה ל-analyze_symbol.
-    שים לב: analyze_symbol עצמו כבר משתמש בסמפור גלובלי – אין צורך/מותר להכפיל סמפור כאן.
-    """
-    try:
-        return await analyze_symbol(
-            symbol=symbol,
-            market_type=market,
-            interval=tf,
-            limit=150,
-            trending_only=trending_only,
-            with_ai=False,
-            frames=[tf],
-        )
-    except Exception as e:
-        logging.error(f"[multi_tf_scanner] analyze_symbol failed for {symbol}@{tf}: {e}", exc_info=True)
-        return None
-
-
-def _normalize_direction(val) -> str:
+def _normalize_direction(val: Any) -> str:
     d = str(val or "").strip().upper()
     if d in ("LONG", "BUY"):
         return "LONG"
@@ -54,6 +34,41 @@ def _dedup_upper(seq: Sequence[str]) -> List[str]:
     return out
 
 
+def _symbols_from_watchlist(min_quality: float) -> List[str]:
+    try:
+        wl = load_watchlist(min_quality=min_quality) or []
+        syms = []
+        for item in wl:
+            if isinstance(item, dict):
+                sym = str(item.get("symbol", "")).strip().upper()
+                if sym:
+                    syms.append(sym)
+        return _dedup_upper(syms)
+    except Exception as e:
+        logging.warning(f"[multi_tf_scanner] watchlist load failed: {e}")
+        return []
+
+
+async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) -> Optional[Dict]:
+    """
+    עטיפה בטוחה ל-analyze_symbol.
+    analyze_symbol עצמו כבר משתמש בסמפור גלובלי – אין צורך להכפיל סמפור כאן.
+    """
+    try:
+        return await analyze_symbol(
+            symbol=symbol,
+            market_type=market,
+            interval=tf,
+            limit=150,
+            trending_only=trending_only,
+            with_ai=False,
+            frames=[tf],
+        )
+    except Exception as e:
+        logging.error(f"[multi_tf_scanner] analyze_symbol failed for {symbol}@{tf}: {e}", exc_info=True)
+        return None
+
+
 async def _build_symbol_list(
     symbols: Optional[Sequence[str]],
     min_quality: float,
@@ -69,24 +84,23 @@ async def _build_symbol_list(
     4) FALLBACK_SYMBOLS
     """
     try:
-        syms: List[str] = []
         if symbols:
             syms = [str(s).strip().upper() for s in symbols if s]
         else:
-            syms = get_symbols_list(min_quality=min_quality)
+            syms = _symbols_from_watchlist(min_quality=min_quality)
 
         if trending_only or not syms:
             try:
                 trending = get_trending_symbols(trending_source, market) or []
                 trending = [str(s).strip().upper() for s in trending if s]
+
                 if syms:
-                    # אם יש syms וגם trending_only=True – נשארים רק עם החיתוך
                     if trending_only:
                         tset = set(trending)
                         syms = [s for s in syms if s in tset]
-                    # אם לא trending_only אבל syms ריק – נשתמש ב-trending כבסיס
                 if not syms:
                     syms = trending
+
                 logging.info(f"[multi_tf_scanner] Trending symbols ({trending_source}/{market}): {syms[:MAX_SYMBOLS]}")
             except Exception as e:
                 logging.warning(f"[multi_tf_scanner] Trending fetch error: {e}")
@@ -115,13 +129,16 @@ async def multi_tf_scan_with_ai(
     מחזיר רשימת dict ממוינת לפי quality_score (יורד), עד top תוצאות.
     פלט מובטח לכל פריט: {symbol, direction, quality_score, signal, confidence, frames, details, raw?}
     """
+    tfs = tuple([str(x).strip() for x in (timeframes or ("15m", "1h")) if str(x).strip()]) or ("15m", "1h")
     market = str(markets[0] if markets else "futures").lower()
+    top_n = max(1, int(top or 10))
+
     logging.info(
-        f"[multi_tf_scanner] Starting scan: tf={timeframes}, markets={markets}, "
-        f"min_quality={min_quality}, top={top}, trending_only={trending_only}"
+        f"[multi_tf_scanner] Starting scan: tf={tfs}, markets={markets}, "
+        f"min_quality={min_quality}, top={top_n}, trending_only={trending_only}"
     )
 
-    # 1) בניית רשימת סמלים
+    # 1) סמלים
     syms = await _build_symbol_list(
         symbols=symbols,
         min_quality=min_quality,
@@ -133,8 +150,8 @@ async def multi_tf_scan_with_ai(
         logging.info("[multi_tf_scanner] No symbols to scan.")
         return []
 
-    # 2) הרצת ניתוח לכל TF ולכל סימבול
-    tasks = [_safe_analyze(sym, tf, market, trending_only) for sym in syms for tf in timeframes]
+    # 2) ניתוח לכל TF ולכל סימבול
+    tasks = [_safe_analyze(sym, tf, market, trending_only) for sym in syms for tf in tfs]
     results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
     # 3) ניפוי חריגות ותוצאות לא חוקיות
@@ -159,12 +176,11 @@ async def multi_tf_scan_with_ai(
     # 5) סיכום + AI לכל סימבול
     final: List[Dict] = []
     for sym, data in grouped.items():
-        # ממוצע איכות
         avg_q = sum(float(d.get("quality_score", 0) or 0) for d in data) / max(1, len(data))
         if avg_q < float(min_quality):
             continue
 
-        # התאמת כיוון אם חסר
+        # ודאות כיוון
         for d in data:
             d["direction"] = _normalize_direction(d.get("direction") or d.get("main_direction"))
 
@@ -185,16 +201,13 @@ async def multi_tf_scan_with_ai(
         # ולידציה של תוצאת ה-AI והשלמת שדות
         if not isinstance(ai, dict):
             logging.warning(f"[multi_tf_scanner] AI analysis result not dict for {sym}: {ai}")
-            final.append(_fallback())
-            continue
+            final.append(_fallback()); continue
 
         if ai.get("error"):
             logging.warning(f"[multi_tf_scanner] AI analysis error for {sym}: {ai.get('error')}")
             out = _fallback()
-            # עדיין נשמור error כדי שתראה בלוגים
             out["error"] = ai.get("error")
-            final.append(out)
-            continue
+            final.append(out); continue
 
         out = dict(ai)
         out["symbol"] = sym
@@ -209,7 +222,8 @@ async def multi_tf_scan_with_ai(
 
     # 6) מיון והחזרה
     final.sort(key=lambda x: float(x.get("quality_score", 0) or 0), reverse=True)
-    return final[:max(1, int(top))]
+    return final[:top_n]
+
 
 
 
