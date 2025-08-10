@@ -56,7 +56,6 @@ _session.headers.update({
     "Accept-Encoding": "gzip",
     "Accept-Language": "en-US,en;q=0.9",
 })
-# הערה: X-MBX-APIKEY לא מוגדר גלובלית – python-binance מוסיף בבקשות חתומות.
 
 _retry = Retry(
     total=_MAX_RETRIES,
@@ -65,7 +64,7 @@ _retry = Retry(
     status=_MAX_RETRIES,
     backoff_factor=_BACKOFF_BASE,
     status_forcelist=[403, 418, 429, 500, 502, 503, 504],
-    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),  # POST לא בטוח לאידמפוטנטיות
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),  # POST לא אידמפוטנטי
     raise_on_status=False,
 )
 _adapter = HTTPAdapter(max_retries=_retry, pool_connections=50, pool_maxsize=50)
@@ -108,7 +107,7 @@ def check_outbound_ip_against_allowlist():
         endpoints.append(_EGRESS_IP_ENDPOINT)
     endpoints += [
         "https://checkip.amazonaws.com",
-        "https://api.ipify.org",
+        "https://api.ipify.org?format=json",
         "https://ifconfig.me/ip",
     ]
     ip = _fetch_outbound_ip(endpoints)
@@ -173,7 +172,7 @@ def sync_server_time() -> None:
 
     url = f"{_FAPI_HTTP}/fapi/v1/time"
     t0 = int(time.time() * 1000)
-    r = _session.get(url, timeout=5)
+    r = _session.get(url, timeout=6)
     r.raise_for_status()
     server_ms = int(r.json()["serverTime"])
     t1 = int(time.time() * 1000)
@@ -222,7 +221,7 @@ def _retry_call(fn: Callable, *, name: str):
             logging.error(f"[Binance] API error in {name}: {txt}")
             raise
         except (BinanceRequestException, requests.exceptions.RequestException) as e:
-            # שים לב: כאן תופסים גם 403/CloudFront שמגיע דרך REST ישיר (premiumIndex וכד')
+            # כאן תופסים גם 403/CloudFront שמגיעים מבקשות REST ישירות
             delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
             logging.warning(f"[Binance] Network/HTTP {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s: {e}")
             time.sleep(delay); last_exc = e; continue
@@ -238,10 +237,25 @@ def _retry_call(fn: Callable, *, name: str):
 def retry_call(fn: Callable, name: str):
     return _retry_call(fn, name=name)
 
-# === Helpers בטוחים/שימושיים ===
+# === exchangeInfo – פולבק ל־HTTP אם ה-SDK לא הצליח ===
+def _futures_exchange_info_http():
+    url = f"{_FAPI_HTTP}/fapi/v1/exchangeInfo"
+    def _do():
+        r = _session.get(url, timeout=8)
+        if r.status_code != 200:
+            txt = (r.text or "")[:200]
+            if "<HTML>" in txt.upper() or "CLOUDFRONT" in txt.upper():
+                raise requests.HTTPError(f"HTTP {r.status_code} CloudFront HTML: {txt}")
+            raise requests.HTTPError(f"HTTP {r.status_code}: {txt}")
+        return r.json()
+    return _retry_call(_do, name="futures_exchange_info(HTTP)")
+
 def futures_exchange_info_safe():
     c = get_client()
-    return _retry_call(lambda: c.futures_exchange_info(), name="futures_exchange_info")
+    data = _retry_call(lambda: c.futures_exchange_info(), name="futures_exchange_info")
+    if not isinstance(data, dict) or "symbols" not in data:
+        data = _futures_exchange_info_http()
+    return data
 
 def futures_mark_price(symbol: str):
     """
@@ -254,12 +268,10 @@ def futures_mark_price(symbol: str):
     def _do():
         resp = _session.get(url, params=params, timeout=6)
         if resp.status_code != 200:
-            # אם זו תגובת HTML, נסמן 'CloudFront' לטובת ה-logger של הריטריי
             text_snip = (resp.text or "")[:200]
             if "<HTML>" in text_snip.upper() or "CLOUDFRONT" in text_snip.upper():
                 raise requests.HTTPError(f"HTTP {resp.status_code} CloudFront HTML: {text_snip}")
             raise requests.HTTPError(f"HTTP {resp.status_code}: {text_snip}")
-        # resp.json עלול לזרוק; ניתן לו לעבור ל-except הכללי
         return resp.json()
 
     return _retry_call(_do, name=f"premiumIndex({symbol})")
@@ -294,6 +306,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
