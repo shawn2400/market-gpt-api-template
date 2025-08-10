@@ -4,11 +4,11 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PORT=10000
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# (רשות) אזור זמן
-# RUN ln -snf /usr/share/zoneinfo/Asia/Jerusalem /etc/localtime && echo "Asia/Jerusalem" > /etc/timezone
+# אל תקבע PORT קבוע בזמן בנייה; Render/Railway מזריקות אותו בזמן ריצה.
+# אם תרצה דיפולט מקומי:
+ENV PORT=10000
 
 # System deps (קטן ונקי)
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
@@ -26,23 +26,30 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # קוד האפליקציה
 COPY . /app
 
-# Healthcheck (Render בודק /health)
-HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+# Healthcheck (בדיקת /health)
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
+  CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
 # הרשאות
 RUN chown -R appuser:appuser /app
 USER appuser
 
-# תיעוד פורט (Render מתעלם, אבל נחמד)
+# תיעוד פורט (אופציונלי)
 EXPOSE ${PORT}
 
-# הרצה: tini לניקוי סיגנלים + gunicorn עם uvicorn worker
+# הרצה: tini לניקוי סיגנלים + gunicorn עם UvicornWorker
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["bash", "-lc", "exec gunicorn main:app -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:${PORT} --timeout 120 --graceful-timeout 30 --keep-alive 5"]
 
-
-
-
+# ✅ Worker יחיד כדי למנוע WS כפולים, ו-timeouts נדיבים ל-IO
+CMD ["bash", "-lc", "exec gunicorn main:app \
+  -k uvicorn.workers.UvicornWorker \
+  --workers 1 \
+  --bind 0.0.0.0:${PORT} \
+  --timeout 180 \
+  --graceful-timeout 30 \
+  --keep-alive 75 \
+  --worker-tmp-dir /dev/shm \
+  --log-level info"]
 
 
 
