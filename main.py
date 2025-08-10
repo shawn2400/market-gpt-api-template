@@ -78,7 +78,7 @@ _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.9.2"
+APP_VERSION = "2.9.3"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -153,22 +153,27 @@ async def _warmup_ai_non_blocking():
         logging.warning("[startup] AI warmup skipped")
 
 # ---------- אירועי חיים ----------
+app.state.ws_task = None
+app.state.ws_symbols = []
+
 @app.on_event("startup")
 async def _on_startup():
-    # לא נבצע REST בעלייה כשיש סיכוי ל-418 (דיפולט False)
+    # לא נבצע REST כבד בעלייה כשיש סיכוי ל-418 – רק אם הוגדר מפורשות
     try:
         if bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False)):
             ping_and_info()
     except Exception as e:
-        logging.warning(f"[startup] ping_and_info failed: {e}")
+        logging.warning(f("[startup] ping_and_info failed: {e}"))
 
-    # WebSocket למחירים חיים
+    # WebSocket למחירים חיים – כטאסק לא חוסם
     try:
         symbols = _pick_ws_symbols()
-        await launch_multi_websocket(symbols)
+        app.state.ws_symbols = list(symbols)
         global WS_SYMBOLS
         WS_SYMBOLS = list(symbols)
-        logging.info(f"[startup] WS launched for {len(symbols)} symbols")
+        if app.state.ws_task is None or app.state.ws_task.done():
+            app.state.ws_task = asyncio.create_task(launch_multi_websocket(symbols))
+        logging.info(f"[startup] WS launched for {len(symbols)} symbols (background)")
     except Exception as e:
         logging.warning(f"[startup] launch_multi_websocket failed: {e}")
 
@@ -185,11 +190,24 @@ async def _on_startup():
 
 @app.on_event("shutdown")
 async def _on_shutdown():
+    # כיבוי אקסקיוטר
     try:
         if is_executor_running():
             stop_executor()
     except Exception as e:
         logging.warning(f"[shutdown] stop_executor failed: {e}")
+
+    # ביטול WS task
+    try:
+        task = getattr(app.state, "ws_task", None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    except Exception as e:
+        logging.warning(f"[shutdown] ws_task cancel failed: {e}")
 
 # ---------- עזר: צילום קונפיג ללא סודות ----------
 def _mask(s: str, keep: int = 4) -> str:
@@ -215,7 +233,7 @@ def _config_snapshot() -> dict:
         "openai_model": str(getattr(config, "OPENAI_MODEL", "gpt-4o-mini")),
         "openai_timeout_seconds": float(getattr(config, "OPENAI_TIMEOUT_SECONDS", 30.0)),
         "openai_max_concurrency": int(getattr(config, "OPENAI_MAX_CONCURRENCY", 4)),
-        "openai_base_url_set": bool(bool(getattr(config, "OPENAI_BASE_URL", ""))),
+        "openai_base_url_set": bool(bool(getattr(config, "OPENAI_BASE_URL", "")))),
         "binance_exchange_info_on_start": bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False)),
         "binance_backoff_base": float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7)),
         "binance_max_retries": int(getattr(config, "BINANCE_MAX_RETRIES", 5)),
@@ -477,11 +495,14 @@ async def ws_status(
     threshold = int(max_age_sec or getattr(config, "PRICE_MAX_AGE_SEC", 10))
     cooldown = _rest_cooldown_active()
 
+    # העדף רשימת סמלים מ-app.state, אם קיימת
+    available_ws_symbols = getattr(app.state, "ws_symbols", None) or WS_SYMBOLS
+
     if symbols:
         raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-        check_syms = raw or (WS_SYMBOLS if WS_SYMBOLS else ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
+        check_syms = raw or (available_ws_symbols if available_ws_symbols else ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
     else:
-        check_syms = WS_SYMBOLS if WS_SYMBOLS else ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+        check_syms = available_ws_symbols if available_ws_symbols else ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 
     out = []
     fresh_count = 0
