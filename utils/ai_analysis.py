@@ -1,36 +1,32 @@
 # utils/ai_analysis.py
-import os
 import logging
 import re
 import traceback
 from typing import Tuple, List, Dict
 
-from dotenv import load_dotenv
 import openai
+from utils import config
+from utils.sl_tp_utils import calculate_sl_tp
 
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# קונפיג OpenAI
+openai.api_key = config.OPENAI_API_KEY
+MODEL = config.OPENAI_MODEL
 
 def _norm_direction(d: str) -> str:
     d = (d or "").strip().upper()
-    if d in ("LONG", "BUY"):
-        return "LONG"
-    if d in ("SHORT", "SELL"):
-        return "SHORT"
+    if d in ("LONG", "BUY"): return "LONG"
+    if d in ("SHORT", "SELL"): return "SHORT"
     return "LONG"
 
 async def analyze_with_ai(tf_results: List[Dict]) -> Dict:
     """
-    מקבל רשימת מסגרות TF עבור סימבול אחד ומחזיר dict:
-    {symbol, direction, quality_score, signal, confidence, frames, details} או {"error": ...}
+    קלט: רשימת תוצאות TF עבור סימבול אחד.
+    פלט: dict אחיד {symbol, direction, quality_score, signal, confidence, frames, details, raw?} או {"error": ...}
     """
     try:
         if not tf_results:
             return {"error": "empty tf_results"}
 
-        # סמלים/כיוון/ממוצעים
         symbol = str(tf_results[0].get("symbol", "")).upper()
         direction = _norm_direction(tf_results[0].get("direction"))
         frames = [str(x.get("interval", "?")) for x in tf_results]
@@ -39,7 +35,8 @@ async def analyze_with_ai(tf_results: List[Dict]) -> Dict:
         avg_volume = sum(float(x.get("volume", 1_000_000) or 1_000_000) for x in tf_results) / len(tf_results)
         avg_quality = sum(float(x.get("quality_score", 0) or 0) for x in tf_results) / len(tf_results)
 
-        if not openai.api_key or not openai.api_key.strip():
+        # אם אין מפתח – נחזיר fallback מאוחד (ללא כישלון קשיח)
+        if not (openai.api_key and openai.api_key.strip()):
             return {
                 "symbol": symbol,
                 "direction": direction,
@@ -77,10 +74,8 @@ async def analyze_with_ai(tf_results: List[Dict]) -> Dict:
         conf = 0.0
         m1 = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
         m2 = re.search(r"Confidence:\s*(\d+(?:\.\d+)?)", content)
-        if m1:
-            signal = m1.group(1).upper()
-        if m2:
-            conf = float(m2.group(1))
+        if m1: signal = m1.group(1).upper()
+        if m2: conf = float(m2.group(1))
 
         return {
             "symbol": symbol,
@@ -95,10 +90,12 @@ async def analyze_with_ai(tf_results: List[Dict]) -> Dict:
 
     except Exception as e:
         logging.error(f"[AI] Exception: {e}\n{traceback.format_exc()}")
-        # החזרה עקבית עם שדות חובה
         symbol = str(tf_results[0].get("symbol", "")).upper() if tf_results else "UNKNOWN"
         direction = _norm_direction(tf_results[0].get("direction")) if tf_results else "LONG"
-        avg_quality = sum(float(x.get("quality_score", 0) or 0) for x in tf_results) / max(1, len(tf_results)) if tf_results else 0.0
+        avg_quality = (
+            sum(float(x.get("quality_score", 0) or 0) for x in tf_results) / max(1, len(tf_results))
+            if tf_results else 0.0
+        )
         return {
             "error": str(e),
             "symbol": symbol,
@@ -110,12 +107,10 @@ async def analyze_with_ai(tf_results: List[Dict]) -> Dict:
             "details": tf_results or []
         }
 
-from utils.sl_tp_utils import calculate_sl_tp
-
 async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: float = None) -> Tuple[float, float]:
     """
-    תמיד מחזיר (stop, tp) כ-tuple. אם ה-AI נכשל—נופל ל-calculate_sl_tp.
-    מבצע ולידציה: LONG => stop < entry < tp, SHORT => tp < entry < stop.
+    תמיד מחזיר (stop, tp) כ-tuple; אם ה-AI נכשל—נופל ל-calculate_sl_tp.
+    מאמת: LONG => stop < entry < tp, SHORT => tp < entry < stop.
     """
     direction = _norm_direction(direction)
     try:
@@ -142,7 +137,6 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
             m = re.search(r"SL:\s*([\d.]+)[,\s]+TP:\s*([\d.]+)", content)
             if m:
                 sl, tp = float(m.group(1)), float(m.group(2))
-                # ולידציה
                 if (direction == "LONG" and sl < entry_price < tp) or (direction == "SHORT" and tp < entry_price < sl):
                     return round(sl, 6), round(tp, 6)
                 else:
@@ -152,6 +146,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
 
     sl, tp = calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
     return float(sl), float(tp)
+
 
 
 
