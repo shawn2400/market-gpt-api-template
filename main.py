@@ -62,7 +62,7 @@ _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.8.1"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -151,13 +151,13 @@ async def _on_shutdown():
         logging.warning(f"[shutdown] stop_executor failed: {e}")
 
 # ---------- עזר: צילום קונפיג ללא סודות ----------
-def _config_snapshot() -> dict:
-    def _mask(s: str, keep: int = 4) -> str:
-        if not s:
-            return ""
-        s = str(s)
-        return s[:keep] + "…" if len(s) > keep else "*" * len(s)
+def _mask(s: str, keep: int = 4) -> str:
+    if not s:
+        return ""
+    s = str(s)
+    return s[:keep] + "…" if len(s) > keep else "*" * len(s)
 
+def _config_snapshot() -> dict:
     return {
         "version": APP_VERSION,
         "auto_run": bool(getattr(config, "AUTO_RUN", True)),
@@ -225,7 +225,7 @@ async def ai_health():
 @app.get("/net/ip", tags=["Debug"])
 async def get_egress_ip():
     """
-    מדפיס את כתובת ה-egress החיצונית של השרת (כפי שמזהה שירות חיצוני).
+    מחזיר את כתובת ה-egress החיצונית של השרת (זיהוי דרך שירות חיצוני).
     שימושי כדי לאשר IP ב-Binance.
     """
     import httpx
@@ -352,7 +352,7 @@ async def scan_multi(
     timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
     results = await multi_tf_scan_with_ai(
         timeframes=timeframes,
-        markets=(market_type,),
+        markets=(market_type, ),
         min_quality=min_quality,
         top=top,
         trending_only=trending_only,
@@ -465,6 +465,7 @@ if __name__ == "__main__":
         app, host="0.0.0.0",
         port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000"))))
     )
+
 
 
 
