@@ -1,6 +1,5 @@
 # utils/binance_trader.py
 import os
-import math
 import asyncio
 import logging
 from decimal import Decimal, ROUND_DOWN, getcontext
@@ -15,10 +14,11 @@ FORCE_HEDGE   = (str(getattr(config, "BINANCE_FORCE_HEDGE_MODE",
                               os.getenv("BINANCE_FORCE_HEDGE_MODE", "false"))).lower() == "true")
 MAX_LEVERAGE  = int(getattr(config, "MAX_LEVERAGE", os.getenv("MAX_LEVERAGE", "35")))
 
-# דיוק גבוה מספיק לרוב ה־tick/step בבינאנס
+# דיוק גבוה כדי להימנע משגיאות float
 getcontext().prec = 28
 
 # ---------- Helpers: exchangeInfo / filters / precision ----------
+
 def _find_symbol_info(exchange_info: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
     if not exchange_info or "symbols" not in exchange_info:
         return None
@@ -34,38 +34,48 @@ def _get_filters(sym_info: Dict[str, Any]) -> Dict[str, Any]:
         out[f.get("filterType")] = f
     return out
 
-def _decimal_step_round(value: float, step: float) -> Decimal:
-    """עיגול מטה לפי step באמצעות Decimal כדי להימנע משגיאות float."""
+def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
+    """עיגול מטה לפי step באמצעות Decimal (floor), כדי לא לקבל דחיות מהבורסה."""
     if step <= 0:
-        return Decimal(str(value))
-    v = Decimal(str(value))
-    s = Decimal(str(step))
-    # floor ל־step
-    return (v // s) * s
+        return value
+    return (value // step) * step
 
 def _fmt_decimal(x: Decimal, precision: Optional[int]) -> str:
     if precision is None or precision < 0:
         # חיתוך עד 10 ספרות אחרי הנקודה כברירת מחדל
-        return format(x.quantize(Decimal("0.0000000001"), rounding=ROUND_DOWN).normalize(), 'f')
-    q = Decimal(1).scaleb(-precision)  # 10^-precision
+        q = Decimal("0.0000000001")
+    else:
+        q = Decimal(1).scaleb(-precision)  # 10^-precision
     return format(x.quantize(q, rounding=ROUND_DOWN).normalize(), 'f')
 
 def _apply_price_tick(price: float, tick: float, price_precision: Optional[int]) -> Tuple[Decimal, str]:
-    dec = _decimal_step_round(price, tick)
+    v = Decimal(str(price))
+    t = Decimal(str(tick)) if tick else Decimal("0")
+    dec = _decimal_step_round(v, t) if t > 0 else v
     return dec, _fmt_decimal(dec, price_precision)
 
-def _apply_qty_step(qty: float, step: float, qty_precision: Optional[int]) -> Tuple[Decimal, str]:
-    dec = _decimal_step_round(qty, step)
+def _apply_qty_step(qty: Decimal, step: float, qty_precision: Optional[int]) -> Tuple[Decimal, str]:
+    s = Decimal(str(step)) if step else Decimal("0")
+    dec = _decimal_step_round(qty, s) if s > 0 else qty
     return dec, _fmt_decimal(dec, qty_precision)
 
-# ---------- Account setup (hedge / leverage) ----------
-def _ensure_position_mode(client, hedge: bool) -> bool:
+# ---------- Account: position mode / leverage ----------
+
+def _read_position_mode(client) -> Optional[bool]:
+    """מחזיר True אם Hedge (dualSidePosition), False אם One-way, או None אם לא ידוע."""
     try:
         info = retry_call(lambda: client.futures_get_position_mode(), "futures_get_position_mode")
-        if not isinstance(info, dict) or "dualSidePosition" not in info:
-            logging.warning("[TRADER] could not read position mode; response=%s", info)
+        if isinstance(info, dict) and "dualSidePosition" in info:
+            return bool(info["dualSidePosition"])
+    except Exception as e:
+        logging.warning(f"[TRADER] read position mode failed: {e}")
+    return None
+
+def _ensure_position_mode(client, hedge: bool) -> bool:
+    try:
+        cur = _read_position_mode(client)
+        if cur is None:
             return False
-        cur = bool(info["dualSidePosition"])
         if cur != hedge:
             if SKIP_MUTATIONS:
                 logging.warning("[TRADER] hedge mode mismatch (cur=%s, want=%s) אך Mutations מושבת — מדלגים.", cur, hedge)
@@ -93,10 +103,12 @@ def _set_leverage(client, symbol: str, leverage: int) -> bool:
         return False
 
 # ---------- Order builders ----------
+
 def _exit_side_for(direction: str) -> str:
     return "SELL" if direction == "LONG" else "BUY"
 
-def _place_limit_entry(client, symbol: str, side: str, price_s: str, qty_s: str, position_side: Optional[str]) -> Dict[str, Any]:
+def _place_limit_entry(client, symbol: str, side: str, price_s: str, qty_s: str,
+                       position_side: Optional[str], client_order_id: Optional[str]) -> Dict[str, Any]:
     params = dict(
         symbol=symbol.upper(),
         side=("BUY" if side == "LONG" else "SELL"),
@@ -109,10 +121,12 @@ def _place_limit_entry(client, symbol: str, side: str, price_s: str, qty_s: str,
     )
     if position_side:
         params["positionSide"] = position_side
+    if client_order_id:
+        params["newClientOrderId"] = client_order_id
     return retry_call(lambda: client.futures_create_order(**params), f"entry_LIMIT({symbol})")
 
 def _place_stop_like(client, symbol: str, direction: str, stop_price_s: str, limit_price_s: str,
-                     qty_s: str, kind: str, position_side: Optional[str]) -> Dict[str, Any]:
+                     qty_s: str, kind: str, position_side: Optional[str], client_order_id: Optional[str]) -> Dict[str, Any]:
     """
     kind: 'STOP' (SL) או 'TAKE_PROFIT' (TP) — הזמנות LIMIT (לא מרקט) עם stopPrice+price.
     יציאה תמיד בכיוון ההפוך לכניסה; reduceOnly=True.
@@ -125,16 +139,19 @@ def _place_stop_like(client, symbol: str, direction: str, stop_price_s: str, lim
         stopPrice=stop_price_s,
         price=limit_price_s,
         quantity=qty_s,
-        workingType="MARK_PRICE",   # שיקול: MARK_PRICE יציב מול מניפולציות; אפשר לשנות ל-CONTRACT_PRICE
+        workingType="MARK_PRICE",   # אפשר לשנות ל-CONTRACT_PRICE לפי מדיניות
         priceProtect=True,
         reduceOnly=True,
         newOrderRespType="RESULT",
     )
     if position_side:
         params["positionSide"] = position_side
+    if client_order_id:
+        params["newClientOrderId"] = client_order_id
     return retry_call(lambda: client.futures_create_order(**params), f"{kind}_LIMIT({symbol})")
 
 # ---------- Public: main trade flow ----------
+
 async def binance_futures_trade(
     symbol: str,
     side: str,                 # 'LONG' or 'SHORT'
@@ -145,11 +162,13 @@ async def binance_futures_trade(
     budget: float,
     quantity: Optional[float] = None,
     market_type: str = "futures",
+    # אופציונלי: מזהים לקישור (למשל OCO-סטייל ניהולי)
+    cid_prefix: str = "algogpt",
 ) -> Dict[str, Any]:
     """
     מבצע:
       1) ולידציה וטעינת מידע סימבול (tick/lot/precision).
-      2) Hedge mode (אופציונלי) + Leverage.
+      2) זיהוי מצב חשבון Hedge/One-way + (אופציונלי) אכיפה + Leverage.
       3) Limit Entry + STOP (SL) + TAKE_PROFIT (TP) — reduceOnly, לא Market.
     """
     if market_type.lower() != "futures":
@@ -157,6 +176,10 @@ async def binance_futures_trade(
 
     if SKIP_MUTATIONS:
         raise RuntimeError("BINANCE_SKIP_ACCOUNT_MUTATIONS=true — כתיבה מושבתת עד אישור IP ב-Binance.")
+
+    side = side.upper()
+    if side not in ("LONG", "SHORT"):
+        raise RuntimeError(f"invalid side: {side}")
 
     client = get_client()
 
@@ -169,20 +192,20 @@ async def binance_futures_trade(
     filters = _get_filters(sym_info)
     price_filter = filters.get("PRICE_FILTER", {}) or {}
     lot_filter   = filters.get("LOT_SIZE", {}) or {}
-    min_notional = float(filters.get("MIN_NOTIONAL", {}).get("notional", 0) or 0.0)
+    min_notional = Decimal(str(filters.get("MIN_NOTIONAL", {}).get("notional", 0) or 0.0))
 
-    tick_size = float(price_filter.get("tickSize", "0.01"))
-    step_size = float(lot_filter.get("stepSize", "0.001"))
-    min_qty   = float(lot_filter.get("minQty", "0.0"))
+    tick_size = Decimal(str(price_filter.get("tickSize", "0.01")))
+    step_size = Decimal(str(lot_filter.get("stepSize", "0.001")))
+    min_qty   = Decimal(str(lot_filter.get("minQty", "0.0")))
 
     # precision אופציונלי (לא תמיד קיים ב-futures)
     price_precision = sym_info.get("pricePrecision")
     qty_precision   = sym_info.get("quantityPrecision")
 
     # מחירים מעוגלים ל-tick
-    entry_dec, entry_s = _apply_price_tick(float(entry), tick_size, price_precision)
-    sl_dec,    sl_s    = _apply_price_tick(float(sl),    tick_size, price_precision)
-    tp_dec,    tp_s    = _apply_price_tick(float(tp),    tick_size, price_precision)
+    entry_dec, entry_s = _apply_price_tick(float(entry), float(tick_size), price_precision)
+    sl_dec,    sl_s    = _apply_price_tick(float(sl),    float(tick_size), price_precision)
+    tp_dec,    tp_s    = _apply_price_tick(float(tp),    float(tick_size), price_precision)
 
     if entry_dec <= 0:
         raise RuntimeError("invalid entry price after rounding")
@@ -193,45 +216,64 @@ async def binance_futures_trade(
     else:
         raw_qty = Decimal(str(quantity))
 
-    qty_dec = _decimal_step_round(float(raw_qty), step_size)
+    qty_dec, qty_s = _apply_qty_step(raw_qty, float(step_size), qty_precision)
+
     # שמירה על minQty
-    if qty_dec < Decimal(str(min_qty)):
+    if qty_dec <= 0 or qty_dec < min_qty:
         raise RuntimeError(f"quantity too small after rounding: {qty_dec} < minQty {min_qty}")
 
-    qty_s = _fmt_decimal(qty_dec, qty_precision)
-    notional = float(qty_dec * entry_dec)
-
+    notional = (qty_dec * entry_dec)
     if min_notional and notional < min_notional:
-        logging.warning("[TRADER] notional too small: qty*entry=%.6f < minNotional=%.6f", notional, min_notional)
+        # אוכפים כדי למנוע דחייה מהבורסה
+        need_qty = (min_notional / entry_dec)
+        need_qty_rounded, _ = _apply_qty_step(need_qty, float(step_size), qty_precision)
+        raise RuntimeError(f"notional too small: qty*entry={notional} < minNotional={min_notional}; "
+                           f"try qty≥{need_qty_rounded}")
 
     # 3) Hedge + Leverage
-    position_side = None
+    position_side: Optional[str] = None
+    # נזהה מצב חשבון בפועל
+    acct_is_hedge = _read_position_mode(client)
+    if acct_is_hedge is True:
+        # אם החשבון במצב Hedge, חובה לשלוח positionSide
+        position_side = "LONG" if side == "LONG" else "SHORT"
+        # ואם ביקשת לאכוף Hedge ולא ב-Hedge, ננסה להחליף (אחרת נסתמך על המצב)
     if FORCE_HEDGE:
         ok = await asyncio.to_thread(_ensure_position_mode, client, True)
-        position_side = ("LONG" if side.upper() == "LONG" else "SHORT") if ok else None
+        if ok:
+            position_side = "LONG" if side == "LONG" else "SHORT"
+
     await asyncio.to_thread(_set_leverage, client, symbol, leverage)
 
     # 4) הזמנות
-    entry_resp = await asyncio.to_thread(_place_limit_entry, client, symbol, side.upper(), entry_s, qty_s, position_side)
+    # נייצר ClientOrderIdים עקביים לקישור (OCO-סטייל לוגי)
+    base_cid = f"{cid_prefix}:{symbol.upper()}:{side}:{int(entry_dec*1000)}"
+    entry_cid = f"{base_cid}:E"
+    sl_cid    = f"{base_cid}:SL"
+    tp_cid    = f"{base_cid}:TP"
+
+    entry_resp = await asyncio.to_thread(
+        _place_limit_entry, client, symbol, side, entry_s, qty_s, position_side, entry_cid
+    )
     if not entry_resp or not isinstance(entry_resp, dict) or "orderId" not in entry_resp:
         raise RuntimeError(f"Failed to place entry LIMIT: {entry_resp}")
 
     # יציאות: תמיד ההפך מכיוון הכניסה
-    sl_resp = await asyncio.to_thread(_place_stop_like, client, symbol, side.upper(),
-                                      stop_price_s=sl_s, limit_price_s=sl_s, qty_s=qty_s,
-                                      kind="STOP", position_side=position_side)
+    sl_resp = await asyncio.to_thread(
+        _place_stop_like, client, symbol, side, sl_s, sl_s, qty_s, "STOP",         position_side, sl_cid
+    )
     if not sl_resp or not isinstance(sl_resp, dict) or "orderId" not in sl_resp:
         raise RuntimeError(f"Failed to place STOP (SL): {sl_resp}")
 
-    tp_resp = await asyncio.to_thread(_place_stop_like, client, symbol, side.upper(),
-                                      stop_price_s=tp_s, limit_price_s=tp_s, qty_s=qty_s,
-                                      kind="TAKE_PROFIT", position_side=position_side)
+    tp_resp = await asyncio.to_thread(
+        _place_stop_like, client, symbol, side, tp_s, tp_s, qty_s, "TAKE_PROFIT",  position_side, tp_cid
+    )
     if not tp_resp or not isinstance(tp_resp, dict) or "orderId" not in tp_resp:
         raise RuntimeError(f"Failed to place TAKE_PROFIT (TP): {tp_resp}")
 
     result = {
         "symbol": symbol.upper(),
-        "side": side.upper(),
+        "side": side,
         "entry": float(entry_dec),
         "qty": float(qty_dec),
         "sl": float(sl_dec),
@@ -243,13 +285,19 @@ async def binance_futures_trade(
             "sl": sl_resp,
             "tp": tp_resp,
         },
-        "notional": notional,
-        "tickSize": tick_size,
-        "stepSize": step_size,
-        "minQty": min_qty,
-        "minNotional": min_notional,
+        "notional": float(notional),
+        "tickSize": float(tick_size),
+        "stepSize": float(step_size),
+        "minQty": float(min_qty),
+        "minNotional": float(min_notional),
+        "clientOrderIds": {
+            "entry": entry_cid,
+            "sl": sl_cid,
+            "tp": tp_cid,
+        }
     }
     return result
+
 
 
 
