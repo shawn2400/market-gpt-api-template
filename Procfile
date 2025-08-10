@@ -1,9 +1,10 @@
-gunicorn -k uvicorn.workers.UvicornWorker main:app \
-  --bind 0.0.0.0:${PORT:-10000} \
-  --workers 2 \
-  --timeout 120 \
+gunicorn main:app \
+  -k uvicorn.workers.UvicornWorker \
+  -w 1 \
+  -t 120 \
   --graceful-timeout 30 \
-  --log-level info
+  --keep-alive 5 \
+  -b 0.0.0.0:$PORT
 
 
 
