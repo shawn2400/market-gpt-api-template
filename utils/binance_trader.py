@@ -8,8 +8,14 @@ from typing import Optional, Dict, Any, Tuple
 from utils import config
 from utils.binance_client import get_client, retry_call, futures_exchange_info_safe
 
-SKIP_MUTATIONS = (str(getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
-                              os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))).lower() == "true")
+# --- שליטה מרכזית על כתיבה לבורסה ---
+EXECUTE_TRADES = bool(getattr(config, "EXECUTE_TRADES", False))
+BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV = str(
+    getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
+            os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))
+).lower() in ("1", "true", "yes", "y", "on")
+SKIP_MUTATIONS = (not EXECUTE_TRADES) or BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV
+
 FORCE_HEDGE   = (str(getattr(config, "BINANCE_FORCE_HEDGE_MODE",
                               os.getenv("BINANCE_FORCE_HEDGE_MODE", "false"))).lower() == "true")
 MAX_LEVERAGE  = int(getattr(config, "MAX_LEVERAGE", os.getenv("MAX_LEVERAGE", "35")))
@@ -33,45 +39,31 @@ def _get_filters(sym_info: Dict[str, Any]) -> Dict[str, Any]:
         out[f.get("filterType")] = f
     return out
 
-def _decimal_step_round_down(value: Decimal, step: Decimal) -> Decimal:
-    """עיגול מטה לפי step באמצעות Decimal (floor), כדי לא לקבל דחיות מהבורסה."""
+def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         return value
     return (value // step) * step
-
-def _decimal_step_round_up(value: Decimal, step: Decimal) -> Decimal:
-    """עיגול מעלה ל-step (ceiling)."""
-    if step <= 0:
-        return value
-    q, r = divmod(value, step)
-    return value if r == 0 else (q + 1) * step
 
 def _fmt_decimal(x: Decimal, precision: Optional[int]) -> str:
     if precision is None or precision < 0:
         q = Decimal("0.0000000001")
     else:
-        q = Decimal(1).scaleb(-precision)  # 10^-precision
+        q = Decimal(1).scaleb(-precision)
     return format(x.quantize(q, rounding=ROUND_DOWN).normalize(), 'f')
 
 def _apply_price_tick(price: float, tick: float, price_precision: Optional[int]) -> Tuple[Decimal, str]:
     v = Decimal(str(price))
     t = Decimal(str(tick)) if tick else Decimal("0")
-    dec = _decimal_step_round_down(v, t) if t > 0 else v
+    dec = _decimal_step_round(v, t) if t > 0 else v
     return dec, _fmt_decimal(dec, price_precision)
 
 def _apply_qty_step(qty: Decimal, step: float, qty_precision: Optional[int]) -> Tuple[Decimal, str]:
     s = Decimal(str(step)) if step else Decimal("0")
-    dec = _decimal_step_round_down(qty, s) if s > 0 else qty
-    return dec, _fmt_decimal(dec, qty_precision)
-
-def _apply_qty_step_up(qty: Decimal, step: float, qty_precision: Optional[int]) -> Tuple[Decimal, str]:
-    s = Decimal(str(step)) if step else Decimal("0")
-    dec = _decimal_step_round_up(qty, s) if s > 0 else qty
+    dec = _decimal_step_round(qty, s) if s > 0 else qty
     return dec, _fmt_decimal(dec, qty_precision)
 
 # ---------- Account: position mode / leverage ----------
 def _read_position_mode(client) -> Optional[bool]:
-    """מחזיר True אם Hedge (dualSidePosition), False אם One-way, או None אם לא ידוע."""
     try:
         info = retry_call(lambda: client.futures_get_position_mode(), "futures_get_position_mode")
         if isinstance(info, dict) and "dualSidePosition" in info:
@@ -170,16 +162,14 @@ async def binance_futures_trade(
     """
     מבצע:
       1) ולידציה וטעינת מידע סימבול (tick/lot/precision).
-      2) זיהוי מצב חשבון Hedge/One-way + (אופציונלי) אכיפה + Leverage.
-      3) Limit Entry + STOP (SL) + TAKE_PROFIT (TP) — reduceOnly, לא Market.
-
-    הערה חשובה: budget מייצג *Margin* (דולרים שהקצית לטרייד); הנומינלי הוא budget*leverage.
+      2) זיהוי/אכיפת מצב חשבון + Leverage.
+      3) Limit Entry + STOP + TAKE_PROFIT (reduceOnly).
     """
     if market_type.lower() != "futures":
         raise ValueError("Only futures is supported in this trader")
 
     if SKIP_MUTATIONS:
-        raise RuntimeError("BINANCE_SKIP_ACCOUNT_MUTATIONS=true — כתיבה מושבתת עד אישור IP ב-Binance.")
+        raise RuntimeError("כתיבה מושבתת (EXECUTE_TRADES=false או BINANCE_SKIP_ACCOUNT_MUTATIONS=true).")
 
     side = side.upper()
     if side not in ("LONG", "SHORT"):
@@ -213,46 +203,23 @@ async def binance_futures_trade(
     if entry_dec <= 0:
         raise RuntimeError("invalid entry price after rounding")
 
-    # 2) חישוב כמות (budget = Margin, לכן מכפילים במינוף)
+    # 2) חישוב כמות
     if quantity is None:
-        # notional ≈ budget * leverage  =>  qty_raw = (budget*leverage)/entry
-        raw_qty = (Decimal(str(budget)) * Decimal(int(leverage))) / entry_dec
+        raw_qty = Decimal(str(budget)) / entry_dec
     else:
         raw_qty = Decimal(str(quantity))
 
     qty_dec, qty_s = _apply_qty_step(raw_qty, float(step_size), qty_precision)
 
-    # אם לאחר עיגול מטה לא עומד ב-minQty, ננסה עיגול מעלה ל-step הקרוב
-    if qty_dec < min_qty:
-        qty_dec, qty_s = _apply_qty_step_up(raw_qty, float(step_size), qty_precision)
-
-    # ולידציה סופית ל-minQty
     if qty_dec <= 0 or qty_dec < min_qty:
-        # חשב מהו qty המינימלי החוקי
-        need_qty_min = min_qty
-        need_qty_min_s = _fmt_decimal(need_qty_min, qty_precision)
-        # תקציב נדרש כדי להגיע לשם
-        required_notional = need_qty_min * entry_dec
-        required_budget = required_notional / max(Decimal(leverage), Decimal(1))
-        raise RuntimeError(
-            f"quantity too small: qty_raw={raw_qty} → adj={qty_dec} (< minQty {need_qty_min_s}). "
-            f"Required budget≈{required_budget:.2f} USD (lev={leverage})."
-        )
+        raise RuntimeError(f"quantity too small after rounding: {qty_dec} < minQty {min_qty}")
 
     notional = (qty_dec * entry_dec)
-
-    # בדיקת Notional מינימלי
     if min_notional and notional < min_notional:
-        # החשב qty/תקציב נדרש
         need_qty = (min_notional / entry_dec)
-        # עיגול למעלה ל-step
-        need_qty_up, _ = _apply_qty_step_up(need_qty, float(step_size), qty_precision)
-        required_notional = need_qty_up * entry_dec
-        required_budget = required_notional / max(Decimal(leverage), Decimal(1))
+        need_qty_rounded, _ = _apply_qty_step(need_qty, float(step_size), qty_precision)
         raise RuntimeError(
-            f"notional too small: qty*entry={notional} < minNotional={min_notional}. "
-            f"Try qty≥{_fmt_decimal(need_qty_up, qty_precision)} "
-            f"(≈ budget {required_budget:.2f} USD at lev={leverage})."
+            f"notional too small: qty*entry={notional} < minNotional={min_notional}; try qty≥{need_qty_rounded}"
         )
 
     # 3) Hedge + Leverage
