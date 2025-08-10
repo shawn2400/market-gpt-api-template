@@ -38,6 +38,7 @@ from utils.binance_client import (
 # === AI health (SDK/HTTP) + warmup ===
 from utils.ai_client import ai_healthcheck
 try:
+    # אם קיים לקוח עם warmup – נטען ונחמם ברקע
     from utils.ai_client import ai_client  # type: ignore
 except Exception:
     ai_client = None
@@ -59,7 +60,7 @@ logging.basicConfig(
 )
 try:
     if hasattr(config, "log_config_summary"):
-        config.log_config_summary()
+        config.log_config_summary()  # סיכום קונפיג ללא סודות
 except Exception:
     pass
 
@@ -77,7 +78,7 @@ _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.9.3"
+APP_VERSION = "2.9.4"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -151,17 +152,19 @@ async def _warmup_ai_non_blocking():
         logging.warning("[startup] AI warmup skipped")
 
 # ---------- אירועי חיים ----------
-app.state.ws_task = None
-app.state.ws_symbols = []
+app.state.ws_task: Optional[asyncio.Task] = None
+app.state.ws_symbols: List[str] = []
 
 @app.on_event("startup")
 async def _on_startup():
+    # בדיקות ראשוניות (לא חוסמות)
     try:
         if bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False)):
             ping_and_info()
     except Exception as e:
         logging.warning(f"[startup] ping_and_info failed: {e}")
 
+    # WebSocket למחירים חיים — כרקע
     try:
         symbols = _pick_ws_symbols()
         app.state.ws_symbols = list(symbols)
@@ -173,8 +176,10 @@ async def _on_startup():
     except Exception as e:
         logging.warning(f"[startup] launch_multi_websocket failed: {e}")
 
+    # AI warmup ברקע
     asyncio.create_task(_warmup_ai_non_blocking())
 
+    # Auto Executor לפי ENV
     try:
         if bool(getattr(config, "AUTO_RUN", True)):
             started = start_executor()
@@ -229,6 +234,7 @@ def _config_snapshot() -> dict:
         "binance_exchange_info_on_start": bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False)),
         "binance_backoff_base": float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7)),
         "binance_max_retries": int(getattr(config, "BINANCE_MAX_RETRIES", 5)),
+        # חיווי לא חושף סודות:
         "has_openai_key": bool(bool(getattr(config, "OPENAI_API_KEY", ""))),
         "has_binance_key": bool(bool(getattr(config, "BINANCE_API_KEY", ""))),
         "binance_key_prefix": _mask(getattr(config, "BINANCE_API_KEY", "")),
@@ -252,6 +258,12 @@ async def health():
 
 @app.get("/ai/health", tags=["Config"])
 async def ai_health():
+    """
+    בדיקת חיבור ולטנסי ל-GPT:
+    - sdk: דרך ה-SDK (utils.ai_client.ai_healthcheck)
+    - http: בדיקת HTTP ישירה אם זמינה (utils.ai_health.ping_openai)
+    אם ה-SDK נכשל → 503.
+    """
     sdk = await ai_healthcheck()
     http = None
     if callable(ping_openai):
@@ -267,6 +279,9 @@ async def ai_health():
 # ---------- ראוט עזר: זיהוי כתובת IP חיצונית ----------
 @app.get("/net/ip", tags=["Debug"])
 async def get_egress_ip():
+    """
+    מחזיר את כתובת ה-egress החיצונית של השרת (לרישום ב-Trusted IPs של Binance).
+    """
     import httpx
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
@@ -283,23 +298,29 @@ async def get_egress_ip():
 # ---------- קונפיג, אוטו-אקזקיוטר ----------
 @app.get("/config", tags=["Config"], dependencies=[Depends(verify_token)])
 async def get_config():
-    return _config_snapshot()
+    return _config_snapshot()  # ללא סודות
 
 @app.get("/auto/status", tags=["Auto"], dependencies=[Depends(verify_token)])
-def auto_status():
+async def auto_status():
     return {"running": is_executor_running()}
 
 @app.post("/auto/start", tags=["Auto"], dependencies=[Depends(verify_token)])
-def auto_start():
-    return {"started": start_executor()}
+async def auto_start():
+    started = start_executor()  # נקרא מתוך event loop
+    return {"started": started}
 
 @app.post("/auto/stop", tags=["Auto"], dependencies=[Depends(verify_token)])
-def auto_stop():
-    return {"stopped": stop_executor()}
+async def auto_stop():
+    stopped = stop_executor()
+    return {"stopped": stopped}
 
 # ---------- דיבוג Binance Futures ----------
 @app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(verify_token)])
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True):
+    """
+    בודק Ping, סנכרון זמן, Mark Price, ExchangeInfo והזמנת TEST (לא מבצע טרייד אמיתי).
+    test_order_ok=True -> החתימה/הרשאות/Allowlist תקינים. בתקופת 418 חלק מהבדיקות עלולות להיכשל.
+    """
     ok_ping = False
     try:
         ok_ping = bool(ping_and_info())
@@ -351,22 +372,30 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True
 # ---------- טריידים / סריקה ----------
 @app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)], response_model=_TradeResult)
 async def place_trade(trade: TradeRequest):
+    """
+    כניסה ממוכנת:
+    - אם entry חסר → מחיר לייב מ־WS/SMART (מודע לבאן). אם לא זמין/לא טרי → 503.
+    - אם SL/TP חסרים → predict_optimal_sl_tp (עם פולבק דטרמיניסטי).
+    - שאר ההגנות (Price Protect וכו׳) נעשות בתוך execute_trade_live.
+    """
     symbol = trade.symbol.upper().strip()
     direction = trade.side.upper().strip()
     if direction not in ("LONG", "SHORT"):
         raise HTTPException(status_code=422, detail="side must be LONG or SHORT")
 
+    # מחיר כניסה (WS תחילה; REST רק אם מותר)
     entry = trade.entry
     if entry is None:
         live = await get_price_smart(symbol)
         if live is None or not is_price_fresh(symbol, max_age_sec=getattr(config, "PRICE_MAX_AGE_SEC", 10)):
             if live is not None:
-                entry = float(live)
+                entry = float(live)  # קיבלנו מחיר אך הסטמפטריות אולי טרם עודכן
             else:
                 raise HTTPException(status_code=503, detail=f"Live price unavailable (WS stale or REST cooldown) for {symbol}")
         else:
             entry = float(live)
 
+    # חישוב SL/TP אם חסר
     sl, tp = trade.sl, trade.tp
     if sl is None or tp is None:
         try:
@@ -386,6 +415,7 @@ async def place_trade(trade: TradeRequest):
     )
     return result
 
+# אליאס מלא כדי לתמוך בקריאות קיימות: POST /trade/futures
 @app.post("/trade/futures", tags=["Trades"], dependencies=[Depends(verify_token)], response_model=_TradeResult)
 async def place_trade_futures(trade: TradeRequest):
     return await place_trade(trade)
@@ -455,6 +485,12 @@ async def ws_status(
     symbols: Optional[str] = Query(None, description="CSV של סמלים לבדיקה, למשל: BTCUSDT,ETHUSDT"),
     max_age_sec: Optional[int] = Query(None, description="סף טריות בשניות; ברירת מחדל לפי PRICE_MAX_AGE_SEC"),
 ):
+    """
+    מצב WS לכל סמל:
+    - price: המחיר האחרון מה־WS (cache בלבד, לא מפעיל REST)
+    - fresh: האם המחיר טרי (<= max_age_sec)
+    - cooldown_active: האם REST נמצא ב-cooldown (אם פונקציה זמינה)
+    """
     threshold = int(max_age_sec or getattr(config, "PRICE_MAX_AGE_SEC", 10))
     cooldown = _rest_cooldown_active()
 
@@ -471,7 +507,7 @@ async def ws_status(
 
     for sym in check_syms:
         try:
-            price = await get_price_cached(sym)
+            price = await get_price_cached(sym)  # cache בלבד
             fresh = bool(price is not None and is_price_fresh(sym, max_age_sec=threshold))
             note = None
             if price is None:
@@ -507,6 +543,7 @@ async def list_routes():
             continue
     return {"count": len(routes), "routes": routes}
 
+# הרצה לוקאלית
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
@@ -515,6 +552,7 @@ if __name__ == "__main__":
         port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))),
         log_level=_LOG_LEVEL.lower(),
     )
+
 
 
 
