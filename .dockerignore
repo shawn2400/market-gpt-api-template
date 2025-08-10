@@ -52,3 +52,8 @@ Thumbs.db
 .idea/
 *.iml
 
+# === Node/Frontend (אם יש) ===
+node_modules/
+*.map
+
+
