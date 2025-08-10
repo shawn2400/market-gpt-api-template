@@ -1,5 +1,5 @@
 # utils/ws_fallback.py
-# WS מרובה-סטרימים לבינאנס (Futures), עם קאש מחירים טרי + גיבוי REST סינכרוני ל-klines.
+# WS מרובה-סטרימים לבינאנס (Futures), עם קאש מחירים טרי + גיבוי REST מהיר למחיר/Klines.
 import asyncio
 import json
 import time
@@ -19,10 +19,10 @@ BINANCE_WS_URL_PREFIX = f"{BINANCE_WS_BASE}{STREAM_SUFFIX}"
 FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
 
-# כמה זמן מחיר נחשב "טרי"
+# זמן טריות המחיר
 DEFAULT_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
 
-_UA = {"User-Agent": "AlgoGPT/2 (Render) ws_fallback", "Accept": "application/json"}
+_UA = {"User-Agent": "AlgoGPT/2 (Railway) ws_fallback", "Accept": "application/json"}
 
 class BinanceWSManager:
     def __init__(self, symbols: List[str]):
@@ -47,14 +47,18 @@ class BinanceWSManager:
     async def _run(self):
         backoff = 0.6
         while not self._stop.is_set():
+            if not self.symbols:
+                await asyncio.sleep(1.0)
+                continue
             streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
             url = BINANCE_WS_URL_PREFIX + streams
             try:
                 session = await self._ensure_session()
-                async with session.ws_connect(url, heartbeat=20) as ws:
+                # heartbeat 20s כדי למנוע ניתוקי 1008
+                async with session.ws_connect(url, heartbeat=20, autoping=True, autoclose=True, timeout=20) as ws:
                     self.ws = ws
                     self.connected = True
-                    backoff = 0.6  # אפס את הבאק-אוף אחרי התחברות מוצלחת
+                    backoff = 0.6  # reset backoff אחרי חיבור מוצלח
                     logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
@@ -62,6 +66,7 @@ class BinanceWSManager:
                                 data = json.loads(msg.data)
                                 payload = data.get("data") or {}
                                 symbol = str(payload.get("s") or "").upper()
+                                # bookTicker: ask: 'a' (string)
                                 ask = payload.get("a")
                                 if symbol and ask is not None:
                                     price = float(ask)
@@ -70,8 +75,8 @@ class BinanceWSManager:
                                         self.ts[symbol] = time.time()
                             except Exception as e:
                                 logging.debug(f"[ws_fallback] parse error: {e}")
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            logging.error(f"[ws_fallback] WS error: {msg.data}")
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            logging.warning(f"[ws_fallback] WS closed/error: {msg.data if hasattr(msg,'data') else msg.type}")
                             break
             except Exception as e:
                 self.connected = False
@@ -80,7 +85,7 @@ class BinanceWSManager:
                 await asyncio.sleep(d)
                 backoff = min(10.0, backoff * 2.0)
                 continue
-            # נפלנו מהלולאה (סגירה רגילה) – ננסה להתחבר מחדש
+            # יציאה מהלולאה הפנימית – ננסה להתחבר מחדש
             self.connected = False
             await asyncio.sleep(1.0)
 
@@ -141,16 +146,50 @@ async def get_price(symbol: str) -> Optional[float]:
 
 def is_price_fresh(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> bool:
     """
-    גרסה סינכרונית עבור קוד שלא רץ ב־async: משתמשים בטיימסטמפ ששמרנו.
+    גרסה סינכרונית לשימוש בקוד sync: בודקת טריות טיימסטמפ.
     """
     global binance_ws_manager
-    if binance_ws_manager is None:
+    if binance_ws_manager is None or not binance_ws_manager.ts:
         return False
     sym = str(symbol).upper()
-    t = binance_ws_manager.ts.get(sym) if binance_ws_manager.ts else None
+    t = binance_ws_manager.ts.get(sym)
     if not t:
         return False
     return (time.time() - t) <= max_age_sec
+
+# ---------- REST Fallback (מחיר) ----------
+def _rest_futures_price(symbol: str, timeout: float = 5.0, retries: int = 3, backoff: float = 0.6) -> Optional[float]:
+    url = f"{FAPI_HTTP}/fapi/v1/ticker/price"
+    params = {"symbol": symbol.upper()}
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout, headers=_UA)
+            if r.status_code == 200:
+                j = r.json()
+                return float(j["price"])
+            if r.status_code in (403, 418, 429, 503):
+                d = min(10.0, backoff * (2 ** attempt))
+                logging.warning(f"[ws_fallback] REST price {symbol} http={r.status_code} → sleep {d:.2f}s")
+                time.sleep(d); last = r.text; continue
+            r.raise_for_status()
+        except Exception as e:
+            d = min(10.0, backoff * (2 ** attempt))
+            logging.warning(f"[ws_fallback] REST price network err (attempt {attempt+1}/{retries+1}) {symbol}: {e} → {d:.2f}s")
+            time.sleep(d); last = e
+    if last:
+        logging.error(f"[ws_fallback] REST price failed for {symbol}: {last}")
+    return None
+
+async def get_price_smart(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> Optional[float]:
+    """
+    מחזיר מחיר WS אם טרי; אחרת נופל חזרה ל־REST Futures price.
+    """
+    p = await get_price(symbol)
+    if p is not None and is_price_fresh(symbol, max_age_sec=max_age_sec):
+        return p
+    # fallback ל־REST
+    return _rest_futures_price(symbol)
 
 # ---------- REST snapshot (סינכרוני) ל-klines עבור גיבוי מהיר ----------
 def _rest_klines(
@@ -172,7 +211,7 @@ def _rest_klines(
             r = requests.get(url, params=params, timeout=timeout, headers=_UA)
             if r.status_code == 200:
                 return r.json()
-            # CloudFront / WAF
+            # CloudFront / WAF / Rate-limit
             if r.status_code in (403, 418, 429, 503):
                 d = min(10.0, backoff * (2 ** attempt))
                 logging.warning(f"[ws_fallback] REST klines {symbol}@{interval} http={r.status_code} → sleep {d:.2f}s")
@@ -222,6 +261,7 @@ def snapshot_klines_df(
     except Exception as e:
         logging.error(f"[ws_fallback] snapshot_klines_df error {symbol}@{interval}: {e}")
         return pd.DataFrame()
+
 
 
 
