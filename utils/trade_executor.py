@@ -95,8 +95,10 @@ async def execute_trade_live(
         return {"status": "success", "result": result}
 
     except Exception as e:
-        logging.error(f("[TRADE] שגיאה בביצוע טרייד %s: %s", symbol, e), exc_info=True)
+        # ✅ תיקון ה-NameError: אין כאן f(...), אלא קריאה רגילה ל-logging.error עם פרמטרים
+        logging.error("[TRADE] שגיאה בביצוע טרייד %s: %s", symbol, e, exc_info=True)
         return {"status": "error", "error": str(e)}
+
 
 
 
