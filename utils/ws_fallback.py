@@ -1,10 +1,10 @@
 # utils/ws_fallback.py
-# WS מרובה-סטרימים לבינאנס (Futures), עם קאש מחירים טרי + גיבוי REST מהיר למחיר/Klines.
+# WS רב-סטרימים לבינאנס (Futures) + קאש מחירים טרי + REST Fallback זהיר עם מודעות-באן (418/429).
 import asyncio
 import json
 import time
 import logging
-from typing import Dict, List, Optional, Iterable
+from typing import Dict, List, Optional, Iterable, Tuple
 
 import aiohttp
 import requests
@@ -22,11 +22,14 @@ SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
 # כמה זמן מחיר נחשב "טרי"
 DEFAULT_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
 
-# UA סטנדרטי כדי להימנע מטריגרים של WAF/CloudFront
+# מגבלה קשיחה לצורך בטיחות (בינאנס: עד ~200 streams לחיבור)
+MAX_STREAMS_PER_CONN = int(getattr(config, "MAX_STREAMS_PER_CONN", 200))
+
+# UA סטנדרטי כדי להימנע מטריגרים של WAF/CloudFront (תוקן AppleWebKit/537.36)
 _UA = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit(537.36) (KHTML, like Gecko) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json",
@@ -41,11 +44,57 @@ def _norm_symbols(symbols: Iterable[str]) -> List[str]:
         u = str(s).strip().lower()
         if not u:
             continue
-        # Binance expects lowercase on stream names
         if u not in seen:
             seen.add(u); out.append(u)
+    # הקפאת כמות סטרימים בהתאם למגבלה (בטיחות)
+    if len(out) > MAX_STREAMS_PER_CONN:
+        logging.warning(f"[ws_fallback] truncating streams from {len(out)} to {MAX_STREAMS_PER_CONN}")
+        out = out[:MAX_STREAMS_PER_CONN]
     return out
 
+# ------- Ban-aware circuit breaker ל-REST -------
+# נשמור כאן מתי נרשם 418/429/403/503 ונמנע נסיונות REST למשך cooldown.
+# נעדיף Retry-After אם קיים; אחרת נשתמש בברירות-מחדל שמרניות.
+_last_rest_ban_until_ts: float = 0.0  # epoch seconds עד מתי להימנע מ-REST
+_default_cooldown_sec: int = int(getattr(config, "REST_COOLDOWN_SEC", 900))  # 15 דקות דיפולט
+_max_cooldown_sec: int = int(getattr(config, "REST_MAX_COOLDOWN_SEC", 3600))  # שעה מקסימום
+
+def _now() -> float:
+    return time.time()
+
+def _parse_retry_after(resp: requests.Response) -> Optional[int]:
+    try:
+        ra = resp.headers.get("Retry-After")
+        if not ra:
+            return None
+        # יכול להיות מספר שניות או תאריך; נתמוך במספר שניות
+        ra = ra.strip()
+        if ra.isdigit():
+            return int(ra)
+    except Exception:
+        return None
+    return None
+
+def _note_rest_ban(resp: Optional[requests.Response] = None):
+    """ מעדכן את חלון ה־cooldown עבור REST לפי Retry-After (אם קיים) או דיפולט. """
+    global _last_rest_ban_until_ts
+    cooldown = _default_cooldown_sec
+    if isinstance(resp, requests.Response):
+        ra = _parse_retry_after(resp)
+        if ra is not None:
+            cooldown = max(cooldown, ra)  # אל תקטין אם Retry-After גדול יותר
+    cooldown = min(cooldown, _max_cooldown_sec)
+    _last_rest_ban_until_ts = _now() + cooldown
+    logging.warning(f"[ws_fallback] REST cooldown engaged for {cooldown}s due to ban/rate-limit")
+
+def _rest_allowed() -> bool:
+    return _now() >= _last_rest_ban_until_ts
+
+def _rest_status_is_ban(code: int) -> bool:
+    # 403/418/429/503 = WAF/ban/ratelimit/temporarily unavailable
+    return code in (403, 418, 429, 503)
+
+# ===================== WS Manager =====================
 class BinanceWSManager:
     def __init__(self, symbols: List[str]):
         self.symbols = _norm_symbols(symbols)
@@ -61,13 +110,14 @@ class BinanceWSManager:
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
+            # trust_env=False כדי לא למשוך פרוקסי לא רצוי; אם צריך פרוקסי, הפוך ל-True
             self._session = aiohttp.ClientSession(headers=_UA, trust_env=False)
         return self._session
 
     def _streams_url(self) -> Optional[str]:
         if not self.symbols:
             return None
-        # bookTicker נותן bid/ask בזמן אמת – נשתמש במחיר ask (סולידי) כמחיר כניסה
+        # bookTicker נותן bid/ask בזמן אמת; נחשב mid עבור כניסות שמרניות
         streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
         return BINANCE_WS_URL_PREFIX + streams
 
@@ -81,7 +131,6 @@ class BinanceWSManager:
                 changed = new_syms != self.symbols
                 self.symbols = new_syms
                 if changed:
-                    # נרוקן מחירים ישנים כדי לא לבלבל טריות
                     self.prices.clear()
                     self.ts.clear()
             else:
@@ -100,7 +149,7 @@ class BinanceWSManager:
                 continue
             try:
                 session = await self._ensure_session()
-                # heartbeat/autoping כדי למנוע 1008 ולשמור חיבור חי
+                # heartbeat/autoping כדי למנוע 1008
                 async with session.ws_connect(
                     url, heartbeat=20, autoping=True, autoclose=True, timeout=20
                 ) as ws:
@@ -109,12 +158,9 @@ class BinanceWSManager:
                         self.connected = True
                     backoff = 0.6  # reset אחרי חיבור מוצלח
                     logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
-
-                    # ננקה את דגל ה-reconnect אם היה
                     self._reconnect_needed.clear()
 
                     async for msg in ws:
-                        # בדיקה אם מישהו ביקש reconnect בגלל שינוי סמלים
                         if self._reconnect_needed.is_set():
                             logging.info("[ws_fallback] reconnect requested (symbols changed)")
                             break
@@ -124,11 +170,9 @@ class BinanceWSManager:
                                 data = json.loads(msg.data)
                                 payload = data.get("data") or {}
                                 symbol = str(payload.get("s") or "").upper()
-                                # bookTicker: ask='a' bid='b'
                                 ask = payload.get("a")
                                 bid = payload.get("b")
                                 price = None
-                                # נעדיף mid אם יש שני הצדדים, אחרת ask
                                 if ask is not None and bid is not None:
                                     price = (float(ask) + float(bid)) / 2.0
                                 elif ask is not None:
@@ -144,7 +188,7 @@ class BinanceWSManager:
                         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                             logging.warning(f"[ws_fallback] WS closed/error: {getattr(msg,'data', msg.type)}")
                             break
-                        # PING/PONG/BINARY מטופל ע״י autoping
+                        # ping/pong מטופל ע"י autoping
             except Exception as e:
                 async with self._lock:
                     self.connected = False
@@ -242,16 +286,28 @@ def is_price_fresh(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> bool:
     גרסה סינכרונית עבור קוד שלא רץ ב־async: משתמשת בטיימסטמפ ששמרנו.
     """
     global binance_ws_manager
-    if binance_ws_manager is None:
+    if binance_ws_manager is None or not binance_ws_manager.ts:
         return False
-    t = binance_ws_manager.ts.get(str(symbol).upper()) if binance_ws_manager.ts else None
+    t = binance_ws_manager.ts.get(str(symbol).upper())
     if not t:
         return False
     return (time.time() - t) <= max_age_sec
 
+# -------------------------------------------------------
+# REST Fallbacks — מודעות-באן (418/429) + backoff זהיר
+# -------------------------------------------------------
+def _handle_rest_response_for_ban(resp: requests.Response) -> bool:
+    """בודק אם זו תשובת BAN/RateLimit ומפעיל cooldown; מחזיר True אם יש באן."""
+    if _rest_status_is_ban(resp.status_code):
+        _note_rest_ban(resp)
+        return True
+    return False
 
-# ---------- REST Fallback (מחיר) ----------
 def _rest_futures_price(symbol: str, timeout: float = 5.0, retries: int = 3, backoff: float = 0.6) -> Optional[float]:
+    if not _rest_allowed():
+        logging.info("[ws_fallback] REST price skipped due to active cooldown")
+        return None
+
     url = f"{FAPI_HTTP}/fapi/v1/ticker/price"
     params = {"symbol": symbol.upper()}
     last = None
@@ -261,7 +317,10 @@ def _rest_futures_price(symbol: str, timeout: float = 5.0, retries: int = 3, bac
             if r.status_code == 200:
                 j = r.json()
                 return float(j["price"])
-            if r.status_code in (403, 418, 429, 503):
+            if _handle_rest_response_for_ban(r):
+                # אל תנסה עוד — חזור מיד
+                return None
+            if r.status_code in (500, 502, 503, 504):
                 d = min(10.0, backoff * (2 ** attempt))
                 logging.warning(f"[ws_fallback] REST price {symbol} http={r.status_code} → sleep {d:.2f}s")
                 time.sleep(d); last = r.text; continue
@@ -276,14 +335,14 @@ def _rest_futures_price(symbol: str, timeout: float = 5.0, retries: int = 3, bac
 
 async def get_price_smart(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> Optional[float]:
     """
-    מחזיר מחיר WS אם טרי; אחרת נופל חזרה ל־REST Futures price.
+    מחזיר מחיר WS אם טרי; אחרת ינסה REST (אם אין cooldown/ban פעיל).
+    בזמן באן (418/429/403/503) הפונקציה תחזיר None במקום להחמיר את המצב.
     """
     p = await get_price(symbol)
     if p is not None and is_price_fresh(symbol, max_age_sec=max_age_sec):
         return p
-    # fallback ל-REST
+    # fallback ל-REST (אם מותר כרגע)
     return _rest_futures_price(symbol)
-
 
 # ---------- REST snapshot (סינכרוני) ל-klines עבור גיבוי מהיר ----------
 def _rest_klines(
@@ -291,6 +350,10 @@ def _rest_klines(
     start_time: Optional[int] = None, end_time: Optional[int] = None,
     timeout: float = 10.0, retries: int = 3, backoff: float = 0.6
 ):
+    if not _rest_allowed():
+        logging.info("[ws_fallback] REST klines skipped due to active cooldown")
+        return None
+
     base = FAPI_HTTP if market == "futures" else SPOT_HTTP
     path = "/fapi/v1/klines" if market == "futures" else "/api/v3/klines"
     url = base + path
@@ -305,8 +368,9 @@ def _rest_klines(
             r = requests.get(url, params=params, timeout=timeout, headers=_UA)
             if r.status_code == 200:
                 return r.json()
-            # CloudFront / WAF / Rate-limit
-            if r.status_code in (403, 418, 429, 503):
+            if _handle_rest_response_for_ban(r):
+                return None
+            if r.status_code in (500, 502, 503, 504):
                 d = min(10.0, backoff * (2 ** attempt))
                 logging.warning(f"[ws_fallback] REST klines {symbol}@{interval} http={r.status_code} → sleep {d:.2f}s")
                 time.sleep(d)
@@ -331,6 +395,7 @@ def snapshot_klines_df(
     """
     גיבוי מהיר לקריאת klines בלי תלות ב־python-binance.
     מחזיר DataFrame עם timestamp/open/high/low/close/volume (UTC index).
+    בזמן באן פעיל יחזיר DataFrame ריק כדי לא לייצר עוד נסיונות REST.
     """
     try:
         raw = _rest_klines(market_type, symbol, interval, limit=limit)
