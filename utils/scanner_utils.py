@@ -1,175 +1,146 @@
+# utils/scanner_utils.py
 import asyncio
 import logging
-import math
-from typing import Optional, List, Dict
+from typing import Optional, Dict, List
+
+import pandas as pd
 
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
-from utils.watchlist_utils import load_watchlist
 
-# === קונפיגורציה ===
-CONCURRENCY = 5
-PER_SYMBOL_TIMEOUT = 25  # שניות לכל סימבול (כולל הורדה+חישוב)
+# מקביליות בטוחה לניתוחים (לכל תהליך)
+semaphore = asyncio.Semaphore(5)
 
-# Semaphore גלובלי להגבלת מקביליות
-semaphore = asyncio.Semaphore(CONCURRENCY)
+def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
+    """
+    ולידציה בסיסית ל-DataFrame לפני חישובי אינדיקטורים.
+    """
+    if df is None or df.empty:
+        logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}@{interval}")
+        return False
 
-REQUIRED_COLS = {"rsi", "adx", "supertrend_dir"}
+    required_cols = {"open", "high", "low", "close", "volume"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        logging.warning(f"[analyze_symbol] ⚠️ חסרות עמודות בסיס עבור {symbol}@{interval}: {missing}")
+        return False
 
-def _last_valid(v) -> Optional[float]:
-    """החזרת ערך מספרי תקין (לא NaN/Inf) או None."""
-    if v is None:
-        return None
-    try:
-        fv = float(v)
-        if math.isnan(fv) or math.isinf(fv):
-            return None
-        return fv
-    except Exception:
-        return None
+    return True
 
-def _normalize_trend_dir(val) -> int:
-    """המרת כיוון סופרטרנד לערך תקני {1,-1}, כל דבר לא חיובי יחשב כ- DOWN."""
-    try:
-        return 1 if int(val) == 1 else -1
-    except Exception:
-        return -1
+def _extract_last_fields(df: pd.DataFrame) -> Dict:
+    """
+    שליפת ערכים אחרונים בצורה בטוחה מה-DataFrame לאחר compute_indicators.
+    """
+    last = df.iloc[-1]
+    def f(x, default=0.0):
+        try:
+            return float(x)
+        except Exception:
+            return float(default)
 
-async def _safe_to_thread(func, *args, **kwargs):
-    """עטיפה ל-to_thread עם טיפול חריגות."""
-    return await asyncio.to_thread(func, *args, **kwargs)
+    out = {
+        "rsi": round(f(last.get("rsi"), 50.0), 2),
+        "adx": round(f(last.get("adx"), 20.0), 2),
+        "volume": round(f(last.get("volume"), 0.0), 2),
+        "atr": round(f(last.get("atr"), 0.0), 6),
+        "macd": f(last.get("macd"), 0.0),
+        "macd_signal": f(last.get("macd_signal"), 0.0),
+        "macd_hist": f(last.get("macd_hist"), 0.0),
+        "ema_21": f(last.get("ema_21"), last.get("close")),
+        "ema_50": f(last.get("ema_50"), last.get("close")),
+        "vwap": f(last.get("vwap"), last.get("close")),
+        "volume_mean": f(last.get("volume_mean"), 1.0),
+    }
+    # pattern אופציונלי
+    if "pattern" in df.columns:
+        out["pattern"] = df["pattern"].iloc[-1]
+    return out
 
 async def analyze_symbol(
     symbol: str,
     interval: str = "15m",
     market_type: str = "futures",
     limit: int = 150,
-    trending_only: bool = False,  # כרגע לא בשימוש לניתוח נקודתי
-    with_ai: bool = False,        # לא בשימוש כאן בכוונה (AI נעשה בשכבה אחרת)
-    frames: Optional[List[str]] = None
+    trending_only: bool = False,
+    with_ai: bool = False,   # שמור לתאימות; לא בשימוש כאן
+    frames: Optional[List[str]] = None,
 ) -> Optional[Dict]:
     """
-    ניתוח טכני מלא לסימבול בטיימפריים נתון.
-    מחזיר dict תקני או None במקרה כשל/חוסר נתונים.
-    """
-    async with semaphore:
-        try:
-            # Timeout לכל הסיקוונס של סימבול כדי שלא ייתקעו משימות
-            async def _work():
-                # 1) הורדת נתונים (סינכרוני -> thread)
-                df = await _safe_to_thread(get_klines, symbol=symbol, interval=interval, limit=limit, market_type=market_type)
-                if df is None or df.empty:
-                    logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}@{interval}")
-                    return None
-
-                # 2) חישוב אינדיקטורים (כבד/CPU -> thread)
-                df = await _safe_to_thread(compute_indicators, df)
-                if df is None or df.empty:
-                    logging.warning(f"[analyze_symbol] ⚠️ compute_indicators החזיר מסגרת ריקה עבור {symbol}@{interval}")
-                    return None
-
-                # בדיקת עמודות חובה
-                if not REQUIRED_COLS.issubset(df.columns):
-                    logging.warning(f"[analyze_symbol] ⚠️ אינדיקטורים חסרים ({REQUIRED_COLS - set(df.columns)}) עבור {symbol}@{interval}")
-                    return None
-
-                # 3) חילוץ ערכים אחרונים תוך ניקוי NaN/Inf
-                rsi_v = _last_valid(df["rsi"].iloc[-1])
-                adx_v = _last_valid(df["adx"].iloc[-1])
-                stdir = _normalize_trend_dir(df["supertrend_dir"].iloc[-1])
-
-                if rsi_v is None or adx_v is None:
-                    logging.warning(f"[analyze_symbol] ⚠️ ערכי RSI/ADX לא תקינים עבור {symbol}@{interval}")
-                    return None
-
-                vol_v = None
-                if "volume" in df.columns:
-                    vol_v = _last_valid(df["volume"].iloc[-1])
-
-                # 4) ציון איכות (כבד/CPU -> thread)
-                score = await _safe_to_thread(compute_quality_score, df)
-                if score is None:
-                    logging.warning(f"[analyze_symbol] ⚠️ compute_quality_score החזיר None עבור {symbol}@{interval}")
-                    return None
-
-                direction = "LONG" if stdir == 1 else "SHORT"
-                trend = "UP" if stdir == 1 else "DOWN"
-
-                # pattern אופציונלי
-                pattern = "unknown"
-                if "pattern" in df.columns:
-                    try:
-                        pattern = str(df["pattern"].iloc[-1])
-                    except Exception:
-                        pass
-
-                return {
-                    "symbol": symbol,
-                    "interval": interval,
-                    "quality_score": float(score),
-                    "rsi": round(rsi_v, 2),
-                    "adx": round(adx_v, 2),
-                    "trend": trend,
-                    "direction": direction,
-                    "volume": round(vol_v, 2) if vol_v is not None else None,
-                    "market": market_type,
-                    "frames": frames or [],
-                    "indicators": {
-                        "rsi": round(rsi_v, 2),
-                        "adx": round(adx_v, 2),
-                        "pattern": pattern
-                    }
-                }
-
-            return await asyncio.wait_for(_work(), timeout=PER_SYMBOL_TIMEOUT)
-
-        except asyncio.TimeoutError:
-            logging.error(f"[analyze_symbol] ⏱️ Timeout עבור {symbol}@{interval} (>{PER_SYMBOL_TIMEOUT}s)")
-            return None
-        except Exception as e:
-            logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
-            return None
-
-async def scan_all(
-    interval: str = "15m",
-    min_quality: int = 6,
-    top: int = 10,
-    symbols: Optional[List[str]] = None,
-    market_type: str = "futures"
-) -> List[Dict]:
-    """
-    סריקה אסינכרונית לכל הסימבולים בטיימפריים מסוים.
-    מחזיר רשימת טריידים עם ציון איכות ≥ min_quality, ממוינים יורד, מוגבלים ל-top.
+    מבצע ניתוח טכני מלא לסימבול בטיימפריים נתון.
+    מחזיר dict עם פרטי ניתוח, כולל אינדיקטורים, כיוון וציון איכות.
+    במקרה כשל – מחזיר None (לא זורק חריגה).
     """
     try:
-        if not symbols:
-            raw_watchlist = load_watchlist() or []
-            # תמיכה בפורמט: [{'symbol': 'BTCUSDT', ...}, ...]
-            symbols = [x.get("symbol") for x in raw_watchlist if isinstance(x, dict) and x.get("symbol")]
-        # ייחוד וסינון None/ריקים
-        symbols = [s for s in dict.fromkeys(symbols or []) if s]
-        if not symbols:
-            logging.warning("[scan_all] ⚠️ אין סמלים לסריקה.")
-            return []
+        async with semaphore:
+            # --- שליפת נתונים ---
+            limit = max(120, int(limit or 150))
+            df = get_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit,
+                market_type=market_type,
+            )
+            if not _validate_df(df, symbol, interval):
+                return None
 
-        logging.info(f"[scan_all] 🚀 סורק {len(symbols)} סמלים ({market_type}) בטיימפריים {interval}...")
+            # --- חישוב אינדיקטורים ---
+            df = compute_indicators(df)
+            if df is None or df.empty:
+                logging.warning(f"[analyze_symbol] ⚠️ compute_indicators החזיר DataFrame ריק עבור {symbol}@{interval}")
+                return None
 
-        tasks = [analyze_symbol(symbol=sym, interval=interval, market_type=market_type) for sym in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+            req = {"rsi", "adx", "supertrend_dir", "volume"}
+            if not req.issubset(df.columns):
+                logging.warning(f"[analyze_symbol] ⚠️ אינדיקטורים חסרים עבור {symbol}@{interval}: {req - set(df.columns)}")
+                return None
 
-        # סינון לפי איכות + ניטרול None
-        filtered = [r for r in results if r and float(r.get("quality_score", 0)) >= float(min_quality)]
+            # --- ציון איכות ---
+            score = float(compute_quality_score(df))
 
-        # מיון יורד לפי איכות
-        sorted_results = sorted(filtered, key=lambda x: float(x["quality_score"]), reverse=True)
+            # --- כיוון/מגמה ---
+            try:
+                st_dir = int(df["supertrend_dir"].iloc[-1])
+            except Exception:
+                st_dir = 1
+            direction = "LONG" if st_dir == 1 else "SHORT"
+            trend = "UP" if st_dir == 1 else "DOWN"
 
-        logging.info(f"[scan_all] ✅ נמצאו {len(sorted_results)} טריידים עם ציון ≥ {min_quality}")
-        return sorted_results[:top]
+            # --- שליפת מדדים אחרונים ---
+            last = _extract_last_fields(df)
+
+            # (אופציונלי) החמרה כאשר trending_only=True – אל תסנן כאן בכוח,
+            # תן לסורק/אגרגטור לקבוע לפי avg_quality. משאירים מידע מלא.
+
+            result = {
+                "symbol": str(symbol).upper(),
+                "interval": interval,
+                "market": market_type,
+                "frames": frames or [],
+                "quality_score": round(score, 2),
+                "trend": trend,
+                "direction": direction,
+                "volume": last["volume"],
+                "indicators": {
+                    "rsi": last["rsi"],
+                    "adx": last["adx"],
+                    "atr": last["atr"],
+                    "macd": last["macd"],
+                    "macd_signal": last["macd_signal"],
+                    "macd_hist": last["macd_hist"],
+                    "ema_21": last["ema_21"],
+                    "ema_50": last["ema_50"],
+                    "vwap": last["vwap"],
+                    "volume_mean": last["volume_mean"],
+                    "pattern": last.get("pattern", "unknown"),
+                },
+            }
+            return result
 
     except Exception as e:
-        logging.error(f"[scan_all] ❌ שגיאה בסריקה: {e}", exc_info=True)
-        return []
+        logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
+        return None
+
 
 
 
