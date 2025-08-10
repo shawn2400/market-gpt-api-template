@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Iterable
 
 import aiohttp
 import requests
@@ -12,29 +12,43 @@ import pandas as pd
 
 from utils import config
 
-BINANCE_WS_BASE = getattr(config, "BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com")
+BINANCE_WS_BASE = getattr(config, "BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com").rstrip("/")
 STREAM_SUFFIX   = getattr(config, "BINANCE_WS_STREAM_SUFFIX", "/stream?streams=")
 BINANCE_WS_URL_PREFIX = f"{BINANCE_WS_BASE}{STREAM_SUFFIX}"
 
-FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
-SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
+FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
 
 # כמה זמן מחיר נחשב "טרי"
 DEFAULT_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
 
-# UA דפדפן סטנדרטי כדי להימנע מטריגרים של WAF/CloudFront
+# UA סטנדרטי כדי להימנע מטריגרים של WAF/CloudFront
 _UA = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "AppleWebKit(537.36) (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Language": "en-US,en;q=0.9",
 }
+
+def _norm_symbols(symbols: Iterable[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for s in symbols or []:
+        u = str(s).strip().lower()
+        if not u:
+            continue
+        # Binance expects lowercase on stream names
+        if u not in seen:
+            seen.add(u); out.append(u)
+    return out
 
 class BinanceWSManager:
     def __init__(self, symbols: List[str]):
-        self.symbols = [str(s).lower() for s in symbols if s]
+        self.symbols = _norm_symbols(symbols)
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self._session: Optional[aiohttp.ClientSession] = None
         self.prices: Dict[str, float] = {}
@@ -43,43 +57,85 @@ class BinanceWSManager:
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        self._reconnect_needed = asyncio.Event()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                headers=_UA,
-                trust_env=False,  # <<< חשוב: לא להשתמש בפרוקסי סביבתי
-            )
+            self._session = aiohttp.ClientSession(headers=_UA, trust_env=False)
         return self._session
+
+    def _streams_url(self) -> Optional[str]:
+        if not self.symbols:
+            return None
+        # bookTicker נותן bid/ask בזמן אמת – נשתמש במחיר ask (סולידי) כמחיר כניסה
+        streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
+        return BINANCE_WS_URL_PREFIX + streams
+
+    async def set_symbols(self, symbols: Iterable[str], replace: bool = True):
+        """
+        מחליף/מעדכן את רשימת הסמלים ומבקש התחברות מחדש.
+        """
+        new_syms = _norm_symbols(symbols)
+        async with self._lock:
+            if replace:
+                changed = new_syms != self.symbols
+                self.symbols = new_syms
+                if changed:
+                    # נרוקן מחירים ישנים כדי לא לבלבל טריות
+                    self.prices.clear()
+                    self.ts.clear()
+            else:
+                merged = _norm_symbols([*self.symbols, *new_syms])
+                changed = merged != self.symbols
+                self.symbols = merged
+            if changed:
+                self._reconnect_needed.set()
 
     async def _run(self):
         backoff = 0.6
         while not self._stop.is_set():
-            if not self.symbols:
-                await asyncio.sleep(1.0)
+            url = self._streams_url()
+            if not url:
+                await asyncio.sleep(0.5)
                 continue
-            streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
-            url = BINANCE_WS_URL_PREFIX + streams
             try:
                 session = await self._ensure_session()
                 # heartbeat/autoping כדי למנוע 1008 ולשמור חיבור חי
                 async with session.ws_connect(
                     url, heartbeat=20, autoping=True, autoclose=True, timeout=20
                 ) as ws:
-                    self.ws = ws
-                    self.connected = True
+                    async with self._lock:
+                        self.ws = ws
+                        self.connected = True
                     backoff = 0.6  # reset אחרי חיבור מוצלח
                     logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
+
+                    # ננקה את דגל ה-reconnect אם היה
+                    self._reconnect_needed.clear()
+
                     async for msg in ws:
+                        # בדיקה אם מישהו ביקש reconnect בגלל שינוי סמלים
+                        if self._reconnect_needed.is_set():
+                            logging.info("[ws_fallback] reconnect requested (symbols changed)")
+                            break
+
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             try:
                                 data = json.loads(msg.data)
                                 payload = data.get("data") or {}
                                 symbol = str(payload.get("s") or "").upper()
-                                # bookTicker: ask = 'a'
+                                # bookTicker: ask='a' bid='b'
                                 ask = payload.get("a")
-                                if symbol and ask is not None:
+                                bid = payload.get("b")
+                                price = None
+                                # נעדיף mid אם יש שני הצדדים, אחרת ask
+                                if ask is not None and bid is not None:
+                                    price = (float(ask) + float(bid)) / 2.0
+                                elif ask is not None:
                                     price = float(ask)
+                                elif bid is not None:
+                                    price = float(bid)
+                                if symbol and price is not None:
                                     async with self._lock:
                                         self.prices[symbol] = price
                                         self.ts[symbol] = time.time()
@@ -88,17 +144,21 @@ class BinanceWSManager:
                         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                             logging.warning(f"[ws_fallback] WS closed/error: {getattr(msg,'data', msg.type)}")
                             break
-                        # שאר סוגי ההודעות (PING/PONG/BINARY) מטופלים ע"י autoping
+                        # PING/PONG/BINARY מטופל ע״י autoping
             except Exception as e:
-                self.connected = False
+                async with self._lock:
+                    self.connected = False
                 d = min(10.0, backoff)
                 logging.warning(f"[ws_fallback] WS connect/reconnect failed: {e} → sleep {d:.2f}s")
                 await asyncio.sleep(d)
                 backoff = min(10.0, backoff * 2.0)
                 continue
-            # יצאנו מהלולאה – ננסה להתחבר מחדש
-            self.connected = False
-            await asyncio.sleep(1.0)
+
+            # יצאנו מה-loop של ה־ws (סגירה או reconnect) → ננסה שוב
+            async with self._lock:
+                self.connected = False
+                self.ws = None
+            await asyncio.sleep(0.5)
 
     def start(self):
         if self._task and not self._task.done():
@@ -118,12 +178,15 @@ class BinanceWSManager:
                 await self._task
             except Exception:
                 pass
+            self._task = None
         if self._session is not None and not self._session.closed:
             try:
                 await self._session.close()
             except Exception:
                 pass
-        self.connected = False
+        async with self._lock:
+            self.connected = False
+            self.ws = None
 
     async def get_price(self, symbol: str) -> Optional[float]:
         sym = str(symbol).upper()
@@ -139,7 +202,8 @@ class BinanceWSManager:
             return False
         return (now - t) <= max_age_sec
 
-# סינגלטון
+
+# --- סינגלטון מנהל WS ---
 binance_ws_manager: Optional[BinanceWSManager] = None
 
 async def launch_multi_websocket(symbols: List[str]):
@@ -147,6 +211,24 @@ async def launch_multi_websocket(symbols: List[str]):
     if binance_ws_manager is None:
         binance_ws_manager = BinanceWSManager(symbols)
         binance_ws_manager.start()
+    else:
+        await binance_ws_manager.set_symbols(symbols, replace=True)
+
+async def add_ws_symbols(symbols: List[str]):
+    """
+    הוספת סמלים לרשימה הקיימת (לא מחליף). גורם ל-reconnect נקי.
+    """
+    global binance_ws_manager
+    if binance_ws_manager is None:
+        await launch_multi_websocket(symbols)
+    else:
+        await binance_ws_manager.set_symbols(symbols, replace=False)
+
+async def stop_websocket():
+    global binance_ws_manager
+    if binance_ws_manager is not None:
+        await binance_ws_manager.stop()
+        binance_ws_manager = None
 
 async def get_price(symbol: str) -> Optional[float]:
     global binance_ws_manager
@@ -157,16 +239,16 @@ async def get_price(symbol: str) -> Optional[float]:
 
 def is_price_fresh(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> bool:
     """
-    גרסה סינכרונית עבור קוד שלא רץ ב־async: משתמשים בטיימסטמפ ששמרנו.
+    גרסה סינכרונית עבור קוד שלא רץ ב־async: משתמשת בטיימסטמפ ששמרנו.
     """
     global binance_ws_manager
-    if binance_ws_manager is None or not binance_ws_manager.ts:
+    if binance_ws_manager is None:
         return False
-    sym = str(symbol).upper()
-    t = binance_ws_manager.ts.get(sym)
+    t = binance_ws_manager.ts.get(str(symbol).upper()) if binance_ws_manager.ts else None
     if not t:
         return False
     return (time.time() - t) <= max_age_sec
+
 
 # ---------- REST Fallback (מחיר) ----------
 def _rest_futures_price(symbol: str, timeout: float = 5.0, retries: int = 3, backoff: float = 0.6) -> Optional[float]:
@@ -201,6 +283,7 @@ async def get_price_smart(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -
         return p
     # fallback ל-REST
     return _rest_futures_price(symbol)
+
 
 # ---------- REST snapshot (סינכרוני) ל-klines עבור גיבוי מהיר ----------
 def _rest_klines(
