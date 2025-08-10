@@ -10,7 +10,7 @@ import requests
 from utils import config
 from utils.binance_client import get_client, futures_exchange_info_safe
 try:
-    # עדיף ייצוא רשמי
+    # עטיפת ריטריי הרשמית
     from utils.binance_client import retry_call
 except Exception:
     # תאימות לאחור אם השם הפרטי הישן קיים
@@ -18,22 +18,32 @@ except Exception:
 
 _client = get_client()
 
-# Cache לפילטרים לכל סימבול
-_SYMBOL_FILTERS_CACHE: dict[str, dict] = {}
-
-# ---- פרמטרי רשת/ריטריי ----
+# ===== פרמטרי רשת/ריטריי/חתימות =====
 _FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 _BACKOFF_BASE = float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7))
-_MAX_RETRIES = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
+_MAX_RETRIES  = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
+_RECV_WINDOW  = int(getattr(config, "BINANCE_RECV_WINDOW", 10000))
 
+# אפשרות לכפות Hedge Mode דרך קונפיג (ברירת מחדל: None → זיהוי אוטומטי)
+_FORCE_HEDGE_MODE = getattr(config, "BINANCE_FORCE_HEDGE_MODE", None)  # True/False/None
+_HEDGE_MODE_CACHE: Optional[bool] = None
+
+# סשן עצמאי לפולבקי REST (exchangeInfo per-symbol)
 _session = requests.Session()
+_session.trust_env = False
 _session.headers.update({
-    "User-Agent": "AlgoGPT/2 (Render) binance-trader",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
     "Accept": "application/json",
     "Accept-Encoding": "gzip",
+    "Accept-Language": "en-US,en;q=0.9",
 })
-if getattr(config, "BINANCE_API_KEY", ""):
-    _session.headers.update({"X-MBX-APIKEY": config.BINANCE_API_KEY})
+
+# Cache לפילטרים לכל סימבול
+_SYMBOL_FILTERS_CACHE: dict[str, dict] = {}
 
 def _to_float(x, default: float = 0.0) -> float:
     try:
@@ -43,14 +53,20 @@ def _to_float(x, default: float = 0.0) -> float:
 
 def _floor_to_step(value: float, step: float, precision: int = 8) -> float:
     step = float(step)
+    if step <= 0:
+        return round(value, precision)
     return round(math.floor(float(value) / step) * step, precision)
 
 def _ceil_to_step(value: float, step: float, precision: int = 8) -> float:
     step = float(step)
+    if step <= 0:
+        return round(value, precision)
     return round(math.ceil(float(value) / step) * step, precision)
 
 def _round_to_tick(value: float, tick: float) -> float:
-    tick = float(tick)
+    tick = float(tick or 0.0001)
+    if tick <= 0:
+        tick = 0.0001
     return round(round(value / tick) * tick, 8)
 
 def _http_exchange_info_symbol(sym: str, timeout: float = 8.0) -> Optional[dict]:
@@ -59,7 +75,7 @@ def _http_exchange_info_symbol(sym: str, timeout: float = 8.0) -> Optional[dict]
     מחזיר meta של הסימבול מתוך "symbols".
     """
     url = f"{_FAPI_HTTP}/fapi/v1/exchangeInfo"
-    params = {"symbol": sym}
+    params = {"symbol": sym.upper()}
     last = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -68,7 +84,6 @@ def _http_exchange_info_symbol(sym: str, timeout: float = 8.0) -> Optional[dict]
                 data = r.json()
                 if isinstance(data, dict) and isinstance(data.get("symbols"), list) and data["symbols"]:
                     return data["symbols"][0]
-                # יש הטמעות שמחזירות אובייקט מלא בלי סינון; ננסה למצוא ידנית
                 if isinstance(data, dict) and isinstance(data.get("symbols"), list):
                     for s in data["symbols"]:
                         if s.get("symbol") == sym:
@@ -89,9 +104,7 @@ def _http_exchange_info_symbol(sym: str, timeout: float = 8.0) -> Optional[dict]
 
 def _guess_filters(sym: str) -> dict:
     """
-    ניחוש שמרני כשאין exchangeInfo (CloudFront/חסימה).
-    הערכים מספיקים לרוב הסימבולים הגדולים; אם ההזמנה תידחה ע״י הבורסה,
-    המשתמש יראה שגיאה מפורטת בלוג ונוכל לחדד ידנית.
+    פולבק שמרני כשאין exchangeInfo (CloudFront/חסימה).
     """
     return {
         "tickSize": 0.01,     # עיגול מחיר לשתי ספרות
@@ -106,10 +119,9 @@ def _load_symbol_filters(symbol: str) -> dict:
     if sym in _SYMBOL_FILTERS_CACHE:
         return _SYMBOL_FILTERS_CACHE[sym]
 
-    # 1) נסה REST ישיר פר-סימבול
     meta = _http_exchange_info_symbol(sym)
     if not meta:
-        # 2) נסה SDK (ייתכן שיעבוד בסביבה אחרת)
+        # נסיון דרך SDK (exchangeInfo מלא) — יקר יותר, אך אולי פתוח
         try:
             ei = futures_exchange_info_safe()
             if isinstance(ei, dict) and isinstance(ei.get("symbols"), list):
@@ -118,16 +130,16 @@ def _load_symbol_filters(symbol: str) -> dict:
             logging.debug(f"[trader] futures_exchange_info_safe error ignored: {e}")
 
     if meta:
-        price_filter = next((f for f in meta.get("filters", []) if f.get("filterType") == "PRICE_FILTER"), None)
-        lot_filter   = next((f for f in meta.get("filters", []) if f.get("filterType") == "LOT_SIZE"), None)
-        notion_filter = next((f for f in meta.get("filters", []) if f.get("filterType") in ("MIN_NOTIONAL", "NOTIONAL")), None)
+        price_filter  = next((f for f in meta.get("filters", []) if f.get("filterType") == "PRICE_FILTER"), None)
+        lot_filter    = next((f for f in meta.get("filters", []) if f.get("filterType") == "LOT_SIZE"), None)
+        notional_filt = next((f for f in meta.get("filters", []) if f.get("filterType") in ("MIN_NOTIONAL", "NOTIONAL")), None)
 
         tick_size = _to_float(price_filter.get("tickSize") if price_filter else "0.0001", 0.0001)
         step_size = _to_float(lot_filter.get("stepSize") if lot_filter else "0.001", 0.001)
-        min_qty = _to_float(lot_filter.get("minQty") if lot_filter else "0.0", 0.0)
+        min_qty   = _to_float(lot_filter.get("minQty")  if lot_filter else "0.0",    0.0)
         min_notional = 0.0
-        if notion_filter:
-            min_notional = _to_float(notion_filter.get("notional", notion_filter.get("minNotional", "0.0")), 0.0)
+        if notional_filt:
+            min_notional = _to_float(notional_filt.get("notional", notional_filt.get("minNotional", "0.0")), 0.0)
 
         out = {
             "tickSize": tick_size,
@@ -139,14 +151,16 @@ def _load_symbol_filters(symbol: str) -> dict:
         _SYMBOL_FILTERS_CACHE[sym] = out
         return out
 
-    # 3) פולבק שמרני (לא מפילים ריצה)
     out = _guess_filters(sym)
     _SYMBOL_FILTERS_CACHE[sym] = out
     logging.warning(f"[trader] ⚠️ using fallback filters for {sym}: {out}")
     return out
 
-def _compute_qty(budget_usd: float, leverage: int, entry_price: float, step_size: float, min_qty: float) -> float:
+def _compute_qty_by_budget(budget_usd: float, leverage: int, entry_price: float,
+                           step_size: float, min_qty: float) -> float:
     notional = float(budget_usd) * int(leverage)
+    if entry_price <= 0:
+        raise ValueError("entry_price must be > 0")
     raw_qty = notional / float(entry_price)
     qty = _floor_to_step(raw_qty, step_size, precision=8)
     if qty < min_qty:
@@ -162,6 +176,59 @@ def _side_for_entry(direction: str) -> str:
 def _side_for_exit(direction: str) -> str:
     return "SELL" if (direction or "").upper() == "LONG" else "BUY"
 
+def _safe_leverage(l: int) -> int:
+    l = int(l)
+    max_lev = int(getattr(config, "MAX_LEVERAGE", 35))
+    if l < 1: l = 1
+    if l > max_lev: l = max_lev
+    return l
+
+def _detect_hedge_mode() -> bool:
+    """
+    מחזיר True אם החשבון במצב Hedge (dualSidePosition=True), אחרת False.
+    מטמון בזיכרון כדי לא להעמיס.
+    """
+    global _HEDGE_MODE_CACHE
+    if _FORCE_HEDGE_MODE is True:
+        _HEDGE_MODE_CACHE = True
+        return True
+    if _FORCE_HEDGE_MODE is False:
+        _HEDGE_MODE_CACHE = False
+        return False
+    if _HEDGE_MODE_CACHE is not None:
+        return _HEDGE_MODE_CACHE
+    try:
+        data = retry_call(lambda: _client.futures_get_position_mode(recvWindow=_RECV_WINDOW), name="get_position_mode")
+        # data דוגמה: {'dualSidePosition': True}
+        is_hedge = bool(data.get("dualSidePosition"))
+        _HEDGE_MODE_CACHE = is_hedge
+        logging.info(f"[trader] position mode detected: {'HEDGE' if is_hedge else 'ONE-WAY'}")
+        return is_hedge
+    except Exception as e:
+        logging.warning(f"[trader] cannot detect position mode, assuming ONE-WAY: {e}")
+        _HEDGE_MODE_CACHE = False
+        return False
+
+def _apply_position_side(params: dict, direction: str, is_exit: bool, hedge: bool) -> dict:
+    """
+    אם במצב Hedge – נצרף positionSide תואם:
+    LONG:  entry BUY  -> positionSide=LONG
+           exit  SELL -> positionSide=LONG
+    SHORT: entry SELL -> positionSide=SHORT
+           exit  BUY  -> positionSide=SHORT
+    """
+    if not hedge:
+        return params
+    d = (direction or "").upper()
+    pos_side = "LONG" if d == "LONG" else "SHORT"
+    params = dict(params)
+    params["positionSide"] = pos_side
+    return params
+
+def _place_with_recv(fn, name: str):
+    """עוטף קריאת SDK (עם recvWindow) דרך retry_call."""
+    return retry_call(lambda: fn(), name=name)
+
 async def binance_futures_trade(
     symbol: str,
     side: str,            # "LONG" / "SHORT"
@@ -170,14 +237,16 @@ async def binance_futures_trade(
     tp: float,
     leverage: int = 20,
     budget: float = 100.0,
+    quantity: Optional[float] = None,   # אם הועבר — נכבד אחרי עיגול ובדיקות
     market_type: str = "futures",
-    margin_type: str = "ISOLATED",  # או "CROSSED"
+    margin_type: str = "ISOLATED",      # או "CROSSED"
 ) -> Dict[str, Any]:
     """
-    ביצוע טרייד USDT-M Futures:
-      - כניסה LIMIT (GTC) בלבד
-      - SL/TP כ-STOP/TAKE_PROFIT (Limit) עם reduceOnly
+    ביצוע טרייד USDT-M Futures (One-Way או Hedge):
+      - כניסה LIMIT (GTC)
+      - SL/TP כ-STOP/TAKE_PROFIT (Limit) עם reduceOnly וב-Hedge גם positionSide
       - עיגול לפי tick/step, בדיקות minQty/minNotional
+      - recvWindow=10000 לכל הקריאות החתומות
     """
     if market_type.lower() != "futures":
         raise ValueError("Only futures market_type is supported.")
@@ -185,32 +254,35 @@ async def binance_futures_trade(
     symbol = str(symbol).upper()
     direction = (side or "").upper()
     entry_price = float(entry)
-    stop_price = float(sl)
+    stop_price  = float(sl)
     take_profit = float(tp)
+    lev = _safe_leverage(leverage)
+
+    hedge_mode = _detect_hedge_mode()
 
     # פילטרים (עם REST+פולבק; בלי קריסה)
     filters = _load_symbol_filters(symbol)
-    tick = filters["tickSize"]
-    step = filters["stepSize"]
-    min_qty = filters["minQty"]
-    min_notional = filters["minNotional"]
+    tick = float(filters["tickSize"])
+    step = float(filters["stepSize"])
+    min_qty = float(filters["minQty"])
+    min_notional = float(filters["minNotional"])
 
-    # מינוף/מצב מרג'ין (לא מפיל אם נכשל)
+    # שינוי מצב מרג'ין ולברג' (לא מפיל אם נכשל)
     try:
-        retry_call(lambda: _client.futures_change_margin_type(symbol=symbol, marginType=margin_type), name="change_margin_type")
+        _place_with_recv(lambda: _client.futures_change_margin_type(symbol=symbol, marginType=margin_type, recvWindow=_RECV_WINDOW), "change_margin_type")
     except Exception as e:
         logging.debug(f"[trader] change_margin_type ignored: {e}")
     try:
-        retry_call(lambda: _client.futures_change_leverage(symbol=symbol, leverage=int(leverage)), name="change_leverage")
+        _place_with_recv(lambda: _client.futures_change_leverage(symbol=symbol, leverage=int(lev), recvWindow=_RECV_WINDOW), "change_leverage")
     except Exception as e:
         logging.debug(f"[trader] change_leverage ignored: {e}")
 
     # עיגול מחירים
-    entry_p = _round_to_tick(entry_price, tick)
+    entry_p    = _round_to_tick(entry_price, tick)
     sl_trigger = _round_to_tick(stop_price, tick)
     tp_trigger = _round_to_tick(take_profit, tick)
 
-    # מחירי limit עבור ה-STOP/TP (שיתמלאו אחרי הטריגר)
+    # מחירי limit עבור STOP/TP (שיתמלאו אחרי הטריגר)
     if direction == "LONG":
         sl_limit = _round_to_tick(max(sl_trigger - tick, tick), tick)
         tp_limit = _round_to_tick(min(tp_trigger + tick, tp_trigger * 1.002), tick)
@@ -218,67 +290,82 @@ async def binance_futures_trade(
         sl_limit = _round_to_tick(min(sl_trigger + tick, sl_trigger * 1.002), tick)
         tp_limit = _round_to_tick(max(tp_trigger - tick, tick), tick)
 
-    # כמות
-    qty = _compute_qty(budget_usd=budget, leverage=int(leverage), entry_price=entry_p, step_size=step, min_qty=min_qty)
+    # כמות: אם הגיע מבחוץ — נשתמש בה אחרי התאמות; אחרת מחשבים לפי תקציב/לברג'
+    if quantity is not None and quantity > 0:
+        qty = float(quantity)
+        qty = _floor_to_step(qty, step, precision=8)
+        if qty < min_qty:
+            qty = _ceil_to_step(min_qty, step, precision=8)
+    else:
+        qty = _compute_qty_by_budget(budget_usd=budget, leverage=lev, entry_price=entry_p, step_size=step, min_qty=min_qty)
+
+    # בדיקת notional מינימלי — נרים כמות אם צריך
     if not _ensure_notional(qty, entry_p, min_notional):
         qty2 = _ceil_to_step(min_notional / entry_p, step, precision=8)
         if qty2 > qty:
             qty = qty2
+
     if qty < min_qty or qty <= 0:
         raise ValueError(f"Qty below minimum after rounding: qty={qty}, min_qty={min_qty}")
 
     entry_side = _side_for_entry(direction)
-    exit_side = _side_for_exit(direction)
+    exit_side  = _side_for_exit(direction)
 
-    # LIMIT כניסה
-    entry_order = retry_call(
-        lambda: _client.futures_create_order(
-            symbol=symbol,
-            side=entry_side,
-            type="LIMIT",
-            timeInForce="GTC",
-            quantity=qty,
-            price=entry_p,
-            reduceOnly=False
-        ),
-        name="entry_LIMIT"
+    # jitter קטן לפני POST (מפחית 403/429/WAF)
+    time.sleep(random.uniform(0.12, 0.35))
+
+    # === LIMIT כניסה ===
+    entry_params = dict(
+        symbol=symbol,
+        side=entry_side,
+        type="LIMIT",
+        timeInForce="GTC",
+        quantity=qty,
+        price=entry_p,
+        reduceOnly=False,
+        recvWindow=_RECV_WINDOW,
     )
+    entry_params = _apply_position_side(entry_params, direction, is_exit=False, hedge=hedge_mode)
+
+    entry_order = _place_with_recv(lambda: _client.futures_create_order(**entry_params), name="entry_LIMIT")
     if not isinstance(entry_order, dict) or "orderId" not in entry_order:
         raise RuntimeError(f"Failed to place entry order: {entry_order}")
 
-    # STOP-LIMIT (SL)
-    sl_order = retry_call(
-        lambda: _client.futures_create_order(
-            symbol=symbol,
-            side=exit_side,
-            type="STOP",
-            timeInForce="GTC",
-            quantity=qty,
-            stopPrice=sl_trigger,
-            price=sl_limit,
-            reduceOnly=True,
-            workingType="CONTRACT_PRICE"
-        ),
-        name="stop_limit"
+    # === STOP-LIMIT (SL) ===
+    sl_params = dict(
+        symbol=symbol,
+        side=exit_side,
+        type="STOP",
+        timeInForce="GTC",
+        quantity=qty,
+        stopPrice=sl_trigger,
+        price=sl_limit,
+        reduceOnly=True,
+        workingType="CONTRACT_PRICE",
+        recvWindow=_RECV_WINDOW,
     )
+    sl_params = _apply_position_side(sl_params, direction, is_exit=True, hedge=hedge_mode)
+
+    sl_order = _place_with_recv(lambda: _client.futures_create_order(**sl_params), name="stop_limit")
     if not isinstance(sl_order, dict) or "orderId" not in sl_order:
         raise RuntimeError(f"Failed to place STOP-LIMIT order: {sl_order}")
 
-    # TAKE_PROFIT-LIMIT (TP)
-    tp_order = retry_call(
-        lambda: _client.futures_create_order(
-            symbol=symbol,
-            side=exit_side,
-            type="TAKE_PROFIT",
-            timeInForce="GTC",
-            quantity=qty,
-            stopPrice=tp_trigger,
-            price=tp_limit,
-            reduceOnly=True,
-            workingType="CONTRACT_PRICE"
-        ),
-        name="tp_limit"
+    # === TAKE_PROFIT-LIMIT (TP) ===
+    tp_params = dict(
+        symbol=symbol,
+        side=exit_side,
+        type="TAKE_PROFIT",
+        timeInForce="GTC",
+        quantity=qty,
+        stopPrice=tp_trigger,
+        price=tp_limit,
+        reduceOnly=True,
+        workingType="CONTRACT_PRICE",
+        recvWindow=_RECV_WINDOW,
     )
+    tp_params = _apply_position_side(tp_params, direction, is_exit=True, hedge=hedge_mode)
+
+    tp_order = _place_with_recv(lambda: _client.futures_create_order(**tp_params), name="tp_limit")
     if not isinstance(tp_order, dict) or "orderId" not in tp_order:
         raise RuntimeError(f"Failed to place TP-LIMIT order: {tp_order}")
 
@@ -286,7 +373,8 @@ async def binance_futures_trade(
         "ok": True,
         "symbol": symbol,
         "direction": direction,
-        "leverage": int(leverage),
+        "hedge_mode": bool(hedge_mode),
+        "leverage": int(lev),
         "qty": float(qty),
         "entry": {"price": entry_p, "orderId": entry_order["orderId"], "clientOrderId": entry_order.get("clientOrderId")},
         "sl":    {"trigger": sl_trigger, "limit": sl_limit, "orderId": sl_order["orderId"]},
