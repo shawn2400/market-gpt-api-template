@@ -83,10 +83,10 @@ def _fetch_outbound_ip(endpoints: List[str], timeout: float = 3.0) -> Optional[s
             r = _session.get(ep, timeout=timeout)
             if r.status_code == 200:
                 txt = r.text.strip()
-                # חלק מהשירותים מחזירים JSON
                 if txt.startswith("{"):
                     try:
-                        txt = r.json().get("ip") or r.json().get("origin") or ""
+                        j = r.json()
+                        txt = j.get("ip") or j.get("origin") or ""
                     except Exception:
                         pass
                 ip = str(txt).strip()
@@ -99,16 +99,13 @@ def _fetch_outbound_ip(endpoints: List[str], timeout: float = 3.0) -> Optional[s
 def check_outbound_ip_against_allowlist():
     """
     אם הוגדר BINANCE_ALLOWED_EGRESS_IPS – נבדוק את ה־IP היוצא ונזהיר אם אינו ברשימה.
-    שימושי במיוחד כשמופיע 403 CloudFront למרות Allowlist.
     """
     allowlist = [x.strip() for x in _ALLOWED_EGRESS_IPS.split(",") if x.strip()]
     if not allowlist:
         return
-
     endpoints = []
     if _EGRESS_IP_ENDPOINT:
         endpoints.append(_EGRESS_IP_ENDPOINT)
-    # ברירות מחדל אמינות
     endpoints += [
         "https://checkip.amazonaws.com",
         "https://api.ipify.org",
@@ -118,11 +115,10 @@ def check_outbound_ip_against_allowlist():
     if not ip:
         logging.warning("[Binance] ⚠️ לא הצלחתי לאחזר Outbound IP לצורך אימות Allowlist.")
         return
-
     if ip in allowlist:
         logging.info(f"[Binance] 🌐 Outbound IP OK: {ip} נמצא ב-Allowlist.")
     else:
-        logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. זה עלול לגרום ל-403.")
+        logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. עלול לגרום ל-403.")
 
 # === יצירת לקוח ===
 def _make_client() -> Client:
@@ -147,13 +143,10 @@ def get_client() -> Client:
             check_outbound_ip_against_allowlist()
         except Exception as e:
             logging.debug(f"[Binance] check_outbound_ip_against_allowlist skipped: {e}")
-
         try:
             sync_server_time()
         except Exception as e:
             logging.warning(f"[Binance] ⚠️ sync_server_time נכשל: {e} – נמשיך בכל מקרה.")
-
-    # הפעל רענון זמן מחזורי פעם אחת
     if not _time_sync_thread_started and _TIME_SYNC_INTERVAL_SEC > 0:
         _time_sync_thread_started = True
         _start_periodic_time_sync(_TIME_SYNC_INTERVAL_SEC)
@@ -177,7 +170,6 @@ def sync_server_time() -> None:
     offset_ms = server_ms - estimated_now
     c.timestamp_offset = offset_ms
     logging.info(f"[Binance] 🕒 time sync: offset={offset_ms}ms rtt~{rtt}ms (recvWindow={_RECV_WINDOW}ms)")
-
     global _client
     _client = c
 
@@ -209,7 +201,6 @@ def _retry_call(fn: Callable, *, name: str):
             if e.status_code in (401, 403, 404, 418, 429, 500, 502, 503, 504) or "CloudFront" in str(e):
                 delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
                 logging.warning(f"[Binance] API {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s ({txt})")
-                # רענון זמן חד-פעמי בניסיון ראשון כשנראה קשור ל-Timestamp/403
                 if attempt == 0 and (e.status_code in (401, 403) or "Timestamp" in e.message):
                     try:
                         sync_server_time()
@@ -282,6 +273,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
