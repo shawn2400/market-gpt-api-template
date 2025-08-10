@@ -1,6 +1,7 @@
 # main.py
 import os
 import logging
+import asyncio
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException, Security, status, Query
@@ -18,8 +19,13 @@ from utils.trade_executor import execute_trade_live
 from utils.watchlist_utils import load_watchlist
 from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
 from utils.trending_utils import get_trending_symbols
-from utils.binance_client import ping_and_info
-from utils.binance_trader import get_symbol_filters  # דיבוג פילטרים
+from utils.binance_client import (
+    ping_and_info,
+    futures_exchange_info_safe,
+    futures_mark_price,
+    get_client,
+    sync_server_time,
+)
 
 # === AI health (SDK/HTTP) ===
 from utils.ai_client import ai_healthcheck
@@ -56,7 +62,7 @@ _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.8.0"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -66,6 +72,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Debug: track WS symbols launched at startup ---
+WS_SYMBOLS: List[str] = []
 
 # ---------- מודלים ----------
 class TradeRequest(BaseModel):
@@ -118,6 +127,9 @@ async def _on_startup():
     try:
         symbols = _pick_ws_symbols()
         await launch_multi_websocket(symbols)
+        # שמירת רשימת הסמלים הגלובלית לדיבוג
+        global WS_SYMBOLS
+        WS_SYMBOLS = list(symbols)
         logging.info(f"[startup] WS launched for {len(symbols)} symbols")
     except Exception as e:
         logging.warning(f"[startup] launch_multi_websocket failed: {e}")
@@ -218,7 +230,6 @@ async def get_egress_ip():
     """
     import httpx
     try:
-        # שני מקורות—אם הראשון לא זמין, השני גיבוי
         async with httpx.AsyncClient(timeout=6.0) as client:
             r = await client.get("https://api.ipify.org?format=json")
             if r.status_code == 200 and "ip" in r.json():
@@ -247,12 +258,54 @@ def auto_start():
 def auto_stop():
     return {"stopped": stop_executor()}
 
+# ---------- דיבוג Binance Futures ----------
+@app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(verify_token)])
+async def debug_binance_futures(symbol: str = "BTCUSDT"):
+    """
+    בודק Ping, סנכרון זמן, Mark Price, ExchangeInfo והזמנת TEST (לא מבצע טרייד אמיתי).
+    test_order_ok=True -> החתימה/הרשאות/Allowlist תקינים.
+    """
+    ok_ping = ping_and_info()
+    try:
+        sync_server_time()
+    except Exception:
+        pass
+
+    prem = futures_mark_price(symbol)
+    ex_info = await asyncio.to_thread(futures_exchange_info_safe)
+    sym_count = (ex_info.get("symbols") and len(ex_info["symbols"])) if isinstance(ex_info, dict) else None
+
+    client = get_client()
+    test_order_resp = None
+    test_err = None
+    try:
+        # החזרה של futures_create_test_order היא None כאשר הצליח
+        test_order_resp = await asyncio.to_thread(
+            client.futures_create_test_order,
+            symbol=symbol,
+            side="BUY",
+            type="LIMIT",
+            timeInForce="GTC",
+            quantity="0.001",
+            price="1000",
+        )
+    except Exception as e:
+        test_err = str(e)
+
+    return {
+        "ping_ok": ok_ping,
+        "mark_price": prem,
+        "symbols_count": sym_count,
+        "test_order_ok": (test_order_resp is None and test_err is None),
+        "test_order_error": test_err,
+    }
+
 # ---------- טריידים / סריקה ----------
 @app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)], response_model=_TradeResult)
 async def place_trade(trade: TradeRequest):
     """
     כניסה ממוכנת:
-    - אם entry חסר → מחיר חי מ־WS (אם לא זמין/לא עדכני → 503)
+    - אם entry חסר → מחיר לייב מ־WS (אם לא זמין/לא עדכני → 503)
     - אם SL/TP חסרים → predict_optimal_sl_tp (עם פולבק דטרמיניסטי)
     - שאר ההגנות (Price Protect וכו׳) נעשות בתוך execute_trade_live
     """
@@ -307,20 +360,103 @@ async def scan_multi(
     )
     return {"results": results}
 
-# --- דיבוג פילטרים: REST/Fallback מקור ---
+# --- דיבוג פילטרים: חישוב מקומי מתוך exchangeInfo ---
+def _find_symbol_info(exchange_info: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
+    if not exchange_info or "symbols" not in exchange_info:
+        return None
+    for s in exchange_info["symbols"]:
+        if s.get("symbol") == symbol.upper():
+            return s
+    return None
+
+def _extract_filters(sym_info: Dict[str, Any]) -> Dict[str, Any]:
+    out = {}
+    for f in sym_info.get("filters", []):
+        out[f.get("filterType")] = f
+    return out
+
 @app.get("/symbols/filters", tags=["Debug"], dependencies=[Depends(verify_token)])
-def symbol_filters(symbol: str = Query(..., description="למשל BTCUSDT")):
-    f = get_symbol_filters(symbol)
+async def symbol_filters(symbol: str = Query(..., description="למשל BTCUSDT")):
+    ex_info = await asyncio.to_thread(futures_exchange_info_safe)
+    sym_info = _find_symbol_info(ex_info, symbol)
+    if not sym_info:
+        raise HTTPException(status_code=404, detail=f"Symbol {symbol.upper()} not found in exchangeInfo")
+    f = _extract_filters(sym_info)
+    price_filter = f.get("PRICE_FILTER", {})
+    lot_filter = f.get("LOT_SIZE", {})
+    min_notional = f.get("MIN_NOTIONAL", {})
     return {
         "symbol": symbol.upper(),
         "filters": {
-            "tickSize": f.get("tickSize"),
-            "stepSize": f.get("stepSize"),
-            "minQty": f.get("minQty"),
-            "minNotional": f.get("minNotional"),
+            "tickSize": price_filter.get("tickSize"),
+            "stepSize": lot_filter.get("stepSize"),
+            "minQty": lot_filter.get("minQty"),
+            "minNotional": min_notional.get("notional"),
         },
-        "source": f.get("_source", "unknown"),
+        "source": "exchangeInfo",
     }
+
+# ---------- דיבוג: WS Prices ----------
+@app.get("/debug/ws", tags=["Debug"], dependencies=[Depends(verify_token)])
+async def ws_status(
+    symbols: Optional[str] = Query(None, description="CSV של סמלים לבדיקה, למשל: BTCUSDT,ETHUSDT"),
+    max_age_sec: Optional[int] = Query(None, description="סף טריות בשניות; ברירת מחדל לפי PRICE_MAX_AGE_SEC"),
+):
+    """
+    מחזיר מצב WS עבור כל סמל:
+    - price: המחיר האחרון מה־WS
+    - fresh: האם המחיר טרי (<= max_age_sec)
+    - note: הערה קצרה במקרה של נתון חסר/לא טרי
+    אם לא סופקה רשימת סמלים → משתמשים ב-WS_SYMBOLS מהעלייה; ואם גם זו ריקה, נופלים ל-BTC/ETH/BNB.
+    """
+    threshold = int(max_age_sec or getattr(config, "PRICE_MAX_AGE_SEC", 10))
+
+    # קלט סמלים
+    if symbols:
+        raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        check_syms = raw or (WS_SYMBOLS if WS_SYMBOLS else ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
+    else:
+        check_syms = WS_SYMBOLS if WS_SYMBOLS else ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+
+    out = []
+    fresh_count = 0
+
+    for sym in check_syms:
+        try:
+            price = await get_price(sym)
+            fresh = bool(price is not None and is_price_fresh(sym, max_age_sec=threshold))
+            note = None
+            if price is None:
+                note = "no price in cache"
+            elif not fresh:
+                note = f"stale > {threshold}s"
+            if fresh:
+                fresh_count += 1
+            out.append({"symbol": sym, "price": price, "fresh": fresh, "note": note})
+        except Exception as e:
+            out.append({"symbol": sym, "price": None, "fresh": False, "note": f"error: {e}"})
+
+    return {
+        "total": len(check_syms),
+        "fresh": fresh_count,
+        "stale": len(check_syms) - fresh_count,
+        "max_age_sec": threshold,
+        "symbols": out,
+    }
+
+# ---------- דיבוג: רשימת ראוטים ----------
+@app.get("/debug/routes", tags=["Debug"], dependencies=[Depends(verify_token)])
+async def list_routes():
+    routes = []
+    for r in app.router.routes:
+        try:
+            methods = sorted(list(getattr(r, "methods", [])))
+            path = getattr(r, "path", "")
+            name = getattr(r, "name", "")
+            routes.append({"path": path, "methods": methods, "name": name})
+        except Exception:
+            continue
+    return {"count": len(routes), "routes": routes}
 
 # הרצה לוקאלית
 if __name__ == "__main__":
@@ -329,6 +465,7 @@ if __name__ == "__main__":
         app, host="0.0.0.0",
         port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000"))))
     )
+
 
 
 
