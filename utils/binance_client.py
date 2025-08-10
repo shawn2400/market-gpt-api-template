@@ -158,7 +158,9 @@ def sync_server_time() -> None:
     סנכרון זמן עם שרת Binance Futures ומדידת offset.
     מפחית false 401/403 מסוג Timestamp/recvWindow.
     """
+    global _client  # ← חשוב: להכריז לפני שימוש
     c = _client or _make_client()
+
     url = f"{_FAPI_HTTP}/fapi/v1/time"
     t0 = int(time.time() * 1000)
     r = _session.get(url, timeout=5)
@@ -170,7 +172,7 @@ def sync_server_time() -> None:
     offset_ms = server_ms - estimated_now
     c.timestamp_offset = offset_ms
     logging.info(f"[Binance] 🕒 time sync: offset={offset_ms}ms rtt~{rtt}ms (recvWindow={_RECV_WINDOW}ms)")
-    global _client
+
     _client = c
 
 def _periodic_time_sync_worker(interval: int):
@@ -273,6 +275,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
