@@ -12,17 +12,16 @@ load_dotenv()
 API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 
-# אפשר לשלוט אם לבצע exchange_info בהפעלה (כבד יחסית)
+# האם להביא exchange_info בהפעלה (כבד/נחסם לעיתים)
 EXCHANGE_INFO_ON_START = (os.getenv("BINANCE_EXCHANGE_INFO_ON_START", "false").lower() == "true")
 
-# פרמטרים לריטריי
+# פרמטרי ריטריי
 _BASE_BACKOFF = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
 _MAX_RETRIES   = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
-# ---- יצירת Session עם User-Agent וטיים-אאוטים ----
+# ---- Session עם User-Agent וטיים-אאוטים ----
 _session = requests.Session()
 _session.headers.update({"User-Agent": "AlgoGPT/1.0 (+render) python-binance"})
-# python-binance ייקח מפה Timeout ברירת מחדל לקריאות
 _requests_params = {"timeout": 10}
 
 def _make_client():
@@ -32,14 +31,18 @@ def _make_client():
     else:
         logging.warning("[Binance] ללא מפתחות – מצב Public-Only (klines בלבד).")
         c = Client(None, None, tld="com", requests_params=_requests_params, session=_session)
-    # ודא בסיס פיו׳צ׳רס גלובלי
+    # וודא בסיס Futures
     c.FUTURES_URL = "https://fapi.binance.com"
     return c
 
 client = _make_client()
 
 def _retry_call(fn, *, name: str):
-    """ריטריי אקספוננציאלי עם ג'יטר על קריאות בינאנס, כולל טיפול ב-403/CloudFront."""
+    """
+    ריטריי אקספוננציאלי עם ג'יטר לקריאות בינאנס.
+    מטפל ב-403/CloudFront, RateLimit (-1003/-1015), ו-418/429/503 + שגיאות רשת.
+    מחזיר תוצאת fn() או None אם כשל אחרי כל הניסיונות.
+    """
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -50,14 +53,12 @@ def _retry_call(fn, *, name: str):
                 delay = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 0.35)
                 logging.warning(f"[Binance] 403/WAF {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → sleep {delay:.2f}s")
                 time.sleep(delay); last_exc = e; continue
-            # Rate limits / זמני
             if e.code in (-1003, -1015) or e.status_code in (418, 429, 503):
                 delay = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 0.35)
                 logging.warning(f"[Binance] RateLimit/API {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → sleep {delay:.2f}s")
                 time.sleep(delay); last_exc = e; continue
-            # אחרת – חריגה אמיתית
             logging.error(f"[Binance] API error in {name}: code={e.code}, http={e.status_code}, msg={e.message}")
-            raise
+            break
         except (BinanceRequestException, requests.exceptions.RequestException) as e:
             delay = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 0.35)
             logging.warning(f"[Binance] Network error {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → sleep {delay:.2f}s: {e}")
@@ -70,24 +71,49 @@ def _retry_call(fn, *, name: str):
         logging.error(f"[Binance] ❌ Exhausted retries for {name}: {last_exc}")
     return None
 
+# ---- עטיפות שימושיות לשימוש באפליקציה (מאפשר שימוש בריטריי מבחוץ) ----
+def ping_safe():
+    return _retry_call(lambda: client.ping(), name="ping")
+
+def futures_exchange_info_safe():
+    return _retry_call(lambda: client.futures_exchange_info(), name="futures_exchange_info")
+
+def spot_exchange_info_safe():
+    return _retry_call(lambda: client.get_exchange_info(), name="spot_exchange_info")
+
+def get_client():
+    """לשימוש חיצוני אם ממש חייבים את האובייקט עצמו (מומלץ להעדיף את העטיפות)."""
+    return client
+
 def ping_and_info():
-    """בדיקת חיבור, ללא הפלה בהפעלה: במצב כשל – מדווחים וממשיכים."""
+    """
+    בדיקת חיבור בהפעלה.
+    - לא מפילה את התהליך, אבל **לא** מדווחת 'OK' אם ping נכשל.
+    - exchange_info בהפעלה רק אם EXCHANGE_INFO_ON_START=true.
+    """
     try:
-        _retry_call(lambda: client.ping(), name="ping")
+        ok = ping_safe()
+        if ok is None:
+            logging.warning("[Binance] ⚠️ ping נכשל לאחר ריטריי – ייתכן WAF/RateLimit. נמשיך והמודולים ינסו שוב לפי צורך.")
+            return False
+
         if EXCHANGE_INFO_ON_START:
-            ei = _retry_call(lambda: client.futures_exchange_info(), name="futures_exchange_info")
-            if ei and isinstance(ei, dict):
+            ei = futures_exchange_info_safe()
+            if isinstance(ei, dict):
                 logging.info(f"[Binance] ✅ חיבור פעיל (Futures symbols={len(ei.get('symbols', []))})")
                 return True
-            logging.warning("[Binance] ⚠️ דילוג futures_exchange_info בהפעלה (כשל זמני או EXCHANGE_INFO_ON_START=false)")
+            logging.warning("[Binance] ⚠️ דילוג futures_exchange_info בהפעלה (כשל זמני)")
+            return True  # ping הצליח, exchange_info נכשל – לא עוצרים
         else:
             logging.info("[Binance] ✅ ping OK (דילוג exchange_info בהפעלה)")
-        return True
+            return True
+
     except Exception as e:
-        logging.error(f"[Binance] API error: {e}")
+        logging.error(f"[Binance] API error during init: {e}")
         return False
 
 BINANCE_READY = ping_and_info()
+
 
 
 
