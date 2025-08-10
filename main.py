@@ -1,7 +1,7 @@
 # main.py
 import os
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException, Security, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -56,7 +56,7 @@ _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -71,7 +71,7 @@ app.add_middleware(
 class TradeRequest(BaseModel):
     symbol: str
     side: str                     # "LONG" / "SHORT"
-    entry: Optional[float] = None # אם חסר – ניקח מלייב
+    entry: Optional[float] = None # אם חסר – מחיר לייב
     sl: Optional[float] = None    # אם חסר – נחשב
     tp: Optional[float] = None    # אם חסר – נחשב
     budget: Optional[float] = 100
@@ -79,7 +79,7 @@ class TradeRequest(BaseModel):
 
 class _TradeResult(BaseModel):
     status: str
-    result: Optional[dict] = None
+    result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 # ---------- עזר: בחירת סמלים ל-WS ----------
@@ -88,15 +88,18 @@ def _pick_ws_symbols() -> List[str]:
         wl = load_watchlist(min_quality=config.MIN_QUALITY_SCORE) or []
         syms = [x["symbol"] for x in wl if isinstance(x, dict) and x.get("symbol")]
         if not syms:
-            syms = get_trending_symbols(source="binance24h", market="futures",
-                                        top_n=min(30, config.TOP_SYMBOLS))
+            syms = get_trending_symbols(
+                source="binance24h", market="futures",
+                top_n=min(30, config.TOP_SYMBOLS)
+            )
         if not syms:
             syms = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
         out, seen = [], set()
         for s in syms:
             u = str(s).upper()
             if u and u not in seen:
-                seen.add(u); out.append(u)
+                seen.add(u)
+                out.append(u)
         return out[:min(40, config.TOP_SYMBOLS)]
     except Exception as e:
         logging.warning(f"[startup] WS symbol pick failed: {e}")
@@ -169,7 +172,7 @@ def _config_snapshot() -> dict:
         "binance_key_prefix": _mask(getattr(config, "BINANCE_API_KEY", "")),
     }
 
-# ---------- ראוטים ----------
+# ---------- ראוטים בסיסיים ----------
 @app.get("/", tags=["Config"])
 async def root_status():
     return {
@@ -206,6 +209,28 @@ async def ai_health():
         raise HTTPException(status_code=503, detail=payload)
     return payload
 
+# ---------- ראוט עזר: זיהוי כתובת IP חיצונית ----------
+@app.get("/net/ip", tags=["Debug"])
+async def get_egress_ip():
+    """
+    מדפיס את כתובת ה-egress החיצונית של השרת (כפי שמזהה שירות חיצוני).
+    שימושי כדי לאשר IP ב-Binance.
+    """
+    import httpx
+    try:
+        # שני מקורות—אם הראשון לא זמין, השני גיבוי
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get("https://api.ipify.org?format=json")
+            if r.status_code == 200 and "ip" in r.json():
+                return {"ip": r.json()["ip"], "source": "ipify"}
+            r2 = await client.get("https://ifconfig.me/ip")
+            if r2.status_code == 200:
+                return {"ip": r2.text.strip(), "source": "ifconfig.me"}
+    except Exception as e:
+        logging.warning(f"[net] IP check failed: {e}")
+    raise HTTPException(status_code=503, detail="Cannot determine egress IP at the moment.")
+
+# ---------- קונפיג, אוטו-אקזקיוטר ----------
 @app.get("/config", tags=["Config"], dependencies=[Depends(verify_token)])
 async def get_config():
     return _config_snapshot()  # ללא סודות
@@ -222,6 +247,7 @@ def auto_start():
 def auto_stop():
     return {"stopped": stop_executor()}
 
+# ---------- טריידים / סריקה ----------
 @app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)], response_model=_TradeResult)
 async def place_trade(trade: TradeRequest):
     """
@@ -273,7 +299,7 @@ async def scan_multi(
     timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
     results = await multi_tf_scan_with_ai(
         timeframes=timeframes,
-        markets=(market_type,  ),
+        markets=(market_type,),
         min_quality=min_quality,
         top=top,
         trending_only=trending_only,
@@ -293,14 +319,17 @@ def symbol_filters(symbol: str = Query(..., description="למשל BTCUSDT")):
             "minQty": f.get("minQty"),
             "minNotional": f.get("minNotional"),
         },
-        "source": f.get("_source", "unknown")
+        "source": f.get("_source", "unknown"),
     }
 
 # הרצה לוקאלית
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0",
-                port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))))
+    uvicorn.run(
+        app, host="0.0.0.0",
+        port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000"))))
+    )
+
 
 
 
