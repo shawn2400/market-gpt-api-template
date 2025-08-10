@@ -1,90 +1,187 @@
-# utils/quality_score.py
+# utils/get_klines.py
+import time
 import logging
-import numpy as np
+from typing import Optional, List, Any
 import pandas as pd
 
-def compute_quality_score(df, verbose: bool = False) -> float:
+from utils import config
+from utils.ws_fallback import snapshot_klines_df  # REST fallback מהיר
+
+# נסה להשתמש בלקוח הגלובלי (אם קיים)
+try:
+    from utils.binance_client import client as _GLOBAL_CLIENT
+except Exception:
+    _GLOBAL_CLIENT = None
+
+# שגיאות רשת/בינאנס
+from binance.client import Client as _BinanceClient
+from binance.exceptions import BinanceAPIException, BinanceRequestException
+import requests.exceptions
+
+MIN_LIMIT = 120
+MAX_LIMIT = 1500  # תקרת בטיחות
+
+def _ensure_client():
     """
-    מחשב ציון איכות לטרייד (0–10) לפי אינדיקטורים טכניים.
-    תומך ב־DataFrame (שורה אחרונה) או dict.
+    יוצר לקוח python-binance אם אין גלובלי — Public בלבד (מספיק ל-klines).
+    """
+    if _GLOBAL_CLIENT is not None:
+        return _GLOBAL_CLIENT
+    c = _BinanceClient(None, None, tld="com")
+    try:
+        c.FUTURES_URL = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+    except Exception:
+        c.FUTURES_URL = "https://fapi.binance.com"
+    logging.warning("[get_klines] ⚠️ Binance client לא מאותחל – מפעיל Public-Only fallback.")
+    return c
+
+def _normalize(symbol: str, interval: str, limit: Optional[int],
+               market_type: str, grid_base_type: str, is_futures: Optional[bool]):
+    if is_futures is not None:
+        mt = "futures" if is_futures else "spot"
+    else:
+        mt = (market_type or "futures").lower().strip()
+
+    if mt == "grid":
+        mt = grid_base_type if grid_base_type in ("futures", "spot") else "futures"
+    if mt not in ("futures", "spot"):
+        raise ValueError(f"Unsupported market_type: {mt}")
+
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        raise ValueError("Empty symbol")
+
+    itv = (interval or getattr(config, "DEFAULT_INTERVAL", "15m")).strip()
+
+    lim = int(limit or MIN_LIMIT)
+    if lim < MIN_LIMIT:
+        logging.info(f"[get_klines] ℹ️ limit קטן מדי ({lim}); מגדיל ל-{MIN_LIMIT} עבור {sym}")
+        lim = MIN_LIMIT
+    if lim > MAX_LIMIT:
+        logging.info(f"[get_klines] ℹ️ limit גדול מאוד ({lim}); חותך ל-{MAX_LIMIT} עבור {sym}")
+        lim = MAX_LIMIT
+
+    return sym, itv, lim, mt
+
+def _to_df(raw: List[List[Any]]) -> pd.DataFrame:
+    if not raw or len(raw) < 5:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(raw, columns=[
+        "timestamp","open","high","low","close","volume",
+        "close_time","quote_asset_volume","number_of_trades",
+        "taker_buy_base_volume","taker_buy_quote_volume","ignore"
+    ])[["timestamp","open","high","low","close","volume"]].copy()
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    for col in ("open","high","low","close","volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df.sort_values("timestamp", inplace=True)
+    df.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+
+    if df.isna().values.any():
+        df.ffill(inplace=True)
+        df.bfill(inplace=True)
+
+    df.dropna(inplace=True)
+    if len(df) < MIN_LIMIT // 2:
+        logging.warning(f"[get_klines] ⚠️ מעט מדי נרות לאחר סינון ({len(df)})")
+        return pd.DataFrame()
+
+    df.set_index("timestamp", inplace=True)
+    return df
+
+def _fetch_klines_with_retry(client, market: str, symbol: str, interval: str,
+                             limit: int, start_time: Optional[int], end_time: Optional[int],
+                             max_retries: int = 5, base_backoff: float = 0.6):
+    attempt = 0
+    last_exc = None
+    while attempt <= max_retries:
+        try:
+            if market == "futures":
+                return client.futures_klines(symbol=symbol, interval=interval, limit=limit,
+                                             startTime=start_time, endTime=end_time)
+            else:
+                return client.get_klines(symbol=symbol, interval=interval, limit=limit,
+                                         startTime=start_time, endTime=end_time)
+        except (requests.exceptions.RequestException, BinanceRequestException) as e:
+            last_exc = e
+            delay = base_backoff * (2 ** attempt)
+            logging.warning(f"[get_klines] 🌐 שגיאת רשת ({attempt+1}/{max_retries+1}) {symbol}@{interval}: {e} → {delay:.2f}s")
+            time.sleep(delay); attempt += 1
+        except BinanceAPIException as e:
+            last_exc = e
+            txt = str(e)
+            if e.code in (-1003, -1015) or e.status_code in (403,418,429,503) or "CloudFront" in txt or "Invalid JSON error message" in txt:
+                delay = base_backoff * (2 ** attempt)
+                logging.warning(f"[get_klines] ⏳ חסימה זמנית ({attempt+1}/{max_retries+1}) {symbol}@{interval}: http={getattr(e,'status_code',0)} code={getattr(e,'code',0)} → {delay:.2f}s")
+                time.sleep(delay); attempt += 1
+            else:
+                logging.error(f"[get_klines] ❌ BinanceAPIException לא ניתן לשחזור {symbol}@{interval}: code={e.code}, msg={e.message}")
+                raise
+        except Exception as e:
+            last_exc = e
+            logging.error(f"[get_klines] ❌ חריגה לא צפויה {symbol}@{interval}: {type(e).__name__}: {e}")
+            break
+    if last_exc:
+        raise last_exc
+    return None
+
+def get_klines(symbol: str, interval: str = "15m", limit: int = 500,
+               market_type: str = "futures", grid_base_type: str = "futures",
+               start_time: Optional[int] = None, end_time: Optional[int] = None,
+               is_futures: Optional[bool] = None) -> pd.DataFrame:
+    """
+    1) ניסיון REST ישיר (snapshot_klines_df)
+    2) נפילה ל-python-binance עם ריטריי
     """
     try:
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            last = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) > 1 else None
-        elif isinstance(df, dict):
-            last = df
-            prev = None
-        else:
-            logging.warning("[quality_score] סוג נתון לא נתמך")
-            return 0.0
-
-        def f(x, default=0.0):
-            try:
-                return float(x)
-            except Exception:
-                return float(default)
-
-        score = 0
-        reasons = []
-
-        # ATR
-        atr = f(last.get("atr"), 0)
-        if atr > 0:
-            score += 1; reasons.append("ATR תקין")
-
-        # MACD
-        macd = f(last.get("macd"), 0); macd_signal = f(last.get("macd_signal"), 0)
-        if macd > macd_signal:
-            score += 1; reasons.append("MACD חיובי")
-
-        # RSI
-        rsi = f(last.get("rsi"), 0)
-        if 45 <= rsi <= 65:
-            score += 1; reasons.append("RSI נייטרלי")
-
-        # ADX
-        adx = f(last.get("adx"), 0)
-        if adx > 20:
-            score += 1; reasons.append("ADX חזק")
-
-        # Volume
-        vol = f(last.get("volume"), 0); vol_mean = max(1e-9, f(last.get("volume_mean"), 1))
-        if vol > vol_mean * 1.5:
-            score += 1; reasons.append("נפח גבוה")
-
-        # EMA checks
-        close = f(last.get("close"), 0)
-        ema21 = f(last.get("ema_21"), close)
-        ema50 = f(last.get("ema_50"), close)
-
-        if close > ema21:
-            score += 1; reasons.append("מעל EMA21")
-        if close > ema50:
-            score += 1; reasons.append("מעל EMA50")
-
-        if prev is not None:
-            if ema21 > ema50 and f(prev.get("ema_21")) <= f(prev.get("ema_50")):
-                score += 1; reasons.append("חציית EMA21 מעל EMA50")
-
-        macd_hist = f(last.get("macd_hist"), 0)
-        if macd_hist > 0:
-            score += 1; reasons.append("MACD היסטוגרמה חיובי")
-
-        vwap = f(last.get("vwap"), close)
-        if close > vwap:
-            score += 1; reasons.append("מעל VWAP")
-
-        final_score = float(min(max(score, 0), 10))
-        if verbose:
-            logging.info(f"[quality_score] ✅ ציון איכות: {final_score} | סיבות: {', '.join(reasons)}")
-        return final_score
+        sym, itv, lim, mt = _normalize(symbol, interval, limit, market_type, grid_base_type, is_futures)
     except Exception as e:
-        logging.error(f"[quality_score] ❌ שגיאה: {e}", exc_info=True)
-        return 0.0
+        logging.error(f"[get_klines] ❌ נורמליזציה נכשלה: {e}")
+        return pd.DataFrame()
 
-def calculate_quality_score(indicators: dict) -> float:
-    return compute_quality_score(indicators, verbose=False)
+    # שלב 1: REST ישיר
+    try:
+        df_rest = snapshot_klines_df(symbol=sym, interval=itv, limit=lim, market_type=mt)
+        if not df_rest.empty:
+            logging.info(f"[get_klines] ✅ {sym} ({itv}, {mt} via REST): {len(df_rest)} נרות")
+            return df_rest
+        logging.warning(f"[get_klines] ⚠️ REST ריק/נחסם עבור {sym}@{itv} ({mt}), נופל ל-python-binance")
+    except Exception as e:
+        logging.warning(f"[get_klines] ⚠️ REST snapshot נכשל עבור {sym}@{itv}: {e} — נופל ל-python-binance")
+
+    # שלב 2: python-binance
+    client = _ensure_client()
+    if client is None:
+        logging.error("[get_klines] ❌ אין Binance client זמין.")
+        return pd.DataFrame()
+
+    try:
+        raw = _fetch_klines_with_retry(client, mt, sym, itv, lim, start_time, end_time)
+        if not raw or len(raw) < 10:
+            logging.warning(f"[get_klines] ⚠️ Klines ריקים/מועטים ({len(raw) if raw else 0}) עבור {sym} ({mt})")
+            return pd.DataFrame()
+
+        df = _to_df(raw)
+        if df.empty:
+            logging.warning(f"[get_klines] ⚠️ לאחר ניקוי — אין מספיק נתונים עבור {sym}@{itv}")
+            return pd.DataFrame()
+
+        logging.info(f"[get_klines] ✅ {sym} ({itv}, {mt} via python-binance): {len(df)} נרות")
+        return df
+
+    except (requests.exceptions.RequestException, BinanceRequestException) as e:
+        logging.error(f"[get_klines] ❌ שגיאת רשת עבור {sym}@{itv}: {e}")
+        return pd.DataFrame()
+    except BinanceAPIException as e:
+        logging.error(f"[get_klines] ❌ BinanceAPIException עבור {sym}@{itv}: code={e.code}, msg={e.message}")
+        return pd.DataFrame()
+    except Exception as e:
+        logging.error(f"[get_klines] ❌ שגיאה לא צפויה עבור {sym}@{itv}: {type(e).__name__} – {e}")
+        return pd.DataFrame()
+
 
 
 
