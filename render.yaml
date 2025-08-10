@@ -1,27 +1,31 @@
 services:
   - type: web
-    name: algo-gpt-fastapi
+    name: algogpt-docker
     env: docker
-    plan: starter
+    plan: starter           # או standard
     autoDeploy: true
-
-    # Render מספק PORT אוטומטית → לא להגדיר PORT ידנית כאן
-    healthCheckPath: /healthz
-
+    healthCheckPath: /health
     envVars:
-      # את המפתחות לא לשים כאן; הזן ב-Dashboard כסוד (Secret)
+      - key: API_BEARER_TOKEN
+        value: "change-me"
       - key: AUTO_RUN
         value: "true"
+      - key: SCAN_INTERVAL
+        value: "60"
       - key: MIN_QUALITY_SCORE
         value: "6"
       - key: MAX_TRADE_BUDGET
         value: "100"
-      - key: SCAN_INTERVAL
+      - key: PRICE_MAX_AGE_SEC
         value: "10"
-      - key: MIN_VOLUME
-        value: "1000000"
       - key: TRENDING_ONLY
-        value: "true"
+        value: "false"
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
 
 
 
