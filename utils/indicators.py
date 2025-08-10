@@ -1,146 +1,174 @@
 # utils/indicators.py
-import logging
+# חישובי אינדיקטורים יציבים על DataFrame עם עמודות: open, high, low, close, volume (Index=Datetime[UTC])
 import numpy as np
 import pandas as pd
-import ta
+import logging
 
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+from ta.momentum import RSIIndicator
+from ta.trend import ADXIndicator, MACD, EMAIndicator
+from ta.volatility import AverageTrueRange
 
-def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> pd.DataFrame:
+# פרמטרים דיפולטיים (אפשר לשנות בהמשך אם תרצה)
+_RSI = 14
+_ADX = 14
+_ATR = 14
+_EMA_FAST = 21
+_EMA_SLOW = 50
+_MACD_FAST = 12
+_MACD_SLOW = 26
+_MACD_SIGNAL = 9
+_ST_PERIOD = 10
+_ST_MULT = 3.0
+
+def _ensure_df(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        logging.warning("supertrend: DataFrame ריק")
-        return df
-    need = {"high", "low", "close"}
+        return pd.DataFrame()
+    need = {"open", "high", "low", "close", "volume"}
     if not need.issubset(df.columns):
-        logging.warning(f"supertrend: חסרות עמודות: {need - set(df.columns)}")
-        return df
+        missing = need - set(df.columns)
+        logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
+        return pd.DataFrame()
+    # טיפוסי float
+    out = df.copy()
+    for c in ("open","high","low","close","volume"):
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+    # אינדקס זמן מסודר
+    if not isinstance(out.index, pd.DatetimeIndex):
+        if "timestamp" in out.columns:
+            out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+            out.set_index("timestamp", inplace=True)
+        else:
+            out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
+    out.sort_index(inplace=True)
+    # ניקוי ראשוני
+    out.replace([np.inf, -np.inf], np.nan, inplace=True)
+    out.dropna(subset=["open","high","low","close","volume"], inplace=True)
+    return out
 
-    hl2 = (df["high"] + df["low"]) / 2
-    atr = ta.volatility.AverageTrueRange(high=df["high"], low=df["low"], close=df["close"], window=period).average_true_range()
+def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
+    """
+    מימוש Supertrend קלאסי: מחזיר קו ה-ST עצמו; כיוון נגזר לפי close>st (1) או אחרת (-1).
+    """
+    # ATR נחוץ ל-ST
+    atr = AverageTrueRange(high=df["high"], low=df["low"], close=df["close"], window=period, fillna=False).average_true_range()
 
-    upperband = hl2 + (multiplier * atr)
-    lowerband = hl2 - (multiplier * atr)
+    hl2 = (df["high"] + df["low"]) / 2.0
+    upper_basic = hl2 + multiplier * atr
+    lower_basic = hl2 - multiplier * atr
 
-    final_upperband = upperband.copy()
-    final_lowerband = lowerband.copy()
-    direction = np.ones(len(df), dtype=int)
-    st_vals = np.full(len(df), np.nan)
+    upper = upper_basic.copy()
+    lower = lower_basic.copy()
 
     for i in range(1, len(df)):
-        if df["close"].iloc[i] > final_upperband.iloc[i - 1]:
-            direction[i] = 1
-        elif df["close"].iloc[i] < final_lowerband.iloc[i - 1]:
-            direction[i] = -1
+        # upper band rule
+        if (upper.iloc[i] < upper.iloc[i-1]) or (df["close"].iloc[i-1] > upper.iloc[i-1]):
+            upper.iloc[i] = upper.iloc[i]
         else:
-            direction[i] = direction[i - 1]
-            if direction[i] == 1 and final_lowerband.iloc[i] < final_lowerband.iloc[i - 1]:
-                final_lowerband.iloc[i] = final_lowerband.iloc[i - 1]
-            if direction[i] == -1 and final_upperband.iloc[i] > final_upperband.iloc[i - 1]:
-                final_upperband.iloc[i] = final_upperband.iloc[i - 1]
-        st_vals[i] = final_lowerband.iloc[i] if direction[i] == 1 else final_upperband.iloc[i]
+            upper.iloc[i] = upper.iloc[i-1]
+        # lower band rule
+        if (lower.iloc[i] > lower.iloc[i-1]) or (df["close"].iloc[i-1] < lower.iloc[i-1]):
+            lower.iloc[i] = lower.iloc[i]
+        else:
+            lower.iloc[i] = lower.iloc[i-1]
 
-    df["supertrend"] = st_vals
-    df["supertrend_dir"] = direction
-    return df
+    st = pd.Series(index=df.index, dtype=float)
+    dir_up = True  # דיפולט
+    for i in range(len(df)):
+        if i == 0:
+            st.iloc[i] = upper.iloc[i]
+            dir_up = df["close"].iloc[i] >= lower.iloc[i]
+            continue
 
-def compute_indicators(df: pd.DataFrame, volume_window: int = 20) -> pd.DataFrame:
-    required = {"open", "high", "low", "close", "volume"}
-    if df is None or df.empty or not required.issubset(df.columns):
-        logging.warning(f"compute_indicators: קלט לא תקין (חסרים: {required - set(df.columns)})")
-        return df
+        prev_st = st.iloc[i-1]
+        if df["close"].iloc[i] > prev_st:
+            dir_up = True
+        elif df["close"].iloc[i] < prev_st:
+            dir_up = False
+
+        st.iloc[i] = lower.iloc[i] if dir_up else upper.iloc[i]
+        # שינוי צד: נוודא שהסט לא חוצה מיידית באופן לא עקבי
+        if dir_up and st.iloc[i] < lower.iloc[i]:
+            st.iloc[i] = lower.iloc[i]
+        if (not dir_up) and st.iloc[i] > upper.iloc[i]:
+            st.iloc[i] = upper.iloc[i]
+
+    return st
+
+def _vwap(df: pd.DataFrame) -> pd.Series:
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    vol = df["volume"].replace(0, np.nan)
+    cum_vol = vol.cumsum()
+    vwap = (tp * vol).cumsum() / cum_vol
+    return vwap
+
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    מחזיר DF עם כל האינדיקטורים הנדרשים:
+      rsi, adx, atr, macd/macd_signal/macd_hist, ema_21, ema_50, vwap, supertrend_dir, pattern (אופציונלי)
+    לעולם לא מחזיר ריק אם יש די נתונים בסיסיים (100+ נרות).
+    """
+    base = _ensure_df(df)
+    if base.empty:
+        return pd.DataFrame()
+
+    # נוודא שיש מספיק היסטוריה לאינדיקטורים "ארוכים" ביותר (EMA 50 / MACD 26 / ATR 14)
+    if len(base) < 100:
+        logging.warning(f"[indicators] מעט מדי נרות ({len(base)}). דרוש לפחות 100.")
+        return pd.DataFrame()
+
+    out = base.copy()
 
     try:
-        # טיפוסים וניקוי
-        for c in ("open", "high", "low", "close", "volume"):
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-        df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        df.dropna(subset=list(required), inplace=True)
-        if len(df) < 50:
-            logging.warning("⚠️ פחות מדי נרות לחישוב אינדיקטורים (מתחת ל־50)")
-            return df
+        # EMA
+        out["ema_21"] = EMAIndicator(close=out["close"], window=_EMA_FAST, fillna=False).ema_indicator()
+        out["ema_50"] = EMAIndicator(close=out["close"], window=_EMA_SLOW, fillna=False).ema_indicator()
 
-        # EMA/SMA
-        df["ema_21"] = ta.trend.EMAIndicator(df["close"], window=21).ema_indicator()
-        df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
-        df["ema_100"] = ta.trend.EMAIndicator(df["close"], window=100).ema_indicator()
-        df["ema_200"] = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
-        df["sma_50"] = ta.trend.SMAIndicator(df["close"], window=50).sma_indicator()
-        df["sma_200"] = ta.trend.SMAIndicator(df["close"], window=200).sma_indicator()
+        # RSI
+        out["rsi"] = RSIIndicator(close=out["close"], window=_RSI, fillna=False).rsi()
 
-        # Momentum
-        df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
-        df["stoch_rsi"] = ta.momentum.StochRSIIndicator(df["close"]).stochrsi()
-        df["williams_r"] = ta.momentum.WilliamsRIndicator(df["high"], df["low"], df["close"]).williams_r()
+        # ADX
+        adx_ind = ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=_ADX, fillna=False)
+        out["adx"] = adx_ind.adx()
 
-        macd = ta.trend.MACD(df["close"])
-        df["macd"] = macd.macd()
-        df["macd_signal"] = macd.macd_signal()
-        df["macd_hist"] = macd.macd_diff()
+        # ATR
+        out["atr"] = AverageTrueRange(high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=False).average_true_range()
 
-        df["adx"] = ta.trend.ADXIndicator(df["high"], df["low"], df["close"]).adx()
-        df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"]).average_true_range()
+        # MACD
+        macd = MACD(close=out["close"], window_fast=_MACD_FAST, window_slow=_MACD_SLOW, window_sign=_MACD_SIGNAL, fillna=False)
+        out["macd"] = macd.macd()
+        out["macd_signal"] = macd.macd_signal()
+        out["macd_hist"] = macd.macd_diff()
 
-        stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"])
-        df["stoch_k"] = stoch.stoch()
-        df["stoch_d"] = stoch.stoch_signal()
+        # VWAP
+        out["vwap"] = _vwap(out)
 
-        df["cci"] = ta.trend.CCIIndicator(df["high"], df["low"], df["close"]).cci()
+        # Supertrend + כיוון
+        st_line = _supertrend(out, period=_ST_PERIOD, multiplier=_ST_MULT)
+        out["supertrend"] = st_line
+        out["supertrend_dir"] = np.where(out["close"] >= st_line, 1, -1)
 
-        # Volume/VWAP
-        df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
-        df["vwap_trend"] = df["close"] > df["vwap"]
-        df["volume_mean"] = df["volume"].rolling(volume_window).mean()
-        df["volume_spike"] = df["volume"] > (df["volume_mean"] * 2)
+        # ניקוי אחרון: להסיר שורות מוקדמות בלי ערכי אינדיקטורים
+        cols_needed = ["rsi","adx","atr","macd","macd_signal","macd_hist","ema_21","ema_50","vwap","supertrend","supertrend_dir"]
+        out.replace([np.inf, -np.inf], np.nan, inplace=True)
+        out.dropna(subset=cols_needed, inplace=True)
 
-        obv = ta.volume.OnBalanceVolumeIndicator(df["close"], df["volume"])
-        df["obv"] = obv.on_balance_volume()
-        df["obv_trend"] = df["obv"].diff() > 0
+        # בטיחות: אם עדיין קצר מאוד, ננסה למלא קדימה/אחורה באופן שמרני
+        if len(out) < 20:
+            out[cols_needed] = out[cols_needed].ffill().bfill()
+            out.dropna(subset=cols_needed, inplace=True)
 
-        mfi = ta.volume.MFIIndicator(df["high"], df["low"], df["close"], df["volume"])
-        df["mfi"] = mfi.money_flow_index()
+        if out.empty:
+            logging.warning("[indicators] לאחר חישוב וניקוי – הכל נפל ל-NaN. מחזיר ריק.")
+            return pd.DataFrame()
 
-        # Bollinger
-        bb = ta.volatility.BollingerBands(df["close"])
-        df["bb_upper"] = bb.bollinger_hband()
-        df["bb_lower"] = bb.bollinger_lband()
-        df["bb_width"] = df["bb_upper"] - df["bb_lower"]
+        # pattern אופציונלי (כרגע unknown)
+        out["pattern"] = "unknown"
 
-        # Patterns
-        rng = (df["high"] - df["low"]).replace(0, np.nan)
-        df["is_doji"] = (abs(df["close"] - df["open"]) / (rng + 1e-6)) < 0.1
-        df["bullish_engulfing"] = (df["close"] > df["open"]) & (df["open"].shift(1) > df["close"].shift(1)) & (df["close"] > df["open"].shift(1))
-        df["bearish_engulfing"] = (df["close"] < df["open"]) & (df["open"].shift(1) < df["close"].shift(1)) & (df["close"] < df["open"].shift(1))
-
-        # Signals / Scores
-        df["ema_cross_bull"] = (df["ema_21"] > df["ema_50"]) & (df["ema_21"].shift(1) <= df["ema_50"].shift(1))
-        df["ema_cross_bear"] = (df["ema_21"] < df["ema_50"]) & (df["ema_21"].shift(1) >= df["ema_50"].shift(1))
-        df["macd_cross_bull"] = (df["macd"] > df["macd_signal"]) & (df["macd"].shift(1) <= df["macd_signal"].shift(1))
-        df["macd_cross_bear"] = (df["macd"] < df["macd_signal"]) & (df["macd"].shift(1) >= df["macd_signal"].shift(1))
-
-        df["grid_signal"] = ((df["rsi"] < 35) & (df["macd_hist"] > 0) & (df["adx"] > 17))
-        df["tech_score"] = (
-            (df["rsi"].between(45, 60)).astype(int) +
-            (df["adx"] > 20).astype(int) +
-            (df["macd_hist"] > 0).astype(int) +
-            (df["close"] > df["ema_21"]).astype(int)
-        )
-
-        df = supertrend(df)
-        # נרמול כיוון ל- {1,-1}
-        df["supertrend_dir"] = df["supertrend_dir"].apply(lambda v: 1 if int(v) == 1 else -1)
-        df["trend_strength"] = df[["tech_score", "supertrend_dir"]].sum(axis=1)
-        df["signal_score"] = df[["ema_cross_bull", "macd_cross_bull", "bullish_engulfing"]].sum(axis=1)
-
-        # ניקוי
-        df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        df.ffill(inplace=True); df.bfill(inplace=True)
-        df.dropna(inplace=True)
-
-        return df
+        return out
 
     except Exception as e:
-        logging.error(f"[compute_indicators] ❌ שגיאה: {e}", exc_info=True)
-        return df
+        logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
+        return pd.DataFrame()
 
 
 
