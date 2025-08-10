@@ -1,13 +1,14 @@
 # auto_executor.py
 import asyncio
 import logging
+from typing import Optional, Set, List
 
 from utils import config
-from utils.watchlist_utils import load_watchlist
+from utils.watchlist_utils import load_watchlist, get_symbols_list
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.trade_executor import execute_trade_live
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils.ws_fallback import get_price, is_price_fresh
+from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
 
 SCAN_INTERVAL = int(config.SCAN_INTERVAL)
 MIN_QUALITY_SCORE = int(config.MIN_QUALITY_SCORE)
@@ -15,46 +16,61 @@ MAX_TRADE_BUDGET = float(config.MAX_TRADE_BUDGET)
 PRICE_MAX_AGE_SEC = int(config.PRICE_MAX_AGE_SEC)
 
 _running = False
-_task: asyncio.Task | None = None
+_task: Optional[asyncio.Task] = None
+
+async def _init_ws_symbols() -> List[str]:
+    """
+    בונה סט סמלים להפעלת WebSocket בתחילת הריצה.
+    אם אין ב-watchlist, יופעל fallback קטן.
+    """
+    try:
+        syms = get_symbols_list(min_quality=MIN_QUALITY_SCORE)
+        if not syms:
+            # fallback מינימלי כדי שתהיה תנועת מחירים
+            syms = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+        return sorted(set(syms))
+    except Exception as e:
+        logging.warning(f"[AUTO] WS symbol init failed: {e}")
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 
 async def executor_loop():
     """
-    לולאת אוטו-אקסקיוטר מחושלת:
-    - קוראת watchlist בבטחה
+    לולאת Auto-Executor:
+    - מפעילה WS למחירים
+    - טוענת watchlist
     - מריצה multi_tf_scan_with_ai
-    - מאמתת price & SL/TP
-    - מבצעת טריידים בפועל עם execute_trade_live
+    - מאמתת מחיר / טריות / SL-TP
+    - מבצעת טרייד עם הגנות (price deviation guard)
     """
     global _running
     _running = True
     logging.info("[AUTO] Auto Executor started")
 
+    # === הפעלת WS פעם אחת בתחילת הריצה ===
+    try:
+        ws_syms = await _init_ws_symbols()
+        await launch_multi_websocket(ws_syms)
+        logging.info(f"[AUTO] WS launched for {len(ws_syms)} symbols")
+    except Exception as e:
+        logging.warning(f"[AUTO] WS launch warning: {e}")
+
     try:
         while _running:
             try:
+                # --- בניית רשימת סמלים מתוך watchlist (לא חובה; הסורק יודע להביא בעצמו אם אין) ---
                 watchlist = load_watchlist(min_quality=MIN_QUALITY_SCORE)
-                if not isinstance(watchlist, list):
-                    logging.error(f"[AUTO] watchlist is not a list: {type(watchlist)} content: {watchlist}")
-                    watchlist = []
-
                 symbols = []
                 for entry in watchlist:
-                    if not isinstance(entry, dict):
-                        logging.error(f"[AUTO] watchlist entry not dict: {type(entry)} content: {entry}")
-                        continue
-                    if "symbol" not in entry:
-                        logging.error(f"[AUTO] watchlist entry missing 'symbol': {entry}")
-                        continue
-                    symbols.append(str(entry["symbol"]).upper())
+                    if isinstance(entry, dict) and entry.get("symbol"):
+                        symbols.append(str(entry["symbol"]).upper())
 
-                # סריקה (גם אם אין רשימה – הסורק יודע להביא trending/fallback)
                 logging.info(f"[AUTO] Scanning (min_quality={MIN_QUALITY_SCORE})…")
                 scan_results = await multi_tf_scan_with_ai(
                     timeframes=("15m", "1h"),
                     markets=("futures",),
                     min_quality=MIN_QUALITY_SCORE,
-                    top=min(5, config.TOP_SYMBOLS),
-                    trending_only=config.TRENDING_ONLY,
+                    top=min(5, int(config.TOP_SYMBOLS)),
+                    trending_only=bool(config.TRENDING_ONLY),
                     symbols=symbols or None
                 )
 
@@ -65,18 +81,19 @@ async def executor_loop():
 
                     symbol = str(trade["symbol"]).upper()
                     direction = str(trade.get("direction", trade.get("main_direction", "LONG"))).upper()
-                    direction = "LONG" if direction not in ("LONG", "SHORT") else direction
+                    direction = direction if direction in ("LONG", "SHORT") else "LONG"
 
+                    # מחיר נוכחי
                     entry_price = await get_price(symbol)
                     if entry_price is None:
                         logging.warning(f"[AUTO] Price not available for {symbol}, skipping.")
                         continue
-
                     if not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC):
                         logging.warning(f"[AUTO] Price stale for {symbol}, skipping.")
                         continue
 
-                    sl, tp = await predict_optimal_sl_tp(symbol, direction, entry_price)
+                    # חישוב SL/TP (עם AI או fallback)
+                    sl, tp = await predict_optimal_sl_tp(symbol, direction, float(entry_price))
                     if sl is None or tp is None:
                         logging.warning(f"[AUTO] Invalid SL/TP for {symbol}, skipping.")
                         continue
@@ -85,11 +102,12 @@ async def executor_loop():
                         f"[AUTO] Trade candidate: {symbol} | {direction} | Entry: {entry_price} | SL: {sl} | TP: {tp}"
                     )
 
+                    # ביצוע הטרייד
                     result = await execute_trade_live(
                         symbol=symbol,
-                        entry=entry_price,
-                        stop=sl,
-                        tp=tp,
+                        entry=float(entry_price),
+                        stop=float(sl),
+                        tp=float(tp),
                         direction=direction,
                         leverage=20,
                         budget_usd=MAX_TRADE_BUDGET,
@@ -131,6 +149,8 @@ def stop_executor():
 
 def is_executor_running():
     return _running
+
+
 
 
 
