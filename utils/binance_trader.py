@@ -1,4 +1,5 @@
 # utils/binance_trader.py
+import os
 import math
 import time
 import random
@@ -19,14 +20,23 @@ except Exception:
 _client = get_client()
 
 # ===== פרמטרי רשת/ריטריי/חתימות =====
-_FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+_FAPI_HTTP   = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 _BACKOFF_BASE = float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7))
 _MAX_RETRIES  = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
 _RECV_WINDOW  = int(getattr(config, "BINANCE_RECV_WINDOW", 10000))
 
-# אפשרות לכפות Hedge Mode דרך קונפיג (ברירת מחדל: None → זיהוי אוטומטי)
+# אפשרות לכפות Hedge Mode דרך קונפיג (True/False/None)
 _FORCE_HEDGE_MODE = getattr(config, "BINANCE_FORCE_HEDGE_MODE", None)  # True/False/None
 _HEDGE_MODE_CACHE: Optional[bool] = None
+
+# דגל לדילוג על פעולות משנות־חשבון (מינוף/מצב מרג'ין/מצב פוזיציות)
+_SKIP_MUTATIONS = str(
+    getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
+            os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "false"))
+).lower() == "true"
+
+# פעם אחת ננסה לשנות מצב פוזיציות אם הוכרח (וניפול בשקט אם חסום)
+_POSITION_MODE_SET = False
 
 # סשן עצמאי לפולבקי REST (exchangeInfo per-symbol)
 _session = requests.Session()
@@ -103,9 +113,7 @@ def _http_exchange_info_symbol(sym: str, timeout: float = 8.0) -> Optional[dict]
     return None
 
 def _guess_filters(sym: str) -> dict:
-    """
-    פולבק שמרני כשאין exchangeInfo (CloudFront/חסימה).
-    """
+    """פולבק שמרני כשאין exchangeInfo (CloudFront/חסימה)."""
     return {
         "tickSize": 0.01,     # עיגול מחיר לשתי ספרות
         "stepSize": 0.001,    # גודל צעד כמות
@@ -183,10 +191,31 @@ def _safe_leverage(l: int) -> int:
     if l > max_lev: l = max_lev
     return l
 
+def _maybe_set_position_mode_forced() -> None:
+    """
+    אם _FORCE_HEDGE_MODE הוגדר (True/False) וניסינו עדיין לא לעדכן — ננסה פעם אחת.
+    ניפול בשקט אם חסום ע"י WAF/403.
+    """
+    global _POSITION_MODE_SET
+    if _POSITION_MODE_SET:
+        return
+    if _FORCE_HEDGE_MODE is None or _SKIP_MUTATIONS:
+        return
+    try:
+        retry_call(lambda: _client.futures_change_position_mode(
+            dualSidePosition=bool(_FORCE_HEDGE_MODE),
+            recvWindow=_RECV_WINDOW
+        ), name="change_position_mode")
+        _POSITION_MODE_SET = True
+        logging.info(f"[trader] forced position mode → {'HEDGE' if _FORCE_HEDGE_MODE else 'ONE-WAY'}")
+    except Exception as e:
+        logging.debug(f"[trader] change_position_mode ignored: {e}")
+        _POSITION_MODE_SET = True  # מסמנים שניסינו כדי לא להציף
+
 def _detect_hedge_mode() -> bool:
     """
     מחזיר True אם החשבון במצב Hedge (dualSidePosition=True), אחרת False.
-    מטמון בזיכרון כדי לא להעמיס.
+    מטמון בזיכרון כדי לא להעמיס. מכבד FORCE אם הוגדר.
     """
     global _HEDGE_MODE_CACHE
     if _FORCE_HEDGE_MODE is True:
@@ -199,7 +228,6 @@ def _detect_hedge_mode() -> bool:
         return _HEDGE_MODE_CACHE
     try:
         data = retry_call(lambda: _client.futures_get_position_mode(recvWindow=_RECV_WINDOW), name="get_position_mode")
-        # data דוגמה: {'dualSidePosition': True}
         is_hedge = bool(data.get("dualSidePosition"))
         _HEDGE_MODE_CACHE = is_hedge
         logging.info(f"[trader] position mode detected: {'HEDGE' if is_hedge else 'ONE-WAY'}")
@@ -258,6 +286,8 @@ async def binance_futures_trade(
     take_profit = float(tp)
     lev = _safe_leverage(leverage)
 
+    # אם הוגדר FORCE, ננסה (פעם אחת) לשנות מצב לפני טרייד; דילוג אם _SKIP_MUTATIONS
+    _maybe_set_position_mode_forced()
     hedge_mode = _detect_hedge_mode()
 
     # פילטרים (עם REST+פולבק; בלי קריסה)
@@ -267,15 +297,22 @@ async def binance_futures_trade(
     min_qty = float(filters["minQty"])
     min_notional = float(filters["minNotional"])
 
-    # שינוי מצב מרג'ין ולברג' (לא מפיל אם נכשל)
-    try:
-        _place_with_recv(lambda: _client.futures_change_margin_type(symbol=symbol, marginType=margin_type, recvWindow=_RECV_WINDOW), "change_margin_type")
-    except Exception as e:
-        logging.debug(f"[trader] change_margin_type ignored: {e}")
-    try:
-        _place_with_recv(lambda: _client.futures_change_leverage(symbol=symbol, leverage=int(lev), recvWindow=_RECV_WINDOW), "change_leverage")
-    except Exception as e:
-        logging.debug(f"[trader] change_leverage ignored: {e}")
+    # שינוי מצב מרג'ין ולברג' (לא מפיל אם נכשל) — אלא אם דילגנו במפורש
+    if not _SKIP_MUTATIONS:
+        try:
+            _place_with_recv(lambda: _client.futures_change_margin_type(
+                symbol=symbol, marginType=margin_type, recvWindow=_RECV_WINDOW
+            ), "change_margin_type")
+        except Exception as e:
+            logging.debug(f"[trader] change_margin_type ignored: {e}")
+        try:
+            _place_with_recv(lambda: _client.futures_change_leverage(
+                symbol=symbol, leverage=int(lev), recvWindow=_RECV_WINDOW
+            ), "change_leverage")
+        except Exception as e:
+            logging.debug(f"[trader] change_leverage ignored: {e}")
+    else:
+        logging.info("[trader] BINANCE_SKIP_ACCOUNT_MUTATIONS=true — skipping margin/leverage changes")
 
     # עיגול מחירים
     entry_p    = _round_to_tick(entry_price, tick)
@@ -297,7 +334,10 @@ async def binance_futures_trade(
         if qty < min_qty:
             qty = _ceil_to_step(min_qty, step, precision=8)
     else:
-        qty = _compute_qty_by_budget(budget_usd=budget, leverage=lev, entry_price=entry_p, step_size=step, min_qty=min_qty)
+        qty = _compute_qty_by_budget(
+            budget_usd=budget, leverage=lev, entry_price=entry_p,
+            step_size=step, min_qty=min_qty
+        )
 
     # בדיקת notional מינימלי — נרים כמות אם צריך
     if not _ensure_notional(qty, entry_p, min_notional):
