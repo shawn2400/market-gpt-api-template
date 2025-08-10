@@ -5,7 +5,14 @@ from typing import Optional, List, Any
 import pandas as pd
 
 from utils import config
-from utils.ws_fallback import snapshot_klines_df  # REST fallback מהיר
+# REST fallback מהיר (מודע לבאן)
+from utils.ws_fallback import snapshot_klines_df
+# מודעות־באן גם לשכבת python-binance (הפעלת cooldown דיפולטי כשמזהים BAN)
+try:
+    from utils.ws_fallback import _rest_status_is_ban as _is_ban, _note_rest_ban as _ban_cooldown  # type: ignore
+except Exception:
+    _is_ban = None
+    _ban_cooldown = None
 
 # נסה להשתמש בלקוח הגלובלי (אם קיים)
 try:
@@ -24,6 +31,7 @@ MAX_LIMIT = 1500  # תקרת בטיחות
 def _ensure_client():
     """
     יוצר לקוח python-binance אם אין גלובלי — Public בלבד (מספיק ל-klines).
+    הערה: הפונקציה סינכרונית. אם אתם קוראים מתוך async, הריצו דרך asyncio.to_thread.
     """
     if _GLOBAL_CLIENT is not None:
         return _GLOBAL_CLIENT
@@ -92,9 +100,19 @@ def _to_df(raw: List[List[Any]]) -> pd.DataFrame:
     df.set_index("timestamp", inplace=True)
     return df
 
-def _fetch_klines_with_retry(client, market: str, symbol: str, interval: str,
-                             limit: int, start_time: Optional[int], end_time: Optional[int],
-                             max_retries: int = 5, base_backoff: float = 0.6):
+def _fetch_klines_with_retry(client,
+                             market: str,
+                             symbol: str,
+                             interval: str,
+                             limit: int,
+                             start_time: Optional[int],
+                             end_time: Optional[int],
+                             max_retries: int = 5,
+                             base_backoff: float = 0.6):
+    """
+    נסיונות ריטריי סינכרוניים ל-python-binance.
+    הערה: אם קוראים מתוך async – הריצו כל הקריאה הזו דרך asyncio.to_thread כדי לא לחסום.
+    """
     attempt = 0
     last_exc = None
     while attempt <= max_retries:
@@ -105,36 +123,58 @@ def _fetch_klines_with_retry(client, market: str, symbol: str, interval: str,
             else:
                 return client.get_klines(symbol=symbol, interval=interval, limit=limit,
                                          startTime=start_time, endTime=end_time)
+
         except (requests.exceptions.RequestException, BinanceRequestException) as e:
             last_exc = e
-            delay = base_backoff * (2 ** attempt)
+            delay = min(10.0, base_backoff * (2 ** attempt))
             logging.warning(f"[get_klines] 🌐 שגיאת רשת ({attempt+1}/{max_retries+1}) {symbol}@{interval}: {e} → {delay:.2f}s")
-            time.sleep(delay); attempt += 1
+            time.sleep(delay)
+            attempt += 1
+
         except BinanceAPIException as e:
             last_exc = e
-            txt = str(e)
-            if e.code in (-1003, -1015) or e.status_code in (403,418,429,503) or "CloudFront" in txt or "Invalid JSON error message" in txt:
-                delay = base_backoff * (2 ** attempt)
-                logging.warning(f"[get_klines] ⏳ חסימה זמנית ({attempt+1}/{max_retries+1}) {symbol}@{interval}: http={getattr(e,'status_code',0)} code={getattr(e,'code',0)} → {delay:.2f}s")
-                time.sleep(delay); attempt += 1
+            status = getattr(e, "status_code", 0) or 0
+            code = getattr(e, "code", 0) or 0
+            txt = str(e) or ""
+            # BAN/rate limit אופייני: -1003, -1015, 403/418/429/503, או הודעות CloudFront
+            ban_like = (code in (-1003, -1015)) or (status in (403, 418, 429, 503)) or ("CloudFront" in txt) or ("Invalid JSON error message" in txt)
+            if ban_like:
+                delay = min(10.0, base_backoff * (2 ** attempt))
+                logging.warning(f"[get_klines] ⏳ חסימה זמנית ({attempt+1}/{max_retries+1}) {symbol}@{interval}: http={status} code={code} → {delay:.2f}s")
+                # אם יש מנגנון cooldown גלובלי של REST, הפעל אותו (דיפולט) כדי לא להחמיר את הבאן
+                if _ban_cooldown:
+                    try:
+                        _ban_cooldown(None)  # אין Response, נפעיל cooldown דיפולטי
+                    except Exception:
+                        pass
+                time.sleep(delay)
+                attempt += 1
             else:
-                logging.error(f"[get_klines] ❌ BinanceAPIException לא ניתן לשחזור {symbol}@{interval}: code={e.code}, msg={e.message}")
+                logging.error(f"[get_klines] ❌ BinanceAPIException לא ניתן לשחזור {symbol}@{interval}: code={code}, msg={e.message}")
                 raise
+
         except Exception as e:
             last_exc = e
             logging.error(f"[get_klines] ❌ חריגה לא צפויה {symbol}@{interval}: {type(e).__name__}: {e}")
             break
+
     if last_exc:
         raise last_exc
     return None
 
-def get_klines(symbol: str, interval: str = "15m", limit: int = 500,
-               market_type: str = "futures", grid_base_type: str = "futures",
-               start_time: Optional[int] = None, end_time: Optional[int] = None,
+def get_klines(symbol: str,
+               interval: str = "15m",
+               limit: int = 500,
+               market_type: str = "futures",
+               grid_base_type: str = "futures",
+               start_time: Optional[int] = None,
+               end_time: Optional[int] = None,
                is_futures: Optional[bool] = None) -> pd.DataFrame:
     """
-    1) ניסיון REST ישיר (snapshot_klines_df)
-    2) נפילה ל-python-binance עם ריטריי
+    זרימת השגה יציבה:
+    1) ניסיון REST ישיר (snapshot_klines_df) — מודע לבאן/Retry-After; מחזיר DF ריק בזמן cooldown.
+    2) נפילה ל-python-binance עם ריטריי שמרני והפעלת cooldown דיפולטי כאשר מזוהה BAN.
+    הערה: הפונקציה סינכרונית. מתוך async יש להריץ אותה דרך asyncio.to_thread.
     """
     try:
         sym, itv, lim, mt = _normalize(symbol, interval, limit, market_type, grid_base_type, is_futures)
@@ -142,7 +182,7 @@ def get_klines(symbol: str, interval: str = "15m", limit: int = 500,
         logging.error(f"[get_klines] ❌ נורמליזציה נכשלה: {e}")
         return pd.DataFrame()
 
-    # שלב 1: REST ישיר
+    # שלב 1: REST ישיר (מודע לבאן)
     try:
         df_rest = snapshot_klines_df(symbol=sym, interval=itv, limit=lim, market_type=mt)
         if not df_rest.empty:
@@ -152,7 +192,7 @@ def get_klines(symbol: str, interval: str = "15m", limit: int = 500,
     except Exception as e:
         logging.warning(f"[get_klines] ⚠️ REST snapshot נכשל עבור {sym}@{itv}: {e} — נופל ל-python-binance")
 
-    # שלב 2: python-binance
+    # שלב 2: python-binance (סינכרוני)
     client = _ensure_client()
     if client is None:
         logging.error("[get_klines] ❌ אין Binance client זמין.")
@@ -181,6 +221,7 @@ def get_klines(symbol: str, interval: str = "15m", limit: int = 500,
     except Exception as e:
         logging.error(f"[get_klines] ❌ שגיאה לא צפויה עבור {sym}@{itv}: {type(e).__name__} – {e}")
         return pd.DataFrame()
+
 
 
 
