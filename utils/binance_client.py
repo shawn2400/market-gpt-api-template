@@ -4,7 +4,7 @@ import time
 import random
 import logging
 import threading
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -27,7 +27,9 @@ try:
     _SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
     _FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
     _RECV_WINDOW = int(getattr(config, "BINANCE_RECV_WINDOW", 10000))
-    _TIME_SYNC_INTERVAL_SEC = int(getattr(config, "BINANCE_TIME_SYNC_INTERVAL_SEC", 900))  # ברירת מחדל: 15 דק׳
+    _TIME_SYNC_INTERVAL_SEC = int(getattr(config, "BINANCE_TIME_SYNC_INTERVAL_SEC", 900))  # 15 דק'
+    _ALLOWED_EGRESS_IPS = getattr(config, "BINANCE_ALLOWED_EGRESS_IPS", "").strip()
+    _EGRESS_IP_ENDPOINT = getattr(config, "EGRESS_IP_ENDPOINT", "").strip()  # אופציונלי
 except Exception:
     _API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
     _API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
@@ -38,10 +40,12 @@ except Exception:
     _FAPI_HTTP = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
     _RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
     _TIME_SYNC_INTERVAL_SEC = int(os.getenv("BINANCE_TIME_SYNC_INTERVAL_SEC", "900"))
+    _ALLOWED_EGRESS_IPS = (os.getenv("BINANCE_ALLOWED_EGRESS_IPS", "") or "").strip()
+    _EGRESS_IP_ENDPOINT = (os.getenv("EGRESS_IP_ENDPOINT", "") or "").strip()
 
 # === סשן HTTP גלובלי ידידותי ל-WAF + ריטריי/Pooling ===
 _session = requests.Session()
-_session.trust_env = False  # לא לעבור דרך פרוקסי סביבתי
+_session.trust_env = False  # לא להשתמש בפרוקסי סביבתי
 _session.headers.update({
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -52,7 +56,7 @@ _session.headers.update({
     "Accept-Encoding": "gzip",
     "Accept-Language": "en-US,en;q=0.9",
 })
-# חשוב: לא מוסיפים כאן X-MBX-APIKEY גלובלית — ה-SDK יוסיף בחתומות.
+# לא מוסיפים X-MBX-APIKEY גלובלית; python-binance יוסיף בקריאות החתומות.
 
 _retry = Retry(
     total=_MAX_RETRIES,
@@ -72,6 +76,54 @@ _requests_params = {"timeout": 10}
 _client: Optional[Client] = None
 _time_sync_thread_started = False
 
+# === Egress IP Helpers (אופציונלי) ===
+def _fetch_outbound_ip(endpoints: List[str], timeout: float = 3.0) -> Optional[str]:
+    for ep in endpoints:
+        try:
+            r = _session.get(ep, timeout=timeout)
+            if r.status_code == 200:
+                txt = r.text.strip()
+                # חלק מהשירותים מחזירים JSON
+                if txt.startswith("{"):
+                    try:
+                        txt = r.json().get("ip") or r.json().get("origin") or ""
+                    except Exception:
+                        pass
+                ip = str(txt).strip()
+                if ip:
+                    return ip
+        except Exception:
+            continue
+    return None
+
+def check_outbound_ip_against_allowlist():
+    """
+    אם הוגדר BINANCE_ALLOWED_EGRESS_IPS – נבדוק את ה־IP היוצא ונזהיר אם אינו ברשימה.
+    שימושי במיוחד כשמופיע 403 CloudFront למרות Allowlist.
+    """
+    allowlist = [x.strip() for x in _ALLOWED_EGRESS_IPS.split(",") if x.strip()]
+    if not allowlist:
+        return
+
+    endpoints = []
+    if _EGRESS_IP_ENDPOINT:
+        endpoints.append(_EGRESS_IP_ENDPOINT)
+    # ברירות מחדל אמינות
+    endpoints += [
+        "https://checkip.amazonaws.com",
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+    ]
+    ip = _fetch_outbound_ip(endpoints)
+    if not ip:
+        logging.warning("[Binance] ⚠️ לא הצלחתי לאחזר Outbound IP לצורך אימות Allowlist.")
+        return
+
+    if ip in allowlist:
+        logging.info(f"[Binance] 🌐 Outbound IP OK: {ip} נמצא ב-Allowlist.")
+    else:
+        logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. זה עלול לגרום ל-403.")
+
 # === יצירת לקוח ===
 def _make_client() -> Client:
     if _API_KEY and _API_SECRET:
@@ -90,6 +142,12 @@ def get_client() -> Client:
     global _client, _time_sync_thread_started
     if _client is None:
         _client = _make_client()
+        # בדיקת Outbound IP מול Allowlist (אם הוגדר)
+        try:
+            check_outbound_ip_against_allowlist()
+        except Exception as e:
+            logging.debug(f"[Binance] check_outbound_ip_against_allowlist skipped: {e}")
+
         try:
             sync_server_time()
         except Exception as e:
@@ -224,6 +282,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
