@@ -1,3 +1,4 @@
+# server/main.py
 import os
 import logging
 from typing import Optional, List
@@ -18,16 +19,26 @@ from utils.watchlist_utils import load_watchlist
 from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
 from utils.trending_utils import get_trending_symbols
 from utils.binance_client import ping_and_info
-from utils.binance_trader import get_symbol_filters  # ← חדש לדיבוג פילטרים
+from utils.binance_trader import get_symbol_filters  # דיבוג פילטרים
 
-# === AI health (SDK) ===
+# === AI health (SDK/HTTP) ===
 from utils.ai_client import ai_healthcheck
-
-# ננסה להביא גם בדיקת HTTP ישירה אם קיימת (לא חובה)
 try:
-    from utils.ai_health import ping_openai
+    from utils.ai_health import ping_openai  # HTTP probe אופציונלי
 except Exception:
-    ping_openai = None  # בדיקת HTTP ישירה אופציונלית
+    ping_openai = None
+
+# === Health endpoints (livez/healthz/readyz) ===
+try:
+    from server.healthz import register_fastapi as register_health_endpoints
+except Exception:
+    register_health_endpoints = None
+
+# === Prometheus /metrics ===
+try:
+    from server.metrics import register_fastapi as register_metrics
+except Exception:
+    register_metrics = None
 
 # === אוטו-אקזקיוטר ===
 from auto_executor import start_executor, stop_executor, is_executor_running
@@ -38,10 +49,13 @@ logging.basicConfig(
     level=getattr(logging, _LOG_LEVEL, logging.INFO),
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
-config.log_config_summary()
+# הדפס סיכום קונפיג קצר (ללא סודות)
+try:
+    config.log_config_summary()
+except Exception:
+    pass
 
 # ---------- אבטחה ----------
-# אם ב-config אין API_BEARER_TOKEN, נשתמש ב-ENV או default.
 API_TOKEN = getattr(config, "API_BEARER_TOKEN", os.getenv("API_BEARER_TOKEN", "secret-token"))
 bearer_scheme = HTTPBearer()
 
@@ -51,16 +65,20 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_sch
     return True
 
 # ---------- CORS ----------
-# תמיכה ב-ENV: CORS_ALLOW_ORIGINS="https://a.com,https://b.com" | ברירת מחדל: "*"
 _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
-if _cors_env.strip() == "*":
-    _allow_origins = ["*"]
-else:
-    _allow_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+_allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.5.0"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
+
+# רישום health endpoints (livez/healthz/readyz)
+if callable(register_health_endpoints):
+    register_health_endpoints(app)
+
+# רישום /metrics + middleware לאיסוף מטריקות
+if callable(register_metrics):
+    register_metrics(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,6 +97,11 @@ class TradeRequest(BaseModel):
     tp: Optional[float] = None    # אם חסר – נחשב
     budget: Optional[float] = 100
     leverage: Optional[int] = 10
+
+class _TradeResult(BaseModel):
+    status: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
 
 # ---------- עזר: בחירת סמלים ל-WS ----------
 def _pick_ws_symbols() -> List[str]:
@@ -103,8 +126,8 @@ def _pick_ws_symbols() -> List[str]:
 # ---------- אירועי חיים ----------
 @app.on_event("startup")
 async def _on_startup():
+    # Binance ping (עם ריטריי פנימי)
     try:
-        # Binance ping (עם ריטריי פנימי)
         ping_and_info()
     except Exception as e:
         logging.warning(f"[startup] ping_and_info failed: {e}")
@@ -119,7 +142,7 @@ async def _on_startup():
 
     # Auto Executor לפי ENV
     try:
-        if config.AUTO_RUN:
+        if getattr(config, "AUTO_RUN", True):
             started = start_executor()
             logging.info(f"[AUTO] Auto Executor started: {started}")
     except Exception as e:
@@ -141,7 +164,7 @@ def _config_snapshot() -> dict:
         s = str(s)
         return s[:keep] + "…" if len(s) > keep else "*" * len(s)
 
-    snap = {
+    return {
         "version": APP_VERSION,
         "auto_run": bool(getattr(config, "AUTO_RUN", True)),
         "scan_interval": int(getattr(config, "SCAN_INTERVAL", 60)),
@@ -151,7 +174,7 @@ def _config_snapshot() -> dict:
         "min_volume": int(getattr(config, "MIN_VOLUME", 1_000_000)),
         "top_symbols": int(getattr(config, "TOP_SYMBOLS", 30)),
         "trending_only": bool(getattr(config, "TRENDING_ONLY", True)),
-        "price_protect_pct": float(getattr(config, "PRICE_PROTECT_PCT", 0.10)),
+        "price_protect_pct": float(getattr(config, "PRICE_PROTECT_PCT", 0.25)),
         "price_max_age_sec": int(getattr(config, "PRICE_MAX_AGE_SEC", 10)),
         "port": int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))),
         "openai_model": str(getattr(config, "OPENAI_MODEL", "gpt-4o-mini")),
@@ -166,7 +189,6 @@ def _config_snapshot() -> dict:
         "has_binance_key": bool(bool(getattr(config, "BINANCE_API_KEY", ""))),
         "binance_key_prefix": _mask(getattr(config, "BINANCE_API_KEY", "")),
     }
-    return snap
 
 # ---------- ראוטים ----------
 @app.get("/", tags=["Config"])
@@ -188,9 +210,9 @@ async def health():
 async def ai_health():
     """
     בדיקת חיבור ולטנסי ל-GPT:
-    - sdk: דרך ה-SDK (utils.ai_client)
+    - sdk: דרך ה-SDK (utils.ai_client.ai_healthcheck)
     - http: בדיקת HTTP ישירה אם זמינה (utils.ai_health.ping_openai)
-    אם ה-SDK נכשל → נחזיר 503 (כדי שתוכל לנטר); אחרת 200.
+    אם ה-SDK נכשל → 503 (אפשר לנטר).
     """
     sdk = await ai_healthcheck()
     http = None
@@ -202,7 +224,6 @@ async def ai_health():
 
     payload = {"sdk": sdk, "http": http}
     if not sdk.get("ok"):
-        # חשוב: לזרוק, לא להחזיר אובייקט של HTTPException
         raise HTTPException(status_code=503, detail=payload)
     return payload
 
@@ -222,13 +243,13 @@ def auto_start():
 def auto_stop():
     return {"stopped": stop_executor()}
 
-@app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)])
+@app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)], response_model=_TradeResult)
 async def place_trade(trade: TradeRequest):
     """
     כניסה ממוכנת:
-    - אם entry חסר → ניקח מחיר חי מ־WS (אם לא זמין/לא עדכני → 503)
-    - אם SL/TP חסרים → predict_optimal_sl_tp (עם פולבק דטרמיניסטי בפנים)
-    - שאר ההגנות (Price Protect, וכו׳) נעשות בתוך execute_trade_live
+    - אם entry חסר → מחיר חי מ־WS (אם לא זמין/לא עדכני → 503)
+    - אם SL/TP חסרים → predict_optimal_sl_tp (עם פולבק דטרמיניסטי)
+    - שאר ההגנות (Price Protect וכו׳) נעשות בתוך execute_trade_live
     """
     symbol = trade.symbol.upper().strip()
     direction = trade.side.upper().strip()
@@ -241,13 +262,13 @@ async def place_trade(trade: TradeRequest):
             raise HTTPException(status_code=503, detail=f"Live price unavailable or stale for {symbol}")
         entry = float(live)
 
+    # חישוב SL/TP אם חסר
     sl, tp = trade.sl, trade.tp
     if sl is None or tp is None:
         try:
             sl, tp = await predict_optimal_sl_tp(symbol, direction, entry_price=entry)
         except Exception as e:
             logging.warning(f"[trade] predict_optimal_sl_tp failed: {e}")
-            # execute_trade_live יפיל אם חסר
 
     result = await execute_trade_live(
         symbol=symbol,
@@ -299,7 +320,9 @@ def symbol_filters(symbol: str = Query(..., description="למשל BTCUSDT")):
 # הרצה לוקאלית
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))))
+    uvicorn.run(app, host="0.0.0.0",
+                port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))))
+
 
 
 
