@@ -41,10 +41,13 @@ from auto_executor import start_executor, stop_executor, is_executor_running
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=getattr(logging, _LOG_LEVEL, logging.INFO),
-    format='[%(asctime)s] %(levelname)s: %(message)s'
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    force=True
 )
 try:
-    config.log_config_summary()  # סיכום קונפיג ללא סודות
+    # סיכום קונפיג ללא סודות
+    if hasattr(config, "log_config_summary"):
+        config.log_config_summary()
 except Exception:
     pass
 
@@ -62,7 +65,7 @@ _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.8.1"
+APP_VERSION = "2.9.0"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -94,12 +97,13 @@ class _TradeResult(BaseModel):
 # ---------- עזר: בחירת סמלים ל-WS ----------
 def _pick_ws_symbols() -> List[str]:
     try:
-        wl = load_watchlist(min_quality=config.MIN_QUALITY_SCORE) or []
+        wl = load_watchlist(min_quality=getattr(config, "MIN_QUALITY_SCORE", 6)) or []
         syms = [x["symbol"] for x in wl if isinstance(x, dict) and x.get("symbol")]
         if not syms:
             syms = get_trending_symbols(
-                source="binance24h", market="futures",
-                top_n=min(30, config.TOP_SYMBOLS)
+                source="binance24h",
+                market="futures",
+                top_n=min(getattr(config, "TOP_SYMBOLS", 30), 30)
             )
         if not syms:
             syms = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
@@ -109,7 +113,7 @@ def _pick_ws_symbols() -> List[str]:
             if u and u not in seen:
                 seen.add(u)
                 out.append(u)
-        return out[:min(40, config.TOP_SYMBOLS)]
+        return out[:min(40, getattr(config, "TOP_SYMBOLS", 30))]
     except Exception as e:
         logging.warning(f"[startup] WS symbol pick failed: {e}")
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
@@ -117,9 +121,10 @@ def _pick_ws_symbols() -> List[str]:
 # ---------- אירועי חיים ----------
 @app.on_event("startup")
 async def _on_startup():
-    # Binance ping (עם ריטריי פנימי)
+    # אל תבצע REST לבינאנס בעלייה כאשר יש סיכוי ל-418 (ברירת מחדל false)
     try:
-        ping_and_info()
+        if bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False)):
+            ping_and_info()
     except Exception as e:
         logging.warning(f"[startup] ping_and_info failed: {e}")
 
@@ -127,7 +132,6 @@ async def _on_startup():
     try:
         symbols = _pick_ws_symbols()
         await launch_multi_websocket(symbols)
-        # שמירת רשימת הסמלים הגלובלית לדיבוג
         global WS_SYMBOLS
         WS_SYMBOLS = list(symbols)
         logging.info(f"[startup] WS launched for {len(symbols)} symbols")
@@ -136,7 +140,7 @@ async def _on_startup():
 
     # Auto Executor לפי ENV
     try:
-        if getattr(config, "AUTO_RUN", True):
+        if bool(getattr(config, "AUTO_RUN", True)):
             started = start_executor()
             logging.info(f"[AUTO] Auto Executor started: {started}")
     except Exception as e:
@@ -206,7 +210,7 @@ async def ai_health():
     בדיקת חיבור ולטנסי ל-GPT:
     - sdk: דרך ה-SDK (utils.ai_client.ai_healthcheck)
     - http: בדיקת HTTP ישירה אם זמינה (utils.ai_health.ping_openai)
-    אם ה-SDK נכשל → 503 (אפשר לנטר).
+    אם ה-SDK נכשל → 503.
     """
     sdk = await ai_healthcheck()
     http = None
@@ -215,7 +219,6 @@ async def ai_health():
             http = await ping_openai(timeout_sec=6)
         except Exception as e:
             http = {"ok": False, "error": f"http_probe_failed: {e}"}
-
     payload = {"sdk": sdk, "http": http}
     if not sdk.get("ok"):
         raise HTTPException(status_code=503, detail=payload)
@@ -225,8 +228,7 @@ async def ai_health():
 @app.get("/net/ip", tags=["Debug"])
 async def get_egress_ip():
     """
-    מחזיר את כתובת ה-egress החיצונית של השרת (זיהוי דרך שירות חיצוני).
-    שימושי כדי לאשר IP ב-Binance.
+    מחזיר את כתובת ה-egress החיצונית של השרת (לרישום ב-Trusted IPs של Binance).
     """
     import httpx
     try:
@@ -264,16 +266,30 @@ async def debug_binance_futures(symbol: str = "BTCUSDT"):
     """
     בודק Ping, סנכרון זמן, Mark Price, ExchangeInfo והזמנת TEST (לא מבצע טרייד אמיתי).
     test_order_ok=True -> החתימה/הרשאות/Allowlist תקינים.
+    הערה: בתקופת 418 ייתכן שחלק מהשדות יכשלו.
     """
-    ok_ping = ping_and_info()
+    ok_ping = False
+    try:
+        ok_ping = bool(ping_and_info())
+    except Exception:
+        ok_ping = False
+
     try:
         sync_server_time()
     except Exception:
         pass
 
-    prem = futures_mark_price(symbol)
-    ex_info = await asyncio.to_thread(futures_exchange_info_safe)
-    sym_count = (ex_info.get("symbols") and len(ex_info["symbols"])) if isinstance(ex_info, dict) else None
+    prem = None
+    try:
+        prem = futures_mark_price(symbol)
+    except Exception as e:
+        prem = {"error": str(e)}
+
+    try:
+        ex_info = await asyncio.to_thread(futures_exchange_info_safe)
+        sym_count = (ex_info.get("symbols") and len(ex_info["symbols"])) if isinstance(ex_info, dict) else None
+    except Exception as e:
+        ex_info, sym_count = {"error": str(e)}, None
 
     client = get_client()
     test_order_resp = None
@@ -311,6 +327,8 @@ async def place_trade(trade: TradeRequest):
     """
     symbol = trade.symbol.upper().strip()
     direction = trade.side.upper().strip()
+    if direction not in ("LONG", "SHORT"):
+        raise HTTPException(status_code=422, detail="side must be LONG or SHORT")
 
     # קבלת מחיר לייב אם לא נשלח
     entry = trade.entry
@@ -340,19 +358,29 @@ async def place_trade(trade: TradeRequest):
     )
     return result
 
+# אליאס מלא כדי לתמוך בקריאות קיימות: POST /trade/futures
+@app.post("/trade/futures", tags=["Trades"], dependencies=[Depends(verify_token)], response_model=_TradeResult)
+async def place_trade_futures(trade: TradeRequest):
+    return await place_trade(trade)
+
 @app.get("/scan/multi", tags=["Trades"], dependencies=[Depends(verify_token)])
 async def scan_multi(
     interval: str = "15m,1h",
     min_quality: int = 6,
     top: int = 10,
     market_type: str = "futures",
-    trending_only: bool = False,
+    trending_only: bool = Query(None, description="ברירת מחדל לפי קונפיג"),
     trending_source: str = "coingecko",
 ):
     timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
+
+    # אם לא סופק — קח מהקונפיג
+    if trending_only is None:
+        trending_only = bool(getattr(config, "TRENDING_ONLY", True))
+
     results = await multi_tf_scan_with_ai(
         timeframes=timeframes,
-        markets=(market_type, ),
+        markets=(market_type,),
         min_quality=min_quality,
         top=top,
         trending_only=trending_only,
@@ -462,8 +490,10 @@ async def list_routes():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        app, host="0.0.0.0",
-        port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000"))))
+        app,
+        host="0.0.0.0",
+        port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))),
+        log_level=_LOG_LEVEL.lower(),
     )
 
 
