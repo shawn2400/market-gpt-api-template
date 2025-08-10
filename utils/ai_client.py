@@ -10,7 +10,16 @@ import httpx
 from openai import AsyncOpenAI
 from openai import APIError, RateLimitError, APITimeoutError
 
-from utils import config
+try:
+    from utils import config
+except Exception:  # fallback מינימלי אם אין config
+    class _C:
+        OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
+        OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "4"))
+        OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "") or None
+        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    config = _C()
 
 # --- קונקרנציה מבוקרת ---
 _MAX_CONCURRENCY = int(getattr(config, "OPENAI_MAX_CONCURRENCY", 4))
@@ -21,15 +30,13 @@ _httpx_client: Optional[httpx.AsyncClient] = None
 _openai_client: Optional[AsyncOpenAI] = None
 
 def _build_httpx_client() -> httpx.AsyncClient:
-    # אל תעביר proxies ל-AsyncOpenAI ישירות; העבר אותם ל-httpx.AsyncClient
+    # פרוקסי דרך ENV בלבד (HTTP(S)_PROXY); לא מעבירים ל-AsyncOpenAI ישירות.
     proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
-
     timeout_sec = float(getattr(config, "OPENAI_TIMEOUT_SECONDS", 30.0))
     timeout = httpx.Timeout(timeout_sec)
 
     headers = {
         "User-Agent": "AlgoGPT/2 (Render) openai-python",
-        # אל תכניס כאן Authorization
     }
 
     return httpx.AsyncClient(
@@ -54,11 +61,15 @@ def _ensure_client() -> AsyncOpenAI:
 
     if not api_key:
         logging.error("[AI] OPENAI_API_KEY is missing")
+
     _openai_client = AsyncOpenAI(
         api_key=api_key,
         base_url=base_url,
-        http_client=_httpx_client,  # ← זה המפתח נגד השגיאה של proxies
+        http_client=_httpx_client,  # ← זה מונע את שגיאת 'proxies' בבנאי
     )
+    logging.info("[AI] AsyncOpenAI client ready (model=%s, base_url=%s)",
+                 getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
+                 "custom" if base_url else "default")
     return _openai_client
 
 async def _chat_once(
@@ -98,7 +109,7 @@ async def chat(
     """
     קריאת צ'אט מאובטחת עם ריטריי ל-429/5xx/Timeout.
     """
-    mdl = model or getattr(config, "OPENAI_MODEL", "gpt-4o-mini")
+    mdl = (model or getattr(config, "OPENAI_MODEL", "gpt-4o-mini")).strip()
 
     async with _semaphore:
         last_err: Optional[Exception] = None
@@ -114,7 +125,6 @@ async def chat(
                 logging.warning(f"[AI] rate/timeout (attempt {attempt+1}/{retries+1}) → sleep {d:.2f}s: {e}")
                 await asyncio.sleep(d)
             except APIError as e:
-                # שגיאות 5xx לרוב ניתנות לריטריי
                 status = getattr(e, "status_code", None)
                 if status and int(status) >= 500 and attempt < retries:
                     d = _backoff(attempt)
@@ -130,17 +140,15 @@ async def chat(
                 logging.warning(f"[AI] httpx timeout (attempt {attempt+1}/{retries+1}) → sleep {d:.2f}s")
                 await asyncio.sleep(d)
             except Exception as e:
-                # חריגה לא צפויה — אל תסתיר
                 logging.error(f"[AI] unexpected error: {type(e).__name__}: {e}")
                 raise
-        # אם הגענו לכאן — אזלנו ריטריי
         if last_err:
             raise last_err
         raise RuntimeError("AI chat failed without explicit exception")
 
 async def ai_healthcheck() -> Dict[str, Any]:
     """
-    בריאות/לטנסי: פינג קצר עם max_tokens=1.
+    בדיקת בריאות/לטנסי: פינג קצר עם max_tokens=1.
     לא מפיל שרת — רק מחזיר מצב.
     """
     t0 = time.perf_counter()
@@ -165,12 +173,12 @@ async def ai_healthcheck() -> Dict[str, Any]:
         return {
             "ok": False,
             "latency_ms": round(dt, 1),
-            "error": str(e.__class__.__name__) + ": " + str(e),
+            "error": f"{e.__class__.__name__}: {e}",
         }
 
 async def close():
     """
-    סגירה מסודרת של httpx client (לרוב לא קריטי ב-Render, אבל נקי).
+    סגירה מסודרת של httpx client (לא חובה ב-Render, אבל נקי).
     """
     global _httpx_client
     try:
@@ -180,5 +188,4 @@ async def close():
     except Exception as e:
         logging.debug(f"[AI] close() ignored: {e}")
 
-__all__ = ["chat", "ai_healthcheck", "close"]
 
