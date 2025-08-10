@@ -1,128 +1,213 @@
 # utils/ws_fallback.py
+# WS מרובה-סטרימים לבינאנס (Futures), עם קאש מחירים טרי + גיבוי REST סינכרוני ל-klines.
 import asyncio
 import json
-import logging
 import time
+import logging
 from typing import Dict, List, Optional
 
 import aiohttp
+import requests
+import pandas as pd
+
 from utils import config
 
-BINANCE_WS_BASE = config.BINANCE_FUTURES_WS_BASE  # "wss://fstream.binance.com"
-STREAM_FMT = "/".join(["{sym}@bookTicker"])
+BINANCE_WS_BASE = getattr(config, "BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com")
+STREAM_SUFFIX   = getattr(config, "BINANCE_WS_STREAM_SUFFIX", "/stream?streams=")
+BINANCE_WS_URL_PREFIX = f"{BINANCE_WS_BASE}{STREAM_SUFFIX}"
+
+FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
+
+# כמה זמן מחיר נחשב "טרי"
+DEFAULT_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
 
 class BinanceWSManager:
-    """
-    מנהל חיבור WS משותף ל־bookTicker עבור מספר סמלים.
-    - שמירת מחיר אחרון + טיימסטמפ לכל סימבול
-    - רה-קונקט אוטומטי עם backoff
-    - thread-safe באמצעות asyncio.Lock
-    """
     def __init__(self, symbols: List[str]):
-        self.symbols = [s.lower() for s in symbols if s]
-        self._prices: Dict[str, float] = {}
-        self._ts: Dict[str, float] = {}
+        self.symbols = [str(s).lower() for s in symbols if s]
+        self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self.prices: Dict[str, float] = {}
+        self.ts: Dict[str, float] = {}
+        self.connected: bool = False
         self._lock = asyncio.Lock()
-        self._running = False
+        self._task: Optional[asyncio.Task] = None
+        self._stop = asyncio.Event()
 
-    @property
-    def streams_url(self) -> str:
-        # combined streams API
-        streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
-        return f"{BINANCE_WS_BASE}/stream?streams={streams}"
-
-    async def connect_forever(self):
-        """
-        לולאת חיבור אינסופית עם רה־קונקט אוטומטי.
-        """
-        self._running = True
-        backoff = 1.0
-        while self._running:
+    async def _run(self):
+        backoff = 0.6
+        while not self._stop.is_set():
+            streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
+            url = BINANCE_WS_URL_PREFIX + streams
             try:
                 async with aiohttp.ClientSession() as session:
-                    url = self.streams_url
-                    logging.info(f"[ws_fallback] Connecting WS: {url}")
-                    async with session.ws_connect(url, heartbeat=25) as ws:
-                        logging.info(f"[ws_fallback] WS connected to Binance for {len(self.symbols)} symbols")
-                        backoff = 1.0  # reset backoff on success
+                    async with session.ws_connect(url, heartbeat=15) as ws:
+                        self.ws = ws
+                        self.connected = True
+                        logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
                         async for msg in ws:
                             if msg.type == aiohttp.WSMsgType.TEXT:
-                                await self._handle_message(msg.data)
+                                try:
+                                    data = json.loads(msg.data)
+                                    payload = data.get("data") or {}
+                                    symbol = str(payload.get("s") or "").upper()
+                                    ask = payload.get("a")
+                                    if symbol and ask is not None:
+                                        price = float(ask)
+                                        async with self._lock:
+                                            self.prices[symbol] = price
+                                            self.ts[symbol] = time.time()
+                                except Exception as e:
+                                    logging.debug(f"[ws_fallback] parse error: {e}")
                             elif msg.type == aiohttp.WSMsgType.ERROR:
                                 logging.error(f"[ws_fallback] WS error: {msg.data}")
                                 break
             except Exception as e:
-                logging.warning(f"[ws_fallback] WS disconnected: {e}. Reconnecting in {backoff:.1f}s…")
+                self.connected = False
+                logging.warning(f"[ws_fallback] WS connect/reconnect failed: {e}")
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60.0)
+                backoff = min(10.0, backoff * 2.0)
+                continue
+            # נפלנו מהלולאה (סגירה רגילה) – ננסה להתחבר מחדש
+            self.connected = False
+            await asyncio.sleep(1.0)
 
-    async def _handle_message(self, data: str):
-        try:
-            obj = json.loads(data)
-            payload = obj.get("data") or {}
-            sym = (payload.get("s") or "").upper()
-            # נעדיף ask (a) כ-entry שמרני
-            ask = payload.get("a")
-            if not sym or ask is None:
-                return
-            price = float(ask)
-            now = time.time()
-            async with self._lock:
-                self._prices[sym] = price
-                self._ts[sym] = now
-        except Exception as e:
-            logging.debug(f"[ws_fallback] parse error: {e}")
-
-    async def get_price(self, symbol: str) -> Optional[float]:
-        sym = (symbol or "").upper()
-        async with self._lock:
-            return self._prices.get(sym)
-
-    async def get_price_with_ts(self, symbol: str) -> Optional[tuple[float, float]]:
-        sym = (symbol or "").upper()
-        async with self._lock:
-            if sym in self._prices and sym in self._ts:
-                return self._prices[sym], self._ts[sym]
-            return None
+    def start(self):
+        if self._task and not self._task.done():
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run())
 
     async def stop(self):
-        self._running = False
+        self._stop.set()
+        if self.ws is not None:
+            try:
+                await self.ws.close()
+            except Exception:
+                pass
+        if self._task:
+            try:
+                await self._task
+            except Exception:
+                pass
+        self.connected = False
 
-# ====== ממשק גלובלי פשוט ======
-_manager: Optional[BinanceWSManager] = None
-_manager_task: Optional[asyncio.Task] = None
+    async def get_price(self, symbol: str) -> Optional[float]:
+        sym = str(symbol).upper()
+        async with self._lock:
+            return self.prices.get(sym)
+
+    async def is_fresh(self, symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> bool:
+        sym = str(symbol).upper()
+        now = time.time()
+        async with self._lock:
+            t = self.ts.get(sym)
+        if not t:
+            return False
+        return (now - t) <= max_age_sec
+
+# סינגלטון
+binance_ws_manager: Optional[BinanceWSManager] = None
 
 async def launch_multi_websocket(symbols: List[str]):
-    """
-    מפעיל WS פעם אחת לתהליך. קריאות נוספות יתעלמו.
-    """
-    global _manager, _manager_task
-    if _manager_task and not _manager_task.done():
-        logging.info("[ws_fallback] WS already running")
-        return
-    _manager = BinanceWSManager(symbols)
-    _manager_task = asyncio.create_task(_manager.connect_forever())
+    global binance_ws_manager
+    if binance_ws_manager is None:
+        binance_ws_manager = BinanceWSManager(symbols)
+        binance_ws_manager.start()
 
 async def get_price(symbol: str) -> Optional[float]:
-    global _manager
-    if _manager is None:
-        raise RuntimeError("WebSocket not started. Call launch_multi_websocket([...]) first.")
-    return await _manager.get_price(symbol)
+    global binance_ws_manager
+    if binance_ws_manager is None:
+        logging.debug("[ws_fallback] get_price called before WS start")
+        return None
+    return await binance_ws_manager.get_price(symbol)
 
-def is_price_fresh(symbol: str, max_age_sec: int = config.PRICE_MAX_AGE_SEC) -> bool:
+def is_price_fresh(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> bool:
     """
-    בודק ע״י הטיימסטמפ האחרון האם הדאטה טרייה.
+    גרסה סינכרונית עבור קוד שלא רץ ב־async: משתמשים בטיימסטמפ ששמרנו.
     """
-    global _manager
-    if _manager is None:
+    global binance_ws_manager
+    if binance_ws_manager is None:
         return False
-    sym = (symbol or "").upper()
-    ts = None
-    # קריאה לא־אסינכרונית: משתמשים ישירות במבנה פנימי בצורה בטוחה מספיק לקריאה בלבד
-    ts = _manager._ts.get(sym) if hasattr(_manager, "_ts") else None
-    if ts is None:
+    sym = str(symbol).upper()
+    t = binance_ws_manager.ts.get(sym) if binance_ws_manager.ts else None
+    if not t:
         return False
-    return (time.time() - ts) <= max_age_sec
+    return (time.time() - t) <= max_age_sec
+
+# ---------- REST snapshot (סינכרוני) ל-klines עבור גיבוי מהיר ----------
+def _rest_klines(
+    market: str, symbol: str, interval: str, limit: int = 120,
+    start_time: Optional[int] = None, end_time: Optional[int] = None,
+    timeout: float = 10.0, retries: int = 3, backoff: float = 0.6
+):
+    base = FAPI_HTTP if market == "futures" else SPOT_HTTP
+    path = "/fapi/v1/klines" if market == "futures" else "/api/v3/klines"
+    url = base + path
+
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
+    if start_time: params["startTime"] = int(start_time)
+    if end_time:   params["endTime"] = int(end_time)
+
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout, headers={
+                "User-Agent": "AlgoGPT/2 (Render) ws_fallback",
+                "Accept": "application/json",
+            })
+            if r.status_code == 200:
+                return r.json()
+            # CloudFront / WAF
+            if r.status_code in (403, 418, 429, 503):
+                d = min(10.0, backoff * (2 ** attempt))
+                logging.warning(f"[ws_fallback] REST klines {symbol}@{interval} http={r.status_code} → sleep {d:.2f}s")
+                time.sleep(d)
+                last = r.text
+                continue
+            r.raise_for_status()
+        except Exception as e:
+            d = min(10.0, backoff * (2 ** attempt))
+            logging.warning(f"[ws_fallback] REST klines network err (attempt {attempt+1}/{retries+1}) {symbol}@{interval}: {e} → {d:.2f}s")
+            time.sleep(d)
+            last = e
+    if last:
+        logging.error(f"[ws_fallback] REST klines failed for {symbol}@{interval}: {last}")
+    return None
+
+def snapshot_klines_df(
+    symbol: str,
+    interval: str = "15m",
+    limit: int = 120,
+    market_type: str = "futures",
+) -> pd.DataFrame:
+    """
+    גיבוי מהיר לקריאת klines בלי תלות ב־python-binance.
+    מחזיר DataFrame עם timestamp/open/high/low/close/volume (UTC index).
+    """
+    try:
+        raw = _rest_klines(market_type, symbol, interval, limit=limit)
+        if not raw or len(raw) < 5:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(raw, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "number_of_trades",
+            "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
+        ])[["timestamp", "open", "high", "low", "close", "volume"]].copy()
+
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        for col in ("open", "high", "low", "close", "volume"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df.sort_values("timestamp", inplace=True)
+        df.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+        df.dropna(inplace=True)
+        df.set_index("timestamp", inplace=True)
+        return df
+    except Exception as e:
+        logging.error(f"[ws_fallback] snapshot_klines_df error {symbol}@{interval}: {e}")
+        return pd.DataFrame()
+
 
 
 
