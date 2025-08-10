@@ -10,22 +10,28 @@ from utils.sl_tp_utils import calculate_sl_tp
 
 
 def _avg(vals, default: float = 0.0) -> float:
-    xs = []
-    for v in vals or []:
+    xs: List[float] = []
+    for v in (vals or []):
         try:
+            if v is None:
+                continue
             xs.append(float(v))
         except Exception:
-            pass
+            continue
     return round(sum(xs) / len(xs), 4) if xs else float(default)
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, float(v)))
+    try:
+        v = float(v)
+    except Exception:
+        v = lo
+    return max(lo, min(hi, v))
 
 
 def _parse_signal_conf(text: str) -> Dict[str, Any]:
     """
-    מצפה ל:
+    מצפה לפורמט:
       Signal: BUY/SELL/HOLD | Confidence: <0-100> | Reason: <short>
     סובלני לפסיקים/רווחים/אחוזים.
     """
@@ -36,15 +42,17 @@ def _parse_signal_conf(text: str) -> Dict[str, Any]:
 
     try:
         # סיגנל
-        m_sig = re.search(r"Signal\W*\:\W*(BUY|SELL|HOLD)", text, re.IGNORECASE)
+        m_sig = re.search(r"Signal\W*:\W*(BUY|SELL|HOLD)", text, re.IGNORECASE)
         if m_sig:
             out["signal"] = m_sig.group(1).upper()
+
         # קונפ'
-        m_conf = re.search(r"Confidence\W*\:\W*([0-9]+(?:\.[0-9]+)?)\s*%?", text, re.IGNORECASE)
+        m_conf = re.search(r"Confidence\W*:\W*([0-9]+(?:\.[0-9]+)?)\s*%?", text, re.IGNORECASE)
         if m_conf:
-            out["confidence"] = _clamp(float(m_conf.group(1)), 0.0, 100.0)
+            out["confidence"] = _clamp(m_conf.group(1), 0.0, 100.0)
+
         # סיבה
-        m_reason = re.search(r"Reason\W*\:\W*(.+)$", text, re.IGNORECASE)
+        m_reason = re.search(r"Reason\W*:\W*(.+)$", text, re.IGNORECASE)
         if m_reason:
             out["reason"] = m_reason.group(1).strip()
     except Exception:
@@ -65,16 +73,26 @@ def _get_metric(d: Dict[str, Any], key: str):
 
 
 def _dedup_str(seq: List[str]) -> List[str]:
-    seen = set()
-    out = []
-    for s in seq or []:
+    seen: set = set()
+    out: List[str] = []
+    for s in (seq or []):
+        if not s:
+            continue
         if s not in seen:
             seen.add(s)
             out.append(s)
     return out
 
 
-async def _safe_chat(prompt: str, *, system: str, model: Optional[str], temperature: float, max_tokens: int, retries: int) -> str:
+async def _safe_chat(
+    prompt: str,
+    *,
+    system: str,
+    model: Optional[str],
+    temperature: float,
+    max_tokens: int,
+    retries: int,
+) -> str:
     """
     מעטפת בטוחה ל-chat: מחזירה מחרוזת ריקה במקרה שגיאה.
     """
@@ -100,20 +118,24 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not tf_results or not isinstance(tf_results, list):
             return {"error": "empty tf_results", "signal": "HOLD", "confidence": 0.0}
 
-        symbol = str(tf_results[0].get("symbol", "UNKNOWN")).upper()
-        direction = str(tf_results[0].get("direction", "LONG")).upper()
-        frames = _dedup_str([str(x.get("interval", "?")) for x in tf_results if x])
+        # נוודא סימבול אחד/כיוון אחד (אם הגיעו שונים ניקח את הראשון)
+        first = tf_results[0] or {}
+        symbol = str(first.get("symbol", "UNKNOWN")).upper()
+        direction = str(first.get("direction", "LONG")).upper()
+
+        frames = _dedup_str([str(x.get("interval", "?")) for x in tf_results if isinstance(x, dict)])
 
         avg_rsi = _avg([_get_metric(x, "rsi") for x in tf_results], default=50.0)
         avg_adx = _avg([_get_metric(x, "adx") for x in tf_results], default=20.0)
         avg_volume = _avg(
-            [(x.get("volume") if x.get("volume") is not None else _get_metric(x, "volume")) for x in tf_results],
-            default=1_000_000.0
+            [(x.get("volume") if isinstance(x, dict) else None) for x in tf_results],
+            default=1_000_000.0,
         )
-        q_scores = []
+
+        q_scores: List[float] = []
         for x in tf_results:
             try:
-                q_scores.append(float(x.get("quality_score", 0.0) or 0.0))
+                q_scores.append(float((x or {}).get("quality_score", 0.0) or 0.0))
             except Exception:
                 q_scores.append(0.0)
         avg_q = round(sum(q_scores) / len(q_scores), 2) if q_scores else 0.0
@@ -147,8 +169,8 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
             "direction": direction,
             "quality_score": avg_q,
             "frames": frames,
-            "signal": parsed["signal"],        # BUY/SELL/HOLD
-            "confidence": parsed["confidence"],# 0-100
+            "signal": parsed["signal"],          # BUY/SELL/HOLD
+            "confidence": parsed["confidence"],  # 0-100
             "raw": content,
             "details": tf_results,
             "reason": parsed.get("reason", ""),
@@ -160,7 +182,12 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
 
 
-async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: float = None) -> Tuple[float, float]:
+async def predict_optimal_sl_tp(
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    atr: Optional[float] = None,
+) -> Tuple[float, float]:
     """
     חישוב SL/TP עם GPT; אם נכשל/לא מפורש → פולבק דטרמיניסטי (calculate_sl_tp).
     """
@@ -185,10 +212,16 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
             retries=2,
         )
 
-        m = re.search(r"SL\W*\:\W*([0-9]*\.?[0-9]+)\W*,\W*TP\W*\:\W*([0-9]*\.?[0-9]+)", content or "", re.IGNORECASE)
+        m = re.search(
+            r"SL\W*:\W*([0-9]*\.?[0-9]+)\W*,\W*TP\W*:\W*([0-9]*\.?[0-9]+)",
+            content or "",
+            re.IGNORECASE,
+        )
         if m:
-            sl, tp = float(m.group(1)), float(m.group(2))
-            return round(sl, 6), round(tp, 6)
+            sl_val, tp_val = float(m.group(1)), float(m.group(2))
+            # הגנות פשוטות במקרה AI מחזיר ערכים לא הגיוניים
+            if sl_val > 0 and tp_val > 0:
+                return round(sl_val, 6), round(tp_val, 6)
 
         logging.warning(f"[AI] SL/TP parse failed, content={content!r}; using fallback")
 
@@ -197,6 +230,7 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
 
     # Fallback דטרמיניסטי
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+
 
 
 
