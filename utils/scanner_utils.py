@@ -1,7 +1,7 @@
 # utils/scanner_utils.py
 import asyncio
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 
 import pandas as pd
 
@@ -28,11 +28,12 @@ def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
 
     return True
 
-def _extract_last_fields(df: pd.DataFrame) -> Dict:
+def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
     """
     שליפת ערכים אחרונים בצורה בטוחה מה-DataFrame לאחר compute_indicators.
     """
     last = df.iloc[-1]
+
     def f(x, default=0.0):
         try:
             return float(x)
@@ -40,6 +41,7 @@ def _extract_last_fields(df: pd.DataFrame) -> Dict:
             return float(default)
 
     out = {
+        "close": f(last.get("close"), 0.0),
         "rsi": round(f(last.get("rsi"), 50.0), 2),
         "adx": round(f(last.get("adx"), 20.0), 2),
         "volume": round(f(last.get("volume"), 0.0), 2),
@@ -52,9 +54,11 @@ def _extract_last_fields(df: pd.DataFrame) -> Dict:
         "vwap": f(last.get("vwap"), last.get("close")),
         "volume_mean": f(last.get("volume_mean"), 1.0),
     }
-    # pattern אופציונלי
     if "pattern" in df.columns:
-        out["pattern"] = df["pattern"].iloc[-1]
+        try:
+            out["pattern"] = df["pattern"].iloc[-1]
+        except Exception:
+            out["pattern"] = "unknown"
     return out
 
 async def analyze_symbol(
@@ -62,10 +66,10 @@ async def analyze_symbol(
     interval: str = "15m",
     market_type: str = "futures",
     limit: int = 150,
-    trending_only: bool = False,
-    with_ai: bool = False,   # שמור לתאימות; לא בשימוש כאן
+    trending_only: bool = False,  # נשמר לתאימות
+    with_ai: bool = False,        # נשמר לתאימות; לא בשימוש כאן
     frames: Optional[List[str]] = None,
-) -> Optional[Dict]:
+) -> Optional[Dict[str, Any]]:
     """
     מבצע ניתוח טכני מלא לסימבול בטיימפריים נתון.
     מחזיר dict עם פרטי ניתוח, כולל אינדיקטורים, כיוון וציון איכות.
@@ -109,10 +113,8 @@ async def analyze_symbol(
             # --- שליפת מדדים אחרונים ---
             last = _extract_last_fields(df)
 
-            # (אופציונלי) החמרה כאשר trending_only=True – אל תסנן כאן בכוח,
-            # תן לסורק/אגרגטור לקבוע לפי avg_quality. משאירים מידע מלא.
-
-            result = {
+            # החזרה – גם top-level (לתאימות עם analyze_with_ai), וגם nested תחת "indicators"
+            result: Dict[str, Any] = {
                 "symbol": str(symbol).upper(),
                 "interval": interval,
                 "market": market_type,
@@ -120,7 +122,24 @@ async def analyze_symbol(
                 "quality_score": round(score, 2),
                 "trend": trend,
                 "direction": direction,
+
+                # top-level (נדרש ע"י ai_analysis)
+                "rsi": last["rsi"],
+                "adx": last["adx"],
+                "atr": last["atr"],
                 "volume": last["volume"],
+
+                # אקסטרות אם תרצה להשתמש בהמשך
+                "close": last["close"],
+                "macd": last["macd"],
+                "macd_signal": last["macd_signal"],
+                "macd_hist": last["macd_hist"],
+                "ema_21": last["ema_21"],
+                "ema_50": last["ema_50"],
+                "vwap": last["vwap"],
+                "volume_mean": last["volume_mean"],
+
+                # בלוק מאורגן לשימושי UI/דיבוג
                 "indicators": {
                     "rsi": last["rsi"],
                     "adx": last["adx"],
@@ -131,15 +150,19 @@ async def analyze_symbol(
                     "ema_21": last["ema_21"],
                     "ema_50": last["ema_50"],
                     "vwap": last["vwap"],
+                    "volume": last["volume"],
                     "volume_mean": last["volume_mean"],
                     "pattern": last.get("pattern", "unknown"),
                 },
             }
+
+            # (אופציונלי) trending_only – לא מסננים כאן כדי להשאיר החלטה לאגרגטור
             return result
 
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
