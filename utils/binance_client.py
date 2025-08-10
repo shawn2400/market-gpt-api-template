@@ -11,7 +11,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 try:
-    # אופציונלי: טעינת .env אם קיים (לא חובה ב-Render)
     from dotenv import load_dotenv  # type: ignore
     load_dotenv(override=False)
 except Exception:
@@ -36,9 +35,11 @@ try:
     _SPOT_HTTP   = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
     _FAPI_HTTP   = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
     _RECV_WINDOW = int(getattr(config, "BINANCE_RECV_WINDOW", 10000))
-    _TIME_SYNC_INTERVAL_SEC = int(getattr(config, "BINANCE_TIME_SYNC_INTERVAL_SEC", 900))  # 15 דק'
+    _TIME_SYNC_INTERVAL_SEC = int(getattr(config, "BINANCE_TIME_SYNC_INTERVAL_SEC", 900))
     _ALLOWED_EGRESS_IPS = getattr(config, "BINANCE_ALLOWED_EGRESS_IPS", "").strip()
     _EGRESS_IP_ENDPOINT = getattr(config, "EGRESS_IP_ENDPOINT", "").strip()
+    _TIME_SYNC_MAX_RTT_MS = int(getattr(config, "TIME_SYNC_MAX_RTT_MS", 800))
+    _TIME_SYNC_MAX_ABS_OFFSET_MS = int(getattr(config, "TIME_SYNC_MAX_ABS_OFFSET_MS", 1500))
 except Exception:
     _API_KEY   = (os.getenv("BINANCE_API_KEY") or "").strip()
     _API_SECRET= (os.getenv("BINANCE_API_SECRET") or "").strip()
@@ -51,10 +52,12 @@ except Exception:
     _TIME_SYNC_INTERVAL_SEC = int(os.getenv("BINANCE_TIME_SYNC_INTERVAL_SEC", "900"))
     _ALLOWED_EGRESS_IPS = (os.getenv("BINANCE_ALLOWED_EGRESS_IPS", "") or "").strip()
     _EGRESS_IP_ENDPOINT = (os.getenv("EGRESS_IP_ENDPOINT", "") or "").strip()
+    _TIME_SYNC_MAX_RTT_MS = int(os.getenv("TIME_SYNC_MAX_RTT_MS", "800"))
+    _TIME_SYNC_MAX_ABS_OFFSET_MS = int(os.getenv("TIME_SYNC_MAX_ABS_OFFSET_MS", "1500"))
 
 # === סשן HTTP גלובלי ידידותי ל-WAF + ריטריי/Pooling ===
 _session = requests.Session()
-_session.trust_env = False  # לא להשתמש בפרוקסי סביבתי (מונע הפתעות ב-Render)
+_session.trust_env = False
 _session.headers.update({
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -73,7 +76,7 @@ _retry = Retry(
     status=_MAX_RETRIES,
     backoff_factor=_BACKOFF_BASE,
     status_forcelist=[403, 418, 429, 500, 502, 503, 504],
-    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),  # לא מריצים POST בריטריי (לא אידמפוטנטי)
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
     raise_on_status=False,
 )
 _adapter = HTTPAdapter(max_retries=_retry, pool_connections=50, pool_maxsize=50)
@@ -105,9 +108,6 @@ def _fetch_outbound_ip(endpoints: List[str], timeout: float = 3.0) -> Optional[s
     return None
 
 def check_outbound_ip_against_allowlist():
-    """
-    אם הוגדר BINANCE_ALLOWED_EGRESS_IPS – נבדוק את ה־IP היוצא ונזהיר אם אינו ברשימה.
-    """
     allowlist = [x.strip() for x in _ALLOWED_EGRESS_IPS.split(",") if x.strip()]
     if not allowlist:
         return
@@ -137,31 +137,25 @@ def _make_client() -> Client:
         logging.warning("[Binance] ללא מפתחות – מצב Public-Only (market data בלבד).")
         c = Client(None, None, tld="com", requests_params=_requests_params)
 
-    # חשוב: בסיסי ה-URL חייבים לכלול את הנתיב /api ו-/fapi
     c.API_URL     = f"{_SPOT_HTTP.rstrip('/')}/api"
     c.FUTURES_URL = f"{_FAPI_HTTP.rstrip('/')}/fapi"
 
-    # חלון קבלה (מקטין 401/Timestamp)
     try:
         c.RECV_WINDOW = _RECV_WINDOW
     except Exception:
         pass
 
-    # שימוש בסשן הקשיח שלנו (UA + ריטריי + pooling)
     c.session = _session
     return c
 
 def get_client() -> Client:
-    """לקוח סינגלטון עם time sync ראשוני ו-thread תקופתי."""
     global _client, _time_sync_thread_started
     if _client is None:
         _client = _make_client()
-        # בדיקת Outbound IP מול Allowlist (אם הוגדר)
         try:
             check_outbound_ip_against_allowlist()
         except Exception as e:
             logging.debug(f"[Binance] check_outbound_ip_against_allowlist skipped: {e}")
-        # סנכרון זמן ראשוני
         try:
             sync_server_time()
         except Exception as e:
@@ -171,29 +165,39 @@ def get_client() -> Client:
         _start_periodic_time_sync(_TIME_SYNC_INTERVAL_SEC)
     return _client
 
-# === סנכרון זמן (חד-פעמי + מחזורי) ===
-def sync_server_time() -> None:
+# === סנכרון זמן (בטוח, מדלג על outliers) ===
+def sync_server_time() -> dict:
     """
-    סנכרון זמן עם שרת Binance Futures ומדידת offset.
-    מפחית false 401/403 מסוג Timestamp/recvWindow.
+    מודד offset ורק אם RTT נמוך מהסף וה־offset סביר – מעדכן timestamp_offset.
+    מחזיר dict טלמטריה; לא זורק שגיאה.
     """
     global _client
     c = _client or _make_client()
 
     url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/time"
-    t0 = int(time.time() * 1000)
-    r = _session.get(url, timeout=6)
-    r.raise_for_status()
-    server_ms = int(r.json()["serverTime"])
-    t1 = int(time.time() * 1000)
-    rtt = (t1 - t0)
-    estimated_now = t0 + rtt // 2
-    offset_ms = server_ms - estimated_now
-    # python-binance קורא לזה timestamp_offset
-    c.timestamp_offset = offset_ms
-    logging.info(f"[Binance] 🕒 time sync: offset={offset_ms}ms rtt~{rtt}ms (recvWindow={_RECV_WINDOW}ms)")
+    t0 = time.time()
+    try:
+        r = _session.get(url, timeout=3)
+        t1 = time.time()
+        r.raise_for_status()
+        srv_ms = int(r.json()["serverTime"])
+        rtt_ms = int((t1 - t0) * 1000)
+        mid_ms = int(((t0 + t1) / 2) * 1000)
+        offset_ms = srv_ms - mid_ms
 
-    _client = c
+        accept = (rtt_ms <= _TIME_SYNC_MAX_RTT_MS) and (abs(offset_ms) <= _TIME_SYNC_MAX_ABS_OFFSET_MS)
+        if not accept:
+            logging.warning(f"[Binance] time sync ignored: offset={offset_ms}ms rtt~{rtt_ms}ms "
+                            f"(thr={_TIME_SYNC_MAX_ABS_OFFSET_MS}/{_TIME_SYNC_MAX_RTT_MS})")
+            return {"ok": False, "offset_ms": offset_ms, "rtt_ms": rtt_ms, "applied": False}
+
+        c.timestamp_offset = offset_ms  # python-binance ייקח מכאן
+        logging.info(f"[Binance] 🕒 time sync: offset={offset_ms}ms rtt~{rtt_ms}ms (recvWindow={_RECV_WINDOW}ms)")
+        _client = c
+        return {"ok": True, "offset_ms": offset_ms, "rtt_ms": rtt_ms, "applied": True}
+    except Exception as e:
+        logging.warning(f"[Binance] time sync failed: {e}")
+        return {"ok": False, "error": str(e), "applied": False}
 
 def _periodic_time_sync_worker(interval: int):
     while True:
@@ -210,10 +214,6 @@ def _start_periodic_time_sync(interval: int):
 
 # === Wrapper עם ריטריי/Backoff ===
 def _retry_call(fn: Callable, *, name: str):
-    """
-    ריטריי אקספוננציאלי + jitter; טיפול ב-403/418/429/5xx/CloudFront.
-    מחזיר ערך או None (לא זורק לאחר מיצוי).
-    """
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -223,7 +223,7 @@ def _retry_call(fn: Callable, *, name: str):
             if e.status_code in (401, 403, 404, 418, 429, 500, 502, 503, 504) or "CloudFront" in str(e):
                 delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
                 logging.warning(f"[Binance] API {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s ({txt})")
-                if attempt == 0 and (e.status_code in (401, 403) or "Timestamp" in getattr(e, "message", "")):
+                if attempt == 0 and (e.status_code in (401, 403) or "Timestamp" in (getattr(e, "message", "") or "")):
                     try:
                         sync_server_time()
                     except Exception:
@@ -232,7 +232,6 @@ def _retry_call(fn: Callable, *, name: str):
             logging.error(f"[Binance] API error in {name}: {txt}")
             raise
         except (BinanceRequestException, requests.exceptions.RequestException) as e:
-            # כאן תופסים גם 403/CloudFront שמגיעים מבקשות REST ישירות
             delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
             logging.warning(f"[Binance] Network/HTTP {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s: {e}")
             time.sleep(delay); last_exc = e; continue
@@ -244,7 +243,6 @@ def _retry_call(fn: Callable, *, name: str):
         logging.error(f"[Binance] ❌ Exhausted retries for {name}: {last_exc}")
     return None
 
-# חשיפה חיצונית לריטריי (למודולים אחרים)
 def retry_call(fn: Callable, name: str):
     return _retry_call(fn, name=name)
 
@@ -269,10 +267,6 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     return data or {}
 
 def futures_mark_price(symbol: str):
-    """
-    קריאת Mark Price בפאבליק (לא חתום), עם ריטריי ידידותי ל-WAF.
-    מזהה תשובת HTML של CloudFront (403) ומחלץ הודעה.
-    """
     url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/premiumIndex"
     params = {"symbol": symbol.upper()}
 
@@ -320,6 +314,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
