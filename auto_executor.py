@@ -1,134 +1,105 @@
-# utils/trade_executor.py
-import os
+# auto_executor.py
+import asyncio
 import logging
-from typing import Dict, Any, Optional
+from typing import Optional
 
-from utils import config
-from utils.ws_fallback import (
-    get_price as get_price_cached,   # לשיקוף טריות
-    get_price_smart,                 # מודע ל-ban/418
-    is_price_fresh,
-)
-from utils.binance_trader import binance_futures_trade  # async
+# קורא פרמטרים מהקונפיג
+try:
+    from utils import config
+except Exception:
+    class _Dummy:
+        AUTO_RUN = False
+        SCAN_INTERVAL = 60
+    config = _Dummy()  # fallback בטוח
 
-PRICE_PROTECT_PCT = float(getattr(config, "PRICE_PROTECT_PCT", 0.25))
-PRICE_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
-SKIP_MUTATIONS = (str(getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
-                              os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))).lower() == "true")
+# דגלים/פרמטרים
+_SCAN_INTERVAL = int(getattr(config, "SCAN_INTERVAL", 60))
+_AUTO_RUN_BOOT = bool(getattr(config, "AUTO_RUN", False))
 
-def _norm_direction(d: str) -> str:
-    d = (d or "").strip().upper()
-    if d in ("LONG", "BUY"):
-        return "LONG"
-    if d in ("SHORT", "SELL"):
-        return "SHORT"
-    return "LONG"
+# ניתן להפעיל לוגיקת סריקות אמיתית בהמשך (כרגע NO-OP בטוח)
+_ENABLE_REAL_SCANNER = False  # שנה ל-True רק כשמוכנים להפעיל סריקות חיות
 
-async def execute_trade_live(
-    symbol: str,
-    entry: Optional[float],
-    stop: Optional[float],
-    tp: Optional[float],
-    direction: str,
-    leverage: int = 20,
-    budget_usd: float = 100,
-    market_type: str = "futures",
-    price_protect_pct: Optional[float] = None,
-    quantity: Optional[float] = None,
-) -> Dict[str, Any]:
+_task: Optional[asyncio.Task] = None
+_stop_evt: Optional[asyncio.Event] = None
+
+async def _runner():
     """
-    ביצוע טרייד חי עם הגנות:
-    - מחיר לייב דרך get_price_smart (WS תחילה; REST רק אם מותר, עם מודעות-באן)
-    - אימות טריות/היגיון רמות (SL/TP מול כיוון)
-    - Price deviation guard מול entry המבוקש
-    - כיבוד דגל BINANCE_SKIP_ACCOUNT_MUTATIONS לבטיחות
+    לולאת רקע בטוחה:
+    - ברירת מחדל NO-OP (לא מבצעת פעולות כתיבה).
+    - כשמחברים סורק אמיתי: עטוף ב-try/except כדי שלא יפיל את השרת.
     """
-    try:
-        symbol = str(symbol).upper()
-        direction = _norm_direction(direction)
-        pprotect = float(price_protect_pct or PRICE_PROTECT_PCT)
+    global _stop_evt
+    logging.info("[AUTO] background runner started (interval=%ss, real_scanner=%s)",
+                 _SCAN_INTERVAL, _ENABLE_REAL_SCANNER)
 
-        # מניעת פעולות כתיבה כשמופעל דגל בטיחות
-        if SKIP_MUTATIONS:
-            msg = "BINANCE_SKIP_ACCOUNT_MUTATIONS=true — פעולות כתיבה מושבתות עד שה-IP יאושר/ה-ban יוסר."
-            logging.error("[TRADE] %s", msg)
-            return {"status": "error", "error": msg, "code": "mutations_disabled"}
-
-        # מחיר חי מודע ל-ban
-        live_price = None
-        cache_price = None
+    # טעינת מודולים כבדה רק אם באמת נדרש
+    if _ENABLE_REAL_SCANNER:
         try:
-            live_price = await get_price_smart(symbol)
-            cache_price = await get_price_cached(symbol)  # לשיקוף טריות
+            from utils.multi_tf_scanner import multi_tf_scan_with_ai  # noqa
         except Exception as e:
-            logging.warning("[TRADE] live price fetch failed for %s: %s", symbol, e)
+            logging.warning("[AUTO] scanner import failed -> falling back to NO-OP: %s", e)
 
-        fresh = bool(cache_price is not None and is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC))
+    while _stop_evt and not _stop_evt.is_set():
+        try:
+            if _ENABLE_REAL_SCANNER:
+                # דוגמה: הפעלת סריקה קלה (ללא כתיבה/טרייד)
+                # results = await multi_tf_scan_with_ai(timeframes=("15m","1h"), markets=("futures",), min_quality=6, top=5)
+                # logging.info("[AUTO] scan tick -> %d candidates", len(results or []))
+                pass
+            else:
+                # NO-OP: שמירה על heartbeat בלוגים
+                logging.debug("[AUTO] tick (noop)")
+        except Exception as e:
+            logging.warning("[AUTO] runner tick error (ignored): %s", e)
+        # המתנה בין טיקים
+        try:
+            await asyncio.wait_for(_stop_evt.wait(), timeout=_SCAN_INTERVAL)
+        except asyncio.TimeoutError:
+            pass
+        except Exception as e:
+            logging.debug("[AUTO] wait error (ignored): %s", e)
 
-        if entry is None:
-            if live_price is None:
-                return {
-                    "status": "error",
-                    "error": f"live price unavailable (WS stale and REST cooldown/ban) for {symbol}"
-                }
-            entry = float(live_price)
+    logging.info("[AUTO] background runner stopped")
 
-        # ולידציות רמות
-        entry = float(entry)
-        stop  = float(stop) if stop is not None else None
-        tp    = float(tp)   if tp is not None else None
+def is_executor_running() -> bool:
+    return bool(_task and not _task.done())
 
-        if stop is None or tp is None:
-            return {"status": "error", "error": "sl/tp required (supply or predict before calling)"}
+def start_executor() -> bool:
+    """
+    מפעיל את האקסקיוטור אם אינו פעיל. ניתן לקרוא גם מתוך endpoints (context של event loop).
+    מחזיר True אם אחרי הקריאה האקסקיוטור רץ.
+    """
+    global _task, _stop_evt
+    if _task and not _task.done():
+        return True
+    loop = asyncio.get_running_loop()
+    _stop_evt = asyncio.Event()
+    _task = loop.create_task(_runner())
+    logging.info("[AUTO] executor started")
+    return True
 
-        if direction == "LONG" and not (stop < entry < tp):
-            return {"status": "error", "error": f"levels invalid for LONG (entry={entry}, stop={stop}, tp={tp})"}
-        if direction == "SHORT" and not (tp < entry < stop):
-            return {"status": "error", "error": f"levels invalid for SHORT (entry={entry}, stop={stop}, tp={tp})"}
+def stop_executor() -> bool:
+    """
+    עוצר את האקסקיוטור (לא חוסם עד שה-task מסתיים בפועל).
+    """
+    global _task, _stop_evt
+    if _stop_evt and not _stop_evt.is_set():
+        _stop_evt.set()
+    if _task and _task.done():
+        _task = None
+    logging.info("[AUTO] executor stop requested")
+    return True
 
-        # אם יש מחיר חי – נגן על סטייה מול entry
-        if live_price is not None:
-            deviation = abs((live_price - entry) / entry) * 100.0
-            if deviation > pprotect:
-                logging.warning("[TRADE] ⚠️ סטיית מחיר %.4f%% בין תוכנית (%.8f) ללייב (%.8f) – נחסם",
-                                deviation, entry, live_price)
-                return {
-                    "status": "error",
-                    "error": f"price deviation {deviation:.4f}% > {pprotect}%",
-                    "entry": entry,
-                    "live_price": live_price
-                }
-        else:
-            # אין live_price (למשל בזמן cooldown) – אפשר לבחור לחסום או לאפשר לפי מדיניות.
-            # ברירת מחדל: חוסם כדי לא להיכנס בעיניים עצומות.
-            return {
-                "status": "error",
-                "error": "no live price available (cooldown/ban); aborting to protect execution"
-            }
-
-        # אזהרת טריות (לא חוסם, כי יש לנו מספר חי מה-smart)
-        if not fresh:
-            logging.info("[TRADE] WS cache stale for %s (> %ss) but smart price is present; continuing.",
-                         symbol, PRICE_MAX_AGE_SEC)
-
-        # ביצוע בפועל
-        result = await binance_futures_trade(
-            symbol=symbol,
-            side=direction,
-            entry=entry,
-            sl=stop,
-            tp=tp,
-            leverage=int(leverage),
-            budget=float(budget_usd),
-            quantity=quantity,
-            market_type=market_type
-        )
-        logging.info("[TRADE] %s %s entry=%.8f live=%.8f -> %s", direction, symbol, entry, live_price, result)
-        return {"status": "success", "result": result}
-
+# הפעלה אוטומטית בעליית השרת (רק אם הוגדר AUTO_RUN=true)
+# הערה: הקריאה בפועל ל-start_executor תיעשה גם מ-main.py/startup.
+if _AUTO_RUN_BOOT:
+    try:
+        # אם מייבאים את המודול לפני שהלופ רץ, לא נוכל ליצור task כאן.
+        # לכן ההפעלה בפועל נעשית ב-main.py בתוך אירוע startup.
+        logging.info("[AUTO] AUTO_RUN=true (startup will start executor)")
     except Exception as e:
-        logging.error("[TRADE] שגיאה בביצוע טרייד %s: %s", symbol if 'symbol' in locals() else "?", e, exc_info=True)
-        return {"status": "error", "error": str(e)}
+        logging.debug("[AUTO] auto-run hint failed: %s", e)
+
 
 
 
