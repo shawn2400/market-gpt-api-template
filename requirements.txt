@@ -1,10 +1,8 @@
-# --- ASGI & Server ---
 fastapi==0.110.0
-starlette==0.37.2
+starlette==0.36.3
 uvicorn[standard]==0.29.0
 gunicorn==21.2.0
 
-# --- Core Utils ---
 python-dotenv==1.0.1
 requests==2.32.3
 httpx[http2]==0.27.2
@@ -14,21 +12,18 @@ dateparser==1.2.2
 certifi>=2024.7.4
 idna>=3.6
 
-# --- Data / TA / Reports ---
 pandas==2.2.2
 numpy==1.26.4
 matplotlib==3.8.4
 ta==0.11.0
 fpdf==1.7.2
-
-# --- Networking / WS ---
 aiohttp==3.9.5
 websocket-client==1.7.0
 h2==4.1.0
 
-# --- Binance / OpenAI ---
 python-binance==1.0.19
 openai==1.30.1
+
 
 
 
