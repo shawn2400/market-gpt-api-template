@@ -6,123 +6,124 @@ import time
 from typing import Dict, List, Optional
 
 import aiohttp
+from utils import config
 
-BINANCE_WS_URL = "wss://fstream.binance.com/stream?streams="
-BINANCE_REST_PRICE = "https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
+BINANCE_WS_BASE = config.BINANCE_FUTURES_WS_BASE  # "wss://fstream.binance.com"
+STREAM_FMT = "/".join(["{sym}@bookTicker"])
 
 class BinanceWSManager:
+    """
+    מנהל חיבור WS משותף ל־bookTicker עבור מספר סמלים.
+    - שמירת מחיר אחרון + טיימסטמפ לכל סימבול
+    - רה-קונקט אוטומטי עם backoff
+    - thread-safe באמצעות asyncio.Lock
+    """
     def __init__(self, symbols: List[str]):
-        self.symbols = [s.lower() for s in symbols]
-        self.ws = None
-        self.connected = False
-        self._lock = asyncio.Lock()
+        self.symbols = [s.lower() for s in symbols if s]
         self._prices: Dict[str, float] = {}
         self._ts: Dict[str, float] = {}
-        self._stop = False
+        self._lock = asyncio.Lock()
+        self._running = False
 
-    async def _rest_price(self, session: aiohttp.ClientSession, symbol: str) -> Optional[float]:
-        try:
-            url = BINANCE_REST_PRICE.format(symbol=symbol.upper())
-            async with session.get(url, timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return float(data["price"])
-                else:
-                    logging.warning(f"[ws_fallback] REST price HTTP {resp.status} for {symbol}")
-        except Exception as e:
-            logging.debug(f"[ws_fallback] REST price error for {symbol}: {e}")
-        return None
+    @property
+    def streams_url(self) -> str:
+        # combined streams API
+        streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
+        return f"{BINANCE_WS_BASE}/stream?streams={streams}"
 
-    async def connect(self):
+    async def connect_forever(self):
+        """
+        לולאת חיבור אינסופית עם רה־קונקט אוטומטי.
+        """
+        self._running = True
         backoff = 1.0
-        while not self._stop:
+        while self._running:
             try:
-                streams = "/".join(f"{s}@bookTicker" for s in self.symbols)
-                url = BINANCE_WS_URL + streams
                 async with aiohttp.ClientSession() as session:
+                    url = self.streams_url
                     logging.info(f"[ws_fallback] Connecting WS: {url}")
-                    async with session.ws_connect(url, heartbeat=30, timeout=15) as ws:
-                        self.ws = ws
-                        self.connected = True
-                        backoff = 1.0
-                        logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
-
+                    async with session.ws_connect(url, heartbeat=25) as ws:
+                        logging.info(f"[ws_fallback] WS connected to Binance for {len(self.symbols)} symbols")
+                        backoff = 1.0  # reset backoff on success
                         async for msg in ws:
                             if msg.type == aiohttp.WSMsgType.TEXT:
-                                data = json.loads(msg.data)
-                                d = data.get("data") or {}
-                                sym = str(d.get("s", "")).upper()
-                                ask = d.get("a")
-                                bid = d.get("b")
-                                price = None
-                                try:
-                                    if ask: price = float(ask)
-                                    elif bid: price = float(bid)
-                                except Exception:
-                                    price = None
-                                if sym and price is not None:
-                                    async with self._lock:
-                                        self._prices[sym] = price
-                                        self._ts[sym] = time.time()
+                                await self._handle_message(msg.data)
                             elif msg.type == aiohttp.WSMsgType.ERROR:
                                 logging.error(f"[ws_fallback] WS error: {msg.data}")
                                 break
             except Exception as e:
-                self.connected = False
-                logging.warning(f"[ws_fallback] WS disconnect: {e}. Reconnecting in {backoff:.1f}s")
+                logging.warning(f"[ws_fallback] WS disconnected: {e}. Reconnecting in {backoff:.1f}s…")
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-            finally:
-                self.connected = False
-                self.ws = None
-        logging.info("[ws_fallback] WS manager stopped")
+                backoff = min(backoff * 2, 60.0)
 
-    async def stop(self):
-        self._stop = True
-        if self.ws:
-            await self.ws.close()
+    async def _handle_message(self, data: str):
+        try:
+            obj = json.loads(data)
+            payload = obj.get("data") or {}
+            sym = (payload.get("s") or "").upper()
+            # נעדיף ask (a) כ-entry שמרני
+            ask = payload.get("a")
+            if not sym or ask is None:
+                return
+            price = float(ask)
+            now = time.time()
+            async with self._lock:
+                self._prices[sym] = price
+                self._ts[sym] = now
+        except Exception as e:
+            logging.debug(f"[ws_fallback] parse error: {e}")
 
     async def get_price(self, symbol: str) -> Optional[float]:
-        s = str(symbol).upper()
+        sym = (symbol or "").upper()
         async with self._lock:
-            p = self._prices.get(s)
-            ts = self._ts.get(s)
-        if p is not None:
-            return float(p)
-        # REST fallback אם לא הגיע עדיין WS
-        async with aiohttp.ClientSession() as session:
-            p = await self._rest_price(session, s)
-        if p is not None:
-            async with self._lock:
-                self._prices[s] = float(p)
-                self._ts[s] = time.time()
-        return p
+            return self._prices.get(sym)
 
-    def is_fresh(self, symbol: str, max_age_sec: int = 10) -> bool:
-        s = str(symbol).upper()
-        t = self._ts.get(s)
-        return bool(t and (time.time() - t) <= max_age_sec)
+    async def get_price_with_ts(self, symbol: str) -> Optional[tuple[float, float]]:
+        sym = (symbol or "").upper()
+        async with self._lock:
+            if sym in self._prices and sym in self._ts:
+                return self._prices[sym], self._ts[sym]
+            return None
 
-binance_ws_manager: BinanceWSManager | None = None
+    async def stop(self):
+        self._running = False
+
+# ====== ממשק גלובלי פשוט ======
+_manager: Optional[BinanceWSManager] = None
+_manager_task: Optional[asyncio.Task] = None
 
 async def launch_multi_websocket(symbols: List[str]):
-    global binance_ws_manager
-    if binance_ws_manager is not None:
+    """
+    מפעיל WS פעם אחת לתהליך. קריאות נוספות יתעלמו.
+    """
+    global _manager, _manager_task
+    if _manager_task and not _manager_task.done():
+        logging.info("[ws_fallback] WS already running")
         return
-    binance_ws_manager = BinanceWSManager([s.upper() for s in symbols])
-    asyncio.create_task(binance_ws_manager.connect())
+    _manager = BinanceWSManager(symbols)
+    _manager_task = asyncio.create_task(_manager.connect_forever())
 
 async def get_price(symbol: str) -> Optional[float]:
-    global binance_ws_manager
-    if binance_ws_manager is None:
-        raise RuntimeError("WebSocket not started — call launch_multi_websocket(symbols) first")
-    return await binance_ws_manager.get_price(symbol)
+    global _manager
+    if _manager is None:
+        raise RuntimeError("WebSocket not started. Call launch_multi_websocket([...]) first.")
+    return await _manager.get_price(symbol)
 
-def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
-    global binance_ws_manager
-    if binance_ws_manager is None:
+def is_price_fresh(symbol: str, max_age_sec: int = config.PRICE_MAX_AGE_SEC) -> bool:
+    """
+    בודק ע״י הטיימסטמפ האחרון האם הדאטה טרייה.
+    """
+    global _manager
+    if _manager is None:
         return False
-    return binance_ws_manager.is_fresh(symbol, max_age_sec=max_age_sec)
+    sym = (symbol or "").upper()
+    ts = None
+    # קריאה לא־אסינכרונית: משתמשים ישירות במבנה פנימי בצורה בטוחה מספיק לקריאה בלבד
+    ts = _manager._ts.get(sym) if hasattr(_manager, "_ts") else None
+    if ts is None:
+        return False
+    return (time.time() - ts) <= max_age_sec
+
 
 
 
