@@ -3,8 +3,14 @@ import math
 import logging
 from typing import Dict, Any
 
-from utils.binance_client import get_client, futures_exchange_info_safe, retry_call
 from utils import config
+from utils.binance_client import get_client, futures_exchange_info_safe
+try:
+    # עדיף ייצוא רשמי
+    from utils.binance_client import retry_call
+except Exception:
+    # תאימות לאחור אם השם הפרטי הישן קיים
+    from utils.binance_client import _retry_call as retry_call  # type: ignore
 
 _client = get_client()
 
@@ -38,11 +44,7 @@ def _load_symbol_filters(symbol: str) -> dict:
     if not isinstance(ei, dict) or "symbols" not in ei:
         raise RuntimeError("Cannot load futures exchange info (filters)")
 
-    meta = None
-    for s in ei["symbols"]:
-        if s.get("symbol") == sym:
-            meta = s
-            break
+    meta = next((s for s in ei["symbols"] if s.get("symbol") == sym), None)
     if not meta:
         raise ValueError(f"Symbol {sym} not found in exchange info")
 
@@ -213,6 +215,7 @@ async def binance_futures_trade(
         "sl":    {"trigger": sl_trigger, "limit": sl_limit, "orderId": sl_order["orderId"]},
         "tp":    {"trigger": tp_trigger, "limit": tp_limit, "orderId": tp_order["orderId"]},
     }
+
 
 
 
