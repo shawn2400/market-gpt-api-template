@@ -1,4 +1,5 @@
 # main.py
+import os
 import logging
 from typing import Optional, List
 
@@ -19,16 +20,23 @@ from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
 from utils.trending_utils import get_trending_symbols
 from utils.binance_client import ping_and_info
 
+# === AI health ===
+from utils.ai_client import ai_healthcheck
+
 # === אוטו-אקזקיוטר ===
 from auto_executor import start_executor, stop_executor, is_executor_running
 
 # ---------- לוגים ----------
-logging.basicConfig(level=getattr(logging, config.LOG_LEVEL, logging.INFO),
-                    format='[%(asctime)s] %(levelname)s: %(message)s')
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format='[%(asctime)s] %(levelname)s: %(message)s'
+)
 config.log_config_summary()
 
 # ---------- אבטחה ----------
-API_TOKEN = config.API_BEARER_TOKEN
+# אם ב-config אין API_BEARER_TOKEN, נשתמש ב-ENV או default.
+API_TOKEN = getattr(config, "API_BEARER_TOKEN", os.getenv("API_BEARER_TOKEN", "secret-token"))
 bearer_scheme = HTTPBearer()
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)):
@@ -36,13 +44,21 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_sch
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     return True
 
+# ---------- CORS ----------
+# תמיכה ב-ENV: CORS_ALLOW_ORIGINS="https://a.com,https://b.com" | ברירת מחדל: "*"
+_cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
+if _cors_env.strip() == "*":
+    _allow_origins = ["*"]
+else:
+    _allow_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+
 # ---------- אפליקציה ----------
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=config.CORS_ALLOW_ORIGINS,
+    allow_origins=_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -81,18 +97,27 @@ def _pick_ws_symbols() -> List[str]:
 # ---------- אירועי חיים ----------
 @app.on_event("startup")
 async def _on_startup():
-    # Binance ping (עם ריטריי פנימי)
-    ping_and_info()
+    try:
+        # Binance ping (עם ריטריי פנימי)
+        ping_and_info()
+    except Exception as e:
+        logging.warning(f"[startup] ping_and_info failed: {e}")
 
     # WebSocket למחירים חיים
-    symbols = _pick_ws_symbols()
-    await launch_multi_websocket(symbols)
-    logging.info(f"[startup] WS launched for {len(symbols)} symbols")
+    try:
+        symbols = _pick_ws_symbols()
+        await launch_multi_websocket(symbols)
+        logging.info(f"[startup] WS launched for {len(symbols)} symbols")
+    except Exception as e:
+        logging.warning(f"[startup] launch_multi_websocket failed: {e}")
 
     # Auto Executor לפי ENV
-    if config.AUTO_RUN:
-        started = start_executor()
-        logging.info(f"[AUTO] Auto Executor started: {started}")
+    try:
+        if config.AUTO_RUN:
+            started = start_executor()
+            logging.info(f"[AUTO] Auto Executor started: {started}")
+    except Exception as e:
+        logging.warning(f"[startup] start_executor failed: {e}")
 
 @app.on_event("shutdown")
 async def _on_shutdown():
@@ -102,25 +127,72 @@ async def _on_shutdown():
     except Exception as e:
         logging.warning(f"[shutdown] stop_executor failed: {e}")
 
+# ---------- עזר: צילום קונפיג ללא סודות ----------
+def _config_snapshot() -> dict:
+    def _mask(s: str, keep: int = 4) -> str:
+        if not s:
+            return ""
+        s = str(s)
+        return s[:keep] + "…" if len(s) > keep else "*" * len(s)
+
+    snap = {
+        "version": APP_VERSION,
+        "auto_run": bool(getattr(config, "AUTO_RUN", True)),
+        "scan_interval": int(getattr(config, "SCAN_INTERVAL", 60)),
+        "min_quality_score": int(getattr(config, "MIN_QUALITY_SCORE", 6)),
+        "max_trade_budget": float(getattr(config, "MAX_TRADE_BUDGET", 100.0)),
+        "default_interval": str(getattr(config, "DEFAULT_INTERVAL", "15m")),
+        "min_volume": int(getattr(config, "MIN_VOLUME", 1_000_000)),
+        "top_symbols": int(getattr(config, "TOP_SYMBOLS", 30)),
+        "trending_only": bool(getattr(config, "TRENDING_ONLY", True)),
+        "price_protect_pct": float(getattr(config, "PRICE_PROTECT_PCT", 0.10)),
+        "price_max_age_sec": int(getattr(config, "PRICE_MAX_AGE_SEC", 10)),
+        "port": int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))),
+        "openai_model": str(getattr(config, "OPENAI_MODEL", "gpt-4o-mini")),
+        "openai_timeout_seconds": float(getattr(config, "OPENAI_TIMEOUT_SECONDS", 30.0)),
+        "openai_max_concurrency": int(getattr(config, "OPENAI_MAX_CONCURRENCY", 4)),
+        "openai_base_url_set": bool(bool(getattr(config, "OPENAI_BASE_URL", ""))),
+        "binance_exchange_info_on_start": bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False)),
+        "binance_backoff_base": float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7)),
+        "binance_max_retries": int(getattr(config, "BINANCE_MAX_RETRIES", 5)),
+        # חיווי לא חושף סודות:
+        "has_openai_key": bool(bool(getattr(config, "OPENAI_API_KEY", ""))),
+        "has_binance_key": bool(bool(getattr(config, "BINANCE_API_KEY", ""))),
+        "binance_key_prefix": _mask(getattr(config, "BINANCE_API_KEY", "")),
+    }
+    return snap
+
 # ---------- ראוטים ----------
 @app.get("/", tags=["Config"])
 async def root_status():
     return {
         "status": "ok",
         "version": APP_VERSION,
-        "auto_run": bool(config.AUTO_RUN),
-        "scan_interval": int(config.SCAN_INTERVAL),
-        "min_quality": int(config.MIN_QUALITY_SCORE),
-        "port": int(config.PORT),
+        "auto_run": bool(getattr(config, "AUTO_RUN", True)),
+        "scan_interval": int(getattr(config, "SCAN_INTERVAL", 60)),
+        "min_quality": int(getattr(config, "MIN_QUALITY_SCORE", 6)),
+        "port": int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))),
     }
 
 @app.get("/health", tags=["Config"])
 async def health():
     return {"ok": True, "version": APP_VERSION}
 
+@app.get("/ai/health", tags=["Config"])
+async def ai_health():
+    """
+    בדיקת חיבור ולטנסי ל-GPT (עם timeouts/ריטריי לפי utils.ai_client).
+    """
+    res = await ai_healthcheck()
+    code = 200 if res.get("ok") else 503
+    if not res.get("ok"):
+        # לא מפילים את השרת — רק יחזיר 503 כדי שתוכל לנטר.
+        logging.warning(f"[ai_health] failed: {res}")
+    return res if code == 200 else HTTPException(status_code=503, detail=res)
+
 @app.get("/config", tags=["Config"], dependencies=[Depends(verify_token)])
 async def get_config():
-    return config.as_dict()  # ללא סודות
+    return _config_snapshot()  # ללא סודות
 
 @app.get("/auto/status", tags=["Auto"], dependencies=[Depends(verify_token)])
 def auto_status():
@@ -149,7 +221,7 @@ async def place_trade(trade: TradeRequest):
     entry = trade.entry
     if entry is None:
         live = await get_price(symbol)
-        if not live or not is_price_fresh(symbol, max_age_sec=config.PRICE_MAX_AGE_SEC):
+        if not live or not is_price_fresh(symbol, max_age_sec=getattr(config, "PRICE_MAX_AGE_SEC", 10)):
             raise HTTPException(status_code=503, detail=f"Live price unavailable or stale for {symbol}")
         entry = float(live)
 
@@ -196,7 +268,8 @@ async def scan_multi(
 # הרצה לוקאלית (ב-Render לא רלוונטי; שם gunicorn/uvicorn worker מריץ)
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(config.PORT))
+    uvicorn.run(app, host="0.0.0.0", port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))))
+
 
 
 
