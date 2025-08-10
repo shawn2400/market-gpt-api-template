@@ -26,7 +26,7 @@ def _normalize_direction(val: Any) -> str:
 def _dedup_upper(seq: Sequence[str]) -> List[str]:
     seen = set()
     out: List[str] = []
-    for s in seq:
+    for s in seq or []:
         u = str(s).upper()
         if u and u not in seen:
             seen.add(u)
@@ -188,26 +188,29 @@ async def multi_tf_scan_with_ai(
 
         def _fallback() -> Dict:
             direction = _normalize_direction(data[-1].get("direction"))
+            frames_list = _dedup_upper([str(d.get("interval", "")).strip() for d in data if d.get("interval")])
             return {
                 "symbol": sym,
                 "direction": direction,
                 "quality_score": round(avg_q, 2),
                 "signal": "BUY" if direction == "LONG" else "SELL",
                 "confidence": 50.0,
-                "frames": [d.get("interval") for d in data],
+                "frames": frames_list,
                 "details": data,
             }
 
         # ולידציה של תוצאת ה-AI והשלמת שדות
         if not isinstance(ai, dict):
             logging.warning(f"[multi_tf_scanner] AI analysis result not dict for {sym}: {ai}")
-            final.append(_fallback()); continue
+            final.append(_fallback())
+            continue
 
         if ai.get("error"):
             logging.warning(f"[multi_tf_scanner] AI analysis error for {sym}: {ai.get('error')}")
             out = _fallback()
             out["error"] = ai.get("error")
-            final.append(out); continue
+            final.append(out)
+            continue
 
         out = dict(ai)
         out["symbol"] = sym
@@ -215,7 +218,7 @@ async def multi_tf_scan_with_ai(
         sig = str(out.get("signal", "HOLD")).upper()
         out["signal"] = sig if sig in ("BUY", "SELL", "HOLD") else "HOLD"
         out["quality_score"] = float(out.get("quality_score", avg_q) or avg_q)
-        out["frames"] = out.get("frames") or [d.get("interval") for d in data]
+        out["frames"] = out.get("frames") or _dedup_upper([str(d.get("interval", "")).strip() for d in data if d.get("interval")])
         out["details"] = out.get("details") or data
 
         final.append(out)
@@ -223,6 +226,7 @@ async def multi_tf_scan_with_ai(
     # 6) מיון והחזרה
     final.sort(key=lambda x: float(x.get("quality_score", 0) or 0), reverse=True)
     return final[:top_n]
+
 
 
 
