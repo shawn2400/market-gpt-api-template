@@ -45,7 +45,8 @@ def _norm_symbols(symbols: Iterable[str]) -> List[str]:
         if not u:
             continue
         if u not in seen:
-            seen.add(u); out.append(u)
+            seen.add(u)
+            out.append(u)
     # הקפאת כמות סטרימים בהתאם למגבלה (בטיחות)
     if len(out) > MAX_STREAMS_PER_CONN:
         logging.warning(f"[ws_fallback] truncating streams from {len(out)} to {MAX_STREAMS_PER_CONN}")
@@ -76,7 +77,7 @@ def _parse_retry_after(resp: requests.Response) -> Optional[int]:
     return None
 
 def _note_rest_ban(resp: Optional[requests.Response] = None):
-    """ מעדכן את חלון ה־cooldown עבור REST לפי Retry-After (אם קיים) או דיפולט. """
+    """מעדכן את חלון ה־cooldown עבור REST לפי Retry-After (אם קיים) או דיפולט."""
     global _last_rest_ban_until_ts
     cooldown = _default_cooldown_sec
     if isinstance(resp, requests.Response):
@@ -303,7 +304,15 @@ def _handle_rest_response_for_ban(resp: requests.Response) -> bool:
         return True
     return False
 
-def _rest_futures_price(symbol: str, timeout: float = 5.0, retries: int = 3, backoff: float = 0.6) -> Optional[float]:
+def _rest_futures_price(
+    symbol: str,
+    timeout: float = 5.0,
+    retries: int = 3,
+    backoff: float = 0.6,
+) -> Optional[float]:
+    """
+    סינכרוני (לקריאה מתוך thread). אל תקרא ישירות מתוך async; השתמש ב-asyncio.to_thread.
+    """
     if not _rest_allowed():
         logging.info("[ws_fallback] REST price skipped due to active cooldown")
         return None
@@ -323,12 +332,15 @@ def _rest_futures_price(symbol: str, timeout: float = 5.0, retries: int = 3, bac
             if r.status_code in (500, 502, 503, 504):
                 d = min(10.0, backoff * (2 ** attempt))
                 logging.warning(f"[ws_fallback] REST price {symbol} http={r.status_code} → sleep {d:.2f}s")
-                time.sleep(d); last = r.text; continue
+                time.sleep(d)  # OK כאן: רץ בתוך thread
+                last = r.text
+                continue
             r.raise_for_status()
         except Exception as e:
             d = min(10.0, backoff * (2 ** attempt))
             logging.warning(f"[ws_fallback] REST price network err (attempt {attempt+1}/{retries+1}) {symbol}: {e} → {d:.2f}s")
-            time.sleep(d); last = e
+            time.sleep(d)  # OK כאן: רץ בתוך thread
+            last = e
     if last:
         logging.error(f"[ws_fallback] REST price failed for {symbol}: {last}")
     return None
@@ -337,18 +349,25 @@ async def get_price_smart(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -
     """
     מחזיר מחיר WS אם טרי; אחרת ינסה REST (אם אין cooldown/ban פעיל).
     בזמן באן (418/429/403/503) הפונקציה תחזיר None במקום להחמיר את המצב.
+    חשוב: REST מבוצע ב-thread כדי לא לחסום את event loop.
     """
     p = await get_price(symbol)
     if p is not None and is_price_fresh(symbol, max_age_sec=max_age_sec):
         return p
-    # fallback ל-REST (אם מותר כרגע)
-    return _rest_futures_price(symbol)
+    # fallback ל-REST (אם מותר כרגע) — הרצה ב-thread כדי למנוע חסימה
+    return await asyncio.to_thread(_rest_futures_price, symbol)
 
 # ---------- REST snapshot (סינכרוני) ל-klines עבור גיבוי מהיר ----------
 def _rest_klines(
-    market: str, symbol: str, interval: str, limit: int = 120,
-    start_time: Optional[int] = None, end_time: Optional[int] = None,
-    timeout: float = 10.0, retries: int = 3, backoff: float = 0.6
+    market: str,
+    symbol: str,
+    interval: str,
+    limit: int = 120,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    timeout: float = 10.0,
+    retries: int = 3,
+    backoff: float = 0.6,
 ):
     if not _rest_allowed():
         logging.info("[ws_fallback] REST klines skipped due to active cooldown")
@@ -359,8 +378,10 @@ def _rest_klines(
     url = base + path
 
     params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
-    if start_time: params["startTime"] = int(start_time)
-    if end_time:   params["endTime"] = int(end_time)
+    if start_time:
+        params["startTime"] = int(start_time)
+    if end_time:
+        params["endTime"] = int(end_time)
 
     last = None
     for attempt in range(retries + 1):
@@ -373,14 +394,14 @@ def _rest_klines(
             if r.status_code in (500, 502, 503, 504):
                 d = min(10.0, backoff * (2 ** attempt))
                 logging.warning(f"[ws_fallback] REST klines {symbol}@{interval} http={r.status_code} → sleep {d:.2f}s")
-                time.sleep(d)
+                time.sleep(d)  # סינכרוני ומותר (מיועד להרצה ב-thread אם צריך)
                 last = r.text
                 continue
             r.raise_for_status()
         except Exception as e:
             d = min(10.0, backoff * (2 ** attempt))
             logging.warning(f"[ws_fallback] REST klines network err (attempt {attempt+1}/{retries+1}) {symbol}@{interval}: {e} → {d:.2f}s")
-            time.sleep(d)
+            time.sleep(d)  # סינכרוני ומותר
             last = e
     if last:
         logging.error(f"[ws_fallback] REST klines failed for {symbol}@{interval}: {last}")
@@ -396,6 +417,7 @@ def snapshot_klines_df(
     גיבוי מהיר לקריאת klines בלי תלות ב־python-binance.
     מחזיר DataFrame עם timestamp/open/high/low/close/volume (UTC index).
     בזמן באן פעיל יחזיר DataFrame ריק כדי לא לייצר עוד נסיונות REST.
+    הערה: הפונקציה סינכרונית. אם תקרא אותה מתוך async — הרץ דרך asyncio.to_thread.
     """
     try:
         raw = _rest_klines(market_type, symbol, interval, limit=limit)
@@ -420,6 +442,7 @@ def snapshot_klines_df(
     except Exception as e:
         logging.error(f"[ws_fallback] snapshot_klines_df error {symbol}@{interval}: {e}")
         return pd.DataFrame()
+
 
 
 
