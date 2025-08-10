@@ -1,9 +1,8 @@
-# main.py
 import os
 import logging
 from typing import Optional, List
 
-from fastapi import FastAPI, Depends, HTTPException, Security, status
+from fastapi import FastAPI, Depends, HTTPException, Security, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -19,6 +18,7 @@ from utils.watchlist_utils import load_watchlist
 from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
 from utils.trending_utils import get_trending_symbols
 from utils.binance_client import ping_and_info
+from utils.binance_trader import get_symbol_filters  # ← חדש לדיבוג פילטרים
 
 # === AI health (SDK) ===
 from utils.ai_client import ai_healthcheck
@@ -59,7 +59,7 @@ else:
     _allow_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -281,10 +281,26 @@ async def scan_multi(
     )
     return {"results": results}
 
-# הרצה לוקאלית (ב-Render לא רלוונטי; שם gunicorn/uvicorn worker מריץ)
+# --- דיבוג פילטרים: REST/Fallback מקור ---
+@app.get("/symbols/filters", tags=["Debug"], dependencies=[Depends(verify_token)])
+def symbol_filters(symbol: str = Query(..., description="למשל BTCUSDT")):
+    f = get_symbol_filters(symbol)
+    return {
+        "symbol": symbol.upper(),
+        "filters": {
+            "tickSize": f.get("tickSize"),
+            "stepSize": f.get("stepSize"),
+            "minQty": f.get("minQty"),
+            "minNotional": f.get("minNotional"),
+        },
+        "source": f.get("_source", "unknown")
+    }
+
+# הרצה לוקאלית
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))))
+
 
 
 
