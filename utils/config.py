@@ -1,155 +1,90 @@
 # utils/config.py
-# מקור אמת אחיד לכל ההגדרות. קורא מ-OS (Render) ורק משלים מ-.env בלוקאל (לא דורס).
 import os
-import json
-import logging
-from dotenv import load_dotenv
 
-# אל תדרוס משתני OS: בלוקאל ימלא חסרים מ-.env, בענן לא ישפיע.
-load_dotenv(override=False)
+def _b(s: str, default: bool=False) -> bool:
+    v = (os.getenv(s, str(default)).strip().lower())
+    return v in ("1", "true", "yes", "y", "on")
 
-def _env_bool(key: str, default: bool = False) -> bool:
-    v = str(os.environ.get(key, str(default))).strip().lower()
-    return v in ("1", "true", "yes", "on")
-
-def _env_int(key: str, default: int) -> int:
+def _i(s: str, default: int=0) -> int:
     try:
-        return int(os.environ.get(key, str(default)))
-    except Exception:
-        return int(default)
-
-def _env_float(key: str, default: float) -> float:
-    try:
-        return float(os.environ.get(key, str(default)))
-    except Exception:
-        return float(default)
-
-def _env_list(key: str, default):
-    raw = os.environ.get(key)
-    if not raw:
-        return default
-    try:
-        # תומך גם ב־JSON וגם בפורמט מופרד בפסיקים
-        if raw.strip().startswith("["):
-            return json.loads(raw)
-        return [x.strip() for x in raw.split(",") if x.strip()]
+        return int(os.getenv(s, str(default)).strip())
     except Exception:
         return default
 
-def _mask(s: str, keep: int = 4) -> str:
-    if not s:
-        return ""
-    s = str(s)
-    if len(s) <= keep:
-        return "*" * len(s)
-    return s[:keep] + "…" + "*" * max(0, len(s) - keep - 1)
+def _f(s: str, default: float=0.0) -> float:
+    try:
+        return float(os.getenv(s, str(default)).strip())
+    except Exception:
+        return default
 
-# === Binance / Networking ===
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "").strip()
-BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET", "").strip()
-BINANCE_EXCHANGE_INFO_ON_START = _env_bool("BINANCE_EXCHANGE_INFO_ON_START", False)
-BINANCE_BACKOFF_BASE = _env_float("BINANCE_BACKOFF_BASE", 0.7)
-BINANCE_MAX_RETRIES = _env_int("BINANCE_MAX_RETRIES", 5)
+def _s(s: str, default: str="") -> str:
+    return os.getenv(s, default).strip()
 
-# כתובות HTTP/WS ברירת מחדל
-BINANCE_FUTURES_HTTP_BASE = os.environ.get("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
-BINANCE_SPOT_HTTP_BASE    = os.environ.get("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
+# === כללי ===
+AUTO_RUN                 = _b("AUTO_RUN", True)
+SCAN_INTERVAL            = _i("SCAN_INTERVAL", 60)
+DEFAULT_INTERVAL         = _s("DEFAULT_INTERVAL", "15m")
+MIN_QUALITY_SCORE        = _i("MIN_QUALITY_SCORE", 6)
+MAX_TRADE_BUDGET         = _f("MAX_TRADE_BUDGET", 100.0)
+MIN_VOLUME               = _i("MIN_VOLUME", 1_000_000)
+TOP_SYMBOLS              = _i("TOP_SYMBOLS", 30)
+TRENDING_ONLY            = _b("TRENDING_ONLY", True)
+PORT                     = _i("PORT", 8000)
 
-BINANCE_FUTURES_WS_BASE   = os.environ.get("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com").strip()
-BINANCE_SPOT_WS_BASE      = os.environ.get("BINANCE_SPOT_WS_BASE", "wss://stream.binance.com:9443").strip()
-# שני השירותים משתמשים באותו סיומת מולטיסטרים
-BINANCE_WS_STREAM_SUFFIX  = os.environ.get("BINANCE_WS_STREAM_SUFFIX", "/stream?streams=").strip()
+# === Price guard / WS ===
+PRICE_PROTECT_PCT        = _f("PRICE_PROTECT_PCT", 0.25)  # % סטייה מקסימלית
+PRICE_MAX_AGE_SEC        = _i("PRICE_MAX_AGE_SEC", 10)
+
+# === Binance ===
+BINANCE_API_KEY          = _s("BINANCE_API_KEY")
+BINANCE_API_SECRET       = _s("BINANCE_API_SECRET")
+BINANCE_SPOT_HTTP_BASE   = _s("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
+BINANCE_FUTURES_HTTP_BASE= _s("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+BINANCE_BACKOFF_BASE     = _f("BINANCE_BACKOFF_BASE", 0.7)
+BINANCE_MAX_RETRIES      = _i("BINANCE_MAX_RETRIES", 5)
+BINANCE_EXCHANGE_INFO_ON_START = _b("BINANCE_EXCHANGE_INFO_ON_START", False)
+BINANCE_RECV_WINDOW      = _i("BINANCE_RECV_WINDOW", 10000)
+BINANCE_TIME_SYNC_INTERVAL_SEC = _i("BINANCE_TIME_SYNC_INTERVAL_SEC", 900)
+
+# בקרות רגישות לסביבת ריידיר/אלוליסט
+BINANCE_ALLOWED_EGRESS_IPS      = _s("BINANCE_ALLOWED_EGRESS_IPS", "")
+EGRESS_IP_ENDPOINT              = _s("EGRESS_IP_ENDPOINT", "")
+
+# מצב חשבון
+BINANCE_FORCE_HEDGE_MODE        = (
+    True if _s("BINANCE_FORCE_HEDGE_MODE", "").lower() == "true"
+    else False if _s("BINANCE_FORCE_HEDGE_MODE", "").lower() == "false"
+    else None
+)
+BINANCE_SKIP_ACCOUNT_MUTATIONS  = _b("BINANCE_SKIP_ACCOUNT_MUTATIONS", False)
+MAX_LEVERAGE                    = _i("MAX_LEVERAGE", 35)
 
 # === OpenAI ===
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL   = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
-OPENAI_TIMEOUT_SECONDS  = _env_float("OPENAI_TIMEOUT_SECONDS", 30.0)
-OPENAI_MAX_CONCURRENCY  = _env_int("OPENAI_MAX_CONCURRENCY", 4)
-OPENAI_BASE_URL         = os.environ.get("OPENAI_BASE_URL", "").strip() or None
-# פרוקסי נלקח ע"י httpx מ-HTTP(S)_PROXY אם יוגדר — לא צריך כאן משתנה נפרד.
+OPENAI_API_KEY           = _s("OPENAI_API_KEY")
+OPENAI_MODEL             = _s("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TIMEOUT_SECONDS   = _f("OPENAI_TIMEOUT_SECONDS", 30.0)
+OPENAI_MAX_CONCURRENCY   = _i("OPENAI_MAX_CONCURRENCY", 4)
+OPENAI_BASE_URL          = _s("OPENAI_BASE_URL", "")
 
-# === Trading / Executor ===
-AUTO_RUN = _env_bool("AUTO_RUN", True)
-SCAN_INTERVAL = _env_int("SCAN_INTERVAL", 60)
-MIN_QUALITY_SCORE = _env_int("MIN_QUALITY_SCORE", 6)
-MAX_TRADE_BUDGET = _env_float("MAX_TRADE_BUDGET", 100.0)
-DEFAULT_INTERVAL = os.environ.get("DEFAULT_INTERVAL", "15m").strip()
-MIN_VOLUME = _env_int("MIN_VOLUME", 1_000_000)
-TOP_SYMBOLS = _env_int("TOP_SYMBOLS", 30)
-TRENDING_ONLY = _env_bool("TRENDING_ONLY", True)
-
-PRICE_PROTECT_PCT = _env_float("PRICE_PROTECT_PCT", 0.10)
-PRICE_MAX_AGE_SEC = _env_int("PRICE_MAX_AGE_SEC", 10)
-
-# --- SL/TP (אופציונלי; לשימוש אם נרצה לשלוט בלי לשנות קוד) ---
-SLTP_MIN_PCT_FLOOR = _env_float("SLTP_MIN_PCT_FLOOR", 0.003)   # 0.3% ל-SL
-SLTP_TP_PCT_FLOOR  = _env_float("SLTP_TP_PCT_FLOOR",  0.006)   # 0.6% ל-TP
-SLTP_ATR_SL_MULT   = _env_float("SLTP_ATR_SL_MULT",   1.5)
-SLTP_ATR_TP_MULT   = _env_float("SLTP_ATR_TP_MULT",   2.5)
-
-# === Server / Security ===
-PORT = _env_int("PORT", int(os.environ.get("PORT", "8000")))
-API_BEARER_TOKEN = os.environ.get("API_BEARER_TOKEN", "secret-token").strip()
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-CORS_ALLOW_ORIGINS = _env_list("CORS_ALLOW_ORIGINS", ["*"])
+# === אבטחה / API ===
+API_BEARER_TOKEN         = _s("API_BEARER_TOKEN", "secret-token")
 
 def log_config_summary():
-    logging.info(
-        "[config] EX_INFO_ON_START=%s | BACKOFF_BASE=%.2f | MAX_RETRIES=%d | "
-        "SCAN_INTERVAL=%d | MIN_QUALITY_SCORE=%d | MAX_TRADE_BUDGET=%.2f | MODEL=%s | PORT=%d",
-        BINANCE_EXCHANGE_INFO_ON_START,
-        BINANCE_BACKOFF_BASE,
-        BINANCE_MAX_RETRIES,
-        SCAN_INTERVAL,
-        MIN_QUALITY_SCORE,
-        MAX_TRADE_BUDGET,
-        OPENAI_MODEL,
-        PORT,
-    )
-    if BINANCE_API_KEY:
-        logging.info("[config] Binance key prefix=%s", _mask(BINANCE_API_KEY, keep=4))
-    if OPENAI_API_KEY:
-        logging.info("[config] OpenAI key prefix=%s", _mask(OPENAI_API_KEY, keep=4))
-    logging.info(
-        "[config] WS bases: futures=%s | spot=%s | suffix=%s",
-        BINANCE_FUTURES_WS_BASE, BINANCE_SPOT_WS_BASE, BINANCE_WS_STREAM_SUFFIX
-    )
-    logging.info(
-        "[config] SLTP floors/mults: SL%%=%.4f | TP%%=%.4f | ATR_SL=%.2f | ATR_TP=%.2f",
-        SLTP_MIN_PCT_FLOOR, SLTP_TP_PCT_FLOOR, SLTP_ATR_SL_MULT, SLTP_ATR_TP_MULT
-    )
-
-def as_dict():
-    """קונפיג 'ציבורי' ללא סודות, עבור /config."""
-    return {
-        "auto_run": AUTO_RUN,
-        "scan_interval": SCAN_INTERVAL,
-        "min_quality_score": MIN_QUALITY_SCORE,
-        "max_trade_budget": MAX_TRADE_BUDGET,
-        "default_interval": DEFAULT_INTERVAL,
-        "min_volume": MIN_VOLUME,
-        "top_symbols": TOP_SYMBOLS,
-        "trending_only": TRENDING_ONLY,
-        "price_protect_pct": PRICE_PROTECT_PCT,
-        "price_max_age_sec": PRICE_MAX_AGE_SEC,
-        "port": PORT,
-        "log_level": LOG_LEVEL,
-        "openai_model": OPENAI_MODEL,
-        "openai_timeout_seconds": OPENAI_TIMEOUT_SECONDS,
-        "openai_max_concurrency": OPENAI_MAX_CONCURRENCY,
-        "openai_base_url_custom": bool(OPENAI_BASE_URL),
-        "binance_futures_http_base": BINANCE_FUTURES_HTTP_BASE,
-        "binance_spot_http_base": BINANCE_SPOT_HTTP_BASE,
-        "binance_futures_ws_base": BINANCE_FUTURES_WS_BASE,
-        "binance_spot_ws_base": BINANCE_SPOT_WS_BASE,
-        "binance_ws_stream_suffix": BINANCE_WS_STREAM_SUFFIX,
-        "cors_allow_origins": CORS_ALLOW_ORIGINS,
-        # תוספות SL/TP לצפייה ב-/config
-        "sltp_min_pct_floor": SLTP_MIN_PCT_FLOOR,
-        "sltp_tp_pct_floor": SLTP_TP_PCT_FLOOR,
-        "sltp_atr_sl_mult": SLTP_ATR_SL_MULT,
-        "sltp_atr_tp_mult": SLTP_ATR_TP_MULT,
-    }
+    mask = lambda x: (x[:4] + "…") if x and len(x) > 4 else ("*" * len(x))
+    print("[CFG] auto_run=", AUTO_RUN,
+          "| scan_interval=", SCAN_INTERVAL,
+          "| default_interval=", DEFAULT_INTERVAL,
+          "| min_quality=", MIN_QUALITY_SCORE,
+          "| max_budget=", MAX_TRADE_BUDGET,
+          "| ws_max_age=", PRICE_MAX_AGE_SEC,
+          "| price_protect%=", PRICE_PROTECT_PCT,
+          "| top_symbols=", TOP_SYMBOLS,
+          "| trending_only=", TRENDING_ONLY,
+          "| binance_keys=", bool(BINANCE_API_KEY), "/", bool(BINANCE_API_SECRET),
+          "| binance_key_prefix=", mask(BINANCE_API_KEY),
+          "| recvWindow=", BINANCE_RECV_WINDOW,
+          "| hedge_mode=", BINANCE_FORCE_HEDGE_MODE,
+          "| skip_mutations=", BINANCE_SKIP_ACCOUNT_MUTATIONS)
 
 
 
