@@ -1,26 +1,41 @@
 # utils/trending_utils.py
 import logging
-from typing import List
+from typing import List, Optional
+import time
 import requests
 
-BINANCE_FUTURES_24H = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-BINANCE_SPOT_24H = "https://api.binance.com/api/v3/ticker/24hr"
+from utils import config
 
-def _fetch_24h(url: str, timeout: float = 8.0) -> list:
-    try:
-        r = requests.get(url, timeout=timeout)
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, list):
-            return data
-        return []
-    except Exception as e:
-        logging.warning(f"[trending] fetch 24h failed: {e}")
-        return []
+BINANCE_FUTURES_24H = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com") + "/fapi/v1/ticker/24hr"
+BINANCE_SPOT_24H    = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com") + "/api/v3/ticker/24hr"
+
+_UA = {"User-Agent": "AlgoGPT/2 (Render) trending_utils", "Accept": "application/json"}
+
+def _fetch_24h(url: str, timeout: float = 8.0, retries: int = 3, backoff: float = 0.6) -> list:
+    last_err: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, timeout=timeout, headers=_UA)
+            if r.status_code == 200:
+                data = r.json()
+                return data if isinstance(data, list) else []
+            if r.status_code in (403, 418, 429, 503):
+                d = min(10.0, backoff * (2 ** attempt))
+                logging.warning(f"[trending] http={r.status_code} {url} → sleep {d:.2f}s")
+                time.sleep(d); continue
+            r.raise_for_status()
+        except Exception as e:
+            last_err = e
+            d = min(10.0, backoff * (2 ** attempt))
+            logging.warning(f"[trending] fetch failed (attempt {attempt+1}/{retries+1}) {url}: {e} → {d:.2f}s")
+            time.sleep(d)
+    if last_err:
+        logging.warning(f"[trending] final failure: {last_err}")
+    return []
 
 def _pick_usdt_symbols(rows: list, top_n: int) -> List[str]:
     """
-    בוחר USDT בלבד, לפי quoteVolume/volume, מסנן נזילות נמוכה.
+    בוחר USDT בלבד, לפי quoteVolume/price חיוביים, מסנן נזילות נמוכה.
     """
     scored = []
     for row in rows:
@@ -28,7 +43,6 @@ def _pick_usdt_symbols(rows: list, top_n: int) -> List[str]:
             sym = str(row.get("symbol", "")).upper()
             if not sym.endswith("USDT"):
                 continue
-            # ב־Futures יש "quoteVolume"; ב־Spot גם.
             qv = float(row.get("quoteVolume") or 0.0)
             price = float(row.get("lastPrice") or 0.0)
             if qv <= 0 or price <= 0:
@@ -37,19 +51,17 @@ def _pick_usdt_symbols(rows: list, top_n: int) -> List[str]:
         except Exception:
             continue
     scored.sort(key=lambda x: x[1], reverse=True)
-    # שמור על ייחוד
     out, seen = [], set()
     for sym, _ in scored:
         if sym not in seen:
-            seen.add(sym)
-            out.append(sym)
+            seen.add(sym); out.append(sym)
         if len(out) >= top_n:
             break
     return out
 
 def get_trending_symbols(source: str = "binance24h", market: str = "futures", top_n: int = 30) -> List[str]:
     """
-    מחזיר רשימת סימבולים טרנדיים. סינכרוני (תואם לשימוש הנוכחי).
+    מחזיר רשימת סימבולים טרנדיים. סינכרוני.
     source: "binance24h" (מומלץ), "spot24h"
     """
     rows = []
@@ -65,6 +77,7 @@ def get_trending_symbols(source: str = "binance24h", market: str = "futures", to
         logging.warning("[trending] fallback symbols used")
         syms = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
     return syms
+
 
 
 
