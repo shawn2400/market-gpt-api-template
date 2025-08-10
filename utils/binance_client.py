@@ -1,122 +1,219 @@
-# utils/binance_client.py
-import os, time, random, logging
-import requests
-from binance.client import Client
-from binance.exceptions import BinanceAPIException, BinanceRequestException
-import requests.exceptions
+# utils/binance_trader.py
+import math
+import logging
+from typing import Dict, Any
 
+from utils.binance_client import get_client, futures_exchange_info_safe, retry_call
 from utils import config
 
-API_KEY = (config.BINANCE_API_KEY or "").strip()
-API_SECRET = (config.BINANCE_API_SECRET or "").strip()
-EXCHANGE_INFO_ON_START = bool(config.BINANCE_EXCHANGE_INFO_ON_START)
-_BASE_BACKOFF = float(config.BINANCE_BACKOFF_BASE)
-_MAX_RETRIES = int(config.BINANCE_MAX_RETRIES)
+_client = get_client()
 
-# ---- Session עם User-Agent וטיים-אאוטים ----
-_session = requests.Session()
-_session.headers.update({"User-Agent": "AlgoGPT/1.0 (+render) python-binance"})
-_requests_params = {"timeout": 10}
+# Cache לפילטרים לכל סימבול
+_SYMBOL_FILTERS_CACHE: dict[str, dict] = {}
 
-def _make_client():
-    # שים לב: לא מעבירים session= בבנאי (גרסאות רבות לא תומכות)
-    if API_KEY and API_SECRET:
-        logging.info("[Binance] 🔑 מפתחות נמצאו – מנסה להתחבר…")
-        c = Client(API_KEY, API_SECRET, tld="com", requests_params=_requests_params)
-    else:
-        logging.warning("[Binance] ללא מפתחות – מצב Public-Only (klines בלבד).")
-        c = Client(None, None, tld="com", requests_params=_requests_params)
-
-    # הצמדה ידנית של ה-Session המוגדר שלנו (UA/connection pooling)
+def _to_float(x, default: float = 0.0) -> float:
     try:
-        c.session = _session  # שימוש ישיר בסשן שלנו
-    except Exception as e:
-        logging.debug(f"[Binance] could not attach custom session: {e}")
-
-    # ודא בסיס Futures
-    try:
-        c.FUTURES_URL = "https://fapi.binance.com"
+        return float(x)
     except Exception:
-        pass
-    return c
+        return float(default)
 
-client = _make_client()
+def _floor_to_step(value: float, step: float, precision: int = 8) -> float:
+    step = float(step)
+    return round(math.floor(float(value) / step) * step, precision)
 
-def _retry_call(fn, *, name: str):
-    """
-    ריטריי אקספוננציאלי עם ג'יטר לקריאות בינאנס.
-    מטפל ב-403/CloudFront, RateLimit (-1003/-1015), 418/429/503 ושגיאות רשת.
-    """
-    last_exc = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            return fn()
-        except BinanceAPIException as e:
-            txt = str(e)
-            if e.status_code == 403 or "CloudFront" in txt or "Invalid JSON error message" in txt:
-                delay = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 0.35)
-                logging.warning(f"[Binance] 403/WAF {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → sleep {delay:.2f}s")
-                time.sleep(delay); last_exc = e; continue
-            if e.code in (-1003, -1015) or e.status_code in (418, 429, 503):
-                delay = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 0.35)
-                logging.warning(f"[Binance] RateLimit/API {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → sleep {delay:.2f}s")
-                time.sleep(delay); last_exc = e; continue
-            logging.error(f"[Binance] API error in {name}: code={e.code}, http={e.status_code}, msg={e.message}")
+def _ceil_to_step(value: float, step: float, precision: int = 8) -> float:
+    step = float(step)
+    return round(math.ceil(float(value) / step) * step, precision)
+
+def _round_to_tick(value: float, tick: float) -> float:
+    tick = float(tick)
+    return round(round(value / tick) * tick, 8)
+
+def _load_symbol_filters(symbol: str) -> dict:
+    sym = str(symbol).upper()
+    if sym in _SYMBOL_FILTERS_CACHE:
+        return _SYMBOL_FILTERS_CACHE[sym]
+
+    ei = futures_exchange_info_safe()
+    if not isinstance(ei, dict) or "symbols" not in ei:
+        raise RuntimeError("Cannot load futures exchange info (filters)")
+
+    meta = None
+    for s in ei["symbols"]:
+        if s.get("symbol") == sym:
+            meta = s
             break
-        except (BinanceRequestException, requests.exceptions.RequestException) as e:
-            delay = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 0.35)
-            logging.warning(f"[Binance] Network error {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → sleep {delay:.2f}s: {e}")
-            time.sleep(delay); last_exc = e; continue
-        except Exception as e:
-            logging.error(f"[Binance] Unexpected in {name}: {type(e).__name__}: {e}")
-            last_exc = e
-            break
-    if last_exc:
-        logging.error(f"[Binance] ❌ Exhausted retries for {name}: {last_exc}")
-    return None
+    if not meta:
+        raise ValueError(f"Symbol {sym} not found in exchange info")
 
-# חשיפה "פומבית" לשימוש ממודולים אחרים
-def retry_call(fn, *, name: str):
-    return _retry_call(fn, name=name)
+    price_filter = next((f for f in meta["filters"] if f["filterType"] == "PRICE_FILTER"), None)
+    lot_filter   = next((f for f in meta["filters"] if f["filterType"] == "LOT_SIZE"), None)
+    notion_filter = next((f for f in meta["filters"] if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL")), None)
 
-def ping_safe():
-    return _retry_call(lambda: client.ping(), name="ping")
+    tick_size = _to_float(price_filter.get("tickSize") if price_filter else "0.0001", 0.0001)
+    step_size = _to_float(lot_filter.get("stepSize") if lot_filter else "0.001", 0.001)
+    min_qty = _to_float(lot_filter.get("minQty") if lot_filter else "0.0", 0.0)
+    min_notional = 0.0
+    if notion_filter:
+        min_notional = _to_float(notion_filter.get("notional", notion_filter.get("minNotional", "0.0")), 0.0)
 
-def futures_exchange_info_safe():
-    return _retry_call(lambda: client.futures_exchange_info(), name="futures_exchange_info")
+    out = {
+        "tickSize": tick_size,
+        "stepSize": step_size,
+        "minQty": min_qty,
+        "minNotional": min_notional or 5.0,  # דיפולט שמרני
+    }
+    _SYMBOL_FILTERS_CACHE[sym] = out
+    return out
 
-def spot_exchange_info_safe():
-    return _retry_call(lambda: client.get_exchange_info(), name="spot_exchange_info")
+def _compute_qty(budget_usd: float, leverage: int, entry_price: float, step_size: float, min_qty: float) -> float:
+    notional = float(budget_usd) * int(leverage)
+    raw_qty = notional / float(entry_price)
+    qty = _floor_to_step(raw_qty, step_size, precision=8)
+    if qty < min_qty:
+        qty = _ceil_to_step(min_qty, step_size, precision=8)
+    return qty
 
-def get_client():
-    return client
+def _ensure_notional(qty: float, price: float, min_notional: float) -> bool:
+    return (float(qty) * float(price)) >= float(min_notional)
 
-def ping_and_info():
+def _side_for_entry(direction: str) -> str:
+    return "BUY" if (direction or "").upper() == "LONG" else "SELL"
+
+def _side_for_exit(direction: str) -> str:
+    return "SELL" if (direction or "").upper() == "LONG" else "BUY"
+
+async def binance_futures_trade(
+    symbol: str,
+    side: str,            # "LONG" / "SHORT"
+    entry: float,
+    sl: float,
+    tp: float,
+    leverage: int = 20,
+    budget: float = 100.0,
+    market_type: str = "futures",
+    margin_type: str = "ISOLATED",  # או "CROSSED"
+) -> Dict[str, Any]:
     """
-    בדיקת חיבור בהפעלה:
-    - לא מפילה את התהליך אם נכשל.
-    - מחזירה False אם ping נכשל אחרי ריטריי.
+    ביצוע טרייד USDT-M Futures:
+      - כניסה LIMIT (GTC) בלבד
+      - SL/TP כ-STOP/TAKE_PROFIT (Limit) עם reduceOnly
+      - עיגול לפי tick/step, בדיקות minQty/minNotional
     """
+    if market_type.lower() != "futures":
+        raise ValueError("Only futures market_type is supported.")
+
+    symbol = str(symbol).upper()
+    direction = (side or "").upper()
+    entry_price = float(entry)
+    stop_price = float(sl)
+    take_profit = float(tp)
+
+    # פילטרים
+    filters = _load_symbol_filters(symbol)
+    tick = filters["tickSize"]
+    step = filters["stepSize"]
+    min_qty = filters["minQty"]
+    min_notional = filters["minNotional"]
+
+    # מינוף/מצב מרג'ין (לא מפיל אם נכשל)
     try:
-        ok = ping_safe()
-        if ok is None:
-            logging.warning("[Binance] ⚠️ ping נכשל לאחר ריטריי – נמשיך והמודולים ינסו שוב לפי צורך.")
-            return False
-
-        if EXCHANGE_INFO_ON_START:
-            ei = futures_exchange_info_safe()
-            if isinstance(ei, dict):
-                logging.info(f"[Binance] ✅ חיבור פעיל (Futures symbols={len(ei.get('symbols', []))})")
-            else:
-                logging.warning("[Binance] ⚠️ דילוג futures_exchange_info בהפעלה (כשל זמני)")
-        else:
-            logging.info("[Binance] ✅ ping OK (דלג exchange_info בהפעלה)")
-        return True
+        retry_call(lambda: _client.futures_change_margin_type(symbol=symbol, marginType=margin_type), name="change_margin_type")
     except Exception as e:
-        logging.error(f"[Binance] API error during init: {e}")
-        return False
+        logging.debug(f"[trader] change_margin_type ignored: {e}")
+    try:
+        retry_call(lambda: _client.futures_change_leverage(symbol=symbol, leverage=int(leverage)), name="change_leverage")
+    except Exception as e:
+        logging.debug(f"[trader] change_leverage ignored: {e}")
 
-BINANCE_READY = ping_and_info()
+    # עיגול מחירים
+    entry_p = _round_to_tick(entry_price, tick)
+    sl_trigger = _round_to_tick(stop_price, tick)
+    tp_trigger = _round_to_tick(take_profit, tick)
+
+    # מחירי limit עבור ה-STOP/TP (שיתמלאו אחרי הטריגר)
+    if direction == "LONG":
+        sl_limit = _round_to_tick(max(sl_trigger - tick, tick), tick)
+        tp_limit = _round_to_tick(min(tp_trigger + tick, tp_trigger * 1.002), tick)
+    else:
+        sl_limit = _round_to_tick(min(sl_trigger + tick, sl_trigger * 1.002), tick)
+        tp_limit = _round_to_tick(max(tp_trigger - tick, tick), tick)
+
+    # כמות
+    qty = _compute_qty(budget_usd=budget, leverage=int(leverage), entry_price=entry_p, step_size=step, min_qty=min_qty)
+    if not _ensure_notional(qty, entry_p, min_notional):
+        qty2 = _ceil_to_step(min_notional / entry_p, step, precision=8)
+        if qty2 > qty:
+            qty = qty2
+    if qty < min_qty or qty <= 0:
+        raise ValueError(f"Qty below minimum after rounding: qty={qty}, min_qty={min_qty}")
+
+    entry_side = _side_for_entry(direction)
+    exit_side = _side_for_exit(direction)
+
+    # LIMIT כניסה
+    entry_order = retry_call(
+        lambda: _client.futures_create_order(
+            symbol=symbol,
+            side=entry_side,
+            type="LIMIT",
+            timeInForce="GTC",
+            quantity=qty,
+            price=entry_p,
+            reduceOnly=False
+        ),
+        name="entry_LIMIT"
+    )
+    if not isinstance(entry_order, dict) or "orderId" not in entry_order:
+        raise RuntimeError(f"Failed to place entry order: {entry_order}")
+
+    # STOP-LIMIT (SL)
+    sl_order = retry_call(
+        lambda: _client.futures_create_order(
+            symbol=symbol,
+            side=exit_side,
+            type="STOP",
+            timeInForce="GTC",
+            quantity=qty,
+            stopPrice=sl_trigger,
+            price=sl_limit,
+            reduceOnly=True,
+            workingType="CONTRACT_PRICE"
+        ),
+        name="stop_limit"
+    )
+    if not isinstance(sl_order, dict) or "orderId" not in sl_order:
+        raise RuntimeError(f"Failed to place STOP-LIMIT order: {sl_order}")
+
+    # TAKE_PROFIT-LIMIT (TP)
+    tp_order = retry_call(
+        lambda: _client.futures_create_order(
+            symbol=symbol,
+            side=exit_side,
+            type="TAKE_PROFIT",
+            timeInForce="GTC",
+            quantity=qty,
+            stopPrice=tp_trigger,
+            price=tp_limit,
+            reduceOnly=True,
+            workingType="CONTRACT_PRICE"
+        ),
+        name="tp_limit"
+    )
+    if not isinstance(tp_order, dict) or "orderId" not in tp_order:
+        raise RuntimeError(f"Failed to place TP-LIMIT order: {tp_order}")
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "direction": direction,
+        "leverage": int(leverage),
+        "qty": float(qty),
+        "entry": {"price": entry_p, "orderId": entry_order["orderId"], "clientOrderId": entry_order.get("clientOrderId")},
+        "sl":    {"trigger": sl_trigger, "limit": sl_limit, "orderId": sl_order["orderId"]},
+        "tp":    {"trigger": tp_trigger, "limit": tp_limit, "orderId": tp_order["orderId"]},
+    }
+
 
 
 
