@@ -1,6 +1,7 @@
 # utils/get_klines.py
 
 import time
+import random
 import logging
 from typing import Optional
 import pandas as pd
@@ -21,8 +22,8 @@ MAX_LIMIT = 1500  # תקרת בטיחות
 def _ensure_client():
     if _GLOBAL_CLIENT is not None:
         return _GLOBAL_CLIENT
-    # Fallback בטוח – Public בלבד (מספיק ל־klines)
-    c = _BinanceClient(None, None, tld="com")
+    # Fallback בטוח – Public בלבד (מספיק ל־klines) עם timeout סביר
+    c = _BinanceClient(None, None, tld="com", requests_params={"timeout": 10})
     c.FUTURES_URL = "https://fapi.binance.com"
     logging.warning("[get_klines] ⚠️ Binance client לא מאותחל – מפעיל Public-Only fallback.")
     return c
@@ -39,7 +40,8 @@ def _fetch_klines_with_retry(
     base_backoff: float = 0.6
 ):
     """
-    קריאת klines עם ריטריי אקספוננציאלי לשגיאות רשת/RateLimit.
+    קריאת klines עם ריטריי אקספוננציאלי לשגיאות רשת/RateLimit/403-WAF.
+    כולל ג'יטר כדי להפחית התנגשויות.
     """
     attempt = 0
     last_exc = None
@@ -63,23 +65,41 @@ def _fetch_klines_with_retry(
                 )
             else:
                 raise ValueError(f"Unsupported market_type: {market}")
+
         except (requests.exceptions.RequestException, BinanceRequestException) as e:
             last_exc = e
-            delay = base_backoff * (2 ** attempt)
-            logging.warning(f"[get_klines] 🌐 שגיאת רשת (attempt {attempt+1}/{max_retries+1}) עבור {symbol}@{interval}: {e}. ממתין {delay:.2f}s...")
+            delay = base_backoff * (2 ** attempt) + random.uniform(0, 0.35)
+            logging.warning(
+                f"[get_klines] 🌐 שגיאת רשת (attempt {attempt+1}/{max_retries+1}) עבור {symbol}@{interval}: {e}. "
+                f"ממתין {delay:.2f}s..."
+            )
             time.sleep(delay)
             attempt += 1
+
         except BinanceAPIException as e:
             last_exc = e
-            # קודי Rate Limit/זמנית – כדאי לנסות שוב
-            if e.code in (-1003, -1015) or e.status_code in (418, 429, 503):
-                delay = base_backoff * (2 ** attempt)
-                logging.warning(f"[get_klines] ⏳ RateLimit/API (attempt {attempt+1}/{max_retries+1}) עבור {symbol}@{interval}: {e}. ממתין {delay:.2f}s...")
+            msg = f"{e}"
+            # זמני/נפוץ: 403 (CloudFront/WAF), 418/429/503, RateLimit (-1003/-1015) או invalid JSON HTML
+            if (
+                getattr(e, "status_code", None) in (403, 418, 429, 503)
+                or getattr(e, "code", None) in (-1003, -1015)
+                or "CloudFront" in msg
+                or "Invalid JSON error message" in msg
+            ):
+                delay = base_backoff * (2 ** attempt) + random.uniform(0, 0.35)
+                logging.warning(
+                    f"[get_klines] ⏳ זמני/חסימה (attempt {attempt+1}/{max_retries+1}) עבור {symbol}@{interval}: "
+                    f"http={getattr(e, 'status_code', '?')} code={getattr(e, 'code', '?')} → {delay:.2f}s"
+                )
                 time.sleep(delay)
                 attempt += 1
             else:
-                logging.error(f"[get_klines] ❌ BinanceAPIException לא ניתן לשחזור עבור {symbol}@{interval}: code={e.code}, msg={e.message}")
+                logging.error(
+                    f"[get_klines] ❌ BinanceAPIException לא ניתן לשחזור עבור {symbol}@{interval}: "
+                    f"code={e.code}, http={e.status_code}, msg={e.message}"
+                )
                 raise
+
         except Exception as e:
             last_exc = e
             logging.error(f"[get_klines] ❌ חריגה לא צפויה בשליפת klines עבור {symbol}@{interval}: {type(e).__name__}: {e}")
@@ -154,9 +174,7 @@ def get_klines(
             "timestamp", "open", "high", "low", "close", "volume",
             "close_time", "quote_asset_volume", "number_of_trades",
             "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
-        ])[
-            ["timestamp", "open", "high", "low", "close", "volume"]
-        ].copy()
+        ])[["timestamp", "open", "high", "low", "close", "volume"]].copy()
 
         # טיפוסי נתונים וניקוי
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
@@ -195,6 +213,7 @@ def get_klines(
     except Exception as e:
         logging.error(f"[get_klines] ❌ שגיאה לא צפויה עבור {sym}@{itv}: {type(e).__name__} – {e}")
         return pd.DataFrame()
+
 
 
 
