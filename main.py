@@ -17,7 +17,13 @@ from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.trade_executor import execute_trade_live
 from utils.watchlist_utils import load_watchlist
-from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
+# נשתמש ב-smart (מודע לבאן) לטריידים, וב-get_price הקש לסטטוס WS
+from utils.ws_fallback import (
+    get_price as get_price_cached,
+    get_price_smart,
+    is_price_fresh,
+    launch_multi_websocket,
+)
 from utils.trending_utils import get_trending_symbols
 from utils.binance_client import (
     ping_and_info,
@@ -26,6 +32,14 @@ from utils.binance_client import (
     get_client,
     sync_server_time,
 )
+
+# נסה לחשוף חיווי cooldown אם קיים (לא חובה)
+def _rest_cooldown_active() -> Optional[bool]:
+    try:
+        from utils.ws_fallback import _rest_allowed  # type: ignore
+        return not bool(_rest_allowed())
+    except Exception:
+        return None
 
 # === AI health (SDK/HTTP) ===
 from utils.ai_client import ai_healthcheck
@@ -45,9 +59,8 @@ logging.basicConfig(
     force=True
 )
 try:
-    # סיכום קונפיג ללא סודות
     if hasattr(config, "log_config_summary"):
-        config.log_config_summary()
+        config.log_config_summary()  # סיכום קונפיג ללא סודות
 except Exception:
     pass
 
@@ -65,7 +78,7 @@ _cors_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 _allow_origins = ["*"] if _cors_env.strip() == "*" else [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.9.1"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -121,7 +134,7 @@ def _pick_ws_symbols() -> List[str]:
 # ---------- אירועי חיים ----------
 @app.on_event("startup")
 async def _on_startup():
-    # אל תבצע REST לבינאנס בעלייה כאשר יש סיכוי ל-418 (ברירת מחדל false)
+    # לא נבצע REST בעלייה כשיש סיכוי ל-418 (דיפולט False)
     try:
         if bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False)):
             ping_and_info()
@@ -265,8 +278,7 @@ def auto_stop():
 async def debug_binance_futures(symbol: str = "BTCUSDT"):
     """
     בודק Ping, סנכרון זמן, Mark Price, ExchangeInfo והזמנת TEST (לא מבצע טרייד אמיתי).
-    test_order_ok=True -> החתימה/הרשאות/Allowlist תקינים.
-    הערה: בתקופת 418 ייתכן שחלק מהשדות יכשלו.
+    test_order_ok=True -> החתימה/הרשאות/Allowlist תקינים. בתקופת 418 חלק מהבדיקות עלולות להיכשל.
     """
     ok_ping = False
     try:
@@ -295,7 +307,6 @@ async def debug_binance_futures(symbol: str = "BTCUSDT"):
     test_order_resp = None
     test_err = None
     try:
-        # החזרה של futures_create_test_order היא None כאשר הצליח
         test_order_resp = await asyncio.to_thread(
             client.futures_create_test_order,
             symbol=symbol,
@@ -321,22 +332,28 @@ async def debug_binance_futures(symbol: str = "BTCUSDT"):
 async def place_trade(trade: TradeRequest):
     """
     כניסה ממוכנת:
-    - אם entry חסר → מחיר לייב מ־WS (אם לא זמין/לא עדכני → 503)
-    - אם SL/TP חסרים → predict_optimal_sl_tp (עם פולבק דטרמיניסטי)
-    - שאר ההגנות (Price Protect וכו׳) נעשות בתוך execute_trade_live
+    - אם entry חסר → מחיר לייב מ־WS/SMART (מודע לבאן). אם לא זמין/לא טרי → 503.
+    - אם SL/TP חסרים → predict_optimal_sl_tp (עם פולבק דטרמיניסטי).
+    - שאר ההגנות (Price Protect וכו׳) נעשות בתוך execute_trade_live.
     """
     symbol = trade.symbol.upper().strip()
     direction = trade.side.upper().strip()
     if direction not in ("LONG", "SHORT"):
         raise HTTPException(status_code=422, detail="side must be LONG or SHORT")
 
-    # קבלת מחיר לייב אם לא נשלח
+    # מחיר כניסה: נשתמש ב-smart (WS תחילה; REST רק אם מותר ולא בזמן באן)
     entry = trade.entry
     if entry is None:
-        live = await get_price(symbol)
-        if not live or not is_price_fresh(symbol, max_age_sec=getattr(config, "PRICE_MAX_AGE_SEC", 10)):
-            raise HTTPException(status_code=503, detail=f"Live price unavailable or stale for {symbol}")
-        entry = float(live)
+        live = await get_price_smart(symbol)
+        # בשונה מ-get_price, smart יחזור None גם בזמן cooldown → נחזיר 503
+        if live is None or not is_price_fresh(symbol, max_age_sec=getattr(config, "PRICE_MAX_AGE_SEC", 10)):
+            # נסה בכל זאת להשתמש בערך smart אם הגיע כרגע (ייתכן טרי אך הטיימסטמפ עוד לא עודכן)
+            if live is not None:
+                entry = float(live)
+            else:
+                raise HTTPException(status_code=503, detail=f"Live price unavailable (WS stale or REST cooldown) for {symbol}")
+        else:
+            entry = float(live)
 
     # חישוב SL/TP אם חסר
     sl, tp = trade.sl, trade.tp
@@ -373,8 +390,6 @@ async def scan_multi(
     trending_source: str = "coingecko",
 ):
     timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
-
-    # אם לא סופק — קח מהקונפיג
     if trending_only is None:
         trending_only = bool(getattr(config, "TRENDING_ONLY", True))
 
@@ -431,15 +446,14 @@ async def ws_status(
     max_age_sec: Optional[int] = Query(None, description="סף טריות בשניות; ברירת מחדל לפי PRICE_MAX_AGE_SEC"),
 ):
     """
-    מחזיר מצב WS עבור כל סמל:
-    - price: המחיר האחרון מה־WS
+    מצב WS לכל סמל:
+    - price: המחיר האחרון מה־WS (cache בלבד, לא מפעיל REST)
     - fresh: האם המחיר טרי (<= max_age_sec)
-    - note: הערה קצרה במקרה של נתון חסר/לא טרי
-    אם לא סופקה רשימת סמלים → משתמשים ב-WS_SYMBOLS מהעלייה; ואם גם זו ריקה, נופלים ל-BTC/ETH/BNB.
+    - cooldown_active: האם REST נמצא ב-cooldown (אם פונקציה זמינה)
     """
     threshold = int(max_age_sec or getattr(config, "PRICE_MAX_AGE_SEC", 10))
+    cooldown = _rest_cooldown_active()
 
-    # קלט סמלים
     if symbols:
         raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         check_syms = raw or (WS_SYMBOLS if WS_SYMBOLS else ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
@@ -451,7 +465,7 @@ async def ws_status(
 
     for sym in check_syms:
         try:
-            price = await get_price(sym)
+            price = await get_price_cached(sym)  # cache בלבד
             fresh = bool(price is not None and is_price_fresh(sym, max_age_sec=threshold))
             note = None
             if price is None:
@@ -469,6 +483,7 @@ async def ws_status(
         "fresh": fresh_count,
         "stale": len(check_syms) - fresh_count,
         "max_age_sec": threshold,
+        "cooldown_active": cooldown,
         "symbols": out,
     }
 
@@ -495,6 +510,7 @@ if __name__ == "__main__":
         port=int(getattr(config, "PORT", int(os.environ.get("PORT", "8000")))),
         log_level=_LOG_LEVEL.lower(),
     )
+
 
 
 
