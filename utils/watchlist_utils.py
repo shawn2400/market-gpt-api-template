@@ -1,82 +1,119 @@
 # utils/watchlist_utils.py
+import os
 import json
 import logging
-from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Dict, Any, Optional
 
-_WATCHLIST_PATHS = [
-    Path("./watchlist.json"),
-    Path("./data/watchlist.json"),
+WATCHLIST_PATH = os.getenv("WATCHLIST_PATH", "watchlist.json")
+
+_DEFAULT_WATCHLIST: List[Dict[str, Any]] = [
+    {"symbol": "BTCUSDT", "direction": "LONG",  "quality_score": 8},
+    {"symbol": "ETHUSDT", "direction": "LONG",  "quality_score": 7},
+    {"symbol": "BNBUSDT", "direction": "LONG",  "quality_score": 7},
 ]
 
-def _load_json(path: Path) -> Optional[Union[list, dict]]:
-    try:
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        logging.warning(f"[watchlist] failed reading {path}: {e}")
-    return None
-
-def load_watchlist(min_quality: Optional[float] = None) -> List[dict]:
-    """
-    טוען watchlist.json אם קיים. תומך בשתי סכמות:
-      1) [{"symbol": "BTCUSDT", "quality": 7.2}, ...]
-      2) ["BTCUSDT", "ETHUSDT", ...]
-    מחזיר תמיד רשימת dict עם לפחות שדה symbol.
-    """
-    data = None
-    for p in _WATCHLIST_PATHS:
-        data = _load_json(p)
-        if data is not None:
-            break
-    if data is None:
-        return []
-
-    items: List[dict] = []
-    if isinstance(data, list):
-        for row in data:
-            if isinstance(row, dict) and row.get("symbol"):
-                d = {"symbol": str(row["symbol"]).upper()}
-                if "quality" in row:
-                    try:
-                        d["quality"] = float(row["quality"])
-                    except Exception:
-                        pass
-                items.append(d)
-            elif isinstance(row, str) and row.strip():
-                items.append({"symbol": row.strip().upper()})
-    else:
-        logging.warning("[watchlist] unexpected json schema; expected list")
-        return []
-
-    if min_quality is not None:
+def _ensure_file(path: str = WATCHLIST_PATH) -> None:
+    if not os.path.exists(path):
         try:
-            mq = float(min_quality)
-            items = [x for x in items if float(x.get("quality", mq)) >= mq]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(_DEFAULT_WATCHLIST, f, ensure_ascii=False, indent=2)
+            logging.info(f"[watchlist] created default {path}")
+        except Exception as e:
+            logging.error(f"[watchlist] failed to create default {path}: {e}")
+
+def _validate_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    try:
+        sym = str(it.get("symbol", "")).strip().upper()
+        if not sym:
+            return None
+        direction = it.get("direction")
+        if direction is not None:
+            direction = str(direction).strip().upper()
+            if direction not in ("LONG", "SHORT"):
+                direction = None
+        q = it.get("quality_score", None)
+        try:
+            q = int(q) if q is not None else None
         except Exception:
-            pass
+            q = None
+        out = {"symbol": sym}
+        if direction:
+            out["direction"] = direction
+        if q is not None:
+            out["quality_score"] = q
+        # אופציונלי: weight/notes
+        if "weight" in it:
+            try:
+                out["weight"] = float(it["weight"])
+            except Exception:
+                pass
+        if "notes" in it:
+            out["notes"] = str(it["notes"])
+        return out
+    except Exception:
+        return None
 
-    # ייחוד
-    out, seen = [], set()
-    for it in items:
-        sym = it["symbol"].upper()
-        if sym not in seen:
-            seen.add(sym); out.append(it)
+def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
+    """
+    מביא רשימת מעקב בפורמט: [{'symbol','direction','quality_score',...}, ...]
+    - דואג לקובץ ברירת מחדל אם חסר.
+    - מסנן כפילויות.
+    - מסנן לפי min_quality אם ביקשת.
+    """
+    _ensure_file(path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            raise ValueError("watchlist must be a list")
+    except Exception as e:
+        logging.error(f"[watchlist] read failed ({e}); using default")
+        data = list(_DEFAULT_WATCHLIST)
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        v = _validate_item(item)
+        if not v:
+            continue
+        key = v["symbol"]
+        if key in seen:
+            continue
+        if isinstance(min_quality, int):
+            q = v.get("quality_score")
+            if isinstance(q, int) and q < int(min_quality):
+                continue
+            # אם אין ציון — לא לפסול; השאר לשיקול הסורק
+        seen.add(key); out.append(v)
+
+    # סדר לפי quality_score יורד (אם יש), ואז לפי symbol
+    out.sort(key=lambda d: (-(d.get("quality_score", -1)), d["symbol"]))
     return out
 
-def get_symbols_list(min_quality: Optional[float] = None) -> List[str]:
-    """
-    מחזיר רשימת סימבולים מתוך ה-watchlist (אם קיים),
-    מסנן לפי min_quality, ומחזיר ייחודי/UPPER.
-    """
-    items = load_watchlist(min_quality=min_quality) or []
-    out, seen = [], set()
-    for it in items:
-        sym = str(it.get("symbol") or "").upper().strip()
-        if sym and sym not in seen:
-            seen.add(sym); out.append(sym)
-    return out
+def save_watchlist(items: List[Dict[str, Any]], path: str = WATCHLIST_PATH) -> bool:
+    try:
+        # validate all
+        clean: List[Dict[str, Any]] = []
+        seen = set()
+        for it in items:
+            v = _validate_item(it)
+            if not v:
+                continue
+            key = v["symbol"]
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(v)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(clean, f, ensure_ascii=False, indent=2)
+        logging.info(f"[watchlist] saved {len(clean)} items -> {path}")
+        return True
+    except Exception as e:
+        logging.error(f"[watchlist] save failed: {e}")
+        return False
+
 
 
 
