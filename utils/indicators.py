@@ -27,7 +27,7 @@ def _ensure_df(df: pd.DataFrame) -> pd.DataFrame:
         logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
         return pd.DataFrame()
     out = df.copy()
-    for c in ("open","high","low","close","volume"):
+    for c in ("open", "high", "low", "close", "volume"):
         out[c] = pd.to_numeric(out[c], errors="coerce")
     if not isinstance(out.index, pd.DatetimeIndex):
         if "timestamp" in out.columns:
@@ -37,11 +37,15 @@ def _ensure_df(df: pd.DataFrame) -> pd.DataFrame:
             out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
     out.sort_index(inplace=True)
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
-    out.dropna(subset=["open","high","low","close","volume"], inplace=True)
+    out.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
     return out
 
 def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
-    atr = AverageTrueRange(high=df["high"], low=df["low"], close=df["close"], window=period, fillna=True).average_true_range()
+    atr = AverageTrueRange(
+        high=df["high"], low=df["low"], close=df["close"],
+        window=period, fillna=True
+    ).average_true_range()
+
     hl2 = (df["high"] + df["low"]) / 2.0
     upper_basic = hl2 + multiplier * atr
     lower_basic = hl2 - multiplier * atr
@@ -49,9 +53,9 @@ def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = 
     upper = upper_basic.copy()
     lower = lower_basic.copy()
 
-    # נוודא שאין NaN
-    upper.fillna(method="ffill", inplace=True)
-    lower.fillna(method="ffill", inplace=True)
+    # במקום fillna(method="ffill")
+    upper.ffill(inplace=True)
+    lower.ffill(inplace=True)
 
     st = pd.Series(index=df.index, dtype=float)
     dir_up = True
@@ -61,14 +65,16 @@ def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = 
             dir_up = df["close"].iloc[i] >= lower.iloc[i]
             continue
 
-        prev_st = st.iloc[i-1]
+        prev_st = st.iloc[i - 1]
         if df["close"].iloc[i] > prev_st:
             dir_up = True
         elif df["close"].iloc[i] < prev_st:
             dir_up = False
 
         st.iloc[i] = lower.iloc[i] if dir_up else upper.iloc[i]
-    st.fillna(method="ffill", inplace=True)
+
+    # במקום fillna(method="ffill")
+    st.ffill(inplace=True)
     return st
 
 def _vwap(df: pd.DataFrame) -> pd.Series:
@@ -88,28 +94,47 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     out = base.copy()
     try:
+        # EMA
         out["ema_21"] = EMAIndicator(close=out["close"], window=_EMA_FAST, fillna=True).ema_indicator()
         out["ema_50"] = EMAIndicator(close=out["close"], window=_EMA_SLOW, fillna=True).ema_indicator()
 
+        # RSI
         out["rsi"] = RSIIndicator(close=out["close"], window=_RSI, fillna=True).rsi()
 
+        # ADX
         adx_ind = ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=_ADX, fillna=True)
         out["adx"] = adx_ind.adx()
 
-        out["atr"] = AverageTrueRange(high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=True).average_true_range()
+        # ATR
+        out["atr"] = AverageTrueRange(
+            high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=True
+        ).average_true_range()
 
-        macd = MACD(close=out["close"], window_fast=_MACD_FAST, window_slow=_MACD_SLOW, window_sign=_MACD_SIGNAL, fillna=True)
+        # MACD
+        macd = MACD(
+            close=out["close"],
+            window_fast=_MACD_FAST,
+            window_slow=_MACD_SLOW,
+            window_sign=_MACD_SIGNAL,
+            fillna=True
+        )
         out["macd"] = macd.macd()
         out["macd_signal"] = macd.macd_signal()
         out["macd_hist"] = macd.macd_diff()
 
+        # VWAP
         out["vwap"] = _vwap(out)
 
+        # SuperTrend
         st_line = _supertrend(out, period=_ST_PERIOD, multiplier=_ST_MULT)
         out["supertrend"] = st_line
         out["supertrend_dir"] = np.where(out["close"] >= st_line, 1, -1)
 
-        cols_needed = ["rsi","adx","atr","macd","macd_signal","macd_hist","ema_21","ema_50","vwap","supertrend","supertrend_dir"]
+        # ניקוי ותיקון NaN/Inf
+        cols_needed = [
+            "rsi", "adx", "atr", "macd", "macd_signal", "macd_hist",
+            "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir"
+        ]
         out.replace([np.inf, -np.inf], np.nan, inplace=True)
         out[cols_needed] = out[cols_needed].ffill().bfill()
         out.dropna(subset=cols_needed, inplace=True)
@@ -118,11 +143,13 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
             return pd.DataFrame()
 
+        # שדה דמה לתבנית (אם יש לך מחולל דפוסים – תוכל לעדכן כאן)
         out["pattern"] = "unknown"
         return out
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
         return pd.DataFrame()
+
 
 
 
