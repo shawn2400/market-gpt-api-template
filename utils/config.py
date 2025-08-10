@@ -47,9 +47,9 @@ PRICE_PROTECT_PCT        = _get_float("PRICE_PROTECT_PCT", 0.25)
 PRICE_MAX_AGE_SEC        = _get_int("PRICE_MAX_AGE_SEC", 10)
 MAX_STREAMS_PER_CONN     = _get_int("MAX_STREAMS_PER_CONN", 200)
 
-# REST cooldown (במודעות-באן)
-REST_COOLDOWN_SEC        = _get_int("REST_COOLDOWN_SEC", 900)    # 15 דקות
-REST_MAX_COOLDOWN_SEC    = _get_int("REST_MAX_COOLDOWN_SEC", 3600)  # עד שעה
+# REST cooldown (ban-aware)
+REST_COOLDOWN_SEC        = _get_int("REST_COOLDOWN_SEC", 900)
+REST_MAX_COOLDOWN_SEC    = _get_int("REST_MAX_COOLDOWN_SEC", 3600)
 
 # ---------- Networking / Bind ----------
 PORT                     = _get_int("PORT", int(os.environ.get("PORT", "8000")))
@@ -67,6 +67,14 @@ BINANCE_BACKOFF_BASE     = _get_float("BINANCE_BACKOFF_BASE", 0.7)
 BINANCE_MAX_RETRIES      = _get_int("BINANCE_MAX_RETRIES", 5)
 BINANCE_EXCHANGE_INFO_ON_START = _get_bool("BINANCE_EXCHANGE_INFO_ON_START", False)
 
+BINANCE_RECV_WINDOW      = _get_int("BINANCE_RECV_WINDOW", 10000)
+BINANCE_TIME_SYNC_INTERVAL_SEC = _get_int("BINANCE_TIME_SYNC_INTERVAL_SEC", 900)
+BINANCE_FORCE_HEDGE_MODE = _get_bool("BINANCE_FORCE_HEDGE_MODE", False)
+BINANCE_SKIP_ACCOUNT_MUTATIONS = _get_bool("BINANCE_SKIP_ACCOUNT_MUTATIONS", True)
+
+BINANCE_ALLOWED_EGRESS_IPS = _get_str("BINANCE_ALLOWED_EGRESS_IPS", "")
+EGRESS_IP_ENDPOINT         = _get_str("EGRESS_IP_ENDPOINT", "")
+
 # ---------- OpenAI ----------
 OPENAI_API_KEY           = _get_str("OPENAI_API_KEY", "")
 OPENAI_MODEL             = _get_str("OPENAI_MODEL", "gpt-4o-mini")
@@ -76,6 +84,10 @@ OPENAI_MAX_CONCURRENCY   = _get_int("OPENAI_MAX_CONCURRENCY", 4)
 
 # ---------- API Security ----------
 API_BEARER_TOKEN         = _get_str("API_BEARER_TOKEN", "secret-token")
+
+# ---------- Auto Trading Controls ----------
+ENABLE_AUTO_TRADING      = _get_bool("ENABLE_AUTO_TRADING", False)  # סריקה אוטומטית
+EXECUTE_TRADES           = _get_bool("EXECUTE_TRADES", False)       # ביצוע הזמנות בפועל
 
 def log_config_summary():
     logging.info("[CONFIG] AutoRun=%s Interval=%ss DefaultTF=%s", AUTO_RUN, SCAN_INTERVAL, DEFAULT_INTERVAL)
@@ -88,6 +100,7 @@ def log_config_summary():
                  OPENAI_MODEL, bool(OPENAI_BASE_URL), OPENAI_TIMEOUT_SECONDS, OPENAI_MAX_CONCURRENCY)
     logging.info("[CONFIG] Keys: has_binance=%s has_openai=%s binance_key_prefix=%s",
                  bool(BINANCE_API_KEY), bool(OPENAI_API_KEY), _mask(BINANCE_API_KEY))
+    logging.info("[CONFIG] AutoTrading: enable=%s execute=%s", ENABLE_AUTO_TRADING, EXECUTE_TRADES)
 
 
 
