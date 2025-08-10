@@ -1,115 +1,84 @@
 # utils/trending_utils.py
-
-import requests
-import os
 import logging
+from typing import List, Optional
+import requests
 import time
-from typing import Optional, List, Dict
+import random
 
-COINGECKO_API = "https://api.coingecko.com/api/v3/search/trending"
-COINGECKO_MARKET_API = "https://api.coingecko.com/api/v3/coins/markets"
-BINANCE_TRENDING_API = "https://www.binance.com/bapi/asset/v1/public/asset-service/product/get-trending"
-LUNARCRUSH_TRENDING_API = "https://api.lunarcrush.com/v2?data=assets&sort=galaxy_score&limit=20"
-LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY")
+from utils import config
 
-_cache: Dict[str, tuple[List[str], float]] = {}
-CACHE_TTL = 600  # 10 דקות
+# REST ישיר (עוקף ספריה) – יותר גמיש למקרי 403/RateLimit הקודמים
+FAPI_24HR = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+SPOT_24HR = "https://api.binance.com/api/v3/ticker/24hr"
 
-def _cached(key: str) -> tuple[List[str], float]:
-    return _cache.get(key, ([], 0))
-
-def _store_cache(key: str, value: List[str]) -> None:
-    _cache[key] = (value, time.time())
-
-symbol_mapping: Dict[str, Dict[str, str]] = {
-    "btc": {"symbol": "BTCUSDT", "market": "futures"},
-    "eth": {"symbol": "ETHUSDT", "market": "futures"},
-    "bnb": {"symbol": "BNBUSDT", "market": "futures"},
-    # ... המשך מיפוי מלא ...
-}
-
-DEFAULT_SOURCES = ["binance", "lunarcrush", "coingecko"]
-
-def get_trending_symbols(trending_source: Optional[str] = None,
-                         market_type: str = "spot",
-                         min_volume: Optional[float] = None,
-                         volume_lookup: Optional[Dict[str, float]] = None,
-                         top: Optional[int] = None,
-                         min_change_percent: Optional[float] = None) -> List[str]:
-    """
-    שליפת סימבולים טרנדיים ממספר מקורות עם Failover אוטומטי.
-    תמיד יחזיר לפחות Fallback אם כל המקורות נכשלים.
-    """
-    sources_to_try = [trending_source.lower()] if trending_source else DEFAULT_SOURCES
-    base_market = "futures" if market_type == "grid" else market_type
-
-    for source in sources_to_try:
-        cache_key = f"{source}:{base_market}:{min_volume}:{top}:{min_change_percent}"
-        symbols, ts = _cached(cache_key)
-        if symbols and (time.time() - ts < CACHE_TTL):
-            logging.info(f"[trending] Using cache for {source} ({len(symbols)} symbols)")
-            return symbols
-
-        logging.info(f"[trending] Fetching from {source}...")
+def _retry_get_json(url: str, max_retries: int = 4, base_backoff: float = 0.6, timeout: int = 8) -> Optional[List[dict]]:
+    last_exc = None
+    for attempt in range(max_retries + 1):
         try:
-            symbols = []
-            if source == "binance":
-                resp = requests.get(BINANCE_TRENDING_API, timeout=5)
-                data = resp.json().get("data", {}).get("articles", [])
-                for art in data:
-                    title = art.get("title", "").lower()
-                    for key, info in symbol_mapping.items():
-                        if key in title and info.get("market") == base_market:
-                            symbols.append(info["symbol"])
-
-            elif source == "lunarcrush":
-                if not LUNARCRUSH_API_KEY:
-                    logging.warning("[trending] Missing LunarCrush API key.")
-                else:
-                    url = f"{LUNARCRUSH_TRENDING_API}&key={LUNARCRUSH_API_KEY}"
-                    resp = requests.get(url, timeout=5)
-                    for asset in resp.json().get("data", []):
-                        sym = asset.get("symbol", "").lower()
-                        mapped = symbol_mapping.get(sym)
-                        if mapped and mapped.get("market") == base_market:
-                            symbols.append(mapped["symbol"])
-
-            elif source == "coingecko":
-                resp = requests.get(COINGECKO_API, timeout=5)
-                ids = [c['item']['id'] for c in resp.json().get("coins", [])]
-                if ids:
-                    mr = requests.get(COINGECKO_MARKET_API,
-                                      params={"vs_currency": "usd", "ids": ",".join(ids),
-                                              "price_change_percentage": "24h"}, timeout=5)
-                    for coin in mr.json():
-                        sym = coin.get("symbol", "").lower()
-                        change = coin.get("price_change_percentage_24h", 0.0)
-                        mapped = symbol_mapping.get(sym)
-                        if mapped and mapped.get("market") == base_market:
-                            if min_change_percent is None or change >= min_change_percent:
-                                symbols.append(mapped["symbol"])
-
-            if min_volume and volume_lookup:
-                symbols = [s for s in symbols if volume_lookup.get(s, 0) >= min_volume]
-
-            if top is not None and len(symbols) > top:
-                symbols = symbols[:top]
-
-            if symbols:
-                _store_cache(cache_key, symbols)
-                logging.info(f"[trending] {source} returned {len(symbols)} symbols")
-                return symbols
-
-            logging.warning(f"[trending] No symbols from {source}, trying next source...")
-
+            r = requests.get(url, timeout=timeout, headers={"User-Agent": "AlgoGPT/1.0 (+render)"})
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code in (418, 429, 403, 503):
+                delay = base_backoff * (2 ** attempt) + random.uniform(0, 0.25)
+                logging.warning(f"[trending] HTTP {r.status_code} {url} attempt {attempt+1}/{max_retries+1} → sleep {delay:.2f}s")
+                time.sleep(delay); continue
+            logging.warning(f"[trending] HTTP {r.status_code} {url} (no retry)")
+            break
         except Exception as e:
-            logging.error(f"[trending] Error fetching {source}: {e}")
+            last_exc = e
+            delay = base_backoff * (2 ** attempt) + random.uniform(0, 0.25)
+            logging.warning(f"[trending] net error {url} attempt {attempt+1}/{max_retries+1} → sleep {delay:.2f}s: {e}")
+            time.sleep(delay)
+    if last_exc:
+        logging.error(f"[trending] exhausted retries: {last_exc}")
+    return None
 
-    # אם כולם נכשלים – Fallback קבוע
-    fallback = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-    logging.warning("[trending] All sources failed, using fallback list")
-    _store_cache("fallback", fallback)
-    return fallback
+def _top_usdt_symbols(rows: List[dict], top_n: int = 50) -> List[str]:
+    # דירוג לפי quoteVolume (מספרי) והחזר סמלי USDT
+    def _to_float(x):
+        try: return float(x)
+        except: return 0.0
+    pairs = []
+    for d in rows:
+        try:
+            sym = str(d.get("symbol", ""))
+            if not sym.endswith("USDT"):
+                continue
+            vol = _to_float(d.get("quoteVolume", d.get("volume", 0)))
+            pairs.append((sym, vol))
+        except Exception:
+            continue
+    pairs.sort(key=lambda x: x[1], reverse=True)
+    # החזר ללא כפילות, עד top_n
+    out = []
+    seen = set()
+    for sym, _ in pairs:
+        if sym not in seen:
+            seen.add(sym); out.append(sym)
+        if len(out) >= top_n:
+            break
+    return out
+
+def get_trending_symbols(source: str = "coingecko", market: str = "futures", top_n: int = 50) -> List[str]:
+    """
+    מחזיר רשימת סמלים "חמים" לשרת:
+    - בפועל משתמש ב-Binance 24hr לפי market (Futures/Spot) בגלל זמינות/אמינות.
+    - source נשמר לפרמטר עתידי (כדי לא לשבור חתימות); כיום מתעלמים ממנו.
+    """
+    try:
+        url = FAPI_24HR if str(market).lower() == "futures" else SPOT_24HR
+        data = _retry_get_json(url, max_retries=int(config.BINANCE_MAX_RETRIES), base_backoff=float(config.BINANCE_BACKOFF_BASE))
+        if isinstance(data, list) and data:
+            syms = _top_usdt_symbols(data, top_n=top_n)
+            if syms:
+                logging.info(f"[trending] selected {len(syms)} symbols (top {top_n}) from {url}")
+                return syms
+        logging.warning("[trending] empty/invalid 24hr data, using fallback")
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+    except Exception as e:
+        logging.warning(f"[trending] error: {e}")
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+
 
 
 
