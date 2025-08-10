@@ -90,6 +90,10 @@ def _retry_call(fn, *, name: str):
         logging.error(f"[Binance] ❌ Exhausted retries for {name}: {last_exc}")
     return None
 
+# ← חשוב: מייצאים retry_call לשימוש ב-binance_trader
+def retry_call(fn, name: str):
+    return _retry_call(fn, name=name)
+
 def futures_exchange_info_safe():
     c = get_client()
     return _retry_call(lambda: c.futures_exchange_info(), name="futures_exchange_info")
@@ -112,9 +116,9 @@ def ping_and_info() -> bool:
     ok = ok_spot or ok_fapi
 
     if ok:
-        logging.info("[Binance] ✅ ping OK (spot=%s, futures=%s)", ok_spot, ok_fapi)
+        logging.info("[Binance] ✅ ping OK (spot=%s, futures=%s) [%s | %s]", ok_spot, ok_fapi, _SPOT_HTTP, _FAPI_HTTP)
     else:
-        logging.warning("[Binance] ⚠️ ping failed (spot=%s, futures=%s) – ממשיכים בכל מקרה.", ok_spot, ok_fapi)
+        logging.warning("[Binance] ⚠️ ping failed (spot=%s, futures=%s) [%s | %s] – ממשיכים בכל מקרה.", ok_spot, ok_fapi, _SPOT_HTTP, _FAPI_HTTP)
 
     # exchange_info אופציונלי בלבד
     if _EX_INFO_ON_START:
@@ -125,6 +129,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
