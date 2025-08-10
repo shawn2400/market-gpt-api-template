@@ -19,10 +19,18 @@ BINANCE_WS_URL_PREFIX = f"{BINANCE_WS_BASE}{STREAM_SUFFIX}"
 FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
 
-# זמן טריות המחיר
+# כמה זמן מחיר נחשב "טרי"
 DEFAULT_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
 
-_UA = {"User-Agent": "AlgoGPT/2 (Railway) ws_fallback", "Accept": "application/json"}
+# UA דפדפן סטנדרטי כדי להימנע מטריגרים של WAF/CloudFront
+_UA = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
 
 class BinanceWSManager:
     def __init__(self, symbols: List[str]):
@@ -40,7 +48,7 @@ class BinanceWSManager:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 headers=_UA,
-                trust_env=True,  # מאפשר שימוש ב-HTTP(S)_PROXY מהסביבה
+                trust_env=False,  # <<< חשוב: לא להשתמש בפרוקסי סביבתי
             )
         return self._session
 
@@ -54,11 +62,13 @@ class BinanceWSManager:
             url = BINANCE_WS_URL_PREFIX + streams
             try:
                 session = await self._ensure_session()
-                # heartbeat 20s כדי למנוע ניתוקי 1008
-                async with session.ws_connect(url, heartbeat=20, autoping=True, autoclose=True, timeout=20) as ws:
+                # heartbeat/autoping כדי למנוע 1008 ולשמור חיבור חי
+                async with session.ws_connect(
+                    url, heartbeat=20, autoping=True, autoclose=True, timeout=20
+                ) as ws:
                     self.ws = ws
                     self.connected = True
-                    backoff = 0.6  # reset backoff אחרי חיבור מוצלח
+                    backoff = 0.6  # reset אחרי חיבור מוצלח
                     logging.info(f"[ws_fallback] WS connected for {len(self.symbols)} symbols")
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
@@ -66,7 +76,7 @@ class BinanceWSManager:
                                 data = json.loads(msg.data)
                                 payload = data.get("data") or {}
                                 symbol = str(payload.get("s") or "").upper()
-                                # bookTicker: ask: 'a' (string)
+                                # bookTicker: ask = 'a'
                                 ask = payload.get("a")
                                 if symbol and ask is not None:
                                     price = float(ask)
@@ -76,8 +86,9 @@ class BinanceWSManager:
                             except Exception as e:
                                 logging.debug(f"[ws_fallback] parse error: {e}")
                         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                            logging.warning(f"[ws_fallback] WS closed/error: {msg.data if hasattr(msg,'data') else msg.type}")
+                            logging.warning(f"[ws_fallback] WS closed/error: {getattr(msg,'data', msg.type)}")
                             break
+                        # שאר סוגי ההודעות (PING/PONG/BINARY) מטופלים ע"י autoping
             except Exception as e:
                 self.connected = False
                 d = min(10.0, backoff)
@@ -85,7 +96,7 @@ class BinanceWSManager:
                 await asyncio.sleep(d)
                 backoff = min(10.0, backoff * 2.0)
                 continue
-            # יציאה מהלולאה הפנימית – ננסה להתחבר מחדש
+            # יצאנו מהלולאה – ננסה להתחבר מחדש
             self.connected = False
             await asyncio.sleep(1.0)
 
@@ -146,7 +157,7 @@ async def get_price(symbol: str) -> Optional[float]:
 
 def is_price_fresh(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -> bool:
     """
-    גרסה סינכרונית לשימוש בקוד sync: בודקת טריות טיימסטמפ.
+    גרסה סינכרונית עבור קוד שלא רץ ב־async: משתמשים בטיימסטמפ ששמרנו.
     """
     global binance_ws_manager
     if binance_ws_manager is None or not binance_ws_manager.ts:
@@ -188,7 +199,7 @@ async def get_price_smart(symbol: str, max_age_sec: int = DEFAULT_MAX_AGE_SEC) -
     p = await get_price(symbol)
     if p is not None and is_price_fresh(symbol, max_age_sec=max_age_sec):
         return p
-    # fallback ל־REST
+    # fallback ל-REST
     return _rest_futures_price(symbol)
 
 # ---------- REST snapshot (סינכרוני) ל-klines עבור גיבוי מהיר ----------
@@ -261,6 +272,7 @@ def snapshot_klines_df(
     except Exception as e:
         logging.error(f"[ws_fallback] snapshot_klines_df error {symbol}@{interval}: {e}")
         return pd.DataFrame()
+
 
 
 
