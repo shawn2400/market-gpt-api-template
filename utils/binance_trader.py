@@ -1,7 +1,11 @@
 # utils/binance_trader.py
 import math
+import time
+import random
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+import requests
 
 from utils import config
 from utils.binance_client import get_client, futures_exchange_info_safe
@@ -16,6 +20,20 @@ _client = get_client()
 
 # Cache לפילטרים לכל סימבול
 _SYMBOL_FILTERS_CACHE: dict[str, dict] = {}
+
+# ---- פרמטרי רשת/ריטריי ----
+_FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+_BACKOFF_BASE = float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7))
+_MAX_RETRIES = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
+
+_session = requests.Session()
+_session.headers.update({
+    "User-Agent": "AlgoGPT/2 (Render) binance-trader",
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+})
+if getattr(config, "BINANCE_API_KEY", ""):
+    _session.headers.update({"X-MBX-APIKEY": config.BINANCE_API_KEY})
 
 def _to_float(x, default: float = 0.0) -> float:
     try:
@@ -35,37 +53,96 @@ def _round_to_tick(value: float, tick: float) -> float:
     tick = float(tick)
     return round(round(value / tick) * tick, 8)
 
+def _http_exchange_info_symbol(sym: str, timeout: float = 8.0) -> Optional[dict]:
+    """
+    קריאה ישירה ל-/fapi/v1/exchangeInfo?symbol=SYMBOL עם ריטריי.
+    מחזיר meta של הסימבול מתוך "symbols".
+    """
+    url = f"{_FAPI_HTTP}/fapi/v1/exchangeInfo"
+    params = {"symbol": sym}
+    last = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            r = _session.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict) and isinstance(data.get("symbols"), list) and data["symbols"]:
+                    return data["symbols"][0]
+                # יש הטמעות שמחזירות אובייקט מלא בלי סינון; ננסה למצוא ידנית
+                if isinstance(data, dict) and isinstance(data.get("symbols"), list):
+                    for s in data["symbols"]:
+                        if s.get("symbol") == sym:
+                            return s
+                return None
+            if r.status_code in (403, 418, 429, 503):
+                d = min(10.0, _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35))
+                logging.warning(f"[trader] exchangeInfo {sym} http={r.status_code} → sleep {d:.2f}s")
+                time.sleep(d); last = r.text; continue
+            r.raise_for_status()
+        except Exception as e:
+            d = min(10.0, _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35))
+            logging.warning(f"[trader] exchangeInfo {sym} net err (attempt {attempt+1}/{_MAX_RETRIES+1}): {e} → {d:.2f}s")
+            time.sleep(d); last = e; continue
+    if last:
+        logging.warning(f"[trader] exchangeInfo REST failed for {sym}: {last}")
+    return None
+
+def _guess_filters(sym: str) -> dict:
+    """
+    ניחוש שמרני כשאין exchangeInfo (CloudFront/חסימה).
+    הערכים מספיקים לרוב הסימבולים הגדולים; אם ההזמנה תידחה ע״י הבורסה,
+    המשתמש יראה שגיאה מפורטת בלוג ונוכל לחדד ידנית.
+    """
+    return {
+        "tickSize": 0.01,     # עיגול מחיר לשתי ספרות
+        "stepSize": 0.001,    # גודל צעד כמות
+        "minQty": 0.001,      # כמינימום בסיסי
+        "minNotional": 5.0,   # דרישת notional שמרנית
+        "_source": "fallback"
+    }
+
 def _load_symbol_filters(symbol: str) -> dict:
     sym = str(symbol).upper()
     if sym in _SYMBOL_FILTERS_CACHE:
         return _SYMBOL_FILTERS_CACHE[sym]
 
-    ei = futures_exchange_info_safe()
-    if not isinstance(ei, dict) or "symbols" not in ei:
-        raise RuntimeError("Cannot load futures exchange info (filters)")
-
-    meta = next((s for s in ei["symbols"] if s.get("symbol") == sym), None)
+    # 1) נסה REST ישיר פר-סימבול
+    meta = _http_exchange_info_symbol(sym)
     if not meta:
-        raise ValueError(f"Symbol {sym} not found in exchange info")
+        # 2) נסה SDK (ייתכן שיעבוד בסביבה אחרת)
+        try:
+            ei = futures_exchange_info_safe()
+            if isinstance(ei, dict) and isinstance(ei.get("symbols"), list):
+                meta = next((s for s in ei["symbols"] if s.get("symbol") == sym), None)
+        except Exception as e:
+            logging.debug(f"[trader] futures_exchange_info_safe error ignored: {e}")
 
-    price_filter = next((f for f in meta["filters"] if f["filterType"] == "PRICE_FILTER"), None)
-    lot_filter   = next((f for f in meta["filters"] if f["filterType"] == "LOT_SIZE"), None)
-    notion_filter = next((f for f in meta["filters"] if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL")), None)
+    if meta:
+        price_filter = next((f for f in meta.get("filters", []) if f.get("filterType") == "PRICE_FILTER"), None)
+        lot_filter   = next((f for f in meta.get("filters", []) if f.get("filterType") == "LOT_SIZE"), None)
+        notion_filter = next((f for f in meta.get("filters", []) if f.get("filterType") in ("MIN_NOTIONAL", "NOTIONAL")), None)
 
-    tick_size = _to_float(price_filter.get("tickSize") if price_filter else "0.0001", 0.0001)
-    step_size = _to_float(lot_filter.get("stepSize") if lot_filter else "0.001", 0.001)
-    min_qty = _to_float(lot_filter.get("minQty") if lot_filter else "0.0", 0.0)
-    min_notional = 0.0
-    if notion_filter:
-        min_notional = _to_float(notion_filter.get("notional", notion_filter.get("minNotional", "0.0")), 0.0)
+        tick_size = _to_float(price_filter.get("tickSize") if price_filter else "0.0001", 0.0001)
+        step_size = _to_float(lot_filter.get("stepSize") if lot_filter else "0.001", 0.001)
+        min_qty = _to_float(lot_filter.get("minQty") if lot_filter else "0.0", 0.0)
+        min_notional = 0.0
+        if notion_filter:
+            min_notional = _to_float(notion_filter.get("notional", notion_filter.get("minNotional", "0.0")), 0.0)
 
-    out = {
-        "tickSize": tick_size,
-        "stepSize": step_size,
-        "minQty": min_qty,
-        "minNotional": min_notional or 5.0,  # דיפולט שמרני
-    }
+        out = {
+            "tickSize": tick_size,
+            "stepSize": step_size,
+            "minQty": min_qty,
+            "minNotional": min_notional or 5.0,
+            "_source": "rest",
+        }
+        _SYMBOL_FILTERS_CACHE[sym] = out
+        return out
+
+    # 3) פולבק שמרני (לא מפילים ריצה)
+    out = _guess_filters(sym)
     _SYMBOL_FILTERS_CACHE[sym] = out
+    logging.warning(f"[trader] ⚠️ using fallback filters for {sym}: {out}")
     return out
 
 def _compute_qty(budget_usd: float, leverage: int, entry_price: float, step_size: float, min_qty: float) -> float:
@@ -111,7 +188,7 @@ async def binance_futures_trade(
     stop_price = float(sl)
     take_profit = float(tp)
 
-    # פילטרים
+    # פילטרים (עם REST+פולבק; בלי קריסה)
     filters = _load_symbol_filters(symbol)
     tick = filters["tickSize"]
     step = filters["stepSize"]
@@ -215,6 +292,12 @@ async def binance_futures_trade(
         "sl":    {"trigger": sl_trigger, "limit": sl_limit, "orderId": sl_order["orderId"]},
         "tp":    {"trigger": tp_trigger, "limit": tp_limit, "orderId": tp_order["orderId"]},
     }
+
+# ---- API ציבורית לדיבוג פילטרים ----
+def get_symbol_filters(symbol: str) -> dict:
+    """פונקציה ציבורית להצגת פילטרים, כולל מקור (rest/fallback)."""
+    return _load_symbol_filters(symbol)
+
 
 
 
