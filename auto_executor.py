@@ -1,184 +1,103 @@
-# auto_executor.py
-import asyncio
+# utils/trade_executor.py
+import os
 import logging
-from typing import Optional, List
+from typing import Dict, Any, Optional
 
 from utils import config
-from utils.watchlist_utils import load_watchlist, get_symbols_list
-from utils.multi_tf_scanner import multi_tf_scan_with_ai
-from utils.trade_executor import execute_trade_live
-from utils.ai_analysis import predict_optimal_sl_tp
-from utils.ws_fallback import get_price, is_price_fresh, launch_multi_websocket
+from utils.ws_fallback import get_price, is_price_fresh
+from utils.binance_trader import binance_futures_trade  # async
 
-SCAN_INTERVAL        = max(5, int(getattr(config, "SCAN_INTERVAL", 60)))  # נימוס לרשת
-MIN_QUALITY_SCORE    = int(getattr(config, "MIN_QUALITY_SCORE", 6))
-MAX_TRADE_BUDGET     = float(getattr(config, "MAX_TRADE_BUDGET", 100.0))
-PRICE_MAX_AGE_SEC    = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
+PRICE_PROTECT_PCT = float(getattr(config, "PRICE_PROTECT_PCT", 0.25))
+PRICE_MAX_AGE_SEC = int(getattr(config, "PRICE_MAX_AGE_SEC", 10))
+SKIP_MUTATIONS = (str(getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS", os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))).lower() == "true")
 
-# מצב "יבש": לא מבצע פקודות חתומות לבייננס (לניטור/דמו/בדיקות)
-SKIP_MUTATIONS = bool(
-    getattr(config, "BINANCE_SKIP_MUTATIONS", False) or
-    getattr(config, "SKIP_BINANCE_MUTATIONS", False)
-)
+def _norm_direction(d: str) -> str:
+    d = (d or "").strip().upper()
+    if d in ("LONG", "BUY"):
+        return "LONG"
+    if d in ("SHORT", "SELL"):
+        return "SHORT"
+    return "LONG"
 
-_running = False
-_task: Optional[asyncio.Task] = None
-
-
-async def _init_ws_symbols() -> List[str]:
+async def execute_trade_live(
+    symbol: str,
+    entry: Optional[float],
+    stop: Optional[float],
+    tp: Optional[float],
+    direction: str,
+    leverage: int = 20,
+    budget_usd: float = 100,
+    market_type: str = "futures",
+    price_protect_pct: Optional[float] = None,
+    quantity: Optional[float] = None,
+) -> Dict[str, Any]:
     """
-    בונה סט סמלים להפעלת WebSocket בתחילת הריצה.
-    אם אין ב-watchlist, יופעל fallback קטן.
+    ביצוע טרייד חי עם הגנות:
+    - אימות מחיר לייב + טריות (WS)
+    - Price deviation guard מול entry המבוקש
+    - כיבוד דגל BINANCE_SKIP_ACCOUNT_MUTATIONS לבטיחות בזמן WAF/403
     """
     try:
-        syms = get_symbols_list(min_quality=MIN_QUALITY_SCORE)
-        if not syms:
-            # fallback מינימלי כדי שתהיה תנועת מחירים
-            syms = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-        # ייחוד וסידור
-        out = sorted({s.upper() for s in syms if s})
-        return out
+        symbol = str(symbol).upper()
+        direction = _norm_direction(direction)
+        pprotect = float(price_protect_pct or PRICE_PROTECT_PCT)
+
+        # בלוק Mutations אם דגל פעיל
+        if SKIP_MUTATIONS:
+            msg = "BINANCE_SKIP_ACCOUNT_MUTATIONS=true — פעולות כתיבה מושבתות עד שה-IP יאושר ב-Binance."
+            logging.error("[TRADE] %s", msg)
+            return {"status": "error", "error": msg, "code": "mutations_disabled"}
+
+        # מחיר חי
+        live_price = await get_price(symbol)
+        if live_price is None or not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC):
+            logging.error("[TRADE] ❌ מחיר חי לא תקין/לא עדכני ל-%s: %s", symbol, live_price)
+            return {"status": "error", "error": "live price unavailable or stale"}
+
+        if entry is None:
+            entry = float(live_price)
+
+        entry = float(entry)
+        stop  = float(stop) if stop is not None else None
+        tp    = float(tp)   if tp is not None else None
+
+        if stop is None or tp is None:
+            return {"status": "error", "error": "sl/tp required (supply or predict before calling)"}
+
+        if direction == "LONG" and not (stop < entry < tp):
+            return {"status": "error", "error": f"levels invalid for LONG (entry={entry}, stop={stop}, tp={tp})"}
+        if direction == "SHORT" and not (tp < entry < stop):
+            return {"status": "error", "error": f"levels invalid for SHORT (entry={entry}, stop={stop}, tp={tp})"}
+
+        deviation = abs((live_price - entry) / entry) * 100.0
+        if deviation > pprotect:
+            logging.warning("[TRADE] ⚠️ סטיית מחיר %.4f%% בין תוכנית (%.8f) ללייב (%.8f) – נחסם", deviation, entry, live_price)
+            return {
+                "status": "error",
+                "error": f"price deviation {deviation:.4f}% > {pprotect}%",
+                "entry": entry,
+                "live_price": live_price
+            }
+
+        # ביצוע בפועל
+        result = await binance_futures_trade(
+            symbol=symbol,
+            side=direction,
+            entry=entry,
+            sl=stop,
+            tp=tp,
+            leverage=int(leverage),
+            budget=float(budget_usd),
+            quantity=quantity,
+            market_type=market_type
+        )
+        logging.info("[TRADE] %s %s live=%.8f entry=%.8f (dev=%.4f%%) -> %s", direction, symbol, live_price, entry, deviation, result)
+        return {"status": "success", "result": result}
+
     except Exception as e:
-        logging.warning(f"[AUTO] WS symbol init failed: {e}")
-        return ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+        logging.error("[TRADE] שגיאה בביצוע טרייד %s: %s", symbol, e, exc_info=True)
+        return {"status": "error", "error": str(e)}
 
-
-async def executor_loop():
-    """
-    לולאת Auto-Executor:
-    - מפעילה WS למחירים
-    - טוענת watchlist
-    - מריצה multi_tf_scan_with_ai
-    - מאמתת מחיר / טריות / SL-TP
-    - מבצעת טרייד עם הגנות (price deviation guard)
-    - מכבדת מצב 'יבש' (SKIP_MUTATIONS) לביצוע ללא שליחת הזמנות
-    """
-    global _running
-    _running = True
-    logging.info("[AUTO] Auto Executor started (skip_mutations=%s)", SKIP_MUTATIONS)
-
-    # === הפעלת WS פעם אחת בתחילת הריצה ===
-    try:
-        ws_syms = await _init_ws_symbols()
-        await launch_multi_websocket(ws_syms)
-        logging.info(f"[AUTO] WS launched for {len(ws_syms)} symbols")
-    except Exception as e:
-        logging.warning(f"[AUTO] WS launch warning: {e}")
-
-    try:
-        # לולאת סריקה אינסופית (עד stop)
-        while _running:
-            try:
-                # --- בניית רשימת סמלים מתוך watchlist (אופציונלי) ---
-                watchlist = load_watchlist(min_quality=MIN_QUALITY_SCORE)
-                symbols: List[str] = []
-                for entry in watchlist:
-                    if isinstance(entry, dict) and entry.get("symbol"):
-                        symbols.append(str(entry["symbol"]).upper())
-
-                logging.info(f"[AUTO] Scanning (min_quality={MIN_QUALITY_SCORE})…")
-                scan_results = await multi_tf_scan_with_ai(
-                    timeframes=("15m", "1h"),
-                    markets=("futures",),
-                    min_quality=MIN_QUALITY_SCORE,
-                    top=min(5, int(getattr(config, "TOP_SYMBOLS", 30))),
-                    trending_only=bool(getattr(config, "TRENDING_ONLY", True)),
-                    symbols=symbols or None
-                )
-
-                # נרווח מעט בין מועמדים כדי להפחית 403/WAF כשיש כמה פעולות רצוף
-                for idx, trade in enumerate(scan_results):
-                    if not isinstance(trade, dict) or "symbol" not in trade:
-                        logging.error(f"[AUTO] invalid scan result item: {trade}")
-                        continue
-
-                    symbol = str(trade["symbol"]).upper()
-                    direction = str(trade.get("direction", trade.get("main_direction", "LONG"))).upper()
-                    direction = direction if direction in ("LONG", "SHORT") else "LONG"
-
-                    # מחיר נוכחי
-                    entry_price = await get_price(symbol)
-                    if entry_price is None:
-                        logging.warning(f"[AUTO] Price not available for {symbol}, skipping.")
-                        continue
-                    if not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC):
-                        logging.warning(f"[AUTO] Price stale for {symbol}, skipping.")
-                        continue
-
-                    # חישוב SL/TP (עם AI או fallback)
-                    try:
-                        sl, tp = await predict_optimal_sl_tp(symbol, direction, float(entry_price))
-                    except Exception as e:
-                        logging.warning(f"[AUTO] SL/TP calc failed for {symbol}: {e}")
-                        continue
-
-                    if sl is None or tp is None:
-                        logging.warning(f"[AUTO] Invalid SL/TP for {symbol}, skipping.")
-                        continue
-
-                    logging.info(
-                        f"[AUTO] Trade candidate: {symbol} | {direction} | Entry: {entry_price} | SL: {sl} | TP: {tp}"
-                    )
-
-                    if SKIP_MUTATIONS:
-                        # מצב יבשות: לא נוגעים בחשבון בבייננס
-                        logging.info(f"[AUTO] SKIP_MUTATIONS=on → not placing real order for {symbol}")
-                    else:
-                        # jitter קצר לפני ביצוע להזמנות חתומות
-                        await asyncio.sleep(0.25)
-                        result = await execute_trade_live(
-                            symbol=symbol,
-                            entry=float(entry_price),
-                            stop=float(sl),
-                            tp=float(tp),
-                            direction=direction,
-                            leverage=20,
-                            budget_usd=MAX_TRADE_BUDGET,
-                            market_type="futures"
-                        )
-                        logging.info(f"[AUTO] Trade result: {result}")
-
-                    # רווח קטן גם בין מועמד למועמד
-                    if idx < len(scan_results) - 1:
-                        await asyncio.sleep(0.35)
-
-            except asyncio.CancelledError:
-                logging.info("[AUTO] Executor cancelled")
-                break
-            except Exception as e:
-                logging.error(f"[AUTO] Loop error: {e}", exc_info=True)
-
-            await asyncio.sleep(SCAN_INTERVAL)
-    finally:
-        _running = False
-        logging.info("[AUTO] Auto Executor stopped")
-
-
-def start_executor():
-    global _task
-    if _task is None or _task.done():
-        _task = asyncio.create_task(executor_loop())
-        logging.info("[AUTO] Executor started")
-        return True
-    logging.info("[AUTO] Executor already running")
-    return False
-
-
-def stop_executor():
-    global _running, _task
-    if _running:
-        _running = False
-        if _task:
-            _task.cancel()
-            _task = None
-        logging.info("[AUTO] Executor stopped")
-        return True
-    logging.info("[AUTO] Executor was not running")
-    return False
-
-
-def is_executor_running():
-    return _running
 
 
 
