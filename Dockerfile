@@ -1,78 +1,46 @@
-# ===== Base =====
-FROM python:3.11-slim AS base
+# ---- Base ----
+FROM python:3.11-slim
 
+# System settings
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    OPENBLAS_NUM_THREADS=1 \
-    OMP_NUM_THREADS=1 \
-    MPLCONFIGDIR=/tmp/mpl \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    TZ=Asia/Jerusalem
+    PORT=8000
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates tzdata \
+# (Optional) Timezone - uncomment אם אתה רוצה Israel time בתוך הקונטיינר
+# RUN ln -snf /usr/share/zoneinfo/Asia/Jerusalem /etc/localtime && echo "Asia/Jerusalem" > /etc/timezone
+
+# System deps (מינימלי; wheels מכסים את pandas/numpy, כך שלא צריך build-essential)
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+    ca-certificates curl tini \
  && rm -rf /var/lib/apt/lists/*
 
+# App user
+RUN useradd -ms /bin/bash appuser
 WORKDIR /app
 
-# ===== Build (wheels) =====
-FROM base AS build
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc build-essential gfortran \
-    libssl-dev libffi-dev \
-    libxml2-dev libxslt1-dev \
-    libjpeg-dev zlib1g-dev \
-    libfreetype6-dev libpng-dev \
-    libblas-dev liblapack-dev libatlas-base-dev libopenblas-dev \
-    git \
- && rm -rf /var/lib/apt/lists/*
-
+# Install Python deps first (better cache)
 COPY requirements.txt /app/requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-RUN pip install --upgrade --no-cache-dir pip \
- && pip wheel --no-cache-dir --wheel-dir /app/wheels -r /app/requirements.txt
+# Copy source
+COPY . /app
 
-# ===== Runtime =====
-FROM base AS runtime
+# Healthcheck (Render קורא /health)
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
-# ספריות runtime מינימליות
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libjpeg62-turbo zlib1g \
-    libfreetype6 libpng16-16 \
-    libopenblas0 \
- && rm -rf /var/lib/apt/lists/*
-
-# צור משתמש ותן לו בעלות על /app + צור תיקיות בסיס כ-root
-RUN useradd -m -u 10001 appuser \
- && mkdir -p /app /app/.well-known /app/static /tmp/mpl \
- && chown -R appuser:appuser /app /tmp/mpl
-
-WORKDIR /app
-
-# התקנת wheels
-COPY --from=build /app/wheels /wheels
-RUN pip install --no-cache-dir /wheels/*
-
-# קוד האפליקציה בבעלות appuser
-COPY --chown=appuser:appuser . .
-
-# הוספת bin של user ל-PATH כדי להעלים אזהרות (uvicorn/gunicorn וכו')
-ENV PATH="/home/appuser/.local/bin:${PATH}"
-
+# Permissions
+RUN chown -R appuser:appuser /app
 USER appuser
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:${PORT:-10000}/health || exit 1
+# Expose (לא חובה ל-Render, אבל טוב לתיעוד)
+EXPOSE ${PORT}
 
-# Render/Railway מזריקים PORT; ברירת מחדל ל-local
-ENV PORT=10000
+# Start (tini ל-signal handling נקי; gunicorn עם uvicorn worker)
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bash", "-lc", "exec gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:${PORT} main:app"]
 
-# שרת
-CMD ["bash", "-lc", "gunicorn main:app -k uvicorn.workers.UvicornWorker --workers 1 --bind 0.0.0.0:${PORT} --timeout 300"]
 
 
 
