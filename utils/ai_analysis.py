@@ -1,26 +1,55 @@
+# utils/ai_analysis.py
 import os
-import openai
 import logging
 import re
 import traceback
-from typing import Tuple
+from typing import Tuple, List, Dict
+
 from dotenv import load_dotenv
+import openai
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-async def analyze_with_ai(tf_results: list) -> dict:
-    if not openai.api_key or openai.api_key.strip() == "":
-        logging.error("[AI] OpenAI API key not configured")
-        return {"error": "OpenAI API key not configured"}
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+def _norm_direction(d: str) -> str:
+    d = (d or "").strip().upper()
+    if d in ("LONG", "BUY"):
+        return "LONG"
+    if d in ("SHORT", "SELL"):
+        return "SHORT"
+    return "LONG"
+
+async def analyze_with_ai(tf_results: List[Dict]) -> Dict:
+    """
+    מקבל רשימת מסגרות TF עבור סימבול אחד ומחזיר dict:
+    {symbol, direction, quality_score, signal, confidence, frames, details} או {"error": ...}
+    """
     try:
-        symbol = tf_results[0]["symbol"]
-        direction = tf_results[0]["direction"]
-        avg_rsi = sum(x.get("rsi", 50) for x in tf_results) / len(tf_results)
-        avg_adx = sum(x.get("adx", 20) for x in tf_results) / len(tf_results)
-        avg_volume = sum(x.get("volume", 1_000_000) for x in tf_results) / len(tf_results)
-        frames = [x["interval"] for x in tf_results]
+        if not tf_results:
+            return {"error": "empty tf_results"}
+
+        # סמלים/כיוון/ממוצעים
+        symbol = str(tf_results[0].get("symbol", "")).upper()
+        direction = _norm_direction(tf_results[0].get("direction"))
+        frames = [str(x.get("interval", "?")) for x in tf_results]
+        avg_rsi = sum(float(x.get("rsi", 50) or 50) for x in tf_results) / len(tf_results)
+        avg_adx = sum(float(x.get("adx", 20) or 20) for x in tf_results) / len(tf_results)
+        avg_volume = sum(float(x.get("volume", 1_000_000) or 1_000_000) for x in tf_results) / len(tf_results)
+        avg_quality = sum(float(x.get("quality_score", 0) or 0) for x in tf_results) / len(tf_results)
+
+        if not openai.api_key or not openai.api_key.strip():
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "quality_score": round(avg_quality, 2),
+                "signal": "BUY" if direction == "LONG" else "SELL",
+                "confidence": 50.0,
+                "frames": frames,
+                "details": tf_results,
+                "error": "OpenAI API key not configured"
+            }
 
         prompt = (
             f"You are a professional crypto analyst.\n"
@@ -31,76 +60,99 @@ async def analyze_with_ai(tf_results: list) -> dict:
             f"- Avg Volume: {avg_volume:,.0f}\n\n"
             f"1. Recommend: BUY / SELL / HOLD\n"
             f"2. Confidence (0-100%)\n"
-            f"3. Format: Signal: BUY | Confidence: 85% | Reason: ...\n"
+            f"3. Format exactly: Signal: BUY | Confidence: 85% | Reason: ...\n"
         )
         logging.info(f"[AI] Sending prompt for {symbol}")
 
-        response = await openai.chat.completions.acreate(
-            model="gpt-4o-mini",
+        resp = await openai.chat.completions.acreate(
+            model=MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=200
+            max_tokens=220
         )
-
-        content = response.choices[0].message.content.strip()
+        content = resp.choices[0].message.content.strip()
         logging.debug(f"[AI] Response: {content}")
 
-        result = {"signal": "HOLD", "confidence": 0.0, "raw": content}
-        signal_match = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
-        confidence_match = re.search(r"Confidence:\s*(\d+(\.\d+)?)", content)
+        signal = "HOLD"
+        conf = 0.0
+        m1 = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
+        m2 = re.search(r"Confidence:\s*(\d+(?:\.\d+)?)", content)
+        if m1:
+            signal = m1.group(1).upper()
+        if m2:
+            conf = float(m2.group(1))
 
-        if signal_match:
-            result["signal"] = signal_match.group(1).upper()
-        if confidence_match:
-            result["confidence"] = float(confidence_match.group(1))
-
-        result["symbol"] = symbol
-        result["direction"] = direction
-        result["quality_score"] = round(sum(x["quality_score"] for x in tf_results) / len(tf_results), 2)
-        result["frames"] = frames
-        result["details"] = tf_results
-
-        logging.info(f"[AI] Result: {result}")
-        return result
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "quality_score": round(avg_quality, 2),
+            "signal": signal if signal in ("BUY", "SELL", "HOLD") else "HOLD",
+            "confidence": max(0.0, min(100.0, conf)),
+            "frames": frames,
+            "details": tf_results,
+            "raw": content
+        }
 
     except Exception as e:
         logging.error(f"[AI] Exception: {e}\n{traceback.format_exc()}")
-        return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
+        # החזרה עקבית עם שדות חובה
+        symbol = str(tf_results[0].get("symbol", "")).upper() if tf_results else "UNKNOWN"
+        direction = _norm_direction(tf_results[0].get("direction")) if tf_results else "LONG"
+        avg_quality = sum(float(x.get("quality_score", 0) or 0) for x in tf_results) / max(1, len(tf_results)) if tf_results else 0.0
+        return {
+            "error": str(e),
+            "symbol": symbol,
+            "direction": direction,
+            "quality_score": round(avg_quality, 2),
+            "signal": "HOLD",
+            "confidence": 0.0,
+            "frames": [str(x.get("interval", "?")) for x in tf_results] if tf_results else [],
+            "details": tf_results or []
+        }
 
+from utils.sl_tp_utils import calculate_sl_tp
 
 async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: float = None) -> Tuple[float, float]:
+    """
+    תמיד מחזיר (stop, tp) כ-tuple. אם ה-AI נכשל—נופל ל-calculate_sl_tp.
+    מבצע ולידציה: LONG => stop < entry < tp, SHORT => tp < entry < stop.
+    """
+    direction = _norm_direction(direction)
     try:
-        prompt = (
-            f"You are a crypto trading assistant.\n"
-            f"Symbol: {symbol}\n"
-            f"Trend: {direction.upper()}\n"
-            f"Entry Price: {entry_price}\n"
-            f"ATR: {atr or 'N/A'}\n\n"
-            f"Suggest optimized SL and TP levels based on current trend and price.\n"
-            f"Return in format: SL: <value>, TP: <value>"
-        )
-        logging.info(f"[AI] SL/TP analysis for {symbol}")
+        if openai.api_key and openai.api_key.strip():
+            prompt = (
+                f"You are a crypto trading assistant.\n"
+                f"Symbol: {symbol}\n"
+                f"Trend: {direction}\n"
+                f"Entry Price: {entry_price}\n"
+                f"ATR: {atr or 'N/A'}\n\n"
+                f"Suggest optimized SL and TP. Format: SL: <value>, TP: <value>"
+            )
+            logging.info(f"[AI] SL/TP analysis for {symbol}")
 
-        response = await openai.chat.completions.acreate(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=100
-        )
-        content = response.choices[0].message.content.strip()
-        logging.debug(f"[AI] SL/TP response: {content}")
+            resp = await openai.chat.completions.acreate(
+                model=MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=120
+            )
+            content = resp.choices[0].message.content.strip()
+            logging.debug(f"[AI] SL/TP response: {content}")
 
-        import re
-        match = re.search(r"SL:\s*([\d.]+)[,\s]+TP:\s*([\d.]+)", content)
-        if match:
-            sl, tp = float(match.group(1)), float(match.group(2))
-            return round(sl, 6), round(tp, 6)
-
+            m = re.search(r"SL:\s*([\d.]+)[,\s]+TP:\s*([\d.]+)", content)
+            if m:
+                sl, tp = float(m.group(1)), float(m.group(2))
+                # ולידציה
+                if (direction == "LONG" and sl < entry_price < tp) or (direction == "SHORT" and tp < entry_price < sl):
+                    return round(sl, 6), round(tp, 6)
+                else:
+                    logging.warning(f"[AI-SLTP] Invalid levels for {direction}: entry={entry_price}, SL={sl}, TP={tp} -> fallback")
     except Exception as e:
-        logging.warning(f"[AI-SLTP] Fallback: {e}")
+        logging.warning(f"[AI-SLTP] Fallback due to error: {e}")
 
-    from utils.sl_tp_utils import calculate_sl_tp
-    return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+    sl, tp = calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+    return float(sl), float(tp)
+
 
 
 
