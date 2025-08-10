@@ -1,45 +1,55 @@
 # utils/sl_tp_utils.py
-
 import logging
-from typing import Tuple
-from utils.binance_client import client
+from typing import Tuple, Optional
 
-def calculate_sl_tp(
-    entry_price: float,
-    direction: str,
-    atr: float = None,
-    risk_reward: float = 2.0,
-    sl_pct: float = 0.7,
-    tp_pct: float = 1.4
-) -> Tuple[float, float]:
-    direction = direction.lower()
-    if direction not in ['long', 'short']:
-        raise ValueError("Direction must be 'long' or 'short'")
+MIN_PCT_FLOOR = 0.003   # 0.3% רצפה ל-SL
+TP_PCT_FLOOR  = 0.006   # 0.6% רצפה ל-TP
+ATR_SL_MULT   = 1.5
+ATR_TP_MULT   = 2.5
+
+def _to_float(x, default=0.0) -> float:
     try:
-        if atr and atr > 0:
-            sl_distance = atr * sl_pct
-            tp_distance = atr * tp_pct * risk_reward
-        else:
-            sl_distance = entry_price * 0.0035 * sl_pct
-            tp_distance = entry_price * 0.0035 * tp_pct * risk_reward
+        return float(x)
+    except Exception:
+        return float(default)
 
-        if direction == 'long':
-            sl = round(entry_price - sl_distance, 6)
-            tp = round(entry_price + tp_distance, 6)
-            if not (sl < entry_price < tp):
-                sl, tp = entry_price * 0.985, entry_price * 1.025
-        else:
-            sl = round(entry_price + sl_distance, 6)
-            tp = round(entry_price - tp_distance, 6)
-            if not (tp < entry_price < sl):
-                sl, tp = entry_price * 1.015, entry_price * 0.975
-        return sl, tp
-    except Exception as e:
-        logging.error(f"[!] שגיאה בחישוב SL/TP: {e}")
-        if direction == "long":
-            return round(entry_price * 0.99, 6), round(entry_price * 1.02, 6)
-        else:
-            return round(entry_price * 1.01, 6), round(entry_price * 0.98, 6)
+def calculate_sl_tp(entry_price: float, direction: str, atr: Optional[float] = None) -> Tuple[float, float]:
+    """
+    חישוב SL/TP דטרמיניסטי:
+    - אם יש ATR: משתמש ב-ATR*1.5 ל-SL ו-ATR*2.5 ל-TP
+    - אחרת: אחוזים רצפה (0.3%/0.6%)
+    מחזיר (SL, TP) תמיד.
+    """
+    entry = _to_float(entry_price)
+    if entry <= 0:
+        raise ValueError("entry_price must be positive")
+
+    use_atr = _to_float(atr, 0.0) if atr is not None else 0.0
+    if use_atr > 0:
+        sl_off = max(use_atr * ATR_SL_MULT, entry * MIN_PCT_FLOOR)
+        tp_off = max(use_atr * ATR_TP_MULT, entry * TP_PCT_FLOOR)
+    else:
+        sl_off = entry * MIN_PCT_FLOOR
+        tp_off = entry * TP_PCT_FLOOR
+
+    d = (direction or "").upper()
+    if d == "LONG":
+        sl = entry - sl_off
+        tp = entry + tp_off
+    else:
+        sl = entry + sl_off
+        tp = entry - tp_off
+
+    # בטיחות מינימלית (למקרה קלטים חריגים)
+    if d == "LONG" and not (sl < entry < tp):
+        sl = min(sl, entry * (1 - MIN_PCT_FLOOR))
+        tp = max(tp, entry * (1 + TP_PCT_FLOOR))
+    if d == "SHORT" and not (tp < entry < sl):
+        sl = max(sl, entry * (1 + MIN_PCT_FLOOR))
+        tp = min(tp, entry * (1 - TP_PCT_FLOOR))
+
+    return (round(float(sl), 6), round(float(tp), 6))
+
 
 
        
