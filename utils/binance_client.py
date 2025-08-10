@@ -4,40 +4,49 @@ import time
 import random
 import logging
 import threading
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict, Any
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from dotenv import load_dotenv
-load_dotenv(override=False)
+try:
+    # אופציונלי: טעינת .env אם קיים (לא חובה ב-Render)
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(override=False)
+except Exception:
+    pass
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# === טעינת קונפיג/ENV ===
+# === טעינת קונפיג / ENV ===
+def _get_bool(val: str, default: bool) -> bool:
+    if val is None:
+        return default
+    return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
+
 try:
     from utils import config
-    _API_KEY = (getattr(config, "BINANCE_API_KEY", "") or "").strip()
-    _API_SECRET = (getattr(config, "BINANCE_API_SECRET", "") or "").strip()
+    _API_KEY   = (getattr(config, "BINANCE_API_KEY", "") or "").strip()
+    _API_SECRET= (getattr(config, "BINANCE_API_SECRET", "") or "").strip()
     _BACKOFF_BASE = float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7))
-    _MAX_RETRIES = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
+    _MAX_RETRIES  = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
     _EX_INFO_ON_START = bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False))
-    _SPOT_HTTP = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
-    _FAPI_HTTP = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
+    _SPOT_HTTP   = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
+    _FAPI_HTTP   = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
     _RECV_WINDOW = int(getattr(config, "BINANCE_RECV_WINDOW", 10000))
     _TIME_SYNC_INTERVAL_SEC = int(getattr(config, "BINANCE_TIME_SYNC_INTERVAL_SEC", 900))  # 15 דק'
     _ALLOWED_EGRESS_IPS = getattr(config, "BINANCE_ALLOWED_EGRESS_IPS", "").strip()
-    _EGRESS_IP_ENDPOINT = getattr(config, "EGRESS_IP_ENDPOINT", "").strip()  # אופציונלי
+    _EGRESS_IP_ENDPOINT = getattr(config, "EGRESS_IP_ENDPOINT", "").strip()
 except Exception:
-    _API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
-    _API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
+    _API_KEY   = (os.getenv("BINANCE_API_KEY") or "").strip()
+    _API_SECRET= (os.getenv("BINANCE_API_SECRET") or "").strip()
     _BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
-    _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
-    _EX_INFO_ON_START = (os.getenv("BINANCE_EXCHANGE_INFO_ON_START", "false").lower() == "true")
-    _SPOT_HTTP = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
-    _FAPI_HTTP = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
+    _MAX_RETRIES  = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
+    _EX_INFO_ON_START = _get_bool(os.getenv("BINANCE_EXCHANGE_INFO_ON_START", "false"), False)
+    _SPOT_HTTP   = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
+    _FAPI_HTTP   = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
     _RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
     _TIME_SYNC_INTERVAL_SEC = int(os.getenv("BINANCE_TIME_SYNC_INTERVAL_SEC", "900"))
     _ALLOWED_EGRESS_IPS = (os.getenv("BINANCE_ALLOWED_EGRESS_IPS", "") or "").strip()
@@ -45,7 +54,7 @@ except Exception:
 
 # === סשן HTTP גלובלי ידידותי ל-WAF + ריטריי/Pooling ===
 _session = requests.Session()
-_session.trust_env = False  # לא להשתמש בפרוקסי סביבתי
+_session.trust_env = False  # לא להשתמש בפרוקסי סביבתי (מונע הפתעות ב-Render)
 _session.headers.update({
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -64,7 +73,7 @@ _retry = Retry(
     status=_MAX_RETRIES,
     backoff_factor=_BACKOFF_BASE,
     status_forcelist=[403, 418, 429, 500, 502, 503, 504],
-    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),  # POST לא אידמפוטנטי
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),  # לא מריצים POST בריטריי (לא אידמפוטנטי)
     raise_on_status=False,
 )
 _adapter = HTTPAdapter(max_retries=_retry, pool_connections=50, pool_maxsize=50)
@@ -119,7 +128,7 @@ def check_outbound_ip_against_allowlist():
     else:
         logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. עלול לגרום ל-403/CloudFront.")
 
-# === יצירת לקוח ===
+# === יצירת לקוח Binance ===
 def _make_client() -> Client:
     if _API_KEY and _API_SECRET:
         logging.info("[Binance] 🔑 נמצאו מפתחות – מנסה להתחבר…")
@@ -128,21 +137,22 @@ def _make_client() -> Client:
         logging.warning("[Binance] ללא מפתחות – מצב Public-Only (market data בלבד).")
         c = Client(None, None, tld="com", requests_params=_requests_params)
 
-    # כתובות בסיס
-    c.API_URL = _SPOT_HTTP
-    c.FUTURES_URL = _FAPI_HTTP
+    # חשוב: בסיסי ה-URL חייבים לכלול את הנתיב /api ו-/fapi
+    c.API_URL     = f"{_SPOT_HTTP.rstrip('/')}/api"
+    c.FUTURES_URL = f"{_FAPI_HTTP.rstrip('/')}/fapi"
 
-    # חלון קבלה וזמן
+    # חלון קבלה (מקטין 401/Timestamp)
     try:
         c.RECV_WINDOW = _RECV_WINDOW
     except Exception:
         pass
 
-    # שימוש בסשן הקשיח שלנו
+    # שימוש בסשן הקשיח שלנו (UA + ריטריי + pooling)
     c.session = _session
     return c
 
 def get_client() -> Client:
+    """לקוח סינגלטון עם time sync ראשוני ו-thread תקופתי."""
     global _client, _time_sync_thread_started
     if _client is None:
         _client = _make_client()
@@ -170,7 +180,7 @@ def sync_server_time() -> None:
     global _client
     c = _client or _make_client()
 
-    url = f"{_FAPI_HTTP}/fapi/v1/time"
+    url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/time"
     t0 = int(time.time() * 1000)
     r = _session.get(url, timeout=6)
     r.raise_for_status()
@@ -179,6 +189,7 @@ def sync_server_time() -> None:
     rtt = (t1 - t0)
     estimated_now = t0 + rtt // 2
     offset_ms = server_ms - estimated_now
+    # python-binance קורא לזה timestamp_offset
     c.timestamp_offset = offset_ms
     logging.info(f"[Binance] 🕒 time sync: offset={offset_ms}ms rtt~{rtt}ms (recvWindow={_RECV_WINDOW}ms)")
 
@@ -239,7 +250,7 @@ def retry_call(fn: Callable, name: str):
 
 # === exchangeInfo – פולבק ל־HTTP אם ה-SDK לא הצליח ===
 def _futures_exchange_info_http():
-    url = f"{_FAPI_HTTP}/fapi/v1/exchangeInfo"
+    url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/exchangeInfo"
     def _do():
         r = _session.get(url, timeout=8)
         if r.status_code != 200:
@@ -250,19 +261,19 @@ def _futures_exchange_info_http():
         return r.json()
     return _retry_call(_do, name="futures_exchange_info(HTTP)")
 
-def futures_exchange_info_safe():
+def futures_exchange_info_safe() -> Dict[str, Any]:
     c = get_client()
     data = _retry_call(lambda: c.futures_exchange_info(), name="futures_exchange_info")
     if not isinstance(data, dict) or "symbols" not in data:
         data = _futures_exchange_info_http()
-    return data
+    return data or {}
 
 def futures_mark_price(symbol: str):
     """
     קריאת Mark Price בפאבליק (לא חתום), עם ריטריי ידידותי ל-WAF.
     מזהה תשובת HTML של CloudFront (403) ומחלץ הודעה.
     """
-    url = f"{_FAPI_HTTP}/fapi/v1/premiumIndex"
+    url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/premiumIndex"
     params = {"symbol": symbol.upper()}
 
     def _do():
@@ -289,8 +300,11 @@ def _http_ping(url: str, name: str) -> bool:
         return False
 
 def ping_and_info() -> bool:
-    ok_spot = _http_ping(f"{_SPOT_HTTP}/api/v3/ping", "spot")
-    ok_fapi = _http_ping(f"{_FAPI_HTTP}/fapi/v1/ping", "futures")
+    spot_url = f"{_SPOT_HTTP.rstrip('/')}/api/v3/ping"
+    fapi_url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/ping"
+
+    ok_spot = _http_ping(spot_url, "spot")
+    ok_fapi = _http_ping(fapi_url, "futures")
     ok = ok_spot or ok_fapi
 
     if ok:
@@ -306,6 +320,7 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
 
 
 
