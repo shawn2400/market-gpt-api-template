@@ -66,6 +66,7 @@ OPENAI_MODEL   = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
 OPENAI_TIMEOUT_SECONDS  = _env_float("OPENAI_TIMEOUT_SECONDS", 30.0)
 OPENAI_MAX_CONCURRENCY  = _env_int("OPENAI_MAX_CONCURRENCY", 4)
 OPENAI_BASE_URL         = os.environ.get("OPENAI_BASE_URL", "").strip() or None
+# פרוקסי נלקח ע"י httpx מ-HTTP(S)_PROXY אם יוגדר — לא צריך כאן משתנה נפרד.
 
 # === Trading / Executor ===
 AUTO_RUN = _env_bool("AUTO_RUN", True)
@@ -79,6 +80,12 @@ TRENDING_ONLY = _env_bool("TRENDING_ONLY", True)
 
 PRICE_PROTECT_PCT = _env_float("PRICE_PROTECT_PCT", 0.10)
 PRICE_MAX_AGE_SEC = _env_int("PRICE_MAX_AGE_SEC", 10)
+
+# --- SL/TP (אופציונלי; לשימוש אם נרצה לשלוט בלי לשנות קוד) ---
+SLTP_MIN_PCT_FLOOR = _env_float("SLTP_MIN_PCT_FLOOR", 0.003)   # 0.3% ל-SL
+SLTP_TP_PCT_FLOOR  = _env_float("SLTP_TP_PCT_FLOOR",  0.006)   # 0.6% ל-TP
+SLTP_ATR_SL_MULT   = _env_float("SLTP_ATR_SL_MULT",   1.5)
+SLTP_ATR_TP_MULT   = _env_float("SLTP_ATR_TP_MULT",   2.5)
 
 # === Server / Security ===
 PORT = _env_int("PORT", int(os.environ.get("PORT", "8000")))
@@ -107,6 +114,10 @@ def log_config_summary():
         "[config] WS bases: futures=%s | spot=%s | suffix=%s",
         BINANCE_FUTURES_WS_BASE, BINANCE_SPOT_WS_BASE, BINANCE_WS_STREAM_SUFFIX
     )
+    logging.info(
+        "[config] SLTP floors/mults: SL%%=%.4f | TP%%=%.4f | ATR_SL=%.2f | ATR_TP=%.2f",
+        SLTP_MIN_PCT_FLOOR, SLTP_TP_PCT_FLOOR, SLTP_ATR_SL_MULT, SLTP_ATR_TP_MULT
+    )
 
 def as_dict():
     """קונפיג 'ציבורי' ללא סודות, עבור /config."""
@@ -133,6 +144,11 @@ def as_dict():
         "binance_spot_ws_base": BINANCE_SPOT_WS_BASE,
         "binance_ws_stream_suffix": BINANCE_WS_STREAM_SUFFIX,
         "cors_allow_origins": CORS_ALLOW_ORIGINS,
+        # תוספות SL/TP לצפייה ב-/config
+        "sltp_min_pct_floor": SLTP_MIN_PCT_FLOOR,
+        "sltp_tp_pct_floor": SLTP_TP_PCT_FLOOR,
+        "sltp_atr_sl_mult": SLTP_ATR_SL_MULT,
+        "sltp_atr_tp_mult": SLTP_ATR_TP_MULT,
     }
 
 
