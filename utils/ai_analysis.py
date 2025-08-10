@@ -2,145 +2,123 @@
 import logging
 import re
 import traceback
-from typing import Tuple, Optional, List, Dict
+from typing import Tuple, List, Dict, Any
 
-from utils.sl_tp_utils import calculate_sl_tp
 from utils import config
+from utils.ai_client import chat
+from utils.sl_tp_utils import calculate_sl_tp
 
-# OpenAI v1.x (Async)
-try:
-    from openai import AsyncOpenAI
-except Exception as e:
-    AsyncOpenAI = None
-    logging.warning(f"[AI] OpenAI SDK import failed: {e}")
+def _avg(vals, default: float = 0.0) -> float:
+    xs = [float(v) for v in vals if isinstance(v, (int, float))]
+    return round(sum(xs) / len(xs), 4) if xs else float(default)
 
-_client = None
-if AsyncOpenAI and config.OPENAI_API_KEY:
+def _parse_signal_conf(text: str) -> Dict[str, Any]:
+    out = {"signal": "HOLD", "confidence": 0.0}
     try:
-        _client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-    except Exception as e:
-        logging.error(f"[AI] failed to init AsyncOpenAI: {e}")
-        _client = None
-
-MODEL = config.OPENAI_MODEL or "gpt-4o-mini"
-
-def _avg(values: List[float], default: float = 0.0) -> float:
-    try:
-        vals = [float(x) for x in values if x is not None]
-        return sum(vals) / len(vals) if vals else float(default)
+        m_sig = re.search(r"Signal:\s*(BUY|SELL|HOLD)", text, re.IGNORECASE)
+        if m_sig:
+            out["signal"] = m_sig.group(1).upper()
+        m_conf = re.search(r"Confidence:\s*(\d+(\.\d+)?)", text)
+        if m_conf:
+            out["confidence"] = float(m_conf.group(1))
     except Exception:
-        return float(default)
+        pass
+    return out
 
-async def analyze_with_ai(tf_results: List[Dict]) -> dict:
+async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    מקבל רשימת תוצאות TF מסורק (dict לכל TF) ומחזיר:
-    {
-      symbol, direction, quality_score, frames, signal (BUY/SELL/HOLD),
-      confidence (0-100), details: [...]
-    }
-    אם אין API KEY/SDK → יוחזר {"error": "..."} ונמשיך בלי לעצור את הזרימה.
+    קולט את פלט ה-multi_tf_scan (לסמל יחיד, מסגרות זמן שונות),
+    ומחזיר החלטת AI יציבה ומפורמטת.
     """
-    if not _client:
-        logging.error("[AI] OpenAI API key not configured or SDK missing")
-        return {"error": "OpenAI API key not configured"}
-
     try:
         if not tf_results or not isinstance(tf_results, list):
-            return {"error": "tf_results invalid"}
+            return {"error": "empty tf_results", "signal": "HOLD", "confidence": 0.0}
 
-        symbol = str(tf_results[0].get("symbol", "")).upper()
-        direction = str(tf_results[0].get("direction", "LONG")).upper()
-        avg_rsi = _avg([x.get("rsi", 50) for x in tf_results], 50.0)
-        avg_adx = _avg([x.get("adx", 20) for x in tf_results], 20.0)
-        avg_volume = _avg([x.get("volume", 1_000_000) for x in tf_results], 1_000_000.0)
-        frames = [str(x.get("interval", "NA")) for x in tf_results]
-        q_score = round(_avg([x.get("quality_score", 0) for x in tf_results], 0.0), 2)
+        symbol = tf_results[0].get("symbol", "UNKNOWN")
+        direction = tf_results[0].get("direction", "LONG")
+        frames = [x.get("interval", "?") for x in tf_results]
+
+        avg_rsi = _avg([x.get("rsi") for x in tf_results], default=50.0)
+        avg_adx = _avg([x.get("adx") for x in tf_results], default=20.0)
+        avg_volume = _avg([x.get("volume") for x in tf_results], default=1_000_000.0)
+        q_scores = [float(x.get("quality_score", 0.0)) for x in tf_results]
+        avg_q = round(sum(q_scores) / len(q_scores), 2) if q_scores else 0.0
 
         prompt = (
-            "You are a professional crypto analyst.\n"
-            f"Technical analysis for {symbol} across {', '.join(frames)}\n"
+            f"You are a professional crypto analyst.\n"
+            f"Technical analysis for {symbol} across frames: {', '.join(frames)}\n"
             f"- Direction: {direction}\n"
             f"- Avg RSI: {avg_rsi:.2f}\n"
             f"- Avg ADX: {avg_adx:.2f}\n"
-            f"- Avg Volume: {avg_volume:,.0f}\n\n"
-            "1. Recommend: BUY / SELL / HOLD\n"
-            "2. Confidence (0-100%)\n"
-            "3. Format exactly: Signal: BUY | Confidence: 85% | Reason: ...\n"
+            f"- Avg Volume: {avg_volume:,.0f}\n"
+            f"- Avg Quality: {avg_q:.2f}\n\n"
+            f"Return exactly this format on a single line:\n"
+            f"Signal: BUY/SELL/HOLD | Confidence: <0-100>% | Reason: <short reason>\n"
         )
-        logging.info(f"[AI] Sending prompt for {symbol} ({MODEL})")
 
-        resp = await _client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
+        logging.info(f"[AI] analyze_with_ai prompt for {symbol} (frames={frames})")
+        content = await chat(
+            prompt,
+            system="Be concise and deterministic. No markdown.",
+            model=getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0.0,
             max_tokens=200,
+            retries=2,
         )
 
-        content = (resp.choices[0].message.content or "").strip()
-        logging.debug(f"[AI] Response: {content}")
-
-        result = {"signal": "HOLD", "confidence": 0.0, "raw": content}
-        m_signal = re.search(r"Signal:\s*(BUY|SELL|HOLD)", content, re.IGNORECASE)
-        m_conf = re.search(r"Confidence:\s*(\d+(\.\d+)?)", content)
-
-        if m_signal:
-            result["signal"] = m_signal.group(1).upper()
-        if m_conf:
-            result["confidence"] = float(m_conf.group(1))
-
-        result.update({
+        parsed = _parse_signal_conf(content)
+        result = {
             "symbol": symbol,
             "direction": direction,
-            "quality_score": q_score,
+            "quality_score": avg_q,
             "frames": frames,
+            "signal": parsed["signal"],
+            "confidence": parsed["confidence"],
+            "raw": content,
             "details": tf_results,
-        })
-        logging.info(f"[AI] Result: {result}")
+        }
         return result
 
     except Exception as e:
-        logging.error(f"[AI] Exception: {e}\n{traceback.format_exc()}")
+        logging.error(f"[AI] analyze_with_ai exception: {e}\n{traceback.format_exc()}")
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
 
-async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: Optional[float] = None) -> Tuple[float, float]:
+async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: float = None) -> Tuple[float, float]:
     """
-    מנסה לקבל SL/TP אופטימליים מהמודל. אם נכשל/אין SDK/KEY → פולבק דטרמיניסטי.
+    חישוב SL/TP בעזרת GPT (עם פולבק דטרמיניסטי ל-calculate_sl_tp).
     """
-    # אם אין לקוח – פולבק
-    if not _client:
-        return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
-
     try:
         prompt = (
-            "You are a crypto trading assistant.\n"
+            f"You are a crypto trading assistant.\n"
             f"Symbol: {symbol}\n"
             f"Trend: {direction.upper()}\n"
             f"Entry Price: {entry_price}\n"
             f"ATR: {atr if atr is not None else 'N/A'}\n\n"
-            "Suggest optimized SL and TP levels based on current trend and price.\n"
-            "Return strictly in format: SL: <value>, TP: <value>\n"
+            f"Suggest optimized SL and TP levels based on trend and entry. "
+            f"Return exactly: SL: <number>, TP: <number>"
         )
-        logging.info(f"[AI] SL/TP analysis for {symbol} ({MODEL})")
 
-        resp = await _client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
+        logging.info(f"[AI] SL/TP analysis for {symbol}")
+        content = await chat(
+            prompt,
+            system="Reply with 'SL: <num>, TP: <num>' only.",
+            model=getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0.2,
-            max_tokens=120,
+            max_tokens=40,
+            retries=2,
         )
-        content = (resp.choices[0].message.content or "").strip()
-        logging.debug(f"[AI] SL/TP response: {content}")
 
-        m = re.search(r"SL:\s*([\d.]+)[,\s]+TP:\s*([\d.]+)", content)
+        m = re.search(r"SL:\s*([0-9]*\.?[0-9]+)\s*,\s*TP:\s*([0-9]*\.?[0-9]+)", content)
         if m:
-            sl = float(m.group(1))
-            tp = float(m.group(2))
-            return (round(sl, 6), round(tp, 6))
+            sl, tp = float(m.group(1)), float(m.group(2))
+            return round(sl, 6), round(tp, 6)
+
+        logging.warning(f"[AI] SL/TP parse failed, content={content!r}; using fallback")
 
     except Exception as e:
-        logging.warning(f"[AI-SLTP] Fallback due to: {e}")
+        logging.warning(f"[AI-SLTP] Exception: {e}; using fallback")
 
-    # פולבק דטרמיניסטי
+    # Fallback דטרמיניסטי
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
 
 
