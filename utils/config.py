@@ -86,22 +86,16 @@ OPENAI_MAX_CONCURRENCY   = _get_int("OPENAI_MAX_CONCURRENCY", 4)
 API_BEARER_TOKEN         = _get_str("API_BEARER_TOKEN", "secret-token")
 
 # ---------- Auto Trading Controls ----------
-ENABLE_AUTO_TRADING      = _get_bool("ENABLE_AUTO_TRADING", False)  # סריקה אוטומטית
-EXECUTE_TRADES           = _get_bool("EXECUTE_TRADES", False)       # ביצוע הזמנות בפועל
+ENABLE_AUTO_TRADING      = _get_bool("ENABLE_AUTO_TRADING", False)
+EXECUTE_TRADES           = _get_bool("EXECUTE_TRADES", False)
 
-# ---------- SL/TP Tunables (ל־sl_tp_utils) ----------
-SLTP_MIN_PCT_FLOOR       = _get_float("SLTP_MIN_PCT_FLOOR", 0.003)  # 0.3%
-SLTP_TP_PCT_FLOOR        = _get_float("SLTP_TP_PCT_FLOOR", 0.006)  # 0.6%
+# ---------- SL/TP (חדשים) ----------
+# רצפת אחוז ל-SL/TP כשאין ATR / או כהגנה מינימלית
+SLTP_MIN_PCT_FLOOR       = _get_float("SLTP_MIN_PCT_FLOOR", 0.003)   # 0.3%
+SLTP_TP_PCT_FLOOR        = _get_float("SLTP_TP_PCT_FLOOR", 0.006)   # 0.6%
+# מכפילי ATR כאשר יש ATR זמין
 SLTP_ATR_SL_MULT         = _get_float("SLTP_ATR_SL_MULT", 1.5)
 SLTP_ATR_TP_MULT         = _get_float("SLTP_ATR_TP_MULT", 2.5)
-
-# ---------- Extra Safety (ל־auto_executor) ----------
-SL_MIN_PCT               = _get_float("SL_MIN_PCT", 0.20)   # 0.20%
-SL_MAX_PCT               = _get_float("SL_MAX_PCT", 5.00)   # 5.00%
-TP_MIN_PCT               = _get_float("TP_MIN_PCT", 0.30)   # 0.30%
-TP_MAX_PCT               = _get_float("TP_MAX_PCT", 8.00)   # 8.00%
-SYMBOL_COOLDOWN_SEC      = _get_int("SYMBOL_COOLDOWN_SEC", 600)  # 10 דקות
-MAX_TRADES_PER_TICK      = _get_int("MAX_TRADES_PER_TICK", 3)
 
 def log_config_summary():
     logging.info("[CONFIG] AutoRun=%s Interval=%ss DefaultTF=%s", AUTO_RUN, SCAN_INTERVAL, DEFAULT_INTERVAL)
@@ -115,10 +109,10 @@ def log_config_summary():
     logging.info("[CONFIG] Keys: has_binance=%s has_openai=%s binance_key_prefix=%s",
                  bool(BINANCE_API_KEY), bool(OPENAI_API_KEY), _mask(BINANCE_API_KEY))
     logging.info("[CONFIG] AutoTrading: enable=%s execute=%s", ENABLE_AUTO_TRADING, EXECUTE_TRADES)
-    logging.info("[CONFIG] SLTP: min_floor=%.4f tp_floor=%.4f atr_sl=%.3f atr_tp=%.3f",
+    # חדשים:
+    logging.info("[CONFIG] SLTP: min_pct_floor=%.4f tp_pct_floor=%.4f atr_sl_mult=%.2f atr_tp_mult=%.2f",
                  SLTP_MIN_PCT_FLOOR, SLTP_TP_PCT_FLOOR, SLTP_ATR_SL_MULT, SLTP_ATR_TP_MULT)
-    logging.info("[CONFIG] Safety: SL%%=[%.3f..%.3f] TP%%=[%.3f..%.3f] cooldown=%ss max_trades/tick=%s",
-                 SL_MIN_PCT, SL_MAX_PCT, TP_MIN_PCT, TP_MAX_PCT, SYMBOL_COOLDOWN_SEC, MAX_TRADES_PER_TICK)
+
 
 
 
