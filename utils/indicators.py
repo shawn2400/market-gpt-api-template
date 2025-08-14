@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, MACD, EMAIndicator
@@ -118,26 +118,26 @@ def _vwap(df: pd.DataFrame) -> pd.Series:
 def _body(o: pd.Series, c: pd.Series) -> pd.Series:
     return (c - o).abs()
 
-def _is_bull(o, c):  # ירוק
+def _is_bull(o, c) -> pd.Series:  # ירוק
     return c > o
 
-def _is_bear(o, c):  # אדום
+def _is_bear(o, c) -> pd.Series:  # אדום
     return c < o
 
-def _wick_upper(h, o, c):
+def _wick_upper(h, o, c) -> pd.Series:
     return h - np.maximum(o, c)
 
-def _wick_lower(l, o, c):
+def _wick_lower(l, o, c) -> pd.Series:
     return np.minimum(o, c) - l
 
 def _pct_of(x: pd.Series, base: pd.Series, eps: float = 1e-12) -> pd.Series:
     return x / (base.replace(0, eps))
 
-def _patterns(df: pd.DataFrame) -> List[str]:
+def _patterns_all(df: pd.DataFrame) -> Dict[str, pd.Series]:
     """
-    מחזיר רשימת תבניות לכל שורה (כמחרוזת מופרדת בפסיקים בסוף).
+    מחזיר מילון עם מסכות (Series[bool]) לכל תבנית + 'pattern' כמחרוזת.
     תבניות: Doji, Bullish Engulfing, Bearish Engulfing, Hammer, Inverted Hammer, Shooting Star,
-            Morning Star (3 נרות), Evening Star (3 נרות).
+            Morning Star, Evening Star.
     """
     o = df["open"]; h = df["high"]; l = df["low"]; c = df["close"]
     rng = (h - l).replace(0, np.nan)
@@ -165,61 +165,63 @@ def _patterns(df: pd.DataFrame) -> List[str]:
     bearish_engulf = is_bear & prev_bull & (o >= c_prev) & (c <= o_prev)
 
     # Hammer / Inverted Hammer / Shooting Star
-    hammer = lower_long & (~upper_long) & (body > 0) & ((c > o) | (o > c)) & (_pct_of(body, rng) <= 0.35)
+    hammer = lower_long & (~upper_long) & (body > 0) & (_pct_of(body, rng) <= 0.35)
     inv_hammer = upper_long & (~lower_long) & (body > 0) & (_pct_of(body, rng) <= 0.35) & is_bull
     shooting_star = upper_long & (~lower_long) & (body > 0) & (_pct_of(body, rng) <= 0.35) & is_bear
 
     # Morning/Evening Star (3 נרות בסיסי)
-    # Morning Star: נר אדום גדול, אחריו גוף קטן (דוז'י/קטן) עם גאפ מטה (בקריפטו נדיר — נר קטן יספיק),
-    # ואז נר ירוק גדול שסוגר מעל אמצע גוף הנר הראשון.
-    small_body_prev = _pct_of(_body(o_prev, c_prev), (h.shift(1) - l.shift(1)).replace(0, np.nan)) <= 0.25
     o_prev2 = o.shift(2); c_prev2 = c.shift(2)
     rng_prev2 = (h.shift(2) - l.shift(2)).replace(0, np.nan)
     large_prev2 = _pct_of(_body(o_prev2, c_prev2), rng_prev2) >= 0.5
+    small_body_prev = _pct_of(_body(o_prev, c_prev), (h.shift(1) - l.shift(1)).replace(0, np.nan)) <= 0.25
 
     morning_star = (
-        large_prev2 & (c_prev2 < o_prev2) &                  # נר 1 אדום גדול
-        small_body_prev &                                    # נר 2 קטן
-        is_bull & body_large &                               # נר 3 ירוק גדול
-        (c >= (o_prev2 + c_prev2) / 2)                       # סוגר מעל חצי הגוף של נר 1
+        large_prev2 & (c_prev2 < o_prev2) &   # נר 1 אדום גדול
+        small_body_prev &                     # נר 2 קטן/דוג'י
+        is_bull & body_large &                # נר 3 ירוק גדול
+        (c >= (o_prev2 + c_prev2) / 2)        # סגירה מעל חצי הגוף של נר 1
     )
 
     evening_star = (
-        large_prev2 & (c_prev2 > o_prev2) &                  # נר 1 ירוק גדול
-        small_body_prev &                                    # נר 2 קטן
-        is_bear & body_large &                               # נר 3 אדום גדול
-        (c <= (o_prev2 + c_prev2) / 2)                       # סוגר מתחת לחצי הגוף של נר 1
+        large_prev2 & (c_prev2 > o_prev2) &   # נר 1 ירוק גדול
+        small_body_prev &                     # נר 2 קטן/דוג'י
+        is_bear & body_large &                # נר 3 אדום גדול
+        (c <= (o_prev2 + c_prev2) / 2)        # סגירה מתחת לחצי הגוף של נר 1
     )
 
-    labels: List[pd.Series] = []
-    def _label(mask: pd.Series, name: str) -> pd.Series:
-        s = pd.Series("", index=df.index, dtype="object")
-        s[mask.fillna(False)] = name
-        return s
+    # מחרוזת תבניות משולבת לכל שורה
+    names = [
+        ("Doji", doji),
+        ("Bullish Engulfing", bullish_engulf),
+        ("Bearish Engulfing", bearish_engulf),
+        ("Hammer", hammer),
+        ("Inverted Hammer", inv_hammer),
+        ("Shooting Star", shooting_star),
+        ("Morning Star", morning_star),
+        ("Evening Star", evening_star),
+    ]
 
-    labels.append(_label(doji, "Doji"))
-    labels.append(_label(bullish_engulf, "Bullish Engulfing"))
-    labels.append(_label(bearish_engulf, "Bearish Engulfing"))
-    labels.append(_label(hammer, "Hammer"))
-    labels.append(_label(inv_hammer, "Inverted Hammer"))
-    labels.append(_label(shooting_star, "Shooting Star"))
-    labels.append(_label(morning_star, "Morning Star"))
-    labels.append(_label(evening_star, "Evening Star"))
+    labdf = pd.DataFrame({n: m.fillna(False) for n, m in names}, index=df.index)
 
-    # איחוד לרשימה/מחרוזת לכל שורה
-    labdf = pd.concat(labels, axis=1)
-    def join_row(row: pd.Series) -> str:
-        xs = [x for x in row.tolist() if isinstance(x, str) and x]
+    def _join_row(row: pd.Series) -> str:
+        xs = [name for name, on in zip(labdf.columns, row.values) if bool(on)]
         return ", ".join(xs) if xs else "unknown"
 
-    return labdf.apply(join_row, axis=1).tolist()
+    pattern_str = labdf.apply(_join_row, axis=1)
+
+    out: Dict[str, pd.Series] = {f"is_{n.lower().replace(' ', '_')}": m for n, m in names}
+    out["pattern"] = pattern_str
+    return out
 
 
 def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     """
     מחזיר DataFrame עם העמודות:
     rsi, adx, atr, macd, macd_signal, macd_hist, ema_21, ema_50, vwap,
-    supertrend, supertrend_dir, volume_mean, pattern
+    supertrend, supertrend_dir, volume_mean, pattern,
+    is_doji, is_bullish_engulfing, is_bearish_engulfing, is_hammer,
+    is_inverted_hammer, is_shooting_star, is_morning_star, is_evening_star
+
     אם אין מספיק נתונים – מחזיר DF ריק.
     """
     base = _ensure_df(df)
@@ -269,12 +271,26 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
         # ממוצע נפח
         out["volume_mean"] = out["volume"].rolling(50, min_periods=1).mean()
 
-        # תבניות נרות (מחרוזת)
+        # תבניות נרות (מחרוזת + דגלים)
         try:
-            out["pattern"] = _patterns(out)
+            pats = _patterns_all(out)
+            # pattern string
+            out["pattern"] = pats["pattern"].astype("string")
+            # דגלים בינאריים 0/1
+            for col, mask in pats.items():
+                if col == "pattern":
+                    continue
+                out[col] = mask.fillna(False).astype("int8")
         except Exception as e:
             logging.debug(f"[indicators] pattern detection skipped: {e}")
             out["pattern"] = "unknown"
+            # דגלים בינאריים כברירת מחדל 0
+            for col in (
+                "is_doji", "is_bullish_engulfing", "is_bearish_engulfing",
+                "is_hammer", "is_inverted_hammer", "is_shooting_star",
+                "is_morning_star", "is_evening_star"
+            ):
+                out[col] = np.int8(0)
 
         # ניקוי NaN/Inf
         cols_needed = [
@@ -289,17 +305,12 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
             logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
             return pd.DataFrame()
 
-        # אם לא זוהתה תבנית – ודא שיש מחרוזות "unknown"
-        if "pattern" not in out.columns:
-            out["pattern"] = "unknown"
-        else:
-            out["pattern"] = out["pattern"].fillna("unknown").astype("string")
-
         return out
 
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
         return pd.DataFrame()
+
 
 
 
