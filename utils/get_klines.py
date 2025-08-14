@@ -5,7 +5,8 @@ from typing import Optional, List, Any
 import pandas as pd
 
 from utils import config
-# REST fallback מהיר (מודע לבאן)
+
+# REST fallback מהיר (מודע לבאן/Retry-After) דרך שכבת ws_fallback
 from utils.ws_fallback import snapshot_klines_df
 # מודעות־באן גם לשכבת python-binance (הפעלת cooldown דיפולטי כשמזהים BAN)
 try:
@@ -40,11 +41,19 @@ def _ensure_client():
         c.FUTURES_URL = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
     except Exception:
         c.FUTURES_URL = "https://fapi.binance.com"
+    try:
+        # להשלמת תמונה — אם צריך גם SPOT
+        c.API_URL = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
+    except Exception:
+        pass
     logging.warning("[get_klines] ⚠️ Binance client לא מאותחל – מפעיל Public-Only fallback.")
     return c
 
 def _normalize(symbol: str, interval: str, limit: Optional[int],
                market_type: str, grid_base_type: str, is_futures: Optional[bool]):
+    """
+    נורמליזציה של פרמטרים והחזרת ערכים בטוחים.
+    """
     if is_futures is not None:
         mt = "futures" if is_futures else "spot"
     else:
@@ -72,6 +81,9 @@ def _normalize(symbol: str, interval: str, limit: Optional[int],
     return sym, itv, lim, mt
 
 def _to_df(raw: List[List[Any]]) -> pd.DataFrame:
+    """
+    המרת klines גולמי ל-DataFrame נקי וממויין.
+    """
     if not raw or len(raw) < 5:
         return pd.DataFrame()
 
@@ -221,6 +233,7 @@ def get_klines(symbol: str,
     except Exception as e:
         logging.error(f"[get_klines] ❌ שגיאה לא צפויה עבור {sym}@{itv}: {type(e).__name__} – {e}")
         return pd.DataFrame()
+
 
 
 
