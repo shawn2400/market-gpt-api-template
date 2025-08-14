@@ -1,5 +1,6 @@
 # utils/sl_tp_utils.py
 from typing import Tuple, Optional
+import math
 
 # ננסה לקרוא פרמטרים מקובץ הקונפיג; יש פולבק לערכי דיפולט אם חסר.
 try:
@@ -18,9 +19,28 @@ except Exception:
 
 def _to_float(x, default: float = 0.0) -> float:
     try:
-        return float(x)
+        v = float(x)
+        if math.isnan(v) or math.isinf(v):
+            return float(default)
+        return v
     except Exception:
         return float(default)
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    if lo > hi:
+        lo, hi = hi, lo
+    return max(lo, min(hi, x))
+
+
+def _norm_dir(direction: str) -> str:
+    d = (direction or "").strip().upper()
+    if d in ("LONG", "BUY"):
+        return "LONG"
+    if d in ("SHORT", "SELL"):
+        return "SHORT"
+    # דיפולט הגנתי: SHORT
+    return "SHORT"
 
 
 def get_sltp_params() -> dict:
@@ -53,7 +73,7 @@ def calculate_sl_tp(
       - בלי ATR: רצפה באחוזים (min_pct_floor / tp_pct_floor)
 
     :param entry_price: מחיר כניסה (>0)
-    :param direction: "LONG" או "SHORT"
+    :param direction: "LONG" או "SHORT" (מילות BUY/SELL יתנרמלו)
     :param atr: (לא חובה) ערך ATR
     :param min_pct_floor: (אופציונלי) רצפת אחוז ל-SL (למשל 0.003 = 0.3%)
     :param tp_pct_floor:  (אופציונלי) רצפת אחוז ל-TP (למשל 0.006 = 0.6%)
@@ -71,15 +91,14 @@ def calculate_sl_tp(
     slm     = _to_float(atr_sl_mult,   _CFG_ATR_SL_MULT)
     tpm     = _to_float(atr_tp_mult,   _CFG_ATR_TP_MULT)
 
-    # הגנות מפני ערכים לא תקינים
-    if min_pct <= 0:
-        min_pct = _CFG_MIN_PCT_FLOOR
-    if tp_pct <= 0:
-        tp_pct = _CFG_TP_PCT_FLOOR
-    if slm <= 0:
-        slm = _CFG_ATR_SL_MULT
-    if tpm <= 0:
-        tpm = _CFG_ATR_TP_MULT
+    # הגנות מפני ערכים לא תקינים / קיצוניים
+    # אסור 0/שלילי; נסגור לטווחים סבירים (0.05%..15%) כדי למנוע סטיות חריגות
+    min_pct = _clamp(min_pct if min_pct > 0 else _CFG_MIN_PCT_FLOOR, 0.0005, 0.15)
+    tp_pct  = _clamp(tp_pct  if tp_pct  > 0 else _CFG_TP_PCT_FLOOR,  0.0005, 0.25)
+    slm     = _clamp(slm     if slm     > 0 else _CFG_ATR_SL_MULT,   0.2,    10.0)
+    tpm     = _clamp(tpm     if tpm     > 0 else _CFG_ATR_TP_MULT,   0.2,    15.0)
+
+    d = _norm_dir(direction)
 
     use_atr = _to_float(atr, 0.0) if atr is not None else 0.0
     if use_atr > 0:
@@ -89,22 +108,17 @@ def calculate_sl_tp(
         sl_off = entry * min_pct
         tp_off = entry * tp_pct
 
-    d = (direction or "").upper()
     if d == "LONG":
         sl = entry - sl_off
         tp = entry + tp_off
-    else:
-        # SHORT או כל ערך אחר נתפס כ-SHORT להגנה
-        sl = entry + sl_off
-        tp = entry - tp_off
-
-    # בטיחות – ודא סדר מחירים תקין ביחס ל-entry
-    if d == "LONG" and not (sl < entry < tp):
+        # בטיחות – ודא סדר מחירים תקין ביחס ל-entry
         if sl >= entry:
             sl = entry * (1 - min_pct)
         if tp <= entry:
             tp = entry * (1 + tp_pct)
-    if d != "LONG" and not (tp < entry < sl):  # SHORT
+    else:  # SHORT
+        sl = entry + sl_off
+        tp = entry - tp_off
         if sl <= entry:
             sl = entry * (1 + min_pct)
         if tp >= entry:
