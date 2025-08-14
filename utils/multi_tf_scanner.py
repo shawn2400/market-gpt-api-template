@@ -1,5 +1,4 @@
-# === הוספת התאמה ל־BTC ב־multi_tf_scanner.py ===
-
+# multi_tf_scanner.py — הוספת התאמה ל־BTC
 import logging
 import asyncio
 from typing import Sequence, List, Dict, Optional, Any
@@ -48,7 +47,7 @@ async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) 
 
 async def _get_btc_direction() -> Optional[str]:
     try:
-        df = await fetch_ohlcv("BTCUSDT", interval=BTC_REF_TF, limit=100)
+        df = await fetch_ohlcv("BTCUSDT", interval=BTC_REF_TF, limit=100, market_type="futures")
         if df is None or df.empty:
             return None
         df_ind = compute_indicators(df)
@@ -149,15 +148,17 @@ async def multi_tf_scan_with_ai(
         out["frames"] = out.get("frames") or [f["interval"] for f in data]
         out["details"] = out.get("details") or data
 
-        # --- התאמה למגמת BTC ---
-        if btc_dir and out["direction"] != btc_dir:
-            logging.info(f"[btc_correlation] FILTERED {sym}: direction={out['direction']} BTC={btc_dir}")
-            continue
+        # --- התאמה למגמת BTC (ניתן לביטול דרך קונפיג) ---
+        if getattr(config, "ALIGN_WITH_BTC_TREND", True):
+            if btc_dir and out["direction"] != btc_dir:
+                logging.info(f"[btc_correlation] FILTERED {sym}: direction={out['direction']} BTC={btc_dir}")
+                continue
 
         final.append(out)
 
     final.sort(key=lambda x: float(x.get("quality_score", 0)), reverse=True)
     return final[:top_n]
+
 
 
 
