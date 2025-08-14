@@ -1,31 +1,42 @@
 # utils/trade_execution_core.py
-from utils.ws_fallback import get_price
+from typing import Optional, Dict, Any
+from utils.ws_fallback import get_price_smart  # async מחיר חי חכם (WS/REST)
 
-def execute_trade_live(symbol, side, entry=None, sl=None, tp=None, budget_usd=100, leverage=10, market_type="futures"):
+async def execute_trade_live(
+    *,
+    symbol: str,
+    side: str,                 # "LONG" / "SHORT"
+    entry: Optional[float] = None,
+    sl: Optional[float] = None,
+    tp: Optional[float] = None,
+    budget_usd: float = 100.0,
+    leverage: int = 10,
+    market_type: str = "futures",
+) -> Dict[str, Any]:
     """
-    ביצוע טרייד לייב (פשטני/דמו): מביא מחיר (אם לא נשלח), ומחזיר תוצאה עם status.
-    במימוש אמיתי – שגר הזמנה ל-Binance והחזר מזהה/פרטים.
+    ביצוע טרייד (דמו/סימולציה): מחזיר מבנה סטנדרטי עם status.
+    במימוש אמיתי תבצע כאן קריאת Binance בפועל.
     """
     try:
-        price = float(entry) if entry is not None else get_price(symbol)
-        if price is None:
+        price = float(entry) if entry is not None else await get_price_smart(symbol)
+        if price is None or price <= 0:
             return {"status": "error", "error": f"live price unavailable for {symbol}"}
 
-        # כאן היית מבצע את הקריאה לאקסצ'יינג' בפועל. כרגע: סימולציה/לוג בלבד.
         result = {
             "symbol": str(symbol).upper(),
             "side": str(side).upper(),          # LONG/SHORT
-            "entry": price,
+            "entry": float(price),
             "sl": float(sl) if sl is not None else None,
             "tp": float(tp) if tp is not None else None,
             "leverage": int(leverage),
             "budget_usd": float(budget_usd),
             "market_type": market_type,
         }
-        # החזרה סטנדרטית כדי ש-/trade יחזיר success
+        # כאן אפשר להחליף לסחיבת הזמנה אמיתית מול Binance, ולהחזיר מזהה וכו'.
         return {"status": "success", "result": result}
 
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
 
 
