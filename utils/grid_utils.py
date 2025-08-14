@@ -49,9 +49,6 @@ def _validate_inputs(
 
 
 def _step_up_down(price: float, pct: float) -> Tuple[float, float]:
-    """
-    מחזיר (up, down) מהמחיר הנתון באחוז pct (למשל pct=0.4 -> 0.4%)
-    """
     f = pct / 100.0
     return price * (1.0 + f), price * (1.0 - f)
 
@@ -80,10 +77,6 @@ def build_grid_plan(
     futures: bool,
     leverage: int,
 ) -> Dict[str, Any]:
-    """
-    בונה תכנית גריד סימטרית סביב המחיר החי:
-    חצי רמות מתחת (BUY), חצי מעל (SELL), עם TP/SL לכל רמה.
-    """
     price = float(live_price)
     half = grid_count // 2
     tranche = float(budget_usd) / float(grid_count)
@@ -93,7 +86,7 @@ def build_grid_plan(
     # מתחת למחיר — קניות
     p_down = price
     for _ in range(half):
-        _, p_down = _step_up_down(p_down, grid_pct)  # יורדים צעד
+        _, p_down = _step_up_down(p_down, grid_pct)
         tp_px, sl_px = _mk_tp_sl(p_down, "BUY", tp_pct, sl_pct)
         levels.append({
             "side": "BUY",
@@ -106,7 +99,7 @@ def build_grid_plan(
     # מעל המחיר — מכירות
     p_up = price
     for _ in range(grid_count - half):
-        p_up, _ = _step_up_down(p_up, grid_pct)  # עולים צעד
+        p_up, _ = _step_up_down(p_up, grid_pct)
         tp_px, sl_px = _mk_tp_sl(p_up, "SELL", tp_pct, sl_pct)
         levels.append({
             "side": "SELL",
@@ -116,7 +109,7 @@ def build_grid_plan(
             "budget": round(tranche, 4),
         })
 
-    plan = {
+    return {
         "symbol": symbol.upper().strip(),
         "market_type": "futures" if futures else "spot",
         "leverage": int(leverage) if futures else None,
@@ -128,7 +121,6 @@ def build_grid_plan(
         "levels": levels,
         "total_budget": float(budget_usd),
     }
-    return plan
 
 
 async def execute_grid_trade(
@@ -136,28 +128,21 @@ async def execute_grid_trade(
     symbol: str,
     budget_usd: float,
     grid_count: int = 6,
-    grid_pct: float = 0.4,    # אחוז הפרדה בין רמות
-    leverage: int = 20,       # בשימוש ב-futures בלבד
-    futures: bool = True,     # True=futures, False=spot
-    tp_pct: float = 1.5,      # TP אחוזי לכל רמה
-    sl_pct: float = 1.0,      # SL אחוזי לכל רמה
+    grid_pct: float = 0.4,
+    leverage: int = 20,
+    futures: bool = True,
+    tp_pct: float = 1.5,
+    sl_pct: float = 1.0,
 ) -> Dict[str, Any]:
-    """
-    בונה תכנית גריד ומנסה לבצע אותה (אם מותר).
-    אם כתיבה מושבתת/אין writer — מוחזר DRY plan.
-    """
     try:
-        # ולידציות בסיסיות
         err = _validate_inputs(symbol, budget_usd, grid_count, grid_pct, tp_pct, sl_pct, leverage, futures)
         if err:
             return {"status": "error", "error": err}
 
-        # מחיר חי ועדכני
         live = await get_price(symbol)
         if live is None or not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC):
             return {"status": "error", "error": "live price unavailable or stale"}
 
-        # בניית תוכנית
         plan = build_grid_plan(
             symbol=symbol,
             live_price=float(live),
@@ -170,7 +155,6 @@ async def execute_grid_trade(
             leverage=leverage,
         )
 
-        # DRY-RUN אם כתיבה מושבתת או אין writer ייעודי
         if MUTATIONS_DISABLED or not _BINANCE_GRID_OK:
             reasons = []
             if MUTATIONS_DISABLED:
@@ -182,7 +166,6 @@ async def execute_grid_trade(
                 reasons.append("binance_grid_trade unavailable")
             return {"status": "dry_run", "reason": " & ".join(reasons), "plan": plan}
 
-        # ביצוע בפועל
         result = await binance_grid_trade(
             symbol=plan["symbol"],
             market_type=plan["market_type"],
