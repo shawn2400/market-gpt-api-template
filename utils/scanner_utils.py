@@ -11,12 +11,10 @@ from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
 
 # --- מקביליות נשלטת קונפיג ---
-# ניתן להגדיר ב-ENV/קונפיג: SCAN_CONCURRENCY (למשל 5-20)
 try:
     _CONC = int(getattr(config, "SCAN_CONCURRENCY", 5))
 except Exception:
     _CONC = 5
-# שמירה על גבולות סבירים
 if _CONC < 1:
     _CONC = 1
 if _CONC > 50:
@@ -24,6 +22,34 @@ if _CONC > 50:
 
 semaphore = asyncio.Semaphore(_CONC)
 logging.info(f"[scanner_utils] Scan concurrency set to {_CONC}")
+
+# --- שירות עזר: שליפת OHLCV אסינכרונית לשימוש חיצוני (למשל BTC ב-multi_tf_scanner) ---
+async def fetch_ohlcv(
+    symbol: str,
+    interval: str = "15m",
+    limit: int = 150,
+    market_type: str = "futures",
+) -> pd.DataFrame:
+    """
+    עטיפה אסינכרונית סביב get_klines (חוסמת) באמצעות to_thread.
+    """
+    try:
+        limit = max(120, int(limit or 150))
+        df = await asyncio.to_thread(
+            get_klines,
+            symbol,
+            interval,
+            limit,
+            market_type,
+            "futures",   # grid_base_type (לא רלוונטי כאן)
+            None,
+            None,
+            None,
+        )
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    except Exception as e:
+        logging.warning(f"[fetch_ohlcv] error for {symbol}@{interval}: {e}")
+        return pd.DataFrame()
 
 def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
     """
@@ -52,6 +78,13 @@ def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
             return float(x)
         except Exception:
             return float(default)
+
+    # פולבק קל — אם מישהו יחליף בעתיד את compute_indicators ולא יחשב volume_mean:
+    if "volume_mean" not in df.columns:
+        try:
+            df["volume_mean"] = df["volume"].rolling(50, min_periods=1).mean()
+        except Exception:
+            df["volume_mean"] = df["volume"]
 
     out = {
         "close": f(last.get("close"), 0.0),
