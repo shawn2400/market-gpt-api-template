@@ -41,7 +41,6 @@ def _validate_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             out["direction"] = direction
         if q is not None:
             out["quality_score"] = q
-        # אופציונלי: weight/notes
         if "weight" in it:
             try:
                 out["weight"] = float(it["weight"])
@@ -54,12 +53,6 @@ def _validate_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
-    """
-    מביא רשימת מעקב בפורמט: [{'symbol','direction','quality_score',...}, ...]
-    - דואג לקובץ ברירת מחדל אם חסר.
-    - מסנן כפילויות.
-    - מסנן לפי min_quality אם ביקשת.
-    """
     _ensure_file(path)
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -85,16 +78,13 @@ def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH
             q = v.get("quality_score")
             if isinstance(q, int) and q < int(min_quality):
                 continue
-            # אם אין ציון — לא לפסול; השאר לשיקול הסורק
         seen.add(key); out.append(v)
 
-    # סדר לפי quality_score יורד (אם יש), ואז לפי symbol
     out.sort(key=lambda d: (-(d.get("quality_score", -1)), d["symbol"]))
     return out
 
 def save_watchlist(items: List[Dict[str, Any]], path: str = WATCHLIST_PATH) -> bool:
     try:
-        # validate all
         clean: List[Dict[str, Any]] = []
         seen = set()
         for it in items:
