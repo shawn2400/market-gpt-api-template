@@ -2,21 +2,30 @@
 import logging
 from typing import Optional, Dict, Any
 
-from utils import config
-from utils.ws_fallback import get_price_smart, is_price_fresh
+from utils.ws_fallback import get_price_smart
 
-# פקדי כתיבה:
-EXECUTE_TRADES = bool(getattr(config, "EXECUTE_TRADES", True))
-BINANCE_SKIP_ACCOUNT_MUTATIONS = str(
-    getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS", "false")
-).strip().lower() in ("1", "true", "yes", "y", "on")
+# אפשרות להפעיל "ביצוע אמיתי" בעתיד דרך קונפיג/ENV
+import os
+EXECUTE_REAL = str(os.getenv("ALGOGPT_EXECUTE_REAL", "false")).lower() in ("1", "true", "yes")
 
-MUTATIONS_DISABLED = (not EXECUTE_TRADES) or BINANCE_SKIP_ACCOUNT_MUTATIONS
+def _estimate_qty(symbol: str, price: float, budget_usd: float, leverage: int) -> float:
+    """
+    חישוב כמות מקורב: notional = budget * leverage
+    qty = notional / price
+    לא מבצע התאמה ל-step-size (כי DRY-RUN) אבל מעגל יפה.
+    """
+    if price <= 0:
+        return 0.0
+    notional = float(budget_usd) * int(leverage)
+    qty = notional / price
+    # עיגול סביר: BTC/ETH ל-0.001, אלטים ל-0.1
+    if symbol.upper().startswith(("BTC", "ETH")):
+        return round(qty, 3)
+    return round(qty, 1)
 
 async def execute_trade_live(
-    *,
     symbol: str,
-    side: str,           # LONG / SHORT
+    side: str,
     entry: Optional[float],
     sl: float,
     tp: float,
@@ -25,62 +34,56 @@ async def execute_trade_live(
     market_type: str = "futures",
 ) -> Dict[str, Any]:
     """
-    שכבה אחידה לביצוע טרייד. כרגע DRY-RUN/אקו מתוכנן; חיבור אמיתי ניתן להוסיף כאן מאוחר יותר.
-    מחזיר תמיד מבנה עקבי כדי שה-API יישאר יציב.
+    ביצוע טרייד "לוגי". כברירת מחדל DRY-RUN: מחזיר תוצאה סימולטיבית.
+    אם EXECUTE_REAL=True (ENV), כאן המקום לחבר להזמנות אמיתיות.
     """
     try:
-        sy = str(symbol).upper().strip()
-        sd = str(side).upper().strip()
-        if sd not in ("LONG", "SHORT"):
-            return {"status": "error", "error": "side must be LONG/SHORT"}
+        symbol_u = symbol.upper()
+        side_u = side.upper()
 
-        px = entry
-        if px is None or float(px) <= 0:
-            live = await get_price_smart(sy)
-            if live is None:
+        # מחיר כניסה (אם לא סופק — מביאים חי)
+        if entry is None:
+            live = await get_price_smart(symbol_u)
+            if live is None or float(live) <= 0:
                 return {"status": "error", "error": "live price unavailable"}
-            px = float(live)
+            entry_price = float(live)
+        else:
+            entry_price = float(entry)
 
-        # ודא שיש מחיר עדכני (אם ידוע)
-        if not is_price_fresh(sy, max_age_sec=int(getattr(config, "PRICE_MAX_AGE_SEC", 10))):
-            logging.warning("[trade] price for %s may be stale", sy)
+        if sl is None or tp is None:
+            return {"status": "error", "error": "SL/TP required"}
 
-        result_payload = {
-            "symbol": sy,
-            "side": sd,
-            "entry": float(px),
+        qty = _estimate_qty(symbol_u, entry_price, float(budget_usd), int(leverage))
+
+        plan = {
+            "symbol": symbol_u,
+            "side": side_u,                 # LONG/SHORT
+            "entry": round(entry_price, 2),
             "sl": float(sl),
             "tp": float(tp),
             "leverage": int(leverage),
             "budget_usd": float(budget_usd),
-            "market_type": str(market_type),
+            "market_type": market_type,
+            "qty": qty,
+            "mode": "DRY-RUN" if not EXECUTE_REAL else "LIVE",
         }
 
-        # כרגע — DRY-RUN/אקו (ללא כתיבה לחשבון). אפשר להרחיב כאן בהמשך.
-        if MUTATIONS_DISABLED:
-            reason = []
-            if not EXECUTE_TRADES:
-                reason.append("EXECUTE_TRADES=false")
-            if BINANCE_SKIP_ACCOUNT_MUTATIONS:
-                reason.append("BINANCE_SKIP_ACCOUNT_MUTATIONS=true")
-            return {
-                "status": "success",
-                "mode": "dry_run",
-                "reason": " & ".join(reason) if reason else "mutations disabled",
-                "result": result_payload,
-            }
+        # כאן אפשר להכניס ביצוע אמיתי בעתיד (EXECUTE_REAL=True)
+        if EXECUTE_REAL:
+            # לדוגמה בלבד (לא ממומש בכוונה):
+            # client = get_client()
+            # order = client.futures_create_order(...)
+            # plan["exchange_order_id"] = order.get("orderId")
+            logging.info("[trade] LIVE not implemented; returning DRY-RUN plan")
+            pass
 
-        # אם תרצה לבצע הזמנה אמיתית – זה המקום להוסיף חיבור ל-python-binance.
-        # כרגע נחזיר אקו "success" כדי לשמור על יציבות הממשק.
-        return {
-            "status": "success",
-            "mode": "execute",
-            "result": result_payload,
-        }
+        logging.info("[trade] plan: %s", plan)
+        return {"status": "success", "result": plan}
 
     except Exception as e:
-        logging.error("[trade_execution_core] error: %s", e, exc_info=True)
+        logging.error("[trade] execute error: %s", e, exc_info=True)
         return {"status": "error", "error": str(e)}
+
 
 
 
