@@ -1,4 +1,5 @@
-# multi_tf_scanner.py — הוספת התאמה ל־BTC
+# === הוספת התאמה ל־BTC ב־multi_tf_scanner.py ===
+
 import logging
 import asyncio
 from typing import Sequence, List, Dict, Optional, Any
@@ -40,31 +41,48 @@ def _symbols_from_watchlist(min_quality: float) -> List[str]:
 
 async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) -> Optional[Dict]:
     try:
-        return await analyze_symbol(symbol=symbol, market_type=market, interval=tf, limit=150, trending_only=trending_only, with_ai=False, frames=[tf])
+        return await analyze_symbol(
+            symbol=symbol,
+            market_type=market,
+            interval=tf,
+            limit=150,
+            trending_only=trending_only,
+            with_ai=False,
+            frames=[tf],
+        )
     except Exception as e:
         logging.error(f"[multi_tf_scanner] analyze_symbol failed for {symbol}@{tf}: {e}", exc_info=True)
         return None
 
 async def _get_btc_direction() -> Optional[str]:
+    """
+    מגמת BTC לפי EMA21/EMA50 על הטיימפריים המוגדר (ברירת מחדל 15m).
+    """
     try:
-        df = await fetch_ohlcv("BTCUSDT", interval=BTC_REF_TF, limit=100, market_type="futures")
+        df = await fetch_ohlcv("BTCUSDT", interval=BTC_REF_TF, limit=120)
         if df is None or df.empty:
             return None
         df_ind = compute_indicators(df)
         if df_ind.empty:
             return None
         last_row = df_ind.iloc[-1]
-        ema_21, ema_50 = last_row["ema_21"], last_row["ema_50"]
+        ema_21, ema_50 = float(last_row["ema_21"]), float(last_row["ema_50"])
         if ema_21 > ema_50:
             return "LONG"
-        elif ema_21 < ema_50:
+        if ema_21 < ema_50:
             return "SHORT"
         return None
     except Exception as e:
         logging.warning(f"[btc_correlation] failed to get BTC trend: {e}")
         return None
 
-async def _build_symbol_list(symbols: Optional[Sequence[str]], min_quality: float, trending_only: bool, trending_source: str, market: str) -> List[str]:
+async def _build_symbol_list(
+    symbols: Optional[Sequence[str]],
+    min_quality: float,
+    trending_only: bool,
+    trending_source: str,
+    market: str,
+) -> List[str]:
     try:
         if symbols:
             syms = [str(s).strip().upper() for s in symbols if s]
@@ -104,6 +122,7 @@ async def multi_tf_scan_with_ai(
     if not syms:
         return []
 
+    # אסוף ניתוחים לכל סימבול בכל טיימפריים
     tasks = [_safe_analyze(sym, tf, market, trending_only) for sym in syms for tf in tfs]
     results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -112,11 +131,13 @@ async def multi_tf_scan_with_ai(
         if isinstance(r, dict) and r.get("symbol"):
             frames.append(r)
 
+    # קיבוץ לפי סימבול
     grouped: Dict[str, List[Dict]] = {}
     for r in frames:
         sym = str(r.get("symbol")).upper()
         grouped.setdefault(sym, []).append(r)
 
+    # מגמת BTC
     btc_dir = await _get_btc_direction()
     logging.info(f"[btc_correlation] BTC trend (via EMA21/50 on {BTC_REF_TF}): {btc_dir}")
 
@@ -126,18 +147,23 @@ async def multi_tf_scan_with_ai(
         if avg_q < float(min_quality):
             continue
 
+        # נרמול כיוונים
         for d in data:
             d["direction"] = _normalize_direction(d.get("direction") or d.get("main_direction"))
 
+        # החלטת AI
         ai = await analyze_with_ai(data)
 
         def _fallback():
             d = _normalize_direction(data[-1].get("direction"))
             return {
-                "symbol": sym, "direction": d,
+                "symbol": sym,
+                "direction": d,
                 "signal": "BUY" if d == "LONG" else "SELL",
                 "quality_score": round(avg_q, 2),
-                "confidence": 50.0, "frames": [f["interval"] for f in data], "details": data,
+                "confidence": 50.0,
+                "frames": [f["interval"] for f in data],
+                "details": data,
             }
 
         out = dict(ai) if isinstance(ai, dict) else _fallback()
@@ -148,16 +174,16 @@ async def multi_tf_scan_with_ai(
         out["frames"] = out.get("frames") or [f["interval"] for f in data]
         out["details"] = out.get("details") or data
 
-        # --- התאמה למגמת BTC (ניתן לביטול דרך קונפיג) ---
-        if getattr(config, "ALIGN_WITH_BTC_TREND", True):
-            if btc_dir and out["direction"] != btc_dir:
-                logging.info(f"[btc_correlation] FILTERED {sym}: direction={out['direction']} BTC={btc_dir}")
-                continue
+        # --- התאמה למגמת BTC ---
+        if btc_dir and out["direction"] != btc_dir:
+            logging.info(f"[btc_correlation] FILTERED {sym}: direction={out['direction']} BTC={btc_dir}")
+            continue
 
         final.append(out)
 
     final.sort(key=lambda x: float(x.get("quality_score", 0)), reverse=True)
     return final[:top_n]
+
 
 
 
