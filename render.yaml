@@ -2,17 +2,21 @@ services:
   - type: web
     name: algogpt-docker
     env: docker
-    plan: starter              # או standard
+    plan: starter                # אפשר גם standard לפי צורך
     autoDeploy: true
     healthCheckPath: /health
+
+    # IMPORTANT:
+    # אל תגדיר כאן PORT. Render מזריק PORT בעצמו והאפליקציה מאזינה על ${PORT:-10000} מתוך ה-Dockerfile.
+
     envVars:
       # --- Security / API Gateway ---
       - key: API_BEARER_TOKEN
         value: "GrwpXpkRWunC7SPZGFrhaizBwcaZzpWLYJ9kv4W7u6aTx_EXu0VGfpBKaBhThLD2"
 
-      # --- Runtime (מסחר ידני) ---
+      # --- Runtime (מסחר ידני/סריקה ידנית) ---
       - key: AUTO_RUN
-        value: "false"         # ידני
+        value: "false"          # הפעלה ידנית; שנה ל-"true" רק אם רוצים סורק/אוטו-טרייד אוטומטי
       - key: SCAN_INTERVAL
         value: "60"
       - key: DEFAULT_INTERVAL
@@ -46,13 +50,13 @@ services:
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
-      # --- Binance keys (שמור בדשבורד כ-Encrypted, לא בקוד) ---
+      # --- Binance keys (להגדיר בדשבורד כ-Encrypted; לא בקוד) ---
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
         sync: false
 
-      # --- OpenAI (לא חובה למסחר ידני, כן לחישובי SL/TP/סריקות) ---
+      # --- OpenAI (ל־SL/TP/סריקות חכמות) ---
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -62,7 +66,7 @@ services:
       - key: OPENAI_MAX_CONCURRENCY
         value: "4"
 
-      # --- Binance endpoints (דיפולט; אל תשנה אם אין צורך) ---
+      # --- Binance endpoints (ברירת מחדל; אל תשנה אם אין צורך) ---
       - key: BINANCE_SPOT_HTTP_BASE
         value: "https://api.binance.com"
       - key: BINANCE_FUTURES_HTTP_BASE
@@ -90,15 +94,17 @@ services:
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # --- Egress IP (ל-Trusted IPs) ---
+      # --- Egress IP (ל־Trusted IPs בבינאנס) ---
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
         value: ""
 
-      # Render מזריק PORT בעצמו; נשאיר כגיבוי
-      - key: PORT
-        value: "10000"
+    # אפשרויות מתקדמות (אופציונלי):
+    # numInstances: 1
+    # autoDeploy: true
+    # region: frankfurt    # דוגמה (אם זמין בחשבון שלך)
+
 
 
 
