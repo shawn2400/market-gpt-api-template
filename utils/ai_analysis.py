@@ -73,7 +73,6 @@ def _parse_signal_conf(text: str) -> Dict[str, Any]:
             reason = m_reason.group(1).strip()
             out["reason"] = _truncate(reason, 240)
     except Exception:
-        # נשאר עם ברירת המחדל הבטוחה
         pass
 
     if out["signal"] not in ("BUY", "SELL", "HOLD"):
@@ -105,9 +104,7 @@ async def _safe_chat(
     מחזירה מחרוזת ריקה במקרה תקלה.
     """
     try:
-        # הגנת אורך prompt (מונע בזבוז טוקנים במקרה של קלט חריג)
         prompt = _truncate(prompt, 6000)
-
         coro = chat(
             prompt,
             system=system,
@@ -126,14 +123,11 @@ async def _safe_chat(
 
 # ---------------------- Public API ----------------------
 async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    קולט פלט multi_tf_scan (לסמל יחיד, מסגרות זמן שונות) ומחזיר החלטה מרוכזת.
-    """
+    """קולט פלט multi_tf_scan (לסמל יחיד, מסגרות זמן שונות) ומחזיר החלטה מרוכזת."""
     try:
         if not tf_results or not isinstance(tf_results, list):
             return {"error": "empty tf_results", "signal": "HOLD", "confidence": 0.0}
 
-        # נוודא סימבול/כיוון – ניקח מהראשון
         first = tf_results[0] or {}
         symbol = str(first.get("symbol", "UNKNOWN")).upper()
         direction = str(first.get("direction", "LONG")).upper()
@@ -228,7 +222,6 @@ async def predict_optimal_sl_tp(
         if m:
             sl_val, tp_val = float(m.group(1)), float(m.group(2))
             if sl_val > 0 and tp_val > 0:
-                # הגנות כיוון: ב- LONG ה-TP חייב להיות >= entry, SL <= entry (ולהיפך ב-SHORT)
                 if direction.upper() == "LONG":
                     if tp_val < entry_price:
                         tp_val = entry_price * 1.003
@@ -246,7 +239,6 @@ async def predict_optimal_sl_tp(
     except Exception as e:
         logging.warning(f"[AI-SLTP] Exception: {e}; using fallback")
 
-    # Fallback דטרמיניסטי
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
 
 
