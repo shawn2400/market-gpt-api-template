@@ -1,12 +1,14 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
+  version: 2.1.0
   description: >
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance. כולל תמיכה ב־Futures, Spot, Grid, ניתוחים טכניים, AI, דוחות ו־Auto Executor.
-  version: 2.0.7
+    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance. כולל תמיכה ב־Futures/Spot/Grid,
+    ניתוחים טכניים, AI, דוחות, ו־Auto Executor. המפרט כולל תגובות טיפוסיות ושדות AI.
 
 servers:
   - url: https://algogpt-docker.onrender.com
+    description: Production
 
 components:
   securitySchemes:
@@ -16,6 +18,20 @@ components:
       bearerFormat: JWT
 
   schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: הודעת שגיאה קריאה
+        code:
+          type: string
+          description: קוד שגיאה קצר (אופציונלי)
+      example:
+        error: Unauthorized
+        code: UNAUTHORIZED
+
     TradeRequest:
       type: object
       required: [symbol, side]
@@ -23,30 +39,79 @@ components:
         symbol:
           type: string
           description: סימבול (למשל BTCUSDT)
+          example: BTCUSDT
         side:
           type: string
           enum: [LONG, SHORT]
           description: כיוון טרייד
+          example: LONG
         entry:
           type: number
           nullable: true
           description: מחיר כניסה (אם ריק — ישתמש במחיר שוק)
+          example: null
         sl:
           type: number
           nullable: true
-          description: Stop Loss
+          description: Stop Loss (מחיר)
+          example: 64250
         tp:
           type: number
           nullable: true
-          description: Take Profit
+          description: Take Profit (מחיר)
+          example: 65500
         budget:
           type: number
           default: 100
           description: תקציב ב־USDT
+          example: 150
         leverage:
           type: number
           default: 10
           description: מינוף
+          example: 20
+
+    TradeResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, rejected, error]
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [LONG, SHORT]
+        entry:
+          type: number
+          nullable: true
+        sl:
+          type: number
+          nullable: true
+        tp:
+          type: number
+          nullable: true
+        leverage:
+          type: number
+        qty:
+          type: number
+        orderIds:
+          type: array
+          items:
+            type: string
+        message:
+          type: string
+      example:
+        status: success
+        symbol: BTCUSDT
+        side: LONG
+        entry: 65010.5
+        sl: 64480
+        tp: 65650
+        leverage: 20
+        qty: 0.03
+        orderIds: ["123456789"]
+        message: order placed
 
     GridTradeRequest:
       type: object
@@ -54,14 +119,17 @@ components:
       properties:
         symbol:
           type: string
+          example: BTCUSDT
         budget:
           type: number
+          example: 300
         grid_count:
           type: integer
           default: 6
         grid_pct:
           type: number
           default: 0.4
+          description: מרווח אחוזי בין קווי הגריד
         leverage:
           type: integer
           default: 20
@@ -75,22 +143,149 @@ components:
           type: number
           default: 1
 
+    GridTradeResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+        symbol:
+          type: string
+        orders:
+          type: array
+          items:
+            type: object
+            properties:
+              side:
+                type: string
+                enum: [BUY, SELL]
+              price:
+                type: number
+              qty:
+                type: number
+              orderId:
+                type: string
+        message:
+          type: string
+      example:
+        status: success
+        symbol: BTCUSDT
+        orders:
+          - { side: BUY, price: 64800, qty: 0.01, orderId: "A1" }
+          - { side: SELL, price: 65200, qty: 0.01, orderId: "B2" }
+        message: grid orders placed
+
     AiAnalyzeRequest:
       type: object
       required: [symbol, rsi, adx, trend, pattern, volume]
       properties:
-        symbol:
+        symbol: { type: string, example: BTCUSDT }
+        rsi:    { type: number, example: 54.2 }
+        adx:    { type: number, example: 23.1 }
+        trend:  { type: string, example: UP }
+        pattern:{ type: string, example: breakout }
+        volume: { type: number, example: 1520000 }
+
+    AiAnalyzeResponse:
+      type: object
+      properties:
+        symbol: { type: string }
+        signal: { type: string, enum: [BUY, SELL, HOLD] }
+        confidence: { type: number, minimum: 0, maximum: 100 }
+        reason: { type: string }
+      example:
+        symbol: BTCUSDT
+        signal: BUY
+        confidence: 71.5
+        reason: "EMA21>EMA50, ADX rising, RSI ~54"
+
+    ScanResultItem:
+      type: object
+      properties:
+        symbol: { type: string }
+        quality_score: { type: number }
+        direction: { type: string, enum: [LONG, SHORT] }
+        trend: { type: string, example: UP }
+        rsi: { type: number }
+        adx: { type: number }
+        volume: { type: number }
+        market: { type: string, enum: [futures, spot] }
+        frames:
+          type: array
+          items: { type: string }
+        # שדות AI (מתוך analyze_with_ai)
+        signal:
           type: string
-        rsi:
+          enum: [BUY, SELL, HOLD]
+        confidence:
           type: number
-        adx:
-          type: number
-        trend:
+          minimum: 0
+          maximum: 100
+        reason:
           type: string
-        pattern:
-          type: string
-        volume:
+      example:
+        symbol: ETHUSDT
+        quality_score: 7.9
+        direction: LONG
+        trend: UP
+        rsi: 56.2
+        adx: 24.7
+        volume: 1850000
+        market: futures
+        frames: ["5m","15m","1h"]
+        signal: BUY
+        confidence: 68.4
+        reason: "Aligned with BTC trend; MACD>signal; above VWAP"
+
+    ScanResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScanResultItem"
+
+    PriceResponse:
+      type: object
+      properties:
+        symbol: { type: string }
+        price: { type: number }
+      example:
+        symbol: BTCUSDT
+        price: 65042.8
+
+    SLTPRequest:
+      type: object
+      required: [symbol, direction, entry]
+      properties:
+        symbol: { type: string, example: BTCUSDT }
+        direction: { type: string, enum: [LONG, SHORT] }
+        entry: { type: number, example: 65000 }
+        atr:
           type: number
+          nullable: true
+          description: ערך ATR אופציונלי לשיפור ההערכה
+          example: 120
+
+    SLTPResponse:
+      type: object
+      properties:
+        symbol: { type: string }
+        direction: { type: string, enum: [LONG, SHORT] }
+        sl: { type: number }
+        tp: { type: number }
+      example:
+        symbol: BTCUSDT
+        direction: LONG
+        sl: 64705.0
+        tp: 65450.0
+
+    PnlPdfResponse:
+      type: object
+      properties:
+        path: { type: string, description: נתיב PDF על השרת }
+      example:
+        path: static/reports/pnl_report.pdf
 
 paths:
   /:
@@ -101,23 +296,35 @@ paths:
       responses:
         "200":
           description: השרת פועל
+        "401":
+          description: אין הרשאה
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
 
   /trade:
     post:
+      security: [{ bearerAuth: [] }]
       tags: [Trades]
       summary: ביצוע טרייד חי בפועל
       operationId: placeTrade
       requestBody:
+        required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/TradeRequest"
+            schema: { $ref: "#/components/schemas/TradeRequest" }
       responses:
         "200":
-          description: טרייד בוצע
+          description: טרייד בוצע/נדחה
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TradeResponse" }
+        "400": { description: בקשה לא תקינה, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: אין הרשאה,     content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: שגיאת שרת,     content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /scan/multi:
     get:
+      security: [{ bearerAuth: [] }]
       tags: [Trades]
       summary: סריקת שוק לפי ניתוח טכני וציון איכות
       operationId: scanMulti
@@ -125,110 +332,112 @@ paths:
         - name: interval
           in: query
           required: false
-          schema:
-            type: string
-            default: 15m
+          schema: { type: string, default: 15m }
           description: טיימפריימים מופרדים בפסיקים (למשל "5m,15m,1h")
         - name: min_quality
           in: query
           required: false
-          schema:
-            type: integer
-            default: 6
-            minimum: 1
-            maximum: 10
+          schema: { type: integer, default: 6, minimum: 1, maximum: 10 }
           description: סף ציון איכות מינימלי (0–10)
         - name: top
           in: query
           required: false
-          schema:
-            type: integer
-            default: 10
-            minimum: 1
+          schema: { type: integer, default: 10, minimum: 1 }
           description: מספר הטריידים המובילים
         - name: market_type
           in: query
           required: false
-          schema:
-            type: string
-            enum: [futures, spot]
-            default: futures
+          schema: { type: string, enum: [futures, spot], default: futures }
           description: סוג שוק לסריקה
         - name: trending_only
           in: query
           required: false
-          schema:
-            type: boolean
-            default: false
+          schema: { type: boolean, default: false }
           description: האם לסרוק רק מטבעות טרנדיים
         - name: trending_source
           in: query
           required: false
-          schema:
-            type: string
-            default: coingecko
+          schema: { type: string, default: coingecko }
           description: מקור המטבעות הטרנדיים (binance / coingecko / lunarcrush)
+        - name: btc_align
+          in: query
+          required: false
+          schema: { type: boolean, default: true }
+          description: האם לסנן תוצאות כך שכיוון הטרייד יתיישר עם מגמת BTC (EMA21/50 על 15m)
       responses:
         "200":
-          description: רשימת טריידים מסוננים לפי איכות
+          description: רשימת טריידים מסוננים לפי איכות ושדות AI
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  results:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        symbol:
-                          type: string
-                        quality_score:
-                          type: number
-                        direction:
-                          type: string
-                          enum: [LONG, SHORT]
-                        trend:
-                          type: string
-                        rsi:
-                          type: number
-                        adx:
-                          type: number
-                        volume:
-                          type: number
-                        market:
-                          type: string
+              schema: { $ref: "#/components/schemas/ScanResponse" }
+        "401":
+          description: אין הרשאה
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
 
   /grid/trade:
     post:
+      security: [{ bearerAuth: [] }]
       tags: [Grid]
       summary: פתיחת גריד מול Binance
       operationId: executeGrid
       requestBody:
+        required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/GridTradeRequest"
+            schema: { $ref: "#/components/schemas/GridTradeRequest" }
       responses:
         "200":
           description: פקודות הגריד נשלחו
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GridTradeResponse" }
+        "400": { description: בקשה לא תקינה, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: אין הרשאה,     content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /ai-analyze:
     post:
+      security: [{ bearerAuth: [] }]
       tags: [AI]
       summary: ניתוח שוק עם GPT
       operationId: aiAnalyze
       requestBody:
+        required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/AiAnalyzeRequest"
+            schema: { $ref: "#/components/schemas/AiAnalyzeRequest" }
       responses:
         "200":
           description: ניתוח נוצר
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
+        "400": { description: בקשה לא תקינה, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: אין הרשאה,     content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /sltp:
+    post:
+      security: [{ bearerAuth: [] }]
+      tags: [Trades]
+      summary: חישוב SL/TP מיטבי (AI עם פולבק דטרמיניסטי)
+      operationId: suggestSLTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SLTPRequest" }
+      responses:
+        "200":
+          description: רמות SL/TP מוצעות
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SLTPResponse" }
+        "400": { description: בקשה לא תקינה, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: אין הרשאה,     content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /price:
     get:
+      security: [{ bearerAuth: [] }]
       tags: [Trades]
       summary: שליפת מחיר נוכחי מ־Binance
       operationId: getPrice
@@ -236,50 +445,75 @@ paths:
         - name: symbol
           in: query
           required: true
-          schema:
-            type: string
-            example: BTCUSDT
+          schema: { type: string, example: BTCUSDT }
       responses:
         "200":
           description: מחיר נשלף
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  symbol:
-                    type: string
-                  price:
-                    type: number
+              schema: { $ref: "#/components/schemas/PriceResponse" }
+        "400": { description: בקשה לא תקינה, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: אין הרשאה,     content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /executor/start:
     get:
+      security: [{ bearerAuth: [] }]
       tags: [Executor]
       summary: התחלת Auto Executor
       operationId: startExecutor
       responses:
-        "200":
-          description: התחיל
+        "200": { description: התחיל }
+        "401":
+          description: אין הרשאה
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
 
   /executor/stop:
     get:
+      security: [{ bearerAuth: [] }]
       tags: [Executor]
       summary: עצירת Auto Executor
       operationId: stopExecutor
       responses:
-        "200":
-          description: נעצר
+        "200": { description: נעצר }
+        "401":
+          description: אין הרשאה
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
 
   /executor/status:
     get:
+      security: [{ bearerAuth: [] }]
       tags: [Executor]
       summary: סטטוס Auto Executor
       operationId: executorStatus
       responses:
+        "200": { description: פועל/לא }
+        "401":
+          description: אין הרשאה
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /report/pnl/pdf:
+    get:
+      security: [{ bearerAuth: [] }]
+      tags: [Reports]
+      summary: יצירת דו״ח PDF מרווח/הפסד יומי
+      operationId: generatePnlPdf
+      responses:
         "200":
-          description: פועל/לא
+          description: נוצר נתיב ל־PDF
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PnlPdfResponse" }
+        "404":
+          description: אין נתונים לייצוא
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
 security:
   - bearerAuth: []
+
 
 
