@@ -1,24 +1,21 @@
+# utils/static_utils.py
 import os
 from datetime import datetime
 import matplotlib
-matplotlib.use('Agg')  # שימוש במצב ללא GUI לצורך הפקה על שרת
+matplotlib.use('Agg')  # מצב ללא GUI לשרתים
 import matplotlib.pyplot as plt
 import pandas as pd
+from typing import Optional, List
 
-def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה", filename: str = "chart.png") -> str:
+def create_sample_chart(x: List[float], y: List[float], title: str = "📈 גרף דוגמה", filename: str = "chart.png") -> Optional[str]:
     """
-    יוצר ושומר גרף פשוט מהנתונים שסופקו בתיקייה static.
-    מחזיר את הנתיב המלא של הקובץ או None אם יש שגיאה.
+    יוצר ושומר גרף פשוט בתיקיית static, ומחזיר נתיב מלא לקובץ.
     """
     try:
-        # ודא שהתיקייה קיימת
         os.makedirs("static", exist_ok=True)
-
-        # צור שם ייחודי לפי תאריך
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         full_path = os.path.join("static", f"{timestamp}_{filename}")
 
-        # ציור הגרף
         plt.figure(figsize=(6, 4))
         plt.plot(x, y, marker='o', linestyle='-', label="קו מגמה")
         plt.title(title, fontsize=14)
@@ -27,47 +24,41 @@ def create_sample_chart(x: list, y: list, title: str = "📈 גרף דוגמה",
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-
-        # שמירה
         plt.savefig(full_path, dpi=150)
         plt.close()
 
-        print(f"✅ גרף נשמר בהצלחה: {full_path}")
         return full_path
-
     except Exception as e:
         print(f"[static_utils] ❌ שגיאה ביצירת גרף: {e}")
         return None
 
 def detect_pattern(df: pd.DataFrame) -> str:
     """
-    מזהה תבנית נר מהשורה האחרונה של DataFrame.
-    מחזיר אחת מהתבניות: ["Doji", "Hammer", "Shooting Star", ""].
+    מזהה תבנית נר בסיסית מהשורה האחרונה.
+    מחזיר: ["Doji", "Hammer", "Shooting Star", ""]
     """
     try:
         last = df.iloc[-1]
-        open_price = last["open"]
-        close_price = last["close"]
-        high = last["high"]
-        low = last["low"]
+        open_price = float(last["open"])
+        close_price = float(last["close"])
+        high = float(last["high"])
+        low = float(last["low"])
 
         body = abs(close_price - open_price)
         candle_range = high - low
-        if candle_range == 0:
+        if candle_range <= 0:
             return ""
 
         upper_shadow = high - max(open_price, close_price)
         lower_shadow = min(open_price, close_price) - low
 
-        # זיהוי תבניות
         if body < candle_range * 0.2:
             return "Doji"
-        elif lower_shadow > body * 2 and body > upper_shadow:
+        if lower_shadow > body * 2 and body > upper_shadow:
             return "Hammer"
-        elif upper_shadow > body * 2 and body > lower_shadow:
+        if upper_shadow > body * 2 and body > lower_shadow:
             return "Shooting Star"
-        else:
-            return ""
+        return ""
     except Exception:
         return ""
 
