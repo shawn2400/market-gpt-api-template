@@ -4,7 +4,7 @@ import logging
 import asyncio
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, Depends, HTTPException, Security, status, Query, Request, Response
+from fastapi import FastAPI, Depends, HTTPException, Security, status, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -25,7 +25,7 @@ from utils.binance_client import (
 )
 from utils.pnl_tracker import generate_pnl_pdf
 
-# לוגיקת טרייד אחידה
+# החלפה: שימוש במימוש DRY-RUN/לייב אחיד
 from utils.trade_execution_core import execute_trade_live
 
 # אופציונלי
@@ -37,6 +37,8 @@ try:
     from utils.ai_health import ping_openai  # type: ignore  # noqa: F401
 except Exception:
     ping_openai = None
+
+from auto_executor import start_executor, stop_executor, is_executor_running
 
 # ---------- לוגים ----------
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -60,7 +62,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_sch
     return True
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.12.6"
+APP_VERSION = "2.13.1"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -109,11 +111,6 @@ class SLTPRequest(BaseModel):
 @app.get("/", tags=["Config"], operation_id="checkServerStatus")
 async def root():
     return {"status": "ok", "version": APP_VERSION}
-
-# HEAD health (חלק מהכלים שולחים HEAD)
-@app.head("/", include_in_schema=False)
-async def root_head():
-    return Response(status_code=200)
 
 @app.get("/health", tags=["Config"], operation_id="health")
 async def health():
@@ -182,7 +179,7 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
             market_type="futures"
         )
         if resp.get("status") == "success":
-            return TradeResponse(status="success", result=resp)
+            return TradeResponse(status="success", result=resp.get("result", resp))
         return TradeResponse(status="error", error=resp.get("error", "trade failed"))
     except Exception as e:
         logging.error("[/trade] %s", e, exc_info=True)
@@ -247,19 +244,16 @@ async def get_price(symbol: str):
 # ---------- Executor ----------
 @app.get("/executor/start", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="startExecutor")
 async def executor_start():
-    from auto_executor import start_executor, is_executor_running
     start_executor()
     return {"started": True, "running": is_executor_running()}
 
 @app.get("/executor/stop", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="stopExecutor")
 async def executor_stop():
-    from auto_executor import stop_executor, is_executor_running
     stop_executor()
     return {"stopped": True, "running": is_executor_running()}
 
 @app.get("/executor/status", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="executorStatus")
 async def executor_status():
-    from auto_executor import is_executor_running
     return {"running": is_executor_running()}
 
 # ---------- דו״ח PnL ----------
@@ -272,50 +266,47 @@ async def report_pnl_pdf():
 
 # ---------- Debug Binance ----------
 @app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(verify_token)], operation_id="debugBinanceFutures")
-async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True):
+async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = False):
     ok_ping = False
     try:
         ok_ping = bool(ping_and_info())
     except Exception:
         ok_ping = False
+
     try:
         sync_server_time()
     except Exception:
         pass
+
     try:
         prem = futures_mark_price(symbol)
     except Exception as e:
         prem = {"error": str(e)}
+
     try:
         ex_info = await asyncio.to_thread(futures_exchange_info_safe)
         sym_count = len(ex_info.get("symbols", [])) if isinstance(ex_info, dict) else None
     except Exception as e:
         ex_info, sym_count = {"error": str(e)}, None
 
+    perm_ok = None
     test_err = None
-    test_ok = False
     if place_test:
         try:
             client = get_client()
-            # אם יש מתודה ייעודית – נשתמש בה; אחרת נדווח בצורה אלגנטית שזה לא נתמך
-            if hasattr(client, "futures_create_test_order"):
-                await asyncio.to_thread(
-                    client.futures_create_test_order,
-                    symbol=symbol, side="BUY", type="LIMIT", timeInForce="GTC",
-                    quantity="0.001", price="1000"
-                )
-                test_ok = True
-            else:
-                test_err = "futures_create_test_order not supported by current python-binance build"
+            # בדיקה לא מזיקה שמצריכה הרשאה, לא יוצרת הזמנה:
+            _ = await asyncio.to_thread(client.futures_account_balance)
+            perm_ok = True
         except Exception as e:
+            perm_ok = False
             test_err = str(e)
 
     return {
         "ping_ok": ok_ping,
         "mark_price": prem,
         "symbols_count": sym_count,
-        "test_order_ok": test_ok,
-        "test_order_error": test_err,
+        "permission_ok": perm_ok,
+        "test_error": test_err,
     }
 
 # ---------- WS lifecycle ----------
