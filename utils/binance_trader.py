@@ -153,11 +153,6 @@ async def binance_futures_trade(
     market_type: str = "futures",
     cid_prefix: str = "algogpt",
 ) -> Dict[str, Any]:
-    """
-    1) ולידציה/precision
-    2) Hedge/Leverage
-    3) Limit Entry + STOP + TAKE_PROFIT (reduceOnly)
-    """
     if market_type.lower() != "futures":
         raise ValueError("Only futures is supported in this trader")
 
@@ -194,11 +189,7 @@ async def binance_futures_trade(
     if entry_dec <= 0:
         raise RuntimeError("invalid entry price after rounding")
 
-    if quantity is None:
-        raw_qty = Decimal(str(budget)) / entry_dec
-    else:
-        raw_qty = Decimal(str(quantity))
-
+    raw_qty = Decimal(str(budget)) / entry_dec if quantity is None else Decimal(str(quantity))
     qty_dec, qty_s = _apply_qty_step(raw_qty, float(step_size), qty_precision)
 
     if qty_dec <= 0 or qty_dec < min_qty:
