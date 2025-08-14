@@ -25,7 +25,7 @@ from utils.binance_client import (
 )
 from utils.pnl_tracker import generate_pnl_pdf
 
-# החלפה: נשתמש במימוש הלוגיקה האחידה
+# החלפה: נשתמש במימוש הלוגיקה האחידה (async + חתימה תואמת)
 from utils.trade_execution_core import execute_trade_live
 
 # אופציונלי
@@ -71,12 +71,25 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"]
 )
 
-# ---------- Routers (גריד) ----------
+# ---------- Routers ----------
 try:
     from routes.grid import router as grid_router
     app.include_router(grid_router)
 except Exception as e:
     logging.warning("[INIT] grid router not loaded: %s", e)
+
+# חדשים:
+try:
+    from routes.utils import router as utils_router
+    app.include_router(utils_router)
+except Exception as e:
+    logging.warning("[INIT] utils router not loaded: %s", e)
+
+try:
+    from routes.health_full import router as health_full_router
+    app.include_router(health_full_router)
+except Exception as e:
+    logging.warning("[INIT] health_full router not loaded: %s", e)
 
 # ---------- מודלים ----------
 class TradeRequest(BaseModel):
@@ -168,16 +181,15 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
                 symbol=req.symbol, direction=req.side, entry_price=entry_for_sltp, atr=None
             )
 
-        # ✅ תיקון חתימות: side + sl/tp (ולא direction/stop)
         resp = await execute_trade_live(
             symbol=req.symbol,
             side=req.side,
-            entry=req.entry,     # אם None – הפונקציה תביא מחיר חי
+            entry=req.entry,  # אם None – הפונקציה תביא מחיר חי
             sl=sl,
             tp=tp,
             leverage=int(req.leverage or 10),
             budget_usd=float(req.budget or 100),
-            market_type="futures"
+            market_type="futures",
         )
         if resp.get("status") == "success":
             return TradeResponse(status="success", result=resp)
@@ -358,6 +370,7 @@ app.openapi = custom_openapi
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
