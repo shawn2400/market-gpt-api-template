@@ -2,21 +2,18 @@ services:
   - type: web
     name: algogpt-docker
     env: docker
-    plan: starter                # אפשר גם standard לפי צורך
+    plan: starter
     autoDeploy: true
-    healthCheckPath: /health
-
-    # IMPORTANT:
-    # אל תגדיר כאן PORT. Render מזריק PORT בעצמו והאפליקציה מאזינה על ${PORT:-10000} מתוך ה-Dockerfile.
+    healthCheckPath: /
 
     envVars:
       # --- Security / API Gateway ---
       - key: API_BEARER_TOKEN
         value: "GrwpXpkRWunC7SPZGFrhaizBwcaZzpWLYJ9kv4W7u6aTx_EXu0VGfpBKaBhThLD2"
 
-      # --- Runtime (מסחר ידני/סריקה ידנית) ---
+      # --- Runtime ---
       - key: AUTO_RUN
-        value: "false"          # הפעלה ידנית; שנה ל-"true" רק אם רוצים סורק/אוטו-טרייד אוטומטי
+        value: "false"
       - key: SCAN_INTERVAL
         value: "60"
       - key: DEFAULT_INTERVAL
@@ -56,7 +53,7 @@ services:
       - key: BINANCE_API_SECRET
         sync: false
 
-      # --- OpenAI (ל־SL/TP/סריקות חכמות) ---
+      # --- OpenAI ---
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -66,7 +63,7 @@ services:
       - key: OPENAI_MAX_CONCURRENCY
         value: "4"
 
-      # --- Binance endpoints (ברירת מחדל; אל תשנה אם אין צורך) ---
+      # --- Binance endpoints ---
       - key: BINANCE_SPOT_HTTP_BASE
         value: "https://api.binance.com"
       - key: BINANCE_FUTURES_HTTP_BASE
@@ -94,16 +91,12 @@ services:
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # --- Egress IP (ל־Trusted IPs בבינאנס) ---
+      # --- Egress IP helper (לא חובה) ---
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
         value: ""
 
-    # אפשרויות מתקדמות (אופציונלי):
-    # numInstances: 1
-    # autoDeploy: true
-    # region: frankfurt    # דוגמה (אם זמין בחשבון שלך)
 
 
 
