@@ -1,10 +1,10 @@
-# main.py (גרסה 2.12.6)
+# main.py
 import os
 import logging
 import asyncio
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, Depends, HTTPException, Security, status, Query
+from fastapi import FastAPI, Depends, HTTPException, Security, status, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -60,7 +60,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_sch
     return True
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.12.6"
+APP_VERSION = "2.12.5"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -105,13 +105,40 @@ class SLTPRequest(BaseModel):
     entry: float
     atr: Optional[float] = None
 
-# ---------- בריאות בסיסית ----------
-@app.get("/", tags=["Config"], operation_id="checkServerStatus")
+# ---------- Health ----------
+@app.get(
+    "/",
+    tags=["Config"],
+    operation_id="checkServerStatus",
+)
 async def root():
     return {"status": "ok", "version": APP_VERSION}
 
-# ---------- סריקת שוק – פתוח ----------
-@app.get("/scan/multi", tags=["Trades"], operation_id="scanMulti")
+@app.get("/health", tags=["Config"], operation_id="health")
+async def health():
+    return {"status": "ok", "version": APP_VERSION}
+
+# ---------- Utility: public egress IP ----------
+import httpx
+@app.get("/net/ip", tags=["Config"], operation_id="getEgressIp")
+async def get_egress_ip(request: Request):
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("https://ifconfig.me/ip")
+            if r.status_code == 200:
+                return {"egress_ip": r.text.strip()}
+    except Exception:
+        pass
+    # פולבק: IP של הלקוח שפנה (לא Egress)
+    client_host = request.client.host if request and request.client else None
+    return {"egress_ip": None, "client_ip": client_host}
+
+# ---------- סריקת שוק – פתוח ללא אימות ----------
+@app.get(
+    "/scan/multi",
+    tags=["Trades"],
+    operation_id="scanMulti",
+)
 async def scan_multi(
     interval: str = "15m,1h",
     min_quality: int = 6,
@@ -120,6 +147,9 @@ async def scan_multi(
     trending_only: Optional[bool] = Query(None, description="אם None - יילקח מהקונפיג"),
     trending_source: str = "coingecko",
 ):
+    """
+    סריקה עם Multi-TF + ניתוח AI (פתוח ללא אימות).
+    """
     timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
     if trending_only is None:
         trending_only = bool(getattr(config, "TRENDING_ONLY", True))
@@ -135,9 +165,18 @@ async def scan_multi(
     return {"results": results}
 
 # ---------- /trade ----------
-@app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="placeTrade")
+@app.post(
+    "/trade",
+    tags=["Trades"],
+    dependencies=[Depends(verify_token)],
+    operation_id="placeTrade",
+)
 async def place_trade(req: TradeRequest) -> TradeResponse:
+    """
+    מבצע טרייד חי (כפוף לדגלי EXECUTE_TRADES / BINANCE_SKIP_ACCOUNT_MUTATIONS).
+    """
     try:
+        # אם אין SL/TP — נחשב אוטומטית עם AI+פולבק
         sl, tp = req.sl, req.tp
         if sl is None or tp is None:
             live = await get_price_smart(req.symbol)
@@ -166,8 +205,16 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
         return TradeResponse(status="error", error=str(e))
 
 # ---------- /ai-analyze ----------
-@app.post("/ai-analyze", tags=["AI"], dependencies=[Depends(verify_token)], operation_id="aiAnalyze")
+@app.post(
+    "/ai-analyze",
+    tags=["AI"],
+    dependencies=[Depends(verify_token)],
+    operation_id="aiAnalyze",
+)
 async def ai_analyze(req: AiAnalyzeRequest):
+    """
+    ניתוח AI על סמך אינדיקטורים שסופקו (מסגרת “custom”).
+    """
     try:
         tf_item = {
             "symbol": req.symbol,
@@ -202,7 +249,12 @@ async def ai_analyze(req: AiAnalyzeRequest):
         return {"error": str(e)}
 
 # ---------- /sltp ----------
-@app.post("/sltp", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="suggestSLTP")
+@app.post(
+    "/sltp",
+    tags=["Trades"],
+    dependencies=[Depends(verify_token)],
+    operation_id="suggestSLTP",
+)
 async def suggest_sltp(req: SLTPRequest):
     try:
         sl, tp = await predict_optimal_sl_tp(
@@ -214,7 +266,12 @@ async def suggest_sltp(req: SLTPRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 # ---------- /price ----------
-@app.get("/price", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="getPrice")
+@app.get(
+    "/price",
+    tags=["Trades"],
+    dependencies=[Depends(verify_token)],
+    operation_id="getPrice",
+)
 async def get_price(symbol: str):
     p = await get_price_smart(symbol)
     if p is None:
@@ -222,22 +279,42 @@ async def get_price(symbol: str):
     return {"symbol": symbol.upper(), "price": float(p)}
 
 # ---------- Executor ----------
-@app.get("/executor/start", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="startExecutor")
+@app.get(
+    "/executor/start",
+    tags=["Executor"],
+    dependencies=[Depends(verify_token)],
+    operation_id="startExecutor",
+)
 async def executor_start():
     start_executor()
     return {"started": True, "running": is_executor_running()}
 
-@app.get("/executor/stop", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="stopExecutor")
+@app.get(
+    "/executor/stop",
+    tags=["Executor"],
+    dependencies=[Depends(verify_token)],
+    operation_id="stopExecutor",
+)
 async def executor_stop():
     stop_executor()
     return {"stopped": True, "running": is_executor_running()}
 
-@app.get("/executor/status", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="executorStatus")
+@app.get(
+    "/executor/status",
+    tags=["Executor"],
+    dependencies=[Depends(verify_token)],
+    operation_id="executorStatus",
+)
 async def executor_status():
     return {"running": is_executor_running()}
 
 # ---------- דו״ח PnL ----------
-@app.get("/report/pnl/pdf", tags=["Reports"], dependencies=[Depends(verify_token)], operation_id="generatePnlPdf")
+@app.get(
+    "/report/pnl/pdf",
+    tags=["Reports"],
+    dependencies=[Depends(verify_token)],
+    operation_id="generatePnlPdf",
+)
 async def report_pnl_pdf():
     path = generate_pnl_pdf()
     if not path:
@@ -245,7 +322,12 @@ async def report_pnl_pdf():
     return {"path": path}
 
 # ---------- Debug Binance ----------
-@app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(verify_token)], operation_id="debugBinanceFutures")
+@app.get(
+    "/debug/binance-futures",
+    tags=["Debug"],
+    dependencies=[Depends(verify_token)],
+    operation_id="debugBinanceFutures",
+)
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True):
     ok_ping = False
     try:
@@ -286,7 +368,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True
         "test_order_error": test_err,
     }
 
-# ---------- אתחול WS ----------
+# ---------- אתחול WS ב-startup / סגירת WS ב-shutdown ----------
 @app.on_event("startup")
 async def _on_startup():
     boot_symbols: List[str] = list(getattr(config, "WS_BOOT_SYMBOLS", ["BTCUSDT", "ETHUSDT"]))
@@ -304,18 +386,20 @@ async def _on_shutdown():
     except Exception as e:
         logging.error("[WS] stop error: %s", e, exc_info=True)
 
-# ---------- OpenAPI: operationId = שם הפונקציה ----------
+# ---------- OpenAPI: אל תדרוס operationId אם כבר הוגדר בדקורטור ----------
 from fastapi.openapi.utils import get_openapi
 from fastapi.routing import APIRoute
 
 def _force_operation_ids(schema):
     for route in app.routes:
         if isinstance(route, APIRoute):
-            fn_name = route.name
-            for m in (route.methods or []):
-                method = m.lower()
-                if route.path in schema.get("paths", {}) and method in schema["paths"][route.path]:
-                    schema["paths"][route.path][method]["operationId"] = fn_name
+            # רק אם אין operationId, קבע את שם הפונקציה
+            if not route.operation_id:
+                fn_name = route.name
+                for m in (route.methods or []):
+                    method = m.lower()
+                    if route.path in schema.get("paths", {}) and method in schema["paths"][route.path]:
+                        schema["paths"][route.path][method]["operationId"] = fn_name
     return schema
 
 def custom_openapi():
@@ -337,6 +421,7 @@ app.openapi = custom_openapi
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
