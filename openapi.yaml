@@ -32,9 +32,12 @@ components:
       properties:
         symbol: { type: string, example: BTCUSDT }
         side:   { type: string, enum: [LONG, SHORT], example: LONG }
-        entry:  { type: number, nullable: true, example: null, description: "אם null, יילקח מחיר חי" }
-        sl:     { type: number, nullable: true }
-        tp:     { type: number, nullable: true }
+        entry:
+          type: [number, 'null']
+          example: null
+          description: "אם null, יילקח מחיר חי"
+        sl: { type: [number, 'null'] }
+        tp: { type: [number, 'null'] }
         budget: { type: number, default: 100, minimum: 0.01 }
         leverage: { type: integer, default: 10, minimum: 1, maximum: 125 }
 
@@ -42,8 +45,10 @@ components:
       type: object
       properties:
         status: { type: string, enum: [success, error] }
-        result: { type: object, nullable: true, additionalProperties: true }
-        error:  { type: string, nullable: true }
+        result:
+          type: [object, 'null']
+          additionalProperties: true
+        error: { type: [string, 'null'] }
 
     AiAnalyzeRequest:
       type: object
@@ -77,8 +82,7 @@ components:
         direction: { type: string, enum: [LONG, SHORT] }
         entry: { type: number, example: 65000 }
         atr:
-          type: number
-          nullable: true
+          type: [number, 'null']
           description: ערך ATR אופציונלי
 
     SLTPResponse:
@@ -106,8 +110,8 @@ components:
         signal: { type: string, enum: [BUY, SELL, HOLD] }
         confidence: { type: number, minimum: 0, maximum: 100 }
         reason: { type: string }
-        entry: { type: number, nullable: true }
-        atr: { type: number, nullable: true }
+        entry: { type: [number, 'null'] }
+        atr: { type: [number, 'null'] }
 
     ScanResponse:
       type: object
@@ -134,6 +138,7 @@ components:
 paths:
   /:
     get:
+      security: []   # פתוח — לא יורש את ה-bearer הגלובלי
       tags: [Config]
       summary: בדיקת סטטוס השרת
       operationId: checkServerStatus
@@ -150,6 +155,7 @@ paths:
 
   /scan/multi:
     get:
+      security: []   # פתוח — לא יורש את ה-bearer הגלובלי
       tags: [Trades]
       summary: סריקת שוק חכמה (Multi-TF + AI) — פתוח
       operationId: scanMulti
@@ -168,7 +174,9 @@ paths:
           schema: { type: string, enum: [futures, spot], default: futures }
         - name: trending_only
           in: query
-          schema: { type: boolean, nullable: true, default: null }
+          schema:
+            type: [boolean, 'null']
+            default: null
           description: אם null – יילקח מהקונפיג
         - name: trending_source
           in: query
@@ -386,10 +394,12 @@ paths:
                 type: object
                 properties:
                   ping_ok: { type: boolean }
-                  mark_price: { type: object, nullable: true, additionalProperties: true }
-                  symbols_count: { type: integer, nullable: true }
+                  mark_price:
+                    type: [object, 'null']
+                    additionalProperties: true
+                  symbols_count: { type: [integer, 'null'] }
                   test_order_ok: { type: boolean }
-                  test_order_error: { type: string, nullable: true }
+                  test_order_error: { type: [string, 'null'] }
         "401":
           description: אין הרשאה
           content:
@@ -398,6 +408,7 @@ paths:
 
 security:
   - bearerAuth: []
+
 
 
 
