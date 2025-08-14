@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, MACD, EMAIndicator
@@ -23,6 +23,7 @@ _ST_MULT = 3.0
 _MIN_ROWS_ABS = 100  # מינימום כללי
 _LONGEST_WIN = max(_EMA_SLOW, _MACD_SLOW, _ATR, _ADX, _RSI, _ST_PERIOD) + 20
 
+
 def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     """מאחד, מנרמל ומוודא שה־DataFrame מוכן לחישוב אינדיקטורים."""
     if df is None or df.empty:
@@ -36,11 +37,11 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
 
     out = df.copy()
 
-    # טיפוסים
+    # המרת סוגי נתונים
     for c in ("open", "high", "low", "close", "volume"):
         out[c] = pd.to_numeric(out[c], errors="coerce").astype("float64")
 
-    # אינדקס זמן (UTC, מונוטוני)
+    # אינדקס זמן
     if not isinstance(out.index, pd.DatetimeIndex):
         if "timestamp" in out.columns:
             out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
@@ -57,17 +58,17 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
 
     return out
 
+
 def _enough_rows(df: pd.DataFrame) -> bool:
     n = len(df)
     if n < _MIN_ROWS_ABS or n < _LONGEST_WIN:
-        logging.warning(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({ _MIN_ROWS_ABS }, {_LONGEST_WIN})")
+        logging.warning(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({_MIN_ROWS_ABS}, {_LONGEST_WIN})")
         return False
     return True
 
+
 def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
-    """
-    חישוב קו SuperTrend בסיסי מבוסס ATR.
-    """
+    """חישוב קו SuperTrend בסיסי מבוסס ATR."""
     atr = AverageTrueRange(
         high=df["high"], low=df["low"], close=df["close"],
         window=period, fillna=True
@@ -103,6 +104,7 @@ def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = 
 
     return st.ffill()
 
+
 def _vwap(df: pd.DataFrame) -> pd.Series:
     tp = (df["high"] + df["low"] + df["close"]) / 3.0
     vol = df["volume"].astype("float64")
@@ -110,6 +112,108 @@ def _vwap(df: pd.DataFrame) -> pd.Series:
     cum_vol = vol.cumsum()
     vwap = (tp * vol).cumsum() / cum_vol
     return vwap
+
+
+# ---------- זיהוי תבניות נרות ----------
+def _body(o: pd.Series, c: pd.Series) -> pd.Series:
+    return (c - o).abs()
+
+def _is_bull(o, c):  # ירוק
+    return c > o
+
+def _is_bear(o, c):  # אדום
+    return c < o
+
+def _wick_upper(h, o, c):
+    return h - np.maximum(o, c)
+
+def _wick_lower(l, o, c):
+    return np.minimum(o, c) - l
+
+def _pct_of(x: pd.Series, base: pd.Series, eps: float = 1e-12) -> pd.Series:
+    return x / (base.replace(0, eps))
+
+def _patterns(df: pd.DataFrame) -> List[str]:
+    """
+    מחזיר רשימת תבניות לכל שורה (כמחרוזת מופרדת בפסיקים בסוף).
+    תבניות: Doji, Bullish Engulfing, Bearish Engulfing, Hammer, Inverted Hammer, Shooting Star,
+            Morning Star (3 נרות), Evening Star (3 נרות).
+    """
+    o = df["open"]; h = df["high"]; l = df["low"]; c = df["close"]
+    rng = (h - l).replace(0, np.nan)
+    body = _body(o, c)
+    u = _wick_upper(h, o, c)
+    d = _wick_lower(l, o, c)
+
+    # ספים יחסיים לגודל הנר
+    body_small = _pct_of(body, rng) <= 0.15     # גוף קטן מאד
+    body_large = _pct_of(body, rng) >= 0.6      # גוף גדול
+    upper_long = _pct_of(u, rng) >= 0.6
+    lower_long = _pct_of(d, rng) >= 0.6
+
+    is_bull = _is_bull(o, c)
+    is_bear = _is_bear(o, c)
+
+    # Doji
+    doji = body_small
+
+    # Engulfing (דורש נר קודם)
+    o_prev = o.shift(1); c_prev = c.shift(1)
+    prev_bull = (c_prev > o_prev)
+    prev_bear = (c_prev < o_prev)
+    bullish_engulf = is_bull & prev_bear & (o <= c_prev) & (c >= o_prev)
+    bearish_engulf = is_bear & prev_bull & (o >= c_prev) & (c <= o_prev)
+
+    # Hammer / Inverted Hammer / Shooting Star
+    hammer = lower_long & (~upper_long) & (body > 0) & ((c > o) | (o > c)) & (_pct_of(body, rng) <= 0.35)
+    inv_hammer = upper_long & (~lower_long) & (body > 0) & (_pct_of(body, rng) <= 0.35) & is_bull
+    shooting_star = upper_long & (~lower_long) & (body > 0) & (_pct_of(body, rng) <= 0.35) & is_bear
+
+    # Morning/Evening Star (3 נרות בסיסי)
+    # Morning Star: נר אדום גדול, אחריו גוף קטן (דוז'י/קטן) עם גאפ מטה (בקריפטו נדיר — נר קטן יספיק),
+    # ואז נר ירוק גדול שסוגר מעל אמצע גוף הנר הראשון.
+    small_body_prev = _pct_of(_body(o_prev, c_prev), (h.shift(1) - l.shift(1)).replace(0, np.nan)) <= 0.25
+    o_prev2 = o.shift(2); c_prev2 = c.shift(2)
+    rng_prev2 = (h.shift(2) - l.shift(2)).replace(0, np.nan)
+    large_prev2 = _pct_of(_body(o_prev2, c_prev2), rng_prev2) >= 0.5
+
+    morning_star = (
+        large_prev2 & (c_prev2 < o_prev2) &                  # נר 1 אדום גדול
+        small_body_prev &                                    # נר 2 קטן
+        is_bull & body_large &                               # נר 3 ירוק גדול
+        (c >= (o_prev2 + c_prev2) / 2)                       # סוגר מעל חצי הגוף של נר 1
+    )
+
+    evening_star = (
+        large_prev2 & (c_prev2 > o_prev2) &                  # נר 1 ירוק גדול
+        small_body_prev &                                    # נר 2 קטן
+        is_bear & body_large &                               # נר 3 אדום גדול
+        (c <= (o_prev2 + c_prev2) / 2)                       # סוגר מתחת לחצי הגוף של נר 1
+    )
+
+    labels: List[pd.Series] = []
+    def _label(mask: pd.Series, name: str) -> pd.Series:
+        s = pd.Series("", index=df.index, dtype="object")
+        s[mask.fillna(False)] = name
+        return s
+
+    labels.append(_label(doji, "Doji"))
+    labels.append(_label(bullish_engulf, "Bullish Engulfing"))
+    labels.append(_label(bearish_engulf, "Bearish Engulfing"))
+    labels.append(_label(hammer, "Hammer"))
+    labels.append(_label(inv_hammer, "Inverted Hammer"))
+    labels.append(_label(shooting_star, "Shooting Star"))
+    labels.append(_label(morning_star, "Morning Star"))
+    labels.append(_label(evening_star, "Evening Star"))
+
+    # איחוד לרשימה/מחרוזת לכל שורה
+    labdf = pd.concat(labels, axis=1)
+    def join_row(row: pd.Series) -> str:
+        xs = [x for x in row.tolist() if isinstance(x, str) and x]
+        return ", ".join(xs) if xs else "unknown"
+
+    return labdf.apply(join_row, axis=1).tolist()
+
 
 def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     """
@@ -162,10 +266,17 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
         out["supertrend"] = st_line
         out["supertrend_dir"] = np.where(out["close"] >= st_line, 1, -1).astype("int8")
 
-        # ממוצע נפח (לציון איכות)
+        # ממוצע נפח
         out["volume_mean"] = out["volume"].rolling(50, min_periods=1).mean()
 
-        # ניקוי/איחוד NaN/Inf
+        # תבניות נרות (מחרוזת)
+        try:
+            out["pattern"] = _patterns(out)
+        except Exception as e:
+            logging.debug(f"[indicators] pattern detection skipped: {e}")
+            out["pattern"] = "unknown"
+
+        # ניקוי NaN/Inf
         cols_needed = [
             "rsi", "adx", "atr", "macd", "macd_signal", "macd_hist",
             "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir", "volume_mean"
@@ -178,11 +289,18 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
             logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
             return pd.DataFrame()
 
-        out["pattern"] = "unknown"
+        # אם לא זוהתה תבנית – ודא שיש מחרוזות "unknown"
+        if "pattern" not in out.columns:
+            out["pattern"] = "unknown"
+        else:
+            out["pattern"] = out["pattern"].fillna("unknown").astype("string")
+
         return out
+
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
         return pd.DataFrame()
+
 
 
 
