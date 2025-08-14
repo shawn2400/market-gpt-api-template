@@ -1,292 +1,170 @@
 # utils/pnl_tracker.py
+from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP, getcontext
-from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
-# ייבוא "רך" של fpdf2 כדי שלא יפיל את השרת אם לא מותקן
-try:
-    from fpdf import FPDF  # מגיע מהחבילה fpdf2
-    HAS_FPDF = True
-except Exception:
-    FPDF = None  # type: ignore
-    HAS_FPDF = False
+from fpdf import FPDF
 
-# דיוק חישוב גבוה מספיק לקריפטו
-getcontext().prec = 28
-
-# קבצים/נתיבים דיפולטיים
-PNL_FILE = os.getenv("PNL_FILE", "pnl_tracker.json")
-PDF_OUTPUT_PATH = os.getenv("PNL_PDF_PATH", "static/reports/pnl_report.pdf")
-REPORT_DIR = Path(PDF_OUTPUT_PATH).parent
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
-
-# ---------- Utilities ----------
-
-def has_pdf_engine() -> bool:
-    """האם מנוע PDF (fpdf2) זמין?"""
-    return HAS_FPDF
-
-def _d(x) -> Decimal:
-    try:
-        return Decimal(str(x))
-    except Exception:
-        return Decimal(0)
-
-def _round(x: Decimal, ndigits: int = 2) -> Decimal:
-    q = Decimal("1." + ("0" * ndigits))
-    return x.quantize(q, rounding=ROUND_HALF_UP)
-
-def _ensure_dir_for(path: str) -> None:
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
+PNL_FILE = "pnl_tracker.json"
+PDF_OUTPUT_PATH = "static/reports/pnl_report.pdf"
 
 def _atomic_write_json(path: str, data: Any) -> None:
-    _ensure_dir_for(path)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
-    os.replace(tmp, path)
+    """כתיבה אטומית כדי למנוע קובץ שבור במקרה של קריסה באמצע."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=d, delete=False, encoding="utf-8") as tmp:
+        json.dump(data, tmp, indent=4, ensure_ascii=False)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_name = tmp.name
+    os.replace(tmp_name, path)
 
-# ---------- Core load/save ----------
 
-def load_pnl() -> Dict[str, List[Dict[str, Any]]]:
-    if not os.path.exists(PNL_FILE):
+def _load_json_or_empty(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
         return {}
     try:
-        with open(PNL_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                for k, v in list(data.items()):
-                    if not isinstance(v, list):
-                        data[k] = []
-                return data
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
     except Exception as e:
-        print(f"[PNL] ⚠️ שגיאה בקריאת {PNL_FILE}: {e}")
-    return {}
+        print(f"[pnl_tracker] ⚠️ שגיאה בקריאת {path}: {e}")
+        return {}
 
-def save_pnl(data: Dict[str, List[Dict[str, Any]]]) -> None:
+
+def _to_float(x, default: float = 0.0) -> float:
     try:
-        _atomic_write_json(PNL_FILE, data)
-    except Exception as e:
-        print(f"[PNL] ❌ כישלון בכתיבה אטומית ל־{PNL_FILE}: {e}")
+        v = float(x)
+        if v != v:  # NaN
+            return default
+        return v
+    except Exception:
+        return default
 
-# ---------- Business logic ----------
 
-def add_trade(
-    data: Dict[str, List[Dict[str, Any]]],
-    *,
-    symbol: str,
-    direction: str,
-    entry: float,
-    exit_price: float,
-    leverage: float,
-    qty: float,
-    fee_rate: float = 0.0,        # לדוגמה: 0.0004 (0.04%)
-    fixed_fee_usdt: float = 0.0   # עמלה קבועה (סה״כ, שתי פקודות)
-) -> Tuple[Dict[str, Any], Decimal]:
+def update_pnl(symbol: str, direction: str, entry: float, exit_price: float, leverage: float, qty: float) -> float:
     """
-    מוסיף טרייד למבנה הנתונים ומחזיר (trade_dict, pnl_decimal).
-    PnL מחושב: (diff * qty * leverage) - fees
-    diff: LONG = (exit - entry), SHORT = (entry - exit)
-    fees: (entry * qty + exit * qty) * fee_rate * leverage + fixed_fee_usdt
+    מעדכן רשומת PNL ליום הנוכחי ומחזיר ערך PNL לחשבון (כולל מינוף).
+    פורמט הקובץ: { "YYYY-MM-DD": [ {trade}, ... ], ... }
     """
-    symbol = str(symbol).upper().strip()
-    d = str(direction or "").upper().strip()
-    if d not in ("LONG", "SHORT"):
-        d = "LONG"
-
-    entry_d    = _d(entry)
-    exit_d     = _d(exit_price)
-    lev_d      = _d(leverage)
-    qty_d      = _d(qty)
-    fee_rate_d = _d(fee_rate)
-    fixed_fee_d= _d(fixed_fee_usdt)
-
-    if entry_d <= 0 or exit_d <= 0 or lev_d <= 0 or qty_d <= 0:
-        raise ValueError("entry/exit/leverage/qty must be positive")
-
-    diff = (exit_d - entry_d) if d == "LONG" else (entry_d - exit_d)
-    gross_pnl = diff * qty_d * lev_d
-
-    notional_in  = entry_d * qty_d * lev_d
-    notional_out = exit_d  * qty_d * lev_d
-    fees = (notional_in + notional_out) * fee_rate_d + fixed_fee_d
-    net_pnl = gross_pnl - fees
-
-    trade = {
-        "symbol": symbol,
-        "direction": d,
-        "entry": float(_round(entry_d, 6)),
-        "exit": float(_round(exit_d, 6)),
-        "leverage": float(lev_d),
-        "qty": float(_round(qty_d, 6)),
-        "pnl": float(_round(net_pnl, 2)),
-        "fees": float(_round(fees, 4)),
-        "fee_rate": float(fee_rate_d),
-        "fixed_fee_usdt": float(_round(fixed_fee_d, 4)),
-        "timestamp": datetime.utcnow().isoformat(),
-        "success": 1 if net_pnl > 0 else 0,
-        "gross_pnl": float(_round(gross_pnl, 2)),
-    }
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    data.setdefault(today, []).append(trade)
-    return trade, net_pnl
+    data = _load_json_or_empty(PNL_FILE)
 
-def update_pnl(
-    symbol: str,
-    direction: str,
-    entry: float,
-    exit_price: float,
-    leverage: float,
-    qty: float,
-    *,
-    fee_rate: float = 0.0,
-    fixed_fee_usdt: float = 0.0
-) -> float:
-    data = load_pnl()
     try:
-        _, pnl_d = add_trade(
-            data,
-            symbol=symbol,
-            direction=direction,
-            entry=entry,
-            exit_price=exit_price,
-            leverage=leverage,
-            qty=qty,
-            fee_rate=fee_rate,
-            fixed_fee_usdt=fixed_fee_usdt,
-        )
-        save_pnl(data)
-        return float(_round(pnl_d, 2))
+        direction_u = (direction or "").upper()
+        entry = _to_float(entry, 0.0)
+        exit_price = _to_float(exit_price, 0.0)
+        leverage = _to_float(leverage, 1.0)
+        qty = _to_float(qty, 0.0)
+
+        if entry <= 0 or exit_price <= 0 or qty <= 0 or leverage <= 0:
+            raise ValueError("Invalid entry/exit/qty/leverage values")
+
+        diff = (exit_price - entry) if direction_u == "LONG" else (entry - exit_price)
+        pnl = round(diff * qty * leverage, 6)
+
+        trade = {
+            "symbol": str(symbol).upper(),
+            "direction": direction_u,
+            "entry": round(entry, 6),
+            "exit": round(exit_price, 6),
+            "leverage": leverage,
+            "qty": qty,
+            "pnl": pnl,
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+            "success": 1 if pnl > 0 else 0,
+        }
+
+        day_list = data.setdefault(today, [])
+        day_list.append(trade)
+
+        _atomic_write_json(PNL_FILE, data)
+        return pnl
+
     except Exception as e:
-        print(f"[PNL] ❌ שגיאה בעדכון PNL: {e}")
+        print(f"[pnl_tracker] ❌ שגיאה בחישוב/כתיבה של PNL: {e}")
         return 0.0
 
-# ---------- Summaries ----------
 
-def daily_summary(data: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Dict[str, Any]]:
-    data = data if data is not None else load_pnl()
-    out: Dict[str, Dict[str, Any]] = {}
-    for date, trades in data.items():
-        total = Decimal(0)
-        wins = 0
-        for t in trades:
-            pnl = _d(t.get("pnl", 0))
-            total += pnl
-            if pnl > 0:
-                wins += 1
-        n = len(trades)
-        losses = max(0, n - wins)
-        sr = float(_round(Decimal(wins) / Decimal(n) * Decimal(100), 2)) if n else 0.0
-        out[date] = {
-            "trades": n,
-            "wins": wins,
-            "losses": losses,
-            "total": float(_round(total, 2)),
-            "success_rate": sr,
-        }
-    return out
+def _summarize_day(trades: List[Dict[str, Any]]) -> Tuple[float, float]:
+    total = sum(_to_float(t.get("pnl"), 0.0) for t in trades)
+    wins = sum(1 for t in trades if _to_float(t.get("pnl"), 0.0) > 0)
+    rate = (wins / len(trades) * 100.0) if trades else 0.0
+    return total, rate
 
-def overall_summary(data: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
-    data = data if data is not None else load_pnl()
-    n = 0
-    wins = 0
-    total = Decimal(0)
-    for trades in data.values():
-        for t in trades:
-            pnl = _d(t.get("pnl", 0))
-            total += pnl
-            n += 1
-            if pnl > 0:
-                wins += 1
-    sr = float(_round(Decimal(wins) / Decimal(n) * Decimal(100), 2)) if n else 0.0
-    return {
-        "trades": n,
-        "wins": wins,
-        "losses": max(0, n - wins),
-        "total": float(_round(total, 2)),
-        "success_rate": sr,
-    }
 
-# ---------- PDF report ----------
-
-class _PNLPDF(FPDF):  # type: ignore[misc]
-    def header(self):
-        self.set_font("Helvetica", "B", 14)
-        self.cell(0, 10, "Daily PNL Report", border=0, ln=1, align="C")
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        self.set_font("Helvetica", "", 10)
-        self.cell(0, 6, now, border=0, ln=1, align="C")
-        self.ln(2)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Helvetica", "I", 8)
-        self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
-
-def generate_pnl_pdf(data: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Optional[str]:
+def generate_pnl_pdf(limit_days: Optional[int] = None) -> Optional[str]:
     """
-    יוצר דו״ח PDF ומחזיר נתיב; אם אין נתונים או שאין fpdf2 – מחזיר None.
-    לא מפיל את השרת.
+    יוצר PDF מסכם מ-PNL_FILE. מחזיר נתיב PDF או None אם אין נתונים.
+    הערה: כדי להימנע מבעיות קידוד גופנים ב-FPDF הקלאסי, לא משתמשים באמוג'ים בברירת מחדל.
     """
-    if not HAS_FPDF:
-        return None
-
-    data = data if data is not None else load_pnl()
+    data = _load_json_or_empty(PNL_FILE)
     if not data:
         return None
 
-    _ensure_dir_for(str(PDF_OUTPUT_PATH))
+    os.makedirs(os.path.dirname(PDF_OUTPUT_PATH), exist_ok=True)
 
-    pdf = _PNLPDF()
-    pdf.set_auto_page_break(auto=True, margin=12)
+    # מיון תאריכים מהחדש לישן + חיתוך לפי limit_days אם נתון
+    dates = sorted(data.keys(), reverse=True)
+    if isinstance(limit_days, int) and limit_days > 0:
+        dates = dates[:limit_days]
+
+    pdf = FPDF()
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
 
-    ov = overall_summary(data)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(
-        0, 8,
-        f"Overall: Trades={ov['trades']} | Wins={ov['wins']} | Losses={ov['losses']} | "
-        f"Total={ov['total']}$ | Success Rate={ov['success_rate']}%",
-        ln=1
-    )
+    # כותרת
+    pdf.set_font("Arial", size=16)
+    pdf.cell(0, 10, txt="Daily PnL Report", ln=True, align="C")
     pdf.ln(2)
 
-    for date in sorted(data.keys(), reverse=True):
-        trades = data[date]
-        day_sum = daily_summary({date: trades})[date]
+    overall_total = 0.0
+    overall_trades = 0
+    overall_wins = 0
 
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(
-            0, 8,
-            f"📅 {date} — Trades={day_sum['trades']} | Total={day_sum['total']}$ | "
-            f"Success Rate={day_sum['success_rate']}%",
-            ln=1
-        )
-        pdf.set_font("Helvetica", "", 11)
+    for date in dates:
+        trades = list(data.get(date) or [])
+        if not trades:
+            continue
 
+        pdf.set_font("Arial", style="B", size=12)
+        pdf.cell(0, 8, txt=f"{date}", ln=True)
+
+        pdf.set_font("Arial", size=11)
         for t in trades:
-            pnl = float(_round(_d(t.get("pnl", 0)), 2))
-            line = (
-                f"{t.get('symbol','?'):>8} | {t.get('direction','?'):>5} | "
-                f"Entry: {t.get('entry')} | Exit: {t.get('exit')} | "
-                f"Lev: {t.get('leverage')} | Qty: {t.get('qty')} | "
-                f"Fees: {t.get('fees', 0)} | PNL: {pnl}$"
-            )
-            pdf.multi_cell(0, 6, line)
+            pnl = _to_float(t.get("pnl"), 0.0)
+            overall_total += pnl
+            overall_trades += 1
+            overall_wins += 1 if pnl > 0 else 0
 
+            line = (
+                f"{t.get('symbol','?')} | {t.get('direction','?')} | "
+                f"Entry: {t.get('entry')} | Exit: {t.get('exit')} | "
+                f"Lev: {t.get('leverage')}x | Qty: {t.get('qty')} | "
+                f"PNL: {pnl:.4f}"
+            )
+            pdf.cell(0, 7, txt=line, ln=True)
+
+        day_total, day_rate = _summarize_day(trades)
+        pdf.set_font("Arial", style="B", size=11)
+        pdf.cell(0, 7, txt=f"Total: {day_total:.4f} | Success Rate: {day_rate:.2f}%", ln=True)
         pdf.ln(2)
+
+    # סיכום כללי
+    overall_rate = (overall_wins / overall_trades * 100.0) if overall_trades else 0.0
+    pdf.ln(4)
+    pdf.set_font("Arial", style="B", size=12)
+    pdf.cell(0, 8, txt=f"Overall Total: {overall_total:.4f}", ln=True)
+    pdf.cell(0, 8, txt=f"Overall Success Rate: {overall_rate:.2f}%", ln=True)
 
     try:
         pdf.output(PDF_OUTPUT_PATH)
         return PDF_OUTPUT_PATH
     except Exception as e:
-        print(f"[PNL] ❌ שגיאה ביצירת PDF: {e}")
+        print(f"[pnl_tracker] ❌ שגיאה ביצירת PDF: {e}")
         return None
 
 
