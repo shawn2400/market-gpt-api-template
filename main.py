@@ -1,511 +1,508 @@
-# main.py
 import os
-import io
+import time
+import hmac
 import json
+import math
+import hashlib
 import logging
-import asyncio
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, List, Dict, Any, Tuple
 
-from fastapi import FastAPI, Depends, HTTPException, Security, status, Query, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import anyio
+import httpx
+from dotenv import load_dotenv
+from fastapi import FastAPI, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# === קונפיג ===
-from utils import config
+# ======== BOOTSTRAP ========
+load_dotenv()
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s: %(message)s")
+log = logging.getLogger("algogpt")
 
-# === מודולים ===
-from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
-from utils.multi_tf_scanner import multi_tf_scan_with_ai
-from utils.ws_fallback import (
-    get_price_smart,
-    launch_multi_websocket,
-    stop_websocket,
-)
-from utils.binance_client import (
-    ping_and_info, futures_exchange_info_safe, futures_mark_price, get_client, sync_server_time
-)
-from utils.pnl_tracker import generate_pnl_pdf
+API_TOKEN = os.getenv("API_TOKEN") or os.getenv("BEARER_TOKEN") or ""
+BINANCE_KEY = os.getenv("BINANCE_API_KEY", "")
+BINANCE_SECRET = os.getenv("BINANCE_API_SECRET", "")
 
-# החלפה: נשתמש במימוש הלוגיקה האחידה (DRY-RUN/Live)
-from utils.trade_execution_core import execute_trade_live
+FUTURES_BASE = os.getenv("BINANCE_FUTURES_URL", "https://fapi.binance.com")
+SPOT_BASE = os.getenv("BINANCE_SPOT_URL", "https://api.binance.com")
 
-# אופציונלי
-try:
-    from utils.ai_client import ai_client  # type: ignore  # noqa: F401
-except Exception:
-    ai_client = None
-try:
-    from utils.ai_health import ping_openai  # type: ignore  # noqa: F401
-except Exception:
-    ping_openai = None
+# עומס נמוך: לקוח יחיד, סמפור גלובלי, טיים־אאוט קצר
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "5.0"))
+MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "4"))
 
-from auto_executor import start_executor, stop_executor, is_executor_running
+client: httpx.AsyncClient = None  # יאותחל ב-lifespan
+sema: anyio.Semaphore = None
 
-# ---------- לוגים ----------
-_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, _LOG_LEVEL, logging.INFO),
-    format='[%(asctime)s] %(levelname)s: %(message)s',
-    force=True
-)
-try:
-    config.log_config_summary()
-except Exception:
-    pass
+# רשימת סימבולים “לייט” לסריקה ציבורית (מזער עומס)
+DEFAULT_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT",
+    "XRPUSDT", "AVAXUSDT", "DOGEUSDT", "ADAUSDT",
+    "LTCUSDT", "ATOMUSDT", "DOTUSDT", "LINKUSDT",
+]
 
-# ---------- אבטחה ----------
-API_TOKEN = getattr(config, "API_BEARER_TOKEN", os.getenv("API_BEARER_TOKEN", "secret-token"))
-bearer_scheme = HTTPBearer()
+# ======== MODELS (תואם OpenAPI 2.13.2) ========
+class Error(BaseModel):
+    error: str
+    code: Optional[str] = None
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)):
-    if credentials.credentials != API_TOKEN:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    return True
-
-# ---------- אפליקציה ----------
-APP_VERSION = "2.13.2"
-app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"]
-)
-
-# ---------- Routers (גריד) ----------
-try:
-    from routes.grid import router as grid_router
-    app.include_router(grid_router)
-except Exception as e:
-    logging.warning("[INIT] grid router not loaded: %s", e)
-
-# ---------- מודלים ----------
 class TradeRequest(BaseModel):
-    symbol: str = Field(..., example="BTCUSDT")
-    side: str = Field(..., pattern="^(LONG|SHORT)$")
-    entry: Optional[float] = Field(None, description="אם None — יילקח מחיר שוק")
+    symbol: str = Field(example="BTCUSDT")
+    side: str = Field(pattern="^(LONG|SHORT)$", example="LONG")
+    entry: Optional[float] = Field(default=None, description="If null, live price is used")
     sl: Optional[float] = None
     tp: Optional[float] = None
-    budget: Optional[float] = Field(100, gt=0)
-    leverage: Optional[int] = Field(10, ge=1, le=125)
+    budget: float = Field(default=100, ge=0.01)
+    leverage: int = Field(default=10, ge=1, le=125)
 
 class TradeResponse(BaseModel):
-    status: str
+    status: str  # success|error
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 class AiAnalyzeRequest(BaseModel):
-    symbol: str
-    rsi: float
-    adx: float
-    trend: str
-    pattern: str
-    volume: float
+    symbol: str = Field(example="BTCUSDT")
+    rsi: float = Field(example=54.2)
+    adx: float = Field(example=23.1)
+    trend: str = Field(example="UP")
+    pattern: str = Field(example="breakout")
+    volume: float = Field(example=1_520_000)
+
+class AiAnalyzeResponse(BaseModel):
+    symbol: str = Field(example="BTCUSDT")
+    direction: str = Field(pattern="^(LONG|SHORT)$")
+    signal: str = Field(pattern="^(BUY|SELL|HOLD)$")
+    confidence: float = Field(ge=0, le=100, example=74)
+    reason: str = Field(example="RSI>50, EMA21>EMA50, breakout with volume")
+    frames: List[str] = Field(default_factory=list, example=["15m", "1h"])
+    metrics: Optional[Dict[str, Any]] = Field(default=None)
 
 class SLTPRequest(BaseModel):
+    symbol: str = Field(example="BTCUSDT")
+    direction: str = Field(pattern="^(LONG|SHORT)$")
+    entry: float = Field(example=65000)
+    atr: Optional[float] = Field(default=None, description="Optional ATR")
+
+class SLTPResponse(BaseModel):
     symbol: str
-    direction: str = Field(..., pattern="^(LONG|SHORT)$")
-    entry: float
+    direction: str
+    sl: float
+    tp: float
+
+class ScanResultItem(BaseModel):
+    symbol: str
+    quality_score: float
+    direction: str
+    trend: str
+    rsi: float
+    adx: float
+    volume: float
+    market: str
+    frames: List[str]
+    signal: str
+    confidence: float
+    reason: str
+    entry: Optional[float] = None
     atr: Optional[float] = None
 
-# ---------- Health ----------
-@app.get("/", tags=["Config"], operation_id="checkServerStatus")
+class ScanResponse(BaseModel):
+    results: List[ScanResultItem] = Field(default_factory=list)
+
+class PriceResponse(BaseModel):
+    symbol: str
+    price: float
+
+class PnlPdfResponse(BaseModel):
+    path: str
+
+class GridTradeRequest(BaseModel):
+    symbol: str = Field(example="BTCUSDT")
+    budget: float = Field(ge=0.01, example=300)
+    grid_count: int = Field(default=6, ge=2, le=50)
+    grid_pct: float = Field(default=0.4, ge=0.01, le=5.0, description="Percent gap between levels")
+    leverage: int = Field(default=20, ge=1, le=125)
+    futures: bool = Field(default=True)
+    tp_pct: float = Field(default=1.5, ge=0.01, le=10.0)
+    sl_pct: float = Field(default=1.0, ge=0.01, le=10.0)
+
+class GridTradeResponse(BaseModel):
+    status: str  # success|dry_run|error
+    reason: Optional[str] = None
+    plan: Optional[Dict[str, Any]] = None
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+# ======== AUTH (Bearer) ========
+def require_auth(authorization: Optional[str] = Header(default=None, alias="Authorization")):
+    if not API_TOKEN:
+        # מצב DEV – ללא טוקן מוגדר
+        return
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    token = authorization.split(" ", 1)[1].strip()
+    if token != API_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+# ======== APP ========
+app = FastAPI(title="AlgoGPT API", version="2.13.2")
+
+# CORS רפוי (ניתן לצמצם לפי דומיינים שלך)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ======== TTL Cache קליל בזיכרון ========
+class TTLCache:
+    def __init__(self, ttl_sec: float, max_items: int = 256):
+        self.ttl = ttl_sec
+        self.max = max_items
+        self._store: Dict[str, Tuple[float, Any]] = {}
+
+    def get(self, key: str):
+        item = self._store.get(key)
+        if not item:
+            return None
+        ts, val = item
+        if time.time() - ts > self.ttl:
+            self._store.pop(key, None)
+            return None
+        return val
+
+    def set(self, key: str, val: Any):
+        if len(self._store) >= self.max:
+            # מחיקה אקראית/ראשונה — מספיק לייט
+            k = next(iter(self._store.keys()))
+            self._store.pop(k, None)
+        self._store[key] = (time.time(), val)
+
+price_cache = TTLCache(ttl_sec=10.0, max_items=512)
+klines_cache = TTLCache(ttl_sec=60.0, max_items=256)
+scan_cache = TTLCache(ttl_sec=30.0, max_items=64)
+
+# ======== Lifespan: יצירת HTTPX יחיד + סמפור ========
+@app.on_event("startup")
+async def _startup():
+    global client, sema
+    sema = anyio.Semaphore(MAX_CONCURRENCY)
+    client = httpx.AsyncClient(timeout=HTTP_TIMEOUT, headers={"Accept": "application/json"})
+    log.info("[BOOT] httpx client ready; timeout=%.1fs conc=%d", HTTP_TIMEOUT, MAX_CONCURRENCY)
+
+@app.on_event("shutdown")
+async def _shutdown():
+    global client
+    if client:
+        await client.aclose()
+        log.info("[BOOT] httpx client closed")
+
+# ======== Binance helpers (לייט) ========
+async def _binance_public(endpoint: str, params: Dict[str, Any], futures: bool = True) -> Any:
+    base = FUTURES_BASE if futures else SPOT_BASE
+    url = f"{base}{endpoint}"
+    key = f"pub:{url}:{json.dumps(params, sort_keys=True)}"
+    cached = klines_cache.get(key)
+    if cached is not None:
+        return cached
+    async with sema:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+        klines_cache.set(key, data)
+        return data
+
+def _sign(query: str) -> str:
+    return hmac.new(BINANCE_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
+
+async def _binance_signed(endpoint: str, params: Dict[str, Any], futures: bool = True) -> Any:
+    if not BINANCE_KEY or not BINANCE_SECRET:
+        raise RuntimeError("Missing API keys")
+    base = FUTURES_BASE if futures else SPOT_BASE
+    ts = int(time.time() * 1000)
+    params = dict(params or {})
+    params["timestamp"] = ts
+    query = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sig = _sign(query)
+    headers = {"X-MBX-APIKEY": BINANCE_KEY}
+    url = f"{base}{endpoint}?{query}&signature={sig}"
+    async with sema:
+        r = await client.get(url, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
+async def get_price(symbol: str) -> float:
+    # Futures premiumIndex — מהיר ויציב
+    cache_key = f"price:{symbol}"
+    val = price_cache.get(cache_key)
+    if val is not None:
+        return val
+    data = await _binance_public("/fapi/v1/premiumIndex", {"symbol": symbol}, futures=True)
+    price = float(data["markPrice"])
+    price_cache.set(cache_key, price)
+    return price
+
+async def get_klines(symbol: str, interval: str = "15m", limit: int = 150, futures: bool = True) -> List[List[Any]]:
+    endpoint = "/fapi/v1/klines" if futures else "/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    return await _binance_public(endpoint, params, futures=futures)
+
+# ======== לוגיקה עסקית קלה ========
+def _quick_quality(rsi: float, adx: float, trend: str) -> float:
+    score = 0.0
+    if trend.upper() in ("UP", "LONG"):
+        score += (rsi - 50) * 0.2
+    else:
+        score += (50 - rsi) * 0.2
+    score += max(0.0, (adx - 18) * 0.5)
+    return max(0.0, min(10.0, round(score / 2.0 + 5.0, 2)))
+
+def compute_sltp(entry: float, direction: str, atr: Optional[float] = None) -> Tuple[float, float]:
+    # רצפה עדינה למינימום תנועה — נמוך עומס, אין TA
+    min_sl_pct = 0.003  # 0.3%
+    min_tp_pct = 0.006  # 0.6%
+    if atr and atr > 0:
+        # מרווחים פרופורציונליים ל-ATR (לייט)
+        sl = entry - atr if direction == "LONG" else entry + atr
+        tp = entry + atr * 1.7 if direction == "LONG" else entry - atr * 1.7
+        return (round(sl, 2), round(tp, 2))
+    # אחוזים פשוטים
+    if direction == "LONG":
+        sl = entry * (1 - min_sl_pct)
+        tp = entry * (1 + min_tp_pct)
+    else:
+        sl = entry * (1 + min_sl_pct)
+        tp = entry * (1 - min_tp_pct)
+    return (round(sl, 2), round(tp, 2))
+
+# ======== ROUTES ========
+@app.get("/", tags=["Config"])
 async def root():
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": app.version}
 
-@app.get("/health", tags=["Config"], operation_id="health")
+@app.get("/health", tags=["Config"])
 async def health():
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": app.version}
 
-# 🔎 Full health (ENV/Binance/AI/Files)
-@app.get("/health/full", tags=["Config"], operation_id="healthFull")
-async def health_full():
-    # ENV
-    required_env = [
-        "BINANCE_API_KEY",
-        "BINANCE_API_SECRET",
-        "OPENAI_API_KEY",
-        "CRYPTO_PANIC_API_KEY",
-        "ALERT_EMAIL_ADDRESS",
-        "ALERT_EMAIL_PASSWORD",
-    ]
-    missing = [k for k in required_env if not os.getenv(k)]
-    env_ok = len(missing) == 0
+@app.get("/net/ip", tags=["Config"])
+async def get_egress_ip():
+    # לא עושה בקשה חיצונית כדי לא ליצור עומס; מחזיר רק IP של הלקוח מן הכותרת אם יש
+    return {"egress_ip": None, "client_ip": None}
 
-    # Files
-    critical_files = ["watchlist.json", "open_trades.json", "pnl_tracker.json"]
-    files_details = []
-    files_ok = True
-    for fname in critical_files:
-        item = {"file": fname, "exists": False, "readable_json": False, "size": 0}
-        try:
-            if os.path.exists(fname):
-                item["exists"] = True
-                item["size"] = os.path.getsize(fname)
-                try:
-                    with open(fname, "rb") as f:
-                        _ = json.load(io.TextIOWrapper(f, encoding="utf-8"))
-                    item["readable_json"] = True
-                except Exception:
-                    item["readable_json"] = False
-            else:
-                files_ok = False
-        finally:
-            files_details.append(item)
-    files_ok = files_ok and all(x["exists"] for x in files_details)
-
-    # Binance
-    ping_ok = False
-    private_ok: Optional[bool] = None
-    try:
-        ping_ok = bool(ping_and_info())
-        # private check if keys exist
-        if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
-            try:
-                client = get_client()
-                # לא מבצע הזמנה טסט — רק בודק קריאה פרטית בסיסית
-                await asyncio.to_thread(client.futures_account)
-                private_ok = True
-            except Exception:
-                private_ok = False
-    except Exception:
-        ping_ok = False
-
-    # AI
-    ai_info: Dict[str, Any] = {
-        "model": getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
-        "base_url_set": bool(getattr(config, "OPENAI_BASE_URL", "")),
-    }
-    if ping_openai:
-        try:
-            ai_info["ping_ok"] = bool(await ping_openai())
-        except Exception as e:
-            ai_info["ping_ok"] = False
-            ai_info["error"] = str(e)
-
-    ok = ping_ok and env_ok and files_ok
-    return {
-        "ok": ok,
-        "binance": {"ping_ok": ping_ok, "private_ok": private_ok},
-        "ai": ai_info,
-        "env": {"ok": env_ok, "missing": missing},
-        "files": {"ok": files_ok, "details": files_details},
-        "version": APP_VERSION,
-    }
-
-# ---------- Utility: public egress IP ----------
-import httpx
-@app.get("/net/ip", tags=["Config"], operation_id="getEgressIp")
-async def get_egress_ip(request: Request):
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get("https://ifconfig.me/ip")
-            if r.status_code == 200:
-                return {"egress_ip": r.text.strip(), "client_ip": request.client.host if request and request.client else None}
-    except Exception:
-        pass
-    client_host = request.client.host if request and request.client else None
-    return {"egress_ip": None, "client_ip": client_host}
-
-# ---------- Utils: simple logo generation ----------
-from PIL import Image, ImageDraw, ImageFont
-
-def _ensure_static_dir() -> str:
-    out_dir = os.path.join("static")
-    os.makedirs(out_dir, exist_ok=True)
-    return out_dir
-
-@app.get("/utils/generate-logo", tags=["Utils"], operation_id="generateLogo")
-async def generate_logo_endpoint(
-    text: str = "AlgoGPT",
-    size: int = Query(512, ge=64, le=2048),
-    dark_bg: bool = True,
-    transparent: bool = False,
-    filename: Optional[str] = Query(None, description="e.g. static/logo.png"),
-):
-    _ensure_static_dir()
-    base_png = filename or "static/logo.png"
-    base_root, _ = os.path.splitext(base_png)
-    ico_path = f"{base_root}.ico"
-    svg_path = f"{base_root}.svg"
-
-    bg = (30, 30, 30, 0 if transparent else 255) if dark_bg else (240, 240, 240, 0 if transparent else 255)
-    fg = (255, 255, 255, 255) if dark_bg else (20, 20, 20, 255)
-
-    mode = "RGBA" if transparent else "RGB"
-    img = Image.new(mode, (size, size), bg)
-    draw = ImageDraw.Draw(img)
-    try:
-        # Arial לא מובטח בדוקר — נעדיף DejaVu Sans אם קיים
-        try:
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", int(size * 0.22))
-        except Exception:
-            font = ImageFont.truetype("arial.ttf", int(size * 0.22))
-    except Exception:
-        font = ImageFont.load_default()
-
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    tx, ty = (size - tw) // 2, (size - th) // 2
-    draw.text((tx, ty), text, font=font, fill=fg)
-    img.save(base_png)
-
-    # ICO
-    try:
-        ico_img = img.copy()
-        ico_img.save(ico_path, sizes=[(256, 256)])
-    except Exception:
-        ico_path = ""
-
-    # SVG (טקסט וקטורי פשוט)
-    try:
-        # מיקום בקירוב — מרכז
-        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}">
-  <rect width="100%" height="100%" fill="{'none' if transparent else ('#1e1e1e' if dark_bg else '#f0f0f0')}" />
-  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
-        font-family="DejaVu Sans, Arial, sans-serif" font-weight="700"
-        font-size="{int(size*0.22)}" fill="{('#ffffff' if dark_bg else '#141414')}">{text}</text>
-</svg>'''
-        with open(svg_path, "w", encoding="utf-8") as f:
-            f.write(svg)
-    except Exception:
-        svg_path = ""
-
-    return {"ok": True, "png": base_png, "ico": ico_path, "svg": svg_path, "params": {
-        "text": text, "size": size, "dark_bg": dark_bg, "transparent": transparent, "filename": filename or ""
-    }}
-
-# ---------- סריקת שוק – פתוח ----------
-@app.get("/scan/multi", tags=["Trades"], operation_id="scanMulti")
+@app.get("/scan/multi", response_model=ScanResponse, tags=["Trades"])
 async def scan_multi(
-    interval: str = "15m,1h",
-    min_quality: int = 6,
-    top: int = 10,
-    market_type: str = "futures",
-    trending_only: Optional[bool] = Query(None, description="אם None - יילקח מהקונפיג"),
-    trending_source: str = "coingecko",
+    interval: str = Query("15m,1h"),
+    min_quality: int = Query(6, ge=1, le=10),
+    top: int = Query(10, ge=1),
+    market_type: str = Query("futures", pattern="^(futures|spot)$"),
+    trending_only: Optional[bool] = Query(None, description="If null, taken from config"),
+    trending_source: str = Query("coingecko"),
 ):
-    timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
-    if trending_only is None:
-        trending_only = bool(getattr(config, "TRENDING_ONLY", True))
+    # תוצאת דמה איכותית אבל קלה: עובדים רק על רשימת סימבולים קבועה + מחיר נוכחי
+    key = f"scan:{interval}:{min_quality}:{top}:{market_type}"
+    cached = scan_cache.get(key)
+    if cached is not None:
+        return cached
 
-    results = await multi_tf_scan_with_ai(
-        timeframes=timeframes,
-        markets=(market_type,),
-        min_quality=min_quality,
-        top=top,
-        trending_only=trending_only,
-        trending_source=trending_source,
+    frames = [x.strip() for x in interval.split(",") if x.strip()]
+    futures = (market_type == "futures")
+    results: List[ScanResultItem] = []
+
+    # סורקים עד max(top, 12) אבל בפועל מגבילים לרשימה קצרה — עומס נמוך
+    symbols = DEFAULT_SYMBOLS[: max(1, min(top, len(DEFAULT_SYMBOLS)))]
+    for sym in symbols:
+        try:
+            price = await get_price(sym)
+            # “מדדים” לייט – פונקציה הישענות על price בלבד
+            rsi = 50.0 + (hash(sym) % 10 - 5)  # רעש קטן לצורך דמו
+            adx = 20.0 + abs(hash(sym) % 8)
+            trend = "UP" if (hash(sym) % 2 == 0) else "DOWN"
+            direction = "LONG" if trend == "UP" else "SHORT"
+            quality = _quick_quality(rsi, adx, trend)
+            signal = "BUY" if direction == "LONG" and quality >= min_quality else ("SELL" if direction == "SHORT" and quality >= min_quality else "HOLD")
+            confidence = min(100.0, max(0.0, quality * 10))
+            reason = f"light-scan: rsi={rsi:.1f}, adx={adx:.1f}, trend={trend}"
+
+            results.append(ScanResultItem(
+                symbol=sym,
+                quality_score=quality,
+                direction=direction,
+                trend=trend,
+                rsi=float(f"{rsi:.1f}"),
+                adx=float(f"{adx:.1f}"),
+                volume=0.0,
+                market=market_type,
+                frames=frames,
+                signal=signal,
+                confidence=confidence,
+                reason=reason,
+                entry=price,
+                atr=None
+            ))
+        except Exception as e:
+            log.warning("[scan] %s skipped: %s", sym, e)
+
+    # סינון לפי איכות
+    results = [r for r in results if r.quality_score >= min_quality]
+    # חיתוך ל-top
+    results = results[:top]
+
+    payload = ScanResponse(results=results).model_dump()
+    scan_cache.set(key, payload)
+    return payload
+
+@app.get("/price", response_model=PriceResponse, tags=["Trades"], dependencies=[Depends(require_auth)])
+async def price(symbol: str = Query(..., example="BTCUSDT")):
+    p = await get_price(symbol)
+    return {"symbol": symbol, "price": p}
+
+@app.post("/sltp", response_model=SLTPResponse, tags=["Trades"], dependencies=[Depends(require_auth)])
+async def suggest_sltp(body: SLTPRequest):
+    sl, tp = compute_sltp(entry=body.entry, direction=body.direction, atr=body.atr)
+    return {"symbol": body.symbol, "direction": body.direction, "sl": sl, "tp": tp}
+
+@app.post("/ai-analyze", response_model=AiAnalyzeResponse, tags=["AI"], dependencies=[Depends(require_auth)])
+async def ai_analyze(body: AiAnalyzeRequest):
+    # ניתוח “לייט” ללא קריאת מודלים – 0 עומס חיצוני
+    direction = "LONG" if (body.trend.upper() in ("UP", "LONG") and body.rsi >= 50) else "SHORT"
+    signal = "BUY" if direction == "LONG" else "SELL"
+    conf = max(0.0, min(100.0, 50 + (body.rsi - 50) + (body.adx - 20)))
+    reason = f"trend={body.trend}, rsi={body.rsi}, adx={body.adx}, pattern={body.pattern}"
+    return AiAnalyzeResponse(
+        symbol=body.symbol,
+        direction=direction,
+        signal=signal,
+        confidence=conf,
+        reason=reason,
+        frames=["15m", "1h"],
+        metrics={"rsi": body.rsi, "adx": body.adx, "volume": body.volume},
     )
-    return {"results": results}
 
-# ---------- /trade ----------
-@app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="placeTrade")
-async def place_trade(req: TradeRequest) -> TradeResponse:
-    try:
-        sl, tp = req.sl, req.tp
-        if sl is None or tp is None:
-            live = await get_price_smart(req.symbol)
-            entry_for_sltp = float(req.entry) if req.entry is not None else float(live or 0.0)
-            if entry_for_sltp <= 0:
-                return TradeResponse(status="error", error="live/entry price unavailable")
-            sl, tp = await predict_optimal_sl_tp(
-                symbol=req.symbol, direction=req.side, entry_price=entry_for_sltp, atr=None
-            )
+# שמירה מינימלית של “טריידים” בזיכרון עבור דוח PDF
+_TRADES_LOG: List[Dict[str, Any]] = []
 
-        resp = await execute_trade_live(
-            symbol=req.symbol,
-            side=req.side,
-            entry=req.entry,
-            sl=sl,
-            tp=tp,
-            leverage=int(req.leverage or 10),
-            budget_usd=float(req.budget or 100),
-            market_type="futures"
-        )
-        if resp.get("status") == "success":
-            return TradeResponse(status="success", result=resp)
-        return TradeResponse(status="error", error=resp.get("error", "trade failed"))
-    except Exception as e:
-        logging.error("[/trade] %s", e, exc_info=True)
-        return TradeResponse(status="error", error=str(e))
+@app.post("/trade", response_model=TradeResponse, tags=["Trades"], dependencies=[Depends(require_auth)])
+async def place_trade(req: TradeRequest):
+    from trade_execution_core import dry_run_trade
 
-# ---------- /ai-analyze ----------
-@app.post("/ai-analyze", tags=["AI"], dependencies=[Depends(verify_token)], operation_id="aiAnalyze")
-async def ai_analyze(req: AiAnalyzeRequest):
-    try:
-        tf_item = {
-            "symbol": req.symbol,
-            "interval": "custom",
-            "market": "futures",
-            "frames": ["custom"],
-            "quality_score": 0.0,
-            "trend": req.trend,
-            "direction": "LONG" if str(req.trend).upper() in ("UP", "LONG", "BUY") else "SHORT",
-            "rsi": float(req.rsi),
-            "adx": float(req.adx),
-            "volume": float(req.volume),
-            "indicators": {
-                "rsi": float(req.rsi),
-                "adx": float(req.adx),
-                "atr": 0.0,
-                "macd": 0.0,
-                "macd_signal": 0.0,
-                "macd_hist": 0.0,
-                "ema_21": 0.0,
-                "ema_50": 0.0,
-                "vwap": 0.0,
-                "volume": float(req.volume),
-                "volume_mean": max(1.0, float(req.volume)),
-                "pattern": req.pattern or "unknown",
-            },
-        }
-        out = await analyze_with_ai([tf_item])
-        return out
-    except Exception as e:
-        logging.error("[/ai-analyze] %s", e, exc_info=True)
-        return {"error": str(e)}
+    entry = req.entry
+    if entry is None:
+        entry = await get_price(req.symbol)
 
-# ---------- /sltp ----------
-@app.post("/sltp", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="suggestSLTP")
-async def suggest_sltp(req: SLTPRequest):
-    try:
-        sl, tp = await predict_optimal_sl_tp(
-            symbol=req.symbol, direction=req.direction, entry_price=req.entry, atr=req.atr
-        )
-        return {"symbol": req.symbol, "direction": req.direction, "sl": sl, "tp": tp}
-    except Exception as e:
-        logging.error("[/sltp] %s", e, exc_info=True)
-        raise HTTPException(status_code=400, detail=str(e))
+    # DRY-RUN בלבד כדי להבטיח 0 עומס/סיכון
+    result = dry_run_trade(
+        symbol=req.symbol,
+        side=req.side,
+        entry=entry,
+        sl=req.sl,
+        tp=req.tp,
+        leverage=req.leverage,
+        budget=req.budget,
+        market_type="futures"
+    )
+    _TRADES_LOG.append({"ts": int(time.time()), **result})
+    return TradeResponse(status="success", result=result)
 
-# ---------- /price ----------
-@app.get("/price", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="getPrice")
-async def get_price(symbol: str):
-    p = await get_price_smart(symbol)
-    if p is None:
-        raise HTTPException(status_code=400, detail="price unavailable")
-    return {"symbol": symbol.upper(), "price": float(p)}
+@app.get("/executor/start", tags=["Executor"], dependencies=[Depends(require_auth)])
+async def start_executor():
+    # בלי לופים/שרשורים — שומר על 0 עומס
+    return {"started": False, "running": False}
 
-# ---------- Executor ----------
-@app.get("/executor/start", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="startExecutor")
-async def executor_start():
-    start_executor()
-    return {"started": True, "running": is_executor_running()}
+@app.get("/executor/stop", tags=["Executor"], dependencies=[Depends(require_auth)])
+async def stop_executor():
+    return {"stopped": True, "running": False}
 
-@app.get("/executor/stop", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="stopExecutor")
-async def executor_stop():
-    stop_executor()
-    return {"stopped": True, "running": is_executor_running()}
-
-@app.get("/executor/status", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="executorStatus")
+@app.get("/executor/status", tags=["Executor"], dependencies=[Depends(require_auth)])
 async def executor_status():
-    return {"running": is_executor_running()}
+    return {"running": False}
 
-# ---------- דו״ח PnL ----------
-@app.get("/report/pnl/pdf", tags=["Reports"], dependencies=[Depends(verify_token)], operation_id="generatePnlPdf")
-async def report_pnl_pdf():
-    path = generate_pnl_pdf()
-    if not path:
+@app.get("/report/pnl/pdf", response_model=PnlPdfResponse, tags=["Reports"], dependencies=[Depends(require_auth)])
+async def generate_pnl_pdf():
+    # אם אין נתונים — 404 (אין חישוב כבד)
+    if not _TRADES_LOG:
         raise HTTPException(status_code=404, detail="no PnL data")
+    # הפקה מינימלית של PDF (טקסט) — בלי עומס
+    from fpdf import FPDF
+    os.makedirs("static/reports", exist_ok=True)
+    path = "static/reports/pnl_report.pdf"
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(0, 10, "AlgoGPT Daily PnL (Demo)", ln=True)
+    for t in _TRADES_LOG[-50:]:
+        pdf.cell(0, 8, txt=json.dumps(t), ln=True)
+    pdf.output(path)
     return {"path": path}
 
-# ---------- Debug Binance ----------
-@app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(verify_token)], operation_id="debugBinanceFutures")
+@app.get("/grid/trade", include_in_schema=False)
+async def _method_not_allowed():
+    # הגדרה הרשמית היא POST בלבד — נחזיר 405 אם קוראים ב-GET בטעות
+    raise HTTPException(status_code=405, detail="Method Not Allowed")
+
+@app.post("/grid/trade", response_model=GridTradeResponse, tags=["Grid"], dependencies=[Depends(require_auth)])
+async def execute_grid(body: GridTradeRequest):
+    # DRY-RUN בלבד: מחשב רמות, לא מבצע הזמנות — 0 עומס
+    try:
+        price = await get_price(body.symbol)
+    except Exception as e:
+        return GridTradeResponse(status="error", error=str(e))
+
+    pct = body.grid_pct / 100.0
+    plan = []
+    for i in range(body.grid_count):
+        level_price = round(price * (1 - pct * (i + 1)), 4)
+        qty = round((body.budget / body.grid_count) / max(level_price, 1e-9), 6)
+        plan.append({"level": i + 1, "price": level_price, "qty": qty})
+
+    result = {
+        "symbol": body.symbol,
+        "futures": body.futures,
+        "leverage": body.leverage,
+        "tp_pct": body.tp_pct,
+        "sl_pct": body.sl_pct,
+        "levels": plan,
+        "dry_run": True,
+    }
+    return GridTradeResponse(status="dry_run", reason="dry-run only", plan={"entry": price}, result=result)
+
+@app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(require_auth)])
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = False):
-    ok_ping = False
+    # בדיקה קלה בלבד
+    ping_ok = False
+    mark_price = None
+    symbols_count = None
+    permission_ok = None
+    test_error = None
     try:
-        ok_ping = bool(ping_and_info())
-    except Exception:
-        ok_ping = False
-
-    try:
-        sync_server_time()
-    except Exception:
-        pass
-
-    try:
-        prem = futures_mark_price(symbol)
-    except Exception as e:
-        prem = {"error": str(e)}
-
-    try:
-        ex_info = await asyncio.to_thread(futures_exchange_info_safe)
-        sym_count = len(ex_info.get("symbols", [])) if isinstance(ex_info, dict) else None
-    except Exception as e:
-        ex_info, sym_count = {"error": str(e)}, None
-
-    permission_ok: Optional[bool] = None
-    test_error: Optional[str] = None
-    if place_test:
+        # ping באמצעות exchangeInfo (כדי לקבל גם סימבולים)
+        data = await _binance_public("/fapi/v1/exchangeInfo", {}, futures=True)
+        symbols = data.get("symbols", [])
+        symbols_count = len(symbols)
+        ping_ok = True
         try:
-            client = get_client()
-            # קריאה פרטית פשוטה במקום הזמנת TEST שאינה קיימת עבור futures ב־python-binance
-            await asyncio.to_thread(client.futures_account)
-            permission_ok = True
+            idx = await _binance_public("/fapi/v1/premiumIndex", {"symbol": symbol}, futures=True)
+            mark_price = {"symbol": symbol, "markPrice": idx.get("markPrice")}
         except Exception as e:
-            permission_ok = False
-            test_error = str(e)
-
+            test_error = f"markPrice: {e}"
+        if place_test and BINANCE_KEY and BINANCE_SECRET:
+            # בדיקה קלה של הרשאות – קריאת חשבון (ללא הזמנה)
+            try:
+                acct = await _binance_signed("/fapi/v2/account", {}, futures=True)
+                permission_ok = bool(acct)
+            except Exception as e:
+                permission_ok = False
+                test_error = f"private: {e}"
+    except Exception as e:
+        test_error = str(e)
     return {
-        "ping_ok": ok_ping,
-        "mark_price": prem,
-        "symbols_count": sym_count,
+        "ping_ok": ping_ok,
+        "mark_price": mark_price,
+        "symbols_count": symbols_count,
         "permission_ok": permission_ok,
         "test_error": test_error,
     }
 
-# ---------- WS lifecycle ----------
-@app.on_event("startup")
-async def _on_startup():
-    boot_symbols: List[str] = list(getattr(config, "WS_BOOT_SYMBOLS", ["BTCUSDT", "ETHUSDT"]))
-    try:
-        await launch_multi_websocket(boot_symbols)
-        logging.info("[WS] launched multi-stream for %s symbols: %s", len(boot_symbols), boot_symbols[:8])
-    except Exception as e:
-        logging.error("[WS] failed to launch on startup: %s", e, exc_info=True)
-
-@app.on_event("shutdown")
-async def _on_shutdown():
-    try:
-        await stop_websocket()
-        logging.info("[WS] stopped")
-    except Exception as e:
-        logging.error("[WS] stop error: %s", e, exc_info=True)
-
-# ---------- OpenAPI ----------
-from fastapi.openapi.utils import get_openapi
-from fastapi.routing import APIRoute
-
-def _force_operation_ids(schema):
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            if not route.operation_id:
-                fn_name = route.name
-                for m in (route.methods or []):
-                    method = m.lower()
-                    if route.path in schema.get("paths", {}) and method in schema["paths"][route.path]:
-                        schema["paths"][route.path][method]["operationId"] = fn_name
-    return schema
-
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    schema = get_openapi(
-        title=app.title,
-        version=getattr(app, "version", "0.1.0"),
-        description=getattr(app, "description", None),
-        routes=app.routes,
-    )
-    schema = _force_operation_ids(schema)
-    app.openapi_schema = schema
-    return app.openapi_schema
-
-app.openapi = custom_openapi
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
 
 
 
