@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  version: 2.12.1
+  version: 2.12.4
   description: >
-    AlgoGPT הוא סוחר אלגוריתמי בזמן אמת עבור Binance. כולל Futures/Spot/Grid,
-    Multi-TF Scan עם AI, ביצוע טריידים, SL/TP חכם, Auto Executor ודוחות PnL.
+    AlgoGPT – Real-time algorithmic trader for Binance. Supports Futures/Spot/Grid,
+    Multi-TF Scan with AI, live trades, smart SL/TP, Auto Executor, and daily PnL PDF.
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -23,23 +23,23 @@ components:
       required: [error]
       properties:
         error: { type: string }
-        code: { type: string }
+        code:  { type: string }
       example: { error: Unauthorized, code: UNAUTHORIZED }
 
     TradeRequest:
       type: object
       required: [symbol, side]
       properties:
-        symbol: { type: string, example: BTCUSDT }
-        side:   { type: string, enum: [LONG, SHORT], example: LONG }
+        symbol:   { type: string, example: BTCUSDT }
+        side:     { type: string, enum: [LONG, SHORT], example: LONG }
         entry:
           type: [number, 'null']
+          description: If null, live price is used
           example: null
-          description: "אם null, יילקח מחיר חי"
-        sl: { type: [number, 'null'] }
-        tp: { type: [number, 'null'] }
-        budget: { type: number, default: 100, minimum: 0.01 }
-        leverage: { type: integer, default: 10, minimum: 1, maximum: 125 }
+        sl:       { type: [number, 'null'] }
+        tp:       { type: [number, 'null'] }
+        budget:   { type: number, minimum: 0.01, default: 100 }
+        leverage: { type: integer, minimum: 1, maximum: 125, default: 10 }
 
     TradeResponse:
       type: object
@@ -48,28 +48,28 @@ components:
         result:
           type: [object, 'null']
           additionalProperties: true
-        error: { type: [string, 'null'] }
+        error:  { type: [string, 'null'] }
 
     AiAnalyzeRequest:
       type: object
       required: [symbol, rsi, adx, trend, pattern, volume]
       properties:
-        symbol: { type: string, example: BTCUSDT }
-        rsi: { type: number, example: 54.2 }
-        adx: { type: number, example: 23.1 }
-        trend: { type: string, example: UP }
+        symbol:  { type: string, example: BTCUSDT }
+        rsi:     { type: number, example: 54.2 }
+        adx:     { type: number, example: 23.1 }
+        trend:   { type: string, example: UP }
         pattern: { type: string, example: breakout }
-        volume: { type: number, example: 1520000 }
+        volume:  { type: number, example: 1520000 }
 
     AiAnalyzeResponse:
       type: object
       required: [symbol, direction, signal, confidence, reason, frames]
       properties:
-        symbol: { type: string }
-        direction: { type: string }
-        signal: { type: string, enum: [BUY, SELL, HOLD] }
+        symbol:     { type: string }
+        direction:  { type: string }
+        signal:     { type: string, enum: [BUY, SELL, HOLD] }
         confidence: { type: number, minimum: 0, maximum: 100 }
-        reason: { type: string }
+        reason:     { type: string }
         frames:
           type: array
           items: { type: string }
@@ -78,40 +78,38 @@ components:
       type: object
       required: [symbol, direction, entry]
       properties:
-        symbol: { type: string, example: BTCUSDT }
+        symbol:    { type: string, example: BTCUSDT }
         direction: { type: string, enum: [LONG, SHORT] }
-        entry: { type: number, example: 65000 }
-        atr:
-          type: [number, 'null']
-          description: ערך ATR אופציונלי
+        entry:     { type: number, example: 65000 }
+        atr:       { type: [number, 'null'], description: Optional ATR }
 
     SLTPResponse:
       type: object
       properties:
-        symbol: { type: string }
+        symbol:    { type: string }
         direction: { type: string, enum: [LONG, SHORT] }
-        sl: { type: number }
-        tp: { type: number }
+        sl:        { type: number }
+        tp:        { type: number }
 
     ScanResultItem:
       type: object
       properties:
-        symbol: { type: string }
+        symbol:        { type: string }
         quality_score: { type: number }
-        direction: { type: string, enum: [LONG, SHORT] }
-        trend: { type: string }
-        rsi: { type: number }
-        adx: { type: number }
-        volume: { type: number }
-        market: { type: string, enum: [futures, spot] }
+        direction:     { type: string, enum: [LONG, SHORT] }
+        trend:         { type: string }
+        rsi:           { type: number }
+        adx:           { type: number }
+        volume:        { type: number }
+        market:        { type: string, enum: [futures, spot] }
         frames:
           type: array
           items: { type: string }
-        signal: { type: string, enum: [BUY, SELL, HOLD] }
+        signal:     { type: string, enum: [BUY, SELL, HOLD] }
         confidence: { type: number, minimum: 0, maximum: 100 }
-        reason: { type: string }
-        entry: { type: [number, 'null'] }
-        atr: { type: [number, 'null'] }
+        reason:     { type: string }
+        entry:      { type: [number, 'null'] }
+        atr:        { type: [number, 'null'] }
 
     ScanResponse:
       type: object
@@ -124,40 +122,64 @@ components:
       type: object
       properties:
         symbol: { type: string }
-        price: { type: number }
-      example:
-        symbol: BTCUSDT
-        price: 65042.8
+        price:  { type: number }
+      example: { symbol: BTCUSDT, price: 65042.8 }
 
     PnlPdfResponse:
       type: object
       properties:
-        path: { type: string, description: נתיב PDF על השרת }
+        path: { type: string, description: Server path to the PDF }
       example: { path: static/reports/pnl_report.pdf }
+
+    GridTradeRequest:
+      type: object
+      required: [symbol, budget]
+      properties:
+        symbol:     { type: string, example: BTCUSDT }
+        budget:     { type: number, minimum: 0.01, example: 300 }
+        grid_count: { type: integer, minimum: 2, maximum: 50, default: 6 }
+        grid_pct:   { type: number, minimum: 0.01, maximum: 5, default: 0.4, description: Percent gap between levels }
+        leverage:   { type: integer, minimum: 1, maximum: 125, default: 20 }
+        futures:    { type: boolean, default: true }
+        tp_pct:     { type: number, minimum: 0.01, maximum: 10, default: 1.5 }
+        sl_pct:     { type: number, minimum: 0.01, maximum: 10, default: 1.0 }
+
+    GridTradeResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [success, dry_run, error] }
+        reason: { type: [string, 'null'] }
+        plan:
+          type: [object, 'null']
+          additionalProperties: true
+        result:
+          type: [object, 'null']
+          additionalProperties: true
+        error: { type: [string, 'null'] }
 
 paths:
   /:
     get:
-      security: []   # פתוח — לא יורש את ה-bearer הגלובלי
+      security: []
       tags: [Config]
-      summary: בדיקת סטטוס השרת
+      summary: Server status
       operationId: checkServerStatus
       responses:
         "200":
-          description: השרת פועל
+          description: Server is up
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  status: { type: string, example: ok }
-                  version: { type: string, example: 2.12.1 }
+                  status:  { type: string, example: ok }
+                  version: { type: string, example: 2.12.4 }
 
   /scan/multi:
     get:
-      security: []   # פתוח — לא יורש את ה-bearer הגלובלי
+      security: []
       tags: [Trades]
-      summary: סריקת שוק חכמה (Multi-TF + AI) — פתוח
+      summary: Market scan (Multi-TF + AI) — public
       operationId: scanMulti
       parameters:
         - name: interval
@@ -174,26 +196,25 @@ paths:
           schema: { type: string, enum: [futures, spot], default: futures }
         - name: trending_only
           in: query
+          description: If null, taken from config
           schema:
-            type: [boolean, 'null']
+            type: ['boolean', 'null']
             default: null
-          description: אם null – יילקח מהקונפיג
         - name: trending_source
           in: query
           schema: { type: string, default: coingecko }
       responses:
         "200":
-          description: רשימת טריידים מסוננים
+          description: Filtered trades
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/ScanResponse"
+              schema: { $ref: "#/components/schemas/ScanResponse" }
 
   /trade:
     post:
       security: [{ bearerAuth: [] }]
       tags: [Trades]
-      summary: ביצוע טרייד חי בפועל
+      summary: Execute a live trade
       operationId: placeTrade
       requestBody:
         required: true
@@ -202,12 +223,12 @@ paths:
             schema: { $ref: "#/components/schemas/TradeRequest" }
       responses:
         "200":
-          description: תוצאת ניסיון ביצוע
+          description: Execution result
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TradeResponse" }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -216,7 +237,7 @@ paths:
     post:
       security: [{ bearerAuth: [] }]
       tags: [AI]
-      summary: ניתוח שוק עם GPT (ידני)
+      summary: Manual AI analysis
       operationId: aiAnalyze
       requestBody:
         required: true
@@ -225,13 +246,12 @@ paths:
             schema: { $ref: "#/components/schemas/AiAnalyzeRequest" }
       responses:
         "200":
-          description: ניתוח נוצר
+          description: Analysis created
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/AiAnalyzeResponse"
+              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -240,7 +260,7 @@ paths:
     post:
       security: [{ bearerAuth: [] }]
       tags: [Trades]
-      summary: חישוב SL/TP מיטבי (AI עם פולבק)
+      summary: Suggest optimal SL/TP
       operationId: suggestSLTP
       requestBody:
         required: true
@@ -249,12 +269,12 @@ paths:
             schema: { $ref: "#/components/schemas/SLTPRequest" }
       responses:
         "200":
-          description: רמות SL/TP מוצעות
+          description: Suggested levels
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SLTPResponse" }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -263,7 +283,7 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       tags: [Trades]
-      summary: שליפת מחיר נוכחי מ־Binance
+      summary: Get live Binance price
       operationId: getPrice
       parameters:
         - name: symbol
@@ -272,12 +292,35 @@ paths:
           schema: { type: string, example: BTCUSDT }
       responses:
         "200":
-          description: מחיר נשלף
+          description: Price fetched
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PriceResponse" }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /grid/trade:
+    post:
+      security: [{ bearerAuth: [] }]
+      tags: [Grid]
+      summary: Open grid orders (Spot/Futures)
+      operationId: executeGrid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GridTradeRequest" }
+      responses:
+        "200":
+          description: Plan and execution/DRY-RUN
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GridTradeResponse" }
+        "401":
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -286,11 +329,11 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       tags: [Executor]
-      summary: התחלת Auto Executor
+      summary: Start Auto Executor
       operationId: startExecutor
       responses:
         "200":
-          description: התחיל
+          description: Started
           content:
             application/json:
               schema:
@@ -299,7 +342,7 @@ paths:
                   started: { type: boolean }
                   running: { type: boolean }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -308,11 +351,11 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       tags: [Executor]
-      summary: עצירת Auto Executor
+      summary: Stop Auto Executor
       operationId: stopExecutor
       responses:
         "200":
-          description: נעצר
+          description: Stopped
           content:
             application/json:
               schema:
@@ -321,7 +364,7 @@ paths:
                   stopped: { type: boolean }
                   running: { type: boolean }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -330,11 +373,11 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       tags: [Executor]
-      summary: סטטוס Auto Executor
+      summary: Auto Executor status
       operationId: executorStatus
       responses:
         "200":
-          description: סטטוס נוכחי
+          description: Current status
           content:
             application/json:
               schema:
@@ -342,7 +385,7 @@ paths:
                 properties:
                   running: { type: boolean }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -351,21 +394,21 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       tags: [Reports]
-      summary: יצירת דו״ח PDF מרווח/הפסד יומי
+      summary: Generate daily PnL PDF
       operationId: generatePnlPdf
       responses:
         "200":
-          description: נוצר נתיב ל־PDF
+          description: PDF path created
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PnlPdfResponse" }
         "404":
-          description: אין נתונים לייצוא
+          description: No data to export
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -374,20 +417,18 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       tags: [Debug]
-      summary: בדיקות חיבור/הרשאות ל-Binance Futures (כולל TEST order)
+      summary: Binance Futures connectivity/permissions test (includes TEST order)
       operationId: debugBinanceFutures
       parameters:
         - name: symbol
           in: query
-          required: false
           schema: { type: string, default: BTCUSDT }
         - name: place_test
           in: query
-          required: false
           schema: { type: boolean, default: true }
       responses:
         "200":
-          description: תוצאת בדיקות Binance
+          description: Binance debug results
           content:
             application/json:
               schema:
@@ -401,13 +442,14 @@ paths:
                   test_order_ok: { type: boolean }
                   test_order_error: { type: [string, 'null'] }
         "401":
-          description: אין הרשאה
+          description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
 security:
   - bearerAuth: []
+
 
 
 
