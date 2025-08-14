@@ -1,4 +1,4 @@
-# main.py (גרסה 2.12.5 – אתחול WS ב-startup, /scan/multi פתוח, שאר הראוטים מאובטחים, operationId = שם פונקציה)
+# main.py (גרסה 2.12.6)
 import os
 import logging
 import asyncio
@@ -60,7 +60,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_sch
     return True
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.12.5"
+APP_VERSION = "2.12.6"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -106,20 +106,12 @@ class SLTPRequest(BaseModel):
     atr: Optional[float] = None
 
 # ---------- בריאות בסיסית ----------
-@app.get(
-    "/",
-    tags=["Config"],
-    operation_id="checkServerStatus",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.get("/", tags=["Config"], operation_id="checkServerStatus")
 async def root():
     return {"status": "ok", "version": APP_VERSION}
 
-# ---------- סריקת שוק – פתוח ללא אימות ----------
-@app.get(
-    "/scan/multi",
-    tags=["Trades"],
-    operation_id="scanMulti",  # יוכתב לשם הפונקציה בהמשך
-)
+# ---------- סריקת שוק – פתוח ----------
+@app.get("/scan/multi", tags=["Trades"], operation_id="scanMulti")
 async def scan_multi(
     interval: str = "15m,1h",
     min_quality: int = 6,
@@ -128,9 +120,6 @@ async def scan_multi(
     trending_only: Optional[bool] = Query(None, description="אם None - יילקח מהקונפיג"),
     trending_source: str = "coingecko",
 ):
-    """
-    סריקה עם Multi-TF + ניתוח AI (פתוח ללא אימות).
-    """
     timeframes = tuple([x.strip() for x in interval.split(",") if x.strip()]) or ("15m", "1h")
     if trending_only is None:
         trending_only = bool(getattr(config, "TRENDING_ONLY", True))
@@ -146,18 +135,9 @@ async def scan_multi(
     return {"results": results}
 
 # ---------- /trade ----------
-@app.post(
-    "/trade",
-    tags=["Trades"],
-    dependencies=[Depends(verify_token)],
-    operation_id="placeTrade",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="placeTrade")
 async def place_trade(req: TradeRequest) -> TradeResponse:
-    """
-    מבצע טרייד חי (כפוף לדגלי EXECUTE_TRADES / BINANCE_SKIP_ACCOUNT_MUTATIONS).
-    """
     try:
-        # אם אין SL/TP — נחשב אוטומטית עם AI+פולבק
         sl, tp = req.sl, req.tp
         if sl is None or tp is None:
             live = await get_price_smart(req.symbol)
@@ -170,7 +150,7 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
 
         resp = await execute_trade_live(
             symbol=req.symbol,
-            entry=req.entry,   # אם None — בפונקציית הביצוע יילקח מחיר חי
+            entry=req.entry,
             stop=sl,
             tp=tp,
             direction=req.side,
@@ -186,16 +166,8 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
         return TradeResponse(status="error", error=str(e))
 
 # ---------- /ai-analyze ----------
-@app.post(
-    "/ai-analyze",
-    tags=["AI"],
-    dependencies=[Depends(verify_token)],
-    operation_id="aiAnalyze",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.post("/ai-analyze", tags=["AI"], dependencies=[Depends(verify_token)], operation_id="aiAnalyze")
 async def ai_analyze(req: AiAnalyzeRequest):
-    """
-    ניתוח AI על סמך אינדיקטורים שסופקו (ממפה ל־analyze_with_ai ע״י יצירת מסגרת אחת).
-    """
     try:
         tf_item = {
             "symbol": req.symbol,
@@ -230,12 +202,7 @@ async def ai_analyze(req: AiAnalyzeRequest):
         return {"error": str(e)}
 
 # ---------- /sltp ----------
-@app.post(
-    "/sltp",
-    tags=["Trades"],
-    dependencies=[Depends(verify_token)],
-    operation_id="suggestSLTP",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.post("/sltp", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="suggestSLTP")
 async def suggest_sltp(req: SLTPRequest):
     try:
         sl, tp = await predict_optimal_sl_tp(
@@ -247,12 +214,7 @@ async def suggest_sltp(req: SLTPRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 # ---------- /price ----------
-@app.get(
-    "/price",
-    tags=["Trades"],
-    dependencies=[Depends(verify_token)],
-    operation_id="getPrice",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.get("/price", tags=["Trades"], dependencies=[Depends(verify_token)], operation_id="getPrice")
 async def get_price(symbol: str):
     p = await get_price_smart(symbol)
     if p is None:
@@ -260,42 +222,22 @@ async def get_price(symbol: str):
     return {"symbol": symbol.upper(), "price": float(p)}
 
 # ---------- Executor ----------
-@app.get(
-    "/executor/start",
-    tags=["Executor"],
-    dependencies=[Depends(verify_token)],
-    operation_id="startExecutor",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.get("/executor/start", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="startExecutor")
 async def executor_start():
     start_executor()
     return {"started": True, "running": is_executor_running()}
 
-@app.get(
-    "/executor/stop",
-    tags=["Executor"],
-    dependencies=[Depends(verify_token)],
-    operation_id="stopExecutor",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.get("/executor/stop", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="stopExecutor")
 async def executor_stop():
     stop_executor()
     return {"stopped": True, "running": is_executor_running()}
 
-@app.get(
-    "/executor/status",
-    tags=["Executor"],
-    dependencies=[Depends(verify_token)],
-    operation_id="executorStatus",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.get("/executor/status", tags=["Executor"], dependencies=[Depends(verify_token)], operation_id="executorStatus")
 async def executor_status():
     return {"running": is_executor_running()}
 
 # ---------- דו״ח PnL ----------
-@app.get(
-    "/report/pnl/pdf",
-    tags=["Reports"],
-    dependencies=[Depends(verify_token)],
-    operation_id="generatePnlPdf",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.get("/report/pnl/pdf", tags=["Reports"], dependencies=[Depends(verify_token)], operation_id="generatePnlPdf")
 async def report_pnl_pdf():
     path = generate_pnl_pdf()
     if not path:
@@ -303,12 +245,7 @@ async def report_pnl_pdf():
     return {"path": path}
 
 # ---------- Debug Binance ----------
-@app.get(
-    "/debug/binance-futures",
-    tags=["Debug"],
-    dependencies=[Depends(verify_token)],
-    operation_id="debugBinanceFutures",  # יוכתב לשם הפונקציה בהמשך
-)
+@app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(verify_token)], operation_id="debugBinanceFutures")
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True):
     ok_ping = False
     try:
@@ -349,11 +286,9 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True
         "test_order_error": test_err,
     }
 
-# ---------- אתחול WS ב-startup / סגירת WS ב-shutdown ----------
+# ---------- אתחול WS ----------
 @app.on_event("startup")
 async def _on_startup():
-    # רשימת סמלים לאתחול WS ניתן להגדיר בקונפיג:
-    # WS_BOOT_SYMBOLS = ["BTCUSDT","ETHUSDT","BNBUSDT"]  (בקובץ config.py)
     boot_symbols: List[str] = list(getattr(config, "WS_BOOT_SYMBOLS", ["BTCUSDT", "ETHUSDT"]))
     try:
         await launch_multi_websocket(boot_symbols)
@@ -369,15 +304,14 @@ async def _on_shutdown():
     except Exception as e:
         logging.error("[WS] stop error: %s", e, exc_info=True)
 
-# ---------- OpenAPI: אכיפה ש-operationId = שם הפונקציה + ייצוא אופציונלי ----------
+# ---------- OpenAPI: operationId = שם הפונקציה ----------
 from fastapi.openapi.utils import get_openapi
 from fastapi.routing import APIRoute
 
 def _force_operation_ids(schema):
-    # מחליף operationId לדוקומנט עם שם הפונקציה בפועל
     for route in app.routes:
         if isinstance(route, APIRoute):
-            fn_name = route.name  # שם הפונקציה (def ...)
+            fn_name = route.name
             for m in (route.methods or []):
                 method = m.lower()
                 if route.path in schema.get("paths", {}) and method in schema["paths"][route.path]:
@@ -399,33 +333,11 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-# ייצוא אוטומטי אם רוצים (DUMP_OPENAPI=1)
-def _dump_openapi_if_requested():
-    if os.getenv("DUMP_OPENAPI", "0") != "1":
-        return
-    try:
-        schema = app.openapi()
-        try:
-            import yaml  # ודא ש-PyYAML ב-requirements אם רוצים YAML
-            from pathlib import Path
-            Path("openapi.yaml").write_text(yaml.safe_dump(schema, sort_keys=False, allow_unicode=True))
-            logging.info("[OpenAPI Dump] wrote openapi.yaml")
-        except Exception:
-            import json
-            from pathlib import Path
-            Path("openapi.json").write_text(
-                json.dumps(schema, ensure_ascii=False, indent=2)
-            )
-            logging.info("[OpenAPI Dump] wrote openapi.json")
-    except Exception as e:
-        logging.error("[OpenAPI Dump] failed: %s", e)
-
-_dump_openapi_if_requested()
-
 # ---------- הפעלה מקומית ----------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
