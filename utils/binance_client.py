@@ -19,7 +19,6 @@ except Exception:
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# === טעינת קונפיג / ENV ===
 def _get_bool(val: Optional[str], default: bool) -> bool:
     if val is None:
         return default
@@ -55,7 +54,6 @@ except Exception:
     _TIME_SYNC_MAX_RTT_MS = int(os.getenv("TIME_SYNC_MAX_RTT_MS", "800"))
     _TIME_SYNC_MAX_ABS_OFFSET_MS = int(os.getenv("TIME_SYNC_MAX_ABS_OFFSET_MS", "1500"))
 
-# === סשן HTTP גלובלי ידידותי ל-WAF + ריטריי/Pooling ===
 _session = requests.Session()
 _session.trust_env = False
 _session.headers.update({
@@ -87,7 +85,6 @@ _requests_params = {"timeout": 10}
 _client: Optional[Client] = None
 _time_sync_thread_started = False
 
-# === Egress IP Helpers (אופציונלי) ===
 def _fetch_outbound_ip(endpoints: List[str], timeout: float = 3.0) -> Optional[str]:
     for ep in endpoints:
         try:
@@ -107,7 +104,7 @@ def _fetch_outbound_ip(endpoints: List[str], timeout: float = 3.0) -> Optional[s
             continue
     return None
 
-def check_outbound_ip_against_allowlist():
+def check_outbound_ip_against_allowlist() -> None:
     allowlist = [x.strip() for x in _ALLOWED_EGRESS_IPS.split(",") if x.strip()]
     if not allowlist:
         return
@@ -128,7 +125,6 @@ def check_outbound_ip_against_allowlist():
     else:
         logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. עלול לגרום ל-403/CloudFront.")
 
-# === יצירת לקוח Binance ===
 def _make_client() -> Client:
     if _API_KEY and _API_SECRET:
         logging.info("[Binance] 🔑 נמצאו מפתחות – מנסה להתחבר…")
@@ -165,11 +161,10 @@ def get_client() -> Client:
         _start_periodic_time_sync(_TIME_SYNC_INTERVAL_SEC)
     return _client
 
-# === סנכרון זמן (בטוח, מדלג על outliers) ===
 def sync_server_time() -> Dict[str, Any]:
     """
-    מודד offset ורק אם RTT נמוך מהסף וה־offset סביר – מעדכן timestamp_offset.
-    מחזיר dict טלמטריה; לא זורק שגיאה.
+    מודד offset ורק אם RTT נמוך וה־offset סביר – מעדכן timestamp_offset.
+    לא זורק חריג.
     """
     global _client
     c = _client or _make_client()
@@ -191,7 +186,7 @@ def sync_server_time() -> Dict[str, Any]:
                             f"(thr={_TIME_SYNC_MAX_ABS_OFFSET_MS}/{_TIME_SYNC_MAX_RTT_MS})")
             return {"ok": False, "offset_ms": offset_ms, "rtt_ms": rtt_ms, "applied": False}
 
-        c.timestamp_offset = offset_ms  # python-binance ייקח מכאן
+        c.timestamp_offset = offset_ms  # python-binance יישם זאת
         logging.info(f"[Binance] 🕒 time sync: offset={offset_ms}ms rtt~{rtt_ms}ms (recvWindow={_RECV_WINDOW}ms)")
         _client = c
         return {"ok": True, "offset_ms": offset_ms, "rtt_ms": rtt_ms, "applied": True}
@@ -199,7 +194,7 @@ def sync_server_time() -> Dict[str, Any]:
         logging.warning(f"[Binance] time sync failed: {e}")
         return {"ok": False, "error": str(e), "applied": False}
 
-def _periodic_time_sync_worker(interval: int):
+def _periodic_time_sync_worker(interval: int) -> None:
     while True:
         try:
             sync_server_time()
@@ -207,12 +202,11 @@ def _periodic_time_sync_worker(interval: int):
             logging.warning(f"[Binance] time sync (periodic) נכשל: {e}")
         time.sleep(interval)
 
-def _start_periodic_time_sync(interval: int):
+def _start_periodic_time_sync(interval: int) -> None:
     t = threading.Thread(target=_periodic_time_sync_worker, args=(interval,), daemon=True)
     t.start()
     logging.info(f"[Binance] ⏱️ periodic time sync every {interval}s הופעל")
 
-# === Wrapper עם ריטריי/Backoff ===
 def _retry_call(fn: Callable, *, name: str):
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
@@ -246,7 +240,6 @@ def _retry_call(fn: Callable, *, name: str):
 def retry_call(fn: Callable, name: str):
     return _retry_call(fn, name=name)
 
-# === exchangeInfo – פולבק ל־HTTP אם ה-SDK לא הצליח ===
 def _futures_exchange_info_http():
     url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/exchangeInfo"
     def _do():
@@ -281,7 +274,6 @@ def futures_mark_price(symbol: str):
 
     return _retry_call(_do, name=f"premiumIndex({symbol})")
 
-# ---- Ping ישיר ל-Spot/Futures ----
 def _http_ping(url: str, name: str) -> bool:
     try:
         r = _session.get(url, timeout=6)
@@ -315,20 +307,12 @@ def ping_and_info() -> bool:
 
     return ok
 
-# ===== תאימות + ייזום עצל =====
 class _LazyClientProxy:
-    """
-    מאפשר `from utils.binance_client import client` בלי לאתחל מיד.
-    בעת גישה לאטריבוט/מתודה – נשלף client אמיתי.
-    """
     def __getattr__(self, name: str):
         return getattr(get_client(), name)
     def __repr__(self):
         return "<LazyBinanceClientProxy>"
 
-# מודולים קיימים אצלך עושים:
-#   from utils.binance_client import client as _GLOBAL_CLIENT
-# זה ימשיך לעבוד — האתחול יקרה רק בשימוש ראשון.
 client = _LazyClientProxy()
 
 
