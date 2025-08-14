@@ -3,8 +3,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PORT=10000
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+    # ⚠️ אל תקבע כאן PORT=10000
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini \
@@ -18,19 +18,21 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . /app
 
+# ✅ הבריאות תבדוק את ${PORT:-10000} (ברירת מחדל מקומית)
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
-  CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+  CMD curl -fsS "http://127.0.0.1:${PORT:-10000}/health" || exit 1
 
 RUN chown -R appuser:appuser /app
 USER appuser
 
-EXPOSE ${PORT}
+# אפשר לוותר על EXPOSE לחלוטין ברנדר; אם משאירים – עדיף סטטי מקומי:
+# EXPOSE 10000
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bash", "-lc", "exec gunicorn main:app \
   -k uvicorn.workers.UvicornWorker \
   --workers 1 \
-  --bind 0.0.0.0:${PORT} \
+  --bind 0.0.0.0:${PORT:-10000} \
   --timeout 180 \
   --graceful-timeout 30 \
   --keep-alive 75 \
