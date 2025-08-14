@@ -1,89 +1,189 @@
-import pandas as pd
+# utils/indicators.py
 import numpy as np
+import pandas as pd
+import logging
+from typing import Optional
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+from ta.momentum import RSIIndicator
+from ta.trend import ADXIndicator, MACD, EMAIndicator
+from ta.volatility import AverageTrueRange
 
-    # מחיקת NaN/שכפולים
-    df.dropna(inplace=True)
-    df = df[~df.index.duplicated(keep='last')]
+# --- פרמטרים דיפולטיים ---
+_RSI = 14
+_ADX = 14
+_ATR = 14
+_EMA_FAST = 21
+_EMA_SLOW = 50
+_MACD_FAST = 12
+_MACD_SLOW = 26
+_MACD_SIGNAL = 9
+_ST_PERIOD = 10
+_ST_MULT = 3.0
 
-    # EMA
-    df["ema_21"] = df["close"].ewm(span=21, adjust=False).mean()
-    df["ema_50"] = df["close"].ewm(span=50, adjust=False).mean()
+_MIN_ROWS_ABS = 100  # מינימום כללי
+_LONGEST_WIN = max(_EMA_SLOW, _MACD_SLOW, _ATR, _ADX, _RSI, _ST_PERIOD) + 20
 
-    # ATR
-    df["H-L"] = df["high"] - df["low"]
-    df["H-C"] = np.abs(df["high"] - df["close"].shift())
-    df["L-C"] = np.abs(df["low"] - df["close"].shift())
-    df["TR"] = df[["H-L", "H-C", "L-C"]].max(axis=1)
-    df["ATR"] = df["TR"].rolling(window=14).mean()
+def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """מאחד, מנרמל ומוודא שה־DataFrame מוכן לחישוב אינדיקטורים."""
+    if df is None or df.empty:
+        return pd.DataFrame()
 
-    # RSI
-    delta = df["close"].diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = pd.Series(gain).rolling(window=14).mean()
-    avg_loss = pd.Series(loss).rolling(window=14).mean()
-    rs = avg_gain / avg_loss
-    df["RSI"] = 100 - (100 / (1 + rs))
+    need = {"open", "high", "low", "close", "volume"}
+    if not need.issubset(df.columns):
+        missing = need - set(df.columns)
+        logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
+        return pd.DataFrame()
 
-    # MACD
-    exp1 = df["close"].ewm(span=12, adjust=False).mean()
-    exp2 = df["close"].ewm(span=26, adjust=False).mean()
-    df["MACD"] = exp1 - exp2
-    df["MACD_signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-    df["MACD_hist"] = df["MACD"] - df["MACD_signal"]
+    out = df.copy()
 
-    # ADX
-    df["+DM"] = np.where((df["high"] - df["high"].shift()) > (df["low"].shift() - df["low"]),
-                         df["high"] - df["high"].shift(), 0)
-    df["-DM"] = np.where((df["low"].shift() - df["low"]) > (df["high"] - df["high"].shift()),
-                         df["low"].shift() - df["low"], 0)
-    tr14 = df["TR"].rolling(window=14).sum()
-    plus_dm14 = df["+DM"].rolling(window=14).sum()
-    minus_dm14 = df["-DM"].rolling(window=14).sum()
-    plus_di14 = 100 * (plus_dm14 / tr14)
-    minus_di14 = 100 * (minus_dm14 / tr14)
-    dx = 100 * np.abs(plus_di14 - minus_di14) / (plus_di14 + minus_di14)
-    df["ADX"] = dx.rolling(window=14).mean()
+    # טיפוסים
+    for c in ("open", "high", "low", "close", "volume"):
+        out[c] = pd.to_numeric(out[c], errors="coerce").astype("float64")
 
-    # VWAP (לגרף תוך יומי)
-    df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
+    # אינדקס זמן (UTC, מונוטוני)
+    if not isinstance(out.index, pd.DatetimeIndex):
+        if "timestamp" in out.columns:
+            out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+            out.set_index("timestamp", inplace=True)
+        else:
+            out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
 
-    # סטיית תקן
-    df["stddev_20"] = df["close"].rolling(window=20).std()
+    out.sort_index(inplace=True)
+    out = out[~out.index.duplicated(keep="last")]
 
-    # Supertrend (10,3)
-    period = 10
-    multiplier = 3
-    hl2 = (df["high"] + df["low"]) / 2
-    atr = df["ATR"]
-    upperband = hl2 + (multiplier * atr)
-    lowerband = hl2 - (multiplier * atr)
-    supertrend = [True] * len(df)
+    # ניקוי ראשוני
+    out.replace([np.inf, -np.inf], np.nan, inplace=True)
+    out.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
+
+    return out
+
+def _enough_rows(df: pd.DataFrame) -> bool:
+    n = len(df)
+    if n < _MIN_ROWS_ABS or n < _LONGEST_WIN:
+        logging.warning(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({ _MIN_ROWS_ABS }, {_LONGEST_WIN})")
+        return False
+    return True
+
+def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
+    """
+    חישוב קו SuperTrend בסיסי מבוסס ATR.
+    """
+    atr = AverageTrueRange(
+        high=df["high"], low=df["low"], close=df["close"],
+        window=period, fillna=True
+    ).average_true_range()
+
+    hl2 = (df["high"] + df["low"]) / 2.0
+    upper_basic = hl2 + multiplier * atr
+    lower_basic = hl2 - multiplier * atr
+
+    upper = upper_basic.copy().ffill()
+    lower = lower_basic.copy().ffill()
+
+    st = pd.Series(index=df.index, dtype="float64")
+    # מצב התחלתי
+    close0 = df["close"].iloc[0]
+    lower0 = lower.iloc[0]
+    upper0 = upper.iloc[0]
+    dir_up = close0 >= lower0
+    st.iloc[0] = lower0 if dir_up else upper0
+
+    closes = df["close"].to_numpy()
+    up_vals = upper.to_numpy()
+    low_vals = lower.to_numpy()
 
     for i in range(1, len(df)):
-        if df["close"].iloc[i] > upperband.iloc[i - 1]:
-            supertrend[i] = True
-        elif df["close"].iloc[i] < lowerband.iloc[i - 1]:
-            supertrend[i] = False
-        else:
-            supertrend[i] = supertrend[i - 1]
-            if supertrend[i] and lowerband.iloc[i] < lowerband.iloc[i - 1]:
-                lowerband.iloc[i] = lowerband.iloc[i - 1]
-            if not supertrend[i] and upperband.iloc[i] > upperband.iloc[i - 1]:
-                upperband.iloc[i] = upperband.iloc[i - 1]
+        prev_st = st.iloc[i - 1]
+        c = closes[i]
+        if c > prev_st:
+            dir_up = True
+        elif c < prev_st:
+            dir_up = False
+        st.iloc[i] = low_vals[i] if dir_up else up_vals[i]
 
-    df["supertrend"] = supertrend
-    df["supertrend_upper"] = upperband
-    df["supertrend_lower"] = lowerband
+    return st.ffill()
 
-    # מחיקת עמודות עזר
-    drop_cols = ["H-L", "H-C", "L-C", "+DM", "-DM", "TR"]
-    df.drop(columns=[col for col in drop_cols if col in df.columns], inplace=True, errors="ignore")
+def _vwap(df: pd.DataFrame) -> pd.Series:
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    vol = df["volume"].astype("float64")
+    vol = vol.where(vol > 0, np.nan)
+    cum_vol = vol.cumsum()
+    vwap = (tp * vol).cumsum() / cum_vol
+    return vwap
 
-    return df
+def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """
+    מחזיר DataFrame עם העמודות:
+    rsi, adx, atr, macd, macd_signal, macd_hist, ema_21, ema_50, vwap,
+    supertrend, supertrend_dir, volume_mean, pattern
+    אם אין מספיק נתונים – מחזיר DF ריק.
+    """
+    base = _ensure_df(df)
+    if base.empty:
+        return pd.DataFrame()
+    if not _enough_rows(base):
+        return pd.DataFrame()
+
+    out = base.copy()
+    try:
+        # EMA
+        out["ema_21"] = EMAIndicator(close=out["close"], window=_EMA_FAST, fillna=True).ema_indicator()
+        out["ema_50"] = EMAIndicator(close=out["close"], window=_EMA_SLOW, fillna=True).ema_indicator()
+
+        # RSI
+        out["rsi"] = RSIIndicator(close=out["close"], window=_RSI, fillna=True).rsi()
+
+        # ADX
+        adx_ind = ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=_ADX, fillna=True)
+        out["adx"] = adx_ind.adx()
+
+        # ATR
+        out["atr"] = AverageTrueRange(
+            high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=True
+        ).average_true_range()
+
+        # MACD
+        macd = MACD(
+            close=out["close"],
+            window_fast=_MACD_FAST,
+            window_slow=_MACD_SLOW,
+            window_sign=_MACD_SIGNAL,
+            fillna=True
+        )
+        out["macd"] = macd.macd()
+        out["macd_signal"] = macd.macd_signal()
+        out["macd_hist"] = macd.macd_diff()
+
+        # VWAP
+        out["vwap"] = _vwap(out)
+
+        # SuperTrend + כיוון
+        st_line = _supertrend(out, period=_ST_PERIOD, multiplier=_ST_MULT)
+        out["supertrend"] = st_line
+        out["supertrend_dir"] = np.where(out["close"] >= st_line, 1, -1).astype("int8")
+
+        # ממוצע נפח (לציון איכות)
+        out["volume_mean"] = out["volume"].rolling(50, min_periods=1).mean()
+
+        # ניקוי/איחוד NaN/Inf
+        cols_needed = [
+            "rsi", "adx", "atr", "macd", "macd_signal", "macd_hist",
+            "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir", "volume_mean"
+        ]
+        out.replace([np.inf, -np.inf], np.nan, inplace=True)
+        out[cols_needed] = out[cols_needed].ffill().bfill()
+        out.dropna(subset=cols_needed, inplace=True)
+
+        if out.empty:
+            logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
+            return pd.DataFrame()
+
+        out["pattern"] = "unknown"
+        return out
+    except Exception as e:
+        logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
+        return pd.DataFrame()
+
 
 
 
