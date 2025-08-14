@@ -24,16 +24,8 @@ class GridTradeResponse(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
-@router.post(
-    "/trade",
-    operation_id="executeGrid",
-    response_model=GridTradeResponse
-)
+@router.post("/trade", operation_id="executeGrid", response_model=GridTradeResponse)
 async def grid_trade(req: GridTradeRequest) -> GridTradeResponse:
-    """
-    פתיחת גריד (Spot/Futures) לפי הפרמטרים שנשלחו.
-    אם פעולות כתיבה מושבתות — יוחזר DRY plan מפורט (לבדיקה/חזרה).
-    """
     try:
         res = await execute_grid_trade(
             symbol=req.symbol,
