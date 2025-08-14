@@ -4,12 +4,14 @@ services:
     env: docker
     plan: starter
     autoDeploy: true
-    healthCheckPath: /
+    healthCheckPath: /health   # ✅ מסלול בריאות ייעודי
 
     envVars:
       # --- Security / API Gateway ---
       - key: API_BEARER_TOKEN
-        value: "GrwpXpkRWunC7SPZGFrhaizBwcaZzpWLYJ9kv4W7u6aTx_EXu0VGfpBKaBhThLD2"
+        # ❗ אל תתחייב טוקן אמיתי לקוד. הגדר אותו כ-Encrypted בדשבורד של Render.
+        # value: "PUT-YOUR-TOKEN-IN-RENDER-DASHBOARD"
+        sync: false
 
       # --- Runtime ---
       - key: AUTO_RUN
@@ -47,7 +49,7 @@ services:
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
-      # --- Binance keys (להגדיר בדשבורד כ-Encrypted; לא בקוד) ---
+      # --- Binance keys (Encrypted בדשבורד) ---
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -96,6 +98,7 @@ services:
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
         value: ""
+
 
 
 
