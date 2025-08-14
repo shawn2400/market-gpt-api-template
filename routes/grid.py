@@ -1,7 +1,7 @@
 # routes/grid.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from utils.grid_utils import execute_grid_trade
 
@@ -11,17 +11,28 @@ class GridTradeRequest(BaseModel):
     symbol: str = Field(..., description="למשל BTCUSDT")
     budget: float = Field(..., gt=0, description="תקציב כולל ב-USDT")
     grid_count: int = Field(6, ge=2, le=50, description="מספר רמות רשת (>=2)")
-    grid_pct: float = Field(0.4, gt=0, le=5, description="אחוז הפרדה בין רמות (למשל 0.4 = 0.4%)")
-    leverage: int = Field(20, ge=1, le=125, description="מינוף (רק ל-Futures)")
+    grid_pct: float = Field(0.4, gt=0, le=5, description="אחוז הפרדה בין רמות (0.4 = 0.4%)")
+    leverage: int = Field(20, ge=1, le=125, description="מינוף (בשימוש ב-Futures)")
     futures: bool = Field(True, description="True=Futures, False=Spot")
     tp_pct: float = Field(1.5, gt=0, le=10, description="TP אחוזי לכל רמה")
     sl_pct: float = Field(1.0, gt=0, le=10, description="SL אחוזי לכל רמה")
 
-@router.post("/trade")
-async def grid_trade(req: GridTradeRequest):
+class GridTradeResponse(BaseModel):
+    status: str
+    reason: Optional[str] = None
+    plan: Optional[Dict[str, Any]] = None
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+@router.post(
+    "/trade",
+    operation_id="executeGrid",
+    response_model=GridTradeResponse
+)
+async def grid_trade(req: GridTradeRequest) -> GridTradeResponse:
     """
     פתיחת גריד (Spot/Futures) לפי הפרמטרים שנשלחו.
-    אם פעולות כתיבה מושבתות — תקבל DRY plan מפורט (נוח לבדיקה).
+    אם פעולות כתיבה מושבתות — יוחזר DRY plan מפורט (לבדיקה/חזרה).
     """
     try:
         res = await execute_grid_trade(
@@ -34,13 +45,16 @@ async def grid_trade(req: GridTradeRequest):
             tp_pct=req.tp_pct,
             sl_pct=req.sl_pct,
         )
-        if res.get("status") in ("success", "dry_run"):
-            return res
+        status = str(res.get("status"))
+        if status in ("success", "dry_run"):
+            return GridTradeResponse(**res)
+        # error
         raise HTTPException(status_code=400, detail=res.get("error", "grid trade failed"))
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
