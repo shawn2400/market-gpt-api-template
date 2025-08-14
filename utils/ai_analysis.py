@@ -51,7 +51,8 @@ _REASON_RE = re.compile(r"Reason\W*:\W*(.+)$", re.IGNORECASE)
 
 def _parse_signal_conf(text: str) -> Dict[str, Any]:
     """
-    מצפה לפורמט:  Signal: BUY/SELL/HOLD | Confidence: <0-100> | Reason: <short>
+    מצפה לפורמט:
+      Signal: BUY/SELL/HOLD | Confidence: <0-100> | Reason: <short>
     מחזיר ברירת מחדל בטוחה במקרה חריג.
     """
     out = {"signal": "HOLD", "confidence": 0.0, "reason": ""}
@@ -67,12 +68,12 @@ def _parse_signal_conf(text: str) -> Dict[str, Any]:
         if m_conf:
             out["confidence"] = _clamp(m_conf.group(1), 0.0, 100.0)
 
-        m_reason = _reason = None
-        m_reason = _reason_RE = _REASON_RE.search(text)
+        m_reason = _REASON_RE.search(text)
         if m_reason:
-            _reason = m_reason.group(1).strip()
-            out["reason"] = _truncate(_reason, 240)
+            reason = m_reason.group(1).strip()
+            out["reason"] = _truncate(reason, 240)
     except Exception:
+        # נשאר עם ברירת המחדל הבטוחה
         pass
 
     if out["signal"] not in ("BUY", "SELL", "HOLD"):
@@ -100,7 +101,8 @@ async def _safe_chat(
     **kwargs,
 ) -> str:
     """
-    מעטפת בטוחה ל-chat: קיטום prompt, timeout קשיח, ולוג שגיאות; מחזירה מחרוזת ריקה במקרה תקלה.
+    מעטפת בטוחה ל-chat: קיטום prompt, timeout קשיח, ולוג שגיאות;
+    מחזירה מחרוזת ריקה במקרה תקלה.
     """
     try:
         # הגנת אורך prompt (מונע בזבוז טוקנים במקרה של קלט חריג)
@@ -228,11 +230,15 @@ async def predict_optimal_sl_tp(
             if sl_val > 0 and tp_val > 0:
                 # הגנות כיוון: ב- LONG ה-TP חייב להיות >= entry, SL <= entry (ולהיפך ב-SHORT)
                 if direction.upper() == "LONG":
-                    if tp_val < entry_price: tp_val = entry_price * 1.003
-                    if sl_val > entry_price: sl_val = entry_price * 0.997
+                    if tp_val < entry_price:
+                        tp_val = entry_price * 1.003
+                    if sl_val > entry_price:
+                        sl_val = entry_price * 0.997
                 elif direction.upper() == "SHORT":
-                    if tp_val > entry_price: tp_val = entry_price * 0.997
-                    if sl_val < entry_price: sl_val = entry_price * 1.003
+                    if tp_val > entry_price:
+                        tp_val = entry_price * 0.997
+                    if sl_val < entry_price:
+                        sl_val = entry_price * 1.003
                 return round(sl_val, 6), round(tp_val, 6)
 
         logging.warning(f"[AI] SL/TP parse failed, content={content!r}; using fallback")
@@ -242,6 +248,7 @@ async def predict_optimal_sl_tp(
 
     # Fallback דטרמיניסטי
     return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+
 
 
 
