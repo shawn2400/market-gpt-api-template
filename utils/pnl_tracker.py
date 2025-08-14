@@ -4,9 +4,16 @@ import json
 import os
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP, getcontext
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
-from fpdf import FPDF
+# ייבוא "רך" של fpdf2 כדי שלא יפיל את השרת אם לא מותקן
+try:
+    from fpdf import FPDF  # מגיע מהחבילה fpdf2
+    HAS_FPDF = True
+except Exception:
+    FPDF = None  # type: ignore
+    HAS_FPDF = False
 
 # דיוק חישוב גבוה מספיק לקריפטו
 getcontext().prec = 28
@@ -14,8 +21,14 @@ getcontext().prec = 28
 # קבצים/נתיבים דיפולטיים
 PNL_FILE = os.getenv("PNL_FILE", "pnl_tracker.json")
 PDF_OUTPUT_PATH = os.getenv("PNL_PDF_PATH", "static/reports/pnl_report.pdf")
+REPORT_DIR = Path(PDF_OUTPUT_PATH).parent
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------- Utilities ----------
+
+def has_pdf_engine() -> bool:
+    """האם מנוע PDF (fpdf2) זמין?"""
+    return HAS_FPDF
 
 def _d(x) -> Decimal:
     try:
@@ -48,7 +61,6 @@ def load_pnl() -> Dict[str, List[Dict[str, Any]]]:
         with open(PNL_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
-                # נוודא שכל ערך הוא list
                 for k, v in list(data.items()):
                     if not isinstance(v, list):
                         data[k] = []
@@ -95,22 +107,15 @@ def add_trade(
     fee_rate_d = _d(fee_rate)
     fixed_fee_d= _d(fixed_fee_usdt)
 
-    # ולידציה בסיסית
     if entry_d <= 0 or exit_d <= 0 or lev_d <= 0 or qty_d <= 0:
         raise ValueError("entry/exit/leverage/qty must be positive")
 
-    if d == "LONG":
-        diff = exit_d - entry_d
-    else:
-        diff = entry_d - exit_d
-
+    diff = (exit_d - entry_d) if d == "LONG" else (entry_d - exit_d)
     gross_pnl = diff * qty_d * lev_d
 
-    # עמלות: גם על כניסה וגם על יציאה (בקירוב)
     notional_in  = entry_d * qty_d * lev_d
     notional_out = exit_d  * qty_d * lev_d
     fees = (notional_in + notional_out) * fee_rate_d + fixed_fee_d
-
     net_pnl = gross_pnl - fees
 
     trade = {
@@ -128,7 +133,6 @@ def add_trade(
         "success": 1 if net_pnl > 0 else 0,
         "gross_pnl": float(_round(gross_pnl, 2)),
     }
-    # מפתח יומי
     today = datetime.utcnow().strftime("%Y-%m-%d")
     data.setdefault(today, []).append(trade)
     return trade, net_pnl
@@ -144,9 +148,6 @@ def update_pnl(
     fee_rate: float = 0.0,
     fixed_fee_usdt: float = 0.0
 ) -> float:
-    """
-    API תואם לאחור: מחזיר PnL (נטו) כ-float.
-    """
     data = load_pnl()
     try:
         _, pnl_d = add_trade(
@@ -169,10 +170,6 @@ def update_pnl(
 # ---------- Summaries ----------
 
 def daily_summary(data: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Dict[str, Any]]:
-    """
-    מחזיר תקציר לכל יום:
-    { date: { 'trades': n, 'wins': w, 'losses': l, 'total': X, 'success_rate': Y } }
-    """
     data = data if data is not None else load_pnl()
     out: Dict[str, Dict[str, Any]] = {}
     for date, trades in data.items():
@@ -218,51 +215,61 @@ def overall_summary(data: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> D
 
 # ---------- PDF report ----------
 
-class _PNLPDF(FPDF):
+class _PNLPDF(FPDF):  # type: ignore[misc]
     def header(self):
-        self.set_font("Arial", "B", 14)
+        self.set_font("Helvetica", "B", 14)
         self.cell(0, 10, "Daily PNL Report", border=0, ln=1, align="C")
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        self.set_font("Arial", "", 10)
+        self.set_font("Helvetica", "", 10)
         self.cell(0, 6, now, border=0, ln=1, align="C")
         self.ln(2)
 
     def footer(self):
         self.set_y(-15)
-        self.set_font("Arial", "I", 8)
+        self.set_font("Helvetica", "I", 8)
         self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
 
-def generate_pnl_pdf() -> Optional[str]:
-    data = load_pnl()
-    if not data:
-        print("[PNL] אין נתונים לייצוא PDF.")
+def generate_pnl_pdf(data: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Optional[str]:
+    """
+    יוצר דו״ח PDF ומחזיר נתיב; אם אין נתונים או שאין fpdf2 – מחזיר None.
+    לא מפיל את השרת.
+    """
+    if not HAS_FPDF:
         return None
 
-    _ensure_dir_for(PDF_OUTPUT_PATH)
+    data = data if data is not None else load_pnl()
+    if not data:
+        return None
+
+    _ensure_dir_for(str(PDF_OUTPUT_PATH))
 
     pdf = _PNLPDF()
     pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
 
-    # סיכום כללי בראש הדו״ח
     ov = overall_summary(data)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, f"Overall: Trades={ov['trades']} | Wins={ov['wins']} | Losses={ov['losses']} | "
-                   f"Total={ov['total']}$ | Success Rate={ov['success_rate']}%", ln=1)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(
+        0, 8,
+        f"Overall: Trades={ov['trades']} | Wins={ov['wins']} | Losses={ov['losses']} | "
+        f"Total={ov['total']}$ | Success Rate={ov['success_rate']}%",
+        ln=1
+    )
     pdf.ln(2)
 
-    # ימים בסדר יורד
     for date in sorted(data.keys(), reverse=True):
         trades = data[date]
-        summary = daily_summary({date: trades})[date]
+        day_sum = daily_summary({date: trades})[date]
 
-        # כותרת יום
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 8, f"📅 {date} — Trades={summary['trades']} | Total={summary['total']}$ | "
-                       f"Success Rate={summary['success_rate']}%", ln=1)
-        pdf.set_font("Arial", "", 11)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(
+            0, 8,
+            f"📅 {date} — Trades={day_sum['trades']} | Total={day_sum['total']}$ | "
+            f"Success Rate={day_sum['success_rate']}%",
+            ln=1
+        )
+        pdf.set_font("Helvetica", "", 11)
 
-        # שורות טריידים
         for t in trades:
             pnl = float(_round(_d(t.get("pnl", 0)), 2))
             line = (
@@ -271,7 +278,6 @@ def generate_pnl_pdf() -> Optional[str]:
                 f"Lev: {t.get('leverage')} | Qty: {t.get('qty')} | "
                 f"Fees: {t.get('fees', 0)} | PNL: {pnl}$"
             )
-            # auto line-break
             pdf.multi_cell(0, 6, line)
 
         pdf.ln(2)
@@ -282,6 +288,7 @@ def generate_pnl_pdf() -> Optional[str]:
     except Exception as e:
         print(f"[PNL] ❌ שגיאה ביצירת PDF: {e}")
         return None
+
 
 
 
