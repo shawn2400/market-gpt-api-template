@@ -1,7 +1,8 @@
 # auto_executor.py
 import asyncio
 import logging
-from typing import Optional, List, Dict
+import time
+from typing import Optional, List, Dict, Set, Tuple
 
 # קונפיג
 try:
@@ -16,6 +17,13 @@ except Exception:
         MAX_TRADE_BUDGET = 100.0
         TRENDING_ONLY = True
         DEFAULT_INTERVAL = "15m"
+        # ספים חדשים (ניתן לשנות בקובץ config)
+        SL_MIN_PCT = 0.20
+        SL_MAX_PCT = 5.00
+        TP_MIN_PCT = 0.30
+        TP_MAX_PCT = 8.00
+        SYMBOL_COOLDOWN_SEC = 600
+        MAX_TRADES_PER_TICK = 3
     config = _Dummy()
 
 _SCAN_INTERVAL = int(getattr(config, "SCAN_INTERVAL", 60))
@@ -27,8 +35,127 @@ _MIN_Q               = float(getattr(config, "MIN_QUALITY_SCORE", 6))
 _BUDGET              = float(getattr(config, "MAX_TRADE_BUDGET", 100.0))
 _TRENDING_ONLY       = bool(getattr(config, "TRENDING_ONLY", True))
 
+# ספים ל-SL/TP (% מהמחיר החי)
+_SL_MIN_PCT = float(getattr(config, "SL_MIN_PCT", 0.20))  # 0.20%
+_SL_MAX_PCT = float(getattr(config, "SL_MAX_PCT", 5.00))  # 5.00%
+_TP_MIN_PCT = float(getattr(config, "TP_MIN_PCT", 0.30))  # 0.30%
+_TP_MAX_PCT = float(getattr(config, "TP_MAX_PCT", 8.00))  # 8.00%
+
+# קירור פר-סימבול (בשניות)
+_SYMBOL_COOLDOWN_SEC = int(getattr(config, "SYMBOL_COOLDOWN_SEC", 600))
+_MAX_TRADES_PER_TICK = int(getattr(config, "MAX_TRADES_PER_TICK", 3))
+
 _task: Optional[asyncio.Task] = None
 _stop_evt: Optional[asyncio.Event] = None
+
+# זיכרון זמני למניעת טריידים תכופים מדי על אותו סימבול
+_last_trade_time: Dict[str, float] = {}
+
+
+async def _get_mark_price(symbol: str) -> Optional[float]:
+    """
+    שליפת Mark Price בטוחה. מחזיר float או None.
+    """
+    try:
+        from utils.binance_client import futures_mark_price
+        data = await asyncio.to_thread(futures_mark_price, symbol)
+        if isinstance(data, dict):
+            for key in ("markPrice", "price", "indexPrice", "estimatedSettlePrice"):
+                v = data.get(key)
+                if v is None:
+                    continue
+                try:
+                    p = float(v)
+                    if p > 0:
+                        return p
+                except Exception:
+                    continue
+        logging.warning("[AUTO] mark price parse failed for %s: %s", symbol, data)
+    except Exception as e:
+        logging.warning("[AUTO] mark price fetch failed for %s: %s", symbol, e)
+    return None
+
+
+def _pick_atr(details: List[Dict]) -> Optional[float]:
+    """
+    מנסה לאסוף ATR עדכני מרשימת פריימים שחושבו בסריקה.
+    """
+    for d in details or []:
+        try:
+            atr = d.get("atr")
+            if atr is None:
+                atr = (d.get("indicators") or {}).get("atr")
+            if atr is not None:
+                atr_f = float(atr)
+                if atr_f > 0:
+                    return atr_f
+        except Exception:
+            continue
+    return None
+
+
+def _pct_distance_long(entry: float, sl: float, tp: float) -> Tuple[float, float]:
+    sl_pct = max(0.0, (entry - sl) / entry * 100.0)
+    tp_pct = max(0.0, (tp - entry) / entry * 100.0)
+    return sl_pct, tp_pct
+
+
+def _pct_distance_short(entry: float, sl: float, tp: float) -> Tuple[float, float]:
+    sl_pct = max(0.0, (sl - entry) / entry * 100.0)
+    tp_pct = max(0.0, (entry - tp) / entry * 100.0)
+    return sl_pct, tp_pct
+
+
+def _valid_sl_tp(entry: float, sl: float, tp: float, direction: str) -> bool:
+    """
+    בודק שה-SL/TP תואמים את הכיוון ושמרחקי האחוזים בתחום המותר.
+    """
+    if entry <= 0 or sl <= 0 or tp <= 0:
+        return False
+
+    d = direction.upper()
+    if d == "LONG":
+        if not (sl <= entry and tp >= entry):
+            return False
+        sl_pct, tp_pct = _pct_distance_long(entry, sl, tp)
+    elif d == "SHORT":
+        if not (sl >= entry and tp <= entry):
+            return False
+        sl_pct, tp_pct = _pct_distance_short(entry, sl, tp)
+    else:
+        return False
+
+    # בדיקת טווחים
+    if not (_SL_MIN_PCT <= sl_pct <= _SL_MAX_PCT):
+        logging.info("[AUTO] SL pct out of bounds (%.3f%% not in [%.3f%%, %.3f%%])",
+                     sl_pct, _SL_MIN_PCT, _SL_MAX_PCT)
+        return False
+    if not (_TP_MIN_PCT <= tp_pct <= _TP_MAX_PCT):
+        logging.info("[AUTO] TP pct out of bounds (%.3f%% not in [%.3f%%, %.3f%%])",
+                     tp_pct, _TP_MIN_PCT, _TP_MAX_PCT)
+        return False
+
+    return True
+
+
+def _cooldown_ok(symbol: str) -> bool:
+    """
+    בודק האם עבר מספיק זמן מאז הטרייד האחרון על הסימבול.
+    """
+    if _SYMBOL_COOLDOWN_SEC <= 0:
+        return True
+    now = time.time()
+    last = _last_trade_time.get(symbol)
+    if last is None or (now - last) >= _SYMBOL_COOLDOWN_SEC:
+        return True
+    left = int(_SYMBOL_COOLDOWN_SEC - (now - last))
+    logging.info("[AUTO] cooldown active for %s: %ss left", symbol, left)
+    return False
+
+
+def _touch_cooldown(symbol: str) -> None:
+    _last_trade_time[symbol] = time.time()
+
 
 async def _tick():
     """
@@ -52,37 +179,67 @@ async def _tick():
         logging.info("[AUTO] no candidates this tick")
         return
 
-    # 2) סינון ראשוני: לא להמשיך אם לא מפעילים ביצוע
+    # 2) אם לא מבצעים טריידים בפועל — רק דווח
     if not _EXECUTE_TRADES:
-        logging.info("[AUTO] scan only (EXECUTE_TRADES=false) — top=%s; first=%s",
-                     len(results), results[0].get("symbol"))
+        logging.info(
+            "[AUTO] scan only (EXECUTE_TRADES=false) — total=%s; top=%s",
+            len(results), results[0].get("symbol"),
+        )
         return
 
-    # 3) בחירה וביצוע זהיר: קח רק אותות BUY/SELL, איכות ≥ סף
-    picked = [r for r in results if str(r.get("signal","HOLD")).upper() in ("BUY","SELL")
-              and float(r.get("quality_score", 0)) >= _MIN_Q]
+    # 3) בחירה זהירה: BUY/SELL ואיכות ≥ סף
+    picked = [
+        r for r in results
+        if str(r.get("signal", "HOLD")).upper() in ("BUY", "SELL")
+        and float(r.get("quality_score", 0)) >= _MIN_Q
+    ]
+    if not picked:
+        logging.info("[AUTO] no signals above threshold (q>=%.2f)", _MIN_Q)
+        return
 
-    for r in picked[:3]:  # אל תתפרע — עד 3 טריידים לטיק
-        sym = str(r.get("symbol")).upper()
-        direction = "LONG" if r["signal"].upper() == "BUY" else "SHORT"
+    placed: int = 0
+    used_symbols: Set[str] = set()
 
-        # נדרש: חישוב SL/TP בטרם ביצוע (כאן נשען על ה-AI בפייפליין העליון שלך)
-        # אם יש לך נתוני SL/TP מפורשים בפריטים — השתמש בהם. אחרת אל תבצע.
+    for r in picked:
+        if placed >= _MAX_TRADES_PER_TICK:
+            break
+
+        sym = str(r.get("symbol", "")).upper().strip()
+        if not sym or sym in used_symbols:
+            continue
+
+        if not _cooldown_ok(sym):
+            continue
+
+        side = str(r.get("signal", "HOLD")).upper()
+        direction = "LONG" if side == "BUY" else "SHORT"
+
         details = r.get("details") or []
-        sl = None; tp = None
+        atr = _pick_atr(details)
+
+        entry_price = await _get_mark_price(sym)
+        if not entry_price or entry_price <= 0:
+            logging.warning("[AUTO] skip %s — no live price", sym)
+            continue
+
+        # חישוב SL/TP
         try:
             from utils.ai_analysis import predict_optimal_sl_tp
-            # נשתמש במחיר חי בתוך execute_trade_live; כאן רק מבטיחים שיהיו ערכים
-            sl, tp = await predict_optimal_sl_tp(sym, direction, entry_price=0.0)
+            sl, tp = await predict_optimal_sl_tp(sym, direction, entry_price=entry_price, atr=atr)
         except Exception as e:
             logging.warning("[AUTO] cannot compute SL/TP for %s: %s — skipping", sym, e)
             continue
 
-        # ביצוע — execute_trade_live עושה ולידציות טריות/סטיות/Mutations
+        if not _valid_sl_tp(entry_price, sl, tp, direction):
+            logging.info("[AUTO] skip %s — SL/TP not within bounds | entry=%.6f sl=%.6f tp=%.6f",
+                         sym, entry_price, sl, tp)
+            continue
+
+        # 4) ביצוע — execute_trade_live יעשה ולידציות נוספות
         try:
             resp = await execute_trade_live(
                 symbol=sym,
-                entry=None,          # קח live
+                entry=None,           # קח מחיר חי בתוך הפונקציה
                 stop=sl,
                 tp=tp,
                 direction=direction,
@@ -94,9 +251,17 @@ async def _tick():
             if status != "success":
                 logging.warning("[AUTO] trade rejected %s %s -> %s", direction, sym, resp)
             else:
-                logging.info("[AUTO] trade placed %s %s -> ok", direction, sym)
+                logging.info("[AUTO] trade placed %s %s | entry≈%.6f sl=%.6f tp=%.6f q=%.2f",
+                             direction, sym, entry_price, sl, tp, float(r.get("quality_score", 0)))
+                placed += 1
+                used_symbols.add(sym)
+                _touch_cooldown(sym)
         except Exception as e:
             logging.error("[AUTO] trade exception for %s: %s", sym, e)
+
+    if placed == 0:
+        logging.info("[AUTO] no trades placed this tick")
+
 
 async def _runner():
     global _stop_evt
@@ -127,8 +292,10 @@ async def _runner():
 
     logging.info("[AUTO] runner stopped")
 
+
 def is_executor_running() -> bool:
     return bool(_task and not _task.done())
+
 
 def start_executor() -> bool:
     global _task, _stop_evt
@@ -140,6 +307,7 @@ def start_executor() -> bool:
     logging.info("[AUTO] executor started")
     return True
 
+
 def stop_executor() -> bool:
     global _task, _stop_evt
     if _stop_evt and not _stop_evt.is_set():
@@ -148,6 +316,7 @@ def stop_executor() -> bool:
         _task = None
     logging.info("[AUTO] executor stop requested")
     return True
+
 
 if _AUTO_RUN_BOOT:
     try:
