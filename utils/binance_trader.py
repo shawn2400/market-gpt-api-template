@@ -20,10 +20,8 @@ FORCE_HEDGE   = (str(getattr(config, "BINANCE_FORCE_HEDGE_MODE",
                               os.getenv("BINANCE_FORCE_HEDGE_MODE", "false"))).lower() == "true")
 MAX_LEVERAGE  = int(getattr(config, "MAX_LEVERAGE", os.getenv("MAX_LEVERAGE", "35")))
 
-# דיוק גבוה כדי להימנע משגיאות float
 getcontext().prec = 28
 
-# ---------- Helpers: exchangeInfo / filters / precision ----------
 def _find_symbol_info(exchange_info: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
     if not exchange_info or "symbols" not in exchange_info:
         return None
@@ -62,7 +60,6 @@ def _apply_qty_step(qty: Decimal, step: float, qty_precision: Optional[int]) -> 
     dec = _decimal_step_round(qty, s) if s > 0 else qty
     return dec, _fmt_decimal(dec, qty_precision)
 
-# ---------- Account: position mode / leverage ----------
 def _read_position_mode(client) -> Optional[bool]:
     try:
         info = retry_call(lambda: client.futures_get_position_mode(), "futures_get_position_mode")
@@ -103,7 +100,6 @@ def _set_leverage(client, symbol: str, leverage: int) -> bool:
         logging.error("[TRADER] set leverage failed: %s", e)
         return False
 
-# ---------- Order builders ----------
 def _exit_side_for(direction: str) -> str:
     return "SELL" if direction == "LONG" else "BUY"
 
@@ -146,7 +142,6 @@ def _place_stop_like(client, symbol: str, direction: str, stop_price_s: str, lim
         params["newClientOrderId"] = client_order_id
     return retry_call(lambda: client.futures_create_order(**params), f"{kind}_LIMIT({symbol})")
 
-# ---------- Public: main trade flow ----------
 async def binance_futures_trade(
     symbol: str,
     side: str,                 # 'LONG' or 'SHORT'
@@ -159,12 +154,6 @@ async def binance_futures_trade(
     market_type: str = "futures",
     cid_prefix: str = "algogpt",
 ) -> Dict[str, Any]:
-    """
-    מבצע:
-      1) ולידציה וטעינת מידע סימבול (tick/lot/precision).
-      2) זיהוי/אכיפת מצב חשבון + Leverage.
-      3) Limit Entry + STOP + TAKE_PROFIT (reduceOnly).
-    """
     if market_type.lower() != "futures":
         raise ValueError("Only futures is supported in this trader")
 
@@ -177,7 +166,6 @@ async def binance_futures_trade(
 
     client = get_client()
 
-    # 1) exchangeInfo + filters
     ex_info = await asyncio.to_thread(futures_exchange_info_safe)
     sym_info = _find_symbol_info(ex_info, symbol)
     if not sym_info:
@@ -195,7 +183,6 @@ async def binance_futures_trade(
     price_precision = sym_info.get("pricePrecision")
     qty_precision   = sym_info.get("quantityPrecision")
 
-    # מחירים מעוגלים ל-tick
     entry_dec, entry_s = _apply_price_tick(float(entry), float(tick_size), price_precision)
     sl_dec,    sl_s    = _apply_price_tick(float(sl),    float(tick_size), price_precision)
     tp_dec,    tp_s    = _apply_price_tick(float(tp),    float(tick_size), price_precision)
@@ -203,7 +190,6 @@ async def binance_futures_trade(
     if entry_dec <= 0:
         raise RuntimeError("invalid entry price after rounding")
 
-    # 2) חישוב כמות
     if quantity is None:
         raw_qty = Decimal(str(budget)) / entry_dec
     else:
@@ -222,7 +208,6 @@ async def binance_futures_trade(
             f"notional too small: qty*entry={notional} < minNotional={min_notional}; try qty≥{need_qty_rounded}"
         )
 
-    # 3) Hedge + Leverage
     position_side: Optional[str] = None
     acct_is_hedge = _read_position_mode(client)
     if acct_is_hedge is True:
@@ -234,7 +219,6 @@ async def binance_futures_trade(
 
     await asyncio.to_thread(_set_leverage, client, symbol, leverage)
 
-    # 4) הזמנות
     base_cid = f"{cid_prefix}:{symbol.upper()}:{side}:{int(entry_dec*1000)}"
     entry_cid = f"{base_cid}:E"
     sl_cid    = f"{base_cid}:SL"
@@ -258,7 +242,7 @@ async def binance_futures_trade(
     if not tp_resp or not isinstance(tp_resp, dict) or "orderId" not in tp_resp:
         raise RuntimeError(f"Failed to place TAKE_PROFIT (TP): {tp_resp}")
 
-    result = {
+    return {
         "symbol": symbol.upper(),
         "side": side,
         "entry": float(entry_dec),
@@ -283,7 +267,6 @@ async def binance_futures_trade(
             "tp": tp_cid,
         }
     }
-    return result
 
 
 
