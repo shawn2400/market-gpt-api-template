@@ -15,7 +15,6 @@ from utils import config
 # === מודולים ===
 from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
-from utils.trade_executor import execute_trade_live
 from utils.ws_fallback import (
     get_price_smart,
     launch_multi_websocket,
@@ -25,6 +24,9 @@ from utils.binance_client import (
     ping_and_info, futures_exchange_info_safe, futures_mark_price, get_client, sync_server_time
 )
 from utils.pnl_tracker import generate_pnl_pdf
+
+# החלפה: נשתמש במימוש הלוגיקה האחידה
+from utils.trade_execution_core import execute_trade_live
 
 # אופציונלי
 try:
@@ -166,12 +168,13 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
                 symbol=req.symbol, direction=req.side, entry_price=entry_for_sltp, atr=None
             )
 
+        # ✅ תיקון חתימות: side + sl/tp (ולא direction/stop)
         resp = await execute_trade_live(
             symbol=req.symbol,
-            entry=req.entry,
-            stop=sl,
+            side=req.side,
+            entry=req.entry,     # אם None – הפונקציה תביא מחיר חי
+            sl=sl,
             tp=tp,
-            direction=req.side,
             leverage=int(req.leverage or 10),
             budget_usd=float(req.budget or 100),
             market_type="futures"
@@ -322,7 +325,7 @@ async def _on_shutdown():
     except Exception as e:
         logging.error("[WS] stop error: %s", e, exc_info=True)
 
-# ---------- OpenAPI: אל תדרוס operationId אם כבר הוגדר ----------
+# ---------- OpenAPI ----------
 from fastapi.openapi.utils import get_openapi
 from fastapi.routing import APIRoute
 
@@ -355,6 +358,7 @@ app.openapi = custom_openapi
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
