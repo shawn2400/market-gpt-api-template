@@ -25,7 +25,7 @@ from utils.binance_client import (
 )
 from utils.pnl_tracker import generate_pnl_pdf
 
-# החלפה: נשתמש במימוש הלוגיקה האחידה (async + חתימה תואמת)
+# ✅ שימוש בליבת הביצוע האחידה (DRY)
 from utils.trade_execution_core import execute_trade_live
 
 # אופציונלי
@@ -71,25 +71,12 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"]
 )
 
-# ---------- Routers ----------
+# ---------- Routers (גריד) ----------
 try:
     from routes.grid import router as grid_router
     app.include_router(grid_router)
 except Exception as e:
     logging.warning("[INIT] grid router not loaded: %s", e)
-
-# חדשים:
-try:
-    from routes.utils import router as utils_router
-    app.include_router(utils_router)
-except Exception as e:
-    logging.warning("[INIT] utils router not loaded: %s", e)
-
-try:
-    from routes.health_full import router as health_full_router
-    app.include_router(health_full_router)
-except Exception as e:
-    logging.warning("[INIT] health_full router not loaded: %s", e)
 
 # ---------- מודלים ----------
 class TradeRequest(BaseModel):
@@ -184,15 +171,16 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
         resp = await execute_trade_live(
             symbol=req.symbol,
             side=req.side,
-            entry=req.entry,  # אם None – הפונקציה תביא מחיר חי
+            entry=req.entry,     # אם None – הפונקציה תביא מחיר חי
             sl=sl,
             tp=tp,
             leverage=int(req.leverage or 10),
             budget_usd=float(req.budget or 100),
-            market_type="futures",
+            market_type="futures"
         )
         if resp.get("status") == "success":
-            return TradeResponse(status="success", result=resp)
+            # ✅ לא להחזיר result מקונן פעמיים
+            return TradeResponse(status="success", result=resp.get("result", resp))
         return TradeResponse(status="error", error=resp.get("error", "trade failed"))
     except Exception as e:
         logging.error("[/trade] %s", e, exc_info=True)
@@ -299,15 +287,32 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True
     except Exception as e:
         ex_info, sym_count = {"error": str(e)}, None
 
+    test_ok = False
     test_err = None
     if place_test:
         try:
             client = get_client()
-            await asyncio.to_thread(
-                client.futures_create_test_order,
-                symbol=symbol, side="BUY", type="LIMIT", timeInForce="GTC",
-                quantity="0.001", price="1000"
-            )
+            # 1) אם קיימת מתודה ייעודית – נשתמש בה
+            if hasattr(client, "futures_create_test_order"):
+                await asyncio.to_thread(
+                    client.futures_create_test_order,
+                    symbol=symbol, side="BUY", type="LIMIT", timeInForce="GTC",
+                    quantity="0.001", price="1000"
+                )
+                test_ok = True
+            # 2) חלק מהגרסאות מאפשרות API גנרי פנימי
+            elif hasattr(client, "_request_futures_api"):
+                await asyncio.to_thread(
+                    client._request_futures_api,  # type: ignore
+                    "post", "order/test", True,
+                    data={
+                        "symbol": symbol, "side": "BUY", "type": "LIMIT",
+                        "timeInForce": "GTC", "quantity": "0.001", "price": "1000"
+                    }
+                )
+                test_ok = True
+            else:
+                test_err = "Test-order API is not available in this python-binance version."
         except Exception as e:
             test_err = str(e)
 
@@ -315,7 +320,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True
         "ping_ok": ok_ping,
         "mark_price": prem,
         "symbols_count": sym_count,
-        "test_order_ok": place_test and test_err is None,
+        "test_order_ok": bool(test_ok),
         "test_order_error": test_err,
     }
 
@@ -370,6 +375,7 @@ app.openapi = custom_openapi
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
