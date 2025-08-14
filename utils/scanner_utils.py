@@ -52,6 +52,9 @@ async def fetch_ohlcv(
         return pd.DataFrame()
 
 def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
+    """
+    ולידציה בסיסית ל-DataFrame לפני חישובי אינדיקטורים.
+    """
     if df is None or df.empty:
         logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}@{interval}")
         return False
@@ -61,9 +64,13 @@ def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
     if missing:
         logging.warning(f"[analyze_symbol] ⚠️ חסרות עמודות בסיס עבור {symbol}@{interval}: {missing}")
         return False
+
     return True
 
 def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    שליפת ערכים אחרונים בצורה בטוחה מה-DataFrame לאחר compute_indicators.
+    """
     last = df.iloc[-1]
 
     def f(x, default=0.0):
@@ -72,7 +79,7 @@ def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
         except Exception:
             return float(default)
 
-    # פולבק ל-volume_mean אם לא חושב
+    # פולבק קל — אם מישהו יחליף בעתיד את compute_indicators ולא יחשב volume_mean:
     if "volume_mean" not in df.columns:
         try:
             df["volume_mean"] = df["volume"].rolling(50, min_periods=1).mean()
@@ -200,6 +207,7 @@ async def analyze_symbol(
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
