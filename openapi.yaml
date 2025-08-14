@@ -33,11 +33,19 @@ components:
         symbol:   { type: string, example: BTCUSDT }
         side:     { type: string, enum: [LONG, SHORT], example: LONG }
         entry:
-          type: [number, 'null']
+          oneOf:
+            - { type: number }
+            - { type: 'null' }
           description: If null, live price is used
           example: null
-        sl:       { type: [number, 'null'] }
-        tp:       { type: [number, 'null'] }
+        sl:
+          oneOf:
+            - { type: number }
+            - { type: 'null' }
+        tp:
+          oneOf:
+            - { type: number }
+            - { type: 'null' }
         budget:   { type: number, minimum: 0.01, default: 100 }
         leverage: { type: integer, minimum: 1, maximum: 125, default: 10 }
 
@@ -46,9 +54,13 @@ components:
       properties:
         status: { type: string, enum: [success, error] }
         result:
-          type: [object, 'null']
-          additionalProperties: true
-        error:  { type: [string, 'null'] }
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: 'null' }
+        error:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
 
     AiAnalyzeRequest:
       type: object
@@ -81,7 +93,11 @@ components:
         symbol:    { type: string, example: BTCUSDT }
         direction: { type: string, enum: [LONG, SHORT] }
         entry:     { type: number, example: 65000 }
-        atr:       { type: [number, 'null'], description: Optional ATR }
+        atr:
+          oneOf:
+            - { type: number }
+            - { type: 'null' }
+          description: Optional ATR
 
     SLTPResponse:
       type: object
@@ -108,8 +124,14 @@ components:
         signal:     { type: string, enum: [BUY, SELL, HOLD] }
         confidence: { type: number, minimum: 0, maximum: 100 }
         reason:     { type: string }
-        entry:      { type: [number, 'null'] }
-        atr:        { type: [number, 'null'] }
+        entry:
+          oneOf:
+            - { type: number }
+            - { type: 'null' }
+        atr:
+          oneOf:
+            - { type: number }
+            - { type: 'null' }
 
     ScanResponse:
       type: object
@@ -148,14 +170,22 @@ components:
       type: object
       properties:
         status: { type: string, enum: [success, dry_run, error] }
-        reason: { type: [string, 'null'] }
+        reason:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
         plan:
-          type: [object, 'null']
-          additionalProperties: true
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: 'null' }
         result:
-          type: [object, 'null']
-          additionalProperties: true
-        error: { type: [string, 'null'] }
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: 'null' }
+        error:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
 
 paths:
   /:
@@ -198,7 +228,9 @@ paths:
           in: query
           description: If null, taken from config
           schema:
-            type: ['boolean', 'null']
+            oneOf:
+              - { type: boolean }
+              - { type: 'null' }
             default: null
         - name: trending_source
           in: query
@@ -436,11 +468,18 @@ paths:
                 properties:
                   ping_ok: { type: boolean }
                   mark_price:
-                    type: [object, 'null']
-                    additionalProperties: true
-                  symbols_count: { type: [integer, 'null'] }
+                    oneOf:
+                      - { type: object, additionalProperties: true }
+                      - { type: 'null' }
+                  symbols_count:
+                    oneOf:
+                      - { type: integer }
+                      - { type: 'null' }
                   test_order_ok: { type: boolean }
-                  test_order_error: { type: [string, 'null'] }
+                  test_order_error:
+                    oneOf:
+                      - { type: string }
+                      - { type: 'null' }
         "401":
           description: Unauthorized
           content:
@@ -449,6 +488,7 @@ paths:
 
 security:
   - bearerAuth: []
+
 
 
 
