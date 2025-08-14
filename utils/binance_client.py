@@ -20,7 +20,7 @@ from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
 # === טעינת קונפיג / ENV ===
-def _get_bool(val: str, default: bool) -> bool:
+def _get_bool(val: Optional[str], default: bool) -> bool:
     if val is None:
         return default
     return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
@@ -45,7 +45,7 @@ except Exception:
     _API_SECRET= (os.getenv("BINANCE_API_SECRET") or "").strip()
     _BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
     _MAX_RETRIES  = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
-    _EX_INFO_ON_START = _get_bool(os.getenv("BINANCE_EXCHANGE_INFO_ON_START", "false"), False)
+    _EX_INFO_ON_START = _get_bool(os.getenv("BINANCE_EXCHANGE_INFO_ON_START"), False)
     _SPOT_HTTP   = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
     _FAPI_HTTP   = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
     _RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
@@ -166,7 +166,7 @@ def get_client() -> Client:
     return _client
 
 # === סנכרון זמן (בטוח, מדלג על outliers) ===
-def sync_server_time() -> dict:
+def sync_server_time() -> Dict[str, Any]:
     """
     מודד offset ורק אם RTT נמוך מהסף וה־offset סביר – מעדכן timestamp_offset.
     מחזיר dict טלמטריה; לא זורק שגיאה.
@@ -314,6 +314,22 @@ def ping_and_info() -> bool:
             logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
 
     return ok
+
+# ===== תאימות + ייזום עצל =====
+class _LazyClientProxy:
+    """
+    מאפשר `from utils.binance_client import client` בלי לאתחל מיד.
+    בעת גישה לאטריבוט/מתודה – נשלף client אמיתי.
+    """
+    def __getattr__(self, name: str):
+        return getattr(get_client(), name)
+    def __repr__(self):
+        return "<LazyBinanceClientProxy>"
+
+# מודולים קיימים אצלך עושים:
+#   from utils.binance_client import client as _GLOBAL_CLIENT
+# זה ימשיך לעבוד — האתחול יקרה רק בשימוש ראשון.
+client = _LazyClientProxy()
 
 
 
