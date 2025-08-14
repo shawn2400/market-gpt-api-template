@@ -5,7 +5,6 @@ info:
   description: >
     AlgoGPT – Real-time algorithmic trader for Binance. Supports Futures/Spot/Grid,
     Multi-TF Scan with AI, live trades, smart SL/TP, Auto Executor, and daily PnL PDF.
-
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
@@ -178,6 +177,106 @@ paths:
                 properties:
                   status:  { type: string, example: ok }
                   version: { type: string, example: 2.12.6 }
+
+  /health:
+    get:
+      security: []
+      tags: [Config]
+      summary: Basic health
+      operationId: health
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  version: { type: string }
+
+  /health/full:
+    get:
+      security: []
+      tags: [Config]
+      summary: Full system health (Binance/AI/ENV/files)
+      operationId: healthFull
+      responses:
+        "200":
+          description: Health details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  binance:
+                    type: object
+                    properties:
+                      ping_ok: { type: boolean }
+                      private_ok:
+                        oneOf: [{type: boolean}, {type: "null"}]
+                  ai:
+                    type: object
+                    additionalProperties: true
+                  env:
+                    type: object
+                    properties:
+                      ok: { type: boolean }
+                      missing:
+                        type: array
+                        items: { type: string }
+                  files:
+                    type: object
+                    properties:
+                      ok: { type: boolean }
+                      details:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            file: { type: string }
+                            exists: { type: boolean }
+                            readable_json: { type: boolean }
+                            size: { type: integer }
+                  version: { type: string, nullable: true }
+
+  /utils/generate-logo:
+    get:
+      security: []
+      tags: [Utils]
+      summary: Generate a simple text logo (PNG/ICO/SVG saved on server)
+      operationId: generateLogo
+      parameters:
+        - name: text
+          in: query
+          schema: { type: string, default: "AlgoGPT" }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 64, maximum: 2048, default: 512 }
+        - name: dark_bg
+          in: query
+          schema: { type: boolean, default: true }
+        - name: transparent
+          in: query
+          schema: { type: boolean, default: false }
+        - name: filename
+          in: query
+          schema: { type: string, nullable: true, example: "static/logo.png" }
+      responses:
+        "200":
+          description: Paths to generated assets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  png: { type: string }
+                  ico: { type: string }
+                  svg: { type: string }
+                  params:
+                    type: object
 
   /scan/multi:
     get:
@@ -452,14 +551,10 @@ paths:
                     oneOf:
                       - { type: string }
                       - { type: 'null' }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
 security:
   - bearerAuth: []
+
 
 
 
