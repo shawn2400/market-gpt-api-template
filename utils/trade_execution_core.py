@@ -1,11 +1,11 @@
 # utils/trade_execution_core.py
 from typing import Optional, Dict, Any
-from utils.ws_fallback import get_price_smart  # async מחיר חי חכם (WS/REST)
+from utils.ws_fallback import get_price_smart  # אסינכרוני
 
 async def execute_trade_live(
     *,
     symbol: str,
-    side: str,                 # "LONG" / "SHORT"
+    side: str,
     entry: Optional[float] = None,
     sl: Optional[float] = None,
     tp: Optional[float] = None,
@@ -14,29 +14,27 @@ async def execute_trade_live(
     market_type: str = "futures",
 ) -> Dict[str, Any]:
     """
-    ביצוע טרייד (דמו/סימולציה): מחזיר מבנה סטנדרטי עם status.
-    במימוש אמיתי תבצע כאן קריאת Binance בפועל.
+    DRY-RUN מבוקר: לא שולח הזמנה אמיתית, רק מחזיר פרטי 'ביצוע' לצורך בדיקות/לוגים.
+    אם entry=None, מביאים מחיר חי דרך get_price_smart.
     """
-    try:
-        price = float(entry) if entry is not None else await get_price_smart(symbol)
-        if price is None or price <= 0:
-            return {"status": "error", "error": f"live price unavailable for {symbol}"}
+    live = await get_price_smart(symbol)
+    price = float(entry) if entry is not None else float(live or 0.0)
+    if price <= 0:
+        return {"status": "error", "error": f"live price unavailable for {symbol}"}
 
-        result = {
-            "symbol": str(symbol).upper(),
-            "side": str(side).upper(),          # LONG/SHORT
-            "entry": float(price),
-            "sl": float(sl) if sl is not None else None,
-            "tp": float(tp) if tp is not None else None,
-            "leverage": int(leverage),
-            "budget_usd": float(budget_usd),
-            "market_type": market_type,
-        }
-        # כאן אפשר להחליף לסחיבת הזמנה אמיתית מול Binance, ולהחזיר מזהה וכו'.
-        return {"status": "success", "result": result}
+    result = {
+        "symbol": symbol.upper(),
+        "side": side.upper(),
+        "entry": price,
+        "sl": float(sl) if sl is not None else None,
+        "tp": float(tp) if tp is not None else None,
+        "leverage": int(leverage),
+        "budget_usd": float(budget_usd),
+        "market_type": market_type,
+    }
+    # בעתיד: אם EXECUTE_TRADES=True ונתיב כתיבה קיים — לקרוא ל-writer אמיתי כאן.
+    return {"status": "success", "result": result}
 
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
 
 
 
