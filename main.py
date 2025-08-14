@@ -1,11 +1,11 @@
-# main.py (גרסה מתוקנת – /scan/multi פתוח, שאר הראוטים מאובטחים)
+# main.py (גרסה מתוקנת – /scan/multi פתוח, שאר הראוטים מאובטחים + operation_id לכל ראוט)
 
 import os
 import logging
 import asyncio
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException, Security, status, Query, Body
+from fastapi import FastAPI, Depends, HTTPException, Security, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -17,24 +17,20 @@ from utils import config
 from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.trade_executor import execute_trade_live
-from utils.watchlist_utils import load_watchlist  # אופציונלי אם בשימוש אצלך
-from utils.ws_fallback import (
-    get_price as get_price_cached, get_price_smart, is_price_fresh, launch_multi_websocket
-)
-from utils.trending_utils import get_trending_symbols
+from utils.ws_fallback import get_price_smart
 from utils.binance_client import (
     ping_and_info, futures_exchange_info_safe, futures_mark_price, get_client, sync_server_time
 )
-from utils.ai_client import ai_healthcheck
+from utils.ai_client import ai_healthcheck  # noqa: F401 (להמשך)
 from utils.pnl_tracker import generate_pnl_pdf
 
 # === אופציונלי ===
 try:
-    from utils.ai_client import ai_client  # type: ignore
+    from utils.ai_client import ai_client  # type: ignore  # noqa: F401
 except Exception:
     ai_client = None
 try:
-    from utils.ai_health import ping_openai  # type: ignore
+    from utils.ai_health import ping_openai  # type: ignore  # noqa: F401
 except Exception:
     ping_openai = None
 
@@ -62,7 +58,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(bearer_sch
     return True
 
 # ---------- אפליקציה ----------
-APP_VERSION = "2.12.0"
+APP_VERSION = "2.12.1"
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 
 app.add_middleware(
@@ -107,16 +103,21 @@ class SLTPRequest(BaseModel):
     entry: float
     atr: Optional[float] = None
 
-# ---------- ברירת מחדל WS סמלים (לא חובה) ----------
-WS_SYMBOLS: List[str] = []
-
 # ---------- בריאות בסיסית ----------
-@app.get("/", tags=["Config"])
+@app.get(
+    "/",
+    tags=["Config"],
+    operation_id="checkServerStatus",
+)
 async def root():
     return {"status": "ok", "version": APP_VERSION}
 
 # ---------- סריקת שוק – פתוח ללא אימות ----------
-@app.get("/scan/multi", tags=["Trades"])
+@app.get(
+    "/scan/multi",
+    tags=["Trades"],
+    operation_id="scanMulti",
+)
 async def scan_multi(
     interval: str = "15m,1h",
     min_quality: int = 6,
@@ -143,7 +144,12 @@ async def scan_multi(
     return {"results": results}
 
 # ---------- /trade ----------
-@app.post("/trade", tags=["Trades"], dependencies=[Depends(verify_token)])
+@app.post(
+    "/trade",
+    tags=["Trades"],
+    dependencies=[Depends(verify_token)],
+    operation_id="placeTrade",
+)
 async def place_trade(req: TradeRequest) -> TradeResponse:
     """
     מבצע טרייד חי (כפוף לדגלי EXECUTE_TRADES / BINANCE_SKIP_ACCOUNT_MUTATIONS).
@@ -152,7 +158,6 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
         # אם אין SL/TP — נחשב אוטומטית עם AI+פולבק
         sl, tp = req.sl, req.tp
         if sl is None or tp is None:
-            # אם אין entry — ניקח live רק לצורך גזירת SL/TP
             live = await get_price_smart(req.symbol)
             entry_for_sltp = float(req.entry) if req.entry is not None else float(live or 0.0)
             if entry_for_sltp <= 0:
@@ -169,7 +174,7 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
             direction=req.side,
             leverage=int(req.leverage or 10),
             budget_usd=float(req.budget or 100),
-            market_type="futures"  # ניתן להרחיב לפי פרמ׳, שמרתי כמו ב־OpenAPI
+            market_type="futures"
         )
         if resp.get("status") == "success":
             return TradeResponse(status="success", result=resp)
@@ -179,10 +184,15 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
         return TradeResponse(status="error", error=str(e))
 
 # ---------- /ai-analyze ----------
-@app.post("/ai-analyze", tags=["AI"], dependencies=[Depends(verify_token)])
+@app.post(
+    "/ai-analyze",
+    tags=["AI"],
+    dependencies=[Depends(verify_token)],
+    operation_id="aiAnalyze",
+)
 async def ai_analyze(req: AiAnalyzeRequest):
     """
-    ניתוח AI על סמך אינדיקטורים שסיפקת (ממפה ל־analyze_with_ai ע״י יצירת מסגרת אחת).
+    ניתוח AI על סמך אינדיקטורים שסופקו (ממפה ל־analyze_with_ai ע״י יצירת מסגרת אחת).
     """
     try:
         tf_item = {
@@ -218,7 +228,12 @@ async def ai_analyze(req: AiAnalyzeRequest):
         return {"error": str(e)}
 
 # ---------- /sltp ----------
-@app.post("/sltp", tags=["Trades"], dependencies=[Depends(verify_token)])
+@app.post(
+    "/sltp",
+    tags=["Trades"],
+    dependencies=[Depends(verify_token)],
+    operation_id="suggestSLTP",
+)
 async def suggest_sltp(req: SLTPRequest):
     try:
         sl, tp = await predict_optimal_sl_tp(
@@ -230,7 +245,12 @@ async def suggest_sltp(req: SLTPRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 # ---------- /price ----------
-@app.get("/price", tags=["Trades"], dependencies=[Depends(verify_token)])
+@app.get(
+    "/price",
+    tags=["Trades"],
+    dependencies=[Depends(verify_token)],
+    operation_id="getPrice",
+)
 async def get_price(symbol: str):
     p = await get_price_smart(symbol)
     if p is None:
@@ -238,22 +258,42 @@ async def get_price(symbol: str):
     return {"symbol": symbol.upper(), "price": float(p)}
 
 # ---------- Executor ----------
-@app.get("/executor/start", tags=["Executor"], dependencies=[Depends(verify_token)])
+@app.get(
+    "/executor/start",
+    tags=["Executor"],
+    dependencies=[Depends(verify_token)],
+    operation_id="startExecutor",
+)
 async def executor_start():
     start_executor()
     return {"started": True, "running": is_executor_running()}
 
-@app.get("/executor/stop", tags=["Executor"], dependencies=[Depends(verify_token)])
+@app.get(
+    "/executor/stop",
+    tags=["Executor"],
+    dependencies=[Depends(verify_token)],
+    operation_id="stopExecutor",
+)
 async def executor_stop():
     stop_executor()
     return {"stopped": True, "running": is_executor_running()}
 
-@app.get("/executor/status", tags=["Executor"], dependencies=[Depends(verify_token)])
+@app.get(
+    "/executor/status",
+    tags=["Executor"],
+    dependencies=[Depends(verify_token)],
+    operation_id="executorStatus",
+)
 async def executor_status():
     return {"running": is_executor_running()}
 
 # ---------- דו״ח PnL ----------
-@app.get("/report/pnl/pdf", tags=["Reports"], dependencies=[Depends(verify_token)])
+@app.get(
+    "/report/pnl/pdf",
+    tags=["Reports"],
+    dependencies=[Depends(verify_token)],
+    operation_id="generatePnlPdf",
+)
 async def report_pnl_pdf():
     path = generate_pnl_pdf()
     if not path:
@@ -261,7 +301,12 @@ async def report_pnl_pdf():
     return {"path": path}
 
 # ---------- Debug Binance ----------
-@app.get("/debug/binance-futures", tags=["Debug"], dependencies=[Depends(verify_token)])
+@app.get(
+    "/debug/binance-futures",
+    tags=["Debug"],
+    dependencies=[Depends(verify_token)],
+    operation_id="debugBinanceFutures",
+)
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True):
     ok_ping = False
     try:
@@ -306,6 +351,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
