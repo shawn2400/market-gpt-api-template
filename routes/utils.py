@@ -1,20 +1,17 @@
 # routes/utils.py
-from __future__ import annotations
-
 from fastapi import APIRouter, Query
 from typing import Optional
-
 from utils.generate_logo import generate_logo
 
 router = APIRouter(prefix="/utils", tags=["Utils"])
 
-@router.get("/generate-logo")
+@router.get("/generate-logo", summary="Generate a simple text logo (PNG/ICO/SVG on server)")
 async def generate_logo_api(
     text: str = Query("AlgoGPT", description="טקסט הלוגו"),
-    size: int = Query(512, ge=64, le=2048, description="גדול התמונה בפיקסלים (ריבוע)"),
+    size: int = Query(512, ge=64, le=2048, description="גודל התמונה (ריבוע)"),
     dark_bg: bool = Query(True, description="רקע כהה (True) או בהיר (False)"),
     transparent: bool = Query(False, description="רקע שקוף"),
-    filename: Optional[str] = Query(None, description="שם קובץ יעד (ברירת מחדל: static/logo.png)"),
+    filename: Optional[str] = Query(None, description="נתיב יעד (ברירת מחדל: static/logo.png)"),
 ):
     out = generate_logo(
         text=text,
@@ -32,3 +29,5 @@ async def generate_logo_api(
         "svg": f"{base}.svg",
         "params": {"text": text, "size": size, "dark_bg": dark_bg, "transparent": transparent},
     }
+
+   
