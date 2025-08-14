@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from utils import config
 from utils.ws_fallback import get_price, is_price_fresh
 
-# נתיב כתיבה ייעודי (אם ממומש אצלך ב- utils/binance_trader.py)
+# ניסיון לייבא כותב ייעודי לגריד (לא חובה; DRY-RUN במקרה שאין)
 _BINANCE_GRID_OK = True
 try:
     # צפוי: async def binance_grid_trade(symbol, market_type, leverage, levels, total_budget) -> dict
@@ -88,13 +88,12 @@ def build_grid_plan(
     half = grid_count // 2
     tranche = float(budget_usd) / float(grid_count)
 
-    # הרמות
     levels: List[Dict[str, Any]] = []
 
     # מתחת למחיר — קניות
     p_down = price
     for _ in range(half):
-        _, p_down = _step_up_down(p_down, grid_pct)
+        _, p_down = _step_up_down(p_down, grid_pct)  # יורדים צעד
         tp_px, sl_px = _mk_tp_sl(p_down, "BUY", tp_pct, sl_pct)
         levels.append({
             "side": "BUY",
@@ -107,7 +106,7 @@ def build_grid_plan(
     # מעל המחיר — מכירות
     p_up = price
     for _ in range(grid_count - half):
-        p_up, _ = _step_up_down(p_up, grid_pct)
+        p_up, _ = _step_up_down(p_up, grid_pct)  # עולים צעד
         tp_px, sl_px = _mk_tp_sl(p_up, "SELL", tp_pct, sl_pct)
         levels.append({
             "side": "SELL",
@@ -122,7 +121,7 @@ def build_grid_plan(
         "market_type": "futures" if futures else "spot",
         "leverage": int(leverage) if futures else None,
         "live_price": price,
-        "grid_count": grid_count,
+        "grid_count": int(grid_count),
         "grid_pct": float(grid_pct),
         "tp_pct": float(tp_pct),
         "sl_pct": float(sl_pct),
@@ -144,7 +143,8 @@ async def execute_grid_trade(
     sl_pct: float = 1.0,      # SL אחוזי לכל רמה
 ) -> Dict[str, Any]:
     """
-    בונה תכנית גריד ומנסה לבצע אותה (אם מותר). אם כתיבה מושבתת/אין writer — מוחזר DRY plan.
+    בונה תכנית גריד ומנסה לבצע אותה (אם מותר).
+    אם כתיבה מושבתת/אין writer — מוחזר DRY plan.
     """
     try:
         # ולידציות בסיסיות
