@@ -8,7 +8,6 @@ from typing import Optional, Dict, Any, Tuple
 from utils import config
 from utils.binance_client import get_client, retry_call, futures_exchange_info_safe
 
-# --- שליטה מרכזית על כתיבה לבורסה ---
 EXECUTE_TRADES = bool(getattr(config, "EXECUTE_TRADES", False))
 BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV = str(
     getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
@@ -76,7 +75,7 @@ def _ensure_position_mode(client, hedge: bool) -> bool:
             return False
         if cur != hedge:
             if SKIP_MUTATIONS:
-                logging.warning("[TRADER] hedge mode mismatch (cur=%s, want=%s) אך Mutations מושבת — מדלגים.", cur, hedge)
+                logging.warning("[TRADER] hedge mode mismatch (cur=%s, want=%s) but mutations disabled.", cur, hedge)
                 return False
             resp = retry_call(lambda: client.futures_change_position_mode(dualSidePosition=hedge),
                               "futures_change_position_mode")
@@ -154,11 +153,16 @@ async def binance_futures_trade(
     market_type: str = "futures",
     cid_prefix: str = "algogpt",
 ) -> Dict[str, Any]:
+    """
+    1) ולידציה/precision
+    2) Hedge/Leverage
+    3) Limit Entry + STOP + TAKE_PROFIT (reduceOnly)
+    """
     if market_type.lower() != "futures":
         raise ValueError("Only futures is supported in this trader")
 
     if SKIP_MUTATIONS:
-        raise RuntimeError("כתיבה מושבתת (EXECUTE_TRADES=false או BINANCE_SKIP_ACCOUNT_MUTATIONS=true).")
+        raise RuntimeError("Mutations disabled (EXECUTE_TRADES=false or BINANCE_SKIP_ACCOUNT_MUTATIONS=true).")
 
     side = side.upper()
     if side not in ("LONG", "SHORT"):
@@ -242,7 +246,7 @@ async def binance_futures_trade(
     if not tp_resp or not isinstance(tp_resp, dict) or "orderId" not in tp_resp:
         raise RuntimeError(f"Failed to place TAKE_PROFIT (TP): {tp_resp}")
 
-    return {
+    result = {
         "symbol": symbol.upper(),
         "side": side,
         "entry": float(entry_dec),
@@ -265,8 +269,9 @@ async def binance_futures_trade(
             "entry": entry_cid,
             "sl": sl_cid,
             "tp": tp_cid,
-        }
+        },
     }
+    return result
 
 
 
