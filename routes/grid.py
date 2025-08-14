@@ -48,12 +48,12 @@ async def grid_trade(req: GridTradeRequest) -> GridTradeResponse:
         status = str(res.get("status"))
         if status in ("success", "dry_run"):
             return GridTradeResponse(**res)
-        # error
         raise HTTPException(status_code=400, detail=res.get("error", "grid trade failed"))
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
