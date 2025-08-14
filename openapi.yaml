@@ -1,17 +1,18 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  version: 2.12.6
+  version: 2.13.2
   description: >
     AlgoGPT – Real-time algorithmic trader for Binance. Supports Futures/Spot/Grid,
     Multi-TF Scan with AI, live trades, smart SL/TP, Auto Executor, and daily PnL PDF.
+
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
 
 components:
   securitySchemes:
-    bearerAuth:
+    HTTPBearer:
       type: http
       scheme: bearer
       bearerFormat: JWT
@@ -68,12 +69,23 @@ components:
       type: object
       required: [symbol, direction, signal, confidence, reason, frames]
       properties:
-        symbol:     { type: string }
-        direction:  { type: string }
+        symbol:     { type: string, example: BTCUSDT }
+        direction:  { type: string, enum: [LONG, SHORT] }
         signal:     { type: string, enum: [BUY, SELL, HOLD] }
-        confidence: { type: number, minimum: 0, maximum: 100 }
-        reason:     { type: string }
-        frames:     { type: array, items: { type: string } }
+        confidence: { type: number, minimum: 0, maximum: 100, example: 74 }
+        reason:     { type: string, example: "RSI>50, EMA21>EMA50, breakout with volume" }
+        frames:
+          type: array
+          items: { type: string }
+          example: ["15m", "1h"]
+        metrics:
+          type: object
+          additionalProperties: true
+          description: Optional numeric metrics (e.g., rsi, adx, atr, macd...)
+          example:
+            rsi: 56.8
+            adx: 22.1
+            atr: 312.5
 
     SLTPRequest:
       type: object
@@ -176,7 +188,7 @@ paths:
                 type: object
                 properties:
                   status:  { type: string, example: ok }
-                  version: { type: string, example: 2.12.6 }
+                  version: { type: string, example: 2.13.2 }
 
   /health:
     get:
@@ -195,88 +207,24 @@ paths:
                   status: { type: string }
                   version: { type: string }
 
-  /health/full:
+  /net/ip:
     get:
       security: []
       tags: [Config]
-      summary: Full system health (Binance/AI/ENV/files)
-      operationId: healthFull
+      summary: Public egress IP (best-effort)
+      operationId: getEgressIp
       responses:
         "200":
-          description: Health details
+          description: ok
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
-                  binance:
-                    type: object
-                    properties:
-                      ping_ok: { type: boolean }
-                      private_ok:
-                        oneOf: [{type: boolean}, {type: "null"}]
-                  ai:
-                    type: object
-                    additionalProperties: true
-                  env:
-                    type: object
-                    properties:
-                      ok: { type: boolean }
-                      missing:
-                        type: array
-                        items: { type: string }
-                  files:
-                    type: object
-                    properties:
-                      ok: { type: boolean }
-                      details:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            file: { type: string }
-                            exists: { type: boolean }
-                            readable_json: { type: boolean }
-                            size: { type: integer }
-                  version: { type: string, nullable: true }
-
-  /utils/generate-logo:
-    get:
-      security: []
-      tags: [Utils]
-      summary: Generate a simple text logo (PNG/ICO/SVG saved on server)
-      operationId: generateLogo
-      parameters:
-        - name: text
-          in: query
-          schema: { type: string, default: "AlgoGPT" }
-        - name: size
-          in: query
-          schema: { type: integer, minimum: 64, maximum: 2048, default: 512 }
-        - name: dark_bg
-          in: query
-          schema: { type: boolean, default: true }
-        - name: transparent
-          in: query
-          schema: { type: boolean, default: false }
-        - name: filename
-          in: query
-          schema: { type: string, nullable: true, example: "static/logo.png" }
-      responses:
-        "200":
-          description: Paths to generated assets
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  png: { type: string }
-                  ico: { type: string }
-                  svg: { type: string }
-                  params:
-                    type: object
+                  egress_ip:
+                    oneOf: [ { type: string }, { type: 'null' } ]
+                  client_ip:
+                    oneOf: [ { type: string }, { type: 'null' } ]
 
   /scan/multi:
     get:
@@ -315,9 +263,9 @@ paths:
 
   /trade:
     post:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Trades]
-      summary: Execute a live trade
+      summary: Execute a trade (DRY-RUN by default)
       operationId: placeTrade
       requestBody:
         required: true
@@ -338,7 +286,7 @@ paths:
 
   /ai-analyze:
     post:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [AI]
       summary: Manual AI analysis
       operationId: aiAnalyze
@@ -361,7 +309,7 @@ paths:
 
   /sltp:
     post:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Trades]
       summary: Suggest optimal SL/TP
       operationId: suggestSLTP
@@ -384,7 +332,7 @@ paths:
 
   /price:
     get:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Trades]
       summary: Get live Binance price
       operationId: getPrice
@@ -407,7 +355,7 @@ paths:
 
   /grid/trade:
     post:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Grid]
       summary: Open grid orders (Spot/Futures)
       operationId: executeGrid
@@ -430,7 +378,7 @@ paths:
 
   /executor/start:
     get:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Executor]
       summary: Start Auto Executor
       operationId: startExecutor
@@ -452,7 +400,7 @@ paths:
 
   /executor/stop:
     get:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Executor]
       summary: Stop Auto Executor
       operationId: stopExecutor
@@ -474,7 +422,7 @@ paths:
 
   /executor/status:
     get:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Executor]
       summary: Auto Executor status
       operationId: executorStatus
@@ -495,7 +443,7 @@ paths:
 
   /report/pnl/pdf:
     get:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Reports]
       summary: Generate daily PnL PDF
       operationId: generatePnlPdf
@@ -518,9 +466,9 @@ paths:
 
   /debug/binance-futures:
     get:
-      security: [{ bearerAuth: [] }]
+      security: [{ HTTPBearer: [] }]
       tags: [Debug]
-      summary: Binance Futures connectivity/permissions test (includes TEST order)
+      summary: Binance Futures connectivity/permissions check (no test order)
       operationId: debugBinanceFutures
       parameters:
         - name: symbol
@@ -528,7 +476,10 @@ paths:
           schema: { type: string, default: BTCUSDT }
         - name: place_test
           in: query
-          schema: { type: boolean, default: true }
+          schema:
+            type: boolean
+            default: false
+            description: "If true, checks private perms via lightweight account call (no order)."
       responses:
         "200":
           description: Binance debug results
@@ -546,14 +497,19 @@ paths:
                     oneOf:
                       - { type: integer }
                       - { type: 'null' }
-                  test_order_ok: { type: boolean }
-                  test_order_error:
+                  permission_ok:
+                    oneOf:
+                      - { type: boolean }
+                      - { type: 'null' }
+                  test_error:
                     oneOf:
                       - { type: string }
                       - { type: 'null' }
-
-security:
-  - bearerAuth: []
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
 
 
