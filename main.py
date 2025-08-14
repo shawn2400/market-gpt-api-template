@@ -1,9 +1,8 @@
-# main.py (גרסה מתוקנת – /scan/multi פתוח, שאר הראוטים מאובטחים + operation_id לכל ראוט)
-
+# main.py (גרסה מתוקנת – /scan/multi פתוח, שאר הראוטים מאובטחים + operation_id אוטומטי = שם פונקציה)
 import os
 import logging
 import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException, Security, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -21,10 +20,9 @@ from utils.ws_fallback import get_price_smart
 from utils.binance_client import (
     ping_and_info, futures_exchange_info_safe, futures_mark_price, get_client, sync_server_time
 )
-from utils.ai_client import ai_healthcheck  # noqa: F401 (להמשך)
 from utils.pnl_tracker import generate_pnl_pdf
 
-# === אופציונלי ===
+# אופציונלי (לא קריטי לריצה)
 try:
     from utils.ai_client import ai_client  # type: ignore  # noqa: F401
 except Exception:
@@ -107,7 +105,7 @@ class SLTPRequest(BaseModel):
 @app.get(
     "/",
     tags=["Config"],
-    operation_id="checkServerStatus",
+    operation_id="checkServerStatus",  # יוחלף אוטומטית ל-root
 )
 async def root():
     return {"status": "ok", "version": APP_VERSION}
@@ -116,7 +114,7 @@ async def root():
 @app.get(
     "/scan/multi",
     tags=["Trades"],
-    operation_id="scanMulti",
+    operation_id="scanMulti",  # יוחלף אוטומטית ל-scan_multi
 )
 async def scan_multi(
     interval: str = "15m,1h",
@@ -148,7 +146,7 @@ async def scan_multi(
     "/trade",
     tags=["Trades"],
     dependencies=[Depends(verify_token)],
-    operation_id="placeTrade",
+    operation_id="placeTrade",  # יוחלף אוטומטית ל-place_trade
 )
 async def place_trade(req: TradeRequest) -> TradeResponse:
     """
@@ -188,7 +186,7 @@ async def place_trade(req: TradeRequest) -> TradeResponse:
     "/ai-analyze",
     tags=["AI"],
     dependencies=[Depends(verify_token)],
-    operation_id="aiAnalyze",
+    operation_id="aiAnalyze",  # יוחלף אוטומטית ל-ai_analyze
 )
 async def ai_analyze(req: AiAnalyzeRequest):
     """
@@ -232,7 +230,7 @@ async def ai_analyze(req: AiAnalyzeRequest):
     "/sltp",
     tags=["Trades"],
     dependencies=[Depends(verify_token)],
-    operation_id="suggestSLTP",
+    operation_id="suggestSLTP",  # יוחלף אוטומטית ל-suggest_sltp
 )
 async def suggest_sltp(req: SLTPRequest):
     try:
@@ -249,7 +247,7 @@ async def suggest_sltp(req: SLTPRequest):
     "/price",
     tags=["Trades"],
     dependencies=[Depends(verify_token)],
-    operation_id="getPrice",
+    operation_id="getPrice",  # יוחלף אוטומטית ל-get_price
 )
 async def get_price(symbol: str):
     p = await get_price_smart(symbol)
@@ -262,7 +260,7 @@ async def get_price(symbol: str):
     "/executor/start",
     tags=["Executor"],
     dependencies=[Depends(verify_token)],
-    operation_id="startExecutor",
+    operation_id="startExecutor",  # יוחלף אוטומטית ל-executor_start
 )
 async def executor_start():
     start_executor()
@@ -272,7 +270,7 @@ async def executor_start():
     "/executor/stop",
     tags=["Executor"],
     dependencies=[Depends(verify_token)],
-    operation_id="stopExecutor",
+    operation_id="stopExecutor",  # יוחלף אוטומטית ל-executor_stop
 )
 async def executor_stop():
     stop_executor()
@@ -282,7 +280,7 @@ async def executor_stop():
     "/executor/status",
     tags=["Executor"],
     dependencies=[Depends(verify_token)],
-    operation_id="executorStatus",
+    operation_id="executorStatus",  # יוחלף אוטומטית ל-executor_status
 )
 async def executor_status():
     return {"running": is_executor_running()}
@@ -292,7 +290,7 @@ async def executor_status():
     "/report/pnl/pdf",
     tags=["Reports"],
     dependencies=[Depends(verify_token)],
-    operation_id="generatePnlPdf",
+    operation_id="generatePnlPdf",  # יוחלף אוטומטית ל-report_pnl_pdf
 )
 async def report_pnl_pdf():
     path = generate_pnl_pdf()
@@ -305,7 +303,7 @@ async def report_pnl_pdf():
     "/debug/binance-futures",
     tags=["Debug"],
     dependencies=[Depends(verify_token)],
-    operation_id="debugBinanceFutures",
+    operation_id="debugBinanceFutures",  # יוחלף אוטומטית ל-debug_binance_futures
 )
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True):
     ok_ping = False
@@ -347,10 +345,64 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = True
         "test_order_error": test_err,
     }
 
+# ---------- OpenAPI: אכיפה ש-operationId = שם הפונקציה + ייצוא אופציונלי ----------
+from fastapi.openapi.utils import get_openapi
+from fastapi.routing import APIRoute
+
+def _force_operation_ids(schema):
+    # מחליף operationId לדוקומנט עם שם הפונקציה בפועל
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            fn_name = route.name  # שם הפונקציה (def ...)
+            for m in (route.methods or []):
+                method = m.lower()
+                if route.path in schema.get("paths", {}) and method in schema["paths"][route.path]:
+                    schema["paths"][route.path][method]["operationId"] = fn_name
+    return schema
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=getattr(app, "version", "0.1.0"),
+        description=getattr(app, "description", None),
+        routes=app.routes,
+    )
+    schema = _force_operation_ids(schema)
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+# ייצוא אוטומטי אם רוצים (DUMP_OPENAPI=1)
+def _dump_openapi_if_requested():
+    if os.getenv("DUMP_OPENAPI", "0") != "1":
+        return
+    try:
+        schema = app.openapi()
+        try:
+            import yaml  # ודא ש-PyYAML ב-requirements אם רוצים YAML
+            from pathlib import Path
+            Path("openapi.yaml").write_text(yaml.safe_dump(schema, sort_keys=False, allow_unicode=True))
+            logging.info("[OpenAPI Dump] wrote openapi.yaml")
+        except Exception:
+            import json
+            from pathlib import Path
+            Path("openapi.json").write_text(
+                json.dumps(schema, ensure_ascii=False, indent=2)
+            )
+            logging.info("[OpenAPI Dump] wrote openapi.json")
+    except Exception as e:
+        logging.error("[OpenAPI Dump] failed: %s", e)
+
+_dump_openapi_if_requested()
+
 # ---------- הפעלה מקומית ----------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
