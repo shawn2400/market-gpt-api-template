@@ -30,21 +30,15 @@ async def fetch_ohlcv(
     limit: int = 150,
     market_type: str = "futures",
 ) -> pd.DataFrame:
-    """
-    עטיפה אסינכרונית סביב get_klines (חוסמת) באמצעות to_thread.
-    """
+    """עטיפה אסינכרונית סביב get_klines (חוסמת) באמצעות to_thread."""
     try:
         limit = max(120, int(limit or 150))
         df = await asyncio.to_thread(
             get_klines,
-            symbol,
-            interval,
-            limit,
-            market_type,
-            "futures",   # grid_base_type (לא רלוונטי כאן)
-            None,
-            None,
-            None,
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+            market_type=market_type,
         )
         return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     except Exception as e:
@@ -52,9 +46,7 @@ async def fetch_ohlcv(
         return pd.DataFrame()
 
 def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
-    """
-    ולידציה בסיסית ל-DataFrame לפני חישובי אינדיקטורים.
-    """
+    """ולידציה בסיסית ל-DataFrame לפני חישובי אינדיקטורים."""
     if df is None or df.empty:
         logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}@{interval}")
         return False
@@ -68,9 +60,7 @@ def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
     return True
 
 def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    שליפת ערכים אחרונים בצורה בטוחה מה-DataFrame לאחר compute_indicators.
-    """
+    """שליפת ערכים אחרונים בצורה בטוחה מה-DataFrame לאחר compute_indicators."""
     last = df.iloc[-1]
 
     def f(x, default=0.0):
@@ -79,7 +69,6 @@ def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
         except Exception:
             return float(default)
 
-    # פולבק קל — אם מישהו יחליף בעתיד את compute_indicators ולא יחשב volume_mean:
     if "volume_mean" not in df.columns:
         try:
             df["volume_mean"] = df["volume"].rolling(50, min_periods=1).mean()
@@ -112,14 +101,12 @@ async def analyze_symbol(
     interval: str = "15m",
     market_type: str = "futures",
     limit: int = 150,
-    trending_only: bool = False,  # נשמר לתאימות
-    with_ai: bool = False,        # נשמר לתאימות; לא בשימוש כאן
+    trending_only: bool = False,  # שמור לתאימות
+    with_ai: bool = False,        # שמור לתאימות; לא בשימוש כאן
     frames: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    מבצע ניתוח טכני מלא לסימבול בטיימפריים נתון.
-    מחזיר dict עם פרטי ניתוח, כולל אינדיקטורים, כיוון וציון איכות.
-    במקרה כשל – מחזיר None (לא זורק חריגה).
+    ניתוח טכני מלא לסימבול בטיימפריים נתון.
     """
     try:
         async with semaphore:
@@ -159,7 +146,6 @@ async def analyze_symbol(
             # --- שליפת מדדים אחרונים ---
             last = _extract_last_fields(df)
 
-            # החזרה – גם top-level (לתאימות עם analyze_with_ai), וגם nested תחת "indicators"
             result: Dict[str, Any] = {
                 "symbol": str(symbol).upper(),
                 "interval": interval,
@@ -169,13 +155,13 @@ async def analyze_symbol(
                 "trend": trend,
                 "direction": direction,
 
-                # top-level (נדרש ע"י ai_analysis)
+                # top-level (ל־ai_analysis)
                 "rsi": last["rsi"],
                 "adx": last["adx"],
                 "atr": last["atr"],
                 "volume": last["volume"],
 
-                # אקסטרות אם תרצה להשתמש בהמשך
+                # אקסטרות
                 "close": last["close"],
                 "macd": last["macd"],
                 "macd_signal": last["macd_signal"],
@@ -185,7 +171,6 @@ async def analyze_symbol(
                 "vwap": last["vwap"],
                 "volume_mean": last["volume_mean"],
 
-                # בלוק מאורגן לשימושי UI/דיבוג
                 "indicators": {
                     "rsi": last["rsi"],
                     "adx": last["adx"],
@@ -207,6 +192,7 @@ async def analyze_symbol(
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
