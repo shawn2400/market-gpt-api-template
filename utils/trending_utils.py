@@ -61,10 +61,6 @@ def _pick_usdt_symbols(rows: list, top_n: int, min_price: float = 0.0001) -> Lis
     return out
 
 def get_trending_symbols(source: str = "binance24h", market: str = "futures", top_n: int = 30) -> List[str]:
-    """
-    מחזיר סימבולים טרנדיים (USDT בלבד) לפי ווליום כספי 24h.
-    source: "binance24h" (Futures) או "spot24h".
-    """
     if source == "binance24h" and market.lower() == "futures":
         rows = _fetch_24h(BINANCE_FUTURES_24H)
     elif source in ("binance24h", "spot24h"):
