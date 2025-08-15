@@ -8,7 +8,6 @@ from utils.indicators import compute_indicators
 from utils.quality_score import compute_quality_score
 from utils.static_utils import detect_pattern
 from utils.get_klines import get_klines
-from utils.btc_anchor import anchor_gate  # חדש: לשקלול מול BTC
 
 def _norm_direction_from_trend(trend: str) -> str:
     t = (trend or "").strip().lower()
@@ -33,19 +32,59 @@ def _trend_from_indicators(last: Dict[str, Any]) -> str:
         return "DOWN"
     return "SIDEWAYS"
 
+def _apply_anchor_adjustments(
+    direction: str,
+    quality: float,
+    confidence: int,
+    anchor: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    מחזיר dict עם {quality, confidence, anchor_note, blocked}
+    לא עושה block כאן; הבלוקינג מתבצע בשכבות גבוהות יותר (scan/trade).
+    """
+    if not anchor or not isinstance(anchor, dict):
+        return {"quality": quality, "confidence": confidence, "anchor_note": None, "blocked": False}
+
+    a_dir = str(anchor.get("direction") or "SIDEWAYS").upper()
+    a_str = float(anchor.get("strength") or 0.0)
+    note = f"anchor={a_dir}/{a_str:.0f}"
+
+    # יחס כיוון מול עוגן
+    aligned = (direction == "LONG" and a_dir == "UP") or (direction == "SHORT" and a_dir == "DOWN")
+
+    q = float(quality)
+    c = int(confidence)
+
+    if a_dir in ("UP", "DOWN"):
+        if a_str >= 70:
+            if aligned:
+                q += 0.5
+                c = min(100, c + 10)
+            else:
+                q -= 0.7
+                c = max(0, c - 15)
+        elif a_str >= 55:
+            if aligned:
+                q += 0.3
+                c = min(100, c + 6)
+            else:
+                q -= 0.4
+                c = max(0, c - 8)
+
+    return {"quality": max(0.0, min(10.0, q)), "confidence": c, "anchor_note": note, "blocked": False}
+
 async def analyze_symbol(
     symbol: str,
     market_type: str,
     interval: str,
     limit: int = 100,
     trending_only: bool = False,
-    with_ai: bool = False,
+    with_ai: bool = False,              # לשמירה על תאימות
     frames: Optional[List[str]] = None,
-    btc_anchor: Optional[Dict[str, Any]] = None,  # חדש: עוגן BTC אופציונלי
+    btc_anchor: Optional[Dict[str, Any]] = None,  # ← חדש: עוגן BTC
 ) -> Optional[Dict[str, Any]]:
     """
-    מנתח סימבול ב־TF יחיד ומחזיר פריט עקבי לשימוש בסורק/AI.
-    אם סופק btc_anchor — ישוקלל לסיגנל/ביטחון.
+    מנתח סימבול ב־TF יחיד ומחזיר פריט עקבי לשימוש בסורק/AI, עם התאמות לפי עוגן BTC.
     """
     try:
         df = await get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
@@ -56,16 +95,21 @@ async def analyze_symbol(
         df = compute_indicators(df)
         last = df.iloc[-1].to_dict()
 
+        # איכות כוללת (0..10)
         quality = float(compute_quality_score(df) or 0.0)
 
-        trend = _trend_from_indicators(last)  # "UP"/"DOWN"/"SIDEWAYS"
+        # מגמה -> כיוון מסחר
+        trend = _trend_from_indicators(last)        # "UP"/"DOWN"/"SIDEWAYS"
         direction = _norm_direction_from_trend(trend)  # "LONG"/"SHORT"/"SIDEWAYS"
 
+        # תבנית נר
         pattern = detect_pattern(df) or ""
+
         rsi = float(last.get("rsi", 0.0) or 0.0)
         adx = float(last.get("adx", 0.0) or 0.0)
         vol = float(last.get("volume", 0.0) or 0.0)
 
+        # סיגנל בסיסי
         signal = "HOLD"
         reason = "low confidence"
         if direction in ("LONG", "SHORT") and trend in ("UP", "DOWN"):
@@ -76,42 +120,36 @@ async def analyze_symbol(
                 signal = "HOLD"
                 reason = f"neutral setup, quality={quality:.1f}"
 
+        # confidence נגזר מאיכות
         confidence = max(0, min(100, int(round(quality * 10))))
 
-        # --- שקלול מול BTC (אם ניתן) ---
-        if btc_anchor:
-            gate = anchor_gate(direction, btc_anchor)
-            if gate["action"] == "block":
-                # אל תמליץ — אבל נחזיר פריט עם HOLD כדי שהשכבה הקוראת תוכל להחליט אם להסתיר
-                signal = "HOLD"
-                confidence = min(confidence, 40)
-                reason = f"{reason}; blocked by BTC ({gate['reason']})"
-            elif gate["action"] == "downgrade":
-                confidence = max(0, confidence - int(gate.get("penalty", 15)))
-                reason = f"{reason}; {gate['reason']}"
-            elif gate["action"] == "boost":
-                confidence = min(100, confidence + int(gate.get("bonus", 10)))
-                reason = f"{reason}; {gate['reason']}"
+        # התאמות לפי עוגן BTC (ללא בלוק קשיח – זה בשכבות scan/trade)
+        adj = _apply_anchor_adjustments(direction, quality, confidence, btc_anchor)
+        quality = adj["quality"]
+        confidence = adj["confidence"]
+        if adj.get("anchor_note"):
+            reason = f"{reason}; {adj['anchor_note']}"
 
         return {
             "symbol": str(symbol).upper(),
             "market": market_type,
             "frames": frames or [interval],
             "interval": interval,
-            "indicators": last,
-            "trend": trend,
-            "direction": direction,
-            "quality_score": quality,
+            "indicators": last,             # תמונת אינדיקטורים מלאה
+            "trend": trend,                 # "UP"/"DOWN"/"SIDEWAYS"
+            "direction": direction,         # "LONG"/"SHORT"/"SIDEWAYS"
+            "quality_score": quality,       # 0..10 (float)
             "volume": vol,
             "pattern": pattern,
             "trending": bool(trending_only),
             "rsi": rsi,
             "adx": adx,
-            "signal": signal,
-            "confidence": confidence,
+            "signal": signal,               # BUY/SELL/HOLD
+            "confidence": confidence,       # 0..100
             "reason": reason,
         }
 
     except Exception as e:
         logging.error(f"[analyze_symbol] שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
