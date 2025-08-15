@@ -1,171 +1,109 @@
 # utils/btc_anchor.py
 from __future__ import annotations
-import time
+from typing import List, Dict, Any, Tuple
 import math
-from typing import Dict, List, Optional, Tuple
 
 from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 
-# קאש קצר כדי להימנע מספאם לבינאנס
-_ANCHOR_CACHE: Dict[Tuple[str, Tuple[str, ...]], Tuple[float, Dict[str, object]]] = {}
-_ANCHOR_TTL = 20.0  # שניות
-
-def _clamp(v: float, lo: float, hi: float) -> float:
-    try:
-        v = float(v)
-    except Exception:
-        v = lo
-    return max(lo, min(hi, v))
-
-def _trend_dir_to_trade_dir(trend: str) -> str:
-    t = (trend or "").upper()
-    if t == "UP":
-        return "LONG"
-    if t == "DOWN":
-        return "SHORT"
+def _dir_from_trend(trend: str) -> str:
+    t = (trend or "").strip().upper()
+    if t == "UP": return "LONG"
+    if t == "DOWN": return "SHORT"
     return "SIDEWAYS"
 
-async def _analyze_tf(symbol: str, tf: str, market: str) -> Optional[Dict[str, float]]:
-    df = await get_klines(symbol, interval=tf, limit=180, market_type=market)
-    if df is None:
-        return None
-    df = compute_indicators(df)
-    if df is None or df.empty:
-        return None
-    last = df.iloc[-1]
-    trend = str(last.get("trend", "SIDEWAYS")).upper()
-    rsi = float(last.get("rsi", 50.0))
-    adx = float(last.get("adx", 15.0))
-    return {"trend": trend, "rsi": rsi, "adx": adx}
+def _frame_strength(trend: str, rsi: float, adx: float) -> Tuple[str, int]:
+    """הופך נתוני TF לציון 0..100 + כיוון."""
+    direction = _dir_from_trend(trend)
+    base = 50
+    # מומנטום RSI
+    if direction == "LONG":
+        base += max(0, min(25, int((rsi - 50) * 1.2)))
+    elif direction == "SHORT":
+        base += max(0, min(25, int((50 - rsi) * 1.2)))
+    # כוח מגמה ADX
+    base += max(0, min(25, int((adx - 20) * 1.5)))
+    return direction, int(max(0, min(100, base)))
 
-def _combine(frames_stats: List[Dict[str, float]]) -> Tuple[str, int]:
-    """
-    הופך רשימת {trend, rsi, adx} להחלטת עוגן כוללת: (overall_trend, strength 0..100)
-    """
-    if not frames_stats:
-        return ("SIDEWAYS", 50)
-    score = 0.0
-    weights_sum = 0.0
-    for s in frames_stats:
-        tr = (s["trend"] or "SIDEWAYS").upper()
-        sign = 1 if tr == "UP" else (-1 if tr == "DOWN" else 0)
-        # נרמל ADX (0..1) וסטיית RSI מ-50 (0..1)
-        w_adx = _clamp(s["adx"], 0, 50) / 50.0
-        w_rsi = _clamp(abs(s["rsi"] - 50.0), 0, 50) / 50.0
-        # משקל TF: ADX חזק יותר
-        tf_strength = (0.6 * w_adx + 0.4 * w_rsi)  # 0..1
-        score += sign * tf_strength
-        weights_sum += tf_strength
+async def compute_btc_anchor(frames: List[str], market: str = "futures") -> Dict[str, Any]:
+    """מחשב עוגן BTC על בסיס כמה TF-ים."""
+    frames = [f.strip() for f in frames if f.strip()]
+    out_parts = []
+    agg_scores = []
+    agg_dirs = []
 
-    if abs(score) < 1e-9:
-        return ("SIDEWAYS", 50)
+    for tf in frames:
+        df = await get_klines("BTCUSDT", interval=tf, limit=180, market_type=market)
+        if df is None or len(df) < 100:
+            out_parts.append(f"{tf}: n/a")
+            continue
+        ind = compute_indicators(df)
+        if ind is None or ind.empty:
+            out_parts.append(f"{tf}: n/a")
+            continue
+        last = ind.iloc[-1].to_dict()
+        trend = str(last.get("trend", "SIDEWAYS"))
+        rsi = float(last.get("rsi", 50.0))
+        adx = float(last.get("adx", 20.0))
+        direction, strength = _frame_strength(trend, rsi, adx)
+        out_parts.append(f"{tf}: trend={trend} rsi={rsi:.1f} adx={adx:.1f}")
+        agg_scores.append(strength)
+        agg_dirs.append(direction)
 
-    avg_mag = abs(score) / max(weights_sum, 1e-9)  # 0..1
-    overall = "UP" if score > 0 else "DOWN"
-    strength = int(round(_clamp(50 + (avg_mag * 50), 0, 100)))
-    return (overall, strength)
-
-def _reason(frames: List[str], stats: List[Optional[Dict[str, float]]]) -> str:
-    parts = []
-    for tf, st in zip(frames, stats):
-        if not st:
-            parts.append(f"{tf}: no-data")
+    # החלטה כוללת
+    dir_final = "SIDEWAYS"
+    if agg_dirs:
+        ups = sum(1 for d in agg_dirs if d == "LONG")
+        downs = sum(1 for d in agg_dirs if d == "SHORT")
+        if ups > downs:
+            dir_final = "LONG"
+        elif downs > ups:
+            dir_final = "SHORT"
         else:
-            parts.append(f"{tf}: trend={st['trend']} rsi={round(st['rsi'],1)} adx={round(st['adx'],1)}")
-    return "; ".join(parts)
+            # תיקו: בחר לפי ממוצע משוקלל ADX/RSI (כבר מגולם בציונים)
+            dir_final = agg_dirs[-1]  # אחרון קובע
 
-async def compute_btc_anchor(frames: List[str], market: str = "futures") -> Dict[str, object]:
-    """
-    מחשב עוגן BTC עבור רשימת TFs. לעולם לא מעלה חריגה; מחזיר עוגן ניטרלי במקרה תקלה.
-    """
-    key = (("spot" if str(market).lower() == "spot" else "futures"), tuple(frames or []))
-    now = time.time()
-    cached = _ANCHOR_CACHE.get(key)
-    if cached and (now - cached[0]) <= _ANCHOR_TTL:
-        return cached[1]  # type: ignore
+    strength_final = int(round(sum(agg_scores) / len(agg_scores))) if agg_scores else 0
+    trend_final = "UP" if dir_final == "LONG" else "DOWN" if dir_final == "SHORT" else "SIDEWAYS"
 
-    try:
-        tfs = [s.strip() for s in (frames or []) if s.strip()]
-        if not tfs:
-            tfs = ["15m", "1h"]
+    return {
+        "symbol": "BTCUSDT",
+        "direction": dir_final,
+        "trend": trend_final,
+        "strength": strength_final,
+        "frames": frames,
+        "reason": "; ".join(out_parts) if out_parts else "",
+    }
 
-        stats: List[Optional[Dict[str, float]]] = []
-        for tf in tfs:
-            st = await _analyze_tf("BTCUSDT", tf, key[0])
-            stats.append(st)
+def anchor_gate(direction: str, anchor: Dict[str, Any], strong_th: int = 70, weak_th: int = 55) -> Dict[str, Any]:
+    """קובע פעולה לפי התאמה/סתירה לעוגן."""
+    d = (direction or "SIDEWAYS").upper()
+    a_dir = str(anchor.get("direction", "SIDEWAYS")).upper()
+    a_strength = int(anchor.get("strength", 0))
 
-        ok_stats = [s for s in stats if s]
-        overall_trend, strength = _combine(ok_stats) if ok_stats else ("SIDEWAYS", 50)
-        direction = _trend_dir_to_trade_dir(overall_trend)
+    if a_dir == "SIDEWAYS" or a_strength < weak_th:
+        return {"action": "allow", "reason": "anchor neutral"}
 
-        out = {
-            "symbol": "BTCUSDT",
-            "direction": direction,                   # LONG / SHORT / SIDEWAYS
-            "trend": overall_trend,                   # UP / DOWN / SIDEWAYS
-            "strength": int(strength),                # 0..100
-            "frames": tfs,
-            "reason": _reason(tfs, stats),
-        }
-        _ANCHOR_CACHE[key] = (now, out)
-        return out
-    except Exception as e:
-        out = {
-            "symbol": "BTCUSDT",
-            "direction": "SIDEWAYS",
-            "trend": "SIDEWAYS",
-            "strength": 50,
-            "frames": frames or ["15m", "1h"],
-            "reason": f"anchor error: {e}",
-        }
-        _ANCHOR_CACHE[key] = (now, out)
-        return out
+    conflict = (d == "LONG" and a_dir == "SHORT") or (d == "SHORT" and a_dir == "LONG")
 
-def anchor_gate(direction: str, anchor: Dict[str, object], *, strong_th: int = 70, weak_th: int = 55) -> Dict[str, object]:
-    """
-    קובע האם לבלום/להחליש/לחזק החלטה מול העוגן.
-    """
-    dir_in = (direction or "SIDEWAYS").upper()
-    a_dir = (anchor.get("direction") or "SIDEWAYS").upper()
-    strength = int(anchor.get("strength") or 0)
+    if conflict and a_strength >= strong_th:
+        return {"action": "block", "reason": f"conflict with strong BTC {a_dir} ({a_strength})"}
+    if conflict:
+        return {"action": "downgrade", "reason": f"conflict with BTC {a_dir} ({a_strength})", "penalty": 15}
 
-    if a_dir == "SIDEWAYS" or strength < weak_th:
-        return {"action": "allow", "reason": "anchor weak/sideways"}
+    # alignment
+    if a_strength >= strong_th:
+        return {"action": "boost", "reason": f"aligned with strong BTC {a_dir} ({a_strength})", "bonus": 10}
+    return {"action": "allow", "reason": "aligned but weak"}
 
-    aligned = (dir_in == "LONG" and a_dir == "LONG") or (dir_in == "SHORT" and a_dir == "SHORT")
-    opposite = (dir_in == "LONG" and a_dir == "SHORT") or (dir_in == "SHORT" and a_dir == "LONG")
-
-    if opposite and strength >= strong_th:
-        return {"action": "block", "reason": f"BTC {a_dir} strong ({strength})"}
-    if opposite:
-        return {"action": "downgrade", "penalty": 15, "reason": f"BTC {a_dir} ({strength}) opposes"}
-    if aligned and strength >= strong_th:
-        return {"action": "boost", "bonus": 12, "reason": f"BTC {a_dir} strong ({strength})"}
-    if aligned:
-        return {"action": "boost", "bonus": 6, "reason": f"BTC {a_dir} ({strength})"}
-    return {"action": "allow", "reason": "anchor neutral"}
-
-def sltp_multipliers(direction: str, anchor: Dict[str, object], *, strong_th: int = 70, weak_th: int = 55) -> Tuple[float, float]:
-    """
-    מחזיר (sl_mult, tp_mult). ערכי בסיס: 1.0/1.0. מכוונן לפי העוגן.
-    """
-    dir_in = (direction or "SIDEWAYS").upper()
-    a_dir = (anchor.get("direction") or "SIDEWAYS").upper()
-    strength = int(anchor.get("strength") or 0)
-
-    if a_dir == "SIDEWAYS" or strength < weak_th:
-        return (1.0, 1.0)
-
-    aligned = (dir_in == "LONG" and a_dir == "LONG") or (dir_in == "SHORT" and a_dir == "SHORT")
-    opposite = (dir_in == "LONG" and a_dir == "SHORT") or (dir_in == "SHORT" and a_dir == "LONG")
-
-    if aligned and strength >= strong_th:
-        return (0.90, 1.20)  # צמצום SL, הרחבת TP
-    if aligned:
-        return (0.95, 1.10)
-    if opposite and strength >= strong_th:
-        return (1.20, 0.90)  # הרחבת SL, צמצום TP
-    if opposite:
-        return (1.10, 0.95)
+def sltp_multipliers(direction: str, anchor: Dict[str, Any], strong_th: int = 70, weak_th: int = 55) -> Tuple[float, float]:
+    gate = anchor_gate(direction, anchor, strong_th=strong_th, weak_th=weak_th)
+    act = gate["action"]
+    if act == "block":
+        return (1.2, 0.9)   # SL רחב יותר, TP שמרני (תואם דוגמאות)
+    if act == "downgrade":
+        return (1.1, 0.95)
+    if act == "boost":
+        return (0.9, 1.1)
     return (1.0, 1.0)
 
