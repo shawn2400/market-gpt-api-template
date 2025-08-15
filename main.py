@@ -64,13 +64,17 @@ try:
 except Exception:
     _ai_client = None
 
-# --- טרייד חי דרך Binance (אופציונלי) ---
+# --- טרייד חי דרך Binance (עם דיאגנוסטיקה + טעינה עצלה) ---
+BINANCE_IMPORT_ERR: str | None = None
+binance_grid_trade = None
+binance_futures_trade = None
 try:
-    from utils.binance_trader import binance_grid_trade, binance_futures_trade  # type: ignore
-except Exception:
-    binance_grid_trade = None
-    binance_futures_trade = None
-    logger.info("[GRID] dedicated binance_grid_trade not available → using DRY-RUN grid executor")
+    from utils.binance_trader import binance_grid_trade as _grid, binance_futures_trade as _fut  # type: ignore
+    binance_grid_trade = _grid
+    binance_futures_trade = _fut
+except Exception as e:
+    BINANCE_IMPORT_ERR = f"{type(e).__name__}: {e}"
+    logger.error("[LIVE] binance_trader import failed: %s", BINANCE_IMPORT_ERR)
 
 # --- קונפיג לעוגן ---
 ANCHOR_ENFORCE = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
@@ -314,6 +318,16 @@ async def env_check():
             "BINANCE_API_SECRET": _is_set("BINANCE_API_SECRET"),
             "OPENAI_API_KEY": _is_set("OPENAI_API_KEY"),
         }
+    }
+
+# ---- Debug LIVE readiness (מוגן) ----
+@app.get("/debug/live-ready", tags=["Debug"], summary="LIVE trader readiness", dependencies=[Depends(require_bearer_token)])
+async def live_ready():
+    return {
+        "execute_trades": EXECUTE_TRADES,
+        "skip_mutations": SKIP_MUTATIONS,
+        "binance_futures_trade_loaded": bool(binance_futures_trade),
+        "binance_import_error": BINANCE_IMPORT_ERR,
     }
 
 # -------- Anchor debug (פומבי) --------
@@ -579,8 +593,16 @@ async def execute_grid(req: GridTradeRequest):
 # -------- LIVE Trade (מוגן) --------
 @app.post("/trade/live", tags=["Trades"], summary="Place LIVE Futures Trade", response_model=LiveTradeResponse, dependencies=[Depends(require_bearer_token)])
 async def trade_live(req: LiveTradeRequest):
+    global binance_futures_trade, BINANCE_IMPORT_ERR
+    # טעינה עצלה אם האפליקציה עלתה לפני שהמודול היה בדיפלוי
     if binance_futures_trade is None:
-        return {"status": "error", "error": "live trader not available (binance_trader missing)"}
+        try:
+            from utils.binance_trader import binance_futures_trade as _f  # type: ignore
+            binance_futures_trade = _f
+        except Exception as e:
+            BINANCE_IMPORT_ERR = f"{type(e).__name__}: {e}"
+            return {"status": "error", "error": f"live trader import failed: {BINANCE_IMPORT_ERR}"}
+
     if not EXECUTE_TRADES or SKIP_MUTATIONS:
         return {"status": "error", "error": "EXECUTE_TRADES must be true and BINANCE_SKIP_ACCOUNT_MUTATIONS must be false"}
 
@@ -672,6 +694,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
