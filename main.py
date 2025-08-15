@@ -7,13 +7,13 @@ import logging
 from typing import Optional, List, Any, Dict
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-# --- Auth dependency (מוגן חזק) ---
+# --- Auth dependency (חובה לכל מה שמוגן) ---
 from utils.auth import require_bearer_token
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
@@ -34,7 +34,7 @@ except Exception:
 from utils.symbols import normalize_symbol, SymbolsCache
 symbols_cache = SymbolsCache(market="futures")
 
-# --- סורק סימבול (scanner_utils) ---
+# --- סורק סימבול ---
 try:
     from utils.scanner_utils import analyze_symbol
 except Exception as e:
@@ -58,16 +58,28 @@ except Exception as e:
     ping_openai = None
     logger.warning("ai_health not available: %s", e)
 
-# --- AI client ל־startup/shutdown (אופציונלי) ---
+# --- לקוח AI ל־startup/shutdown ---
 try:
     from utils.ai_client import ai_client as _ai_client
 except Exception:
     _ai_client = None
 
+# --- טרייד חי דרך Binance (אופציונלי) ---
+try:
+    from utils.binance_trader import binance_grid_trade, binance_futures_trade  # type: ignore
+except Exception:
+    binance_grid_trade = None
+    binance_futures_trade = None
+    logger.info("[GRID] dedicated binance_grid_trade not available → using DRY-RUN grid executor")
+
 # --- קונפיג לעוגן ---
 ANCHOR_ENFORCE = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
 ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
 ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
+
+# --- דגלי LIVE (לנוחות) ---
+EXECUTE_TRADES = (os.getenv("EXECUTE_TRADES", "false").strip().lower() in ("1","true","yes","on"))
+SKIP_MUTATIONS = (os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS","true").strip().lower() in ("1","true","yes","on"))
 
 # -------- סכימות --------
 class TradeRequest(BaseModel):
@@ -80,6 +92,20 @@ class TradeRequest(BaseModel):
     leverage: Optional[int] = Field(default=10, ge=1, le=125)
 
 class TradeResponse(BaseModel):
+    status: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
+
+class LiveTradeRequest(BaseModel):
+    symbol: str
+    side: str = Field(pattern="^(LONG|SHORT)$")
+    entry: float
+    sl: float
+    tp: float
+    leverage: int = Field(default=10, ge=1, le=125)
+    budget: float = Field(default=10, gt=0)
+
+class LiveTradeResponse(BaseModel):
     status: str
     result: Optional[dict] = None
     error: Optional[str] = None
@@ -131,6 +157,7 @@ class ScanResultItem(BaseModel):
 
 class ScanResponse(BaseModel):
     results: List[ScanResultItem] = Field(default_factory=list)
+    errors: Optional[Dict[str, str]] = None
 
 class PriceResponse(BaseModel):
     symbol: str
@@ -266,6 +293,29 @@ async def get_egress_ip(request: Request):
             pass
     return {"egress_ip": egress, "client_ip": client_ip}
 
+# -------- Debug auth/env (מוגן) --------
+@app.get("/debug/auth-check", tags=["Debug"], summary="Token check (401 אם לא תואם)", dependencies=[Depends(require_bearer_token)])
+async def auth_check():
+    return {"ok": True}
+
+@app.get("/debug/env", tags=["Debug"], summary="Critical env status (masked)", dependencies=[Depends(require_bearer_token)])
+async def env_check():
+    def _is_set(k: str) -> bool:
+        v = os.getenv(k)
+        return bool(v and len(v.strip()) > 0)
+    return {
+        "version": APP_VERSION,
+        "live_flags": {
+            "EXECUTE_TRADES": EXECUTE_TRADES,
+            "BINANCE_SKIP_ACCOUNT_MUTATIONS": SKIP_MUTATIONS,
+        },
+        "keys_present": {
+            "BINANCE_API_KEY": _is_set("BINANCE_API_KEY"),
+            "BINANCE_API_SECRET": _is_set("BINANCE_API_SECRET"),
+            "OPENAI_API_KEY": _is_set("OPENAI_API_KEY"),
+        }
+    }
+
 # -------- Anchor debug (פומבי) --------
 @app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)")
 async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
@@ -356,7 +406,6 @@ async def scan_multi(
 
     results.sort(key=lambda r: (r.quality_score or 0.0), reverse=True)
     results = results[:max(1, int(top))]
-    # מחזירים גם שגיאות כדי לראות איפה נפל – לא מפילים את ה־API
     return {"results": results, "errors": errors}
 
 # -------- Price (מוגן) --------
@@ -475,7 +524,7 @@ async def ai_analyze(req: AiAnalyzeRequest):
         metrics={"rsi": req.rsi, "adx": req.adx, "volume": req.volume, "pattern": req.pattern},
     )
 
-# -------- Trade (מוגן, עם Gate קשיח) --------
+# -------- Trade (מוגן, DRY-RUN אם אין ליבה חיצונית) --------
 @app.post("/trade", tags=["Trades"], summary="Place Trade", response_model=TradeResponse, dependencies=[Depends(require_bearer_token)])
 async def place_trade(req: TradeRequest):
     try:
@@ -502,13 +551,7 @@ async def place_trade(req: TradeRequest):
         logger.exception("trade failed")
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e), "result": None})
 
-# -------- Grid (מוגן, DRY-RUN אם אין מודול) --------
-try:
-    from utils.binance_trader import binance_grid_trade  # type: ignore
-except Exception:
-    binance_grid_trade = None
-    logger.info("[GRID] dedicated binance_grid_trade not available → using DRY-RUN grid executor")
-
+# -------- Grid (מוגן, DRY-RUN אם אין מודול ייעודי) --------
 @app.post("/grid/trade", tags=["Grid"], summary="Grid Trade", response_model=GridTradeResponse, dependencies=[Depends(require_bearer_token)])
 async def execute_grid(req: GridTradeRequest):
     try:
@@ -532,6 +575,42 @@ async def execute_grid(req: GridTradeRequest):
     except Exception as e:
         logger.exception("grid trade failed")
         return {"status": "error", "error": str(e), "plan": plan}
+
+# -------- LIVE Trade (מוגן) --------
+@app.post("/trade/live", tags=["Trades"], summary="Place LIVE Futures Trade", response_model=LiveTradeResponse, dependencies=[Depends(require_bearer_token)])
+async def trade_live(req: LiveTradeRequest):
+    if binance_futures_trade is None:
+        return {"status": "error", "error": "live trader not available (binance_trader missing)"}
+    if not EXECUTE_TRADES or SKIP_MUTATIONS:
+        return {"status": "error", "error": "EXECUTE_TRADES must be true and BINANCE_SKIP_ACCOUNT_MUTATIONS must be false"}
+
+    try:
+        sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+    # Gate לפי BTC Anchor
+    anchor = await compute_btc_anchor(frames=["15m", "1h"], market="futures")
+    gate = anchor_gate(req.side, anchor, strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
+    if ANCHOR_ENFORCE and gate["action"] == "block":
+        return {"status": "error", "error": f"blocked by BTC anchor: {gate['reason']}"}
+
+    try:
+        res = await binance_futures_trade(
+            symbol=sym,
+            side=req.side,
+            entry=req.entry,
+            sl=req.sl,
+            tp=req.tp,
+            leverage=req.leverage,
+            budget=req.budget,
+            market_type="futures",
+            cid_prefix="algogpt",
+        )
+        return {"status": "success", "result": res}
+    except Exception as e:
+        logger.exception("live trade failed")
+        return {"status": "error", "error": str(e)}
 
 # -------- Executor (in-mem demo) --------
 EXECUTOR_RUNNING = False
@@ -593,6 +672,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
