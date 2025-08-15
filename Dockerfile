@@ -31,7 +31,7 @@ RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 COPY . /app
 
 # ✅ יצירת תקיות נדרשות מראש כדי למנוע RuntimeError ב-StaticFiles
-RUN mkdir -p /app/static/reports /tmp/matplotlib \
+RUN mkdir -p /app/static/reports /app/static/img /tmp/matplotlib \
  && chown -R appuser:appuser /app /tmp/matplotlib
 
 # ---- Healthcheck ----
