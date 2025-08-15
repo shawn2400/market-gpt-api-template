@@ -17,27 +17,21 @@ def _norm_dir(v: Any) -> Optional[str]:
     return None
 
 def _ema_slope_strength(ema_fast: float, ema_slow: float, close: float) -> float:
-    """
-    אומדן חוזק פשוט: פער EMA ביחס למחיר (באחוזים) מומר ל-0..100.
-    """
+    """אומדן חוזק פשוט: פער EMA ביחס למחיר (באחוזים) מומר ל-0..100."""
     try:
         gap = abs(float(ema_fast) - float(ema_slow))
         if close <= 0:
             return 0.0
         pct = (gap / float(close)) * 100.0
-        # map: 0%->0, 0.5%->50, 1.0%->80, 2%->100 (קאפ)
         if pct >= 2.0:
             return 100.0
         if pct >= 1.0:
             return 80.0 + (pct - 1.0) * 20.0
-        return min(80.0, pct * 100.0)  # 0..80
+        return min(80.0, pct * 100.0)
     except Exception:
         return 0.0
 
 async def _anchor_for_tf(tf: str, market: str) -> Optional[Dict[str, Any]]:
-    """
-    מחשב עוגן ל-TF בודד לפי EMA21/50 וחוזק.
-    """
     df = await aget_klines("BTCUSDT", interval=tf, limit=180, market_type=market)
     if df is None or df.empty:
         return None
@@ -54,14 +48,10 @@ async def _anchor_for_tf(tf: str, market: str) -> Optional[Dict[str, Any]]:
         return None
 
     strength = _ema_slope_strength(ema21, ema50, close)
-
-    # אם יש ADX מהאינדיקטורים שלך – נשקלל קלות (לא חובה)
     try:
         adx = float(last.get("adx", 0.0) or 0.0)
-        # קליפ 10..40 → 0..+10 חיזוק
         if adx > 10:
-            bonus = min(10.0, (adx - 10.0) * 0.33)
-            strength = min(100.0, strength + bonus)
+            strength = min(100.0, strength + min(10.0, (adx - 10.0) * 0.33))
     except Exception:
         pass
 
@@ -75,17 +65,6 @@ async def _anchor_for_tf(tf: str, market: str) -> Optional[Dict[str, Any]]:
     }
 
 async def compute_btc_anchor(*, frames: List[str] | Tuple[str, ...] = ("15m", "1h"), market: str = "futures") -> Dict[str, Any]:
-    """
-    מחשב עוגן BTC מצרפי על פני כמה TFs: כיוון רוב, חוזק ממוצע.
-    החזרה:
-      {
-        direction: LONG/SHORT,
-        strength: 0..100,
-        trend: "UP"/"DOWN",
-        frames: [...],
-        details: [{tf, direction, strength, ...}, ...]
-      }
-    """
     fr = [str(x).strip() for x in (frames or ("15m", "1h")) if str(x).strip()]
     details: List[Dict[str, Any]] = []
     for tf in fr:
@@ -115,13 +94,6 @@ async def compute_btc_anchor(*, frames: List[str] | Tuple[str, ...] = ("15m", "1
     }
 
 def anchor_gate(direction: Optional[str], anchor: Optional[Dict[str, Any]], *, strong_th: int = 70, weak_th: int = 55) -> Dict[str, Any]:
-    """
-    מחזיר פעולה לפי התאמה לעוגן:
-      - align & strong  → boost
-      - align & weak    → none
-      - oppose & strong → block
-      - oppose & weak   → downgrade
-    """
     d = _norm_dir(direction)
     if not anchor or not isinstance(anchor, dict):
         return {"action": "none", "reason": "no anchor"}
@@ -136,17 +108,11 @@ def anchor_gate(direction: Optional[str], anchor: Optional[Dict[str, Any]], *, s
             return {"action": "boost", "bonus": 12, "reason": f"aligned with BTC ({a_dir}, {strength})"}
         return {"action": "none", "reason": f"aligned (weak, {strength})"}
 
-    # נגד הכיוון
     if strength >= strong_th:
         return {"action": "block", "reason": f"against BTC ({a_dir}, {strength})"}
     return {"action": "downgrade", "penalty": 15, "reason": f"against (weak, {strength})"}
 
 def sltp_multipliers(direction: str, anchor: Optional[Dict[str, Any]], *, strong_th: int = 70, weak_th: int = 55) -> Tuple[float, float]:
-    """
-    מכפילים ל-SL/TP לפי התאמה לעוגן:
-      חיזוק עם העוגן → TP↑, SL↓ ; נגד העוגן → TP↓, SL↑.
-    מחזיר: (sl_mult, tp_mult)
-    """
     d = _norm_dir(direction)
     if not anchor or not d:
         return (1.0, 1.0)
@@ -156,7 +122,7 @@ def sltp_multipliers(direction: str, anchor: Optional[Dict[str, Any]], *, strong
 
     if a_dir == d:
         if strength >= strong_th:
-            return (0.90, 1.15)  # SL קטן יותר, TP גדול יותר
+            return (0.90, 1.15)
         if strength >= weak_th:
             return (1.00, 1.08)
         return (1.00, 1.02)
@@ -166,6 +132,7 @@ def sltp_multipliers(direction: str, anchor: Optional[Dict[str, Any]], *, strong
         if strength >= weak_th:
             return (1.10, 0.95)
         return (1.05, 0.98)
+
 
 
 
