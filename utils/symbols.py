@@ -1,133 +1,93 @@
 # utils/symbols.py
 from __future__ import annotations
 import time
-import re
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Set, List, Optional
 import httpx
 
-__all__ = ["normalize_symbol", "SymbolsCache"]
+BINANCE_SPOT_EXINFO = "https://api.binance.com/api/v3/exchangeInfo"
+BINANCE_FAPI_EXINFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 
-# מרובדים נפוצים בפיוצ'רס
-__QUOTES: Tuple[str, ...] = ("USDT", "USDC", "FDUSD", "BUSD")
-
-_SPOT_EXI = "https://api.binance.com/api/v3/exchangeInfo"
-_FUT_EXI  = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+# קוואוטים נפוצים (נשתמש בניסיון לפי סדר)
+__QUOTES: List[str] = ["USDT", "USDC", "FDUSD", "TUSD", "BUSD", "TRY"]
 
 class SymbolsCache:
-    def __init__(self, market: str = "futures", ttl: int = 3600):
+    def __init__(self, market: str = "futures", ttl: int = 900):
         self.market = "spot" if str(market).lower() == "spot" else "futures"
         self.ttl = int(ttl)
-        self.ts: float = 0.0
-        self.symbols: Dict[str, Dict] = {}  # SYMBOL -> raw
-        self.base_to_quotes: Dict[str, List[str]] = {}
+        self._t0: float = 0.0
+        self.symbols: Set[str] = set()
+        self.bases: Set[str] = set()
+
+    def _expired(self) -> bool:
+        return (time.time() - self._t0) > self.ttl or not self.symbols
 
     def _endpoint(self) -> str:
-        return _SPOT_EXI if self.market == "spot" else _FUT_EXI
+        return BINANCE_SPOT_EXINFO if self.market == "spot" else BINANCE_FAPI_EXINFO
 
-    def _refresh(self) -> None:
-        if (time.time() - self.ts) < self.ttl and self.symbols:
-            return
+    def refresh(self) -> None:
         url = self._endpoint()
         with httpx.Client(timeout=6.0) as x:
             r = x.get(url)
             r.raise_for_status()
             data = r.json()
-        syms = {}
-        b2q: Dict[str, List[str]] = {}
-        for s in (data.get("symbols") or []):
-            status = (s.get("status") or s.get("contractStatus") or "TRADING")
-            if status != "TRADING":
+        syms = set()
+        bases = set()
+        for s in data.get("symbols", []):
+            sym = str(s.get("symbol", "")).upper()
+            st = str(s.get("status", "")).upper()
+            if not sym or st not in ("TRADING", "PENDING_TRADING", "BREAK"):
                 continue
-            sym = str(s.get("symbol") or "").upper()
-            base = str(s.get("baseAsset") or "").upper()
-            quote = str(s.get("quoteAsset") or "").upper()
-            if not sym or not base or not quote:
-                continue
-            syms[sym] = s
-            b2q.setdefault(base, []).append(quote)
+            syms.add(sym)
+            bases.add(str(s.get("baseAsset", "")).upper())
         self.symbols = syms
-        self.base_to_quotes = b2q
-        self.ts = time.time()
+        self.bases = bases
+        self._t0 = time.time()
 
-    def find(self, candidate: str) -> Optional[str]:
-        self._refresh()
-        c = candidate.upper()
-        if c in self.symbols:
-            return c
-        return None
+    def ensure(self) -> None:
+        if self._expired():
+            self.refresh()
 
-    def best_with_base(self, base: str) -> Optional[str]:
-        self._refresh()
-        base = base.upper()
-        quotes = self.base_to_quotes.get(base) or []
-        # העדף USDT/FDUSD
-        for q in ("USDT", "FDUSD", "USDC", "BUSD"):
-            if q in quotes:
-                sym = base + q
-                if sym in self.symbols:
-                    return sym
-        # fallback כלשהו
-        for q in quotes:
-            sym = base + q
-            if sym in self.symbols:
-                return sym
-        return None
+def _strip(sym: str) -> str:
+    s = "".join(ch for ch in sym if ch.isalnum())
+    return s.upper()
 
-
-_WS = re.compile(r"[\s\-/]+")
-
-def _split_base_quote(s: str) -> Tuple[str, Optional[str]]:
-    s = s.strip().upper()
-    s = _WS.sub("", s)
-    # "BTCUSDT" ארוך -> נסה לחלץ quote מוכר
+def _maybe_add_quote(sym_u: str) -> List[str]:
+    # אם קיבלנו כבר quote – נחזיר אותו קודם
+    out = [sym_u]
+    # אחרת ננסה לצרף קוואוטים בניסיון
     for q in __QUOTES:
-        if s.endswith(q) and len(s) > len(q):
-            return s[:-len(q)], q
-    # "BTC/USDT" או "BTC-USDT" כבר קוזז ע"י regex למעלה, כך שאין מפריד
-    return s, None
+        if not sym_u.endswith(q):
+            out.append(sym_u + q)
+    return out
 
-def _maybe_add_quote(base_or_symbol: str) -> List[str]:
-    s = base_or_symbol.upper()
-    # אם כבר נראה כמו SYMBOL מלא
-    for q in __QUOTES:
-        if s.endswith(q) and len(s) > len(q):
-            return [s]
-    # נסה כל quote מוכר
-    return [s + q for q in __QUOTES]
-
-def normalize_symbol(user_input: str, *, market: str = "futures", cache: Optional[SymbolsCache] = None) -> str:
-    """
-    מקבל קלט גמיש ("btc", "btc/usdt", "BTCUSDT") ומחזיר SYMBOL חוקי לפי exchangeInfo.
-    """
-    if not user_input or not str(user_input).strip():
-        raise ValueError("empty symbol")
-
-    market = "spot" if str(market).lower() == "spot" else "futures"
+def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[SymbolsCache] = None) -> str:
+    sym_u = _strip(symbol)
     c = cache or SymbolsCache(market=market)
+    c.ensure()
 
-    raw = str(user_input).upper().strip()
-    raw = raw.replace("PERP", "").replace("_", "/")
-    base, maybe_quote = _split_base_quote(raw)
+    # אם כבר תקין
+    if sym_u in c.symbols:
+        return sym_u
 
-    # רשימת מועמדים לפי קלט
+    # אם המשתמש נתן רק base (BTC / ETH / SOL...)
     candidates: List[str] = []
-    if maybe_quote:
-        candidates.append(base + maybe_quote)
-    else:
-        candidates.extend(_maybe_add_quote(base))
+    # אם יש מפריד, נמחק וננסה
+    candidates.extend(_maybe_add_quote(sym_u))
 
-    # נסה למצוא במדויק
     for cand in candidates:
-        hit = c.find(cand)
-        if hit:
-            return hit
+        if cand in c.symbols:
+            return cand
 
-    # נסה "הטבת" base בלבד
-    best = c.best_with_base(base)
-    if best:
-        return best
+    # ניסיון לפצל ידנית (btc/usdt, btc-usdt, btc_usdt)
+    for sep in ("/", "-", "_"):
+        if sep in symbol:
+            b, q = symbol.replace(" ", "").upper().split(sep, 1)
+            z = _strip(b + q)
+            if z in c.symbols:
+                return z
 
-    raise ValueError(f"unknown symbol '{user_input}' for market={market}")
+    raise ValueError(f"Unknown or unsupported symbol '{symbol}' for {c.market}")
+
 
 
 
