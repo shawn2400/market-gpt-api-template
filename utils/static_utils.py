@@ -2,15 +2,12 @@
 import os
 from datetime import datetime
 import matplotlib
-matplotlib.use('Agg')  # מצב ללא GUI לשרתים
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pandas as pd
 from typing import Optional, List
 
 def create_sample_chart(x: List[float], y: List[float], title: str = "📈 גרף דוגמה", filename: str = "chart.png") -> Optional[str]:
-    """
-    יוצר ושומר גרף פשוט בתיקיית static, ומחזיר נתיב מלא לקובץ.
-    """
     try:
         os.makedirs("static", exist_ok=True)
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -33,17 +30,7 @@ def create_sample_chart(x: List[float], y: List[float], title: str = "📈 גר�
         return None
 
 def detect_pattern(df: pd.DataFrame) -> str:
-    """
-    מזהה תבנית נר בסיסית מהשורה האחרונה.
-    מחזיר: ["Doji", "Hammer", "Shooting Star", ""]
-    """
     try:
-        if df is None or df.empty:
-            return ""
-        need = {"open", "high", "low", "close"}
-        if not need.issubset(df.columns):
-            return ""
-
         last = df.iloc[-1]
         open_price = float(last["open"])
         close_price = float(last["close"])
@@ -67,6 +54,7 @@ def detect_pattern(df: pd.DataFrame) -> str:
         return ""
     except Exception:
         return ""
+
 
 
 
