@@ -1,96 +1,68 @@
 # =========================
-# AlgoGPT – .env (Production-ready)
+# AlgoGPT – Render Production ENV
 # =========================
 
-# ---- API Auth (חובה) ----
-# חייב להיות מחרוזת חזקה באורך 32–64 תווים לפחות (נבדק ב-utils/auth.py)
-API_BEARER_TOKEN=REPLACE_WITH_STRONG_RANDOM_64CH________________________________
+# ---- אבטחה ----
+API_BEARER_TOKEN=GrwpXpkRWunC7SPZGFrhaizBwcaZzpWLYJ9kv4W7u6aTx_EXu0VGfpBKaBhThLD2
 
-# ---- בסיסי אפליקציה ----
-ALGOGPT_VERSION=2.13.4
-LOG_LEVEL=INFO
-CORS_ALLOW_ORIGINS=*
-# אל תקבע PORT ידנית בספקים כמו Render/Railway; הם מזריקים PORT בזמן ריצה.
-
-# ---- ביצוע טריידים / אוטומציה (לפי הצורך שלך) ----
-EXECUTE_TRADES=false
-BINANCE_SKIP_ACCOUNT_MUTATIONS=false
+# ---- אוטומציה ----
 AUTO_RUN=false
 ENABLE_AUTO_TRADING=false
+EXECUTE_TRADES=false
+BINANCE_SKIP_ACCOUNT_MUTATIONS=false
 
-# מגבלות סיכון כלליות
-MAX_TRADE_BUDGET=100
-MAX_LEVERAGE=35
-
-# ---- פרמטרי סריקה/ברירת מחדל ----
+# ---- פרמטרי סריקה ----
+SCAN_INTERVAL=60
 DEFAULT_INTERVAL=15m
-SCAN_INTERVAL=60                 # שניות בין סריקות (אם יש worker/loop חיצוני)
 MIN_QUALITY_SCORE=6
 MIN_VOLUME=1000000
 TOP_SYMBOLS=30
 TRENDING_ONLY=false
 
-# ---- הגנת מחיר ----
-PRICE_PROTECT_PCT=0.25           # אחוז הגנה מהירה על מחיר
+# ---- הגנות ----
+PRICE_PROTECT_PCT=0.25
 PRICE_MAX_AGE_SEC=10
 
-# ---- פרמטרים לעוגן BTC (משפיע על gating/SLTP multipliers) ----
-BTC_ANCHOR_ENFORCE=true          # true=חסימה/שורט/דאונגרד בהתאם לעוגן
-BTC_ANCHOR_STRONG_TH=70
-BTC_ANCHOR_WEAK_TH=55
+# ---- מגבלות סיכון ----
+MAX_TRADE_BUDGET=100
+MAX_LEVERAGE=35
 
-# ---- פרמטרים לחישוב SL/TP (רצפות ואומדני ATR) ----
-SLTP_MIN_PCT_FLOOR=0.0030        # 0.30% מינימום מרחק SL
-SLTP_TP_PCT_FLOOR=0.0060         # 0.60% מינימום מרחק TP
-ATR_SL_MULT=1.50
-ATR_TP_MULT=2.50
-
-# ---- OpenAI (ברירת מחדל: OpenAI רגיל) ----
-OPENAI_API_KEY=<PUT_YOUR_OPENAI_KEY>
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_TIMEOUT_SECONDS=30.0
-OPENAI_MAX_CONCURRENCY=4
-OPENAI_HTTP2=false               # true לאפשר HTTP/2 (תלוי תשתית)
-OPENAI_MAX_RETRIES=3
-OPENAI_BACKOFF_BASE=0.6
-OPENAI_BACKOFF_CAP=10.0
-# אופציונלי:
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_ORG=
-OPENAI_PROJECT=
-
-# ---- Azure OpenAI (אופציונלי; אם מוגדרים ערכים -> הלקוח יעבוד במצב Azure) ----
-AZURE_OPENAI_ENDPOINT=           # למשל: https://<your-resource>.openai.azure.com
-AZURE_OPENAI_KEY=
-AZURE_OPENAI_DEPLOYMENT=         # שם ה-Deployment (למשל: gpt-4o-mini)
-AZURE_OPENAI_API_VERSION=2024-02-15-preview
+# ---- לוגים ו-CORS ----
+LOG_LEVEL=INFO
+CORS_ALLOW_ORIGINS=*
 
 # ---- Binance ----
-BINANCE_API_KEY=<BINANCE_API_KEY>
-BINANCE_API_SECRET=<BINANCE_API_SECRET>
-
-# בסיסי HTTP/WS (ניתן להשאיר דיפולט)
-BINANCE_SPOT_HTTP_BASE=https://api.binance.com
-BINANCE_FUTURES_HTTP_BASE=https://fapi.binance.com
-BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com
-BINANCE_WS_STREAM_SUFFIX=/stream?streams=
-
-# ריטריים/באק-אוף (httpx + לקוחות עזר)
+BINANCE_API_KEY=<BINANCE_KEY_HERE>
+BINANCE_API_SECRET=<BINANCE_SECRET_HERE>
 BINANCE_BACKOFF_BASE=0.7
 BINANCE_MAX_RETRIES=5
 BINANCE_RECV_WINDOW=10000
 BINANCE_TIME_SYNC_INTERVAL_SEC=900
 BINANCE_EXCHANGE_INFO_ON_START=false
 BINANCE_FORCE_HEDGE_MODE=false
+BINANCE_SPOT_HTTP_BASE=https://api.binance.com
+BINANCE_FUTURES_HTTP_BASE=https://fapi.binance.com
+BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com
+BINANCE_WS_STREAM_SUFFIX=/stream?streams=
 
-# ---- יציאות רשת / Egress ----
+# ---- OpenAI ----
+OPENAI_API_KEY=<OPENAI_KEY_HERE>
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TIMEOUT_SECONDS=30.0
+OPENAI_MAX_CONCURRENCY=4
+OPENAI_HTTP2=false
+OPENAI_MAX_RETRIES=3
+OPENAI_BACKOFF_BASE=0.6
+OPENAI_BACKOFF_CAP=10.0
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+# ---- יציאות רשת ----
 EGRESS_IP_ENDPOINT=https://algogpt-docker.onrender.com/net/ip
-BINANCE_ALLOWED_EGRESS_IPS=      # אם יש הגבלת FW מהצד שלך, רשום כאן IPs מופרדים בפסיקים
+BINANCE_ALLOWED_EGRESS_IPS=
 
-# ---- Paths / סטטיים (דיפולט מתאים ל-Dockerfile) ----
-# אל תשנה אלא אם שינית את המבנה
-# Static paths נוצרים ב-build והאפליקציה מעלה אותם ב-startup:
-# static/, static/reports/, static/img/
+# ---- הגדרות Render ----
+PORT=10000
+
 
 
 
