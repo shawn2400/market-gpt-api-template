@@ -1,6 +1,4 @@
 # utils/indicators.py
-from __future__ import annotations
-
 import numpy as np
 import pandas as pd
 import logging
@@ -22,7 +20,7 @@ _MACD_SIGNAL = 9
 _ST_PERIOD = 10
 _ST_MULT = 3.0
 
-_MIN_ROWS_ABS = 100  # מינימום כללי לניקוי/אינדיקטורים
+_MIN_ROWS_ABS = 100  # מינימום כללי
 _LONGEST_WIN = max(_EMA_SLOW, _MACD_SLOW, _ATR, _ADX, _RSI, _ST_PERIOD) + 20
 
 
@@ -34,7 +32,7 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     need = {"open", "high", "low", "close", "volume"}
     if not need.issubset(df.columns):
         missing = need - set(df.columns)
-        logging.debug(f"[indicators] חסרות עמודות לבסיס: {missing}")
+        logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
         return pd.DataFrame()
 
     out = df.copy()
@@ -64,13 +62,13 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
 def _enough_rows(df: pd.DataFrame) -> bool:
     n = len(df)
     if n < _MIN_ROWS_ABS or n < _LONGEST_WIN:
-        logging.debug(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({_MIN_ROWS_ABS}, {_LONGEST_WIN})")
+        logging.warning(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({_MIN_ROWS_ABS}, {_LONGEST_WIN})")
         return False
     return True
 
 
 def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
-    """חישוב קו SuperTrend בסיסי מבוסס ATR (וקטורי, קל משקל)."""
+    """חישוב קו SuperTrend בסיסי מבוסס ATR."""
     atr = AverageTrueRange(
         high=df["high"], low=df["low"], close=df["close"],
         window=period, fillna=True
@@ -294,31 +292,34 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
             ):
                 out[col] = np.int8(0)
 
-        # נגזרת טרנד פשוטה (עוזר לשכבות מעל)
-        # UP אם ema21>ema50 והמחיר מעל ema21; DOWN אם ema21<ema50 והמחיר מתחת ל-ema21; אחרת SIDEWAYS
-        cond_up = (out["ema_21"] > out["ema_50"]) & (out["close"] > out["ema_21"])
-        cond_down = (out["ema_21"] < out["ema_50"]) & (out["close"] < out["ema_21"])
-        out["trend"] = np.where(cond_up, "UP", np.where(cond_down, "DOWN", "SIDEWAYS"))
-
         # ניקוי NaN/Inf
         cols_needed = [
             "rsi", "adx", "atr", "macd", "macd_signal", "macd_hist",
-            "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir",
-            "volume_mean", "trend"
+            "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir", "volume_mean"
         ]
         out.replace([np.inf, -np.inf], np.nan, inplace=True)
         out[cols_needed] = out[cols_needed].ffill().bfill()
         out.dropna(subset=cols_needed, inplace=True)
 
         if out.empty:
-            logging.debug("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
+            logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
             return pd.DataFrame()
+
+        # --- נגזרת מגמה 'trend' לשימוש בשכבות אחרות ---
+        # היגיון: UP אם ema21>ema50 וגם close>ema21; DOWN אם ema21<ema50 וגם close<ema21; אחרת SIDEWAYS
+        cond_up = (out["ema_21"] > out["ema_50"]) & (out["close"] > out["ema_21"])
+        cond_dn = (out["ema_21"] < out["ema_50"]) & (out["close"] < out["ema_21"])
+        trend_series = pd.Series("SIDEWAYS", index=out.index, dtype="string")
+        trend_series[cond_up] = "UP"
+        trend_series[cond_dn] = "DOWN"
+        out["trend"] = trend_series
 
         return out
 
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
         return pd.DataFrame()
+
 
 
 
