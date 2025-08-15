@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import json
 import logging
 from typing import Optional, List, Any, Dict
 
@@ -20,6 +19,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
+# --- אבטחה (Bearer) ---
+_API_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
+
+def auth_dep(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    token = auth.split(" ", 1)[1].strip()
+    if _API_TOKEN and token != _API_TOKEN:
+        # אם לא הוגדר טוקן בסביבה – נאפשר לכל Bearer (Dev)
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
 # --- ליבת מסחר (אופציונלי) ---
 try:
     from trade_execution_core import dry_run_trade as _ext_dry_run_trade
@@ -30,33 +42,28 @@ except Exception:
 from utils.symbols import normalize_symbol, SymbolsCache
 symbols_cache = SymbolsCache(market="futures")
 
-# --- סורק סימבול ---
+# --- סורק TF יחיד ---
 try:
     from utils.symbol_analysis import analyze_symbol
 except Exception as e:
     analyze_symbol = None
     logger.warning("symbol_analysis not available: %s", e)
 
-# --- klines ---
+# --- klines (תאימות לשני הקבצים) ---
 try:
     from utils.get_klines import get_klines
-except Exception:
+except Exception:  # pragma: no cover
     from utils.klines import get_klines  # type: ignore
 
 # --- עוגן BTC ---
 from utils.btc_anchor import compute_btc_anchor, anchor_gate, sltp_multipliers
 
-# קונפיג לעוגן
-ANCHOR_ENFORCE = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
+ANCHOR_ENFORCE  = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
 ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
 ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
 
-# --- אבטחה בסיסית ---
-def auth_dep(request: Request):
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return True
+# --- AI (לניתוח מרובה TF ו-SLTP אופציונלי) ---
+from utils.ai_analysis import analyze_with_ai
 
 # --- סכימות ---
 class TradeRequest(BaseModel):
@@ -118,7 +125,7 @@ class ScanResultItem(BaseModel):
     atr: Optional[float] = None
 
 class ScanResponse(BaseModel):
-    results: List[ScanResultItem] = []
+    results: List[ScanResultItem] = Field(default_factory=list)
 
 class PriceResponse(BaseModel):
     symbol: str
@@ -148,11 +155,14 @@ class GridTradeResponse(BaseModel):
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=[os.getenv("CORS_ALLOW_ORIGINS", "*")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-BINANCE_FAPI = "https://fapi.binance.com"
-BINANCE_SPOT = "https://api.binance.com"
+BINANCE_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+BINANCE_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
 
 async def _get_mark_price(symbol: str) -> Optional[dict]:
     url = f"{BINANCE_FAPI}/fapi/v1/premiumIndex"
@@ -168,7 +178,7 @@ async def _get_exchange_info() -> Optional[dict]:
         r.raise_for_status()
         return r.json()
 
-# -------- Config routes --------
+# -------- Config --------
 @app.get("/", tags=["Config"], summary="Root")
 async def root():
     return {"status": "ok", "version": APP_VERSION}
@@ -188,8 +198,8 @@ async def get_egress_ip(request: Request):
     egress = None
     for svc in ("https://api.ipify.org", "https://ifconfig.me/ip"):
         try:
-            with httpx.Client(timeout=4.0) as x:
-                resp = x.get(svc)
+            async with httpx.AsyncClient(timeout=4.0) as x:
+                resp = await x.get(svc)
                 if resp.status_code == 200:
                     egress = resp.text.strip()
                     break
@@ -197,7 +207,7 @@ async def get_egress_ip(request: Request):
             pass
     return {"egress_ip": egress, "client_ip": client_ip}
 
-# -------- Anchor debug (קל לבדיקה) --------
+# -------- Anchor debug --------
 @app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)")
 async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
     fr = [s.strip() for s in frames.split(",") if s.strip()]
@@ -228,9 +238,14 @@ async def scan_multi(
         best_quality = -1.0
         for tf in frames:
             try:
-                res = await analyze_symbol(sym, market_type=market_type, interval=tf,
-                                           limit=150, trending_only=bool(trending_only),
-                                           frames=frames, btc_anchor=anchor)
+                res = await analyze_symbol(
+                    sym,
+                    market_type=market_type,
+                    interval=tf,
+                    limit=150,
+                    trending_only=bool(trending_only),
+                    frames=frames,
+                )
                 if not res:
                     continue
                 q = float(res.get("quality_score") or 0.0)
@@ -247,7 +262,7 @@ async def scan_multi(
         gate = anchor_gate(item_agg.get("direction"), anchor,
                            strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
         if ANCHOR_ENFORCE and gate["action"] == "block":
-            # מדלגים — נגד BTC בעוצמה גבוהה
+            # נגד BTC בעוצמה גבוהה – מדלגים
             continue
 
         # שומרים רק מעל quality מינ'
@@ -275,8 +290,8 @@ async def scan_multi(
                 "signal": item_agg.get("signal"),
                 "confidence": conf,
                 "reason": reason,
-                "entry": item_agg.get("indicators", {}).get("close"),
-                "atr": item_agg.get("indicators", {}).get("atr"),
+                "entry": (item_agg.get("indicators") or {}).get("close"),
+                "atr": (item_agg.get("indicators") or {}).get("atr"),
             }))
 
     results.sort(key=lambda r: (r.quality_score or 0.0), reverse=True)
@@ -284,7 +299,13 @@ async def scan_multi(
     return {"results": results}
 
 # -------- Price --------
-@app.get("/price", tags=["Trades"], summary="Get Price", response_model=PriceResponse, dependencies=[Depends(auth_dep)])
+@app.get(
+    "/price",
+    tags=["Trades"],
+    summary="Get Price",
+    response_model=PriceResponse,
+    dependencies=[Depends(auth_dep)],
+)
 async def get_price(symbol: str):
     try:
         sym = normalize_symbol(symbol, market="futures", cache=symbols_cache)
@@ -294,14 +315,20 @@ async def get_price(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-# פרמטרים ל־SLTP
+# פרמטרים ל־SLTP בסיסיים (נשארים כאן במקרה שאתה מסתמך עליהם)
 SLTP_MIN_PCT_FLOOR = float(os.getenv("SLTP_MIN_PCT_FLOOR", "0.0030"))   # 0.30%
 SLTP_TP_PCT_FLOOR  = float(os.getenv("SLTP_TP_PCT_FLOOR",  "0.0060"))   # 0.60%
 ATR_SL_MULT        = float(os.getenv("ATR_SL_MULT",        "1.50"))
 ATR_TP_MULT        = float(os.getenv("ATR_TP_MULT",        "2.50"))
 
-# -------- SLTP (עם כוונון לפי BTC) --------
-@app.post("/sltp", tags=["Trades"], summary="Suggest SL/TP", response_model=SLTPResponse, dependencies=[Depends(auth_dep)])
+# -------- SLTP (כוונון לפי BTC Anchor) --------
+@app.post(
+    "/sltp",
+    tags=["Trades"],
+    summary="Suggest SL/TP",
+    response_model=SLTPResponse,
+    dependencies=[Depends(auth_dep)],
+)
 async def suggest_sltp(req: SLTPRequest):
     try:
         sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
@@ -328,8 +355,74 @@ async def suggest_sltp(req: SLTPRequest):
 
     return {"symbol": sym, "direction": req.direction, "sl": sl, "tp": tp}
 
+# -------- AI Analyze (עם עוגן BTC) --------
+@app.post(
+    "/ai-analyze",
+    tags=["AI"],
+    summary="Manual AI analysis (with BTC anchor)",
+    dependencies=[Depends(auth_dep)],
+)
+async def ai_analyze(req: AiAnalyzeRequest):
+    frames = ["15m", "1h"]
+    tf_results: List[Dict[str, Any]] = []
+
+    # ננסה לייצר נתוני TF אמיתיים
+    if analyze_symbol is not None:
+        for tf in frames:
+            try:
+                res = await analyze_symbol(
+                    req.symbol, market_type="futures", interval=tf,
+                    limit=150, trending_only=False, frames=frames
+                )
+                if res:
+                    tf_results.append(res)
+            except Exception as e:
+                logger.warning("[ai-analyze] %s@%s: %s", req.symbol, tf, e)
+
+    # אם אין נתונים – נשתמש ב־hint מהגוף שנשלח
+    if not tf_results:
+        tf_results = [{
+            "symbol": req.symbol.upper(),
+            "market": "futures",
+            "frames": frames,
+            "interval": "synthetic",
+            "indicators": {"rsi": req.rsi, "adx": req.adx, "close": req.volume},
+            "trend": str(req.trend).upper(),
+            "direction": "LONG" if str(req.trend).upper() == "UP" else ("SHORT" if str(req.trend).upper() == "DOWN" else "SIDEWAYS"),
+            "quality_score": 6.0,
+            "volume": float(req.volume),
+            "pattern": str(req.pattern),
+            "rsi": float(req.rsi),
+            "adx": float(req.adx),
+            "signal": "HOLD",
+            "confidence": 0,
+            "reason": "synthetic input",
+        }]
+
+    # מחשבים עוגן פעם אחת
+    anchor = await compute_btc_anchor(frames=frames, market="futures")
+    out = await analyze_with_ai(tf_results, use_anchor=True, anchor_frames=frames, anchor_market="futures", btc_anchor=anchor)
+
+    # ממפים לתגובה קומפקטית (ועוגן מצורף בשדה נפרד)
+    resp = {
+        "symbol": out.get("symbol", req.symbol.upper()),
+        "direction": out.get("direction", "LONG"),
+        "signal": out.get("signal", "HOLD"),
+        "confidence": int(out.get("confidence", 0)),
+        "reason": out.get("reason", "")[:240],
+        "frames": out.get("frames", frames),
+        "anchor": out.get("anchor", None),
+    }
+    return resp
+
 # -------- Trade (עם Gate קשיח) --------
-@app.post("/trade", tags=["Trades"], summary="Place Trade", response_model=TradeResponse, dependencies=[Depends(auth_dep)])
+@app.post(
+    "/trade",
+    tags=["Trades"],
+    summary="Place Trade",
+    response_model=TradeResponse,
+    dependencies=[Depends(auth_dep)],
+)
 async def place_trade(req: TradeRequest):
     # נרמול סימבול
     try:
@@ -348,11 +441,11 @@ async def place_trade(req: TradeRequest):
         })
 
     if _ext_dry_run_trade is None:
+        # אין מודול חיצוני – לא נקרוס, נחזיר 501
         return JSONResponse(status_code=501, content={"status": "error", "error": "trade core not installed", "result": None})
 
     try:
         result = await _ext_dry_run_trade(req.model_dump())
-        # אפשר להוסיף כאן הזרקת anchor ל־result אם תרצה (לא מחייב לסכימה)
         return {"status": "success", "result": result}
     except Exception as e:
         logger.exception("trade failed")
@@ -365,7 +458,13 @@ except Exception:
     binance_grid_trade = None
     logger.info("[GRID] dedicated binance_grid_trade not available → using DRY-RUN grid executor")
 
-@app.post("/grid/trade", tags=["Grid"], summary="Grid Trade", response_model=GridTradeResponse, dependencies=[Depends(auth_dep)])
+@app.post(
+    "/grid/trade",
+    tags=["Grid"],
+    summary="Grid Trade",
+    response_model=GridTradeResponse,
+    dependencies=[Depends(auth_dep)],
+)
 async def execute_grid(req: GridTradeRequest):
     try:
         sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
@@ -409,14 +508,31 @@ async def executor_status():
     return {"running": EXECUTOR_RUNNING}
 
 # -------- Reports --------
-@app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF", response_model=PnlPdfResponse, dependencies=[Depends(auth_dep)])
+@app.get(
+    "/report/pnl/pdf",
+    tags=["Reports"],
+    summary="Generate PnL PDF",
+    response_model=PnlPdfResponse,
+    dependencies=[Depends(auth_dep)],
+)
 async def generate_pnl_pdf():
     raise HTTPException(status_code=404, detail="no PnL data")
 
 # -------- Debug Futures --------
-@app.get("/debug/binance-futures", tags=["Debug"], summary="Binance Futures connectivity", dependencies=[Depends(auth_dep)])
+@app.get(
+    "/debug/binance-futures",
+    tags=["Debug"],
+    summary="Binance Futures connectivity",
+    dependencies=[Depends(auth_dep)],
+)
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = False):
-    out: Dict[str, Any] = {"ping_ok": False, "mark_price": None, "symbols_count": None, "permission_ok": None, "test_error": None}
+    out: Dict[str, Any] = {
+        "ping_ok": False,
+        "mark_price": None,
+        "symbols_count": None,
+        "permission_ok": None,
+        "test_error": None
+    }
     try:
         mp = await _get_mark_price(normalize_symbol(symbol, market="futures", cache=symbols_cache))
         out["mark_price"] = mp
@@ -431,8 +547,10 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
         out["test_error"] = f"exchangeInfo: {e}"
 
     if place_test:
+        # לא מבצעים הזמנה בדמו – רק מציינים שלא נבדק
         out["permission_ok"] = None
     return out
+
 
 
 
