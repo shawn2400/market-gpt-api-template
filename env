@@ -1,19 +1,19 @@
 # =========================
 # AlgoGPT – .env (Template)
 # =========================
-# ⚠️ אל תאחסן Secrets בקוד. את הערכים מסמנים רק כאן כסמן מקום,
-#    אבל בפועל מזינים ב-Render > Environment כ-Encrypted.
+# ⚠️ אין להתחייב קבצי סוד לריפו. בתצורת Render הזינו אותם כ-Encrypted Env Vars.
 
 # --- Security / API Gateway ---
-API_BEARER_TOKEN=<STRONG_RANDOM_64CH>   # לשיחות ל-API שלך
+# לשימוש מקומי בלבד ניתן לשים כאן ערך. ב-Render הזן בדאשבורד.
+API_BEARER_TOKEN=
 
 # --- Trading switches (בטוח כברירת מחדל) ---
-EXECUTE_TRADES=false                    # true רק אחרי בדיקות
-BINANCE_SKIP_ACCOUNT_MUTATIONS=false    # השאר false אלא אם ידוע אחרת
+EXECUTE_TRADES=false
+BINANCE_SKIP_ACCOUNT_MUTATIONS=false
 
 # --- Optional automation ---
-AUTO_RUN=false                          # סריקה אוטומטית? false עד שמוודאים יציבות
-ENABLE_AUTO_TRADING=false               # ניתוק ממסחר אוטומטי כברירת מחדל
+AUTO_RUN=false
+ENABLE_AUTO_TRADING=false
 
 # --- Budgets / limits ---
 MAX_TRADE_BUDGET=100
@@ -28,19 +28,19 @@ TOP_SYMBOLS=30
 TRENDING_ONLY=false
 
 # --- Guards ---
-PRICE_PROTECT_PCT=0.25                  # 0.25% מרווח הגנה
-PRICE_MAX_AGE_SEC=10                    # מחיר מ-WS טרי עד 10 שניות
+PRICE_PROTECT_PCT=0.25
+PRICE_MAX_AGE_SEC=10
 
 # --- Logging / CORS ---
 LOG_LEVEL=INFO
 CORS_ALLOW_ORIGINS=*
 
 # --- Binance keys (להזין ב-Render כ-Encrypted) ---
-BINANCE_API_KEY=<BINANCE_API_KEY>
-BINANCE_API_SECRET=<BINANCE_API_SECRET>
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
 
 # --- OpenAI (ל-TP/SL חכם וכו') ---
-OPENAI_API_KEY=<OPENAI_API_KEY>
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT_SECONDS=30.0
 OPENAI_MAX_CONCURRENCY=4
@@ -63,10 +63,11 @@ BINANCE_FORCE_HEDGE_MODE=false
 
 # --- Egress IP (ל-Trusted IPs) ---
 EGRESS_IP_ENDPOINT=https://algogpt-docker.onrender.com/net/ip
-BINANCE_ALLOWED_EGRESS_IPS=             # רשימת IPs מופרדת בפסיקים אם צריך Allowlist בבינאנס
+BINANCE_ALLOWED_EGRESS_IPS=
 
 # --- Network/Platform ---
 # אל תגדיר PORT כאן. Render מזריק PORT משלו, והאפליקציה מאזינה ל-${PORT:-10000}
+
 
 
 
