@@ -1,6 +1,4 @@
 # utils/multi_tf_scanner.py
-# === Multi-TF scanner עם סינון לפי מגמת BTC ו-fallback ידני ===
-
 import logging
 import asyncio
 from typing import Sequence, List, Dict, Optional, Any
@@ -12,19 +10,20 @@ from utils.scanner_utils import analyze_symbol, fetch_ohlcv
 from utils.ai_analysis import analyze_with_ai
 from utils.indicators import compute_indicators
 
-# הגדרות
 MAX_SYMBOLS = max(1, min(int(getattr(config, "TOP_SYMBOLS", 30)), 50))
 FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-BTC_REF_TF = "15m"  # טיימפריים לבדיקת מגמה
+BTC_REF_TF = "15m"
 
 def _normalize_direction(val: Any) -> str:
     d = str(val or "").strip().upper()
-    if d in ("LONG", "BUY"): return "LONG"
-    if d in ("SHORT", "SELL"): return "SHORT"
+    if d in ("LONG", "BUY"):
+        return "LONG"
+    if d in ("SHORT", "SELL"):
+        return "SHORT"
     return "LONG"
 
 def _dedup_upper(seq: Sequence[str]) -> List[str]:
-    seen = set(); out: List[str] = []
+    seen, out = set(), []
     for s in seq or []:
         u = str(s).upper()
         if u and u not in seen:
@@ -56,18 +55,16 @@ async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) 
         return None
 
 async def _get_btc_direction() -> Optional[str]:
-    """
-    מגמת BTC לפי EMA21/EMA50 על הטיימפריים המוגדר (ברירת מחדל 15m).
-    """
     try:
         df = await fetch_ohlcv("BTCUSDT", interval=BTC_REF_TF, limit=120)
         if df is None or df.empty:
             return None
         df_ind = compute_indicators(df)
-        if df_ind.empty:
+        if df_ind is None or df_ind.empty:
             return None
         last_row = df_ind.iloc[-1]
-        ema_21, ema_50 = float(last_row["ema_21"]), float(last_row["ema_50"])
+        ema_21 = float(last_row.get("ema_21"))
+        ema_50 = float(last_row.get("ema_50"))
         if ema_21 > ema_50:
             return "LONG"
         if ema_21 < ema_50:
@@ -115,7 +112,7 @@ async def multi_tf_scan_with_ai(
     trending_source: str = "coingecko",
     symbols: Optional[Sequence[str]] = None,
 ) -> List[Dict]:
-    tfs = tuple([str(x).strip() for x in timeframes or ("15m", "1h")])
+    tfs = tuple([str(x).strip() for x in timeframes or ("15m", "1h") if x])
     market = str((markets[0] if markets else "futures")).lower()
     top_n = max(1, int(top))
 
@@ -123,7 +120,7 @@ async def multi_tf_scan_with_ai(
     if not syms:
         return []
 
-    # אסוף ניתוחים לכל סימבול בכל טיימפריים
+    # ניתוח לכל סימבול ולכל טיימפריים
     tasks = [_safe_analyze(sym, tf, market, trending_only) for sym in syms for tf in tfs]
     results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -131,6 +128,9 @@ async def multi_tf_scan_with_ai(
     for r in results_raw:
         if isinstance(r, dict) and r.get("symbol"):
             frames.append(r)
+
+    if not frames:
+        return []
 
     # קיבוץ לפי סימבול
     grouped: Dict[str, List[Dict]] = {}
@@ -144,7 +144,7 @@ async def multi_tf_scan_with_ai(
 
     final: List[Dict] = []
     for sym, data in grouped.items():
-        avg_q = sum(float(d.get("quality_score", 0)) for d in data) / len(data)
+        avg_q = sum(float(d.get("quality_score", 0)) for d in data) / max(1, len(data))
         if avg_q < float(min_quality):
             continue
 
@@ -156,8 +156,8 @@ async def multi_tf_scan_with_ai(
         try:
             ai = await analyze_with_ai(data)
         except Exception as e:
-            logging.warning(f"[multi_tf_scanner] analyze_with_ai failed: {e}")
-            ai = None
+            logging.warning(f"[multi_tf_scanner] AI failed for {sym}: {e}")
+            ai = {}
 
         def _fallback():
             d = _normalize_direction(data[-1].get("direction"))
@@ -167,16 +167,16 @@ async def multi_tf_scan_with_ai(
                 "signal": "BUY" if d == "LONG" else "SELL",
                 "quality_score": round(avg_q, 2),
                 "confidence": 50.0,
-                "frames": [f["interval"] for f in data],
+                "frames": [f.get("interval") for f in data],
                 "details": data,
             }
 
-        out = dict(ai) if isinstance(ai, dict) else _fallback()
+        out = dict(ai) if isinstance(ai, dict) and ai else _fallback()
         out["symbol"] = sym
         out["direction"] = _normalize_direction(out.get("direction"))
-        out["signal"] = out.get("signal", "HOLD").upper()
+        out["signal"] = (out.get("signal") or "HOLD").upper()
         out["quality_score"] = float(out.get("quality_score", avg_q))
-        out["frames"] = out.get("frames") or [f["interval"] for f in data]
+        out["frames"] = out.get("frames") or [f.get("interval") for f in data]
         out["details"] = out.get("details") or data
 
         # --- התאמה למגמת BTC ---
@@ -189,29 +189,41 @@ async def multi_tf_scan_with_ai(
     final.sort(key=lambda x: float(x.get("quality_score", 0)), reverse=True)
     return final[:top_n]
 
-# --- פולבק ידני לשימוש ע"י ראוטים אחרים ---
-async def fallback_scan_manual(symbol: str = "BTCUSDT") -> List[Dict]:
+# -------- fallback ידני לסריקה נקודתית --------
+async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
     """
-    סורק ידני מינימלי ל־symbol נתון בשני טיימפריימים.
+    סריקה מינימלית על סימבול בודד בכמה טיימפריימים — לעולם לא זורק חריג.
+    מחזיר מבנה תואם ל־multi_tf_scan_with_ai (רשימה עם פריט אחד).
     """
-    data: List[Dict] = []
-    for tf in ("15m", "1h"):
-        r = await _safe_analyze(symbol, tf, "futures", trending_only=False)
-        if isinstance(r, dict):
-            data.append(r)
-    if not data:
+    try:
+        symbol = str(symbol or "BTCUSDT").upper()
+        tfs = ("15m", "1h")
+        market = "futures"
+        frames: List[Dict] = []
+        for tf in tfs:
+            r = await _safe_analyze(symbol, tf, market, trending_only=False)
+            if isinstance(r, dict):
+                frames.append(r)
+        if not frames:
+            return []
+        avg_q = sum(float(d.get("quality_score", 0)) for d in frames) / max(1, len(frames))
+        dir_ = _normalize_direction(frames[-1].get("direction"))
+        out = {
+            "symbol": symbol,
+            "direction": dir_,
+            "signal": "BUY" if dir_ == "LONG" else "SELL",
+            "quality_score": round(avg_q, 2),
+            "confidence": 50,
+            "frames": [f.get("interval") for f in frames],
+            "details": frames,
+            "entry": frames[-1].get("close"),
+            "atr": frames[-1].get("atr"),
+        }
+        return [out]
+    except Exception as e:
+        logging.warning(f"[fallback_scan_manual] failed for {symbol}: {e}")
         return []
-    avg_q = sum(float(d.get("quality_score", 0)) for d in data) / len(data)
-    direction = _normalize_direction(data[-1].get("direction"))
-    return [{
-        "symbol": symbol.upper(),
-        "direction": direction,
-        "signal": "BUY" if direction == "LONG" else "SELL",
-        "quality_score": round(avg_q, 2),
-        "confidence": 50,
-        "frames": [f["interval"] for f in data],
-        "details": data,
-    }]
+
 
 
 
