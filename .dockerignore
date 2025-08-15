@@ -1,18 +1,19 @@
-# === קבצי סביבה ===
+# === Environment / secrets ===
 .env
 *.env
-
-# === קבצים רגישים / אבטחה ===
 *.key
 *.pem
+
+# === Sensitive runtime data ===
 saved_trades.json
 pnl_tracker.json
+open_trades.json
 !watchlist.json
 
-# === קבצי לוג ===
+# === Logs ===
 *.log
 
-# === קבצי Python זמניים / קומפילציה ===
+# === Python cache / compiled ===
 __pycache__/
 *.py[cod]
 *.pyo
@@ -20,39 +21,46 @@ __pycache__/
 .cache/
 *.sqlite3
 
-# === דוחות PDF שנוצרים אוטומטית ===
+# === Generated reports / snapshots ===
 *.pdf
 static/reports/
 static/snapshots/
 
-# === קבצים סטטיים שלא צריכים גרסה ===
+# === Static files ===
 static/
 !static/logo.png
+# !static/styles.css
+# !static/favicon.ico
 
-# === תיקיות קאש של טסטים וסקריפטים לבדיקה ===
+# === Tests / debug ===
 .pytest_cache/
 test_algogpt.ps1
+tests/
+test_*.py
 
-# === תיקיות וירטואליות של Python ===
+# === Virtual environments ===
 .venv/
 venv/
 
-# === מערכת הפעלה ===
+# === OS files ===
 .DS_Store
 Thumbs.db
 
-# === Docker / Build ===
+# === Docker / build artifacts ===
 *.pid
 *.tar
 *.lock
 *.bak
+dist/
+build/
+*.spec
 
-# === IDE / עורך קוד (VSCode, PyCharm) ===
+# === IDE ===
 .vscode/
 .idea/
 *.iml
 
-# === Node/Frontend (אם יש) ===
+# === Node / frontend ===
 node_modules/
 *.map
 
