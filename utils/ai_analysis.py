@@ -1,33 +1,19 @@
 # utils/ai_analysis.py
-from __future__ import annotations
-
-import os
 import logging
 import re
 import traceback
-import asyncio
 from typing import Tuple, List, Dict, Any, Optional
 
-# --- config (עם פולבק ל-ENV אם המודול לא קיים) ---
-try:
-    from utils import config  # type: ignore
-    _OPENAI_MODEL = getattr(config, "OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    _OPENAI_TIMEOUT = float(getattr(config, "OPENAI_TIMEOUT_SECONDS", os.getenv("OPENAI_TIMEOUT_SECONDS", "30.0")))
-except Exception:
-    _OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    _OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30.0"))
-
+from utils import config
 from utils.ai_client import chat
 from utils.sl_tp_utils import calculate_sl_tp
 
-# --- עוגן BTC ---
 from utils.btc_anchor import (
     compute_btc_anchor,
     anchor_gate,
     sltp_multipliers,
 )
 
-# ---------------------- Utilities ----------------------
 def _avg(vals, default: float = 0.0) -> float:
     xs: List[float] = []
     for v in (vals or []):
@@ -63,16 +49,11 @@ def _truncate(s: str, max_len: int) -> str:
         return ""
     return s if len(s) <= max_len else (s[: max_len - 3] + "...")
 
-# ---------------------- Parse helpers ----------------------
 _SIG_RE = re.compile(r"Signal\W*:\W*(BUY|SELL|HOLD)", re.IGNORECASE)
 _CONF_RE = re.compile(r"Confidence\W*:\W*([0-9]+(?:\.[0-9]+)?)\s*%?", re.IGNORECASE)
 _REASON_RE = re.compile(r"Reason\W*:\W*(.+)$", re.IGNORECASE)
 
 def _parse_signal_conf(text: str) -> Dict[str, Any]:
-    """
-    מצפה בדיוק לפורמט:
-      Signal: BUY/SELL/HOLD | Confidence: <0-100> | Reason: <short>
-    """
     out = {"signal": "HOLD", "confidence": 0.0, "reason": ""}
     if not isinstance(text, str) or not text.strip():
         return out
@@ -80,17 +61,15 @@ def _parse_signal_conf(text: str) -> Dict[str, Any]:
         m_sig = _SIG_RE.search(text)
         if m_sig:
             out["signal"] = m_sig.group(1).upper()
-
         m_conf = _CONF_RE.search(text)
         if m_conf:
             out["confidence"] = _clamp(m_conf.group(1), 0.0, 100.0)
-
         m_reason = _REASON_RE.search(text)
         if m_reason:
-            out["reason"] = _truncate(m_reason.group(1).strip(), 240)
+            reason = m_reason.group(1).strip()
+            out["reason"] = _truncate(reason, 240)
     except Exception:
         pass
-
     if out["signal"] not in ("BUY", "SELL", "HOLD"):
         out["signal"] = "HOLD"
     out["confidence"] = _clamp(out["confidence"], 0.0, 100.0)
@@ -102,7 +81,8 @@ def _get_metric(d: Dict[str, Any], key: str):
     inds = d.get("indicators") or {}
     return inds.get(key)
 
-# ---------------------- Safe AI call ----------------------
+import asyncio
+
 async def _safe_chat(
     prompt: str,
     *,
@@ -113,16 +93,12 @@ async def _safe_chat(
     timeout_sec: float = 20.0,
     **kwargs,
 ) -> str:
-    """
-    מעטפת בטוחה ל-chat: קיטום prompt, timeout קשיח, ולוג שגיאות;
-    מחזירה מחרוזת ריקה במקרה תקלה.
-    """
     try:
         prompt = _truncate(prompt, 6000)
         coro = chat(
             prompt,
             system=system,
-            model=(model or _OPENAI_MODEL),
+            model=model or getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
             temperature=temperature,
             max_tokens=max_tokens,
             **kwargs,
@@ -135,7 +111,6 @@ async def _safe_chat(
         logging.error(f"[AI] chat failed: {e}")
         return ""
 
-# ---------------------- Public API ----------------------
 async def analyze_with_ai(
     tf_results: List[Dict[str, Any]],
     *,
@@ -144,10 +119,6 @@ async def analyze_with_ai(
     anchor_market: str = "futures",
     btc_anchor: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    קולט פלט multi_tf_scan (לסמל יחיד, מסגרות זמן שונות) ומחזיר החלטה מרוכזת.
-    משלב 'עוגן BTC' (חי) להטיה/חסימה/בוסט – עם קאש קצר בצד העוגן.
-    """
     try:
         if not tf_results or not isinstance(tf_results, list):
             return {"error": "empty tf_results", "signal": "HOLD", "confidence": 0.0}
@@ -160,7 +131,6 @@ async def analyze_with_ai(
         avg_rsi = _avg([_get_metric(x, "rsi") for x in tf_results], default=50.0)
         avg_adx = _avg([_get_metric(x, "adx") for x in tf_results], default=20.0)
         avg_volume = _avg([(x.get("volume") if isinstance(x, dict) else None) for x in tf_results], default=1_000_000.0)
-
         q_scores: List[float] = []
         for x in tf_results:
             try:
@@ -169,7 +139,6 @@ async def analyze_with_ai(
                 q_scores.append(0.0)
         avg_q = round(sum(q_scores) / len(q_scores), 2) if q_scores else 0.0
 
-        # --- עוגן BTC (חי/מועבר) ---
         anchor_used: Optional[Dict[str, Any]] = None
         if use_anchor:
             if btc_anchor is not None:
@@ -178,7 +147,6 @@ async def analyze_with_ai(
                 afr = anchor_frames or (frames if frames else ["15m", "1h"])
                 anchor_used = await compute_btc_anchor(frames=afr, market=anchor_market)
 
-        # --- Prompt ל-GPT (עם קונטקסט של העוגן) ---
         anchor_line = ""
         if anchor_used:
             anchor_line = (
@@ -203,10 +171,10 @@ async def analyze_with_ai(
         content = await _safe_chat(
             prompt,
             system="Be concise and deterministic. No markdown.",
-            model=_OPENAI_MODEL,
+            model=getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0.0,
             max_tokens=200,
-            timeout_sec=_OPENAI_TIMEOUT,
+            timeout_sec=float(getattr(config, "OPENAI_TIMEOUT_SECONDS", 30.0)),
         )
 
         parsed = _parse_signal_conf(content)
@@ -214,7 +182,6 @@ async def analyze_with_ai(
         confidence = int(round(parsed["confidence"]))
         reason = parsed.get("reason", "")
 
-        # --- Gate/Boost מול BTC (דטרמיניסטי) ---
         if anchor_used:
             gate = anchor_gate(direction, anchor_used)
             if gate["action"] == "block":
@@ -228,7 +195,7 @@ async def analyze_with_ai(
                 confidence = min(100, confidence + int(gate.get("bonus", 10)))
                 reason = (reason + "; " if reason else "") + gate["reason"]
 
-        result: Dict[str, Any] = {
+        result = {
             "symbol": symbol,
             "direction": direction,
             "quality_score": avg_q,
@@ -263,14 +230,8 @@ async def predict_optimal_sl_tp(
     anchor_market: str = "futures",
     btc_anchor: Optional[Dict[str, Any]] = None,
 ) -> Tuple[float, float]:
-    """
-    חישוב SL/TP עם GPT; אם נכשל/לא מפורש → פולבק דטרמיניסטי (calculate_sl_tp).
-    משלב כוונון לפי עוגן BTC עבור כל אופציה (גם GPT וגם פולבק).
-    """
     sl_val: Optional[float] = None
     tp_val: Optional[float] = None
-
-    # 1) ננסה GPT
     try:
         prompt = (
             "You are a crypto trading assistant.\n"
@@ -286,10 +247,10 @@ async def predict_optimal_sl_tp(
         content = await _safe_chat(
             prompt,
             system="Reply with 'SL: <num>, TP: <num>' only.",
-            model=_OPENAI_MODEL,
+            model=getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0.2,
             max_tokens=40,
-            timeout_sec=min(20.0, _OPENAI_TIMEOUT),
+            timeout_sec=min(20.0, float(getattr(config, "OPENAI_TIMEOUT_SECONDS", 30.0))),
         )
 
         m = re.search(r"SL\W*:\W*([0-9]*\.?[0-9]+)\W*,\W*TP\W*:\W*([0-9]*\.?[0-9]+)", content or "", re.IGNORECASE)
@@ -309,11 +270,9 @@ async def predict_optimal_sl_tp(
     except Exception as e:
         logging.warning(f"[AI-SLTP] Exception: {e}; will fallback if needed")
 
-    # 2) פולבק אם GPT לא נתן תשובה טובה
     if not (sl_val and tp_val and sl_val > 0 and tp_val > 0):
         sl_val, tp_val = calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
 
-    # 3) כוונון לפי עוגן BTC (עם קאש בצד העוגן)
     try:
         if use_anchor:
             anchor_used = btc_anchor or await compute_btc_anchor(
@@ -326,7 +285,7 @@ async def predict_optimal_sl_tp(
                 tp_dist = abs(tp_val - entry_price) * tp_mult
                 sl_val = entry_price - sl_dist
                 tp_val = entry_price + tp_dist
-            else:  # SHORT
+            else:
                 sl_dist = abs(sl_val - entry_price) * sl_mult
                 tp_dist = abs(entry_price - tp_val) * tp_mult
                 sl_val = entry_price + sl_dist
