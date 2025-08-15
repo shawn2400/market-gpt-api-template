@@ -45,7 +45,7 @@ def compute_quality_score(
             last = data
             prev = None
         else:
-            logging.warning("[quality_score] סוג נתון לא נתמך")
+            logging.warning("[quality_score] unsupported data")
             return 0.0
 
         score = 0.0
@@ -53,49 +53,48 @@ def compute_quality_score(
 
         atr = _f(last.get("atr"), 0)
         if atr > 0:
-            score += 1; reasons.append("ATR תקין")
+            score += 1; reasons.append("ATR ok")
 
         macd = _f(last.get("macd"), 0); macd_signal = _f(last.get("macd_signal"), 0)
         if macd > macd_signal:
-            score += 1; reasons.append("MACD חיובי")
+            score += 1; reasons.append("MACD > signal")
 
         rsi = _f(last.get("rsi"), 0)
         if 45 <= rsi <= 65:
-            score += 1; reasons.append("RSI נייטרלי")
+            score += 1; reasons.append("RSI neutral")
         if rsi >= 65:
-            score += 0.5; reasons.append("RSI גבוה (מומנטום)")
+            score += 0.5; reasons.append("RSI high")
 
         adx = _f(last.get("adx"), 0)
         if adx > 20:
-            score += 1; reasons.append("ADX חזק")
+            score += 1; reasons.append("ADX strong")
 
         vol = _f(last.get("volume"), 0); vol_mean = max(1e-9, _f(last.get("volume_mean"), 1))
         if vol > vol_mean * 1.5:
-            score += 1; reasons.append("נפח גבוה")
+            score += 1; reasons.append("Volume high")
 
         close = _f(last.get("close"), 0)
         ema21 = _f(last.get("ema_21"), close)
         ema50 = _f(last.get("ema_50"), close)
-
         if close > ema21:
-            score += 1; reasons.append("מעל EMA21")
+            score += 1; reasons.append("> EMA21")
         if close > ema50:
-            score += 1; reasons.append("מעל EMA50")
+            score += 1; reasons.append("> EMA50")
 
         if prev is not None:
             try:
                 if _f(last.get("ema_21")) > _f(last.get("ema_50")) and _f(prev.get("ema_21")) <= _f(prev.get("ema_50")):
-                    score += 1; reasons.append("חציית EMA21 מעל EMA50")
+                    score += 1; reasons.append("EMA21 crossed up EMA50")
             except Exception:
                 pass
 
         macd_hist = _f(last.get("macd_hist"), 0)
         if macd_hist > 0:
-            score += 1; reasons.append("MACD היסטוגרמה חיובי")
+            score += 1; reasons.append("MACD hist > 0")
 
         vwap = _f(last.get("vwap"), close)
         if close > vwap:
-            score += 1; reasons.append("מעל VWAP")
+            score += 1; reasons.append("> VWAP")
 
         dir_use = (direction or "").strip().upper()
         if dir_use not in ("LONG", "SHORT"):
@@ -108,7 +107,7 @@ def compute_quality_score(
         shoot     = _b(last.get("is_shooting_star"))
         morning   = _b(last.get("is_morning_star"))
         evening   = _b(last.get("is_evening_star"))
-        doji      = _b(last.get("is_doji"))
+        # doji ניטרלי
 
         if dir_use == "LONG":
             if bulls_eng: score += 1
@@ -127,16 +126,13 @@ def compute_quality_score(
             if inv_ham:   score -= 0.5
 
         final_score = float(min(max(score, 0.0), 10.0))
-
         if verbose:
-            logging.info(f"[quality_score] ✅ ציון איכות: {final_score} | כיוון: {dir_use} | RSI={rsi} ADX={adx}")
-
+            logging.info(f"[quality_score] score={final_score} dir={dir_use} reasons={reasons}")
         return final_score
 
     except Exception as e:
-        logging.error(f"[quality_score] ❌ שגיאה: {e}", exc_info=True)
+        logging.error(f"[quality_score] error: {e}", exc_info=True)
         return 0.0
-
 
 def calculate_quality_score(indicators: dict, direction: Optional[str] = None) -> float:
     return compute_quality_score(indicators, direction=direction, verbose=False)
