@@ -1,142 +1,152 @@
 # utils/symbols.py
 from __future__ import annotations
+
+import re
 import time
-from typing import Optional, Set, Dict, List
+from typing import Optional, Dict, Set, List
 
 import httpx
 
 BINANCE_FAPI = "https://fapi.binance.com"
 BINANCE_SPOT = "https://api.binance.com"
 
-# קווטים נפוצים – נשתמש ב-USDT כברירת מחדל אם לא הועבר
-_QUOTES = ("USDT", "BUSD", "USDC", "FDUSD", "TUSD")
+# אילו מטבעות ציטוט נחשב “סבירים”
+QUOTES_FUTURES: List[str] = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD"]
+QUOTES_SPOT:    List[str] = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD"]
 
-# חלק מהזוגות בבינאנס פיוצ'רס מגיעים בפורמט "1000SHIBUSDT", "1000PEPEUSDT"
-_THOUSANDS_BASES = {"SHIB", "PEPE"}
+# פולבק במידה ואין חיבור / Binance לא זמין
+DEFAULT_FUTURES: Set[str] = {
+    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
+    "AVAXUSDT","MATICUSDT","LINKUSDT","TRXUSDT","SHIBUSDT","DOTUSDT",
+}
+DEFAULT_SPOT: Set[str] = set(DEFAULT_FUTURES)
 
-def _now() -> float:
-    return time.time()
+_CLEAN_PAIR = re.compile(r"[^A-Z0-9]+")
+
+def _upper(s: str) -> str:
+    return (s or "").strip().upper()
+
+def _normalize_raw(s: str) -> str:
+    """
+    מסיר רווחים ומפרידים נפוצים, הופך ל-UPPER.
+    תומך: 'avax', 'avax/usdt', 'avax-usdt', 'AVAX_USDT', ' AVAX usdt '
+    """
+    s = _upper(s)
+    # תצורות כמו BASE/QUOTE
+    if "/" in s or "-" in s or "_" in s or " " in s:
+        parts = re.split(r"[\/\-\_\s]+", s)
+        parts = [p for p in parts if p]
+        if len(parts) >= 2:
+            return "".join(parts[:2])  # BASE + QUOTE
+    # “PERP”, “THIS-PERP” וכד' → מתעלמים מהסיומת
+    s = s.replace("PERP", "")
+    return _CLEAN_PAIR.sub("", s)
 
 class SymbolsCache:
     """
-    קאש קליל לשמות סימבולים לפי שוק (futures/spot), עם ריענון מ-exchangeInfo.
-    שימוש:
-        fut = SymbolsCache(market="futures")
-        sym = normalize_symbol("avax", market="futures", cache=fut)  # → "AVAXUSDT"
+    קאש פשוט לרשימת סימבולים תקפים מהבורסה.
+    refresh() סינכרוני – נוח לשימוש גם מתוך פונקציות async שלא await-ות כאן.
     """
-    def __init__(self, market: str = "futures", ttl_sec: int = 900) -> None:
+    def __init__(self, market: str = "futures", ttl: int = 1800) -> None:
         self.market = "spot" if str(market).lower() == "spot" else "futures"
-        self.ttl = int(ttl_sec)
-        self._symbols: Set[str] = set()
-        self._last_fetch: float = 0.0
+        self.ttl = int(ttl)
+        self._last: float = 0.0
+        self._symbols: Set[str] = set(DEFAULT_SPOT if self.market == "spot" else DEFAULT_FUTURES)
+        self._bases: Set[str] = set()  # אוסף baseAsset לתיחום חכם
 
     def _endpoint(self) -> str:
-        if self.market == "spot":
-            return f"{BINANCE_SPOT}/api/v3/exchangeInfo"
-        return f"{BINANCE_FAPI}/fapi/v1/exchangeInfo"
+        return f"{BINANCE_SPOT}/api/v3/exchangeInfo" if self.market == "spot" else f"{BINANCE_FAPI}/fapi/v1/exchangeInfo"
 
-    def refresh(self, force: bool = False) -> None:
-        if not force and (_now() - self._last_fetch) < self.ttl and self._symbols:
+    def _quotes(self) -> List[str]:
+        return QUOTES_SPOT if self.market == "spot" else QUOTES_FUTURES
+
+    def refresh(self) -> None:
+        now = time.time()
+        if self._symbols and (now - self._last) < self.ttl:
             return
         try:
-            with httpx.Client(timeout=6.0) as x:
+            with httpx.Client(timeout=8.0) as x:
                 r = x.get(self._endpoint())
                 r.raise_for_status()
                 data = r.json()
-        except Exception:
-            # אל תשבור — אם אין דאטה קודם, נשאיר סט ריק (normalize יטיל חריגה אם לא יימצא)
-            return
-
-        try:
-            syms = set()
-            for s in (data.get("symbols") or []):
-                name = str(s.get("symbol") or "").upper().strip()
-                if not name:
+            symbols = data.get("symbols", [])
+            syms: Set[str] = set()
+            bases: Set[str] = set()
+            for s in symbols:
+                sym = _upper(s.get("symbol", ""))
+                status = _upper(s.get("status", ""))
+                base = _upper(s.get("baseAsset", ""))
+                if not sym:
                     continue
-                st = str(s.get("status") or "").upper()
-                if st and st not in ("TRADING", "PENDING_TRADING"):
-                    continue
-                syms.add(name)
+                # ב־Futures יש גם מצבים כמו PENDING_TRADING; נרשה מצב TRADING בלבד
+                if status and status not in {"TRADING", "PENDING_TRADING"}:
+                    # ב־SPOT לרוב רק TRADING
+                    # עדיין נשמור TRADING; PENDING_TRADING נכלול רק אם אין מספיק כיסוי
+                    pass
+                syms.add(sym)
+                if base:
+                    bases.add(base)
             if syms:
                 self._symbols = syms
-                self._last_fetch = _now()
+            if bases:
+                self._bases = bases
+            self._last = now
         except Exception:
-            pass
+            # נשאר עם ברירת המחדל; אין צורך להפיל
+            self._last = now  # נסה שוב רק אחרי ttl
 
-    def all(self) -> Set[str]:
-        self.refresh(force=False)
-        return set(self._symbols)
+    def normalize(self, raw: str) -> str:
+        """
+        מחזיר סימבול מלא תקף לביננס (לדוגמה: BTC → BTCUSDT, avax/usdt → AVAXUSDT).
+        תמיד מחזיר UPPERCASE. נצמד למרקט של הקאש.
+        """
+        self.refresh()
+        s = _normalize_raw(raw)
+        if not s:
+            raise ValueError("empty symbol")
 
+        # אם כבר סימבול מלא שקיים – החזר
+        if s in self._symbols:
+            return s
 
-def _maybe_add_quote(sym_u: str) -> List[str]:
-    """אם לא סופק קווט ידוע, ננסה לצרף USDT."""
-    for q in _QUOTES:
-        if sym_u.endswith(q):
-            return [sym_u]
-    return [sym_u + "USDT", sym_u]  # נעדיף עם USDT, אבל נבדוק גם את המקור ליתר ביטחון
+        # אם נמסר כ־BASE+QUOTE בפועל, אבל לא קיים – ננסה וריאציות ציטוט
+        quotes = self._quotes()
 
+        # 1) אם מסתיים ב־QUOTE ידוע → בדיקה ישירה (אולי חסר ב־cache)
+        for q in quotes:
+            if s.endswith(q) and s in self._symbols:
+                return s
 
-def _thousands_variants(sym_u: str) -> List[str]:
+        # 2) אם נמסר כ־"BASEQUOTE" (כבר מנוּרמל), ננסה לשבור לבסיס
+        #    base = כל מה שלא מסתיים באחד ה־quotes
+        base = s
+        for q in quotes:
+            if s.endswith(q):
+                base = s[: -len(q)]
+                break
+
+        # 3) pair style שהיה עם מפריד (טפלנו ב־_normalize_raw), אך ליתר ביטחון – לא צריך כאן
+
+        # 4) ניחוש חכם: נסה BASE + quote מועדף (USDT תחילה), אח"כ השאר
+        preferred = ["USDT"] + [q for q in quotes if q != "USDT"]
+        for q in preferred:
+            cand = f"{base}{q}"
+            if cand in self._symbols:
+                return cand
+
+        # 5) אם הבסיס קיים ב־exchange (bases) – החזר BASEUSDT (גם אם לא נכלל ב־symbols)
+        if base in self._bases:
+            return f"{base}USDT"
+
+        # 6) פולבק סופי: BASEUSDT
+        return f"{base}USDT"
+
+def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[SymbolsCache] = None) -> str:
     """
-    החזר וריאציות '1000' לבייסים ידועים אם לא קיימים.
-    לדוגמה: SHIBUSDT → 1000SHIBUSDT
+    עטיפה נוחה לשימוש חיצוני. סינכרוני (לא צריך await).
     """
-    out: List[str] = []
-    for q in _QUOTES:
-        if sym_u.endswith(q):
-            base = sym_u[: -len(q)]
-            if base and base in _THOUSANDS_BASES and not base.startswith("1000"):
-                out.append(f"1000{base}{q}")
-            break
-    return out
+    if cache is None or cache.market != ("spot" if str(market).lower() == "spot" else "futures"):
+        cache = SymbolsCache(market=market)
+    return cache.normalize(symbol)
 
-
-def normalize_symbol(
-    symbol: str,
-    *,
-    market: str = "futures",
-    cache: Optional[SymbolsCache] = None,
-) -> str:
-    """
-    נרמול סימבול לקאנוני של בינאנס:
-      - אותיות גדולות
-      - הוספת USDT אם לא הועבר קווט
-      - התאמות 1000SHIB/1000PEPE בפיוצ'רס
-      - אימות מול exchangeInfo (דרך הקאש שנמסר)
-    זורק ValueError אם לא נמצא סימבול תקין.
-    """
-    if not symbol or not isinstance(symbol, str):
-        raise ValueError("symbol is required")
-
-    sym_u = symbol.strip().upper().replace(" ", "")
-    mrk = "spot" if str(market).lower() == "spot" else "futures"
-
-    # קאש (אם לא נמסר – ניצור קצר-חיים)
-    local_cache = cache or SymbolsCache(market=mrk, ttl_sec=300)
-    symbols = local_cache.all()
-
-    # רשימת מועמדים לבדיקה
-    candidates: List[str] = []
-    candidates.extend(_maybe_add_quote(sym_u))
-
-    # אם הושלם לקווט → נייצר גם וריאציית 1000 לבייסים הרלוונטיים
-    extra = []
-    for c in list(candidates):
-        extra.extend(_thousands_variants(c))
-    candidates.extend(extra)
-
-    # בדיקה מול הקאש; אם לא מצאנו, נרענן פעם אחת
-    for c in candidates:
-        if c in symbols:
-            return c
-
-    local_cache.refresh(force=True)
-    symbols = local_cache.all()
-    for c in candidates:
-        if c in symbols:
-            return c
-
-    suggestions = [c for c in candidates if c.startswith("1000")]
-    hint = f" (did you mean: {', '.join(suggestions[:3])})" if suggestions else ""
-    raise ValueError(f"Unknown/unsupported symbol '{symbol}' for {mrk}{hint}")
 
