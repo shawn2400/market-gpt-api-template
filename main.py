@@ -58,14 +58,21 @@ try:
 except Exception:
     _ai_client = None
 
-# קונפיג לעוגן
+# --- קונפיג לעוגן ---
 ANCHOR_ENFORCE = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
 ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
 ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
 
-# --- אבטחה בסיסית ---
+# --- אימות טוקן (פרטי) ---
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
+
 def auth_dep(request: Request):
+    """
+    אימות פשוט:
+    - אם מוגדר API_BEARER_TOKEN בסביבה → חייבים להתאים בדיוק.
+    - אם לא מוגדר → עדיין דורשים טוקן (Header Authorization: Bearer XXX או ?token=XXX),
+      אבל לא בודקים ערך ספציפי. מתאים לפרטי/שימוש פנימי.
+    """
     auth = request.headers.get("Authorization", "")
     bearer = ""
     if auth.lower().startswith("bearer "):
@@ -74,12 +81,14 @@ def auth_dep(request: Request):
         qtok = request.query_params.get("token")
         if qtok:
             bearer = qtok.strip()
+
     if API_BEARER_TOKEN:
         if bearer != API_BEARER_TOKEN:
             raise HTTPException(status_code=401, detail="Unauthorized")
     else:
         if not bearer:
             raise HTTPException(status_code=401, detail="Unauthorized")
+
     return True
 
 # --- סכימות ---
@@ -270,9 +279,11 @@ async def scan_multi(
         best_quality = -1.0
         for tf in frames:
             try:
-                res = await analyze_symbol(sym, market_type=market_type, interval=tf,
-                                           limit=150, trending_only=bool(trending_only),
-                                           frames=frames, btc_anchor=anchor)
+                res = await analyze_symbol(
+                    sym, market_type=market_type, interval=tf,
+                    limit=150, trending_only=bool(trending_only),
+                    frames=frames, btc_anchor=anchor
+                )
                 if not res:
                     continue
                 q = float(res.get("quality_score") or 0.0)
@@ -346,6 +357,7 @@ async def suggest_sltp(req: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    # ATR/רצפה
     atr = float(req.atr) if req.atr is not None else max(req.entry * SLTP_MIN_PCT_FLOOR, 1.0)
     base_sl = max(atr * ATR_SL_MULT, req.entry * SLTP_MIN_PCT_FLOOR)
     base_tp = max(atr * ATR_TP_MULT, req.entry * SLTP_TP_PCT_FLOOR)
@@ -405,6 +417,7 @@ async def ai_analyze(req: AiAnalyzeRequest):
             metrics={"rsi": req.rsi, "adx": req.adx, "volume": req.volume, "pattern": req.pattern},
         )
 
+    # פולבק דטרמיניסטי
     signal = "HOLD"
     conf = 50
     if direction == "LONG" and req.adx >= 22 and req.rsi >= 55:
@@ -515,7 +528,10 @@ async def generate_pnl_pdf():
 # -------- Debug Futures --------
 @app.get("/debug/binance-futures", tags=["Debug"], summary="Binance Futures connectivity", dependencies=[Depends(auth_dep)])
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = False):
-    out: Dict[str, Any] = {"ping_ok": False, "mark_price": None, "symbols_count": None, "permission_ok": None, "test_error": None}
+    out: Dict[str, Any] = {
+        "ping_ok": False, "mark_price": None, "symbols_count": None,
+        "permission_ok": None, "test_error": None
+    }
     try:
         mp = await _get_mark_price(normalize_symbol(symbol, market="futures", cache=symbols_cache))
         out["mark_price"] = mp
@@ -532,6 +548,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
