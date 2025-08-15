@@ -8,6 +8,13 @@ from utils import config
 from utils.ai_client import chat
 from utils.sl_tp_utils import calculate_sl_tp
 
+# --- עוגן BTC ---
+from utils.btc_anchor import (
+    compute_btc_anchor,
+    anchor_gate,
+    sltp_multipliers,
+)
+
 # ---------------------- Utilities ----------------------
 def _avg(vals, default: float = 0.0) -> float:
     xs: List[float] = []
@@ -122,22 +129,32 @@ async def _safe_chat(
         return ""
 
 # ---------------------- Public API ----------------------
-async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """קולט פלט multi_tf_scan (לסמל יחיד, מסגרות זמן שונות) ומחזיר החלטה מרוכזת."""
+async def analyze_with_ai(
+    tf_results: List[Dict[str, Any]],
+    *,
+    use_anchor: bool = True,
+    anchor_frames: Optional[List[str]] = None,
+    anchor_market: str = "futures",
+    btc_anchor: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    קולט פלט multi_tf_scan (לסמל יחיד, מסגרות זמן שונות) ומחזיר החלטה מרוכזת.
+    משלב 'עוגן BTC' (חי) להטיה/חסימה/בוסט – עם קאש קצר בצד העוגן.
+    """
     try:
         if not tf_results or not isinstance(tf_results, list):
             return {"error": "empty tf_results", "signal": "HOLD", "confidence": 0.0}
 
         first = tf_results[0] or {}
         symbol = str(first.get("symbol", "UNKNOWN")).upper()
+
+        # כיוון/מגמה של האלט (נגזר מהתוצאה, נשמר כפי שהסקאנר קבע)
         direction = str(first.get("direction", "LONG")).upper()
 
         frames = _dedup_str([str(x.get("interval", "?")) for x in tf_results if isinstance(x, dict)])[:6]
-
         avg_rsi = _avg([_get_metric(x, "rsi") for x in tf_results], default=50.0)
         avg_adx = _avg([_get_metric(x, "adx") for x in tf_results], default=20.0)
         avg_volume = _avg([(x.get("volume") if isinstance(x, dict) else None) for x in tf_results], default=1_000_000.0)
-
         q_scores: List[float] = []
         for x in tf_results:
             try:
@@ -146,6 +163,23 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
                 q_scores.append(0.0)
         avg_q = round(sum(q_scores) / len(q_scores), 2) if q_scores else 0.0
 
+        # --- עוגן BTC (מחשב כאן פעם אחת או משתמש במה שנמסר) ---
+        anchor_used: Optional[Dict[str, Any]] = None
+        if use_anchor:
+            if btc_anchor is not None:
+                anchor_used = btc_anchor
+            else:
+                afr = anchor_frames or (frames if frames else ["15m", "1h"])
+                anchor_used = await compute_btc_anchor(frames=afr, market=anchor_market)
+
+        # --- Prompt ל-GPT (מוסיף קונטקסט של העוגן כדי לעזור, אך לא מסתמך עליו בלבד) ---
+        anchor_line = ""
+        if anchor_used:
+            anchor_line = (
+                f"- BTC Anchor: dir={anchor_used.get('direction')}, "
+                f"strength={anchor_used.get('strength')}, frames={','.join(anchor_used.get('frames', []))}\n"
+            )
+
         prompt = (
             "You are a professional crypto analyst.\n"
             f"Technical analysis for {symbol} across frames: {', '.join(frames)}\n"
@@ -153,7 +187,8 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
             f"- Avg RSI: {avg_rsi:.2f}\n"
             f"- Avg ADX: {avg_adx:.2f}\n"
             f"- Avg Volume: {avg_volume:,.0f}\n"
-            f"- Avg Quality: {avg_q:.2f}\n\n"
+            f"- Avg Quality: {avg_q:.2f}\n"
+            f"{anchor_line}\n"
             "Return exactly this format on a single line:\n"
             "Signal: BUY/SELL/HOLD | Confidence: <0-100> | Reason: <short reason>\n"
         )
@@ -169,18 +204,43 @@ async def analyze_with_ai(tf_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         )
 
         parsed = _parse_signal_conf(content)
+        signal = parsed["signal"]           # BUY/SELL/HOLD
+        confidence = int(round(parsed["confidence"]))  # נעגל לאינט
+        reason = parsed.get("reason", "")
+
+        # --- Gate/Boost מול BTC (דטרמיניסטי, בלי תלות במודל) ---
+        if anchor_used:
+            gate = anchor_gate(direction, anchor_used)
+            if gate["action"] == "block":
+                # חסימה: לא ממליצים על כניסה; הופך ל-HOLD ומגביל confidence
+                signal = "HOLD"
+                confidence = min(confidence, 40)
+                reason = (reason + "; " if reason else "") + f"blocked by BTC ({gate['reason']})"
+            elif gate["action"] == "downgrade":
+                confidence = max(0, confidence - int(gate.get("penalty", 15)))
+                reason = (reason + "; " if reason else "") + gate["reason"]
+            elif gate["action"] == "boost":
+                confidence = min(100, confidence + int(gate.get("bonus", 10)))
+                reason = (reason + "; " if reason else "") + gate["reason"]
 
         result = {
             "symbol": symbol,
             "direction": direction,
             "quality_score": avg_q,
             "frames": frames,
-            "signal": parsed["signal"],          # BUY/SELL/HOLD
-            "confidence": parsed["confidence"],  # 0-100
+            "signal": signal,
+            "confidence": int(confidence),
             "raw": content,
             "details": tf_results,
-            "reason": parsed.get("reason", ""),
+            "reason": reason,
         }
+        if anchor_used:
+            result["anchor"] = {
+                "direction": anchor_used.get("direction"),
+                "strength": anchor_used.get("strength"),
+                "trend": anchor_used.get("trend"),
+                "frames": anchor_used.get("frames"),
+            }
         return result
 
     except Exception as e:
@@ -192,11 +252,19 @@ async def predict_optimal_sl_tp(
     direction: str,
     entry_price: float,
     atr: Optional[float] = None,
+    *,
+    use_anchor: bool = True,
+    anchor_frames: Optional[List[str]] = None,
+    anchor_market: str = "futures",
+    btc_anchor: Optional[Dict[str, Any]] = None,
 ) -> Tuple[float, float]:
     """
     חישוב SL/TP עם GPT; אם נכשל/לא מפורש → פולבק דטרמיניסטי (calculate_sl_tp).
-    כולל הגנות ערכים לפי כיוון (LONG/SHORT).
+    משלב כוונון לפי עוגן BTC עבור כל אופציה (גם GPT וגם פולבק).
     """
+    # 1) ננסה GPT
+    sl_val: Optional[float] = None
+    tp_val: Optional[float] = None
     try:
         prompt = (
             "You are a crypto trading assistant.\n"
@@ -221,6 +289,7 @@ async def predict_optimal_sl_tp(
         m = re.search(r"SL\W*:\W*([0-9]*\.?[0-9]+)\W*,\W*TP\W*:\W*([0-9]*\.?[0-9]+)", content or "", re.IGNORECASE)
         if m:
             sl_val, tp_val = float(m.group(1)), float(m.group(2))
+            # הגנות לוגיקה בסיסיות
             if sl_val > 0 and tp_val > 0:
                 if direction.upper() == "LONG":
                     if tp_val < entry_price:
@@ -232,14 +301,38 @@ async def predict_optimal_sl_tp(
                         tp_val = entry_price * 0.997
                     if sl_val < entry_price:
                         sl_val = entry_price * 1.003
-                return round(sl_val, 6), round(tp_val, 6)
-
-        logging.warning(f"[AI] SL/TP parse failed, content={content!r}; using fallback")
-
     except Exception as e:
-        logging.warning(f"[AI-SLTP] Exception: {e}; using fallback")
+        logging.warning(f"[AI-SLTP] Exception: {e}; will fallback if needed")
 
-    return calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+    # 2) פולבק אם GPT לא נתן תשובה טובה
+    if not (sl_val and tp_val and sl_val > 0 and tp_val > 0):
+        sl_val, tp_val = calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
+
+    # 3) כוונון לפי עוגן BTC (קליל, עם קאש)
+    try:
+        if use_anchor:
+            anchor_used = btc_anchor or await compute_btc_anchor(
+                frames=(anchor_frames or ["15m", "1h"]),
+                market=anchor_market,
+            )
+            sl_mult, tp_mult = sltp_multipliers(direction, anchor_used)
+            # מחשבים מרחקים יחסית למחיר כניסה
+            if direction.upper() == "LONG":
+                sl_dist = abs(entry_price - sl_val) * sl_mult
+                tp_dist = abs(tp_val - entry_price) * tp_mult
+                sl_val = entry_price - sl_dist
+                tp_val = entry_price + tp_dist
+            else:  # SHORT
+                sl_dist = abs(sl_val - entry_price) * sl_mult
+                tp_dist = abs(entry_price - tp_val) * tp_mult
+                sl_val = entry_price + sl_dist
+                tp_val = entry_price - tp_dist
+    except Exception as e:
+        logging.warning(f"[AI-SLTP] anchor adjust failed: {e}")
+
+    # עיגול נוח (שמור על רזולוציה טובה)
+    return round(float(sl_val), 6), round(float(tp_val), 6)
+
 
 
 
