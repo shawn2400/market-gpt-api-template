@@ -1,7 +1,7 @@
 # utils/btc_anchor.py
 from __future__ import annotations
 import logging
-from typing import Dict, Any, List, Sequence, Tuple, Optional
+from typing import Dict, Any, List, Sequence, Tuple
 
 from utils.scanner_utils import fetch_ohlcv
 from utils.indicators import compute_indicators
@@ -10,7 +10,7 @@ def _frame_direction_strength(df) -> Tuple[str, float]:
     """
     קובע כיוון (LONG/SHORT/SIDEWAYS) וחוזק 0–100 על סמך EMA21/EMA50 + ADX/RSI.
     """
-    if df is None or df.empty:
+    if df is None or getattr(df, "empty", True):
         return "SIDEWAYS", 50.0
     dfi = compute_indicators(df)
     if dfi is None or dfi.empty:
@@ -44,7 +44,7 @@ async def compute_btc_anchor(
 ) -> Dict[str, Any]:
     """
     מחזיר עוגן BTC: {direction, strength, frames}
-    אין await על פונקציה סינכרונית – השליפה דרך fetch_ohlcv.
+    שליפה אסינכרונית דרך fetch_ohlcv (אין await על פונקציה סינכרונית).
     """
     directions: List[str] = []
     strengths: List[float] = []
@@ -70,7 +70,7 @@ async def compute_btc_anchor(
         elif short_cnt > long_cnt:
             direction = "SHORT"
         else:
-            direction = directions[-1]  # אחרון קובע/תיקו → מצב נוכחי
+            direction = directions[-1]  # תיקו → מצב אחרון
         strength = int(round(sum(strengths) / max(1, len(strengths))))
 
     return {"symbol": "BTCUSDT", "frames": list(frames or ("15m", "1h")), "direction": direction, "strength": strength}
