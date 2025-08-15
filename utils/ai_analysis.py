@@ -3,6 +3,7 @@ import logging
 import re
 import traceback
 from typing import Tuple, List, Dict, Any, Optional
+import asyncio
 
 from utils import config
 from utils.ai_client import chat
@@ -80,8 +81,6 @@ def _get_metric(d: Dict[str, Any], key: str):
         return d.get(key)
     inds = d.get("indicators") or {}
     return inds.get(key)
-
-import asyncio
 
 async def _safe_chat(
     prompt: str,
@@ -294,6 +293,7 @@ async def predict_optimal_sl_tp(
         logging.warning(f"[AI-SLTP] anchor adjust failed: {e}")
 
     return round(float(sl_val), 6), round(float(tp_val), 6)
+
 
 
 
