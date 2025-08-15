@@ -1,4 +1,5 @@
-# === הוספת התאמה ל־BTC ב־multi_tf_scanner.py ===
+# utils/multi_tf_scanner.py
+# === Multi-TF scanner עם סינון לפי מגמת BTC ו-fallback ידני ===
 
 import logging
 import asyncio
@@ -151,8 +152,12 @@ async def multi_tf_scan_with_ai(
         for d in data:
             d["direction"] = _normalize_direction(d.get("direction") or d.get("main_direction"))
 
-        # החלטת AI
-        ai = await analyze_with_ai(data)
+        # החלטת AI (עם פולבק)
+        try:
+            ai = await analyze_with_ai(data)
+        except Exception as e:
+            logging.warning(f"[multi_tf_scanner] analyze_with_ai failed: {e}")
+            ai = None
 
         def _fallback():
             d = _normalize_direction(data[-1].get("direction"))
@@ -183,6 +188,31 @@ async def multi_tf_scan_with_ai(
 
     final.sort(key=lambda x: float(x.get("quality_score", 0)), reverse=True)
     return final[:top_n]
+
+# --- פולבק ידני לשימוש ע"י ראוטים אחרים ---
+async def fallback_scan_manual(symbol: str = "BTCUSDT") -> List[Dict]:
+    """
+    סורק ידני מינימלי ל־symbol נתון בשני טיימפריימים.
+    """
+    data: List[Dict] = []
+    for tf in ("15m", "1h"):
+        r = await _safe_analyze(symbol, tf, "futures", trending_only=False)
+        if isinstance(r, dict):
+            data.append(r)
+    if not data:
+        return []
+    avg_q = sum(float(d.get("quality_score", 0)) for d in data) / len(data)
+    direction = _normalize_direction(data[-1].get("direction"))
+    return [{
+        "symbol": symbol.upper(),
+        "direction": direction,
+        "signal": "BUY" if direction == "LONG" else "SELL",
+        "quality_score": round(avg_q, 2),
+        "confidence": 50,
+        "frames": [f["interval"] for f in data],
+        "details": data,
+    }]
+
 
 
 
