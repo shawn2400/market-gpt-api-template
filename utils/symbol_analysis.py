@@ -9,8 +9,6 @@ from utils.static_utils import detect_pattern
 from utils.get_klines import get_klines
 from utils.btc_anchor import anchor_gate
 
-__all__ = ["analyze_symbol"]
-
 def _norm_direction_from_trend(trend: str) -> str:
     t = (trend or "").strip().lower()
     if t in ("up", "long", "buy", "bull", "bullish"):
@@ -34,22 +32,15 @@ def _trend_from_indicators(last: Dict[str, Any]) -> str:
         return "DOWN"
     return "SIDEWAYS"
 
-def _apply_anchor_effects(
-    direction: str,
-    quality: float,
-    confidence: int,
-    btc_anchor: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+def _apply_anchor_effects(direction: str, quality: float, confidence: int, btc_anchor: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not btc_anchor or not isinstance(btc_anchor, dict):
-        return {"quality": quality, "confidence": confidence, "anchor_action": "none", "anchor_reason": "", "blocked": False}
-
+        return {"quality": float(quality), "confidence": int(confidence), "anchor_action": "none", "anchor_reason": "", "blocked": False}
     gate = anchor_gate(direction, btc_anchor)
     action = gate.get("action", "allow")
     reason = gate.get("reason", "")
     q = float(quality)
     c = int(confidence)
     blocked = False
-
     if action == "block":
         q = max(0.0, q - 0.9)
         c = max(0, min(c, 35))
@@ -60,7 +51,6 @@ def _apply_anchor_effects(
     elif action == "boost":
         q = min(10.0, q + 0.3)
         c = min(100, c + int(gate.get("bonus", 10)))
-
     return {"quality": float(q), "confidence": int(c), "anchor_action": str(action), "anchor_reason": str(reason), "blocked": bool(blocked)}
 
 async def analyze_symbol(
@@ -76,16 +66,15 @@ async def analyze_symbol(
     try:
         df = await get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or len(df) < 60:
-            logging.debug(f"[symbol_analysis] לא מספיק נרות לניתוח עבור {symbol}@{interval}")
+            logging.debug(f"[symbol_analysis] not enough klines for {symbol}@{interval}")
             return None
 
         df = compute_indicators(df)
         if df is None or df.empty:
-            logging.debug(f"[symbol_analysis] compute_indicators החזיר ריק עבור {symbol}@{interval}")
+            logging.debug(f"[symbol_analysis] compute_indicators returned empty for {symbol}@{interval}")
             return None
 
         last = df.iloc[-1].to_dict()
-
         quality = float(compute_quality_score(df) or 0.0)
 
         trend = _trend_from_indicators(last)
@@ -122,7 +111,6 @@ async def analyze_symbol(
             anchor_action = adj["anchor_action"]
             anchor_reason = adj["anchor_reason"]
             blocked = adj["blocked"]
-
             if blocked:
                 signal = "HOLD"
                 reason = (reason + "; " if reason else "") + f"blocked by BTC ({anchor_reason})"
@@ -163,8 +151,9 @@ async def analyze_symbol(
         return item
 
     except Exception as e:
-        logging.error(f"[analyze_symbol] שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
+        logging.error(f"[analyze_symbol] error {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
