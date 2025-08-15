@@ -3,7 +3,12 @@ from __future__ import annotations
 import os, time
 from typing import List, Dict, Any, Optional, Tuple
 
-from utils.klines import get_klines
+# תאימות: קודם ננסה get_klines מהמודול שהגדרת, ואם לא – מהחלופי
+try:
+    from utils.get_klines import get_klines  # type: ignore
+except Exception:
+    from utils.klines import get_klines  # type: ignore
+
 from utils.indicators import compute_indicators
 
 # קאש קצר לעוגן כדי לא להעמיס (שניות)
@@ -139,3 +144,4 @@ def sltp_multipliers(alt_direction: str, anchor: Dict[str, Any],
         if s >= weak_th:
             return 0.95, 1.10
     return 1.00, 1.00
+
