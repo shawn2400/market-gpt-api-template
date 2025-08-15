@@ -1,6 +1,5 @@
 # utils/get_klines.py
 from __future__ import annotations
-import os
 import time
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -9,27 +8,25 @@ import pandas as pd
 
 from utils.symbols import normalize_symbol, SymbolsCache
 
-BINANCE_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-BINANCE_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
+BINANCE_FAPI = "https://fapi.binance.com"
+BINANCE_SPOT = "https://api.binance.com"
 
 _symbols_cache_fut = SymbolsCache(market="futures")
 _symbols_cache_spot = SymbolsCache(market="spot")
 
-_INVALID_TTL = 3600  # seconds
-_invalid_cache: Dict[Tuple[str, str], float] = {}  # {(market, norm_symbol): expire_ts}
+_INVALID_TTL = 3600  # שניות
+_invalid_cache: Dict[Tuple[str, str], float] = {}  # {(market, symbol_upper): ts_expire}
 
+def _is_invalid(market: str, symbol: str) -> bool:
+    return _invalid_cache.get((market, symbol.upper()), 0.0) > time.time()
 
-def _is_invalid(market: str, norm_symbol: str) -> bool:
-    return _invalid_cache.get((market, norm_symbol.upper()), 0.0) > time.time()
-
-
-def _mark_invalid(market: str, norm_symbol: str) -> None:
-    _invalid_cache[(market, norm_symbol.upper())] = time.time() + _INVALID_TTL
-
+def _mark_invalid(market: str, symbol: str) -> None:
+    _invalid_cache[(market, symbol.upper())] = time.time() + _INVALID_TTL
 
 def _endpoint_for(market_type: str) -> str:
-    return f"{BINANCE_SPOT}/api/v3/klines" if str(market_type).lower() == "spot" else f"{BINANCE_FAPI}/fapi/v1/klines"
-
+    if str(market_type).lower() == "spot":
+        return f"{BINANCE_SPOT}/api/v3/klines"
+    return f"{BINANCE_FAPI}/fapi/v1/klines"
 
 def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
     cols = [
@@ -46,42 +43,34 @@ def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
     df["timestamp"] = df["close_time"]
     return df
 
-
 async def get_klines(
     symbol: str,
     interval: str,
     limit: int = 150,
     market_type: str = "futures",
 ) -> Optional[pd.DataFrame]:
-    """
-    Fetch klines from Binance with robust symbol normalization and a 1h blacklist for bad symbols.
-    Order: normalize -> blacklist check -> request.
-    """
     market = "spot" if str(market_type).lower() == "spot" else "futures"
+    sym_in = symbol.upper()
 
-    # 1) normalize first (this also resolves SHIBUSDT -> 1000SHIBUSDT in futures)
+    if _is_invalid(market, sym_in):
+        raise ValueError(f"Symbol {sym_in} recently marked invalid for {market}")
+
     try:
-        norm = normalize_symbol(symbol, market=market, cache=_symbols_cache_spot if market == "spot" else _symbols_cache_fut)
+        norm = normalize_symbol(sym_in, market=market, cache=_symbols_cache_spot if market == "spot" else _symbols_cache_fut)
     except Exception:
-        # don't blacklist raw symbol; we only blacklist normalized names
+        _mark_invalid(market, sym_in)
         raise
 
-    # 2) now check blacklist for the normalized symbol
-    if _is_invalid(market, norm):
-        raise ValueError(f"Symbol {norm} recently marked invalid for {market}")
-
-    # 3) fetch
     url = _endpoint_for(market)
     params = {"symbol": norm, "interval": interval, "limit": int(limit)}
 
-    async with httpx.AsyncClient(timeout=5.0) as x:
+    async with httpx.AsyncClient(timeout=6.0) as x:
         r = await x.get(url, params=params)
         try:
             r.raise_for_status()
         except httpx.HTTPStatusError:
-            # blacklist only normalized symbol
             if 400 <= r.status_code < 500:
-                _mark_invalid(market, norm)
+                _mark_invalid(market, sym_in)
             raise
 
         data = r.json()
@@ -92,6 +81,7 @@ async def get_klines(
     if len(df) < 10:
         return None
     return df
+
 
 
 
