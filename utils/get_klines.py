@@ -1,6 +1,7 @@
 # utils/get_klines.py
 from __future__ import annotations
 import time
+import math
 from typing import Optional, List, Dict, Any, Tuple
 
 import httpx
@@ -43,16 +44,28 @@ def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
     df["timestamp"] = df["close_time"]
     return df
 
-async def get_klines(
+def _sleep_backoff(attempt: int, base: float = 0.6, cap: float = 6.0) -> None:
+    # backoff אקספוננציאלי קטן + jitter
+    delay = min(cap, base * (2 ** attempt))
+    jitter = delay * 0.3 * (0.5 if attempt % 2 else 1.0)
+    time.sleep(delay + jitter)
+
+def get_klines(
     symbol: str,
     interval: str,
     limit: int = 150,
     market_type: str = "futures",
 ) -> Optional[pd.DataFrame]:
+    """
+    פונקציה סינכרונית (blocking). בשכבות async משתמשים בה דרך asyncio.to_thread.
+    כולל ריטריי/באק-אוף על שגיאות רשת/5xx.
+    """
     market = "spot" if str(market_type).lower() == "spot" else "futures"
     sym_in = symbol.upper()
 
-    # אל תחסום מיד — נסה להחלים
+    if _is_invalid(market, sym_in):
+        return None
+
     try:
         norm = normalize_symbol(sym_in, market=market, cache=_symbols_cache_spot if market == "spot" else _symbols_cache_fut)
     except Exception:
@@ -62,23 +75,42 @@ async def get_klines(
     url = _endpoint_for(market)
     params = {"symbol": norm, "interval": interval, "limit": int(limit)}
 
-    async with httpx.AsyncClient(timeout=6.0) as x:
-        r = await x.get(url, params=params)
+    # ריטריי עד 4 ניסיונות לשגיאות זמניות
+    last_err = None
+    for attempt in range(4):
         try:
-            r.raise_for_status()
-        except httpx.HTTPStatusError:
-            if 400 <= r.status_code < 500:
-                _mark_invalid(market, sym_in)
-            raise
+            with httpx.Client(timeout=6.0) as x:
+                r = x.get(url, params=params)
+                if r.status_code == 200:
+                    data = r.json()
+                    if not isinstance(data, list) or len(data) == 0:
+                        return None
+                    df = _to_dataframe(data)
+                    if len(df) < 10:
+                        return None
+                    return df
 
-        data = r.json()
-        if not isinstance(data, list) or len(data) == 0:
-            return None
+                # 4xx → סמן כלא-תקין (לזמן מה) והחזר None
+                if 400 <= r.status_code < 500:
+                    _mark_invalid(market, sym_in)
+                    return None
 
-    df = _to_dataframe(data)
-    if len(df) < 10:
-        return None
-    return df
+                # 5xx → נסה ריטריי
+                last_err = f"http={r.status_code} body={(r.text or '')[:200]}"
+                _sleep_backoff(attempt)
+                continue
+
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
+            last_err = f"net={type(e).__name__}: {e}"
+            _sleep_backoff(attempt)
+            continue
+        except Exception as e:
+            last_err = f"unexpected={type(e).__name__}: {e}"
+            break
+
+    # אם התרוקנו ניסיונות – החזר None כדי שהשכבה למעלה תוכל לעשות פולבק
+    return None
+
 
 
 
