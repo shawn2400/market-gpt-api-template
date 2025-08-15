@@ -1,3 +1,4 @@
+# routes/multi_scan.py
 from fastapi import APIRouter, Query
 from typing import Optional
 from utils.multi_tf_scanner import multi_tf_scan_with_ai, fallback_scan_manual
@@ -31,13 +32,14 @@ async def scan_multi(
         )
 
         if not results:
-            return {"warning": "לא נמצאו טריידים איכותיים, הופעל fallback ידני", 
+            return {"warning": "לא נמצאו טריידים איכותיים, הופעל fallback ידני",
                     "results": await fallback_scan_manual("BTCUSDT")}
 
         return {"results": results}
 
     except Exception as e:
         return {"error": str(e), "results": await fallback_scan_manual("BTCUSDT")}
+
 
 
 
