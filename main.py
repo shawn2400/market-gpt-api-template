@@ -146,7 +146,7 @@ async def _get_exchange_info() -> Optional[dict]:
     params = {"_": os.urandom(2).hex()}
     return await _http_get_json(url, params=params)
 
-# -------- Config / Health (חלקם ציבוריים לצורך /docs) --------
+# -------- Config / Health (ציבוריים לצורך /docs) --------
 @app.get("/", tags=["Config"], summary="Root")
 async def root():
     return {"status": "ok", "version": APP_VERSION}
@@ -154,12 +154,6 @@ async def root():
 @app.get("/health", tags=["Config"], summary="Health")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
-
-@app.get("/ai/health", tags=["AI"], summary="AI health (OpenAI/Azure)")
-async def ai_health():
-    if ping_openai is None:
-        return {"ok": False, "error": "ai_health not loaded"}
-    return await ping_openai()
 
 @app.get("/net/ip", tags=["Config"], summary="Public egress IP (best-effort)")
 async def get_egress_ip(request: Request):
@@ -181,7 +175,7 @@ async def get_egress_ip(request: Request):
             pass
     return {"egress_ip": egress, "client_ip": client_ip}
 
-# -------- Anchor debug --------
+# -------- Anchor debug (מוגן) --------
 @app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)",
          dependencies=[Depends(require_bearer_token)])
 async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
@@ -274,84 +268,6 @@ class GridTradeResponse(BaseModel):
     plan: Optional[dict] = None
     result: Optional[dict] = None
     error: Optional[str] = None
-
-# -------- Scanner (מוגן) --------
-@app.get("/scan/multi", tags=["Trades"], summary="Scan Multi",
-         response_model=ScanResponse, dependencies=[Depends(require_bearer_token)])
-async def scan_multi(
-    interval: str = "15m,1h",
-    min_quality: int = 6,
-    top: int = 10,
-    market_type: str = "futures",
-    trending_only: Optional[bool] = None,
-    trending_source: str = "coingecko",
-):
-    frames = [s.strip() for s in interval.split(",") if s.strip()]
-    base_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
-
-    anchor = await compute_btc_anchor(frames=frames, market=market_type)
-
-    results: List[ScanResultItem] = []
-    if analyze_symbol is None:
-        return {"results": results}
-
-    for sym in base_symbols:
-        item_agg: Dict[str, Any] = {}
-        best_quality = -1.0
-        for tf in frames:
-            try:
-                res = await analyze_symbol(
-                    sym, market_type=market_type, interval=tf,
-                    limit=150, trending_only=bool(trending_only),
-                    frames=frames
-                )
-                if not res:
-                    continue
-                q = float(res.get("quality_score") or 0.0)
-                if q > best_quality:
-                    best_quality = q
-                    item_agg = res
-            except Exception as e:
-                logger.warning("[scan] %s@%s: %s", sym, tf, e)
-
-        if not item_agg:
-            continue
-
-        gate = anchor_gate(item_agg.get("direction"), anchor,
-                           strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
-        if ANCHOR_ENFORCE and gate["action"] == "block":
-            continue
-
-        if best_quality >= float(min_quality):
-            conf = int(item_agg.get("confidence") or 0)
-            if gate["action"] == "downgrade":
-                conf = max(0, conf - int(gate.get("penalty", 15)))
-            elif gate["action"] == "boost":
-                conf = min(100, conf + int(gate.get("bonus", 10)))
-
-            reason = str(item_agg.get("reason") or "")
-            reason = f"{reason}; anchor={anchor.get('direction')}/{anchor.get('strength')}"
-
-            results.append(ScanResultItem(**{
-                "symbol": item_agg.get("symbol"),
-                "quality_score": item_agg.get("quality_score"),
-                "direction": item_agg.get("direction"),
-                "trend": item_agg.get("trend"),
-                "rsi": item_agg.get("rsi"),
-                "adx": item_agg.get("adx"),
-                "volume": item_agg.get("volume"),
-                "market": item_agg.get("market"),
-                "frames": item_agg.get("frames"),
-                "signal": item_agg.get("signal"),
-                "confidence": conf,
-                "reason": reason,
-                "entry": item_agg.get("close"),
-                "atr": item_agg.get("atr"),
-            }))
-
-    results.sort(key=lambda r: (r.quality_score or 0.0), reverse=True)
-    results = results[:max(1, int(top))]
-    return {"results": results}
 
 # -------- Price (מוגן) --------
 @app.get("/price", tags=["Trades"], summary="Get Price",
@@ -446,6 +362,7 @@ async def ai_analyze(req: AiAnalyzeRequest):
             metrics={"rsi": req.rsi, "adx": req.adx, "volume": req.volume, "pattern": req.pattern},
         )
 
+    # פולבק דטרמיניסטי
     signal = "HOLD"
     conf = 50
     if direction == "LONG" and req.adx >= 22 and req.rsi >= 55:
@@ -499,38 +416,6 @@ async def place_trade(req: TradeRequest):
         logger.exception("trade failed")
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e), "result": None})
 
-# -------- Grid (מוגן; DRY-RUN אם אין מודול ייעודי) --------
-try:
-    from utils.binance_trader import binance_grid_trade  # type: ignore
-except Exception:
-    binance_grid_trade = None
-    logger.info("[GRID] dedicated binance_grid_trade not available → using DRY-RUN grid executor")
-
-@app.post("/grid/trade", tags=["Grid"], summary="Grid Trade",
-          response_model=GridTradeResponse, dependencies=[Depends(require_bearer_token)])
-async def execute_grid(req: GridTradeRequest):
-    try:
-        sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-    levels = [round(1.0 - (i * (req.grid_pct / 100.0)), 6) for i in range(req.grid_count)]
-    plan = {
-        "symbol": sym, "grid_count": req.grid_count, "grid_pct": req.grid_pct,
-        "levels_mult": levels, "leverage": req.leverage, "futures": req.futures,
-        "tp_pct": req.tp_pct, "sl_pct": req.sl_pct, "budget": req.budget,
-    }
-
-    if binance_grid_trade is None:
-        return {"status": "dry_run", "plan": plan, "reason": "no dedicated grid executor"}
-
-    try:
-        result = await binance_grid_trade(plan)
-        return {"status": "success", "plan": plan, "result": result}
-    except Exception as e:
-        logger.exception("grid trade failed")
-        return {"status": "error", "error": str(e), "plan": plan}
-
 # -------- Executor (מוגן) --------
 EXECUTOR_RUNNING = False
 
@@ -572,30 +457,28 @@ async def generate_pnl_pdf_route():
         logger.exception("pnl pdf failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-# -------- Debug Futures (מוגן) --------
-@app.get("/debug/binance-futures", tags=["Debug"], summary="Binance Futures connectivity",
-         dependencies=[Depends(require_bearer_token)])
-async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = False):
-    out: Dict[str, Any] = {
-        "ping_ok": False, "mark_price": None, "symbols_count": None,
-        "permission_ok": None, "test_error": None
-    }
-    try:
-        mp = await _get_mark_price(normalize_symbol(symbol, market="futures", cache=symbols_cache))
-        out["mark_price"] = mp
-        out["ping_ok"] = True
-    except Exception as e:
-        out["test_error"] = f"mark_price: {e}"
+# --- Include routers (מומלץ) ---
+# שים לב: המסלולים הבאים נטענים מהקבצים כדי לאחד לוגיקה:
+# - /ai/health (ציבורי) + /ai/manual-scan (מוגן)
+# - /scan/multi (מוגן) — הוסר מהקובץ הזה כדי למנוע כפילות
+# - /grid/trade (מוגן) — הוסר מהקובץ הזה כדי למנוע כפילות
+# - /debug/binance-futures (מוגן) — הוסר מהקובץ הזה כדי למנוע כפילות
+# - /trade/best (מוגן) — קיים רק ב-router
+# - /utils/generate-logo (מוגן) — קיים רק ב-router
+from routes.ai import router as ai_router
+from routes.debug_binance import router as debug_router
+from routes.grid import router as grid_router
+from routes.trade import router as trade_router
+from routes.multi_scan import router as scan_router
+from routes.utils import router as utils_router
 
-    try:
-        exi = await _get_exchange_info()
-        out["symbols_count"] = len(exi.get("symbols", [])) if exi else None
-    except Exception as e:
-        out["test_error"] = f"exchangeInfo: {e}"
+app.include_router(ai_router)     # /ai/health (open), /ai/manual-scan (protected)
+app.include_router(scan_router)   # /scan/multi (protected)
+app.include_router(grid_router)   # /grid/trade (protected)
+app.include_router(trade_router)  # /trade/best (protected)
+app.include_router(utils_router)  # /utils/generate-logo (protected)
+app.include_router(debug_router)  # /debug/binance-futures (protected)
 
-    if place_test:
-        out["permission_ok"] = None  # הרחבה עתידית
-    return out
 
 
 
