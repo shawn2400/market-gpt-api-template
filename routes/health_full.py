@@ -2,7 +2,8 @@
 from __future__ import annotations
 import os, json, asyncio
 from typing import Dict, Any, List
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Header, Query, HTTPException
+
 from utils import config
 from utils.binance_client import ping_and_info, get_client
 from utils.ai_client import ai_healthcheck
@@ -13,11 +14,31 @@ REQUIRED_ENV = [
     "BINANCE_API_KEY",
     "BINANCE_API_SECRET",
     "OPENAI_API_KEY",
-    "CRYPTO_PANIC_API_KEY",
-    "ALERT_EMAIL_ADDRESS",
-    "ALERT_EMAIL_PASSWORD",
+    # אפשר להסיר/להוסיף בהתאם למערכת שלך:
+    # "CRYPTO_PANIC_API_KEY",
+    # "ALERT_EMAIL_ADDRESS",
+    # "ALERT_EMAIL_PASSWORD",
 ]
 CRITICAL_FILES = ["watchlist.json", "open_trades.json", "pnl_tracker.json"]
+
+def auth_dep(
+    authorization: str = Header(default=""),
+    x_api_key: str = Header(default=""),
+    token: str = Query(default="")
+):
+    expected = (getattr(config, "API_BEARER_TOKEN", "") or "").strip()
+    bearer = ""
+    if authorization.lower().startswith("bearer "):
+        bearer = authorization.split(" ", 1)[1].strip()
+    if not bearer:
+        bearer = (x_api_key or token or "").strip()
+    if expected:
+        if bearer != expected:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    else:
+        if not bearer:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
 
 def _env_status() -> Dict[str, Any]:
     missing = [k for k in REQUIRED_ENV if not os.getenv(k)]
@@ -42,7 +63,7 @@ def _files_status() -> Dict[str, Any]:
         details.append({"file": f, "exists": exists, "readable_json": readable, "size": size})
     return {"ok": ok, "details": details}
 
-@router.get("/health/full", summary="Full system health (Binance/AI/ENV/files)")
+@router.get("/health/full", summary="Full system health (Binance/AI/ENV/files)", dependencies=[Depends(auth_dep)])
 async def health_full() -> Dict[str, Any]:
     # Binance public ping
     try:
@@ -78,3 +99,4 @@ async def health_full() -> Dict[str, Any]:
         "files": files,
         "version": getattr(config, "OPENAI_MODEL", None),
     }
+
