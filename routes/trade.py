@@ -1,11 +1,32 @@
-from fastapi import APIRouter, HTTPException, Query
+# routes/trade.py
+from fastapi import APIRouter, HTTPException, Query, Depends, Header
 from typing import Optional
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.ai_analysis import predict_optimal_sl_tp
+from utils import config as cfg
 
-router = APIRouter()
+router = APIRouter(tags=["Trades"])
 
-@router.get("/trade/best")
+def auth_dep(
+    authorization: str = Header(default=""),
+    x_api_key: str = Header(default=""),
+    token: str = Query(default="")
+):
+    expected = (getattr(cfg, "API_BEARER_TOKEN", "") or "").strip()
+    bearer = ""
+    if authorization.lower().startswith("bearer "):
+        bearer = authorization.split(" ", 1)[1].strip()
+    if not bearer:
+        bearer = (x_api_key or token or "").strip()
+    if expected:
+        if bearer != expected:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    else:
+        if not bearer:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+@router.get("/trade/best", dependencies=[Depends(auth_dep)])
 async def get_best_trade(
     min_quality: int = Query(6, ge=1, le=10, description="ציון איכות מינימלי"),
     top: int = Query(1, ge=1, description="מספר הטריידים שברצונך לקבל"),
@@ -29,7 +50,6 @@ async def get_best_trade(
 
     best_trade = results[0]
 
-    # חישוב SL/TP חכם בעזרת GPT או fallback
     sl, tp = await predict_optimal_sl_tp(
         symbol=best_trade["symbol"],
         direction=best_trade["direction"],
@@ -49,5 +69,6 @@ async def get_best_trade(
     }
 
     return {"best_trade": trade_info}
+
 
 
