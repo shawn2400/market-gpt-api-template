@@ -1,32 +1,13 @@
 # routes/trade.py
-from fastapi import APIRouter, HTTPException, Query, Depends, Header
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
+from utils.auth import require_bearer_token
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.ai_analysis import predict_optimal_sl_tp
-from utils import config as cfg
 
-router = APIRouter(tags=["Trades"])
+router = APIRouter(tags=["Trades"], dependencies=[Depends(require_bearer_token)])
 
-def auth_dep(
-    authorization: str = Header(default=""),
-    x_api_key: str = Header(default=""),
-    token: str = Query(default="")
-):
-    expected = (getattr(cfg, "API_BEARER_TOKEN", "") or "").strip()
-    bearer = ""
-    if authorization.lower().startswith("bearer "):
-        bearer = authorization.split(" ", 1)[1].strip()
-    if not bearer:
-        bearer = (x_api_key or token or "").strip()
-    if expected:
-        if bearer != expected:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-    else:
-        if not bearer:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-    return True
-
-@router.get("/trade/best", dependencies=[Depends(auth_dep)])
+@router.get("/trade/best")
 async def get_best_trade(
     min_quality: int = Query(6, ge=1, le=10, description="ציון איכות מינימלי"),
     top: int = Query(1, ge=1, description="מספר הטריידים שברצונך לקבל"),
@@ -44,19 +25,15 @@ async def get_best_trade(
         trending_only=trending_only,
         trending_source=trending_source
     )
-
     if not results:
         raise HTTPException(status_code=404, detail="לא נמצאו טריידים איכותיים כרגע")
-
     best_trade = results[0]
-
     sl, tp = await predict_optimal_sl_tp(
         symbol=best_trade["symbol"],
         direction=best_trade["direction"],
         entry_price=best_trade.get("entry") or 0,
         atr=best_trade.get("atr")
     )
-
     trade_info = {
         "symbol": best_trade["symbol"],
         "direction": best_trade["direction"],
@@ -67,8 +44,8 @@ async def get_best_trade(
         "leverage": 10,
         "budget_usd": 100,
     }
-
     return {"best_trade": trade_info}
+
 
 
 
