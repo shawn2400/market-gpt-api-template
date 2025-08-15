@@ -63,3 +63,4 @@ def require_bearer_token(provided: str = Depends(_extract_provided_token)) -> bo
         )
     return True
 
+
