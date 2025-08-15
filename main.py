@@ -1,7 +1,7 @@
-# main.py
 from __future__ import annotations
 
 import os
+import asyncio
 import logging
 from typing import Optional, List, Any, Dict
 
@@ -12,7 +12,10 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.3")
+# --- אימות מרכזי ---
+from utils.auth import require_bearer_token
+
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -64,34 +67,6 @@ except Exception:
 ANCHOR_ENFORCE = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
 ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
 ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
-
-# --- אימות טוקן (פרטי) ---
-API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
-
-def auth_dep(request: Request):
-    """
-    אימות פשוט:
-    - אם מוגדר API_BEARER_TOKEN בסביבה → חייבים להתאים בדיוק.
-    - אם לא מוגדר → עדיין דורשים טוקן (Header Authorization: Bearer XXX או ?token=XXX),
-      אבל לא בודקים ערך ספציפי.
-    """
-    auth = request.headers.get("Authorization", "")
-    bearer = ""
-    if auth.lower().startswith("bearer "):
-        bearer = auth.split(" ", 1)[1].strip()
-    if not bearer:
-        qtok = request.query_params.get("token")
-        if qtok:
-            bearer = qtok.strip()
-
-    if API_BEARER_TOKEN:
-        if bearer != API_BEARER_TOKEN:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-    else:
-        if not bearer:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-
-    return True
 
 # --- סכימות ---
 class TradeRequest(BaseModel):
@@ -213,23 +188,51 @@ async def _on_shutdown():
         except Exception:
             pass
 
+# -------- Binance helpers (עם כותרות ורטריי) --------
 BINANCE_FAPI = "https://fapi.binance.com"
+
+_BINANCE_HDRS = {
+    "User-Agent": "AlgoGPT/2 (Render) api-client",
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+}
+_BINANCE_RETRY_STATUSES = {418, 429, 500, 502, 503, 504}
+
+async def _http_get_json(url: str, params: Dict[str, Any] | None = None, tries: int = 4, timeout: float = 6.0):
+    last_err: Optional[Exception] = None
+    for attempt in range(tries):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, headers=_BINANCE_HDRS) as x:
+                r = await x.get(url, params=params)
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code in _BINANCE_RETRY_STATUSES:
+                delay = min(5.0, 0.6 * (2 ** attempt))
+                logging.warning(f"[binance] http={r.status_code} → retry in {delay:.2f}s (attempt {attempt+1}/{tries})")
+                await asyncio.sleep(delay)
+                continue
+            r.raise_for_status()
+        except Exception as e:
+            last_err = e
+            delay = min(5.0, 0.6 * (2 ** attempt))
+            logging.warning(f"[binance] net error → retry in {delay:.2f}s (attempt {attempt+1}/{tries}): {e}")
+            await asyncio.sleep(delay)
+            continue
+    if last_err:
+        raise last_err
+    raise HTTPException(status_code=502, detail="binance http unknown error")
 
 async def _get_mark_price(symbol: str) -> Optional[dict]:
     url = f"{BINANCE_FAPI}/fapi/v1/premiumIndex"
-    async with httpx.AsyncClient(timeout=5.0) as x:
-        r = await x.get(url, params={"symbol": symbol})
-        r.raise_for_status()
-        return r.json()
+    params = {"symbol": symbol, "_": os.urandom(2).hex()}
+    return await _http_get_json(url, params=params)
 
 async def _get_exchange_info() -> Optional[dict]:
     url = f"{BINANCE_FAPI}/fapi/v1/exchangeInfo"
-    async with httpx.AsyncClient(timeout=5.0) as x:
-        r = await x.get(url)
-        r.raise_for_status()
-        return r.json()
+    params = {"_": os.urandom(2).hex()}
+    return await _http_get_json(url, params=params)
 
-# -------- Config routes --------
+# -------- Config (פתוח) --------
 @app.get("/", tags=["Config"], summary="Root")
 async def root():
     return {"status": "ok", "version": APP_VERSION}
@@ -255,7 +258,7 @@ async def get_egress_ip(request: Request):
     egress = None
     for svc in ("https://api.ipify.org", "https://ifconfig.me/ip"):
         try:
-            with httpx.Client(timeout=4.0) as x:
+            with httpx.Client(timeout=4.0, headers={"User-Agent": "AlgoGPT/2"}) as x:
                 resp = x.get(svc)
                 if resp.status_code == 200:
                     egress = resp.text.strip()
@@ -264,14 +267,15 @@ async def get_egress_ip(request: Request):
             pass
     return {"egress_ip": egress, "client_ip": client_ip}
 
-# -------- Anchor debug --------
+# -------- Anchor debug (פתוח) --------
 @app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)")
 async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
     fr = [s.strip() for s in frames.split(",") if s.strip()]
     return await compute_btc_anchor(frames=fr, market=market)
 
-# -------- Scanner --------
-@app.get("/scan/multi", tags=["Trades"], summary="Scan Multi", response_model=ScanResponse)
+# -------- Scanner (מוגן) --------
+@app.get("/scan/multi", tags=["Trades"], summary="Scan Multi",
+         response_model=ScanResponse, dependencies=[Depends(require_bearer_token)])
 async def scan_multi(
     interval: str = "15m,1h",
     min_quality: int = 6,
@@ -347,14 +351,21 @@ async def scan_multi(
     results = results[:max(1, int(top))]
     return {"results": results}
 
-# -------- Price --------
-@app.get("/price", tags=["Trades"], summary="Get Price", response_model=PriceResponse, dependencies=[Depends(auth_dep)])
+# -------- Price (מוגן) --------
+@app.get("/price", tags=["Trades"], summary="Get Price",
+         response_model=PriceResponse, dependencies=[Depends(require_bearer_token)])
 async def get_price(symbol: str):
     try:
         sym = normalize_symbol(symbol, market="futures", cache=symbols_cache)
-        data = await _get_mark_price(sym)
-        price = float(data.get("markPrice"))
-        return {"symbol": sym, "price": price}
+        try:
+            data = await _get_mark_price(sym)  # mark price
+            price = float(data.get("markPrice"))
+            return {"symbol": sym, "price": price}
+        except Exception:
+            url = f"{BINANCE_FAPI}/fapi/v1/ticker/price"  # fallback: last price
+            data = await _http_get_json(url, params={"symbol": sym, "_": os.urandom(2).hex()})
+            price = float(data.get("price"))
+            return {"symbol": sym, "price": price}
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -364,15 +375,15 @@ SLTP_TP_PCT_FLOOR  = float(os.getenv("SLTP_TP_PCT_FLOOR",  "0.0060"))   # 0.60%
 ATR_SL_MULT        = float(os.getenv("ATR_SL_MULT",        "1.50"))
 ATR_TP_MULT        = float(os.getenv("ATR_TP_MULT",        "2.50"))
 
-# -------- SLTP (עם כוונון לפי BTC) --------
-@app.post("/sltp", tags=["Trades"], summary="Suggest SL/TP", response_model=SLTPResponse, dependencies=[Depends(auth_dep)])
+# -------- SLTP (עם כוונון לפי BTC, מוגן) --------
+@app.post("/sltp", tags=["Trades"], summary="Suggest SL/TP",
+          response_model=SLTPResponse, dependencies=[Depends(require_bearer_token)])
 async def suggest_sltp(req: SLTPRequest):
     try:
         sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    # ATR/רצפה
     atr = float(req.atr) if req.atr is not None else max(req.entry * SLTP_MIN_PCT_FLOOR, 1.0)
     base_sl = max(atr * ATR_SL_MULT, req.entry * SLTP_MIN_PCT_FLOOR)
     base_tp = max(atr * ATR_TP_MULT, req.entry * SLTP_TP_PCT_FLOOR)
@@ -392,7 +403,7 @@ async def suggest_sltp(req: SLTPRequest):
 
     return {"symbol": sym, "direction": req.direction, "sl": sl, "tp": tp}
 
-# -------- AI analyze (ידני) --------
+# -------- AI analyze (ידני, מוגן) --------
 def _norm_direction_from_trend(trend: str) -> str:
     t = (trend or "").strip().lower()
     if t in ("up", "long", "buy", "bull", "bullish"):
@@ -401,7 +412,8 @@ def _norm_direction_from_trend(trend: str) -> str:
         return "SHORT"
     return "SIDEWAYS"
 
-@app.post("/ai-analyze", tags=["AI"], summary="Manual AI analysis", response_model=AiAnalyzeResponse, dependencies=[Depends(auth_dep)])
+@app.post("/ai-analyze", tags=["AI"], summary="Manual AI analysis",
+          response_model=AiAnalyzeResponse, dependencies=[Depends(require_bearer_token)])
 async def ai_analyze(req: AiAnalyzeRequest):
     frames = ["manual"]
     direction = _norm_direction_from_trend(req.trend)
@@ -458,8 +470,9 @@ async def ai_analyze(req: AiAnalyzeRequest):
         metrics={"rsi": req.rsi, "adx": req.adx, "volume": req.volume, "pattern": req.pattern},
     )
 
-# -------- Trade (עם Gate קשיח) --------
-@app.post("/trade", tags=["Trades"], summary="Place Trade", response_model=TradeResponse, dependencies=[Depends(auth_dep)])
+# -------- Trade (עם Gate קשיח, מוגן) --------
+@app.post("/trade", tags=["Trades"], summary="Place Trade",
+          response_model=TradeResponse, dependencies=[Depends(require_bearer_token)])
 async def place_trade(req: TradeRequest):
     try:
         req.symbol = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
@@ -485,14 +498,15 @@ async def place_trade(req: TradeRequest):
         logger.exception("trade failed")
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e), "result": None})
 
-# -------- Grid (DRY-RUN אם אין מודול ייעודי) --------
+# -------- Grid (DRY-RUN אם אין מודול ייעודי, מוגן) --------
 try:
     from utils.binance_trader import binance_grid_trade  # type: ignore
 except Exception:
     binance_grid_trade = None
     logger.info("[GRID] dedicated binance_grid_trade not available → using DRY-RUN grid executor")
 
-@app.post("/grid/trade", tags=["Grid"], summary="Grid Trade", response_model=GridTradeResponse, dependencies=[Depends(auth_dep)])
+@app.post("/grid/trade", tags=["Grid"], summary="Grid Trade",
+          response_model=GridTradeResponse, dependencies=[Depends(require_bearer_token)])
 async def execute_grid(req: GridTradeRequest):
     try:
         sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
@@ -516,40 +530,47 @@ async def execute_grid(req: GridTradeRequest):
         logger.exception("grid trade failed")
         return {"status": "error", "error": str(e), "plan": plan}
 
-# -------- Executor (in-mem demo) --------
+# -------- Executor (in-mem demo, מוגן) --------
 EXECUTOR_RUNNING = False
 
-@app.get("/executor/start", tags=["Executor"], summary="Executor Start", dependencies=[Depends(auth_dep)])
+@app.get("/executor/start", tags=["Executor"], summary="Executor Start",
+         dependencies=[Depends(require_bearer_token)])
 async def start_executor():
     global EXECUTOR_RUNNING
     EXECUTOR_RUNNING = True
     return {"started": True, "running": EXECUTOR_RUNNING}
 
-@app.get("/executor/stop", tags=["Executor"], summary="Executor Stop", dependencies=[Depends(auth_dep)])
+@app.get("/executor/stop", tags=["Executor"], summary="Executor Stop",
+         dependencies=[Depends(require_bearer_token)])
 async def stop_executor():
     global EXECUTOR_RUNNING
     EXECUTOR_RUNNING = False
     return {"stopped": True, "running": EXECUTOR_RUNNING}
 
-@app.get("/executor/status", tags=["Executor"], summary="Executor Status", dependencies=[Depends(auth_dep)])
+@app.get("/executor/status", tags=["Executor"], summary="Executor Status",
+         dependencies=[Depends(require_bearer_token)])
 async def executor_status():
     return {"running": EXECUTOR_RUNNING}
 
-# --- אליאסים תואמי-עבר ---
-@app.get("/auto-executor/start", tags=["Executor"], dependencies=[Depends(auth_dep)])
-async def auto_executor_start():
-    return await start_executor()
+# --- אליאסים תואמי-עבר (מוגנים) ---
+@app.get("/getPrice", tags=["Trades"], summary="(alias) Get Price",
+         response_model=PriceResponse, dependencies=[Depends(require_bearer_token)])
+async def get_price_alias(symbol: str):
+    return await get_price(symbol)
 
-@app.get("/auto-executor/stop", tags=["Executor"], dependencies=[Depends(auth_dep)])
-async def auto_executor_stop():
-    return await stop_executor()
+@app.post("/executeGrid", tags=["Grid"], summary="(alias) Execute Grid",
+          response_model=GridTradeResponse, dependencies=[Depends(require_bearer_token)])
+async def execute_grid_alias(req: GridTradeRequest):
+    return await execute_grid(req)
 
-@app.get("/auto-executor/status", tags=["Executor"], dependencies=[Depends(auth_dep)])
-async def auto_executor_status():
-    return await executor_status()
+@app.post("/generatePnlPdf", tags=["Reports"], summary="(alias) Generate PnL PDF",
+          response_model=PnlPdfResponse, dependencies=[Depends(require_bearer_token)])
+async def generate_pnl_pdf_alias():
+    return await generate_pnl_pdf_route()
 
-# -------- Reports --------
-@app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF", response_model=PnlPdfResponse, dependencies=[Depends(auth_dep)])
+# -------- Reports (מוגן) --------
+@app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF",
+         response_model=PnlPdfResponse, dependencies=[Depends(require_bearer_token)])
 async def generate_pnl_pdf_route():
     """
     יוצר PDF מ-pnl_tracker.json ומחזיר נתיב נגיש תחת /static.
@@ -569,8 +590,9 @@ async def generate_pnl_pdf_route():
         logger.exception("pnl pdf failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-# -------- Debug Futures --------
-@app.get("/debug/binance-futures", tags=["Debug"], summary="Binance Futures connectivity", dependencies=[Depends(auth_dep)])
+# -------- Debug Futures (מוגן) --------
+@app.get("/debug/binance-futures", tags=["Debug"], summary="Binance Futures connectivity",
+         dependencies=[Depends(require_bearer_token)])
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = False):
     out: Dict[str, Any] = {
         "ping_ok": False, "mark_price": None, "symbols_count": None,
@@ -592,6 +614,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
