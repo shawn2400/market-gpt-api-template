@@ -237,7 +237,7 @@ async def binance_futures_trade(
     if not tp_resp or not isinstance(tp_resp, dict) or "orderId" not in tp_resp:
         raise RuntimeError(f"Failed to place TAKE_PROFIT (TP): {tp_resp}")
 
-    result = {
+    return {
         "symbol": symbol.upper(),
         "side": side,
         "entry": float(entry_dec),
@@ -246,23 +246,14 @@ async def binance_futures_trade(
         "tp": float(tp_dec),
         "leverage": int(leverage),
         "positionSide": position_side,
-        "orders": {
-            "entry": entry_resp,
-            "sl": sl_resp,
-            "tp": tp_resp,
-        },
+        "orders": {"entry": entry_resp, "sl": sl_resp, "tp": tp_resp},
         "notional": float(notional),
         "tickSize": float(tick_size),
         "stepSize": float(step_size),
         "minQty": float(min_qty),
         "minNotional": float(min_notional),
-        "clientOrderIds": {
-            "entry": entry_cid,
-            "sl": sl_cid,
-            "tp": tp_cid,
-        },
     }
-    return result
+
 
 
 
