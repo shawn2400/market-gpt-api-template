@@ -29,13 +29,12 @@ except Exception:
 from utils.symbols import normalize_symbol, SymbolsCache
 symbols_cache = SymbolsCache(market="futures")
 
-# --- סורק סימבול (ייבוא עם traceback מלא אם נכשל) ---
+# --- סורק סימבול ---
 try:
-    import utils.symbol_analysis as _sym_ana
-    analyze_symbol = _sym_ana.analyze_symbol
-except Exception:
+    from utils.symbol_analysis import analyze_symbol
+except Exception as e:
     analyze_symbol = None
-    logger.warning("symbol_analysis not available", exc_info=True)
+    logger.warning("symbol_analysis not available: %s", e)
 
 # --- klines ---
 try:
@@ -65,10 +64,22 @@ ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
 ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
 
 # --- אבטחה בסיסית ---
+API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
 def auth_dep(request: Request):
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    bearer = ""
+    if auth.lower().startswith("bearer "):
+        bearer = auth.split(" ", 1)[1].strip()
+    if not bearer:
+        qtok = request.query_params.get("token")
+        if qtok:
+            bearer = qtok.strip()
+    if API_BEARER_TOKEN:
+        if bearer != API_BEARER_TOKEN:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    else:
+        if not bearer:
+            raise HTTPException(status_code=401, detail="Unauthorized")
     return True
 
 # --- סכימות ---
@@ -165,7 +176,7 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-# --- Startup / Shutdown (AI warmup/close) ---
+# --- Startup / Shutdown ---
 @app.on_event("startup")
 async def _on_startup():
     if _ai_client is not None:
@@ -335,7 +346,6 @@ async def suggest_sltp(req: SLTPRequest):
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    # אם יש מודול AI מותקן ורוצים AI — אפשר להחליף כאן ל-predict_optimal_sl_tp
     atr = float(req.atr) if req.atr is not None else max(req.entry * SLTP_MIN_PCT_FLOOR, 1.0)
     base_sl = max(atr * ATR_SL_MULT, req.entry * SLTP_MIN_PCT_FLOOR)
     base_tp = max(atr * ATR_TP_MULT, req.entry * SLTP_TP_PCT_FLOOR)
@@ -366,13 +376,9 @@ def _norm_direction_from_trend(trend: str) -> str:
 
 @app.post("/ai-analyze", tags=["AI"], summary="Manual AI analysis", response_model=AiAnalyzeResponse, dependencies=[Depends(auth_dep)])
 async def ai_analyze(req: AiAnalyzeRequest):
-    """
-    מקבל מדדים ידניים ומחזיר החלטה מרוכזת; משלב עוגן BTC מאחורי הקלעים.
-    """
     frames = ["manual"]
     direction = _norm_direction_from_trend(req.trend)
 
-    # אם יש מודול AI – נשתמש בו; אחרת היגיון דטרמיניסטי קל.
     if analyze_with_ai:
         tf_item = {
             "symbol": req.symbol.upper(),
@@ -399,7 +405,6 @@ async def ai_analyze(req: AiAnalyzeRequest):
             metrics={"rsi": req.rsi, "adx": req.adx, "volume": req.volume, "pattern": req.pattern},
         )
 
-    # פולבק דטרמיניסטי פשוט (אם אין מודול AI)
     signal = "HOLD"
     conf = 50
     if direction == "LONG" and req.adx >= 22 and req.rsi >= 55:
@@ -527,6 +532,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
