@@ -99,7 +99,7 @@ async def analyze_symbol(
     market_type: str = "futures",
     limit: int = 150,
     trending_only: bool = False,
-    with_ai: bool = False,        # נשמר לתאימות; לא בשימוש כאן
+    with_ai: bool = False,        # שמור לתאימות; לא בשימוש כאן
     frames: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
@@ -185,6 +185,7 @@ async def analyze_symbol(
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
