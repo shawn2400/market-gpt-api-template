@@ -1,4 +1,6 @@
 # utils/multi_tf_scanner.py
+from __future__ import annotations
+
 import logging
 import asyncio
 from typing import Sequence, List, Dict, Optional, Any, Tuple
@@ -282,6 +284,7 @@ async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logging.warning(f"[fallback_scan_manual] failed for {symbol}: {e}")
         return []
+
 
 
 
