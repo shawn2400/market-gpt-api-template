@@ -1,17 +1,14 @@
 # =========================
 # AlgoGPT – .env (Template)
 # =========================
-# ⚠️ אין להתחייב קבצי סוד לריפו. בתצורת Render הזינו אותם כ-Encrypted Env Vars.
+# ⚠️ אל תאחסן Secrets בגיט! את הערכים האמיתיים מזינים בדאשבורד של Render כסודית (Encrypted).
 
 # --- Security / API Gateway ---
-# לשימוש מקומי בלבד ניתן לשים כאן ערך. ב-Render הזן בדאשבורד.
-API_BEARER_TOKEN=
+API_BEARER_TOKEN=<STRONG_RANDOM_64CH>   # נדרש לכל ראוטים המוגנים (Authorization: Bearer ...)
 
-# --- Trading switches (בטוח כברירת מחדל) ---
+# --- Trading switches ---
 EXECUTE_TRADES=false
 BINANCE_SKIP_ACCOUNT_MUTATIONS=false
-
-# --- Optional automation ---
 AUTO_RUN=false
 ENABLE_AUTO_TRADING=false
 
@@ -27,6 +24,13 @@ MIN_VOLUME=1000000
 TOP_SYMBOLS=30
 TRENDING_ONLY=false
 
+# Trending (אופציונלי)
+TRENDING_TOP_N=30
+TRENDING_MIN_PRICE=0.0001
+TRENDING_TIMEOUT_SEC=8.0
+TRENDING_RETRIES=4
+TRENDING_BACKOFF_BASE=0.6
+
 # --- Guards ---
 PRICE_PROTECT_PCT=0.25
 PRICE_MAX_AGE_SEC=10
@@ -35,17 +39,25 @@ PRICE_MAX_AGE_SEC=10
 LOG_LEVEL=INFO
 CORS_ALLOW_ORIGINS=*
 
-# --- Binance keys (להזין ב-Render כ-Encrypted) ---
-BINANCE_API_KEY=
-BINANCE_API_SECRET=
+# --- Binance keys (Encrypted בדאשבורד) ---
+BINANCE_API_KEY=<BINANCE_API_KEY>
+BINANCE_API_SECRET=<BINANCE_API_SECRET>
 
-# --- OpenAI (ל-TP/SL חכם וכו') ---
-OPENAI_API_KEY=
+# --- OpenAI (או Azure OpenAI) ---
+OPENAI_API_KEY=<OPENAI_API_KEY>
 OPENAI_MODEL=gpt-4o-mini
+# אם יש פרוקסי/בייס מותאם:
+# OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_TIMEOUT_SECONDS=30.0
 OPENAI_MAX_CONCURRENCY=4
 
-# --- Binance endpoints (דיפולט) ---
+# Azure (אם עובדים מול Azure במקום OpenAI הרגיל):
+# AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com
+# AZURE_OPENAI_DEPLOYMENT=<deployment-name>
+# AZURE_OPENAI_KEY=<your-azure-key>
+# AZURE_OPENAI_API_VERSION=2024-02-15-preview
+
+# --- Binance endpoints ---
 BINANCE_SPOT_HTTP_BASE=https://api.binance.com
 BINANCE_FUTURES_HTTP_BASE=https://fapi.binance.com
 BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com
@@ -57,16 +69,11 @@ BINANCE_MAX_RETRIES=5
 BINANCE_RECV_WINDOW=10000
 BINANCE_TIME_SYNC_INTERVAL_SEC=900
 BINANCE_EXCHANGE_INFO_ON_START=false
-
-# --- Account modes ---
 BINANCE_FORCE_HEDGE_MODE=false
 
-# --- Egress IP (ל-Trusted IPs) ---
+# --- Egress IP / Allowlist (אופציונלי) ---
 EGRESS_IP_ENDPOINT=https://algogpt-docker.onrender.com/net/ip
 BINANCE_ALLOWED_EGRESS_IPS=
-
-# --- Network/Platform ---
-# אל תגדיר PORT כאן. Render מזריק PORT משלו, והאפליקציה מאזינה ל-${PORT:-10000}
 
 
 
