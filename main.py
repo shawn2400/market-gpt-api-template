@@ -29,12 +29,13 @@ except Exception:
 from utils.symbols import normalize_symbol, SymbolsCache
 symbols_cache = SymbolsCache(market="futures")
 
-# --- סורק סימבול ---
+# --- סורק סימבול (ייבוא עם traceback מלא אם נכשל) ---
 try:
-    from utils.symbol_analysis import analyze_symbol
-except Exception as e:
+    import utils.symbol_analysis as _sym_ana
+    analyze_symbol = _sym_ana.analyze_symbol
+except Exception:
     analyze_symbol = None
-    logger.warning("symbol_analysis not available: %s", e)
+    logger.warning("symbol_analysis not available", exc_info=True)
 
 # --- klines ---
 try:
@@ -51,6 +52,12 @@ try:
 except Exception:
     analyze_with_ai = None
     predict_optimal_sl_tp = None
+
+# AI client לאירועי startup/shutdown (אופציונלי)
+try:
+    from utils.ai_client import ai_client as _ai_client
+except Exception:
+    _ai_client = None
 
 # קונפיג לעוגן
 ANCHOR_ENFORCE = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
@@ -157,6 +164,25 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
+
+# --- Startup / Shutdown (AI warmup/close) ---
+@app.on_event("startup")
+async def _on_startup():
+    if _ai_client is not None:
+        try:
+            await _ai_client.warmup()
+            logger.info("[BOOT] AI client warmup done (ready=%s)", getattr(_ai_client, "ready", False))
+        except Exception as e:
+            logger.warning("[BOOT] AI warmup failed: %s", e)
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    if _ai_client is not None:
+        try:
+            await _ai_client.close()
+            logger.info("[BOOT] httpx client closed")
+        except Exception:
+            pass
 
 BINANCE_FAPI = "https://fapi.binance.com"
 
@@ -356,12 +382,10 @@ async def ai_analyze(req: AiAnalyzeRequest):
             "direction": direction,
             "volume": req.volume,
             "pattern": req.pattern,
-            # ציון איכות גס: ADX חיובי + RSI אלים/שורי
             "quality_score": max(0.0, min(10.0, (req.adx / 5.0) + (max(0.0, req.rsi - 50.0) / 10.0))),
             "frames": frames,
         }
         ai_res = await analyze_with_ai([tf_item])
-        # הוספת עוגן כהסבר
         anchor = await compute_btc_anchor(frames=["15m", "1h"], market="futures")
         reason = (ai_res.get("reason") or "").strip()
         reason = (reason + f"; anchor={anchor.get('direction')}/{anchor.get('strength')}").strip("; ")
@@ -503,6 +527,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
