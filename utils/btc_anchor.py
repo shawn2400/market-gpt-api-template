@@ -1,115 +1,171 @@
 # utils/btc_anchor.py
 from __future__ import annotations
-import logging
-from typing import Dict, Any, List, Sequence, Tuple
+import math
+from typing import List, Dict, Any, Optional, Tuple
 
-from utils.scanner_utils import fetch_ohlcv
+import pandas as pd
+
+from utils.get_klines import aget_klines   # ✅ עטיפה אסינכרונית
 from utils.indicators import compute_indicators
 
-def _frame_direction_strength(df) -> Tuple[str, float]:
+def _norm_dir(v: Any) -> Optional[str]:
+    s = str(v or "").strip().upper()
+    if s in ("LONG", "BUY", "UP", "BULL", "BULLISH"):
+        return "LONG"
+    if s in ("SHORT", "SELL", "DOWN", "BEAR", "BEARISH"):
+        return "SHORT"
+    return None
+
+def _ema_slope_strength(ema_fast: float, ema_slow: float, close: float) -> float:
     """
-    קובע כיוון (LONG/SHORT/SIDEWAYS) וחוזק 0–100 על סמך EMA21/EMA50 + ADX/RSI.
+    אומדן חוזק פשוט: פער EMA ביחס למחיר (באחוזים) מומר ל-0..100.
     """
-    if df is None or getattr(df, "empty", True):
-        return "SIDEWAYS", 50.0
+    try:
+        gap = abs(float(ema_fast) - float(ema_slow))
+        if close <= 0:
+            return 0.0
+        pct = (gap / float(close)) * 100.0
+        # map: 0%->0, 0.5%->50, 1.0%->80, 2%->100 (קאפ)
+        if pct >= 2.0:
+            return 100.0
+        if pct >= 1.0:
+            return 80.0 + (pct - 1.0) * 20.0
+        return min(80.0, pct * 100.0)  # 0..80
+    except Exception:
+        return 0.0
+
+async def _anchor_for_tf(tf: str, market: str) -> Optional[Dict[str, Any]]:
+    """
+    מחשב עוגן ל-TF בודד לפי EMA21/50 וחוזק.
+    """
+    df = await aget_klines("BTCUSDT", interval=tf, limit=180, market_type=market)
+    if df is None or df.empty:
+        return None
     dfi = compute_indicators(df)
     if dfi is None or dfi.empty:
-        return "SIDEWAYS", 50.0
+        return None
     last = dfi.iloc[-1]
+    close = float(last.get("close", 0.0) or 0.0)
+    ema21 = float(last.get("ema_21", 0.0) or 0.0)
+    ema50 = float(last.get("ema_50", 0.0) or 0.0)
+
+    direction = "LONG" if ema21 > ema50 else "SHORT" if ema21 < ema50 else None
+    if direction is None:
+        return None
+
+    strength = _ema_slope_strength(ema21, ema50, close)
+
+    # אם יש ADX מהאינדיקטורים שלך – נשקלל קלות (לא חובה)
     try:
-        close = float(last.get("close"))
-        ema21 = float(last.get("ema_21"))
-        ema50 = float(last.get("ema_50"))
+        adx = float(last.get("adx", 0.0) or 0.0)
+        # קליפ 10..40 → 0..+10 חיזוק
+        if adx > 10:
+            bonus = min(10.0, (adx - 10.0) * 0.33)
+            strength = min(100.0, strength + bonus)
     except Exception:
-        return "SIDEWAYS", 50.0
+        pass
 
-    adx = float(last.get("adx", 20.0))
-    rsi = float(last.get("rsi", 50.0))
+    return {
+        "tf": tf,
+        "direction": direction,
+        "strength": round(float(strength), 2),
+        "close": close,
+        "ema_21": ema21,
+        "ema_50": ema50,
+    }
 
-    if ema21 > ema50:
-        direction = "LONG"
-    elif ema21 < ema50:
-        direction = "SHORT"
-    else:
-        direction = "SIDEWAYS"
-
-    sep_pct = abs(ema21 - ema50) / max(1e-9, close) * 100.0
-    strength = 40.0 + min(sep_pct * 5.0, 30.0) + max(0.0, adx - 20.0) * 1.0 + abs(rsi - 50.0) * 0.3
-    strength = max(0.0, min(100.0, strength))
-    return direction, float(strength)
-
-async def compute_btc_anchor(
-    frames: Sequence[str] = ("15m", "1h"),
-    market: str = "futures",
-) -> Dict[str, Any]:
+async def compute_btc_anchor(*, frames: List[str] | Tuple[str, ...] = ("15m", "1h"), market: str = "futures") -> Dict[str, Any]:
     """
-    מחזיר עוגן BTC: {direction, strength, frames}
-    שליפה אסינכרונית דרך fetch_ohlcv (אין await על פונקציה סינכרונית).
+    מחשב עוגן BTC מצרפי על פני כמה TFs: כיוון רוב, חוזק ממוצע.
+    החזרה:
+      {
+        direction: LONG/SHORT,
+        strength: 0..100,
+        trend: "UP"/"DOWN",
+        frames: [...],
+        details: [{tf, direction, strength, ...}, ...]
+      }
     """
-    directions: List[str] = []
-    strengths: List[float] = []
-
-    for tf in frames or ("15m", "1h"):
+    fr = [str(x).strip() for x in (frames or ("15m", "1h")) if str(x).strip()]
+    details: List[Dict[str, Any]] = []
+    for tf in fr:
         try:
-            df = await fetch_ohlcv("BTCUSDT", interval=tf, limit=180, market_type=market)
-            d, s = _frame_direction_strength(df)
-            directions.append(d)
-            strengths.append(s)
-        except Exception as e:
-            logging.warning(f"[btc_anchor] {tf}: {e}")
+            item = await _anchor_for_tf(tf, market)
+            if item:
+                details.append(item)
+        except Exception:
+            continue
 
-    # הכרעת כיוון
-    if not directions:
-        direction = "SIDEWAYS"
-        strength = 50
+    if not details:
+        return {"direction": "LONG", "strength": 50, "trend": "UP", "frames": fr, "details": []}
+
+    longs = sum(1 for d in details if d.get("direction") == "LONG")
+    shorts = sum(1 for d in details if d.get("direction") == "SHORT")
+    direction = "LONG" if longs >= shorts else "SHORT"
+
+    strength = sum(float(d.get("strength", 0.0)) for d in details) / max(1, len(details))
+    trend = "UP" if direction == "LONG" else "DOWN"
+
+    return {
+        "direction": direction,
+        "strength": round(float(strength), 2),
+        "trend": trend,
+        "frames": fr,
+        "details": details,
+    }
+
+def anchor_gate(direction: Optional[str], anchor: Optional[Dict[str, Any]], *, strong_th: int = 70, weak_th: int = 55) -> Dict[str, Any]:
+    """
+    מחזיר פעולה לפי התאמה לעוגן:
+      - align & strong  → boost
+      - align & weak    → none
+      - oppose & strong → block
+      - oppose & weak   → downgrade
+    """
+    d = _norm_dir(direction)
+    if not anchor or not isinstance(anchor, dict):
+        return {"action": "none", "reason": "no anchor"}
+
+    a_dir = _norm_dir(anchor.get("direction"))
+    strength = float(anchor.get("strength", 0.0) or 0.0)
+    if not d or not a_dir:
+        return {"action": "none", "reason": "indeterminate"}
+
+    if d == a_dir:
+        if strength >= strong_th:
+            return {"action": "boost", "bonus": 12, "reason": f"aligned with BTC ({a_dir}, {strength})"}
+        return {"action": "none", "reason": f"aligned (weak, {strength})"}
+
+    # נגד הכיוון
+    if strength >= strong_th:
+        return {"action": "block", "reason": f"against BTC ({a_dir}, {strength})"}
+    return {"action": "downgrade", "penalty": 15, "reason": f"against (weak, {strength})"}
+
+def sltp_multipliers(direction: str, anchor: Optional[Dict[str, Any]], *, strong_th: int = 70, weak_th: int = 55) -> Tuple[float, float]:
+    """
+    מכפילים ל-SL/TP לפי התאמה לעוגן:
+      חיזוק עם העוגן → TP↑, SL↓ ; נגד העוגן → TP↓, SL↑.
+    מחזיר: (sl_mult, tp_mult)
+    """
+    d = _norm_dir(direction)
+    if not anchor or not d:
+        return (1.0, 1.0)
+
+    a_dir = _norm_dir(anchor.get("direction"))
+    strength = float(anchor.get("strength", 0.0) or 0.0)
+
+    if a_dir == d:
+        if strength >= strong_th:
+            return (0.90, 1.15)  # SL קטן יותר, TP גדול יותר
+        if strength >= weak_th:
+            return (1.00, 1.08)
+        return (1.00, 1.02)
     else:
-        long_cnt = sum(1 for d in directions if d == "LONG")
-        short_cnt = sum(1 for d in directions if d == "SHORT")
-        if long_cnt > short_cnt:
-            direction = "LONG"
-        elif short_cnt > long_cnt:
-            direction = "SHORT"
-        else:
-            direction = directions[-1]  # תיקו → מצב אחרון
-        strength = int(round(sum(strengths) / max(1, len(strengths))))
+        if strength >= strong_th:
+            return (1.25, 0.85)
+        if strength >= weak_th:
+            return (1.10, 0.95)
+        return (1.05, 0.98)
 
-    return {"symbol": "BTCUSDT", "frames": list(frames or ("15m", "1h")), "direction": direction, "strength": strength}
-
-def anchor_gate(direction: str, anchor: Dict[str, Any], *, strong_th: int = 70, weak_th: int = 55) -> Dict[str, Any]:
-    d = (direction or "").upper()
-    a_dir = (anchor or {}).get("direction", "SIDEWAYS")
-    a_str = int((anchor or {}).get("strength", 50))
-
-    if a_str >= strong_th:
-        if d == a_dir:
-            return {"action": "boost", "bonus": 10, "reason": f"aligned strong anchor {a_dir}/{a_str}"}
-        else:
-            return {"action": "block", "reason": f"opposes strong anchor {a_dir}/{a_str}"}
-    if a_str >= weak_th:
-        if d == a_dir:
-            return {"action": "boost", "bonus": 5, "reason": f"aligned weak anchor {a_dir}/{a_str}"}
-        else:
-            return {"action": "downgrade", "penalty": 10, "reason": f"opposes weak anchor {a_dir}/{a_str}"}
-    return {"action": "neutral", "reason": f"anchor weak {a_dir}/{a_str}"}
-
-def sltp_multipliers(direction: str, anchor: Dict[str, Any], *, strong_th: int = 70, weak_th: int = 55) -> Tuple[float, float]:
-    """
-    מחזיר (sl_mult, tp_mult): מכפיל למרחקי SL/TP.
-    """
-    d = (direction or "").upper()
-    a_dir = (anchor or {}).get("direction", "SIDEWAYS")
-    a_str = int((anchor or {}).get("strength", 50))
-
-    if a_str >= strong_th:
-        if d == a_dir:
-            return (0.90, 1.10)  # SL קרוב יותר, TP רחוק יותר
-        else:
-            return (1.10, 0.90)  # SL רחוק יותר, TP קרוב יותר
-    if a_str >= weak_th:
-        if d == a_dir:
-            return (0.95, 1.05)
-        else:
-            return (1.05, 0.95)
-    return (1.00, 1.00)
 
 
