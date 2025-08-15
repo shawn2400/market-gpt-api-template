@@ -2,13 +2,12 @@
 import numpy as np
 import pandas as pd
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, Dict
 
 from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, MACD, EMAIndicator
 from ta.volatility import AverageTrueRange
 
-# --- פרמטרים דיפולטיים ---
 _RSI = 14
 _ADX = 14
 _ATR = 14
@@ -20,22 +19,19 @@ _MACD_SIGNAL = 9
 _ST_PERIOD = 10
 _ST_MULT = 3.0
 
-_MIN_ROWS_ABS = 100  # מינימום כללי
+_MIN_ROWS_ABS = 100
 _LONGEST_WIN = max(_EMA_SLOW, _MACD_SLOW, _ATR, _ADX, _RSI, _ST_PERIOD) + 20
-
 
 def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
-
     need = {"open", "high", "low", "close", "volume"}
     if not need.issubset(df.columns):
         missing = need - set(df.columns)
-        logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
+        logging.warning(f"[indicators] missing base cols: {missing}")
         return pd.DataFrame()
 
     out = df.copy()
-
     for c in ("open", "high", "low", "close", "volume"):
         out[c] = pd.to_numeric(out[c], errors="coerce").astype("float64")
 
@@ -48,27 +44,19 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
 
     out.sort_index(inplace=True)
     out = out[~out.index.duplicated(keep="last")]
-
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     out.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
-
     return out
-
 
 def _enough_rows(df: pd.DataFrame) -> bool:
     n = len(df)
     if n < _MIN_ROWS_ABS or n < _LONGEST_WIN:
-        logging.warning(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({_MIN_ROWS_ABS}, {_LONGEST_WIN})")
+        logging.warning(f"[indicators] too few rows ({n}). need ≥ {max(_MIN_ROWS_ABS, _LONGEST_WIN)}")
         return False
     return True
 
-
 def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
-    atr = AverageTrueRange(
-        high=df["high"], low=df["low"], close=df["close"],
-        window=period, fillna=True
-    ).average_true_range()
-
+    atr = AverageTrueRange(high=df["high"], low=df["low"], close=df["close"], window=period, fillna=True).average_true_range()
     hl2 = (df["high"] + df["low"]) / 2.0
     upper_basic = hl2 + multiplier * atr
     lower_basic = hl2 - multiplier * atr
@@ -98,7 +86,6 @@ def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = 
 
     return st.ffill()
 
-
 def _vwap(df: pd.DataFrame) -> pd.Series:
     tp = (df["high"] + df["low"] + df["close"]) / 3.0
     vol = df["volume"].astype("float64")
@@ -107,8 +94,6 @@ def _vwap(df: pd.DataFrame) -> pd.Series:
     vwap = (tp * vol).cumsum() / cum_vol
     return vwap
 
-
-# ---------- זיהוי תבניות נרות ----------
 def _body(o: pd.Series, c: pd.Series) -> pd.Series:
     return (c - o).abs()
 
@@ -165,7 +150,6 @@ def _patterns_all(df: pd.DataFrame) -> Dict[str, pd.Series]:
         is_bull & body_large &
         (c >= (o_prev2 + c_prev2) / 2)
     )
-
     evening_star = (
         large_prev2 & (c_prev2 > o_prev2) &
         small_body_prev &
@@ -185,24 +169,16 @@ def _patterns_all(df: pd.DataFrame) -> Dict[str, pd.Series]:
     ]
 
     labdf = pd.DataFrame({n: m.fillna(False) for n, m in names}, index=df.index)
-
     def _join_row(row: pd.Series) -> str:
         xs = [name for name, on in zip(labdf.columns, row.values) if bool(on)]
         return ", ".join(xs) if xs else "unknown"
 
     pattern_str = labdf.apply(_join_row, axis=1)
-
     out: Dict[str, pd.Series] = {f"is_{n.lower().replace(' ', '_')}": m for n, m in names}
     out["pattern"] = pattern_str
     return out
 
-
 def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
-    """
-    מוסיף:
-    rsi, adx, atr, macד*, ema_21, ema_50, vwap, supertrend (+dir), volume_mean,
-    pattern + דגלים, ולבסוף גם עמודת 'trend' (UP/DOWN/SIDEWAYS)
-    """
     base = _ensure_df(df)
     if base.empty:
         return pd.DataFrame()
@@ -211,17 +187,15 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
 
     out = base.copy()
     try:
-        out["ema_21"] = EMAIndicator(close=out["close"], window=_EMA_FAST, fillna=True).ema_indicator()
-        out["ema_50"] = EMAIndicator(close=out["close"], window=_EMA_SLOW, fillna=True).ema_indicator()
+        out["ema_21"] = EMAIndicator(close=out["close"], window=_EMAFast:=_EMA_FAST, fillna=True).ema_indicator()
+        out["ema_50"] = EMAIndicator(close=out["close"], window=_EMASlow:=_EMA_SLOW, fillna=True).ema_indicator()
 
         out["rsi"] = RSIIndicator(close=out["close"], window=_RSI, fillna=True).rsi()
 
         adx_ind = ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=_ADX, fillna=True)
         out["adx"] = adx_ind.adx()
 
-        out["atr"] = AverageTrueRange(
-            high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=True
-        ).average_true_range()
+        out["atr"] = AverageTrueRange(high=out["high"], low=out["low"], close=out["close"], window=_ATR, fillna=True).average_true_range()
 
         macd = MACD(close=out["close"], window_fast=_MACD_FAST, window_slow=_MACD_SLOW, window_sign=_MACD_SIGNAL, fillna=True)
         out["macd"] = macd.macd()
@@ -247,22 +221,18 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
             logging.debug(f"[indicators] pattern detection skipped: {e}")
             out["pattern"] = "unknown"
             for col in (
-                "is_doji", "is_bullish_engulfing", "is_bearish_engulfing",
-                "is_hammer", "is_inverted_hammer", "is_shooting_star",
-                "is_morning_star", "is_evening_star"
+                "is_doji","is_bullish_engulfing","is_bearish_engulfing",
+                "is_hammer","is_inverted_hammer","is_shooting_star",
+                "is_morning_star","is_evening_star"
             ):
                 out[col] = np.int8(0)
 
-        cols_needed = [
-            "rsi", "adx", "atr", "macd", "macd_signal", "macd_hist",
-            "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir", "volume_mean"
-        ]
+        cols_needed = ["rsi","adx","atr","macd","macd_signal","macd_hist","ema_21","ema_50","vwap","supertrend","supertrend_dir","volume_mean"]
         out.replace([np.inf, -np.inf], np.nan, inplace=True)
         out[cols_needed] = out[cols_needed].ffill().bfill()
         out.dropna(subset=cols_needed, inplace=True)
-
         if out.empty:
-            logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
+            logging.warning("[indicators] after compute/clean — empty")
             return pd.DataFrame()
 
         cond_up = (out["ema_21"] > out["ema_50"]) & (out["close"] > out["ema_21"])
@@ -273,9 +243,8 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
         out["trend"] = trend_series
 
         return out
-
     except Exception as e:
-        logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
+        logging.error(f"[indicators] error: {e}", exc_info=True)
         return pd.DataFrame()
 
 
