@@ -38,6 +38,12 @@ def detect_pattern(df: pd.DataFrame) -> str:
     מחזיר: ["Doji", "Hammer", "Shooting Star", ""]
     """
     try:
+        if df is None or df.empty:
+            return ""
+        need = {"open", "high", "low", "close"}
+        if not need.issubset(df.columns):
+            return ""
+
         last = df.iloc[-1]
         open_price = float(last["open"])
         close_price = float(last["close"])
@@ -61,6 +67,7 @@ def detect_pattern(df: pd.DataFrame) -> str:
         return ""
     except Exception:
         return ""
+
 
 
 
