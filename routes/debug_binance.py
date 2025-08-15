@@ -1,50 +1,26 @@
 # routes/debug_binance.py
-from fastapi import APIRouter, Depends, Header, Query, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 import asyncio
 
+from utils.auth import require_bearer_token
 from utils.binance_client import (
     get_client, ping_and_info, futures_mark_price, futures_exchange_info_safe, sync_server_time
 )
-from utils import config as cfg
 
-router = APIRouter(prefix="/debug", tags=["Debug"])
+router = APIRouter(prefix="/debug", tags=["Debug"], dependencies=[Depends(require_bearer_token)])
 
-def auth_dep(
-    authorization: str = Header(default=""),
-    x_api_key: str = Header(default=""),
-    token: str = Query(default="")
-):
-    expected = (getattr(cfg, "API_BEARER_TOKEN", "") or "").strip()
-    bearer = ""
-    if authorization.lower().startswith("bearer "):
-        bearer = authorization.split(" ", 1)[1].strip()
-    if not bearer:
-        bearer = (x_api_key or token or "").strip()
-    if expected:
-        if bearer != expected:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-    else:
-        if not bearer:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-    return True
-
-@router.get("/binance-futures", dependencies=[Depends(auth_dep)])
+@router.get("/binance-futures")
 async def debug_binance_futures(symbol: str = "BTCUSDT"):
-    # 1) Ping + time sync
     ok = ping_and_info()
     try:
         sync_server_time()
     except Exception:
         pass
 
-    # 2) Mark price (public)
     prem = futures_mark_price(symbol)
-
-    # 3) Exchange info
     ex_info = await asyncio.to_thread(futures_exchange_info_safe)
     sym_count = (ex_info.get("symbols") and len(ex_info["symbols"])) if isinstance(ex_info, dict) else None
 
-    # 4) Test order (לא מבצע טרייד אמיתי)
     client = get_client()
     test_order_resp = None
     test_err = None
