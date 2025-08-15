@@ -1,152 +1,133 @@
 # utils/symbols.py
 from __future__ import annotations
-
-import re
 import time
-from typing import Optional, Dict, Set, List
-
+import re
+from typing import Dict, Optional, Tuple, List
 import httpx
 
-BINANCE_FAPI = "https://fapi.binance.com"
-BINANCE_SPOT = "https://api.binance.com"
+__all__ = ["normalize_symbol", "SymbolsCache"]
 
-# אילו מטבעות ציטוט נחשב “סבירים”
-QUOTES_FUTURES: List[str] = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD"]
-QUOTES_SPOT:    List[str] = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD"]
+# מרובדים נפוצים בפיוצ'רס
+__QUOTES: Tuple[str, ...] = ("USDT", "USDC", "FDUSD", "BUSD")
 
-# פולבק במידה ואין חיבור / Binance לא זמין
-DEFAULT_FUTURES: Set[str] = {
-    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
-    "AVAXUSDT","MATICUSDT","LINKUSDT","TRXUSDT","SHIBUSDT","DOTUSDT",
-}
-DEFAULT_SPOT: Set[str] = set(DEFAULT_FUTURES)
-
-_CLEAN_PAIR = re.compile(r"[^A-Z0-9]+")
-
-def _upper(s: str) -> str:
-    return (s or "").strip().upper()
-
-def _normalize_raw(s: str) -> str:
-    """
-    מסיר רווחים ומפרידים נפוצים, הופך ל-UPPER.
-    תומך: 'avax', 'avax/usdt', 'avax-usdt', 'AVAX_USDT', ' AVAX usdt '
-    """
-    s = _upper(s)
-    # תצורות כמו BASE/QUOTE
-    if "/" in s or "-" in s or "_" in s or " " in s:
-        parts = re.split(r"[\/\-\_\s]+", s)
-        parts = [p for p in parts if p]
-        if len(parts) >= 2:
-            return "".join(parts[:2])  # BASE + QUOTE
-    # “PERP”, “THIS-PERP” וכד' → מתעלמים מהסיומת
-    s = s.replace("PERP", "")
-    return _CLEAN_PAIR.sub("", s)
+_SPOT_EXI = "https://api.binance.com/api/v3/exchangeInfo"
+_FUT_EXI  = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 
 class SymbolsCache:
-    """
-    קאש פשוט לרשימת סימבולים תקפים מהבורסה.
-    refresh() סינכרוני – נוח לשימוש גם מתוך פונקציות async שלא await-ות כאן.
-    """
-    def __init__(self, market: str = "futures", ttl: int = 1800) -> None:
+    def __init__(self, market: str = "futures", ttl: int = 3600):
         self.market = "spot" if str(market).lower() == "spot" else "futures"
         self.ttl = int(ttl)
-        self._last: float = 0.0
-        self._symbols: Set[str] = set(DEFAULT_SPOT if self.market == "spot" else DEFAULT_FUTURES)
-        self._bases: Set[str] = set()  # אוסף baseAsset לתיחום חכם
+        self.ts: float = 0.0
+        self.symbols: Dict[str, Dict] = {}  # SYMBOL -> raw
+        self.base_to_quotes: Dict[str, List[str]] = {}
 
     def _endpoint(self) -> str:
-        return f"{BINANCE_SPOT}/api/v3/exchangeInfo" if self.market == "spot" else f"{BINANCE_FAPI}/fapi/v1/exchangeInfo"
+        return _SPOT_EXI if self.market == "spot" else _FUT_EXI
 
-    def _quotes(self) -> List[str]:
-        return QUOTES_SPOT if self.market == "spot" else QUOTES_FUTURES
-
-    def refresh(self) -> None:
-        now = time.time()
-        if self._symbols and (now - self._last) < self.ttl:
+    def _refresh(self) -> None:
+        if (time.time() - self.ts) < self.ttl and self.symbols:
             return
-        try:
-            with httpx.Client(timeout=8.0) as x:
-                r = x.get(self._endpoint())
-                r.raise_for_status()
-                data = r.json()
-            symbols = data.get("symbols", [])
-            syms: Set[str] = set()
-            bases: Set[str] = set()
-            for s in symbols:
-                sym = _upper(s.get("symbol", ""))
-                status = _upper(s.get("status", ""))
-                base = _upper(s.get("baseAsset", ""))
-                if not sym:
-                    continue
-                # ב־Futures יש גם מצבים כמו PENDING_TRADING; נרשה מצב TRADING בלבד
-                if status and status not in {"TRADING", "PENDING_TRADING"}:
-                    # ב־SPOT לרוב רק TRADING
-                    # עדיין נשמור TRADING; PENDING_TRADING נכלול רק אם אין מספיק כיסוי
-                    pass
-                syms.add(sym)
-                if base:
-                    bases.add(base)
-            if syms:
-                self._symbols = syms
-            if bases:
-                self._bases = bases
-            self._last = now
-        except Exception:
-            # נשאר עם ברירת המחדל; אין צורך להפיל
-            self._last = now  # נסה שוב רק אחרי ttl
+        url = self._endpoint()
+        with httpx.Client(timeout=6.0) as x:
+            r = x.get(url)
+            r.raise_for_status()
+            data = r.json()
+        syms = {}
+        b2q: Dict[str, List[str]] = {}
+        for s in (data.get("symbols") or []):
+            status = (s.get("status") or s.get("contractStatus") or "TRADING")
+            if status != "TRADING":
+                continue
+            sym = str(s.get("symbol") or "").upper()
+            base = str(s.get("baseAsset") or "").upper()
+            quote = str(s.get("quoteAsset") or "").upper()
+            if not sym or not base or not quote:
+                continue
+            syms[sym] = s
+            b2q.setdefault(base, []).append(quote)
+        self.symbols = syms
+        self.base_to_quotes = b2q
+        self.ts = time.time()
 
-    def normalize(self, raw: str) -> str:
-        """
-        מחזיר סימבול מלא תקף לביננס (לדוגמה: BTC → BTCUSDT, avax/usdt → AVAXUSDT).
-        תמיד מחזיר UPPERCASE. נצמד למרקט של הקאש.
-        """
-        self.refresh()
-        s = _normalize_raw(raw)
-        if not s:
-            raise ValueError("empty symbol")
+    def find(self, candidate: str) -> Optional[str]:
+        self._refresh()
+        c = candidate.upper()
+        if c in self.symbols:
+            return c
+        return None
 
-        # אם כבר סימבול מלא שקיים – החזר
-        if s in self._symbols:
-            return s
-
-        # אם נמסר כ־BASE+QUOTE בפועל, אבל לא קיים – ננסה וריאציות ציטוט
-        quotes = self._quotes()
-
-        # 1) אם מסתיים ב־QUOTE ידוע → בדיקה ישירה (אולי חסר ב־cache)
+    def best_with_base(self, base: str) -> Optional[str]:
+        self._refresh()
+        base = base.upper()
+        quotes = self.base_to_quotes.get(base) or []
+        # העדף USDT/FDUSD
+        for q in ("USDT", "FDUSD", "USDC", "BUSD"):
+            if q in quotes:
+                sym = base + q
+                if sym in self.symbols:
+                    return sym
+        # fallback כלשהו
         for q in quotes:
-            if s.endswith(q) and s in self._symbols:
-                return s
+            sym = base + q
+            if sym in self.symbols:
+                return sym
+        return None
 
-        # 2) אם נמסר כ־"BASEQUOTE" (כבר מנוּרמל), ננסה לשבור לבסיס
-        #    base = כל מה שלא מסתיים באחד ה־quotes
-        base = s
-        for q in quotes:
-            if s.endswith(q):
-                base = s[: -len(q)]
-                break
 
-        # 3) pair style שהיה עם מפריד (טפלנו ב־_normalize_raw), אך ליתר ביטחון – לא צריך כאן
+_WS = re.compile(r"[\s\-/]+")
 
-        # 4) ניחוש חכם: נסה BASE + quote מועדף (USDT תחילה), אח"כ השאר
-        preferred = ["USDT"] + [q for q in quotes if q != "USDT"]
-        for q in preferred:
-            cand = f"{base}{q}"
-            if cand in self._symbols:
-                return cand
+def _split_base_quote(s: str) -> Tuple[str, Optional[str]]:
+    s = s.strip().upper()
+    s = _WS.sub("", s)
+    # "BTCUSDT" ארוך -> נסה לחלץ quote מוכר
+    for q in __QUOTES:
+        if s.endswith(q) and len(s) > len(q):
+            return s[:-len(q)], q
+    # "BTC/USDT" או "BTC-USDT" כבר קוזז ע"י regex למעלה, כך שאין מפריד
+    return s, None
 
-        # 5) אם הבסיס קיים ב־exchange (bases) – החזר BASEUSDT (גם אם לא נכלל ב־symbols)
-        if base in self._bases:
-            return f"{base}USDT"
+def _maybe_add_quote(base_or_symbol: str) -> List[str]:
+    s = base_or_symbol.upper()
+    # אם כבר נראה כמו SYMBOL מלא
+    for q in __QUOTES:
+        if s.endswith(q) and len(s) > len(q):
+            return [s]
+    # נסה כל quote מוכר
+    return [s + q for q in __QUOTES]
 
-        # 6) פולבק סופי: BASEUSDT
-        return f"{base}USDT"
-
-def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[SymbolsCache] = None) -> str:
+def normalize_symbol(user_input: str, *, market: str = "futures", cache: Optional[SymbolsCache] = None) -> str:
     """
-    עטיפה נוחה לשימוש חיצוני. סינכרוני (לא צריך await).
+    מקבל קלט גמיש ("btc", "btc/usdt", "BTCUSDT") ומחזיר SYMBOL חוקי לפי exchangeInfo.
     """
-    if cache is None or cache.market != ("spot" if str(market).lower() == "spot" else "futures"):
-        cache = SymbolsCache(market=market)
-    return cache.normalize(symbol)
+    if not user_input or not str(user_input).strip():
+        raise ValueError("empty symbol")
+
+    market = "spot" if str(market).lower() == "spot" else "futures"
+    c = cache or SymbolsCache(market=market)
+
+    raw = str(user_input).upper().strip()
+    raw = raw.replace("PERP", "").replace("_", "/")
+    base, maybe_quote = _split_base_quote(raw)
+
+    # רשימת מועמדים לפי קלט
+    candidates: List[str] = []
+    if maybe_quote:
+        candidates.append(base + maybe_quote)
+    else:
+        candidates.extend(_maybe_add_quote(base))
+
+    # נסה למצוא במדויק
+    for cand in candidates:
+        hit = c.find(cand)
+        if hit:
+            return hit
+
+    # נסה "הטבת" base בלבד
+    best = c.best_with_base(base)
+    if best:
+        return best
+
+    raise ValueError(f"unknown symbol '{user_input}' for market={market}")
+
 
 
