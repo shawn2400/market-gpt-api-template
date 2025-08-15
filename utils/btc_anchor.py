@@ -1,147 +1,171 @@
 # utils/btc_anchor.py
 from __future__ import annotations
-import os, time
-from typing import List, Dict, Any, Optional, Tuple
+import time
+import math
+from typing import Dict, List, Optional, Tuple
 
-# תאימות: קודם ננסה get_klines מהמודול שהגדרת, ואם לא – מהחלופי
-try:
-    from utils.get_klines import get_klines  # type: ignore
-except Exception:
-    from utils.klines import get_klines  # type: ignore
-
+from utils.get_klines import get_klines
 from utils.indicators import compute_indicators
 
-# קאש קצר לעוגן כדי לא להעמיס (שניות)
-_ANCHOR_TTL = int(os.getenv("BTC_ANCHOR_TTL", "20"))
-# ספי פעולה
-_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
-_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
+# קאש קצר כדי להימנע מספאם לבינאנס
+_ANCHOR_CACHE: Dict[Tuple[str, Tuple[str, ...]], Tuple[float, Dict[str, object]]] = {}
+_ANCHOR_TTL = 20.0  # שניות
 
-# (market, frames_key) -> (expire_ts, data)
-_ANCHOR_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+def _clamp(v: float, lo: float, hi: float) -> float:
+    try:
+        v = float(v)
+    except Exception:
+        v = lo
+    return max(lo, min(hi, v))
 
-
-def _trend_from_indicators(last: Dict[str, Any]) -> str:
-    ema21 = float(last.get("ema_21", 0.0) or 0.0)
-    ema50 = float(last.get("ema_50", 0.0) or 0.0)
-    close = float(last.get("close", 0.0) or 0.0)
-    tr = str(last.get("trend") or "").upper()
-    if tr in ("UP", "DOWN", "SIDEWAYS"):
-        return tr
-    if close <= 0:
-        return "SIDEWAYS"
-    if ema21 > ema50 and close > ema21:
-        return "UP"
-    if ema21 < ema50 and close < ema21:
-        return "DOWN"
+def _trend_dir_to_trade_dir(trend: str) -> str:
+    t = (trend or "").upper()
+    if t == "UP":
+        return "LONG"
+    if t == "DOWN":
+        return "SHORT"
     return "SIDEWAYS"
 
+async def _analyze_tf(symbol: str, tf: str, market: str) -> Optional[Dict[str, float]]:
+    df = await get_klines(symbol, interval=tf, limit=180, market_type=market)
+    if df is None:
+        return None
+    df = compute_indicators(df)
+    if df is None or df.empty:
+        return None
+    last = df.iloc[-1]
+    trend = str(last.get("trend", "SIDEWAYS")).upper()
+    rsi = float(last.get("rsi", 50.0))
+    adx = float(last.get("adx", 15.0))
+    return {"trend": trend, "rsi": rsi, "adx": adx}
 
-async def compute_btc_anchor(frames: List[str] | None = None, market: str = "futures") -> Dict[str, Any]:
+def _combine(frames_stats: List[Dict[str, float]]) -> Tuple[str, int]:
     """
-    מחשב את מצב ה-BTC (כיוון/מגמה/חוזק) על פני כמה TF-ים, עם קאש קצר.
+    הופך רשימת {trend, rsi, adx} להחלטת עוגן כוללת: (overall_trend, strength 0..100)
     """
-    frames = frames or ["15m", "1h"]
-    key = (market, ",".join(frames))
-    now = time.time()
+    if not frames_stats:
+        return ("SIDEWAYS", 50)
+    score = 0.0
+    weights_sum = 0.0
+    for s in frames_stats:
+        tr = (s["trend"] or "SIDEWAYS").upper()
+        sign = 1 if tr == "UP" else (-1 if tr == "DOWN" else 0)
+        # נרמל ADX (0..1) וסטיית RSI מ-50 (0..1)
+        w_adx = _clamp(s["adx"], 0, 50) / 50.0
+        w_rsi = _clamp(abs(s["rsi"] - 50.0), 0, 50) / 50.0
+        # משקל TF: ADX חזק יותר
+        tf_strength = (0.6 * w_adx + 0.4 * w_rsi)  # 0..1
+        score += sign * tf_strength
+        weights_sum += tf_strength
 
-    cached = _ANCHOR_CACHE.get(key)
-    if cached and cached[0] > now:
-        return cached[1]
+    if abs(score) < 1e-9:
+        return ("SIDEWAYS", 50)
 
-    dir_scores: List[int] = []
-    strengths: List[int] = []
-    reasons: List[str] = []
+    avg_mag = abs(score) / max(weights_sum, 1e-9)  # 0..1
+    overall = "UP" if score > 0 else "DOWN"
+    strength = int(round(_clamp(50 + (avg_mag * 50), 0, 100)))
+    return (overall, strength)
 
-    for tf in frames:
-        df = await get_klines("BTCUSDT", interval=tf, limit=150, market_type=market)
-        if df is None or len(df) < 60:
-            continue
-        df = compute_indicators(df)
-        last = df.iloc[-1].to_dict()
-
-        trend = _trend_from_indicators(last)
-        direction = "LONG" if trend == "UP" else ("SHORT" if trend == "DOWN" else "SIDEWAYS")
-        adx = float(last.get("adx", 0.0) or 0.0)
-        rsi = float(last.get("rsi", 50.0) or 50.0)
-
-        score = 1 if direction == "LONG" else (-1 if direction == "SHORT" else 0)
-        dir_scores.append(score)
-
-        # חוזק פשוט: ADX + התאמת RSI לכיוון
-        s = 40
-        if adx >= 25: s += 20
-        if direction == "LONG" and rsi >= 55: s += 20
-        if direction == "SHORT" and rsi <= 45: s += 20
-        s = max(0, min(100, s))
-        strengths.append(int(s))
-
-        reasons.append(f"{tf}: trend={trend} rsi={rsi:.1f} adx={adx:.1f}")
-
-    if not dir_scores:
-        anchor = {"symbol": "BTCUSDT", "direction": "SIDEWAYS", "trend": "SIDEWAYS",
-                  "strength": 0, "frames": frames, "reason": "no data"}
-    else:
-        agg = sum(dir_scores)
-        if agg > 0:
-            dir_final, trend = "LONG", "UP"
-        elif agg < 0:
-            dir_final, trend = "SHORT", "DOWN"
+def _reason(frames: List[str], stats: List[Optional[Dict[str, float]]]) -> str:
+    parts = []
+    for tf, st in zip(frames, stats):
+        if not st:
+            parts.append(f"{tf}: no-data")
         else:
-            dir_final, trend = "SIDEWAYS", "SIDEWAYS"
-        strength = int(round(sum(strengths) / len(strengths))) if strengths else 0
-        anchor = {"symbol": "BTCUSDT", "direction": dir_final, "trend": trend,
-                  "strength": strength, "frames": frames, "reason": "; ".join(reasons)}
+            parts.append(f"{tf}: trend={st['trend']} rsi={round(st['rsi'],1)} adx={round(st['adx'],1)}")
+    return "; ".join(parts)
 
-    _ANCHOR_CACHE[key] = (now + _ANCHOR_TTL, anchor)
-    return anchor
-
-
-def anchor_gate(alt_direction: str, anchor: Dict[str, Any],
-                strong_th: int = _STRONG_TH, weak_th: int = _WEAK_TH) -> Dict[str, Any]:
+async def compute_btc_anchor(frames: List[str], market: str = "futures") -> Dict[str, object]:
     """
-    קובע Gate לפוזיציית אלט אל מול העוגן:
-      - block (נגד BTC חזק)
-      - downgrade (נגד BTC בינוני)
-      - boost (עם BTC בינוני+)
-      - allow (ניטרלי)
+    מחשב עוגן BTC עבור רשימת TFs. לעולם לא מעלה חריגה; מחזיר עוגן ניטרלי במקרה תקלה.
     """
-    adir = (alt_direction or "SIDEWAYS").upper()
-    adir = "LONG" if adir in ("LONG", "BUY") else ("SHORT" if adir in ("SHORT", "SELL") else "SIDEWAYS")
+    key = (("spot" if str(market).lower() == "spot" else "futures"), tuple(frames or []))
+    now = time.time()
+    cached = _ANCHOR_CACHE.get(key)
+    if cached and (now - cached[0]) <= _ANCHOR_TTL:
+        return cached[1]  # type: ignore
+
+    try:
+        tfs = [s.strip() for s in (frames or []) if s.strip()]
+        if not tfs:
+            tfs = ["15m", "1h"]
+
+        stats: List[Optional[Dict[str, float]]] = []
+        for tf in tfs:
+            st = await _analyze_tf("BTCUSDT", tf, key[0])
+            stats.append(st)
+
+        ok_stats = [s for s in stats if s]
+        overall_trend, strength = _combine(ok_stats) if ok_stats else ("SIDEWAYS", 50)
+        direction = _trend_dir_to_trade_dir(overall_trend)
+
+        out = {
+            "symbol": "BTCUSDT",
+            "direction": direction,                   # LONG / SHORT / SIDEWAYS
+            "trend": overall_trend,                   # UP / DOWN / SIDEWAYS
+            "strength": int(strength),                # 0..100
+            "frames": tfs,
+            "reason": _reason(tfs, stats),
+        }
+        _ANCHOR_CACHE[key] = (now, out)
+        return out
+    except Exception as e:
+        out = {
+            "symbol": "BTCUSDT",
+            "direction": "SIDEWAYS",
+            "trend": "SIDEWAYS",
+            "strength": 50,
+            "frames": frames or ["15m", "1h"],
+            "reason": f"anchor error: {e}",
+        }
+        _ANCHOR_CACHE[key] = (now, out)
+        return out
+
+def anchor_gate(direction: str, anchor: Dict[str, object], *, strong_th: int = 70, weak_th: int = 55) -> Dict[str, object]:
+    """
+    קובע האם לבלום/להחליש/לחזק החלטה מול העוגן.
+    """
+    dir_in = (direction or "SIDEWAYS").upper()
     a_dir = (anchor.get("direction") or "SIDEWAYS").upper()
-    s = int(anchor.get("strength") or 0)
+    strength = int(anchor.get("strength") or 0)
 
-    conflict = (adir == "LONG" and a_dir == "SHORT") or (adir == "SHORT" and a_dir == "LONG")
+    if a_dir == "SIDEWAYS" or strength < weak_th:
+        return {"action": "allow", "reason": "anchor weak/sideways"}
 
-    if conflict and s >= strong_th:
-        return {"action": "block", "penalty": 25, "reason": f"conflict with BTC {a_dir} (strength {s})"}
-    if conflict and s >= weak_th:
-        return {"action": "downgrade", "penalty": 15, "reason": f"weak conflict with BTC {a_dir} (strength {s})"}
-    if adir != "SIDEWAYS" and a_dir == adir and s >= weak_th:
-        return {"action": "boost", "bonus": 10, "reason": f"aligned with BTC {a_dir} (strength {s})"}
-    return {"action": "allow", "reason": "neutral"}
+    aligned = (dir_in == "LONG" and a_dir == "LONG") or (dir_in == "SHORT" and a_dir == "SHORT")
+    opposite = (dir_in == "LONG" and a_dir == "SHORT") or (dir_in == "SHORT" and a_dir == "LONG")
 
+    if opposite and strength >= strong_th:
+        return {"action": "block", "reason": f"BTC {a_dir} strong ({strength})"}
+    if opposite:
+        return {"action": "downgrade", "penalty": 15, "reason": f"BTC {a_dir} ({strength}) opposes"}
+    if aligned and strength >= strong_th:
+        return {"action": "boost", "bonus": 12, "reason": f"BTC {a_dir} strong ({strength})"}
+    if aligned:
+        return {"action": "boost", "bonus": 6, "reason": f"BTC {a_dir} ({strength})"}
+    return {"action": "allow", "reason": "anchor neutral"}
 
-def sltp_multipliers(alt_direction: str, anchor: Dict[str, Any],
-                     strong_th: int = _STRONG_TH, weak_th: int = _WEAK_TH) -> Tuple[float, float]:
+def sltp_multipliers(direction: str, anchor: Dict[str, object], *, strong_th: int = 70, weak_th: int = 55) -> Tuple[float, float]:
     """
-    מחזיר (SL_mult, TP_mult) לכוונון מרחקי SL/TP לפי העוגן.
+    מחזיר (sl_mult, tp_mult). ערכי בסיס: 1.0/1.0. מכוונן לפי העוגן.
     """
-    adir = (alt_direction or "SIDEWAYS").upper()
-    adir = "LONG" if adir in ("LONG", "BUY") else ("SHORT" if adir in ("SHORT", "SELL") else "SIDEWAYS")
+    dir_in = (direction or "SIDEWAYS").upper()
     a_dir = (anchor.get("direction") or "SIDEWAYS").upper()
-    s = int(anchor.get("strength") or 0)
+    strength = int(anchor.get("strength") or 0)
 
-    conflict = (adir == "LONG" and a_dir == "SHORT") or (adir == "SHORT" and a_dir == "LONG")
+    if a_dir == "SIDEWAYS" or strength < weak_th:
+        return (1.0, 1.0)
 
-    if conflict and s >= strong_th:
-        return 1.20, 0.80  # מרחיבים SL, מצמצמים TP
-    if conflict and s >= weak_th:
-        return 1.10, 0.90
-    if adir != "SIDEWAYS" and a_dir == adir:
-        if s >= strong_th:
-            return 0.90, 1.20  # מצמצמים SL, מרחיבים TP
-        if s >= weak_th:
-            return 0.95, 1.10
-    return 1.00, 1.00
+    aligned = (dir_in == "LONG" and a_dir == "LONG") or (dir_in == "SHORT" and a_dir == "SHORT")
+    opposite = (dir_in == "LONG" and a_dir == "SHORT") or (dir_in == "SHORT" and a_dir == "LONG")
+
+    if aligned and strength >= strong_th:
+        return (0.90, 1.20)  # צמצום SL, הרחבת TP
+    if aligned:
+        return (0.95, 1.10)
+    if opposite and strength >= strong_th:
+        return (1.20, 0.90)  # הרחבת SL, צמצום TP
+    if opposite:
+        return (1.10, 0.95)
+    return (1.0, 1.0)
 
