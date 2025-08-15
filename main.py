@@ -29,7 +29,7 @@ except Exception:
 from utils.symbols import normalize_symbol, SymbolsCache
 symbols_cache = SymbolsCache(market="futures")
 
-# --- סורק סימבול ---
+# --- סורק סימבול (אופציונלי) ---
 try:
     from utils.symbol_analysis import analyze_symbol
 except Exception as e:
@@ -63,20 +63,28 @@ ANCHOR_ENFORCE = os.getenv("BTC_ANCHOR_ENFORCE", "true").lower() == "true"
 ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
 ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
 
-# --- אימות טוקן (פרטי) ---
-API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
+# --- אימות טוקן (מאוחד דרך utils.config) ---
+from utils import config as cfg
+API_BEARER_TOKEN = (getattr(cfg, "API_BEARER_TOKEN", "") or "").strip()
 
 def auth_dep(request: Request):
     """
     אימות פשוט:
     - אם מוגדר API_BEARER_TOKEN בסביבה → חייבים להתאים בדיוק.
-    - אם לא מוגדר → עדיין דורשים טוקן (Header Authorization: Bearer XXX או ?token=XXX),
-      אבל לא בודקים ערך ספציפי. מתאים לפרטי/שימוש פנימי.
+    - אם לא מוגדר → עדיין דורשים טוקן (Header Authorization: Bearer XXX/X-API-Key או ?token=XXX).
     """
     auth = request.headers.get("Authorization", "")
     bearer = ""
     if auth.lower().startswith("bearer "):
         bearer = auth.split(" ", 1)[1].strip()
+
+    # תמיכה גם ב־X-API-Key
+    if not bearer:
+        xkey = request.headers.get("X-API-Key", "").strip()
+        if xkey:
+            bearer = xkey
+
+    # תמיכה גם ב־query param token
     if not bearer:
         qtok = request.query_params.get("token")
         if qtok:
@@ -255,7 +263,7 @@ async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
     fr = [s.strip() for s in frames.split(",") if s.strip()]
     return await compute_btc_anchor(frames=fr, market=market)
 
-# -------- Scanner --------
+# -------- Scanner (גרסה בסיסית לוקלית) --------
 @app.get("/scan/multi", tags=["Trades"], summary="Scan Multi", response_model=ScanResponse)
 async def scan_multi(
     interval: str = "15m,1h",
@@ -501,24 +509,39 @@ async def execute_grid(req: GridTradeRequest):
         logger.exception("grid trade failed")
         return {"status": "error", "error": str(e), "plan": plan}
 
-# -------- Executor (in-mem demo) --------
-EXECUTOR_RUNNING = False
+# -------- Executor (חיבור ל־auto_executor) --------
+from auto_executor import (
+    is_executor_running as _is_exec_running,
+    start_executor as _start_exec,
+    stop_executor as _stop_exec,
+)
 
 @app.get("/executor/start", tags=["Executor"], summary="Executor Start", dependencies=[Depends(auth_dep)])
 async def start_executor():
-    global EXECUTOR_RUNNING
-    EXECUTOR_RUNNING = True
-    return {"started": True, "running": EXECUTOR_RUNNING}
+    _start_exec()
+    return {"started": True, "running": _is_exec_running()}
 
 @app.get("/executor/stop", tags=["Executor"], summary="Executor Stop", dependencies=[Depends(auth_dep)])
 async def stop_executor():
-    global EXECUTOR_RUNNING
-    EXECUTOR_RUNNING = False
-    return {"stopped": True, "running": EXECUTOR_RUNNING}
+    _stop_exec()
+    return {"stopped": True, "running": _is_exec_running()}
 
 @app.get("/executor/status", tags=["Executor"], summary="Executor Status", dependencies=[Depends(auth_dep)])
 async def executor_status():
-    return {"running": EXECUTOR_RUNNING}
+    return {"running": _is_exec_running()}
+
+# ---- Aliases תואמי-לקוח ----
+@app.get("/auto-executor/start", tags=["Executor"], dependencies=[Depends(auth_dep)])
+async def auto_executor_start():
+    return await start_executor()
+
+@app.get("/auto-executor/stop", tags=["Executor"], dependencies=[Depends(auth_dep)])
+async def auto_executor_stop():
+    return await stop_executor()
+
+@app.get("/auto-executor/status", tags=["Executor"], dependencies=[Depends(auth_dep)])
+async def auto_executor_status():
+    return await executor_status()
 
 # -------- Reports --------
 @app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF", response_model=PnlPdfResponse, dependencies=[Depends(auth_dep)])
@@ -548,6 +571,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
