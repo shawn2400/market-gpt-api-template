@@ -1,4 +1,6 @@
 # utils/indicators.py
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import logging
@@ -20,7 +22,7 @@ _MACD_SIGNAL = 9
 _ST_PERIOD = 10
 _ST_MULT = 3.0
 
-_MIN_ROWS_ABS = 100  # מינימום כללי
+_MIN_ROWS_ABS = 100  # מינימום כללי לניקוי/אינדיקטורים
 _LONGEST_WIN = max(_EMA_SLOW, _MACD_SLOW, _ATR, _ADX, _RSI, _ST_PERIOD) + 20
 
 
@@ -32,7 +34,7 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     need = {"open", "high", "low", "close", "volume"}
     if not need.issubset(df.columns):
         missing = need - set(df.columns)
-        logging.warning(f"[indicators] חסרות עמודות לבסיס: {missing}")
+        logging.debug(f"[indicators] חסרות עמודות לבסיס: {missing}")
         return pd.DataFrame()
 
     out = df.copy()
@@ -62,13 +64,13 @@ def _ensure_df(df: Optional[pd.DataFrame]) -> pd.DataFrame:
 def _enough_rows(df: pd.DataFrame) -> bool:
     n = len(df)
     if n < _MIN_ROWS_ABS or n < _LONGEST_WIN:
-        logging.warning(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({_MIN_ROWS_ABS}, {_LONGEST_WIN})")
+        logging.debug(f"[indicators] מעט מדי נרות ({n}). דרוש לפחות max({_MIN_ROWS_ABS}, {_LONGEST_WIN})")
         return False
     return True
 
 
 def _supertrend(df: pd.DataFrame, period: int = _ST_PERIOD, multiplier: float = _ST_MULT) -> pd.Series:
-    """חישוב קו SuperTrend בסיסי מבוסס ATR."""
+    """חישוב קו SuperTrend בסיסי מבוסס ATR (וקטורי, קל משקל)."""
     atr = AverageTrueRange(
         high=df["high"], low=df["low"], close=df["close"],
         window=period, fillna=True
@@ -220,7 +222,7 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     rsi, adx, atr, macd, macd_signal, macd_hist, ema_21, ema_50, vwap,
     supertrend, supertrend_dir, volume_mean, pattern,
     is_doji, is_bullish_engulfing, is_bearish_engulfing, is_hammer,
-    is_inverted_hammer, is_shooting_star, is_morning_star, is_evening_star
+    is_inverted_hammer, is_shooting_star, is_morning_star, is_evening_star, trend
 
     אם אין מספיק נתונים – מחזיר DF ריק.
     """
@@ -292,17 +294,24 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
             ):
                 out[col] = np.int8(0)
 
+        # נגזרת טרנד פשוטה (עוזר לשכבות מעל)
+        # UP אם ema21>ema50 והמחיר מעל ema21; DOWN אם ema21<ema50 והמחיר מתחת ל-ema21; אחרת SIDEWAYS
+        cond_up = (out["ema_21"] > out["ema_50"]) & (out["close"] > out["ema_21"])
+        cond_down = (out["ema_21"] < out["ema_50"]) & (out["close"] < out["ema_21"])
+        out["trend"] = np.where(cond_up, "UP", np.where(cond_down, "DOWN", "SIDEWAYS"))
+
         # ניקוי NaN/Inf
         cols_needed = [
             "rsi", "adx", "atr", "macd", "macd_signal", "macd_hist",
-            "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir", "volume_mean"
+            "ema_21", "ema_50", "vwap", "supertrend", "supertrend_dir",
+            "volume_mean", "trend"
         ]
         out.replace([np.inf, -np.inf], np.nan, inplace=True)
         out[cols_needed] = out[cols_needed].ffill().bfill()
         out.dropna(subset=cols_needed, inplace=True)
 
         if out.empty:
-            logging.warning("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
+            logging.debug("[indicators] לאחר חישוב וניקוי – אין נתונים. מחזיר ריק.")
             return pd.DataFrame()
 
         return out
@@ -310,6 +319,7 @@ def compute_indicators(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     except Exception as e:
         logging.error(f"[indicators] שגיאה בחישוב אינדיקטורים: {e}", exc_info=True)
         return pd.DataFrame()
+
 
 
 
