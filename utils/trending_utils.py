@@ -1,4 +1,6 @@
 # utils/trending_utils.py
+from __future__ import annotations
+
 import os
 import logging
 import time
@@ -133,6 +135,7 @@ def get_trending_symbols(source: str = "binance24h", market: str = "futures", to
         logging.warning("[trending] fallback symbols used")
         syms = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
     return syms
+
 
 
 
