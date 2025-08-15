@@ -1,4 +1,4 @@
-# utils/klines.py
+# utils/get_klines.py
 from __future__ import annotations
 import time
 from typing import Optional, List, Dict, Any, Tuple
@@ -11,33 +11,24 @@ from utils.symbols import normalize_symbol, SymbolsCache
 BINANCE_FAPI = "https://fapi.binance.com"
 BINANCE_SPOT = "https://api.binance.com"
 
-# cache לסימבולים תקפים
 _symbols_cache_fut = SymbolsCache(market="futures")
 _symbols_cache_spot = SymbolsCache(market="spot")
 
-# מניעת עומס על סימבולים בעייתיים
 _INVALID_TTL = 3600  # שניות
 _invalid_cache: Dict[Tuple[str, str], float] = {}  # {(market, symbol_upper): ts_expire}
-
 
 def _is_invalid(market: str, symbol: str) -> bool:
     return _invalid_cache.get((market, symbol.upper()), 0.0) > time.time()
 
-
 def _mark_invalid(market: str, symbol: str) -> None:
     _invalid_cache[(market, symbol.upper())] = time.time() + _INVALID_TTL
-
 
 def _endpoint_for(market_type: str) -> str:
     if str(market_type).lower() == "spot":
         return f"{BINANCE_SPOT}/api/v3/klines"
     return f"{BINANCE_FAPI}/fapi/v1/klines"
 
-
 def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
-    """
-    המרת klines של בינאנס ל־DataFrame עם עמודות נוחות.
-    """
     cols = [
         "open_time", "open", "high", "low", "close", "volume",
         "close_time", "quote_asset_volume", "number_of_trades",
@@ -49,10 +40,8 @@ def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
     df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    # חותמת זמן שימושית
     df["timestamp"] = df["close_time"]
     return df
-
 
 async def get_klines(
     symbol: str,
@@ -60,18 +49,12 @@ async def get_klines(
     limit: int = 150,
     market_type: str = "futures",
 ) -> Optional[pd.DataFrame]:
-    """
-    משיג נרות מ־Binance (REST), עם נרמול סימבול ו־blacklist לשעה עבור סימבולים לא תקפים.
-    מחזיר DataFrame או None.
-    """
     market = "spot" if str(market_type).lower() == "spot" else "futures"
     sym_in = symbol.upper()
 
-    # אל תנסה אם סומן בעייתי לאחרונה
     if _is_invalid(market, sym_in):
         raise ValueError(f"Symbol {sym_in} recently marked invalid for {market}")
 
-    # נרמול (כולל 1000SHIB וכו')
     try:
         norm = normalize_symbol(sym_in, market=market, cache=_symbols_cache_spot if market == "spot" else _symbols_cache_fut)
     except Exception:
@@ -85,8 +68,7 @@ async def get_klines(
         r = await x.get(url, params=params)
         try:
             r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            # אם קיבלנו 4xx — נניח לא תקף ונחסום לשעה
+        except httpx.HTTPStatusError:
             if 400 <= r.status_code < 500:
                 _mark_invalid(market, sym_in)
             raise
@@ -96,7 +78,6 @@ async def get_klines(
             return None
 
     df = _to_dataframe(data)
-    # אנו מצפים לפחות ~60 נרות כדי לחשב ממוצעים נעים/ADX וכו'
     if len(df) < 10:
         return None
     return df
