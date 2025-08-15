@@ -19,7 +19,7 @@ def _now() -> float:
 
 class SymbolsCache:
     """
-    קאש קליל לשמות סימבולים לפי שוק (futures/spot), עם ריענון ע"י exchangeInfo.
+    קאש קליל לשמות סימבולים לפי שוק (futures/spot), עם ריענון מ-exchangeInfo.
     שימוש:
         fut = SymbolsCache(market="futures")
         sym = normalize_symbol("avax", market="futures", cache=fut)  # → "AVAXUSDT"
@@ -50,20 +50,17 @@ class SymbolsCache:
         try:
             syms = set()
             for s in (data.get("symbols") or []):
-                # בפיוצ'רס/ספוט השדה "symbol" קיים תמיד
                 name = str(s.get("symbol") or "").upper().strip()
                 if not name:
                     continue
-                # מצב "TRADING" / "BREAK" / וכו' — נסנן ל־TRADING אם יש
                 st = str(s.get("status") or "").upper()
-                if st and st not in ("TRADING", "PENDING_TRADING"):  # ספוט לפעמים PENDING_TRADING
+                if st and st not in ("TRADING", "PENDING_TRADING"):
                     continue
                 syms.add(name)
             if syms:
                 self._symbols = syms
                 self._last_fetch = _now()
         except Exception:
-            # בלית ברירה — אל תזרוק חריגה
             pass
 
     def all(self) -> Set[str]:
@@ -73,7 +70,7 @@ class SymbolsCache:
 
 def _maybe_add_quote(sym_u: str) -> List[str]:
     """אם לא סופק קווט ידוע, ננסה לצרף USDT."""
-    for q in __QUOTES:
+    for q in _QUOTES:
         if sym_u.endswith(q):
             return [sym_u]
     return [sym_u + "USDT", sym_u]  # נעדיף עם USDT, אבל נבדוק גם את המקור ליתר ביטחון
@@ -85,7 +82,7 @@ def _thousands_variants(sym_u: str) -> List[str]:
     לדוגמה: SHIBUSDT → 1000SHIBUSDT
     """
     out: List[str] = []
-    for q in __QUOTES:
+    for q in _QUOTES:
         if sym_u.endswith(q):
             base = sym_u[: -len(q)]
             if base and base in _THOUSANDS_BASES and not base.startswith("1000"):
@@ -114,7 +111,7 @@ def normalize_symbol(
     sym_u = symbol.strip().upper().replace(" ", "")
     mrk = "spot" if str(market).lower() == "spot" else "futures"
 
-    # קלאס קאש — אם לא נמסר, נשתמש באחד קצר-חיים (לא הכי יעיל, אך בטוח)
+    # קאש (אם לא נמסר – ניצור קצר-חיים)
     local_cache = cache or SymbolsCache(market=mrk, ttl_sec=300)
     symbols = local_cache.all()
 
@@ -128,22 +125,18 @@ def normalize_symbol(
         extra.extend(_thousands_variants(c))
     candidates.extend(extra)
 
-    # דוגמאות שימושיות נוספות:
-    # אם המשתמש הזין "BTC" — נכניס גם "BTCUSDT" (כבר מכוסה ע"י _maybe_add_quote)
-
     # בדיקה מול הקאש; אם לא מצאנו, נרענן פעם אחת
     for c in candidates:
         if c in symbols:
             return c
 
-    # ניסיון רענון חד-פעמי ואז בדיקה נוספת
     local_cache.refresh(force=True)
     symbols = local_cache.all()
     for c in candidates:
         if c in symbols:
             return c
 
-    # לא נמצא — ננסה לתת הודעה עם הצעות (למשל 1000SHIBUSDT)
-    suggestions = [c for c in candidates if any(c.startswith(prefix) for prefix in ("1000",))]
+    suggestions = [c for c in candidates if c.startswith("1000")]
     hint = f" (did you mean: {', '.join(suggestions[:3])})" if suggestions else ""
     raise ValueError(f"Unknown/unsupported symbol '{symbol}' for {mrk}{hint}")
+
