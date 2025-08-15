@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-# אימות מרכזי
+# --- Auth dependency (מוגן חזק) ---
 from utils.auth import require_bearer_token
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
@@ -58,7 +58,7 @@ except Exception as e:
     ping_openai = None
     logger.warning("ai_health not available: %s", e)
 
-# AI client לאירועי startup/shutdown (אופציונלי)
+# --- AI client ל־startup/shutdown (אופציונלי) ---
 try:
     from utils.ai_client import ai_client as _ai_client
 except Exception:
@@ -272,7 +272,7 @@ async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
     fr = [s.strip() for s in frames.split(",") if s.strip()]
     return await compute_btc_anchor(frames=fr, market=market)
 
-# -------- Scanner (פומבי) --------
+# -------- Scanner (פומבי, קשיח נגד נפילות) --------
 @app.get("/scan/multi", tags=["Trades"], summary="Scan Multi", response_model=ScanResponse)
 async def scan_multi(
     interval: str = "15m,1h",
@@ -285,9 +285,15 @@ async def scan_multi(
     frames = [s.strip() for s in interval.split(",") if s.strip()]
     base_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
-    anchor = await compute_btc_anchor(frames=frames, market=market_type)
+    try:
+        anchor = await compute_btc_anchor(frames=frames, market=market_type)
+    except Exception as e:
+        logger.warning("[scan] anchor failed: %s", e)
+        anchor = {"direction": "SIDEWAYS", "strength": 0, "frames": frames}
 
     results: List[ScanResultItem] = []
+    errors: Dict[str, str] = {}
+
     if analyze_symbol is None:
         return {"results": results}
 
@@ -298,7 +304,7 @@ async def scan_multi(
             try:
                 res = await analyze_symbol(
                     sym, market_type=market_type, interval=tf,
-                    limit=150, trending_only=bool(trending_only),
+                    limit=180, trending_only=bool(trending_only),
                     frames=frames
                 )
                 if not res:
@@ -308,26 +314,29 @@ async def scan_multi(
                     best_quality = q
                     item_agg = res
             except Exception as e:
-                logger.warning("[scan] %s@%s: %s", sym, tf, e)
+                errors[f"{sym}@{tf}"] = str(e)
+                logger.warning("[scan] %s@%s failed: %s", sym, tf, e)
 
         if not item_agg:
             continue
 
-        gate = anchor_gate(item_agg.get("direction"), anchor,
-                           strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
-        if ANCHOR_ENFORCE and gate["action"] == "block":
+        try:
+            gate = anchor_gate(item_agg.get("direction"), anchor,
+                               strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
+        except Exception:
+            gate = {"action": "none"}
+
+        if ANCHOR_ENFORCE and gate.get("action") == "block":
             continue
 
         if best_quality >= float(min_quality):
             conf = int(item_agg.get("confidence") or 0)
-            if gate["action"] == "downgrade":
+            if gate.get("action") == "downgrade":
                 conf = max(0, conf - int(gate.get("penalty", 15)))
-            elif gate["action"] == "boost":
+            elif gate.get("action") == "boost":
                 conf = min(100, conf + int(gate.get("bonus", 10)))
 
-            reason = str(item_agg.get("reason") or "")
-            reason = f"{reason}; anchor={anchor.get('direction')}/{anchor.get('strength')}"
-
+            reason = f"{item_agg.get('reason','')}; anchor={anchor.get('direction')}/{anchor.get('strength')}"
             results.append(ScanResultItem(**{
                 "symbol": item_agg.get("symbol"),
                 "quality_score": item_agg.get("quality_score"),
@@ -347,20 +356,19 @@ async def scan_multi(
 
     results.sort(key=lambda r: (r.quality_score or 0.0), reverse=True)
     results = results[:max(1, int(top))]
-    return {"results": results}
+    # מחזירים גם שגיאות כדי לראות איפה נפל – לא מפילים את ה־API
+    return {"results": results, "errors": errors}
 
 # -------- Price (מוגן) --------
 @app.get("/price", tags=["Trades"], summary="Get Price", response_model=PriceResponse, dependencies=[Depends(require_bearer_token)])
 async def get_price(symbol: str):
     try:
         sym = normalize_symbol(symbol, market="futures", cache=symbols_cache)
-        # ניסיון ראשון: mark price
         try:
             data = await _get_mark_price(sym)
             price = float(data.get("markPrice"))
             return {"symbol": sym, "price": price}
         except Exception:
-            # פולבק: last price
             url = f"{BINANCE_FAPI}/fapi/v1/ticker/price"
             data = await _http_get_json(url, params={"symbol": sym, "_": os.urandom(2).hex()})
             price = float(data.get("price"))
@@ -585,6 +593,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
