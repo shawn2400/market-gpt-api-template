@@ -5,7 +5,6 @@ info:
   description: >
     AlgoGPT – Real-time algorithmic trader for Binance. Supports Futures/Spot/Grid,
     Multi-TF Scan with AI, live trades, smart SL/TP, Auto Executor, and daily PnL PDF.
-
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
@@ -65,13 +64,30 @@ components:
         pattern: { type: string, example: breakout }
         volume:  { type: number, example: 1520000 }
 
+    AnchorSnapshot:
+      type: object
+      properties:
+        direction:
+          type: string
+          enum: [UP, DOWN, SIDEWAYS]
+          example: UP
+        strength:
+          type: number
+          minimum: 0
+          maximum: 100
+          example: 72
+        frames:
+          type: array
+          items: { type: string }
+          example: ["15m", "1h"]
+
     AiAnalyzeResponse:
       type: object
       required: [symbol, direction, signal, confidence, reason, frames]
       properties:
         symbol:     { type: string, example: BTCUSDT }
-        direction:  { type: string, enum: [LONG, SHORT] }
-        signal:     { type: string, enum: [BUY, SELL, HOLD] }
+        direction:  { type: string, enum: [LONG, SHORT, SIDEWAYS], example: LONG }
+        signal:     { type: string, enum: [BUY, SELL, HOLD], example: BUY }
         confidence: { type: number, minimum: 0, maximum: 100, example: 74 }
         reason:     { type: string, example: "RSI>50, EMA21>EMA50, breakout with volume" }
         frames:
@@ -86,6 +102,11 @@ components:
             rsi: 56.8
             adx: 22.1
             atr: 312.5
+        anchor:
+          oneOf:
+            - { $ref: "#/components/schemas/AnchorSnapshot" }
+            - { type: 'null' }
+          description: BTC anchor context (optional)
 
     SLTPRequest:
       type: object
@@ -111,7 +132,7 @@ components:
       properties:
         symbol:        { type: string }
         quality_score: { type: number }
-        direction:     { type: string, enum: [LONG, SHORT] }
+        direction:     { type: string, enum: [LONG, SHORT, SIDEWAYS] }
         trend:         { type: string }
         rsi:           { type: number }
         adx:           { type: number }
@@ -136,7 +157,7 @@ components:
       properties:
         symbol: { type: string }
         price:  { type: number }
-      example: { symbol: BTCUSDT, price: 65042.8 }
+      example: { symbol: BTCUSDT, price: 118369.86 }
 
     PnlPdfResponse:
       type: object
@@ -226,6 +247,26 @@ paths:
                   client_ip:
                     oneOf: [ { type: string }, { type: 'null' } ]
 
+  /anchor/btc:
+    get:
+      security: []
+      tags: [Debug]
+      summary: Current BTC anchor (cached)
+      operationId: getBtcAnchor
+      parameters:
+        - name: frames
+          in: query
+          schema: { type: string, default: "15m,1h" }
+        - name: market
+          in: query
+          schema: { type: string, enum: [futures, spot], default: futures }
+      responses:
+        "200":
+          description: BTC anchor snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AnchorSnapshot" }
+
   /scan/multi:
     get:
       security: []
@@ -261,48 +302,30 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ScanResponse" }
 
-  /trade:
-    post:
+  /price:
+    get:
       security: [{ HTTPBearer: [] }]
       tags: [Trades]
-      summary: Execute a trade (DRY-RUN by default)
-      operationId: placeTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/TradeRequest" }
+      summary: Get live Binance price
+      operationId: getPrice
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string, example: BTCUSDT }
       responses:
         "200":
-          description: Execution result
+          description: Price fetched
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/TradeResponse" }
+              schema: { $ref: "#/components/schemas/PriceResponse" }
         "401":
           description: Unauthorized
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-
-  /ai-analyze:
-    post:
-      security: [{ HTTPBearer: [] }]
-      tags: [AI]
-      summary: Manual AI analysis
-      operationId: aiAnalyze
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AiAnalyzeRequest" }
-      responses:
-        "200":
-          description: Analysis created
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
-        "401":
-          description: Unauthorized
+        "422":
+          description: Validation error
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -329,26 +352,69 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-
-  /price:
-    get:
-      security: [{ HTTPBearer: [] }]
-      tags: [Trades]
-      summary: Get live Binance price
-      operationId: getPrice
-      parameters:
-        - name: symbol
-          in: query
-          required: true
-          schema: { type: string, example: BTCUSDT }
-      responses:
-        "200":
-          description: Price fetched
+        "422":
+          description: Validation error
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PriceResponse" }
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /ai-analyze:
+    post:
+      security: [{ HTTPBearer: [] }]
+      tags: [AI]
+      summary: Manual AI analysis (with BTC anchor)
+      operationId: aiAnalyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AiAnalyzeRequest" }
+      responses:
+        "200":
+          description: Analysis created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
         "401":
           description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /trade:
+    post:
+      security: [{ HTTPBearer: [] }]
+      tags: [Trades]
+      summary: Execute a trade (dry-run unless a trade core is installed)
+      operationId: placeTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TradeRequest" }
+      responses:
+        "200":
+          description: Execution result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TradeResponse" }
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "501":
+          description: Trade core not installed
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -372,6 +438,11 @@ paths:
               schema: { $ref: "#/components/schemas/GridTradeResponse" }
         "401":
           description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: Validation error
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -510,6 +581,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+security:
+  - HTTPBearer: []
+
 
 
 
