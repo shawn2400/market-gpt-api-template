@@ -30,18 +30,18 @@ except Exception:
 from utils.symbols import normalize_symbol, SymbolsCache
 symbols_cache = SymbolsCache(market="futures")
 
-# --- סורק סימבול ---
+# --- סורק סימבול (הגרסה התקינה נמצאת ב-scanner_utils) ---
 try:
-    from utils.symbol_analysis import analyze_symbol
+    from utils.scanner_utils import analyze_symbol  # ✅ זה הקיים אצלך
 except Exception as e:
     analyze_symbol = None
-    logger.warning("symbol_analysis not available: %s", e)
+    logger.warning("scanner_utils.analyze_symbol not available: %s", e)
 
-# --- klines ---
+# --- klines (לשימוש פנימי) ---
 try:
     from utils.get_klines import get_klines
 except Exception:
-    from utils.klines import get_klines  # type: ignore
+    get_klines = None  # לא נדרש כאן ישירות
 
 # --- עוגן BTC ---
 from utils.btc_anchor import compute_btc_anchor, anchor_gate, sltp_multipliers
@@ -186,6 +186,9 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
+# ✅ יצירת תקיות סטטיות מראש כדי למנוע קריסת mount
+os.makedirs("static/reports", exist_ok=True)
+
 # הגשת סטטיים (ל־PDF, לוגו וכו')
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -283,10 +286,11 @@ async def scan_multi(
         best_quality = -1.0
         for tf in frames:
             try:
+                # ✅ לא מעבירים btc_anchor= כי הפונקציה לא מקבלת אותו
                 res = await analyze_symbol(
                     sym, market_type=market_type, interval=tf,
                     limit=150, trending_only=bool(trending_only),
-                    frames=frames, btc_anchor=anchor
+                    frames=frames
                 )
                 if not res:
                     continue
@@ -315,6 +319,7 @@ async def scan_multi(
             reason = str(item_agg.get("reason") or "")
             reason = f"{reason}; anchor={anchor.get('direction')}/{anchor.get('strength')}"
 
+            # ✅ משתמשים בשדות הקיימים בפועל
             results.append(ScanResultItem(**{
                 "symbol": item_agg.get("symbol"),
                 "quality_score": item_agg.get("quality_score"),
@@ -328,8 +333,8 @@ async def scan_multi(
                 "signal": item_agg.get("signal"),
                 "confidence": conf,
                 "reason": reason,
-                "entry": item_agg.get("indicators", {}).get("close"),
-                "atr": item_agg.get("indicators", {}).get("atr"),
+                "entry": item_agg.get("close"),  # ✅ היה אינדיקטור; עכשיו נכון
+                "atr": item_agg.get("atr"),      # ✅ יש גם בטופ-לבל
             }))
 
     results.sort(key=lambda r: (r.quality_score or 0.0), reverse=True)
@@ -541,7 +546,7 @@ async def auto_executor_status():
 @app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF", response_model=PnlPdfResponse, dependencies=[Depends(auth_dep)])
 async def generate_pnl_pdf_route():
     """
-    יוצר PDF מ- p p pnl_tracker.json ומחזיר נתיב נגיש תחת /static.
+    יוצר PDF מ-pnl_tracker.json ומחזיר נתיב נגיש תחת /static.
     """
     try:
         from utils.pnl_tracker import generate_pnl_pdf
@@ -582,6 +587,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
