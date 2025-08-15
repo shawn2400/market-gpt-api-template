@@ -15,15 +15,12 @@ try:
     _CONC = int(getattr(config, "SCAN_CONCURRENCY", 5))
 except Exception:
     _CONC = 5
-if _CONC < 1:
-    _CONC = 1
-if _CONC > 50:
-    _CONC = 50
+_CONC = max(1, min(_CONC, 50))
 
 semaphore = asyncio.Semaphore(_CONC)
 logging.info(f"[scanner_utils] Scan concurrency set to {_CONC}")
 
-# --- שליפת OHLCV אסינכרונית (עטיפה סביב get_klines הסינכרוני) ---
+# --- שליפת OHLCV אסינכרונית ---
 async def fetch_ohlcv(
     symbol: str,
     interval: str = "15m",
@@ -32,13 +29,7 @@ async def fetch_ohlcv(
 ) -> pd.DataFrame:
     try:
         limit = max(120, int(limit or 150))
-        df = await asyncio.to_thread(
-            get_klines,
-            symbol,
-            interval,
-            limit,
-            market_type,
-        )
+        df = await asyncio.to_thread(get_klines, symbol, interval, limit, market_type)
         return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     except Exception as e:
         logging.warning(f"[fetch_ohlcv] error for {symbol}@{interval}: {e}")
@@ -48,13 +39,11 @@ def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
     if df is None or df.empty:
         logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}@{interval}")
         return False
-
     required_cols = {"open", "high", "low", "close", "volume"}
     missing = required_cols - set(df.columns)
     if missing:
         logging.warning(f"[analyze_symbol] ⚠️ חסרות עמודות בסיס עבור {symbol}@{interval}: {missing}")
         return False
-
     return True
 
 def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
@@ -106,13 +95,7 @@ async def analyze_symbol(
         async with semaphore:
             # --- שליפת נתונים ---
             limit = max(120, int(limit or 150))
-            df = await asyncio.to_thread(
-                get_klines,
-                symbol,
-                interval,
-                limit,
-                market_type,
-            )
+            df = await asyncio.to_thread(get_klines, symbol, interval, limit, market_type)
             if not _validate_df(df, symbol, interval):
                 return None
 
@@ -185,6 +168,7 @@ async def analyze_symbol(
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
