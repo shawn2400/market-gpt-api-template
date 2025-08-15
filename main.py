@@ -30,23 +30,23 @@ except Exception:
 from utils.symbols import normalize_symbol, SymbolsCache
 symbols_cache = SymbolsCache(market="futures")
 
-# --- סורק סימבול (הגרסה התקינה נמצאת ב-scanner_utils) ---
+# --- סורק סימבול (scanner_utils) ---
 try:
-    from utils.scanner_utils import analyze_symbol  # ✅ זה הקיים אצלך
+    from utils.scanner_utils import analyze_symbol  # ✅ זמין אצלך
 except Exception as e:
     analyze_symbol = None
     logger.warning("scanner_utils.analyze_symbol not available: %s", e)
 
-# --- klines (לשימוש פנימי) ---
+# --- klines (לא נדרש ישירות כאן) ---
 try:
     from utils.get_klines import get_klines
 except Exception:
-    get_klines = None  # לא נדרש כאן ישירות
+    get_klines = None
 
 # --- עוגן BTC ---
 from utils.btc_anchor import compute_btc_anchor, anchor_gate, sltp_multipliers
 
-# --- AI (לניתוח ידני/SLTP חכם) ---
+# --- AI (ניתוח ידני/SLTP חכם) ---
 try:
     from utils.ai_analysis import analyze_with_ai, predict_optimal_sl_tp
 except Exception:
@@ -72,7 +72,7 @@ def auth_dep(request: Request):
     אימות פשוט:
     - אם מוגדר API_BEARER_TOKEN בסביבה → חייבים להתאים בדיוק.
     - אם לא מוגדר → עדיין דורשים טוקן (Header Authorization: Bearer XXX או ?token=XXX),
-      אבל לא בודקים ערך ספציפי. מתאים לפרטי/שימוש פנימי.
+      אבל לא בודקים ערך ספציפי.
     """
     auth = request.headers.get("Authorization", "")
     bearer = ""
@@ -187,7 +187,8 @@ app.add_middleware(
 )
 
 # ✅ יצירת תקיות סטטיות מראש כדי למנוע קריסת mount
-os.makedirs("static/reports", exist_ok=True)
+for d in ("static", "static/reports", "static/img"):
+    os.makedirs(d, exist_ok=True)
 
 # הגשת סטטיים (ל־PDF, לוגו וכו')
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -235,6 +236,12 @@ async def root():
 @app.get("/health", tags=["Config"], summary="Health")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
+
+# ✅ בריאות OpenAI
+from utils.ai_health import ping_openai
+@app.get("/ai/health", tags=["AI"], summary="AI health (OpenAI/Azure)")
+async def ai_health():
+    return await ping_openai()
 
 @app.get("/net/ip", tags=["Config"], summary="Public egress IP (best-effort)")
 async def get_egress_ip(request: Request):
@@ -286,7 +293,6 @@ async def scan_multi(
         best_quality = -1.0
         for tf in frames:
             try:
-                # ✅ לא מעבירים btc_anchor= כי הפונקציה לא מקבלת אותו
                 res = await analyze_symbol(
                     sym, market_type=market_type, interval=tf,
                     limit=150, trending_only=bool(trending_only),
@@ -319,7 +325,6 @@ async def scan_multi(
             reason = str(item_agg.get("reason") or "")
             reason = f"{reason}; anchor={anchor.get('direction')}/{anchor.get('strength')}"
 
-            # ✅ משתמשים בשדות הקיימים בפועל
             results.append(ScanResultItem(**{
                 "symbol": item_agg.get("symbol"),
                 "quality_score": item_agg.get("quality_score"),
@@ -333,8 +338,8 @@ async def scan_multi(
                 "signal": item_agg.get("signal"),
                 "confidence": conf,
                 "reason": reason,
-                "entry": item_agg.get("close"),  # ✅ היה אינדיקטור; עכשיו נכון
-                "atr": item_agg.get("atr"),      # ✅ יש גם בטופ-לבל
+                "entry": item_agg.get("close"),
+                "atr": item_agg.get("atr"),
             }))
 
     results.sort(key=lambda r: (r.quality_score or 0.0), reverse=True)
@@ -553,7 +558,6 @@ async def generate_pnl_pdf_route():
         path = generate_pnl_pdf()
         if not path:
             raise HTTPException(status_code=404, detail="no PnL data")
-        # ודא שהנתיב יחסי ונגיש:
         rel = path.replace("\\", "/")
         if not rel.startswith("/"):
             rel = "/" + rel
@@ -585,8 +589,9 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
         out["test_error"] = f"exchangeInfo: {e}"
 
     if place_test:
-        out["permission_ok"] = None
+        out["permission_ok"] = None  # כאן אפשר להרחיב בעתיד לבדיקת הרשאות פרטית
     return out
+
 
 
 
