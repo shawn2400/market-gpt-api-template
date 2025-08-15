@@ -11,32 +11,17 @@ def _f(x: Any, default: float = 0.0) -> float:
         return float(default)
 
 def _b(x: Any) -> int:
-    """
-    ממיר לכללים בינאריים 0/1 (מקבל גם bool/float/str).
-    """
     try:
         if isinstance(x, (bool, np.bool_)):
             return int(bool(x))
         if x is None:
             return 0
-        if isinstance(x, str):
-            xs = x.strip().lower()
-            if xs in ("true", "yes", "y", "1"):
-                return 1
-            if xs in ("false", "no", "n", "0", ""):
-                return 0
         v = float(x)
         return 1 if v != 0.0 else 0
     except Exception:
         return 0
 
 def _infer_direction(last: dict, prev: Optional[dict] = None) -> str:
-    """
-    ניסיון להסיק כיוון אם לא הועבר מבחוץ:
-    1) supertrend_dir
-    2) EMA21 מעל EMA50 -> LONG, אחרת SHORT
-    ברירת מחדל: LONG
-    """
     try:
         st = last.get("supertrend_dir", None)
         if st is not None:
@@ -52,10 +37,6 @@ def compute_quality_score(
     direction: Optional[str] = None,
     verbose: bool = False
 ) -> float:
-    """
-    מחשב ציון איכות לטרייד (0–10) לפי אינדיקטורים טכניים + בונוסים/קנסות מתבניות נרות.
-    תומך ב־DataFrame (לוקח שורה אחרונה) או dict.
-    """
     try:
         if isinstance(data, pd.DataFrame) and not data.empty:
             last = data.iloc[-1].to_dict()
@@ -67,38 +48,31 @@ def compute_quality_score(
             logging.warning("[quality_score] סוג נתון לא נתמך")
             return 0.0
 
-        # ------ בסיס ------
         score = 0.0
         reasons = []
 
-        # ATR
         atr = _f(last.get("atr"), 0)
         if atr > 0:
             score += 1; reasons.append("ATR תקין")
 
-        # MACD
         macd = _f(last.get("macd"), 0); macd_signal = _f(last.get("macd_signal"), 0)
         if macd > macd_signal:
             score += 1; reasons.append("MACD חיובי")
 
-        # RSI
         rsi = _f(last.get("rsi"), 0)
         if 45 <= rsi <= 65:
             score += 1; reasons.append("RSI נייטרלי")
         if rsi >= 65:
             score += 0.5; reasons.append("RSI גבוה (מומנטום)")
 
-        # ADX
         adx = _f(last.get("adx"), 0)
         if adx > 20:
             score += 1; reasons.append("ADX חזק")
 
-        # Volume
         vol = _f(last.get("volume"), 0); vol_mean = max(1e-9, _f(last.get("volume_mean"), 1))
         if vol > vol_mean * 1.5:
             score += 1; reasons.append("נפח גבוה")
 
-        # EMA checks
         close = _f(last.get("close"), 0)
         ema21 = _f(last.get("ema_21"), close)
         ema50 = _f(last.get("ema_50"), close)
@@ -123,7 +97,6 @@ def compute_quality_score(
         if close > vwap:
             score += 1; reasons.append("מעל VWAP")
 
-        # ------ בונוסים/קנסות לפי תבניות + כיוון ------
         dir_use = (direction or "").strip().upper()
         if dir_use not in ("LONG", "SHORT"):
             dir_use = _infer_direction(last, prev)
@@ -138,29 +111,25 @@ def compute_quality_score(
         doji      = _b(last.get("is_doji"))
 
         if dir_use == "LONG":
-            if bulls_eng: score += 1; reasons.append("Bullish Engulfing (LONG +1)")
-            if hammer:    score += 1; reasons.append("Hammer (LONG +1)")
-            if morning:   score += 1; reasons.append("Morning Star (LONG +1)")
-
-            if bears_eng: score -= 1; reasons.append("Bearish Engulfing (LONG -1)")
-            if shoot:     score -= 1; reasons.append("Shooting Star (LONG -1)")
-            if evening:   score -= 1; reasons.append("Evening Star (LONG -1)")
-        else:  # SHORT
-            if bears_eng: score += 1; reasons.append("Bearish Engulfing (SHORT +1)")
-            if shoot:     score += 1; reasons.append("Shooting Star (SHORT +1)")
-            if evening:   score += 1; reasons.append("Evening Star (SHORT +1)")
-
-            if bulls_eng: score -= 1; reasons.append("Bullish Engulfing (SHORT -1)")
-            if hammer:    score -= 1; reasons.append("Hammer (SHORT -1)")
-            if morning:   score -= 1; reasons.append("Morning Star (SHORT -1)")
-            if inv_ham:   score -= 0.5; reasons.append("Inverted Hammer (SHORT -0.5)")
-
-        # Doji – ניטראלי (0)
+            if bulls_eng: score += 1
+            if hammer:    score += 1
+            if morning:   score += 1
+            if bears_eng: score -= 1
+            if shoot:     score -= 1
+            if evening:   score -= 1
+        else:
+            if bears_eng: score += 1
+            if shoot:     score += 1
+            if evening:   score += 1
+            if bulls_eng: score -= 1
+            if hammer:    score -= 1
+            if morning:   score -= 1
+            if inv_ham:   score -= 0.5
 
         final_score = float(min(max(score, 0.0), 10.0))
 
         if verbose:
-            logging.info(f"[quality_score] ✅ ציון איכות: {final_score} | כיוון: {dir_use} | סיבות: {', '.join(reasons)}")
+            logging.info(f"[quality_score] ✅ ציון איכות: {final_score} | כיוון: {dir_use} | RSI={rsi} ADX={adx}")
 
         return final_score
 
@@ -170,8 +139,8 @@ def compute_quality_score(
 
 
 def calculate_quality_score(indicators: dict, direction: Optional[str] = None) -> float:
-    """עטיפה נוחה לשימוש חיצוני."""
     return compute_quality_score(indicators, direction=direction, verbose=False)
+
 
 
 
