@@ -1,31 +1,12 @@
 # routes/grid.py
-from fastapi import APIRouter, HTTPException, Depends, Header, Query
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 
+from utils.auth import require_bearer_token
 from utils.grid_utils import execute_grid_trade
-from utils import config as cfg
 
-router = APIRouter(prefix="/grid", tags=["Grid"])
-
-def auth_dep(
-    authorization: str = Header(default=""),
-    x_api_key: str = Header(default=""),
-    token: str = Query(default="")
-):
-    expected = (getattr(cfg, "API_BEARER_TOKEN", "") or "").strip()
-    bearer = ""
-    if authorization.lower().startswith("bearer "):
-        bearer = authorization.split(" ", 1)[1].strip()
-    if not bearer:
-        bearer = (x_api_key or token or "").strip()
-    if expected:
-        if bearer != expected:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-    else:
-        if not bearer:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-    return True
+router = APIRouter(prefix="/grid", tags=["Grid"], dependencies=[Depends(require_bearer_token)])
 
 class GridTradeRequest(BaseModel):
     symbol: str = Field(..., description="למשל BTCUSDT")
@@ -44,7 +25,7 @@ class GridTradeResponse(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
-@router.post("/trade", operation_id="executeGrid", response_model=GridTradeResponse, dependencies=[Depends(auth_dep)])
+@router.post("/trade", response_model=GridTradeResponse)
 async def grid_trade(req: GridTradeRequest) -> GridTradeResponse:
     try:
         res = await execute_grid_trade(
