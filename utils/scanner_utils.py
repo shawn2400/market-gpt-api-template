@@ -23,7 +23,7 @@ if _CONC > 50:
 semaphore = asyncio.Semaphore(_CONC)
 logging.info(f"[scanner_utils] Scan concurrency set to {_CONC}")
 
-# --- שירות עזר: שליפת OHLCV אסינכרונית לשימוש חיצוני (למשל BTC ב-multi_tf_scanner) ---
+# --- שירות עזר: שליפת OHLCV אסינכרונית סביב פונקציה סינכרונית ---
 async def fetch_ohlcv(
     symbol: str,
     interval: str = "15m",
@@ -31,7 +31,7 @@ async def fetch_ohlcv(
     market_type: str = "futures",
 ) -> pd.DataFrame:
     """
-    עטיפה אסינכרונית סביב get_klines (חוסמת) באמצעות to_thread.
+    עטיפה אסינכרונית סביב get_klines (סינכרונית) באמצעות to_thread.
     """
     try:
         limit = max(120, int(limit or 150))
@@ -41,10 +41,6 @@ async def fetch_ohlcv(
             interval,
             limit,
             market_type,
-            "futures",   # grid_base_type (לא רלוונטי כאן)
-            None,
-            None,
-            None,
         )
         return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     except Exception as e:
@@ -52,9 +48,6 @@ async def fetch_ohlcv(
         return pd.DataFrame()
 
 def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
-    """
-    ולידציה בסיסית ל-DataFrame לפני חישובי אינדיקטורים.
-    """
     if df is None or df.empty:
         logging.warning(f"[analyze_symbol] ⚠️ אין נתונים עבור {symbol}@{interval}")
         return False
@@ -68,9 +61,6 @@ def _validate_df(df: pd.DataFrame, symbol: str, interval: str) -> bool:
     return True
 
 def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    שליפת ערכים אחרונים בצורה בטוחה מה-DataFrame לאחר compute_indicators.
-    """
     last = df.iloc[-1]
 
     def f(x, default=0.0):
@@ -79,7 +69,6 @@ def _extract_last_fields(df: pd.DataFrame) -> Dict[str, Any]:
         except Exception:
             return float(default)
 
-    # פולבק קל — אם מישהו יחליף בעתיד את compute_indicators ולא יחשב volume_mean:
     if "volume_mean" not in df.columns:
         try:
             df["volume_mean"] = df["volume"].rolling(50, min_periods=1).mean()
@@ -118,14 +107,12 @@ async def analyze_symbol(
 ) -> Optional[Dict[str, Any]]:
     """
     מבצע ניתוח טכני מלא לסימבול בטיימפריים נתון.
-    מחזיר dict עם פרטי ניתוח, כולל אינדיקטורים, כיוון וציון איכות.
-    במקרה כשל – מחזיר None (לא זורק חריגה).
     """
     try:
         async with semaphore:
-            # --- שליפת נתונים ---
+            # --- שליפת נתונים (לא חוסם את event loop) ---
             limit = max(120, int(limit or 150))
-            df = get_klines(
+            df = await fetch_ohlcv(
                 symbol=symbol,
                 interval=interval,
                 limit=limit,
@@ -159,7 +146,6 @@ async def analyze_symbol(
             # --- שליפת מדדים אחרונים ---
             last = _extract_last_fields(df)
 
-            # החזרה – גם top-level (לתאימות עם analyze_with_ai), וגם nested תחת "indicators"
             result: Dict[str, Any] = {
                 "symbol": str(symbol).upper(),
                 "interval": interval,
@@ -169,13 +155,13 @@ async def analyze_symbol(
                 "trend": trend,
                 "direction": direction,
 
-                # top-level (נדרש ע"י ai_analysis)
+                # top-level
                 "rsi": last["rsi"],
                 "adx": last["adx"],
                 "atr": last["atr"],
                 "volume": last["volume"],
 
-                # אקסטרות אם תרצה להשתמש בהמשך
+                # אקסטרות
                 "close": last["close"],
                 "macd": last["macd"],
                 "macd_signal": last["macd_signal"],
@@ -185,7 +171,6 @@ async def analyze_symbol(
                 "vwap": last["vwap"],
                 "volume_mean": last["volume_mean"],
 
-                # בלוק מאורגן לשימושי UI/דיבוג
                 "indicators": {
                     "rsi": last["rsi"],
                     "adx": last["adx"],
@@ -201,12 +186,12 @@ async def analyze_symbol(
                     "pattern": last.get("pattern", "unknown"),
                 },
             }
-
             return result
 
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
