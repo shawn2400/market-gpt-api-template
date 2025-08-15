@@ -1,9 +1,10 @@
 # routes/utils.py
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from typing import Optional
+from utils.auth import require_bearer_token
 from utils.generate_logo import generate_logo
 
-router = APIRouter(prefix="/utils", tags=["Utils"])
+router = APIRouter(prefix="/utils", tags=["Utils"], dependencies=[Depends(require_bearer_token)])
 
 @router.get("/generate-logo", summary="Generate a simple text logo (PNG/ICO/SVG on server)")
 async def generate_logo_api(
