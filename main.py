@@ -32,16 +32,10 @@ symbols_cache = SymbolsCache(market="futures")
 
 # --- סורק סימבול (scanner_utils) ---
 try:
-    from utils.scanner_utils import analyze_symbol  # ✅ זמין אצלך
+    from utils.scanner_utils import analyze_symbol
 except Exception as e:
     analyze_symbol = None
     logger.warning("scanner_utils.analyze_symbol not available: %s", e)
-
-# --- klines (לא נדרש ישירות כאן) ---
-try:
-    from utils.get_klines import get_klines
-except Exception:
-    get_klines = None
 
 # --- עוגן BTC ---
 from utils.btc_anchor import compute_btc_anchor, anchor_gate, sltp_multipliers
@@ -52,6 +46,13 @@ try:
 except Exception:
     analyze_with_ai = None
     predict_optimal_sl_tp = None
+
+# --- בריאות OpenAI ---
+try:
+    from utils.ai_health import ping_openai
+except Exception as e:
+    ping_openai = None
+    logger.warning("ai_health not available: %s", e)
 
 # AI client לאירועי startup/shutdown (אופציונלי)
 try:
@@ -237,10 +238,10 @@ async def root():
 async def health():
     return {"status": "ok", "version": APP_VERSION}
 
-# ✅ בריאות OpenAI
-from utils.ai_health import ping_openai
 @app.get("/ai/health", tags=["AI"], summary="AI health (OpenAI/Azure)")
 async def ai_health():
+    if ping_openai is None:
+        return {"ok": False, "error": "ai_health not loaded"}
     return await ping_openai()
 
 @app.get("/net/ip", tags=["Config"], summary="Public egress IP (best-effort)")
@@ -589,8 +590,9 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
         out["test_error"] = f"exchangeInfo: {e}"
 
     if place_test:
-        out["permission_ok"] = None  # כאן אפשר להרחיב בעתיד לבדיקת הרשאות פרטית
+        out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
