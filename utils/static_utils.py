@@ -23,10 +23,9 @@ def create_sample_chart(x: List[float], y: List[float], title: str = "📈 גר�
         plt.tight_layout()
         plt.savefig(full_path, dpi=150)
         plt.close()
-
         return full_path
     except Exception as e:
-        print(f"[static_utils] ❌ שגיאה ביצירת גרף: {e}")
+        print(f"[static_utils] ❌ error creating chart: {e}")
         return None
 
 def detect_pattern(df: pd.DataFrame) -> str:
