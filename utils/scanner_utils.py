@@ -23,16 +23,13 @@ if _CONC > 50:
 semaphore = asyncio.Semaphore(_CONC)
 logging.info(f"[scanner_utils] Scan concurrency set to {_CONC}")
 
-# --- שירות עזר: שליפת OHLCV אסינכרונית סביב פונקציה סינכרונית ---
+# --- שליפת OHLCV אסינכרונית (עטיפה סביב get_klines הסינכרוני) ---
 async def fetch_ohlcv(
     symbol: str,
     interval: str = "15m",
     limit: int = 150,
     market_type: str = "futures",
 ) -> pd.DataFrame:
-    """
-    עטיפה אסינכרונית סביב get_klines (סינכרונית) באמצעות to_thread.
-    """
     try:
         limit = max(120, int(limit or 150))
         df = await asyncio.to_thread(
@@ -101,27 +98,25 @@ async def analyze_symbol(
     interval: str = "15m",
     market_type: str = "futures",
     limit: int = 150,
-    trending_only: bool = False,  # נשמר לתאימות
+    trending_only: bool = False,
     with_ai: bool = False,        # נשמר לתאימות; לא בשימוש כאן
     frames: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    מבצע ניתוח טכני מלא לסימבול בטיימפריים נתון.
-    """
     try:
         async with semaphore:
-            # --- שליפת נתונים (לא חוסם את event loop) ---
+            # --- שליפת נתונים ---
             limit = max(120, int(limit or 150))
-            df = await fetch_ohlcv(
-                symbol=symbol,
-                interval=interval,
-                limit=limit,
-                market_type=market_type,
+            df = await asyncio.to_thread(
+                get_klines,
+                symbol,
+                interval,
+                limit,
+                market_type,
             )
             if not _validate_df(df, symbol, interval):
                 return None
 
-            # --- חישוב אינדיקטורים ---
+            # --- אינדיקטורים ---
             df = compute_indicators(df)
             if df is None or df.empty:
                 logging.warning(f"[analyze_symbol] ⚠️ compute_indicators החזיר DataFrame ריק עבור {symbol}@{interval}")
@@ -143,7 +138,7 @@ async def analyze_symbol(
             # --- ציון איכות ---
             score = float(compute_quality_score(df))
 
-            # --- שליפת מדדים אחרונים ---
+            # --- אחרון ---
             last = _extract_last_fields(df)
 
             result: Dict[str, Any] = {
@@ -155,13 +150,11 @@ async def analyze_symbol(
                 "trend": trend,
                 "direction": direction,
 
-                # top-level
                 "rsi": last["rsi"],
                 "adx": last["adx"],
                 "atr": last["atr"],
                 "volume": last["volume"],
 
-                # אקסטרות
                 "close": last["close"],
                 "macd": last["macd"],
                 "macd_signal": last["macd_signal"],
@@ -186,11 +179,13 @@ async def analyze_symbol(
                     "pattern": last.get("pattern", "unknown"),
                 },
             }
+
             return result
 
     except Exception as e:
         logging.error(f"[analyze_symbol] ❌ שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
 
 
