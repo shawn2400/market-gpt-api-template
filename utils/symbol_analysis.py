@@ -38,10 +38,6 @@ def _apply_anchor_adjustments(
     confidence: int,
     anchor: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """
-    מחזיר dict עם {quality, confidence, anchor_note, blocked}
-    לא עושה block כאן; הבלוקינג מתבצע בשכבות גבוהות יותר (scan/trade).
-    """
     if not anchor or not isinstance(anchor, dict):
         return {"quality": quality, "confidence": confidence, "anchor_note": None, "blocked": False}
 
@@ -49,7 +45,6 @@ def _apply_anchor_adjustments(
     a_str = float(anchor.get("strength") or 0.0)
     note = f"anchor={a_dir}/{a_str:.0f}"
 
-    # יחס כיוון מול עוגן
     aligned = (direction == "LONG" and a_dir == "UP") or (direction == "SHORT" and a_dir == "DOWN")
 
     q = float(quality)
@@ -58,18 +53,14 @@ def _apply_anchor_adjustments(
     if a_dir in ("UP", "DOWN"):
         if a_str >= 70:
             if aligned:
-                q += 0.5
-                c = min(100, c + 10)
+                q += 0.5; c = min(100, c + 10)
             else:
-                q -= 0.7
-                c = max(0, c - 15)
+                q -= 0.7; c = max(0, c - 15)
         elif a_str >= 55:
             if aligned:
-                q += 0.3
-                c = min(100, c + 6)
+                q += 0.3; c = min(100, c + 6)
             else:
-                q -= 0.4
-                c = max(0, c - 8)
+                q -= 0.4; c = max(0, c - 8)
 
     return {"quality": max(0.0, min(10.0, q)), "confidence": c, "anchor_note": note, "blocked": False}
 
@@ -79,13 +70,10 @@ async def analyze_symbol(
     interval: str,
     limit: int = 100,
     trending_only: bool = False,
-    with_ai: bool = False,              # לשמירה על תאימות
+    with_ai: bool = False,
     frames: Optional[List[str]] = None,
-    btc_anchor: Optional[Dict[str, Any]] = None,  # ← חדש: עוגן BTC
+    btc_anchor: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    מנתח סימבול ב־TF יחיד ומחזיר פריט עקבי לשימוש בסורק/AI, עם התאמות לפי עוגן BTC.
-    """
     try:
         df = await get_klines(symbol, interval=interval, limit=limit, market_type=market_type)
         if df is None or len(df) < 60:
@@ -95,21 +83,17 @@ async def analyze_symbol(
         df = compute_indicators(df)
         last = df.iloc[-1].to_dict()
 
-        # איכות כוללת (0..10)
         quality = float(compute_quality_score(df) or 0.0)
 
-        # מגמה -> כיוון מסחר
-        trend = _trend_from_indicators(last)        # "UP"/"DOWN"/"SIDEWAYS"
-        direction = _norm_direction_from_trend(trend)  # "LONG"/"SHORT"/"SIDEWAYS"
+        trend = _trend_from_indicators(last)
+        direction = _norm_direction_from_trend(trend)
 
-        # תבנית נר
         pattern = detect_pattern(df) or ""
 
         rsi = float(last.get("rsi", 0.0) or 0.0)
         adx = float(last.get("adx", 0.0) or 0.0)
         vol = float(last.get("volume", 0.0) or 0.0)
 
-        # סיגנל בסיסי
         signal = "HOLD"
         reason = "low confidence"
         if direction in ("LONG", "SHORT") and trend in ("UP", "DOWN"):
@@ -120,10 +104,8 @@ async def analyze_symbol(
                 signal = "HOLD"
                 reason = f"neutral setup, quality={quality:.1f}"
 
-        # confidence נגזר מאיכות
         confidence = max(0, min(100, int(round(quality * 10))))
 
-        # התאמות לפי עוגן BTC (ללא בלוק קשיח – זה בשכבות scan/trade)
         adj = _apply_anchor_adjustments(direction, quality, confidence, btc_anchor)
         quality = adj["quality"]
         confidence = adj["confidence"]
@@ -135,21 +117,21 @@ async def analyze_symbol(
             "market": market_type,
             "frames": frames or [interval],
             "interval": interval,
-            "indicators": last,             # תמונת אינדיקטורים מלאה
-            "trend": trend,                 # "UP"/"DOWN"/"SIDEWAYS"
-            "direction": direction,         # "LONG"/"SHORT"/"SIDEWAYS"
-            "quality_score": quality,       # 0..10 (float)
+            "indicators": last,
+            "trend": trend,
+            "direction": direction,
+            "quality_score": quality,
             "volume": vol,
             "pattern": pattern,
             "trending": bool(trending_only),
             "rsi": rsi,
             "adx": adx,
-            "signal": signal,               # BUY/SELL/HOLD
-            "confidence": confidence,       # 0..100
+            "signal": signal,
+            "confidence": confidence,
             "reason": reason,
         }
-
     except Exception as e:
         logging.error(f"[analyze_symbol] שגיאה בניתוח {symbol}@{interval}: {e}", exc_info=True)
         return None
+
 
