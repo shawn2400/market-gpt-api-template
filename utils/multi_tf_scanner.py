@@ -1,7 +1,7 @@
 # utils/multi_tf_scanner.py
 import logging
 import asyncio
-from typing import Sequence, List, Dict, Optional, Any
+from typing import Sequence, List, Dict, Optional, Any, Tuple
 
 from utils import config
 from utils.watchlist_utils import load_watchlist
@@ -10,10 +10,12 @@ from utils.scanner_utils import analyze_symbol, fetch_ohlcv
 from utils.ai_analysis import analyze_with_ai
 from utils.indicators import compute_indicators
 
+# גבולות/דיפולטים
 MAX_SYMBOLS = max(1, min(int(getattr(config, "TOP_SYMBOLS", 30)), 50))
 FALLBACK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
 BTC_REF_TF = "15m"
 
+# ----------------- עזרים -----------------
 def _normalize_direction(val: Any) -> str:
     d = str(val or "").strip().upper()
     if d in ("LONG", "BUY"):
@@ -46,8 +48,8 @@ async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) 
             market_type=market,
             interval=tf,
             limit=150,
-            trending_only=trending_only,
-            with_ai=False,
+            trending_only=trending_only,  # נשמר לתאימות
+            with_ai=False,               # AI קורה בשכבה העליונה
             frames=[tf],
         )
     except Exception as e:
@@ -55,6 +57,9 @@ async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) 
         return None
 
 async def _get_btc_direction() -> Optional[str]:
+    """
+    מגמת BTC לפי EMA21/EMA50 על הטיימפריים המוגדר (ברירת מחדל 15m).
+    """
     try:
         df = await fetch_ohlcv("BTCUSDT", interval=BTC_REF_TF, limit=120)
         if df is None or df.empty:
@@ -73,6 +78,42 @@ async def _get_btc_direction() -> Optional[str]:
     except Exception as e:
         logging.warning(f"[btc_correlation] failed to get BTC trend: {e}")
         return None
+
+def _aggregate_metrics(frames: List[Dict]) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """
+    מוציא ערכי entry/atr/rsi/adx מהמסגרות:
+    - עדיפות לפריים עם quality_score מקסימלי
+    - פולבק לפריים האחרון אם חסר
+    """
+    if not frames:
+        return None, None, None, None
+    best = max(frames, key=lambda d: float(d.get("quality_score", 0.0)))
+    last = frames[-1]
+
+    def pick(key: str):
+        return best.get(key) if best.get(key) not in (None, "") else last.get(key)
+
+    entry = pick("close")
+    atr   = pick("atr")
+    rsi   = pick("rsi")
+    adx   = pick("adx")
+    try:
+        entry = float(entry) if entry is not None else None
+    except Exception:
+        entry = None
+    try:
+        atr = float(atr) if atr is not None else None
+    except Exception:
+        atr = None
+    try:
+        rsi = float(rsi) if rsi is not None else None
+    except Exception:
+        rsi = None
+    try:
+        adx = float(adx) if adx is not None else None
+    except Exception:
+        adx = None
+    return entry, atr, rsi, adx
 
 async def _build_symbol_list(
     symbols: Optional[Sequence[str]],
@@ -103,6 +144,7 @@ async def _build_symbol_list(
         logging.error(f"[multi_tf_scanner] Symbol list build failed: {e}", exc_info=True)
         return FALLBACK_SYMBOLS
 
+# ----------------- הסורק הראשי -----------------
 async def multi_tf_scan_with_ai(
     timeframes: Sequence[str] = ("5m", "15m", "1h"),
     markets: Sequence[str] = ("futures",),
@@ -112,7 +154,10 @@ async def multi_tf_scan_with_ai(
     trending_source: str = "coingecko",
     symbols: Optional[Sequence[str]] = None,
 ) -> List[Dict]:
-    tfs = tuple([str(x).strip() for x in timeframes or ("15m", "1h") if x])
+    # ניקוי טיימפריימים
+    raw_tfs = timeframes or ("15m", "1h")
+    tfs = tuple([s for s in (str(x).strip() for x in raw_tfs) if s])
+
     market = str((markets[0] if markets else "futures")).lower()
     top_n = max(1, int(top))
 
@@ -120,7 +165,7 @@ async def multi_tf_scan_with_ai(
     if not syms:
         return []
 
-    # ניתוח לכל סימבול ולכל טיימפריים
+    # ניתוח לכל סימבול/טיימפריים (מקבילי)
     tasks = [_safe_analyze(sym, tf, market, trending_only) for sym in syms for tf in tfs]
     results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -138,7 +183,7 @@ async def multi_tf_scan_with_ai(
         sym = str(r.get("symbol")).upper()
         grouped.setdefault(sym, []).append(r)
 
-    # מגמת BTC
+    # מגמת BTC (לסינון/חיזוק)
     btc_dir = await _get_btc_direction()
     logging.info(f"[btc_correlation] BTC trend (via EMA21/50 on {BTC_REF_TF}): {btc_dir}")
 
@@ -152,7 +197,7 @@ async def multi_tf_scan_with_ai(
         for d in data:
             d["direction"] = _normalize_direction(d.get("direction") or d.get("main_direction"))
 
-        # החלטת AI (עם פולבק)
+        # החלטת AI (עם פולבק בטוח)
         try:
             ai = await analyze_with_ai(data)
         except Exception as e:
@@ -178,6 +223,17 @@ async def multi_tf_scan_with_ai(
         out["quality_score"] = float(out.get("quality_score", avg_q))
         out["frames"] = out.get("frames") or [f.get("interval") for f in data]
         out["details"] = out.get("details") or data
+
+        # הזרקת מדדים עליונים (entry/atr/rsi/adx) ברמת הפריט
+        entry, atr, rsi, adx = _aggregate_metrics(data)
+        if entry is not None:
+            out["entry"] = entry
+        if atr is not None:
+            out["atr"] = atr
+        if rsi is not None:
+            out["rsi"] = rsi
+        if adx is not None:
+            out["adx"] = adx
 
         # --- התאמה למגמת BTC ---
         if btc_dir and out["direction"] != btc_dir:
@@ -208,6 +264,7 @@ async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
             return []
         avg_q = sum(float(d.get("quality_score", 0)) for d in frames) / max(1, len(frames))
         dir_ = _normalize_direction(frames[-1].get("direction"))
+        entry, atr, rsi, adx = _aggregate_metrics(frames)
         out = {
             "symbol": symbol,
             "direction": dir_,
@@ -216,13 +273,16 @@ async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
             "confidence": 50,
             "frames": [f.get("interval") for f in frames],
             "details": frames,
-            "entry": frames[-1].get("close"),
-            "atr": frames[-1].get("atr"),
+            "entry": entry,
+            "atr": atr,
+            "rsi": rsi,
+            "adx": adx,
         }
         return [out]
     except Exception as e:
         logging.warning(f"[fallback_scan_manual] failed for {symbol}: {e}")
         return []
+
 
 
 
