@@ -90,12 +90,44 @@ ENABLE_AUTO_TRADING      = _get_bool("ENABLE_AUTO_TRADING", False)
 EXECUTE_TRADES           = _get_bool("EXECUTE_TRADES", False)
 
 # ---------- SL/TP (חדשים) ----------
-# רצפת אחוז ל-SL/TP כשאין ATR / או כהגנה מינימלית
 SLTP_MIN_PCT_FLOOR       = _get_float("SLTP_MIN_PCT_FLOOR", 0.003)   # 0.3%
 SLTP_TP_PCT_FLOOR        = _get_float("SLTP_TP_PCT_FLOOR", 0.006)   # 0.6%
-# מכפילי ATR כאשר יש ATR זמין
 SLTP_ATR_SL_MULT         = _get_float("SLTP_ATR_SL_MULT", 1.5)
 SLTP_ATR_TP_MULT         = _get_float("SLTP_ATR_TP_MULT", 2.5)
+
+# ---------- Scan tuning ----------
+SCAN_REF_TF              = _get_str("SCAN_REF_TF", "15m")
+# פסיק-מופרד → tuple floats
+TP_TIER_MULTS            = tuple(
+    float(x) for x in _get_str("TP_TIER_MULTS", "0.8,1.6,2.5").split(",") if x.strip()
+)
+
+# ---------- Strategy / Build metadata ----------
+STRATEGY_NAME    = _get_str("STRATEGY_NAME", "AlgoGPT-Pro")
+STRATEGY_VERSION = _get_str("STRATEGY_VERSION", "1.0.0")
+GIT_COMMIT       = _get_str("GIT_COMMIT", "unknown")
+REQ_HASH         = _get_str("REQ_HASH", "unknown")
+
+def strategy_meta_snapshot() -> dict:
+    return {
+        "name": STRATEGY_NAME,
+        "version": STRATEGY_VERSION,
+        "git_commit": GIT_COMMIT,
+        "req_hash": REQ_HASH,
+        "params": {
+            "SCAN_REF_TF": SCAN_REF_TF,
+            "TP_TIER_MULTS": TP_TIER_MULTS,
+            "SLTP_MIN_PCT_FLOOR": SLTP_MIN_PCT_FLOOR,
+            "SLTP_TP_PCT_FLOOR": SLTP_TP_PCT_FLOOR,
+            "SLTP_ATR_SL_MULT": SLTP_ATR_SL_MULT,
+            "SLTP_ATR_TP_MULT": SLTP_ATR_TP_MULT,
+            "PRICE_MAX_AGE_SEC": PRICE_MAX_AGE_SEC,
+            "MIN_QUALITY_SCORE": MIN_QUALITY_SCORE,
+            "MAX_TRADE_BUDGET": MAX_TRADE_BUDGET,
+            "TRENDING_ONLY": TRENDING_ONLY,
+            "TOP_SYMBOLS": TOP_SYMBOLS,
+        },
+    }
 
 def log_config_summary():
     logging.info("[CONFIG] AutoRun=%s Interval=%ss DefaultTF=%s", AUTO_RUN, SCAN_INTERVAL, DEFAULT_INTERVAL)
@@ -109,9 +141,9 @@ def log_config_summary():
     logging.info("[CONFIG] Keys: has_binance=%s has_openai=%s binance_key_prefix=%s",
                  bool(BINANCE_API_KEY), bool(OPENAI_API_KEY), _mask(BINANCE_API_KEY))
     logging.info("[CONFIG] AutoTrading: enable=%s execute=%s", ENABLE_AUTO_TRADING, EXECUTE_TRADES)
-    # חדשים:
     logging.info("[CONFIG] SLTP: min_pct_floor=%.4f tp_pct_floor=%.4f atr_sl_mult=%.2f atr_tp_mult=%.2f",
                  SLTP_MIN_PCT_FLOOR, SLTP_TP_PCT_FLOOR, SLTP_ATR_SL_MULT, SLTP_ATR_TP_MULT)
+
 
 
 
