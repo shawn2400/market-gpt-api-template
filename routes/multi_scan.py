@@ -4,16 +4,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Depends
 from typing import Optional, List, Dict, Any, Tuple
 import math
-import numpy as np
 import pandas as pd
 
 from utils.auth import require_bearer_token
 from utils.multi_tf_scanner import multi_tf_scan_with_ai, fallback_scan_manual
 from utils.btc_anchor import compute_btc_anchor
 from utils.sl_tp_utils import calculate_sl_tp, get_sltp_params
-from utils.precision_utils import apply_price_tick, apply_qty_step, get_precision_info
+from utils.precision_utils import apply_price_tick, apply_qty_step, calc_quantity_from_budget
 from utils.ws_fallback import snapshot_klines_df, get_price, is_price_fresh
-from utils.binance_client import futures_exchange_info_safe
 from utils import config
 
 from ta.trend import ADXIndicator
@@ -85,7 +83,7 @@ def _auto_leverage(atrp: Optional[float], adx: Optional[float], btc_strength: Op
     q = float(quality or 7.0)
     base = 10.0 + max(0.0, min(14.0, (q - 6.0) * 3.5))  # 6→10, 10→24
     boost = 0.0
-    if adx is not None:        boost += max(0.0, min(6.0, (float(adx) - 20.0) * 0.3))
+    if adx is not None:          boost += max(0.0, min(6.0, (float(adx) - 20.0) * 0.3))
     if btc_strength is not None: boost += max(0.0, min(5.0, (float(btc_strength) - 55.0) * 0.15))
     penalty = 0.0
     if atrp is not None:
@@ -142,78 +140,9 @@ def _entry_fill_probability(distance_pct: float, adx: Optional[float], atrp: Opt
     if atrp is not None:
         v = float(atrp)
         if v >= 1.8: base -= 5.0
-        elif v <= 0.5: base -= 3.0  # תנועה איטית → קושי להגיע בזמן
+        elif v <= 0.5: base -= 3.0
     if aligned is False: base -= 3.0
     return int(round(max(3.0, min(98.0, base))))
-
-# ===================== מידע בורסה/חוקי סימבול =====================
-_ei_cache: Optional[Dict[str, Any]] = None
-def _exchange_info() -> Dict[str, Any]:
-    global _ei_cache
-    if _ei_cache is None:
-        _ei_cache = futures_exchange_info_safe() or {}
-    return _ei_cache
-
-def _symbol_filters(symbol: str) -> Dict[str, Any]:
-    su = str(symbol).upper()
-    for s in _exchange_info().get("symbols", []) or []:
-        if s.get("symbol") == su:
-            out = {"tickSize": None, "stepSize": None, "minQty": None, "minNotional": None}
-            for f in s.get("filters", []) or []:
-                t = f.get("filterType")
-                if t == "PRICE_FILTER": out["tickSize"] = f.get("tickSize")
-                elif t == "LOT_SIZE":
-                    out["stepSize"] = f.get("stepSize")
-                    out["minQty"]   = f.get("minQty") or f.get("minQtyStep")
-                elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-                    mn = f.get("notional") or f.get("minNotional") or f.get("minNotionalValue")
-                    out["minNotional"] = mn
-            return out
-    return {"tickSize": None, "stepSize": None, "minQty": None, "minNotional": None}
-
-def _qty_from_budget(symbol: str, price: float, budget_usd: float, leverage: float) -> Dict[str, Any]:
-    """
-    מחזיר כמות מעוגנת + בדיקות Notional/MinQty, בלי לזרוק חריגות.
-    """
-    flt = _symbol_filters(symbol)
-    step = float(flt["stepSize"] or 0.0)
-    min_qty = float(flt["minQty"] or 0.0)
-    min_notional = float(flt["minNotional"] or 0.0)
-
-    # כמות תאורטית:
-    theo_qty = (float(budget_usd) * float(leverage)) / float(price) if float(price) > 0 else 0.0
-    if step > 0:
-        q_adj, q_str = apply_qty_step(theo_qty, symbol)
-    else:
-        # ללא מידע — נעגל לפי quantityPrecision
-        q_adj = theo_qty
-        q_str = f"{q_adj:.6f}"
-
-    # מגבלות מינימום:
-    if min_qty and q_adj < min_qty:
-        q_adj = min_qty
-        q_adj, q_str = apply_qty_step(q_adj, symbol)
-
-    notional = q_adj * float(price)
-    ok = True
-    reason = None
-    if min_notional and notional < min_notional:
-        ok = False
-        reason = f"notional<{min_notional}"
-    if q_adj <= 0:
-        ok = False
-        reason = reason or "qty<=0"
-
-    return {
-        "ok": ok,
-        "reason": reason,
-        "qty": float(q_adj),
-        "qty_str": q_str,
-        "notional": float(notional),
-        "min_notional": float(min_notional) if min_notional else None,
-        "min_qty": float(min_qty) if min_qty else None,
-        "step_size": step if step else None,
-    }
 
 # ===================== TP שכבות + $ =====================
 def _tp_tiers(symbol: str, entry: float, direction: str, atr: Optional[float]) -> List[Dict[str, Any]]:
@@ -263,7 +192,6 @@ async def _build_ready_plan(item: Dict[str, Any], market_type: str, budget_usd: 
         if lp is not None and is_price_fresh(sym, max_age_sec=PRICE_MAX_AGE_SEC):
             entry = float(lp)
         else:
-            # פולבק: close אחרון
             entry = risk.get("last")
 
     if entry is None or float(entry) <= 0:
@@ -276,8 +204,13 @@ async def _build_ready_plan(item: Dict[str, Any], market_type: str, budget_usd: 
     sl_adj,    sl_str    = apply_price_tick(float(sl_raw), sym)
     tp_adj,    tp_str    = apply_price_tick(float(tp_raw), sym)
 
-    # כמות מתוקצבת (Budget x Leverage / Entry) + חוקים
-    qty_res = _qty_from_budget(sym, price=entry_adj, budget_usd=float(budget_usd), leverage=lev_eff if market_type == "futures" else 1.0)
+    # כמות מתוקצבת (Budget x Leverage / Entry) + חוקים (דרך precision_utils)
+    qty_res = calc_quantity_from_budget(
+        sym,
+        price=entry_adj,
+        budget_usd=float(budget_usd),
+        leverage=lev_eff if market_type == "futures" else 1.0
+    )
 
     # ETA והסתברות כניסה (Limit)
     live_price = await get_price(sym)
@@ -292,11 +225,23 @@ async def _build_ready_plan(item: Dict[str, Any], market_type: str, budget_usd: 
 
     # TP שכבות + הסתברויות + ETA + $ PnL (נדרוש qty אם יש)
     tiers = _tp_tiers(sym, entry_adj, direction, atr)
-    base_win = _win_probability(quality=quality, confidence=confidence, adx=adx, atrp=atrp, btc_strength=btc_strength, dir_aligned_with_btc=dir_aligned_with_btc)
+    base_win = _win_probability(
+        quality=quality,
+        confidence=confidence,
+        adx=adx,
+        atrp=atrp,
+        btc_strength=btc_strength,
+        dir_aligned_with_btc=dir_aligned_with_btc
+    )
     for idx, t in enumerate(tiers):
-        t_eta = _eta_minutes(distance_pct=t["distance_pct"], speed_pct_per_bar=spd, tf_minutes=tmf if (tmf:=tfm) else tfm, adx=adx, atrp=atrp)
+        t_eta = _eta_minutes(distance_pct=t["distance_pct"], speed_pct_per_bar=spd, tf_minutes=tfm, adx=adx, atrp=atrp)
         t_prob = _tier_probability(base_win, idx, adx, atrp, dir_aligned_with_btc)
-        t.update({"eta_min": t_eta["eta_min"], "eta_window_min": t_eta["eta_window_min"], "eta_window_max": t_eta["eta_window_max"], "prob_pct": t_prob})
+        t.update({
+            "eta_min": t_eta["eta_min"],
+            "eta_window_min": t_eta["eta_window_min"],
+            "eta_window_max": t_eta["eta_window_max"],
+            "prob_pct": t_prob
+        })
 
     # חשיפות
     position_value_usd = float(budget_usd) * lev_eff
@@ -332,13 +277,13 @@ async def _build_ready_plan(item: Dict[str, Any], market_type: str, budget_usd: 
     }
 
     # הוספת TP Tiers + $PnL (אם יש qty)
-    qty_ok = qty_res.get("ok", False)
+    qty_ok = bool(qty_res.get("ok"))
     if qty_ok:
         qty = float(qty_res["qty"]); qty_str = qty_res["qty_str"]; notional = float(qty_res["notional"])
         plan["quantity"] = qty; plan["quantity_str"] = qty_str
         plan["notional"] = notional
         plan["min_notional"] = float(qty_res["min_notional"]) if qty_res.get("min_notional") is not None else None
-        # חישוב $PnL לכל TP:
+
         out_tiers = []
         for t in tiers:
             tp_price = float(t["price"])
@@ -472,6 +417,7 @@ async def scan_multi(
         # פולבק + שגיאה שקופה
         fb = await fallback_scan_manual("BTCUSDT")
         return {"error": str(e), "results": fb, "ready": []}
+
 
 
 
