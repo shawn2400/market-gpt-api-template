@@ -1,8 +1,11 @@
 # utils/binance_client.py
 import os
 import time
+import hmac
+import json
 import random
 import logging
+import hashlib
 import threading
 from typing import Optional, Callable, List, Dict, Any
 
@@ -19,41 +22,67 @@ except Exception:
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
+# -------------------- utils --------------------
+def _clean(s: Optional[str]) -> str:
+    return (s or "").replace("\r", "").replace("\n", "").strip().strip("\"'").strip()
+
 def _get_bool(val: Optional[str], default: bool) -> bool:
     if val is None:
         return default
     return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
 
+def _len_or_zero(s: Optional[str]) -> int:
+    return len(s) if s else 0
+
+# -------------------- config --------------------
 try:
     from utils import config
-    _API_KEY   = (getattr(config, "BINANCE_API_KEY", "") or "").strip()
-    _API_SECRET= (getattr(config, "BINANCE_API_SECRET", "") or "").strip()
-    _BACKOFF_BASE = float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7))
-    _MAX_RETRIES  = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
+    _API_KEY_RAW    = getattr(config, "BINANCE_API_KEY", "")
+    _API_SECRET_RAW = getattr(config, "BINANCE_API_SECRET", "")
+    _BACKOFF_BASE   = float(getattr(config, "BINANCE_BACKOFF_BASE", 0.7))
+    _MAX_RETRIES    = int(getattr(config, "BINANCE_MAX_RETRIES", 5))
     _EX_INFO_ON_START = bool(getattr(config, "BINANCE_EXCHANGE_INFO_ON_START", False))
-    _SPOT_HTTP   = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
-    _FAPI_HTTP   = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
-    _RECV_WINDOW = int(getattr(config, "BINANCE_RECV_WINDOW", 10000))
+    _SPOT_HTTP      = getattr(config, "BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
+    _FAPI_HTTP      = getattr(config, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
+    _RECV_WINDOW    = int(getattr(config, "BINANCE_RECV_WINDOW", 10000))
     _TIME_SYNC_INTERVAL_SEC = int(getattr(config, "BINANCE_TIME_SYNC_INTERVAL_SEC", 900))
     _ALLOWED_EGRESS_IPS = getattr(config, "BINANCE_ALLOWED_EGRESS_IPS", "").strip()
-    _EGRESS_IP_ENDPOINT = getattr(config, "EGRESS_IP_ENDPOINT", "").strip()
+    _EGRESS_IP_ENDPOINT  = getattr(config, "EGRESS_IP_ENDPOINT", "").strip()
     _TIME_SYNC_MAX_RTT_MS = int(getattr(config, "TIME_SYNC_MAX_RTT_MS", 800))
     _TIME_SYNC_MAX_ABS_OFFSET_MS = int(getattr(config, "TIME_SYNC_MAX_ABS_OFFSET_MS", 1500))
 except Exception:
-    _API_KEY   = (os.getenv("BINANCE_API_KEY") or "").strip()
-    _API_SECRET= (os.getenv("BINANCE_API_SECRET") or "").strip()
-    _BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
-    _MAX_RETRIES  = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
+    _API_KEY_RAW    = os.getenv("BINANCE_API_KEY", "")
+    _API_SECRET_RAW = os.getenv("BINANCE_API_SECRET", "")
+    _BACKOFF_BASE   = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
+    _MAX_RETRIES    = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
     _EX_INFO_ON_START = _get_bool(os.getenv("BINANCE_EXCHANGE_INFO_ON_START"), False)
-    _SPOT_HTTP   = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
-    _FAPI_HTTP   = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
-    _RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
+    _SPOT_HTTP      = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").strip()
+    _FAPI_HTTP      = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").strip()
+    _RECV_WINDOW    = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
     _TIME_SYNC_INTERVAL_SEC = int(os.getenv("BINANCE_TIME_SYNC_INTERVAL_SEC", "900"))
     _ALLOWED_EGRESS_IPS = (os.getenv("BINANCE_ALLOWED_EGRESS_IPS", "") or "").strip()
-    _EGRESS_IP_ENDPOINT = (os.getenv("EGRESS_IP_ENDPOINT", "") or "").strip()
+    _EGRESS_IP_ENDPOINT  = (os.getenv("EGRESS_IP_ENDPOINT", "") or "").strip()
     _TIME_SYNC_MAX_RTT_MS = int(os.getenv("TIME_SYNC_MAX_RTT_MS", "800"))
     _TIME_SYNC_MAX_ABS_OFFSET_MS = int(os.getenv("TIME_SYNC_MAX_ABS_OFFSET_MS", "1500"))
 
+_API_KEY    = _clean(_API_KEY_RAW)
+_API_SECRET = _clean(_API_SECRET_RAW)
+
+def get_keys_cleaned() -> Dict[str, Any]:
+    """מחזיר מפתחות אחרי ניקוי + מידע דיאגנוסטי בסיסי."""
+    return {
+        "api_key": _API_KEY,
+        "api_secret": _API_SECRET,
+        "key_len": _len_or_zero(_API_KEY),
+        "secret_len": _len_or_zero(_API_SECRET),
+    }
+
+def assert_keys_ok() -> None:
+    if _len_or_zero(_API_KEY) < 32 or _len_or_zero(_API_SECRET) < 32:
+        raise RuntimeError(f"BINANCE keys look invalid (len={_len_or_zero(_API_KEY)}/{_len_or_zero(_API_SECRET)}). "
+                           "Paste without quotes/newlines and ensure Futures-enabled & IP allowlist if used.")
+
+# -------------------- session --------------------
 _session = requests.Session()
 _session.trust_env = False
 _session.headers.update({
@@ -85,6 +114,7 @@ _requests_params = {"timeout": 10}
 _client: Optional[Client] = None
 _time_sync_thread_started = False
 
+# -------------------- egress/allowlist --------------------
 def _fetch_outbound_ip(endpoints: List[str], timeout: float = 3.0) -> Optional[str]:
     for ep in endpoints:
         try:
@@ -125,6 +155,7 @@ def check_outbound_ip_against_allowlist() -> None:
     else:
         logging.warning(f"[Binance] 🚫 Outbound IP {ip} אינו ב-Allowlist: {allowlist}. עלול לגרום ל-403/CloudFront.")
 
+# -------------------- client & time sync --------------------
 def _make_client() -> Client:
     if _API_KEY and _API_SECRET:
         logging.info("[Binance] 🔑 נמצאו מפתחות – מנסה להתחבר…")
@@ -203,6 +234,7 @@ def _start_periodic_time_sync(interval: int) -> None:
     t.start()
     logging.info(f"[Binance] ⏱️ periodic time sync every {interval}s הופעל")
 
+# -------------------- retry wrapper --------------------
 def _retry_call(fn: Callable, *, name: str):
     last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
@@ -214,14 +246,8 @@ def _retry_call(fn: Callable, *, name: str):
             msg    = getattr(e, 'message', '') or ''
             txt = f"http={status} code={code} msg={msg}"
 
-            if str(code) == "-2015":
-                logging.error("[Binance] ❌ -2015 Invalid API-key/IP/permissions. "
-                              "בדוק: 1) שה-API KEY/SECRET נכונים, 2) שה-IP היוצא מאושר ב-Whitelist, "
-                              "3) שהופעל 'Enable Futures' למפתח.")
-                try:
-                    sync_server_time()
-                except Exception:
-                    pass
+            if str(code) in ("-2014", "-2015"):
+                logging.error("[Binance] ❌ Auth error %s: %s. בדוק KEY/SECRET, IP Allowlist, ושה-Futures מאופשר.", code, msg)
 
             if status in (401, 403, 404, 418, 429, 500, 502, 503, 504) or "CloudFront" in str(e):
                 delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
@@ -250,6 +276,7 @@ def _retry_call(fn: Callable, *, name: str):
 def retry_call(fn: Callable, name: str):
     return _retry_call(fn, name=name)
 
+# -------------------- HTTP helpers --------------------
 def _futures_exchange_info_http():
     url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/exchangeInfo"
     def _do():
@@ -285,10 +312,6 @@ def futures_mark_price(symbol: str):
     return _retry_call(_do, name=f"premiumIndex({symbol})")
 
 def get_price(symbol: str) -> Optional[float]:
-    """
-    מחיר Mark דרך /fapi/v1/premiumIndex (פאבליק, לא דורש API Key).
-    בטוח לשימוש גם אם המפתחות לא תקינים / IP לא מאושר.
-    """
     try:
         data = futures_mark_price(symbol.upper())
         if isinstance(data, dict):
@@ -299,39 +322,39 @@ def get_price(symbol: str) -> Optional[float]:
         logging.warning(f"[Binance] get_price failed for {symbol}: {e}")
     return None
 
-def _http_ping(url: str, name: str) -> bool:
+# -------------------- Signed auth probe --------------------
+def _hmac_sha256(secret: str, msg: str) -> str:
+    return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+
+def auth_probe_signed() -> None:
+    """
+    מבצע קריאה חתומה פשוטה אל /fapi/v2/balance כדי לאמת KEY/SECRET/IP/הרשאות.
+    זורק RuntimeError עם הודעה ברורה במקרה כשל.
+    """
+    assert_keys_ok()
+    ts = int(time.time() * 1000)
+    query = f"timestamp={ts}&recvWindow={_RECV_WINDOW}"
+    sig = _hmac_sha256(_API_SECRET, query)
+    url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v2/balance?{query}&signature={sig}"
+    headers = {"X-MBX-APIKEY": _API_KEY, "Accept": "application/json"}
+    r = _session.get(url, headers=headers, timeout=6)
+    ct = (r.headers.get("Content-Type") or "").lower()
+    body = {}
     try:
-        r = _session.get(url, timeout=6)
-        if r.status_code == 200:
-            return True
-        logging.warning(f"[Binance] {name} ping http={r.status_code} body={r.text[:120]}")
-        return False
-    except Exception as e:
-        logging.warning(f"[Binance] {name} ping error: {e}")
-        return False
+        body = r.json() if "json" in ct else {}
+    except Exception:
+        body = {}
 
-def ping_and_info() -> bool:
-    spot_url = f"{_SPOT_HTTP.rstrip('/')}/api/v3/ping"
-    fapi_url = f"{_FAPI_HTTP.rstrip('/')}/fapi/v1/ping"
+    if r.status_code == 200:
+        return
+    code = body.get("code")
+    msg  = body.get("msg") or body.get("message") or r.text
+    if code in (-2014, -2015) or r.status_code in (401, 403):
+        raise RuntimeError(f"Binance auth failed ({code}): {msg}. "
+                           "Check: trimmed KEY/SECRET (no quotes/newlines), Futures enabled on the key, and IP allowlist.")
+    raise RuntimeError(f"Binance signed probe failed http={r.status_code}: {msg}")
 
-    ok_spot = _http_ping(spot_url, "spot")
-    ok_fapi = _http_ping(fapi_url, "futures")
-    ok = ok_spot or ok_fapi
-
-    if ok:
-        logging.info("[Binance] ✅ ping OK (spot=%s, futures=%s) [%s | %s]", ok_spot, ok_fapi, _SPOT_HTTP, _FAPI_HTTP)
-    else:
-        logging.warning("[Binance] ⚠️ ping failed (spot=%s, futures=%s) [%s | %s] – ממשיכים בכל מקרה.", ok_spot, ok_fapi, _SPOT_HTTP, _FAPI_HTTP)
-
-    if _EX_INFO_ON_START:
-        ei = futures_exchange_info_safe()
-        if isinstance(ei, dict) and "symbols" in ei:
-            logging.info("[Binance] ✅ futures_exchange_info symbols=%d", len(ei.get("symbols", [])))
-        else:
-            logging.warning("[Binance] ⚠️ exchange_info נכשל/לא זמין – נמשיך ללא עצירה.")
-
-    return ok
-
+# -------------------- Convenience proxy --------------------
 class _LazyClientProxy:
     def __getattr__(self, name: str):
         return getattr(get_client(), name)
@@ -339,6 +362,7 @@ class _LazyClientProxy:
         return "<LazyBinanceClientProxy>"
 
 client = _LazyClientProxy()
+
 
 
 
