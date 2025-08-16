@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, Tuple
 from utils import config
 from utils.binance_client import (
     get_client, retry_call, futures_exchange_info_safe,
-    auth_probe_signed, get_keys_cleaned
+    auth_probe_signed
 )
 
 # ----- Flags -----
@@ -240,9 +240,7 @@ async def binance_futures_trade(
 
     # If too small vs minQty → attempt auto-adjust or raise error with required budget
     if qty_dec <= 0 or qty_dec < min_qty:
-        # minimal legal qty with ceiling to step and >= min_qty
         min_qty_step = max(min_qty, _decimal_step_ceil(min_qty, step_size))
-        # budget required
         min_budget = (min_qty_step * entry_dec) / Decimal(str(lev))
         if AUTO_ADJUST_QTY:
             qty_dec = min_qty_step
@@ -322,7 +320,7 @@ async def binance_futures_trade(
         "positionSide": position_side,
         "orders": {"entry": entry_resp, "sl": sl_resp, "tp": tp_resp},
         "notional": float(notional),
-        "tickSize": float(step_size),  # note: logged tick/step above; here we keep step as tickSize field for brevity
+        "tickSize": float(step_size),
         "stepSize": float(step_size),
         "minQty": float(min_qty),
         "minNotional": float(min_notional),
