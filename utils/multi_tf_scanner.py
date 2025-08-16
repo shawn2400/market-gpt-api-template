@@ -11,6 +11,7 @@ from utils.trending_utils import get_trending_symbols
 from utils.scanner_utils import analyze_symbol, fetch_ohlcv
 from utils.ai_analysis import analyze_with_ai
 from utils.indicators import compute_indicators
+from utils.btc_anchor import compute_btc_anchor
 
 # גבולות/דיפולטים
 MAX_SYMBOLS = max(1, min(int(getattr(config, "TOP_SYMBOLS", 30)), 50))
@@ -50,8 +51,8 @@ async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) 
             market_type=market,
             interval=tf,
             limit=150,
-            trending_only=trending_only,  # נשמר לתאימות
-            with_ai=False,               # AI קורה בשכבה העליונה
+            trending_only=trending_only,  # תאימות
+            with_ai=False,                # AI בשכבה העליונה
             frames=[tf],
         )
     except Exception as e:
@@ -60,7 +61,7 @@ async def _safe_analyze(symbol: str, tf: str, market: str, trending_only: bool) 
 
 async def _get_btc_direction() -> Optional[str]:
     """
-    מגמת BTC לפי EMA21/EMA50 על הטיימפריים המוגדר (ברירת מחדל 15m).
+    מגמת BTC לפי EMA21/EMA50 על 15m (fallback מהיר במקרה שאין btc_anchor).
     """
     try:
         df = await fetch_ohlcv("BTCUSDT", interval=BTC_REF_TF, limit=120)
@@ -82,11 +83,6 @@ async def _get_btc_direction() -> Optional[str]:
         return None
 
 def _aggregate_metrics(frames: List[Dict]) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
-    """
-    מוציא ערכי entry/atr/rsi/adx מהמסגרות:
-    - עדיפות לפריים עם quality_score מקסימלי
-    - פולבק לפריים האחרון אם חסר
-    """
     if not frames:
         return None, None, None, None
     best = max(frames, key=lambda d: float(d.get("quality_score", 0.0)))
@@ -117,25 +113,51 @@ def _aggregate_metrics(frames: List[Dict]) -> Tuple[Optional[float], Optional[fl
         adx = None
     return entry, atr, rsi, adx
 
-def _make_fast_reply(decision_yes: bool, direction: str, entry: Optional[float], atr: Optional[float]) -> str:
+def _auto_leverage(atrp: Optional[float], adx: Optional[float], quality: float, btc_strength: Optional[float]) -> int:
     """
-    SOP “קצר”: החלטה | כיוון | כניסה | SL | TP1/TP2 | סייז | הערת אימות (2–5 מילים)
+    חישוב מינוף אוטומטי 5×–35×:
+    - בסיס לפי איכות (6→10×, 10→24×).
+    - ADX מחזק עד +6×.
+    - ATR% מפחית עד −10×.
+    - חוזק עוגן BTC מחזק עד +5×.
+    """
+    q = float(quality)
+    base = 10.0 + max(0.0, min(14.0, (q - 6.0) * 3.5))  # 6→10, 10→24
+    boost = 0.0
+    if adx is not None:
+        boost += max(0.0, min(6.0, (float(adx) - 20.0) * 0.3))
+    if btc_strength is not None:
+        boost += max(0.0, min(5.0, (float(btc_strength) - 55.0) * 0.15))
+    penalty = 0.0
+    if atrp is not None:
+        # ATR% גבוה → להוריד מינוף
+        if atrp >= 2.0:
+            penalty = 10.0
+        elif atrp >= 1.2:
+            penalty = 6.0
+        elif atrp >= 0.8:
+            penalty = 3.0
+    lev = base + boost - penalty
+    return int(max(5.0, min(35.0, round(lev))))
+
+def _make_fast_reply(decision_yes: bool, direction: str, entry: Optional[float], atr: Optional[float], lev: int) -> str:
+    """
+    SOP “קצר”: החלטה | כיוון | כניסה | SL | TP1/TP2 | $40@×LEV | BTC Gate
     SL = 0.6×ATR ; TP1=1.8×ATR ; TP2=3.2×ATR
     """
     try:
         d = "כן" if decision_yes else "לא"
         dir_ = "LONG" if direction == "LONG" else "SHORT"
         if entry is None or atr is None:
-            return f"{d} | {dir_} | — | SL — | TP1/TP2 — | $40@×20 | BTC Gate"
+            return f"{d} | {dir_} | — | SL — | TP1/TP2 — | $40@×{lev} | BTC Gate"
         sl   = entry - 0.6*atr if dir_ == "LONG" else entry + 0.6*atr
         tp1  = entry + 1.8*atr if dir_ == "LONG" else entry - 1.8*atr
         tp2  = entry + 3.2*atr if dir_ == "LONG" else entry - 3.2*atr
-        # עיגול סביר:
         def fmt(x: float) -> str:
             return f"{x:.6f}".rstrip("0").rstrip(".")
-        return f"{d} | {dir_} | {fmt(entry)} | SL {fmt(sl)} | TP1 {fmt(tp1)}/TP2 {fmt(tp2)} | $40@×20 | BTC Gate"
+        return f"{d} | {dir_} | {fmt(entry)} | SL {fmt(sl)} | TP1 {fmt(tp1)}/TP2 {fmt(tp2)} | $40@×{lev} | BTC Gate"
     except Exception:
-        return f"{'כן' if decision_yes else 'לא'} | {direction} | — | SL — | TP1/TP2 — | $40@×20 | BTC Gate"
+        return f"{'כן' if decision_yes else 'לא'} | {direction} | — | SL — | TP1/TP2 — | $40@×{lev} | BTC Gate"
 
 async def _build_symbol_list(
     symbols: Optional[Sequence[str]],
@@ -177,9 +199,8 @@ async def multi_tf_scan_with_ai(
     symbols: Optional[Sequence[str]] = None,
     *,
     hard_btc_filter: bool = False,
-    allow_divergence: bool = False,  # preview בלבד בשלב זה
+    allow_divergence: bool = False,  # preview בלבד
 ) -> List[Dict]:
-    # ניקוי טיימפריימים
     raw_tfs = timeframes or ("15m", "1h")
     tfs = tuple([s for s in (str(x).strip() for x in raw_tfs) if s])
 
@@ -208,9 +229,11 @@ async def multi_tf_scan_with_ai(
         sym = str(r.get("symbol")).upper()
         grouped.setdefault(sym, []).append(r)
 
-    # מגמת BTC (לסינון/חיזוק)
-    btc_dir = await _get_btc_direction()
-    logging.info(f"[btc_correlation] BTC trend (via EMA21/50 on {BTC_REF_TF}): {btc_dir}")
+    # BTC Anchor (כיוון+עוצמה)
+    anchor = await compute_btc_anchor(frames=("15m",), market=market)
+    btc_dir = anchor.get("direction") or await _get_btc_direction()
+    btc_strength = float(anchor.get("strength", 0.0) or 0.0)
+    logging.info(f"[btc_anchor] dir={btc_dir} strength={btc_strength} on {BTC_REF_TF}")
 
     final: List[Dict] = []
     for sym, data in grouped.items():
@@ -260,9 +283,15 @@ async def multi_tf_scan_with_ai(
         if adx is not None:
             out["adx"] = adx
 
+        # חישוב ATR% לצורך מינוף
+        atrp = (atr / entry * 100.0) if (atr is not None and entry) else None
+        lev = _auto_leverage(atrp, adx, out["quality_score"], btc_strength)
+        out["leverage_suggest"] = lev
+
         # --- Hard Preview: יישור ל-BTC + שדות עזר ---
         aligned = (btc_dir is not None and out["direction"] == btc_dir)
         out["btc_dir"] = btc_dir
+        out["btc_strength"] = btc_strength
         out["aligned"] = bool(aligned)
         if btc_dir is None:
             out["signal_type"] = "UNKNOWN"
@@ -273,12 +302,11 @@ async def multi_tf_scan_with_ai(
             if aligned:
                 out["signal_type"] = "ALIGNED"
                 out["hard_status"] = "PASS"
-                out["hard_reason"] = "Aligned with BTC-Gate"
+                out["hard_reason"] = f"Aligned with BTC ({btc_dir}, strength={btc_strength})"
                 out["executable"] = True
             else:
                 out["signal_type"] = "DIVERGENCE"
                 if allow_divergence:
-                    # בשלב זה רק preview – ללא בדיקות RS/קורלציה עמוקות
                     out["hard_status"] = "FAIL"
                     out["hard_reason"] = "Against BTC (divergence preview only)"
                     out["executable"] = False
@@ -288,7 +316,7 @@ async def multi_tf_scan_with_ai(
                     out["executable"] = False
 
         # fast_reply לפי SOP “קצר”
-        out["fast_reply"] = _make_fast_reply(out.get("executable", False), out["direction"], entry, atr)
+        out["fast_reply"] = _make_fast_reply(out.get("executable", False), out["direction"], entry, atr, lev)
 
         final.append(out)
 
@@ -306,10 +334,6 @@ async def multi_tf_scan_with_ai(
 
 # -------- fallback ידני לסריקה נקודתית --------
 async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
-    """
-    סריקה מינימלית על סימבול בודד בכמה טיימפריימים — לעולם לא זורק חריג.
-    מחזיר מבנה תואם ל־multi_tf_scan_with_ai (רשימה עם פריט אחד).
-    """
     try:
         symbol = str(symbol or "BTCUSDT").upper()
         tfs = ("15m", "1h")
@@ -324,6 +348,11 @@ async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
         avg_q = sum(float(d.get("quality_score", 0)) for d in frames) / max(1, len(frames))
         dir_ = _normalize_direction(frames[-1].get("direction"))
         entry, atr, rsi, adx = _aggregate_metrics(frames)
+        anchor = await compute_btc_anchor(frames=("15m",), market=market)
+        btc_dir = anchor.get("direction")
+        btc_strength = float(anchor.get("strength", 0.0) or 0.0)
+        atrp = (atr / entry * 100.0) if (atr is not None and entry) else None
+        lev = _auto_leverage(atrp, adx, avg_q, btc_strength)
         out = {
             "symbol": symbol,
             "direction": dir_,
@@ -336,17 +365,20 @@ async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
             "atr": atr,
             "rsi": rsi,
             "adx": adx,
-            "btc_dir": await _get_btc_direction(),
-            "aligned": None,
+            "btc_dir": btc_dir,
+            "btc_strength": btc_strength,
+            "aligned": (btc_dir is not None and dir_ == btc_dir),
             "hard_status": "FAIL",
             "hard_reason": "fallback only",
             "executable": False,
-            "fast_reply": _make_fast_reply(False, dir_, entry, atr),
+            "leverage_suggest": lev,
+            "fast_reply": _make_fast_reply(False, dir_, entry, atr, lev),
         }
         return [out]
     except Exception as e:
         logging.warning(f"[fallback_scan_manual] failed for {symbol}: {e}")
         return []
+
 
 
 
