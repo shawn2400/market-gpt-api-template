@@ -1,48 +1,79 @@
 # routes/health.py
 from __future__ import annotations
+
+import os
 import time
-import importlib.metadata as md
+import platform
+from datetime import datetime, timezone
+from typing import Dict, Any
+
 from fastapi import APIRouter
-from utils import config
+from importlib import metadata as importlib_metadata
 
 router = APIRouter(prefix="/health", tags=["Health"])
 
-def _v(pkg: str) -> str:
-    try:
-        return md.version(pkg)
-    except Exception:
-        return "n/a"
+# שמירת זמן עלייה ל-uptime פשוט
+_BOOT_TS = time.time()
 
-@router.get("/strategy-version")
-async def strategy_version():
-    m = config.strategy_meta_snapshot()
+def _pkg_ver(name: str) -> str | None:
+    try:
+        return importlib_metadata.version(name)
+    except Exception:
+        return None
+
+@router.get("/live", summary="Liveness probe", operation_id="getLiveness")
+async def health_live() -> Dict[str, Any]:
     return {
-        "ok": True,
-        "ts": int(time.time()),
-        "strategy": {
-            "name": m["name"],
-            "version": m["version"],
-            "git_commit": m["git_commit"],
-            "req_hash": m["req_hash"],
-        },
-        "params": m["params"],
-        "flags": {
-            "ENABLE_AUTO_TRADING": bool(getattr(config, "ENABLE_AUTO_TRADING", False)),
-            "EXECUTE_TRADES": bool(getattr(config, "EXECUTE_TRADES", False)),
-            "BINANCE_SKIP_ACCOUNT_MUTATIONS": bool(getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS", True)),
-        },
-        "deps": {
-            "fastapi": _v("fastapi"),
-            "starlette": _v("starlette"),
-            "uvicorn": _v("uvicorn"),
-            "pandas": _v("pandas"),
-            "numpy": _v("numpy"),
-            "ta": _v("ta"),
-            "python-binance": _v("python-binance"),
-            "openai": _v("openai"),
-        },
+        "status": "live",
+        "uptime_sec": int(time.time() - _BOOT_TS),
+        "now_utc": datetime.now(timezone.utc).isoformat(),
     }
 
-@router.get("/live")
-async def live():
-    return {"ok": True}
+@router.get("/strategy-version", summary="Strategy metadata & dependency versions", operation_id="getStrategyVersion")
+async def health_strategy_version() -> Dict[str, Any]:
+    """
+    מחזיר מטא-דאטה על הגרסה, פירוט חבילות עיקריות ודגלי LIVE.
+    """
+    # גרסת אפליקציה (מ-ENV) וגרסת אסטרטגיה אם תבחר לשים
+    app_version = os.getenv("ALGOGPT_VERSION", "unknown")
+    strategy_version = os.getenv("STRATEGY_VERSION", app_version)
+
+    # גרסאות ספריות עיקריות (best-effort)
+    libs = {
+        "python": platform.python_version(),
+        "fastapi": _pkg_ver("fastapi"),
+        "starlette": _pkg_ver("starlette"),
+        "uvicorn": _pkg_ver("uvicorn"),
+        "gunicorn": _pkg_ver("gunicorn"),
+        "httpx": _pkg_ver("httpx"),
+        "requests": _pkg_ver("requests"),
+        "aiohttp": _pkg_ver("aiohttp"),
+        "pandas": _pkg_ver("pandas"),
+        "numpy": _pkg_ver("numpy"),
+        "ta": _pkg_ver("ta"),
+        "python-binance": _pkg_ver("python-binance"),
+        "openai": _pkg_ver("openai"),
+        "fpdf2": _pkg_ver("fpdf2"),
+        "Pillow": _pkg_ver("Pillow"),
+        "matplotlib": _pkg_ver("matplotlib"),
+    }
+
+    env_flags = {
+        "execute_trades": str(os.getenv("EXECUTE_TRADES", "false")).lower() in ("1","true","yes","on"),
+        "skip_mutations": str(os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true")).lower() in ("1","true","yes","on"),
+    }
+
+    return {
+        "status": "ok",
+        "app_version": app_version,
+        "strategy_version": strategy_version,
+        "git_commit": os.getenv("GIT_COMMIT", None),
+        "req_hash": os.getenv("REQ_HASH", None),
+        "python_version": libs["python"],
+        "libs": libs,
+        "env_flags": env_flags,
+        "boot_ts": int(_BOOT_TS),
+        "uptime_sec": int(time.time() - _BOOT_TS),
+        "now_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
