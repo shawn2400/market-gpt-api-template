@@ -12,7 +12,7 @@ getcontext().prec = 28
 @lru_cache(maxsize=1)
 def _load_futures_exchange_info() -> Dict[str, Any]:
     """
-    exchangeInfo של Futures (עם ריטריי/פולבק שמיושם ב-binance_client).
+    טוען once את exchangeInfo של ה-Futures (עם ריטריי/פולבק שכבר קיימים ב-binance_client).
     """
     data = futures_exchange_info_safe()
     return data or {}
@@ -33,82 +33,42 @@ def get_precision_info(symbol: str) -> dict:
     info = _find_symbol_info(symbol)
     if not info:
         return {"pricePrecision": 2, "quantityPrecision": 3}
+
     return {
         "pricePrecision": int(info.get("pricePrecision", 2)),
         "quantityPrecision": int(info.get("quantityPrecision", 3)),
     }
 
+def round_to_precision(value: float, digits: int) -> float:
+    """עיגול פשוט ל־N ספרות אחרי הנקודה (ללא התאמה ל־tick/step)."""
+    try:
+        return round(float(value), int(digits))
+    except Exception:
+        return float(value)
+
 def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         return value
-    # רינדון למטה על פי step
     return (value // step) * step
-
-def _get_filter(info: Dict[str, Any], ftype: str) -> Optional[Dict[str, Any]]:
-    for f in info.get("filters", []) or []:
-        if f.get("filterType") == ftype:
-            return f
-    return None
-
-def _get_tick_size(info: Dict[str, Any]) -> Decimal:
-    f = _get_filter(info, "PRICE_FILTER")
-    if f:
-        ts = f.get("tickSize") or f.get("tick_size") or "0"
-        try:
-            return Decimal(str(ts))
-        except Exception:
-            return Decimal("0")
-    return Decimal("0")
-
-def _get_step_size(info: Dict[str, Any]) -> Decimal:
-    # Futures בד"כ "LOT_SIZE"; לפעמים יש גם MARKET_LOT_SIZE (בדרך כלל זהה)
-    f = _get_filter(info, "LOT_SIZE") or _get_filter(info, "MARKET_LOT_SIZE")
-    if f:
-        ss = f.get("stepSize") or f.get("step_size") or "0"
-        try:
-            return Decimal(str(ss))
-        except Exception:
-            return Decimal("0")
-    return Decimal("0")
-
-def _get_min_qty(info: Dict[str, Any]) -> Decimal:
-    f = _get_filter(info, "LOT_SIZE")
-    if f:
-        v = f.get("minQty") or "0"
-        try:
-            return Decimal(str(v))
-        except Exception:
-            return Decimal("0")
-    return Decimal("0")
-
-def _get_min_notional(info: Dict[str, Any]) -> Decimal:
-    """
-    ב-UM Futures קיים לעיתים filterType=MIN_NOTIONAL עם שדה 'notional'.
-    אם לא קיים – נחזיר 0 (אין בדיקה).
-    """
-    f = _get_filter(info, "MIN_NOTIONAL")
-    if f:
-        v = f.get("notional") or f.get("minNotional") or "0"
-        try:
-            return Decimal(str(v))
-        except Exception:
-            return Decimal("0")
-    return Decimal("0")
 
 def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
     """
-    מעגל מחיר ל-tickSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
-    אם לא נמצא tickSize – יישען על pricePrecision.
+    מעגל מחיר ל־tickSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
+    אם לא נמצא tickSize – מעגל רק לפי pricePrecision.
     """
     info = _find_symbol_info(symbol) or {}
     price_precision = info.get("pricePrecision")
+    tick_size = "0"
+    for f in info.get("filters", []) or []:
+        if f.get("filterType") == "PRICE_FILTER":
+            tick_size = f.get("tickSize", "0")
+            break
 
     v = Decimal(str(price))
-    t = _get_tick_size(info)
-
+    t = Decimal(str(tick_size)) if tick_size else Decimal("0")
     dec = _decimal_step_round(v, t) if t > 0 else v
 
-    # פורמט לפי pricePrecision אם ידוע, אחרת השארה טבעית
+    # פורמט לפי pricePrecision אם ידוע
     if isinstance(price_precision, int) and price_precision >= 0:
         q = Decimal(1).scaleb(-price_precision)
         s = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
@@ -119,15 +79,20 @@ def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
 
 def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
     """
-    מעגל כמות ל-stepSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
-    אם לא נמצא stepSize – יישען על quantityPrecision.
+    מעגל כמות ל־stepSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
+    אם לא נמצא stepSize – מעגל רק לפי quantityPrecision.
     """
     info = _find_symbol_info(symbol) or {}
     qty_precision = info.get("quantityPrecision")
-    step = _get_step_size(info)
+    step_size = "0"
+    for f in info.get("filters", []) or []:
+        if f.get("filterType") == "LOT_SIZE":
+            step_size = f.get("stepSize", "0")
+            break
 
     v = Decimal(str(qty))
-    dec = _decimal_step_round(v, step) if step > 0 else v
+    s = Decimal(str(step_size)) if step_size else Decimal("0")
+    dec = _decimal_step_round(v, s) if s > 0 else v
 
     if isinstance(qty_precision, int) and qty_precision >= 0:
         q = Decimal(1).scaleb(-qty_precision)
@@ -137,54 +102,100 @@ def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
 
     return float(dec), out
 
-def calc_quantity_from_budget(symbol: str, price: float, budget_usd: float, leverage: float = 1.0) -> Dict[str, Any]:
+# ---------------------- NEW: פילטרים שימושיים + חישוב כמות מהתקציב ----------------------
+
+def _symbol_filters(symbol: str) -> Dict[str, Any]:
     """
-    מחשב כמות Futures מהתקציב והמחיר:
-    qty_raw = (budget_usd * leverage) / price
-    מחזיר גם בדיקות MIN_NOTIONAL / minQty.
+    מאתר tickSize/stepSize/minQty/minNotional (אם קיים) מתוך exchangeInfo.
     """
     info = _find_symbol_info(symbol) or {}
-    if price <= 0 or budget_usd <= 0:
-        return {"qty": 0.0, "qty_str": "0", "ok": False, "reason": "bad price/budget"}
+    tick_size = None
+    step_size = None
+    min_qty = None
+    min_notional = None
 
-    raw = (Decimal(str(budget_usd)) * Decimal(str(leverage))) / Decimal(str(price))
-    # עיגון ל-step
-    step = _get_step_size(info)
-    min_qty = _get_min_qty(info)
-    min_notional = _get_min_notional(info)
+    for f in info.get("filters", []) or []:
+        t = f.get("filterType")
+        if t == "PRICE_FILTER":
+            tick_size = f.get("tickSize")
+        elif t == "LOT_SIZE":
+            step_size = f.get("stepSize")
+            min_qty = f.get("minQty")
+        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+            # ב-USDT-M futures זה בד"כ MIN_NOTIONAL עם מפתח 'notional'
+            mn = f.get("notional") or f.get("minNotional")
+            if mn is not None:
+                min_notional = mn
 
-    qty_dec = _decimal_step_round(raw, step) if step > 0 else raw
-    if qty_dec <= 0:
-        return {"qty": 0.0, "qty_str": "0", "ok": False, "reason": "qty<=0"}
-
-    # כיבוד minQty
-    if min_qty > 0 and qty_dec < min_qty:
-        qty_dec = min_qty
-
-    # בדיקת MIN_NOTIONAL אם קיים
-    notional = qty_dec * Decimal(str(price))
-    if min_notional > 0 and notional < min_notional:
-        # ננסה להרים כמות למינימום הנדרש
-        req = (min_notional / Decimal(str(price)))
-        adj = _decimal_step_round(req, step) if step > 0 else req
-        if adj > qty_dec:
-            qty_dec = adj
-
-    # פורמט טקסטואלי לפי quantityPrecision
-    qty_precision = info.get("quantityPrecision")
-    if isinstance(qty_precision, int) and qty_precision >= 0:
-        q = Decimal(1).scaleb(-qty_precision)
-        qty_str = format(qty_dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
-    else:
-        qty_str = format(qty_dec.normalize(), "f")
+    def _safe_float(x):
+        try:
+            return float(x)
+        except Exception:
+            return None
 
     return {
+        "tick_size": _safe_float(tick_size),
+        "step_size": _safe_float(step_size),
+        "min_qty": _safe_float(min_qty),
+        "min_notional": _safe_float(min_notional),
+        "pricePrecision": int(info.get("pricePrecision", 2)) if info else 2,
+        "quantityPrecision": int(info.get("quantityPrecision", 3)) if info else 3,
+    }
+
+def calc_quantity_from_budget(
+    symbol: str,
+    *,
+    price: float,
+    budget_usd: float,
+    leverage: float = 1.0,
+) -> Dict[str, Any]:
+    """
+    מחשב כמות לפי תקציב×מינוף, עם עיגון ל-LOT_SIZE ועמידה ב-MIN_NOTIONAL (אם קיים).
+    מחזיר: {"ok":bool, "qty":float, "qty_str":str, "notional":float, "min_notional":float|None, "reason":str?}
+    """
+    try:
+        price = float(price); budget_usd = float(budget_usd); leverage = max(1.0, float(leverage))
+    except Exception:
+        return {"ok": False, "reason": "bad_inputs"}
+
+    if price <= 0 or budget_usd <= 0:
+        return {"ok": False, "reason": "non_positive_inputs"}
+
+    flt = _symbol_filters(symbol)
+    pos_value = budget_usd * leverage  # USD
+    raw_qty = pos_value / price
+    qty_dec, qty_str = apply_qty_step(raw_qty, symbol)
+
+    notional = qty_dec * price
+    mn = flt.get("min_notional")
+
+    if mn is not None and notional < mn:
+        # נסה להעלות כמות למינימום נומינלי (פולבק עדין)
+        needed_qty = (mn / price) * 1.001
+        qty_dec2, qty_str2 = apply_qty_step(needed_qty, symbol)
+        notional2 = qty_dec2 * price
+        if notional2 + 1e-9 < mn:
+            return {
+                "ok": False,
+                "reason": "below_min_notional",
+                "qty": qty_dec,
+                "qty_str": qty_str,
+                "notional": notional,
+                "min_notional": mn,
+            }
+        qty_dec, qty_str, notional = qty_dec2, qty_str2, notional2
+
+    if qty_dec <= 0:
+        return {"ok": False, "reason": "qty_rounded_to_zero", "min_notional": mn}
+
+    return {
+        "ok": True,
         "qty": float(qty_dec),
         "qty_str": qty_str,
-        "ok": True,
-        "min_notional": float(min_notional),
         "notional": float(notional),
+        "min_notional": float(mn) if mn is not None else None,
     }
+
 
 
 
