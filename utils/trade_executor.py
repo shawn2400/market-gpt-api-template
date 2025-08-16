@@ -13,6 +13,7 @@ from utils.btc_anchor import compute_btc_anchor
 from utils.precision_utils import (
     apply_price_tick, apply_qty_step, calc_quantity_from_budget
 )
+from utils.sl_tp_utils import calculate_sl_tp, get_sltp_params
 
 # נתיבי כתיבה (אם זמינים)
 _futures_ok = True
@@ -45,11 +46,6 @@ BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV = str(
 
 MUTATIONS_DISABLED = (not EXECUTE_TRADES) or BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV
 
-# פרופיל רמות (ATR-מכפילים) — תואם “Fast Reply”
-_SL_K = 0.60
-_TP1_K = 1.80
-_TP2_K = 3.20
-
 def _norm_direction(d: str) -> str:
     d = (d or "").strip().upper()
     if d in ("LONG", "BUY"):
@@ -78,18 +74,15 @@ def _validate_inputs(symbol: str,
     return None
 
 def _quick_risk_metrics(symbol: str, interval: str = "15m", limit: int = 120) -> Dict[str, Optional[float]]:
+    """Snapshot מהיר ל-ATR/ADX/ATR% בלי תלות ב-python-binance (עמיד בבאן REST)."""
     try:
         df: pd.DataFrame = snapshot_klines_df(symbol, interval=interval, limit=limit, market_type="futures")
         if df is None or df.empty:
-            return {"atr": None, "atrp": None, "adx": None}
-        close = df["close"]
-        high  = df["high"]
-        low   = df["low"]
+            return {"atr": None, "atrp": None, "adx": None, "last": None}
+        close = df["close"]; high = df["high"]; low = df["low"]
         atr14 = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
         adx14 = ADXIndicator(high=high, low=low, close=close, window=14).adx()
-        atr = float(atr14.iloc[-1])
-        adx = float(adx14.iloc[-1])
-        last = float(close.iloc[-1])
+        atr = float(atr14.iloc[-1]); adx = float(adx14.iloc[-1]); last = float(close.iloc[-1])
         atrp = (atr / last * 100.0) if last > 0 else None
         return {"atr": atr, "atrp": atrp, "adx": adx, "last": last}
     except Exception as e:
@@ -97,6 +90,10 @@ def _quick_risk_metrics(symbol: str, interval: str = "15m", limit: int = 120) ->
         return {"atr": None, "atrp": None, "adx": None, "last": None}
 
 def _auto_leverage(atrp: Optional[float], adx: Optional[float], btc_strength: Optional[float], quality: Optional[float]) -> int:
+    """
+    מינוף אוטומטי 5×–35×: איכות/ADX/עוצמת עוגן BTC מעלים, ATR% מוריד.
+    כוונון שמרני כדי למנוע over-leverage בתנודתיות חריגה.
+    """
     q = float(quality or 7.0)
     base = 10.0 + max(0.0, min(14.0, (q - 6.0) * 3.5))   # 6→10, 10→24
     boost = 0.0
@@ -112,20 +109,6 @@ def _auto_leverage(atrp: Optional[float], adx: Optional[float], btc_strength: Op
     lev = base + boost - penalty
     return int(max(5.0, min(35.0, round(lev))))
 
-def _levels_from_atr(direction: str, entry: float, atr: float) -> Tuple[float, float, float]:
-    """
-    מחזיר (sl, tp1, tp2) לא לעיגון דיוק (זה יקרה בהמשך).
-    """
-    if direction == "LONG":
-        sl = entry - _SL_K * atr
-        tp1 = entry + _TP1_K * atr
-        tp2 = entry + _TP2_K * atr
-    else:
-        sl = entry + _SL_K * atr
-        tp1 = entry - _TP1_K * atr
-        tp2 = entry - _TP2_K * atr
-    return sl, tp1, tp2
-
 async def execute_trade_live(
     symbol: str,
     entry: Optional[float],
@@ -140,13 +123,12 @@ async def execute_trade_live(
     quality_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    ביצוע טרייד חי (Spot/Futures) עם:
-    - מינוף אוטומטי (אם לא סופק)
-    - חישוב SL/TP אוטומטי (אם לא סופק) על בסיס ATR
-    - חישוב כמות מה-Budget×Leverage (אם לא סופקה)
-    - עיגון Price/Qty לפי exchangeInfo (tick/step/minNotional)
-    - אימות מחיר לייב + סטיית מחיר מותרת
-    - DRY-RUN אם כתיבה מושבתת
+    טרייד חי (Spot/Futures) אוטומטי-בטוח:
+    - בחירת מינוף (אם לא סופק) לפי ATR%, ADX, עוצמת BTC Anchor, וציון איכות
+    - חישוב SL/TP אוטומטי ע"י sl_tp_utils + עיגון tickSize
+    - חישוב כמות מבוסס Budget×Leverage (או עיגון כמות שסופקה) + בדיקות MIN_NOTIONAL/MIN_QTY
+    - אימות מחיר חי וסטיית מחיר מותרת
+    - DRY-RUN אם כתיבה מושבתת (מחזיר תוכנית מלאה להזנה ידנית)
     """
     try:
         symbol = str(symbol).upper().strip()
@@ -162,20 +144,18 @@ async def execute_trade_live(
         # מחיר חי
         live_price = await get_price(symbol)
         if live_price is None or not is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC):
-            logging.error(f"[TRADE] ❌ מחיר חי לא תקין/לא עדכני ל-{symbol}: {live_price}")
+            logging.error(f"[TRADE] ❌ live price unavailable/stale for {symbol}: {live_price}")
             return {"status": "error", "error": "live price unavailable or stale", "code": "stale_price"}
 
         # אם לא הועבר entry — נשתמש במחיר חי
         if entry is None:
             entry = float(live_price)
 
-        # מדדי סיכון מהירים (ATR/ADX/ATR%)
+        # מדדי סיכון מהירים
         risk = _quick_risk_metrics(symbol, interval="15m", limit=120)
-        atr = risk.get("atr")
-        adx = risk.get("adx")
-        atrp = risk.get("atrp")
+        atr = risk.get("atr"); adx = risk.get("adx"); atrp = risk.get("atrp")
 
-        # חישוב מינוף אוטומטי אם לא סופק (Futures בלבד)
+        # מינוף אוטומטי (Futures בלבד)
         if leverage is None and market_type == "futures":
             anchor = await compute_btc_anchor(frames=("15m",), market="futures")
             btc_strength = float(anchor.get("strength", 0.0) or 0.0)
@@ -183,28 +163,26 @@ async def execute_trade_live(
 
         lev_for_calc = int(leverage or 1)
 
-        # אם SL/TP לא נמסרו — חישוב אוטומטי
-        if (stop is None or tp is None) and (atr is not None):
-            sl, tp1, tp2 = _levels_from_atr(direction, float(entry), float(atr))
-            # בנתיב ביצוע אנחנו משתמשים ב-TP1 כברירת מחדל; TP2 נוח להצגה בתוכנית.
-            if stop is None:
-                stop = sl
-            if tp is None:
-                tp = tp1
+        # SL/TP אוטומטי אם חסר
+        if stop is None or tp is None:
+            sl_raw, tp_raw = calculate_sl_tp(
+                entry_price=float(entry),
+                direction=direction,
+                atr=float(atr) if atr is not None else None,
+            )
+            if stop is None: stop = sl_raw
+            if tp   is None: tp   = tp_raw
 
-        # עיגון דיוק/טיק למחירים (entry/stop/tp)
+        # עיגון דיוק/טיק
         entry_adj, entry_str = apply_price_tick(float(entry), symbol)
-        stop_adj, stop_str = (apply_price_tick(float(stop), symbol) if stop is not None else (None, ""))
-        tp_adj, tp_str = (apply_price_tick(float(tp), symbol) if tp is not None else (None, ""))
+        stop_adj,  stop_str  = apply_price_tick(float(stop),  symbol) if stop is not None else (None, "")
+        tp_adj,    tp_str    = apply_price_tick(float(tp),    symbol) if tp   is not None else (None, "")
 
-        entry = entry_adj
-        stop = stop_adj
-        tp = tp_adj
+        entry, stop, tp = entry_adj, stop_adj, tp_adj
 
-        # סדר מחירים חייב להיות תקין
+        # סדר מחירים
         if stop is None or tp is None:
             return {"status": "error", "error": "sl/tp required and could not be derived", "code": "missing_levels"}
-
         if direction == "LONG":
             if not (stop < entry < tp):
                 return {"status": "error", "error": f"levels invalid for LONG (entry={entry}, stop={stop}, tp={tp})", "code": "levels_order"}
@@ -212,10 +190,10 @@ async def execute_trade_live(
             if not (tp < entry < stop):
                 return {"status": "error", "error": f"levels invalid for SHORT (entry={entry}, stop={stop}, tp={tp})", "code": "levels_order"}
 
-        # סטיית מחיר מול לייב — pprotect באחוזים
+        # סטיית מחיר מול לייב
         deviation_pct = abs((live_price - entry) / entry) * 100.0
         if deviation_pct > pprotect:
-            logging.warning(f"[TRADE] ⚠️ סטיית מחיר {deviation_pct:.4f}% בין תוכנית ({entry}) ללייב ({live_price}) – נחסם (> {pprotect}%)")
+            logging.warning(f"[TRADE] ⚠️ deviation {deviation_pct:.4f}% > {pprotect}% — blocked")
             return {
                 "status": "error",
                 "error": f"price deviation {deviation_pct:.4f}% > {pprotect}%",
@@ -225,86 +203,66 @@ async def execute_trade_live(
                 "deviation_pct": round(deviation_pct, 6),
             }
 
-        # חישוב כמות אם לא נמסרה: Budget×Leverage / Entry
-        qty_out = None
+        # כמות
         if quantity is None:
-            qres = calc_quantity_from_budget(symbol, price=entry, budget_usd=float(budget_usd), leverage=float(lev_for_calc if market_type == "futures" else 1.0))
+            qres = calc_quantity_from_budget(
+                symbol, price=entry, budget_usd=float(budget_usd),
+                leverage=float(lev_for_calc if market_type == "futures" else 1.0)
+            )
             if not qres.get("ok"):
                 return {"status": "error", "error": f"quantity calc failed: {qres.get('reason')}", "code": "qty_calc_failed"}
             quantity = float(qres["qty"])
-            qty_out = qres["qty_str"]
+            qty_str = qres["qty_str"]
         else:
-            # עיגון ידני ל-step אם סופקה כמות
-            quantity, qty_out = apply_qty_step(float(quantity), symbol)
+            quantity, qty_str = apply_qty_step(float(quantity), symbol)
 
-        # DRY-RUN אם כתיבה מושבתת
+        # DRY-RUN – מוכן להזנה ידנית
         if MUTATIONS_DISABLED:
-            msg_flags = []
-            if not EXECUTE_TRADES: msg_flags.append("EXECUTE_TRADES=false")
-            if BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV: msg_flags.append("BINANCE_SKIP_ACCOUNT_MUTATIONS=true")
-            msg = " & ".join(msg_flags) or "mutations disabled"
-
-            # חישוב TP2 להצגה (לא לביצוע)
-            tp2_disp = None
-            if atr is not None:
-                _, _tp1, _tp2 = _levels_from_atr(direction, float(entry), float(atr))
-                tp2_disp, _ = apply_price_tick(_tp2, symbol)
-
+            params = get_sltp_params()
             return {
                 "status": "dry_run",
-                "reason": msg,
+                "reason": ("EXECUTE_TRADES=false" if not EXECUTE_TRADES else "") + (
+                    " & BINANCE_SKIP_ACCOUNT_MUTATIONS=true" if BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV else ""
+                ),
                 "plan": {
                     "symbol": symbol,
                     "side": direction,
-                    "entry": entry,
-                    "entry_str": entry_str,
-                    "sl": stop,
-                    "sl_str": stop_str,
-                    "tp": tp,
-                    "tp_str": tp_str,
-                    "tp2_preview": tp2_disp,
+                    "entry": entry, "entry_str": entry_str,
+                    "sl": stop,    "sl_str":    stop_str,
+                    "tp": tp,      "tp_str":    tp_str,
                     "leverage": (lev_for_calc if market_type == "futures" else None),
                     "budget": float(budget_usd),
                     "quantity": quantity,
-                    "quantity_str": qty_out,
+                    "quantity_str": qty_str,
                     "market_type": market_type,
                     "live_price": live_price,
                     "deviation_pct": round(deviation_pct, 6),
-                    "atr": float(atr) if atr is not None else None,
-                    "adx": float(adx) if adx is not None else None,
+                    "risk": {"atr": float(atr) if atr is not None else None,
+                             "adx": float(adx) if adx is not None else None,
+                             "atrp": float(atrp) if atrp is not None else None},
+                    "sltp_params": params,
                 },
             }
 
-        # ביצוע בפועל (כתיבה לבורסה)
+        # ביצוע בפועל
         if market_type == "futures":
             result = await binance_futures_trade(
-                symbol=symbol,
-                side=direction,
-                entry=entry,
-                sl=stop,
-                tp=tp,
-                leverage=int(lev_for_calc),
-                budget=float(budget_usd),
-                quantity=quantity,
-                market_type=market_type
+                symbol=symbol, side=direction, entry=entry, sl=stop, tp=tp,
+                leverage=int(lev_for_calc), budget=float(budget_usd), quantity=quantity, market_type=market_type
             )
         else:
             result = await binance_spot_trade(
-                symbol=symbol,
-                side=direction,
-                entry=entry,
-                sl=stop,
-                tp=tp,
-                budget=float(budget_usd),
-                quantity=quantity
+                symbol=symbol, side=direction, entry=entry, sl=stop, tp=tp,
+                budget=float(budget_usd), quantity=quantity
             )
 
         logging.info(f"[TRADE] ✅ {market_type.upper()} {direction} {symbol} live={live_price} entry={entry} -> {result}")
         return {"status": "success", "result": result}
 
     except Exception as e:
-        logging.error("[TRADE] שגיאה בביצוע טרייד %s: %s", symbol, e, exc_info=True)
+        logging.error("[TRADE] exception %s: %s", symbol, e, exc_info=True)
         return {"status": "error", "error": str(e), "code": "exception"}
+
 
 
 
