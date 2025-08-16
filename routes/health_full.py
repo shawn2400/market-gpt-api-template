@@ -17,7 +17,7 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
 STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", APP_VERSION)
 BOOT_TS = int(time.time())
 
-# --- מודלים להידוק OpenAPI (תואם לקובץ openapi.yaml שלך) ---
+# --- מודלים להידוק OpenAPI ---
 class StrategyVersionEnvFlags(BaseModel):
     execute_trades: bool
     skip_mutations: bool
@@ -59,17 +59,16 @@ def _get_lib_versions() -> Dict[str, Optional[str]]:
         "pydantic": _v("pydantic"),
         "numpy": _v("numpy"),
         "pandas": _v("pandas"),
-        "python_binance": _v("binance"),   # python-binance
+        "python_binance": _v("binance"),
         "openai": _v("openai"),
         "ta": _v("ta"),
-        "fpdf2": _v("fpdf"),               # חבילה מיובאת כ-fpdf
+        "fpdf2": _v("fpdf"),
         "Pillow": _v("PIL"),
         "matplotlib": _v("matplotlib"),
         "requests": _v("requests"),
         "aiohttp": _v("aiohttp"),
         "ujson": _v("ujson"),
     }
-    # המרות שמות מודולים לגרסאות במידת הצורך
     if libs["Pillow"] is None:
         try:
             from PIL import Image
@@ -132,6 +131,15 @@ async def strategy_version():
 async def liveness():
     uptime = int(time.time()) - BOOT_TS
     return LiveResponse(status="live", uptime_sec=uptime, now_utc=_now_iso_utc())
+
+@router.get(
+    "/healthz",
+    tags=["Health"],
+    summary="Alias for health checks",
+)
+async def healthz():
+    return {"ok": True, "version": APP_VERSION}
+
 
 
 
