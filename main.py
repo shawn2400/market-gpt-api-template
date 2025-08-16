@@ -230,6 +230,18 @@ async def _on_startup():
             logger.info("[BOOT] AI client warmup done (ready=%s)", getattr(_ai_client, "ready", False))
         except Exception as e:
             logger.warning("[BOOT] AI warmup failed: %s", e)
+    # ✅ בדיקת Binance חתומה מוקדמת – נופלת מוקדם וברור אם KEY/IP/הרשאות לא תקין
+    try:
+        from utils.binance_client import auth_probe_signed, get_keys_cleaned
+        keys_info = get_keys_cleaned()
+        if keys_info.get("key_len", 0) > 0:
+            auth_probe_signed()
+            logger.info("[BOOT] Binance signed auth probe OK (key_len=%s, secret_len=%s)",
+                        keys_info.get("key_len"), keys_info.get("secret_len"))
+        else:
+            logger.info("[BOOT] Binance keys not set – running in public-only mode.")
+    except Exception as e:
+        logger.error("[BOOT] Binance auth check failed: %s", e)
 
 @app.on_event("shutdown")
 async def _on_shutdown():
@@ -632,6 +644,7 @@ async def trade_live(req: LiveTradeRequest):
             BINANCE_IMPORT_ERR = f"{type(e).__name__}: {e}"
             return {"status": "error", "error": f"live trader import failed: {BINANCE_IMPORT_ERR}"}
 
+    # LIVE ידני: חייבים ששני הדגלים יהיו כך
     if not EXECUTE_TRADES or SKIP_MUTATIONS:
         return {"status": "error", "error": "EXECUTE_TRADES must be true and BINANCE_SKIP_ACCOUNT_MUTATIONS must be false"}
 
@@ -658,9 +671,12 @@ async def trade_live(req: LiveTradeRequest):
             cid_prefix="algogpt",
         )
         return {"status": "success", "result": res}
+    except RuntimeError as e:
+        # שגיאות ידידותיות (auth/minQty/minNotional/חוקי בורסה)
+        return {"status": "error", "error": str(e)}
     except Exception as e:
         logger.exception("live trade failed")
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": f"unexpected: {e.__class__.__name__}: {e}"}
 
 # -------- Executor (in-mem demo) --------
 EXECUTOR_RUNNING = False
@@ -722,6 +738,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
