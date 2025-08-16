@@ -254,6 +254,21 @@ async def binance_futures_trade(
         "minNotional": float(min_notional),
     }
 
+# --------------------------------------------------------------------
+# NEW: Backward-compat shim so imports won't fail.
+# main.execute_grid קורא binance_grid_trade(plan) עם מילון "plan"
+# כאן נחזיר dry_run מסודר עד שתרצה לחבר מבצען אמיתי.
+# --------------------------------------------------------------------
+async def binance_grid_trade(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Compatibility shim for grid trading. Accepts a 'plan' dict and returns a dry_run echo.
+    Replace this with a real executor if/when available.
+    """
+    return {
+        "mode": "dry_run",
+        "reason": "grid executor not implemented in this module",
+        "echo_plan": plan,
+    }
 
 
 
