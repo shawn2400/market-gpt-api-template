@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, Tuple
 from utils import config
 from utils.binance_client import get_client, retry_call, futures_exchange_info_safe
 
+# ----- Flags -----
 EXECUTE_TRADES = bool(getattr(config, "EXECUTE_TRADES", False))
 BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV = str(
     getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
@@ -21,6 +22,7 @@ MAX_LEVERAGE  = int(getattr(config, "MAX_LEVERAGE", os.getenv("MAX_LEVERAGE", "3
 
 getcontext().prec = 28
 
+# ----- Helpers -----
 def _find_symbol_info(exchange_info: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
     if not exchange_info or "symbols" not in exchange_info:
         return None
@@ -39,9 +41,11 @@ def _get_filters(sym_info: Dict[str, Any]) -> Dict[str, Any]:
 def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         return value
+    # round down to step
     return (value // step) * step
 
 def _fmt_decimal(x: Decimal, precision: Optional[int]) -> str:
+    # floor to requested precision for API strings
     if precision is None or precision < 0:
         q = Decimal("0.0000000001")
     else:
@@ -89,7 +93,7 @@ def _set_leverage(client, symbol: str, leverage: int) -> bool:
     lev = max(1, min(int(leverage), MAX_LEVERAGE))
     try:
         if SKIP_MUTATIONS:
-            logging.warning("[TRADER] leverage set skipped (Mutations disabled). requested=%s", lev)
+            logging.warning("[TRADER] leverage set skipped (mutations disabled). requested=%s", lev)
             return False
         resp = retry_call(lambda: client.futures_change_leverage(symbol=symbol.upper(), leverage=lev),
                           f"change_leverage({symbol})")
@@ -141,6 +145,7 @@ def _place_stop_like(client, symbol: str, direction: str, stop_price_s: str, lim
         params["newClientOrderId"] = client_order_id
     return retry_call(lambda: client.futures_create_order(**params), f"{kind}_LIMIT({symbol})")
 
+# ----- Core trade -----
 async def binance_futures_trade(
     symbol: str,
     side: str,                 # 'LONG' or 'SHORT'
@@ -148,8 +153,8 @@ async def binance_futures_trade(
     sl: float,
     tp: float,
     leverage: int,
-    budget: float,
-    quantity: Optional[float] = None,
+    budget: float,             # margin (USDT) you are willing to allocate
+    quantity: Optional[float] = None,  # override computed qty
     market_type: str = "futures",
     cid_prefix: str = "algogpt",
 ) -> Dict[str, Any]:
@@ -165,6 +170,7 @@ async def binance_futures_trade(
 
     client = get_client()
 
+    # Exchange info + filters
     ex_info = await asyncio.to_thread(futures_exchange_info_safe)
     sym_info = _find_symbol_info(ex_info, symbol)
     if not sym_info:
@@ -173,6 +179,7 @@ async def binance_futures_trade(
     filters = _get_filters(sym_info)
     price_filter = filters.get("PRICE_FILTER", {}) or {}
     lot_filter   = filters.get("LOT_SIZE", {}) or {}
+    # On UM futures the filter is MIN_NOTIONAL (not always present)
     min_notional = Decimal(str(filters.get("MIN_NOTIONAL", {}).get("notional", 0) or 0.0))
 
     tick_size = Decimal(str(price_filter.get("tickSize", "0.01")))
@@ -182,6 +189,7 @@ async def binance_futures_trade(
     price_precision = sym_info.get("pricePrecision")
     qty_precision   = sym_info.get("quantityPrecision")
 
+    # Round prices to tick
     entry_dec, entry_s = _apply_price_tick(float(entry), float(tick_size), price_precision)
     sl_dec,    sl_s    = _apply_price_tick(float(sl),    float(tick_size), price_precision)
     tp_dec,    tp_s    = _apply_price_tick(float(tp),    float(tick_size), price_precision)
@@ -189,20 +197,52 @@ async def binance_futures_trade(
     if entry_dec <= 0:
         raise RuntimeError("invalid entry price after rounding")
 
-    raw_qty = Decimal(str(budget)) / entry_dec if quantity is None else Decimal(str(quantity))
+    # Validate SL/TP orientation
+    if side == "LONG":
+        if sl_dec >= entry_dec:
+            raise RuntimeError(f"SL must be < entry for LONG (sl={sl_dec}, entry={entry_dec})")
+        if tp_dec <= entry_dec:
+            raise RuntimeError(f"TP must be > entry for LONG (tp={tp_dec}, entry={entry_dec})")
+    else:  # SHORT
+        if sl_dec <= entry_dec:
+            raise RuntimeError(f"SL must be > entry for SHORT (sl={sl_dec}, entry={entry_dec})")
+        if tp_dec >= entry_dec:
+            raise RuntimeError(f"TP must be < entry for SHORT (tp={tp_dec}, entry={entry_dec})")
+
+    # --- Quantity calculation (FIX) ---
+    # Correct formula when 'budget' is margin:
+    # qty = (budget * leverage) / entry
+    if quantity is None:
+        raw_qty = (Decimal(str(budget)) * Decimal(str(leverage))) / entry_dec
+    else:
+        raw_qty = Decimal(str(quantity))
+
+    # Round qty to step (floor)
     qty_dec, qty_s = _apply_qty_step(raw_qty, float(step_size), qty_precision)
 
-    if qty_dec <= 0 or qty_dec < min_qty:
-        raise RuntimeError(f"quantity too small after rounding: {qty_dec} < minQty {min_qty}")
-
-    notional = (qty_dec * entry_dec)
-    if min_notional and notional < min_notional:
-        need_qty = (min_notional / entry_dec)
-        need_qty_rounded, _ = _apply_qty_step(need_qty, float(step_size), qty_precision)
+    # Enforce minQty
+    if qty_dec < min_qty or qty_dec <= 0:
+        # Compute minimal budget required to meet minQty with given leverage
+        # budget_needed = (minQty * entry) / leverage
+        min_budget = (min_qty * entry_dec) / Decimal(str(leverage))
         raise RuntimeError(
-            f"notional too small: qty*entry={notional} < minNotional={min_notional}; try qty≥{need_qty_rounded}"
+            f"quantity too small after rounding: {qty_dec} < minQty {min_qty}. "
+            f"Try budget ≥ {min_budget.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} "
+            f"(at leverage={leverage}) or increase leverage."
         )
 
+    # Notional check (if applicable)
+    notional = (qty_dec * entry_dec)
+    if min_notional and notional < min_notional:
+        # Minimal budget for notional: budget_needed = min_notional / leverage
+        min_budget_notional = (min_notional / Decimal(str(leverage)))
+        raise RuntimeError(
+            f"notional too small: qty*entry={notional} < minNotional={min_notional}. "
+            f"Try budget ≥ {min_budget_notional.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} "
+            f"(at leverage={leverage})."
+        )
+
+    # ----- Position mode & leverage -----
     position_side: Optional[str] = None
     acct_is_hedge = _read_position_mode(client)
     if acct_is_hedge is True:
@@ -214,10 +254,16 @@ async def binance_futures_trade(
 
     await asyncio.to_thread(_set_leverage, client, symbol, leverage)
 
+    # ----- Place orders -----
     base_cid = f"{cid_prefix}:{symbol.upper()}:{side}:{int(entry_dec*1000)}"
     entry_cid = f"{base_cid}:E"
     sl_cid    = f"{base_cid}:SL"
     tp_cid    = f"{base_cid}:TP"
+
+    logging.info(
+        "[TRADER] %s %s | entry=%s sl=%s tp=%s | qty=%s | tick=%s step=%s minQty=%s minNotional=%s | lev=%s budget=%s notional=%s",
+        symbol.upper(), side, entry_s, sl_s, tp_s, qty_s, tick_size, step_size, min_qty, min_notional, leverage, budget, notional
+    )
 
     entry_resp = await asyncio.to_thread(
         _place_limit_entry, client, symbol, side, entry_s, qty_s, position_side, entry_cid
@@ -255,9 +301,7 @@ async def binance_futures_trade(
     }
 
 # --------------------------------------------------------------------
-# NEW: Backward-compat shim so imports won't fail.
-# main.execute_grid קורא binance_grid_trade(plan) עם מילון "plan"
-# כאן נחזיר dry_run מסודר עד שתרצה לחבר מבצען אמיתי.
+# Grid dry-run shim (לשמירת תאימות)
 # --------------------------------------------------------------------
 async def binance_grid_trade(plan: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -269,6 +313,7 @@ async def binance_grid_trade(plan: Dict[str, Any]) -> Dict[str, Any]:
         "reason": "grid executor not implemented in this module",
         "echo_plan": plan,
     }
+
 
 
 
