@@ -3,210 +3,416 @@ info:
   title: AlgoGPT API
   version: 2.13.4
   description: >
-    AlgoGPT – Real-time algorithmic trader for Binance (Futures/Spot/Grid), Multi-TF Scan with AI,
-    live trades, smart SL/TP, Auto Executor, and PnL PDF.
+    AlgoGPT – Real-time algorithmic trader for Binance (Futures/Spot/Grid), Multi-TF Scan with AI, live trades, smart
+    SL/TP, Auto Executor, and PnL PDF.
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
-
 components:
   securitySchemes:
     HTTPBearer:
       type: http
       scheme: bearer
       bearerFormat: JWT
-
   schemas:
     Error:
       type: object
       properties:
-        error: { type: string }
-        code:  { type: string }
-
+        error:
+          type: string
+        code:
+          type: string
     PriceResponse:
       type: object
       properties:
-        symbol: { type: string }
-        price:  { type: number }
-
+        symbol:
+          type: string
+        price:
+          type: number
     AnchorSnapshot:
       type: object
       properties:
-        direction: { type: string, enum: [UP, DOWN, SIDEWAYS] }
-        strength:  { type: number, minimum: 0, maximum: 100 }
+        direction:
+          type: string
+          enum:
+            - UP
+            - DOWN
+            - SIDEWAYS
+        strength:
+          type: number
+          minimum: 0
+          maximum: 100
         frames:
           type: array
-          items: { type: string }
-
+          items:
+            type: string
     ScanResultItem:
       type: object
       properties:
-        symbol:        { type: string }
-        quality_score: { type: number }
-        direction:     { type: string, enum: [LONG, SHORT, SIDEWAYS] }
-        trend:         { type: string }
-        rsi:           { type: number }
-        adx:           { type: number }
-        volume:        { type: number }
-        market:        { type: string, enum: [futures, spot] }
+        symbol:
+          type: string
+        quality_score:
+          type: number
+        direction:
+          type: string
+          enum:
+            - LONG
+            - SHORT
+            - SIDEWAYS
+        trend:
+          type: string
+        rsi:
+          type: number
+        adx:
+          type: number
+        volume:
+          type: number
+        market:
+          type: string
+          enum:
+            - futures
+            - spot
         frames:
           type: array
-          items: { type: string }
-        signal:        { type: string, enum: [BUY, SELL, HOLD] }
-        confidence:    { type: number, minimum: 0, maximum: 100 }
-        reason:        { type: string }
-        entry:         { type: [number, "null"] }
-        atr:           { type: [number, "null"] }
-
+          items:
+            type: string
+        signal:
+          type: string
+          enum:
+            - BUY
+            - SELL
+            - HOLD
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 100
+        reason:
+          type: string
+        entry:
+          type:
+            - number
+            - "null"
+        atr:
+          type:
+            - number
+            - "null"
     ScanResponse:
       type: object
       properties:
         results:
           type: array
-          items: { $ref: "#/components/schemas/ScanResultItem" }
+          items:
+            $ref: "#/components/schemas/ScanResultItem"
         errors:
-          type: [object, "null"]
-          additionalProperties: { type: string }
-
+          type:
+            - object
+            - "null"
+          additionalProperties:
+            type: string
     SLTPRequest:
       type: object
-      required: [symbol, direction, entry]
+      required:
+        - symbol
+        - direction
+        - entry
       properties:
-        symbol:    { type: string, example: BTCUSDT }
-        direction: { type: string, enum: [LONG, SHORT] }
-        entry:     { type: number, example: 65000 }
+        symbol:
+          type: string
+          example: BTCUSDT
+        direction:
+          type: string
+          enum:
+            - LONG
+            - SHORT
+        entry:
+          type: number
+          example: 65000
         atr:
-          type: [number, "null"]
+          type:
+            - number
+            - "null"
           description: Optional ATR
-
     SLTPResponse:
       type: object
       properties:
-        symbol:    { type: string }
-        direction: { type: string, enum: [LONG, SHORT] }
-        sl:        { type: number }
-        tp:        { type: number }
-
+        symbol:
+          type: string
+        direction:
+          type: string
+          enum:
+            - LONG
+            - SHORT
+        sl:
+          type: number
+        tp:
+          type: number
     TradeRequest:
       type: object
-      required: [symbol, side]
+      required:
+        - symbol
+        - side
       properties:
-        symbol:   { type: string, example: BTCUSDT }
-        side:     { type: string, enum: [LONG, SHORT], example: LONG }
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          enum:
+            - LONG
+            - SHORT
+          example: LONG
         entry:
-          type: [number, "null"]
+          type:
+            - number
+            - "null"
           description: If null, live price is used
-        sl:       { type: [number, "null"] }
-        tp:       { type: [number, "null"] }
-        budget:   { type: number, minimum: 0.01, default: 100 }
-        leverage: { type: integer, minimum: 1, maximum: 125, default: 10 }
-
+        sl:
+          type:
+            - number
+            - "null"
+        tp:
+          type:
+            - number
+            - "null"
+        budget:
+          type: number
+          minimum: 0.01
+          default: 100
+        leverage:
+          type: integer
+          minimum: 1
+          maximum: 125
+          default: 10
     TradeResponse:
       type: object
       properties:
-        status: { type: string, enum: [success, error] }
+        status:
+          type: string
+          enum:
+            - success
+            - error
         result:
-          type: [object, "null"]
+          type:
+            - object
+            - "null"
           additionalProperties: true
         error:
-            type: [string, "null"]
-
+          type:
+            - string
+            - "null"
     AiAnalyzeRequest:
       type: object
-      required: [symbol, rsi, adx, trend, pattern, volume]
+      required:
+        - symbol
+        - rsi
+        - adx
+        - trend
+        - pattern
+        - volume
       properties:
-        symbol:  { type: string, example: BTCUSDT }
-        rsi:     { type: number, example: 54.2 }
-        adx:     { type: number, example: 23.1 }
-        trend:   { type: string, example: UP }
-        pattern: { type: string, example: breakout }
-        volume:  { type: number, example: 1520000 }
-
+        symbol:
+          type: string
+          example: BTCUSDT
+        rsi:
+          type: number
+          example: 54.2
+        adx:
+          type: number
+          example: 23.1
+        trend:
+          type: string
+          example: UP
+        pattern:
+          type: string
+          example: breakout
+        volume:
+          type: number
+          example: 1520000
     AiAnalyzeResponse:
       type: object
-      required: [symbol, direction, signal, confidence, reason, frames]
+      required:
+        - symbol
+        - direction
+        - signal
+        - confidence
+        - reason
+        - frames
       properties:
-        symbol:     { type: string, example: BTCUSDT }
-        direction:  { type: string, enum: [LONG, SHORT, SIDEWAYS], example: LONG }
-        signal:     { type: string, enum: [BUY, SELL, HOLD], example: BUY }
-        confidence: { type: number, minimum: 0, maximum: 100, example: 74 }
-        reason:     { type: string }
+        symbol:
+          type: string
+          example: BTCUSDT
+        direction:
+          type: string
+          enum:
+            - LONG
+            - SHORT
+            - SIDEWAYS
+          example: LONG
+        signal:
+          type: string
+          enum:
+            - BUY
+            - SELL
+            - HOLD
+          example: BUY
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 100
+          example: 74
+        reason:
+          type: string
         frames:
           type: array
-          items: { type: string }
+          items:
+            type: string
         metrics:
-          type: [object, "null"]
+          type:
+            - object
+            - "null"
           additionalProperties: true
         anchor:
           oneOf:
-            - { $ref: "#/components/schemas/AnchorSnapshot" }
-            - { type: "null" }
-
+            - $ref: "#/components/schemas/AnchorSnapshot"
+            - type: "null"
     PnlPdfResponse:
       type: object
       properties:
-        path: { type: string, description: Server path to the PDF }
-
+        path:
+          type: string
+          description: Server path to the PDF
     GridTradeRequest:
       type: object
-      required: [symbol, budget]
+      required:
+        - symbol
+        - budget
       properties:
-        symbol:     { type: string, example: BTCUSDT }
-        budget:     { type: number, minimum: 0.01, example: 300 }
-        grid_count: { type: integer, minimum: 2, maximum: 50, default: 6 }
-        grid_pct:   { type: number, minimum: 0.01, maximum: 5, default: 0.4 }
-        leverage:   { type: integer, minimum: 1, maximum: 125, default: 20 }
-        futures:    { type: boolean, default: true }
-        tp_pct:     { type: number, minimum: 0.01, maximum: 10, default: 1.5 }
-        sl_pct:     { type: number, minimum: 0.01, maximum: 10, default: 1.0 }
-
+        symbol:
+          type: string
+          example: BTCUSDT
+        budget:
+          type: number
+          minimum: 0.01
+          example: 300
+        grid_count:
+          type: integer
+          minimum: 2
+          maximum: 50
+          default: 6
+        grid_pct:
+          type: number
+          minimum: 0.01
+          maximum: 5
+          default: 0.4
+        leverage:
+          type: integer
+          minimum: 1
+          maximum: 125
+          default: 20
+        futures:
+          type: boolean
+          default: true
+        tp_pct:
+          type: number
+          minimum: 0.01
+          maximum: 10
+          default: 1.5
+        sl_pct:
+          type: number
+          minimum: 0.01
+          maximum: 10
+          default: 1
     GridTradeResponse:
       type: object
       properties:
-        status: { type: string, enum: [success, dry_run, error] }
-        reason: { type: [string, "null"] }
+        status:
+          type: string
+          enum:
+            - success
+            - dry_run
+            - error
+        reason:
+          type:
+            - string
+            - "null"
         plan:
-          type: [object, "null"]
+          type:
+            - object
+            - "null"
           additionalProperties: true
         result:
-          type: [object, "null"]
+          type:
+            - object
+            - "null"
           additionalProperties: true
-        error: { type: [string, "null"] }
-
-    # ---- New: schemas שמכסות את השגיאות שלך ----
+        error:
+          type:
+            - string
+            - "null"
     StrategyVersionResponse:
       type: object
       properties:
-        status: { type: string, example: ok }
-        app_version: { type: string, example: 2.13.4 }
-        strategy_version: { type: string, example: 2.13.4 }
-        git_commit: { type: [string, "null"] }
-        req_hash: { type: [string, "null"] }
-        python_version: { type: string }
+        status:
+          type: string
+          example: ok
+        app_version:
+          type: string
+          example: 2.13.4
+        strategy_version:
+          type: string
+          example: 2.13.4
+        git_commit:
+          type:
+            - string
+            - "null"
+        req_hash:
+          type:
+            - string
+            - "null"
+        python_version:
+          type: string
         libs:
           type: object
-          additionalProperties: { type: [string, "null"] }
+          additionalProperties:
+            type:
+              - string
+              - "null"
         env_flags:
           type: object
           properties:
-            execute_trades: { type: boolean }
-            skip_mutations: { type: boolean }
-        boot_ts: { type: integer }
-        uptime_sec: { type: integer }
-        now_utc: { type: string }
+            execute_trades:
+              type: boolean
+            skip_mutations:
+              type: boolean
+        boot_ts:
+          type: integer
+        uptime_sec:
+          type: integer
+        now_utc:
+          type: string
     AiHealthResponse:
       type: object
       properties:
-        ok: { type: boolean }
-        model: { type: [string, "null"] }
-        latency_ms: { type: [number, "null"] }
-        error: { type: [string, "null"] }
-
+        ok:
+          type: boolean
+        model:
+          type:
+            - string
+            - "null"
+        latency_ms:
+          type:
+            - number
+            - "null"
+        error:
+          type:
+            - string
+            - "null"
 paths:
   /:
     get:
       security: []
-      tags: [Config]
+      tags:
+        - Config
       summary: Server status
       operationId: getRootStatus
       responses:
@@ -217,13 +423,17 @@ paths:
               schema:
                 type: object
                 properties:
-                  status:  { type: string, example: ok }
-                  version: { type: string, example: 2.13.4 }
-
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: 2.13.4
   /health:
     get:
       security: []
-      tags: [Config]
+      tags:
+        - Config
       summary: Basic health
       operationId: getBasicHealth
       responses:
@@ -234,13 +444,15 @@ paths:
               schema:
                 type: object
                 properties:
-                  status: { type: string }
-                  version: { type: string }
-
+                  status:
+                    type: string
+                  version:
+                    type: string
   /health/strategy-version:
     get:
       security: []
-      tags: [Health]
+      tags:
+        - Health
       summary: Strategy metadata & dependency versions
       operationId: getStrategyVersion
       responses:
@@ -248,12 +460,13 @@ paths:
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StrategyVersionResponse" }
-
+              schema:
+                $ref: "#/components/schemas/StrategyVersionResponse"
   /health/live:
     get:
       security: []
-      tags: [Health]
+      tags:
+        - Health
       summary: Liveness probe
       operationId: getLiveness
       responses:
@@ -264,14 +477,18 @@ paths:
               schema:
                 type: object
                 properties:
-                  status: { type: string, example: live }
-                  uptime_sec: { type: integer }
-                  now_utc: { type: string }
-
+                  status:
+                    type: string
+                    example: live
+                  uptime_sec:
+                    type: integer
+                  now_utc:
+                    type: string
   /ai/health:
     get:
       security: []
-      tags: [AI]
+      tags:
+        - AI
       summary: AI health (OpenAI/Azure)
       operationId: getAiHealth
       responses:
@@ -279,12 +496,13 @@ paths:
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AiHealthResponse" }
-
+              schema:
+                $ref: "#/components/schemas/AiHealthResponse"
   /net/ip:
     get:
       security: []
-      tags: [Config]
+      tags:
+        - Config
       summary: Public egress IP (best-effort)
       operationId: getEgressIp
       responses:
@@ -295,84 +513,119 @@ paths:
               schema:
                 type: object
                 properties:
-                  egress_ip: { type: [string, "null"] }
-                  client_ip: { type: [string, "null"] }
-
+                  egress_ip:
+                    type:
+                      - string
+                      - "null"
+                  client_ip:
+                    type:
+                      - string
+                      - "null"
   /debug/auth-check:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Debug]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Debug
       summary: Token check
       operationId: getAuthCheck
       responses:
         "200":
           description: ok
-
   /debug/env:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Debug]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Debug
       summary: Critical env status (masked)
       operationId: getEnvDebug
       responses:
         "200":
           description: ok
-
   /debug/live-ready:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Debug]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Debug
       summary: LIVE trader readiness
       operationId: getLiveReady
       responses:
         "200":
           description: ok
-
   /anchor/btc:
     get:
       security: []
-      tags: [Debug]
+      tags:
+        - Debug
       summary: Current BTC anchor (cached)
       operationId: getBtcAnchor
       parameters:
         - name: frames
           in: query
-          schema: { type: string, default: "15m,1h" }
+          schema:
+            type: string
+            default: 15m,1h
         - name: market
           in: query
-          schema: { type: string, enum: [futures, spot], default: futures }
+          schema:
+            type: string
+            enum:
+              - futures
+              - spot
+            default: futures
       responses:
         "200":
           description: BTC anchor snapshot
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AnchorSnapshot" }
-
+              schema:
+                $ref: "#/components/schemas/AnchorSnapshot"
   /scan/multi:
     get:
       security: []
-      tags: [Trades]
+      tags:
+        - Trades
       summary: Market scan (Multi-TF + AI)
       operationId: getScanMulti
       parameters:
         - name: interval
           in: query
-          schema: { type: string, default: "15m,1h" }
+          schema:
+            type: string
+            default: 15m,1h
         - name: min_quality
           in: query
-          schema: { type: integer, minimum: 1, maximum: 10, default: 6 }
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 6
         - name: top
           in: query
-          schema: { type: integer, minimum: 1, default: 10 }
+          schema:
+            type: integer
+            minimum: 1
+            default: 10
         - name: market_type
           in: query
-          schema: { type: string, enum: [futures, spot], default: futures }
+          schema:
+            type: string
+            enum:
+              - futures
+              - spot
+            default: futures
         - name: trending_only
           in: query
-          schema: { type: boolean, default: false }
+          schema:
+            type: boolean
+            default: false
         - name: trending_source
           in: query
-          schema: { type: string, default: coingecko }
+          schema:
+            type: string
+            default: coingecko
       responses:
         "200":
           description: ok
@@ -380,101 +633,117 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScanResponse"
-
   /price:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Trades]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Trades
       summary: Get futures price (mark/ticker fallback)
       operationId: getPrice
       parameters:
         - name: symbol
           in: query
           required: true
-          schema: { type: string }
+          schema:
+            type: string
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PriceResponse" }
-
+              schema:
+                $ref: "#/components/schemas/PriceResponse"
   /sltp:
     post:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Trades]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Trades
       summary: Suggest SL/TP (with BTC anchor adjust)
       operationId: postSuggestSLTP
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/SLTPRequest" }
+            schema:
+              $ref: "#/components/schemas/SLTPRequest"
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/SLTPResponse" }
-
+              schema:
+                $ref: "#/components/schemas/SLTPResponse"
   /ai-analyze:
     post:
-      security: [ { HTTPBearer: [] } ]
-      tags: [AI]
+      security:
+        - HTTPBearer: []
+      tags:
+        - AI
       summary: Manual AI analysis (signal/confidence/reason)
       operationId: postAiAnalyze
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/AiAnalyzeRequest" }
+            schema:
+              $ref: "#/components/schemas/AiAnalyzeRequest"
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
-
+              schema:
+                $ref: "#/components/schemas/AiAnalyzeResponse"
   /trade:
     post:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Trades]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Trades
       summary: Place trade (dry-run via external core if present)
       operationId: postPlaceTrade
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/TradeRequest" }
+            schema:
+              $ref: "#/components/schemas/TradeRequest"
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/TradeResponse" }
-
+              schema:
+                $ref: "#/components/schemas/TradeResponse"
   /grid/trade:
     post:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Grid]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Grid
       summary: Grid trade plan (dry-run unless executor present)
       operationId: postGridTrade
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/GridTradeRequest" }
+            schema:
+              $ref: "#/components/schemas/GridTradeRequest"
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GridTradeResponse" }
-
+              schema:
+                $ref: "#/components/schemas/GridTradeResponse"
   /trade/live:
     post:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Trades]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Trades
       summary: Place LIVE Futures trade (LIMIT+SL/TP)
       operationId: postTradeLive
       requestBody:
@@ -483,54 +752,82 @@ paths:
           application/json:
             schema:
               type: object
-              required: [symbol, side, entry, sl, tp, leverage, budget]
+              required:
+                - symbol
+                - side
+                - entry
+                - sl
+                - tp
+                - leverage
+                - budget
               properties:
-                symbol:   { type: string }
-                side:     { type: string, enum: [LONG, SHORT] }
-                entry:    { type: number }
-                sl:       { type: number }
-                tp:       { type: number }
-                leverage: { type: integer, minimum: 1, maximum: 125, default: 10 }
-                budget:   { type: number, minimum: 0.01 }
+                symbol:
+                  type: string
+                side:
+                  type: string
+                  enum:
+                    - LONG
+                    - SHORT
+                entry:
+                  type: number
+                sl:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: integer
+                  minimum: 1
+                  maximum: 125
+                  default: 10
+                budget:
+                  type: number
+                  minimum: 0.01
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/TradeResponse" }
-
+              schema:
+                $ref: "#/components/schemas/TradeResponse"
   /executor/start:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Executor]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Executor
       summary: Executor Start
       operationId: getExecutorStart
       responses:
-        "200": { description: ok }
-
+        "200":
+          description: ok
   /executor/stop:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Executor]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Executor
       summary: Executor Stop
       operationId: getExecutorStop
       responses:
-        "200": { description: ok }
-
+        "200":
+          description: ok
   /executor/status:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Executor]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Executor
       summary: Executor Status
       operationId: getExecutorStatus
       responses:
         "200":
           description: ok
-
   /report/pnl/pdf:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Reports]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Reports
       summary: Generate PnL PDF
       operationId: getReportPnlPdf
       responses:
@@ -538,21 +835,27 @@ paths:
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/PnlPdfResponse" }
-
+              schema:
+                $ref: "#/components/schemas/PnlPdfResponse"
   /debug/binance-futures:
     get:
-      security: [ { HTTPBearer: [] } ]
-      tags: [Debug]
+      security:
+        - HTTPBearer: []
+      tags:
+        - Debug
       summary: Binance Futures connectivity
       operationId: getDebugBinanceFutures
       parameters:
         - name: symbol
           in: query
-          schema: { type: string, default: BTCUSDT }
+          schema:
+            type: string
+            default: BTCUSDT
         - name: place_test
           in: query
-          schema: { type: boolean, default: false }
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: ok
