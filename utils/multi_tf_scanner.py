@@ -117,6 +117,26 @@ def _aggregate_metrics(frames: List[Dict]) -> Tuple[Optional[float], Optional[fl
         adx = None
     return entry, atr, rsi, adx
 
+def _make_fast_reply(decision_yes: bool, direction: str, entry: Optional[float], atr: Optional[float]) -> str:
+    """
+    SOP “קצר”: החלטה | כיוון | כניסה | SL | TP1/TP2 | סייז | הערת אימות (2–5 מילים)
+    SL = 0.6×ATR ; TP1=1.8×ATR ; TP2=3.2×ATR
+    """
+    try:
+        d = "כן" if decision_yes else "לא"
+        dir_ = "LONG" if direction == "LONG" else "SHORT"
+        if entry is None or atr is None:
+            return f"{d} | {dir_} | — | SL — | TP1/TP2 — | $40@×20 | BTC Gate"
+        sl   = entry - 0.6*atr if dir_ == "LONG" else entry + 0.6*atr
+        tp1  = entry + 1.8*atr if dir_ == "LONG" else entry - 1.8*atr
+        tp2  = entry + 3.2*atr if dir_ == "LONG" else entry - 3.2*atr
+        # עיגול סביר:
+        def fmt(x: float) -> str:
+            return f"{x:.6f}".rstrip("0").rstrip(".")
+        return f"{d} | {dir_} | {fmt(entry)} | SL {fmt(sl)} | TP1 {fmt(tp1)}/TP2 {fmt(tp2)} | $40@×20 | BTC Gate"
+    except Exception:
+        return f"{'כן' if decision_yes else 'לא'} | {direction} | — | SL — | TP1/TP2 — | $40@×20 | BTC Gate"
+
 async def _build_symbol_list(
     symbols: Optional[Sequence[str]],
     min_quality: float,
@@ -155,6 +175,9 @@ async def multi_tf_scan_with_ai(
     trending_only: bool = False,
     trending_source: str = "coingecko",
     symbols: Optional[Sequence[str]] = None,
+    *,
+    hard_btc_filter: bool = False,
+    allow_divergence: bool = False,  # preview בלבד בשלב זה
 ) -> List[Dict]:
     # ניקוי טיימפריימים
     raw_tfs = timeframes or ("15m", "1h")
@@ -237,12 +260,46 @@ async def multi_tf_scan_with_ai(
         if adx is not None:
             out["adx"] = adx
 
-        # --- התאמה למגמת BTC ---
-        if btc_dir and out["direction"] != btc_dir:
-            logging.info(f"[btc_correlation] FILTERED {sym}: direction={out['direction']} BTC={btc_dir}")
-            continue
+        # --- Hard Preview: יישור ל-BTC + שדות עזר ---
+        aligned = (btc_dir is not None and out["direction"] == btc_dir)
+        out["btc_dir"] = btc_dir
+        out["aligned"] = bool(aligned)
+        if btc_dir is None:
+            out["signal_type"] = "UNKNOWN"
+            out["hard_status"] = "FAIL"
+            out["hard_reason"] = "BTC neutral/unknown"
+            out["executable"] = False
+        else:
+            if aligned:
+                out["signal_type"] = "ALIGNED"
+                out["hard_status"] = "PASS"
+                out["hard_reason"] = "Aligned with BTC-Gate"
+                out["executable"] = True
+            else:
+                out["signal_type"] = "DIVERGENCE"
+                if allow_divergence:
+                    # בשלב זה רק preview – ללא בדיקות RS/קורלציה עמוקות
+                    out["hard_status"] = "FAIL"
+                    out["hard_reason"] = "Against BTC (divergence preview only)"
+                    out["executable"] = False
+                else:
+                    out["hard_status"] = "FAIL"
+                    out["hard_reason"] = "BTC-Gate fail"
+                    out["executable"] = False
+
+        # fast_reply לפי SOP “קצר”
+        out["fast_reply"] = _make_fast_reply(out.get("executable", False), out["direction"], entry, atr)
 
         final.append(out)
+
+    # --- סינון לפי BTC: Soft/Hard ---
+    if btc_dir:
+        if hard_btc_filter:
+            final = [o for o in final if o.get("aligned")]
+        else:
+            aligned = [o for o in final if o.get("aligned")]
+            if aligned:
+                final = aligned
 
     final.sort(key=lambda x: float(x.get("quality_score", 0)), reverse=True)
     return final[:top_n]
@@ -279,6 +336,12 @@ async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
             "atr": atr,
             "rsi": rsi,
             "adx": adx,
+            "btc_dir": await _get_btc_direction(),
+            "aligned": None,
+            "hard_status": "FAIL",
+            "hard_reason": "fallback only",
+            "executable": False,
+            "fast_reply": _make_fast_reply(False, dir_, entry, atr),
         }
         return [out]
     except Exception as e:
