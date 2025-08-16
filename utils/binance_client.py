@@ -162,10 +162,6 @@ def get_client() -> Client:
     return _client
 
 def sync_server_time() -> Dict[str, Any]:
-    """
-    מודד offset ורק אם RTT נמוך וה־offset סביר – מעדכן timestamp_offset.
-    לא זורק חריג.
-    """
     global _client
     c = _client or _make_client()
 
@@ -186,7 +182,7 @@ def sync_server_time() -> Dict[str, Any]:
                             f"(thr={_TIME_SYNC_MAX_ABS_OFFSET_MS}/{_TIME_SYNC_MAX_RTT_MS})")
             return {"ok": False, "offset_ms": offset_ms, "rtt_ms": rtt_ms, "applied": False}
 
-        c.timestamp_offset = offset_ms  # python-binance יישם זאת
+        c.timestamp_offset = offset_ms
         logging.info(f"[Binance] 🕒 time sync: offset={offset_ms}ms rtt~{rtt_ms}ms (recvWindow={_RECV_WINDOW}ms)")
         _client = c
         return {"ok": True, "offset_ms": offset_ms, "rtt_ms": rtt_ms, "applied": True}
@@ -213,16 +209,30 @@ def _retry_call(fn: Callable, *, name: str):
         try:
             return fn()
         except BinanceAPIException as e:
-            txt = f"http={getattr(e, 'status_code', '?')} code={getattr(e, 'code', '?')} msg={getattr(e, 'message', '')}"
-            if e.status_code in (401, 403, 404, 418, 429, 500, 502, 503, 504) or "CloudFront" in str(e):
+            status = getattr(e, 'status_code', '?')
+            code   = getattr(e, 'code', '?')
+            msg    = getattr(e, 'message', '') or ''
+            txt = f"http={status} code={code} msg={msg}"
+
+            if str(code) == "-2015":
+                logging.error("[Binance] ❌ -2015 Invalid API-key/IP/permissions. "
+                              "בדוק: 1) שה-API KEY/SECRET נכונים, 2) שה-IP היוצא מאושר ב-Whitelist, "
+                              "3) שהופעל 'Enable Futures' למפתח.")
+                try:
+                    sync_server_time()
+                except Exception:
+                    pass
+
+            if status in (401, 403, 404, 418, 429, 500, 502, 503, 504) or "CloudFront" in str(e):
                 delay = _BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.35)
                 logging.warning(f"[Binance] API {name} (attempt {attempt+1}/{_MAX_RETRIES+1}) → {delay:.2f}s ({txt})")
-                if attempt == 0 and (e.status_code in (401, 403) or "Timestamp" in (getattr(e, "message", "") or "")):
+                if attempt == 0 and (status in (401, 403) or "Timestamp" in msg):
                     try:
                         sync_server_time()
                     except Exception:
                         pass
                 time.sleep(delay); last_exc = e; continue
+
             logging.error(f"[Binance] API error in {name}: {txt}")
             raise
         except (BinanceRequestException, requests.exceptions.RequestException) as e:
@@ -274,6 +284,21 @@ def futures_mark_price(symbol: str):
 
     return _retry_call(_do, name=f"premiumIndex({symbol})")
 
+def get_price(symbol: str) -> Optional[float]:
+    """
+    מחיר Mark דרך /fapi/v1/premiumIndex (פאבליק, לא דורש API Key).
+    בטוח לשימוש גם אם המפתחות לא תקינים / IP לא מאושר.
+    """
+    try:
+        data = futures_mark_price(symbol.upper())
+        if isinstance(data, dict):
+            mp = data.get("markPrice")
+            if mp is not None:
+                return float(mp)
+    except Exception as e:
+        logging.warning(f"[Binance] get_price failed for {symbol}: {e}")
+    return None
+
 def _http_ping(url: str, name: str) -> bool:
     try:
         r = _session.get(url, timeout=6)
@@ -314,6 +339,7 @@ class _LazyClientProxy:
         return "<LazyBinanceClientProxy>"
 
 client = _LazyClientProxy()
+
 
 
 
