@@ -4,109 +4,135 @@ from __future__ import annotations
 import os
 import time
 import platform
-from typing import Dict, Any, Optional
-from importlib.metadata import version, PackageNotFoundError
+from datetime import datetime, timezone
+from typing import Dict, Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-router = APIRouter(tags=["Health"])
+router = APIRouter()
 
-_BOOT_TS = int(time.time())
+# --- קבועים/זמן עלייה ---
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
+STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", APP_VERSION)
+BOOT_TS = int(time.time())
 
-# --------- Schemas ---------
-class BasicHealthResponse(BaseModel):
-    status: str = Field(examples=["ok"])
-    version: str
+# --- מודלים להידוק OpenAPI (תואם לקובץ openapi.yaml שלך) ---
+class StrategyVersionEnvFlags(BaseModel):
+    execute_trades: bool
+    skip_mutations: bool
 
 class StrategyVersionResponse(BaseModel):
-    status: str = "ok"
-    app_version: str
-    strategy_version: str
+    status: str = Field(example="ok")
+    app_version: str = Field(example="2.13.4")
+    strategy_version: str = Field(example="2.13.4")
     git_commit: Optional[str] = None
     req_hash: Optional[str] = None
     python_version: str
-    libs: Dict[str, Optional[str]]
-    env_flags: Dict[str, bool]
+    libs: Dict[str, Optional[str]] = {}
+    env_flags: StrategyVersionEnvFlags
     boot_ts: int
     uptime_sec: int
     now_utc: str
 
-class LivenessResponse(BaseModel):
-    status: str = Field(examples=["live"])
+class BasicHealthResponse(BaseModel):
+    status: str = "ok"
+    version: str = APP_VERSION
+
+class LiveResponse(BaseModel):
+    status: str = "live"
     uptime_sec: int
     now_utc: str
 
-# --------- Helpers ---------
-def _safe_ver(pkg: str) -> str | None:
-    try:
-        return version(pkg)
-    except PackageNotFoundError:
-        return None
-    except Exception:
-        return None
+def _get_lib_versions() -> Dict[str, Optional[str]]:
+    def _v(modname: str) -> Optional[str]:
+        try:
+            mod = __import__(modname)
+            return getattr(mod, "__version__", None)
+        except Exception:
+            return None
 
-def _collect_libs() -> Dict[str, str | None]:
-    libs = [
-        "fastapi", "starlette", "uvicorn", "gunicorn",
-        "httpx", "requests", "aiohttp",
-        "pydantic", "python-dotenv", "ujson", "PyYAML",
-        "pandas", "numpy", "ta",
-        "python-binance", "websockets",
-        "openai", "fpdf2", "Pillow", "matplotlib",
-    ]
-    return {k: _safe_ver(k) for k in libs}
+    libs = {
+        "fastapi": _v("fastapi"),
+        "starlette": _v("starlette"),
+        "httpx": _v("httpx"),
+        "pydantic": _v("pydantic"),
+        "numpy": _v("numpy"),
+        "pandas": _v("pandas"),
+        "python_binance": _v("binance"),   # python-binance
+        "openai": _v("openai"),
+        "ta": _v("ta"),
+        "fpdf2": _v("fpdf"),               # חבילה מיובאת כ-fpdf
+        "Pillow": _v("PIL"),
+        "matplotlib": _v("matplotlib"),
+        "requests": _v("requests"),
+        "aiohttp": _v("aiohttp"),
+        "ujson": _v("ujson"),
+    }
+    # המרות שמות מודולים לגרסאות במידת הצורך
+    if libs["Pillow"] is None:
+        try:
+            from PIL import Image
+            libs["Pillow"] = getattr(Image, "__version__", None)
+        except Exception:
+            pass
+    return libs
 
-# --------- Routes ---------
+def _now_iso_utc() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+# ---------------- Endpoints ----------------
+
 @router.get(
     "/health",
+    tags=["Config"],
     summary="Basic health",
     operation_id="getBasicHealth",
     response_model=BasicHealthResponse,
 )
-async def basic_health() -> BasicHealthResponse:
-    return BasicHealthResponse(
-        status="ok",
-        version=os.getenv("ALGOGPT_VERSION", "unknown"),
-    )
+async def basic_health():
+    return BasicHealthResponse(status="ok", version=APP_VERSION)
 
 @router.get(
     "/health/strategy-version",
+    tags=["Health"],
     summary="Strategy metadata & dependency versions",
     operation_id="getStrategyVersion",
     response_model=StrategyVersionResponse,
 )
-async def strategy_version() -> StrategyVersionResponse:
-    app_ver = os.getenv("ALGOGPT_VERSION", "unknown")
-    strat_ver = os.getenv("STRATEGY_VERSION", app_ver)
+async def strategy_version():
+    uptime = int(time.time()) - BOOT_TS
+    libs = _get_lib_versions()
+    pyver = platform.python_version()
+    flags = StrategyVersionEnvFlags(
+        execute_trades=os.getenv("EXECUTE_TRADES", "false").strip().lower() in ("1", "true", "yes", "on"),
+        skip_mutations=os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "on"),
+    )
     return StrategyVersionResponse(
-        app_version=app_ver,
-        strategy_version=strat_ver,
-        git_commit=os.getenv("GIT_COMMIT"),
-        req_hash=os.getenv("REQ_HASH"),
-        python_version=platform.python_version(),
-        libs=_collect_libs(),
-        env_flags={
-            "execute_trades": os.getenv("EXECUTE_TRADES", "false").lower() in ("1", "true", "yes", "on"),
-            "skip_mutations": os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true").lower() in ("1", "true", "yes", "on"),
-        },
-        boot_ts=_BOOT_TS,
-        uptime_sec=int(time.time()) - _BOOT_TS,
-        now_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        status="ok",
+        app_version=APP_VERSION,
+        strategy_version=STRATEGY_VERSION,
+        git_commit=os.getenv("GIT_COMMIT") or None,
+        req_hash=os.getenv("REQ_HASH") or None,
+        python_version=pyver,
+        libs=libs,
+        env_flags=flags,
+        boot_ts=BOOT_TS,
+        uptime_sec=uptime,
+        now_utc=_now_iso_utc(),
     )
 
 @router.get(
     "/health/live",
+    tags=["Health"],
     summary="Liveness probe",
     operation_id="getLiveness",
-    response_model=LivenessResponse,
+    response_model=LiveResponse,
 )
-async def liveness() -> LivenessResponse:
-    return LivenessResponse(
-        status="live",
-        uptime_sec=int(time.time()) - _BOOT_TS,
-        now_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    )
+async def liveness():
+    uptime = int(time.time()) - BOOT_TS
+    return LiveResponse(status="live", uptime_sec=uptime, now_utc=_now_iso_utc())
+
 
 
 
