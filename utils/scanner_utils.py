@@ -4,7 +4,7 @@ import asyncio
 import httpx
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, EMAIndicator
 from ta.volatility import AverageTrueRange
@@ -44,10 +44,27 @@ async def _fetch_klines(symbol: str, interval: str, limit: int = 200) -> List[li
     url = f"{BINANCE_FAPI}/fapi/v1/klines"
     return await _http_get_json(url, params={"symbol": symbol, "interval": interval, "limit": int(limit)})
 
+async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> pd.DataFrame:
+    """
+    מחזיר DataFrame עם עמודות open/high/low/close/volume + timestamp לפי klines Futures.
+    """
+    raw = await _fetch_klines(symbol.upper(), interval=interval, limit=max(50, int(limit)))
+    if not raw or len(raw) < 10:
+        return pd.DataFrame()
+    cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","taker_base","taker_quote","ignore"]
+    df = pd.DataFrame(raw, columns=cols)[["open_time","open","high","low","close","volume"]].copy()
+    for c in ("open","high","low","close","volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df.dropna(inplace=True)
+    df.rename(columns={"open_time":"timestamp"}, inplace=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    df.set_index("timestamp", inplace=True)
+    return df
+
 def _to_float(x, default: float = 0.0) -> float:
     try:
         v = float(x)
-        if v != v:  # NaN
+        if v != v:
             return default
         return v
     except Exception:
@@ -71,7 +88,7 @@ async def analyze_symbol(
 ) -> Optional[Dict[str, Any]]:
     """
     מנתח סימבול ייעודי ל-Binance Futures: RSI/ADX/EMA/ATR + ציון איכות.
-    מחזיר dict בפורמט שמותאם ל-/scan/multi ב-main.py
+    מחזיר dict בפורמט שמותאם ל-/scan/multi.
     """
     sym = str(symbol).upper().strip()
     raw = await _fetch_klines(sym, interval=interval, limit=max(100, int(limit)))
@@ -116,7 +133,6 @@ async def analyze_symbol(
             signal, conf = "SELL", 65
 
     # ציון איכות 0–10
-    # משלב: ADX, מרחק RSI מ-50, יישור למגמה
     align_bonus = 2.0 if ((direction == "LONG" and trend == "UP") or (direction == "SHORT" and trend == "DOWN")) else 0.0
     q = (max(0.0, last_adx - 15.0) / 5.0) + (abs(last_rsi - 50.0) / 10.0) + align_bonus
     quality = float(_clamp(q, 0.0, 10.0))
