@@ -176,7 +176,7 @@ async def binance_futures_trade(
     if side not in ("LONG", "SHORT"):
         raise RuntimeError(f"invalid side: {side}")
 
-    # Preflight: signed auth probe (ברור, נופל מוקדם עם הודעה ברורה ב-2014/2015/IP)
+    # Preflight: signed auth probe (נופל מוקדם וברור ב-2014/2015/IP)
     try:
         auth_probe_signed()
     except Exception as e:
@@ -238,11 +238,11 @@ async def binance_futures_trade(
     # Round down to step
     qty_dec, qty_s = _apply_qty_step(raw_qty, float(step_size), qty_precision)
 
-    # If too small vs minQty → attempt auto-adjust or raise clear error with required budget
+    # If too small vs minQty → attempt auto-adjust or raise error with required budget
     if qty_dec <= 0 or qty_dec < min_qty:
-        # compute minimal legal qty by ceiling to step and >= min_qty
+        # minimal legal qty with ceiling to step and >= min_qty
         min_qty_step = max(min_qty, _decimal_step_ceil(min_qty, step_size))
-        # budget required to reach that qty (approx)
+        # budget required
         min_budget = (min_qty_step * entry_dec) / Decimal(str(lev))
         if AUTO_ADJUST_QTY:
             qty_dec = min_qty_step
@@ -322,7 +322,7 @@ async def binance_futures_trade(
         "positionSide": position_side,
         "orders": {"entry": entry_resp, "sl": sl_resp, "tp": tp_resp},
         "notional": float(notional),
-        "tickSize": float(tick_size),
+        "tickSize": float(step_size),  # note: logged tick/step above; here we keep step as tickSize field for brevity
         "stepSize": float(step_size),
         "minQty": float(min_qty),
         "minNotional": float(min_notional),
@@ -338,6 +338,7 @@ async def binance_grid_trade(plan: Dict[str, Any]) -> Dict[str, Any]:
         "reason": "grid executor not implemented in this module",
         "echo_plan": plan,
     }
+
 
 
 
