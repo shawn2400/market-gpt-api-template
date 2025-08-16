@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import pandas as pd
 
-from utils.get_klines import aget_klines   # ✅ עטיפה אסינכרונית
+from utils.get_klines import aget_klines   # עטיפה אסינכרונית
 from utils.indicators import compute_indicators
 
 def _norm_dir(v: Any) -> Optional[str]:
@@ -17,7 +17,6 @@ def _norm_dir(v: Any) -> Optional[str]:
     return None
 
 def _ema_slope_strength(ema_fast: float, ema_slow: float, close: float) -> float:
-    """אומדן חוזק פשוט: פער EMA ביחס למחיר (באחוזים) מומר ל-0..100."""
     try:
         gap = abs(float(ema_fast) - float(ema_slow))
         if close <= 0:
@@ -76,7 +75,7 @@ async def compute_btc_anchor(*, frames: List[str] | Tuple[str, ...] = ("15m", "1
             continue
 
     if not details:
-        return {"direction": "LONG", "strength": 50, "trend": "UP", "frames": fr, "details": []}
+        return {"direction": None, "strength": 0.0, "trend": None, "frames": fr, "details": []}
 
     longs = sum(1 for d in details if d.get("direction") == "LONG")
     shorts = sum(1 for d in details if d.get("direction") == "SHORT")
@@ -132,6 +131,7 @@ def sltp_multipliers(direction: str, anchor: Optional[Dict[str, Any]], *, strong
         if strength >= weak_th:
             return (1.10, 0.95)
         return (1.05, 0.98)
+
 
 
 
