@@ -1,15 +1,15 @@
 # =========================
-# AlgoGPT – Render Production ENV
+# AlgoGPT – Render ENV (Auto-Scan Mode)
 # =========================
 
 # ---- אבטחה ----
 API_BEARER_TOKEN=GrwpXpkRWunC7SPZGFrhaizBwcaZzpWLYJ9kv4W7u6aTx_EXu0VGfpBKaBhThLD2
 
 # ---- אוטומציה ----
-AUTO_RUN=false
-ENABLE_AUTO_TRADING=false
-EXECUTE_TRADES=false
-BINANCE_SKIP_ACCOUNT_MUTATIONS=false
+AUTO_RUN=true                  # סריקה אוטומטית ברקע
+ENABLE_AUTO_TRADING=false      # לא סוחר בפועל
+EXECUTE_TRADES=false           # לא שולח פקודות ל-Binance
+BINANCE_SKIP_ACCOUNT_MUTATIONS=true
 
 # ---- פרמטרי סריקה ----
 SCAN_INTERVAL=60
@@ -32,8 +32,8 @@ LOG_LEVEL=INFO
 CORS_ALLOW_ORIGINS=*
 
 # ---- Binance ----
-BINANCE_API_KEY=<BINANCE_KEY_HERE>
-BINANCE_API_SECRET=<BINANCE_SECRET_HERE>
+BINANCE_API_KEY=<TO_BE_SET_IN_RENDER>
+BINANCE_API_SECRET=<TO_BE_SET_IN_RENDER>
 BINANCE_BACKOFF_BASE=0.7
 BINANCE_MAX_RETRIES=5
 BINANCE_RECV_WINDOW=10000
@@ -46,7 +46,7 @@ BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com
 BINANCE_WS_STREAM_SUFFIX=/stream?streams=
 
 # ---- OpenAI ----
-OPENAI_API_KEY=<OPENAI_KEY_HERE>
+OPENAI_API_KEY=<TO_BE_SET_IN_RENDER>
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT_SECONDS=30.0
 OPENAI_MAX_CONCURRENCY=4
@@ -58,10 +58,11 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 # ---- יציאות רשת ----
 EGRESS_IP_ENDPOINT=https://algogpt-docker.onrender.com/net/ip
-BINANCE_ALLOWED_EGRESS_IPS=
+BINANCE_ALLOWED_EGRESS_IPS=18.156.158.53,18.156.42.200,52.59.103.54
 
 # ---- הגדרות Render ----
 PORT=10000
+
 
 
 
