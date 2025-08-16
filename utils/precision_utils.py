@@ -3,22 +3,50 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_DOWN, getcontext
 from functools import lru_cache
 from typing import Dict, Any, Optional, Tuple
+import threading
+import time
+import logging
 
 from utils.binance_client import futures_exchange_info_safe
 
 # דיוק גבוה למניעת שגיאות ציפה
 getcontext().prec = 28
 
-@lru_cache(maxsize=1)
-def _load_futures_exchange_info() -> Dict[str, Any]:
-    """
-    טוען once את exchangeInfo של ה-Futures (עם ריטריי/פולבק שכבר קיימים ב-binance_client).
-    """
-    data = futures_exchange_info_safe()
-    return data or {}
+# ===================== ExchangeInfo Cache =====================
+# קאש עם TTL ורענון יזום כדי לשמור על LIVE עקבי ללא עומס
+_EX_INFO_LOCK = threading.Lock()
+_EX_INFO_DATA: Optional[Dict[str, Any]] = None
+_EX_INFO_TS: float = 0.0
+_EX_INFO_TTL_SEC = 900  # 15 דקות
 
+def _load_ex_info_live() -> Dict[str, Any]:
+    try:
+        data = futures_exchange_info_safe()
+        return data or {}
+    except Exception as e:
+        logging.warning(f"[precision_utils] exchange_info load failed: {e}")
+        return {}
+
+def _ensure_ex_info(ttl_sec: int = _EX_INFO_TTL_SEC) -> Dict[str, Any]:
+    global _EX_INFO_DATA, _EX_INFO_TS
+    now = time.time()
+    with _EX_INFO_LOCK:
+        if _EX_INFO_DATA is None or (now - _EX_INFO_TS) > ttl_sec:
+            _EX_INFO_DATA = _load_ex_info_live()
+            _EX_INFO_TS = now
+        return _EX_INFO_DATA or {}
+
+def refresh_exchange_info() -> None:
+    """רענון יזום (למשל לאחר עדכוני סימבולים/פילטרים בבורסה)."""
+    global _EX_INFO_DATA, _EX_INFO_TS
+    with _EX_INFO_LOCK:
+        _EX_INFO_DATA = _load_ex_info_live()
+        _EX_INFO_TS = time.time()
+    logging.info("[precision_utils] exchange_info refreshed")
+
+# ===================== Symbol Helpers =====================
 def _find_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
-    ei = _load_futures_exchange_info()
+    ei = _ensure_ex_info()
     su = (symbol or "").upper()
     for s in ei.get("symbols", []) or []:
         if s.get("symbol") == su:
@@ -33,12 +61,12 @@ def get_precision_info(symbol: str) -> dict:
     info = _find_symbol_info(symbol)
     if not info:
         return {"pricePrecision": 2, "quantityPrecision": 3}
-
     return {
         "pricePrecision": int(info.get("pricePrecision", 2)),
         "quantityPrecision": int(info.get("quantityPrecision", 3)),
     }
 
+# ===================== Rounding =====================
 def round_to_precision(value: float, digits: int) -> float:
     """עיגול פשוט ל־N ספרות אחרי הנקודה (ללא התאמה ל־tick/step)."""
     try:
@@ -102,8 +130,7 @@ def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
 
     return float(dec), out
 
-# ---------------------- NEW: פילטרים שימושיים + חישוב כמות מהתקציב ----------------------
-
+# ===================== Filters + Quantity =====================
 def _symbol_filters(symbol: str) -> Dict[str, Any]:
     """
     מאתר tickSize/stepSize/minQty/minNotional (אם קיים) מתוך exchangeInfo.
@@ -122,8 +149,7 @@ def _symbol_filters(symbol: str) -> Dict[str, Any]:
             step_size = f.get("stepSize")
             min_qty = f.get("minQty")
         elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-            # ב-USDT-M futures זה בד"כ MIN_NOTIONAL עם מפתח 'notional'
-            mn = f.get("notional") or f.get("minNotional")
+            mn = f.get("notional") or f.get("minNotional") or f.get("minNotionalValue")
             if mn is not None:
                 min_notional = mn
 
@@ -164,12 +190,18 @@ def calc_quantity_from_budget(
     flt = _symbol_filters(symbol)
     pos_value = budget_usd * leverage  # USD
     raw_qty = pos_value / price
-    qty_dec, qty_str = apply_qty_step(raw_qty, symbol)
 
+    qty_dec, qty_str = apply_qty_step(raw_qty, symbol)
     notional = qty_dec * price
     mn = flt.get("min_notional")
+    min_qty = flt.get("min_qty")
 
-    if mn is not None and notional < mn:
+    # בדיקת מינימוםי בורסה
+    if min_qty is not None and qty_dec < min_qty:
+        qty_dec, qty_str = apply_qty_step(min_qty, symbol)
+        notional = qty_dec * price
+
+    if mn is not None and notional + 1e-9 < mn:
         # נסה להעלות כמות למינימום נומינלי (פולבק עדין)
         needed_qty = (mn / price) * 1.001
         qty_dec2, qty_str2 = apply_qty_step(needed_qty, symbol)
@@ -178,15 +210,15 @@ def calc_quantity_from_budget(
             return {
                 "ok": False,
                 "reason": "below_min_notional",
-                "qty": qty_dec,
+                "qty": float(qty_dec),
                 "qty_str": qty_str,
-                "notional": notional,
-                "min_notional": mn,
+                "notional": float(notional),
+                "min_notional": float(mn),
             }
         qty_dec, qty_str, notional = qty_dec2, qty_str2, notional2
 
     if qty_dec <= 0:
-        return {"ok": False, "reason": "qty_rounded_to_zero", "min_notional": mn}
+        return {"ok": False, "reason": "qty_rounded_to_zero", "min_notional": float(mn) if mn is not None else None}
 
     return {
         "ok": True,
@@ -194,6 +226,7 @@ def calc_quantity_from_budget(
         "qty_str": qty_str,
         "notional": float(notional),
         "min_notional": float(mn) if mn is not None else None,
+        "min_qty": float(min_qty) if min_qty is not None else None,
     }
 
 
