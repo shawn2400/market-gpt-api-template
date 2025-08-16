@@ -41,11 +41,9 @@ def _get_filters(sym_info: Dict[str, Any]) -> Dict[str, Any]:
 def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         return value
-    # round down to step
-    return (value // step) * step
+    return (value // step) * step  # floor to step
 
 def _fmt_decimal(x: Decimal, precision: Optional[int]) -> str:
-    # floor to requested precision for API strings
     if precision is None or precision < 0:
         q = Decimal("0.0000000001")
     else:
@@ -153,8 +151,8 @@ async def binance_futures_trade(
     sl: float,
     tp: float,
     leverage: int,
-    budget: float,             # margin (USDT) you are willing to allocate
-    quantity: Optional[float] = None,  # override computed qty
+    budget: float,             # margin (USDT) allocated
+    quantity: Optional[float] = None,
     market_type: str = "futures",
     cid_prefix: str = "algogpt",
 ) -> Dict[str, Any]:
@@ -168,6 +166,9 @@ async def binance_futures_trade(
     if side not in ("LONG", "SHORT"):
         raise RuntimeError(f"invalid side: {side}")
 
+    # Use effective leverage consistently (clamped to MAX_LEVERAGE)
+    lev = max(1, min(int(leverage), MAX_LEVERAGE))
+
     client = get_client()
 
     # Exchange info + filters
@@ -179,7 +180,6 @@ async def binance_futures_trade(
     filters = _get_filters(sym_info)
     price_filter = filters.get("PRICE_FILTER", {}) or {}
     lot_filter   = filters.get("LOT_SIZE", {}) or {}
-    # On UM futures the filter is MIN_NOTIONAL (not always present)
     min_notional = Decimal(str(filters.get("MIN_NOTIONAL", {}).get("notional", 0) or 0.0))
 
     tick_size = Decimal(str(price_filter.get("tickSize", "0.01")))
@@ -197,7 +197,7 @@ async def binance_futures_trade(
     if entry_dec <= 0:
         raise RuntimeError("invalid entry price after rounding")
 
-    # Validate SL/TP orientation
+    # SL/TP orientation guard
     if side == "LONG":
         if sl_dec >= entry_dec:
             raise RuntimeError(f"SL must be < entry for LONG (sl={sl_dec}, entry={entry_dec})")
@@ -209,37 +209,33 @@ async def binance_futures_trade(
         if tp_dec >= entry_dec:
             raise RuntimeError(f"TP must be < entry for SHORT (tp={tp_dec}, entry={entry_dec})")
 
-    # --- Quantity calculation (FIX) ---
-    # Correct formula when 'budget' is margin:
-    # qty = (budget * leverage) / entry
+    # --- Quantity calculation (margin-based) ---
+    # qty = (budget * lev) / entry
     if quantity is None:
-        raw_qty = (Decimal(str(budget)) * Decimal(str(leverage))) / entry_dec
+        raw_qty = (Decimal(str(budget)) * Decimal(str(lev))) / entry_dec
     else:
         raw_qty = Decimal(str(quantity))
 
-    # Round qty to step (floor)
     qty_dec, qty_s = _apply_qty_step(raw_qty, float(step_size), qty_precision)
 
-    # Enforce minQty
     if qty_dec < min_qty or qty_dec <= 0:
-        # Compute minimal budget required to meet minQty with given leverage
-        # budget_needed = (minQty * entry) / leverage
-        min_budget = (min_qty * entry_dec) / Decimal(str(leverage))
+        # budget_needed = (minQty * entry) / lev
+        min_budget = (min_qty * entry_dec) / Decimal(str(lev))
         raise RuntimeError(
             f"quantity too small after rounding: {qty_dec} < minQty {min_qty}. "
             f"Try budget ≥ {min_budget.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} "
-            f"(at leverage={leverage}) or increase leverage."
+            f"(at leverage={lev}) or increase leverage (≤ MAX_LEVERAGE={MAX_LEVERAGE})."
         )
 
-    # Notional check (if applicable)
+    # Notional check (if present)
     notional = (qty_dec * entry_dec)
     if min_notional and notional < min_notional:
-        # Minimal budget for notional: budget_needed = min_notional / leverage
-        min_budget_notional = (min_notional / Decimal(str(leverage)))
+        # budget_needed = min_notional / lev
+        min_budget_notional = (min_notional / Decimal(str(lev)))
         raise RuntimeError(
             f"notional too small: qty*entry={notional} < minNotional={min_notional}. "
             f"Try budget ≥ {min_budget_notional.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} "
-            f"(at leverage={leverage})."
+            f"(at leverage={lev})."
         )
 
     # ----- Position mode & leverage -----
@@ -252,7 +248,7 @@ async def binance_futures_trade(
         if ok:
             position_side = "LONG" if side == "LONG" else "SHORT"
 
-    await asyncio.to_thread(_set_leverage, client, symbol, leverage)
+    await asyncio.to_thread(_set_leverage, client, symbol, lev)
 
     # ----- Place orders -----
     base_cid = f"{cid_prefix}:{symbol.upper()}:{side}:{int(entry_dec*1000)}"
@@ -262,7 +258,7 @@ async def binance_futures_trade(
 
     logging.info(
         "[TRADER] %s %s | entry=%s sl=%s tp=%s | qty=%s | tick=%s step=%s minQty=%s minNotional=%s | lev=%s budget=%s notional=%s",
-        symbol.upper(), side, entry_s, sl_s, tp_s, qty_s, tick_size, step_size, min_qty, min_notional, leverage, budget, notional
+        symbol.upper(), side, entry_s, sl_s, tp_s, qty_s, tick_size, step_size, min_qty, min_notional, lev, budget, notional
     )
 
     entry_resp = await asyncio.to_thread(
@@ -290,7 +286,7 @@ async def binance_futures_trade(
         "qty": float(qty_dec),
         "sl": float(sl_dec),
         "tp": float(tp_dec),
-        "leverage": int(leverage),
+        "leverage": int(lev),
         "positionSide": position_side,
         "orders": {"entry": entry_resp, "sl": sl_resp, "tp": tp_resp},
         "notional": float(notional),
@@ -304,15 +300,12 @@ async def binance_futures_trade(
 # Grid dry-run shim (לשמירת תאימות)
 # --------------------------------------------------------------------
 async def binance_grid_trade(plan: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Compatibility shim for grid trading. Accepts a 'plan' dict and returns a dry_run echo.
-    Replace this with a real executor if/when available.
-    """
     return {
         "mode": "dry_run",
         "reason": "grid executor not implemented in this module",
         "echo_plan": plan,
     }
+
 
 
 
