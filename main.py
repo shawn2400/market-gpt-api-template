@@ -194,10 +194,14 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-# ✅ תקיות סטטיות
+# ✅ סטטי
 for d in ("static", "static/reports", "static/img"):
     os.makedirs(d, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ✅ Routers
+from routes.health import router as health_router
+app.include_router(health_router)
 
 # --- Startup / Shutdown ---
 @app.on_event("startup")
@@ -218,7 +222,7 @@ async def _on_shutdown():
         except Exception:
             pass
 
-# -------- Binance helpers (עם כותרות ורטריי) --------
+# -------- Binance helpers --------
 BINANCE_FAPI = "https://fapi.binance.com"
 
 _BINANCE_HDRS = {
@@ -263,21 +267,28 @@ async def _get_exchange_info() -> Optional[dict]:
     return await _http_get_json(url, params=params)
 
 # -------- Config routes (פומביים) --------
-@app.get("/", tags=["Config"], summary="Root")
+@app.get("/", tags=["Config"], summary="Root", operation_id="getRootStatus")
 async def root():
     return {"status": "ok", "version": APP_VERSION}
 
-@app.get("/health", tags=["Config"], summary="Health")
+@app.get("/health", tags=["Config"], summary="Health", operation_id="getBasicHealth")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
 
-@app.get("/ai/health", tags=["AI"], summary="AI health (OpenAI/Azure)")
+@app.get("/ai/health", tags=["AI"], summary="AI health (OpenAI/Azure)", operation_id="getAiHealth")
 async def ai_health():
     if ping_openai is None:
-        return {"ok": False, "error": "ai_health not loaded"}
-    return await ping_openai()
+        return {"ok": False, "error": "ai_health not loaded", "model": None, "latency_ms": None}
+    res = await ping_openai()
+    # מבטיחים סכימה יציבה
+    return {
+        "ok": bool(res.get("ok")),
+        "model": res.get("model"),
+        "latency_ms": res.get("latency_ms"),
+        "error": res.get("error"),
+    }
 
-@app.get("/net/ip", tags=["Config"], summary="Public egress IP (best-effort)")
+@app.get("/net/ip", tags=["Config"], summary="Public egress IP (best-effort)", operation_id="getEgressIp")
 async def get_egress_ip(request: Request):
     client_ip = None
     try:
@@ -298,11 +309,11 @@ async def get_egress_ip(request: Request):
     return {"egress_ip": egress, "client_ip": client_ip}
 
 # -------- Debug auth/env (מוגן) --------
-@app.get("/debug/auth-check", tags=["Debug"], summary="Token check (401 אם לא תואם)", dependencies=[Depends(require_bearer_token)])
+@app.get("/debug/auth-check", tags=["Debug"], summary="Token check (401 אם לא תואם)", dependencies=[Depends(require_bearer_token)], operation_id="getAuthCheck")
 async def auth_check():
     return {"ok": True}
 
-@app.get("/debug/env", tags=["Debug"], summary="Critical env status (masked)", dependencies=[Depends(require_bearer_token)])
+@app.get("/debug/env", tags=["Debug"], summary="Critical env status (masked)", dependencies=[Depends(require_bearer_token)], operation_id="getEnvDebug")
 async def env_check():
     def _is_set(k: str) -> bool:
         v = os.getenv(k)
@@ -321,7 +332,7 @@ async def env_check():
     }
 
 # ---- Debug LIVE readiness (מוגן) ----
-@app.get("/debug/live-ready", tags=["Debug"], summary="LIVE trader readiness", dependencies=[Depends(require_bearer_token)])
+@app.get("/debug/live-ready", tags=["Debug"], summary="LIVE trader readiness", dependencies=[Depends(require_bearer_token)], operation_id="getLiveReady")
 async def live_ready():
     return {
         "execute_trades": EXECUTE_TRADES,
@@ -331,13 +342,13 @@ async def live_ready():
     }
 
 # -------- Anchor debug (פומבי) --------
-@app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)")
+@app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)", operation_id="getBtcAnchor")
 async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
     fr = [s.strip() for s in frames.split(",") if s.strip()]
     return await compute_btc_anchor(frames=fr, market=market)
 
-# -------- Scanner (פומבי, קשיח נגד נפילות) --------
-@app.get("/scan/multi", tags=["Trades"], summary="Scan Multi", response_model=ScanResponse)
+# -------- Scanner (פומבי, קשיח) --------
+@app.get("/scan/multi", tags=["Trades"], summary="Scan Multi", response_model=ScanResponse, operation_id="getScanMulti")
 async def scan_multi(
     interval: str = "15m,1h",
     min_quality: int = 6,
@@ -359,7 +370,7 @@ async def scan_multi(
     errors: Dict[str, str] = {}
 
     if analyze_symbol is None:
-        return {"results": results}
+        return {"results": results, "errors": {"scanner": "analyze_symbol missing"}}
 
     for sym in base_symbols:
         item_agg: Dict[str, Any] = {}
@@ -423,7 +434,7 @@ async def scan_multi(
     return {"results": results, "errors": errors}
 
 # -------- Price (מוגן) --------
-@app.get("/price", tags=["Trades"], summary="Get Price", response_model=PriceResponse, dependencies=[Depends(require_bearer_token)])
+@app.get("/price", tags=["Trades"], summary="Get Price", response_model=PriceResponse, dependencies=[Depends(require_bearer_token)], operation_id="getPrice")
 async def get_price(symbol: str):
     try:
         sym = normalize_symbol(symbol, market="futures", cache=symbols_cache)
@@ -440,13 +451,13 @@ async def get_price(symbol: str):
         raise HTTPException(status_code=422, detail=str(e))
 
 # פרמטרים ל־SLTP
-SLTP_MIN_PCT_FLOOR = float(os.getenv("SLTP_MIN_PCT_FLOOR", "0.0030"))   # 0.30%
-SLTP_TP_PCT_FLOOR  = float(os.getenv("SLTP_TP_PCT_FLOOR",  "0.0060"))   # 0.60%
+SLTP_MIN_PCT_FLOOR = float(os.getenv("SLTP_MIN_PCT_FLOOR", "0.0030"))
+SLTP_TP_PCT_FLOOR  = float(os.getenv("SLTP_TP_PCT_FLOOR",  "0.0060"))
 ATR_SL_MULT        = float(os.getenv("ATR_SL_MULT",        "1.50"))
 ATR_TP_MULT        = float(os.getenv("ATR_TP_MULT",        "2.50"))
 
 # -------- SLTP (מוגן) --------
-@app.post("/sltp", tags=["Trades"], summary="Suggest SL/TP", response_model=SLTPResponse, dependencies=[Depends(require_bearer_token)])
+@app.post("/sltp", tags=["Trades"], summary="Suggest SL/TP", response_model=SLTPResponse, dependencies=[Depends(require_bearer_token)], operation_id="postSuggestSLTP")
 async def suggest_sltp(req: SLTPRequest):
     try:
         sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
@@ -481,7 +492,7 @@ def _norm_direction_from_trend(trend: str) -> str:
         return "SHORT"
     return "SIDEWAYS"
 
-@app.post("/ai-analyze", tags=["AI"], summary="Manual AI analysis", response_model=AiAnalyzeResponse, dependencies=[Depends(require_bearer_token)])
+@app.post("/ai-analyze", tags=["AI"], summary="Manual AI analysis", response_model=AiAnalyzeResponse, dependencies=[Depends(require_bearer_token)], operation_id="postAiAnalyze")
 async def ai_analyze(req: AiAnalyzeRequest):
     frames = ["manual"]
     direction = _norm_direction_from_trend(req.trend)
@@ -538,8 +549,8 @@ async def ai_analyze(req: AiAnalyzeRequest):
         metrics={"rsi": req.rsi, "adx": req.adx, "volume": req.volume, "pattern": req.pattern},
     )
 
-# -------- Trade (מוגן, DRY-RUN אם אין ליבה חיצונית) --------
-@app.post("/trade", tags=["Trades"], summary="Place Trade", response_model=TradeResponse, dependencies=[Depends(require_bearer_token)])
+# -------- Trade (מוגן) --------
+@app.post("/trade", tags=["Trades"], summary="Place Trade", response_model=TradeResponse, dependencies=[Depends(require_bearer_token)], operation_id="postPlaceTrade")
 async def place_trade(req: TradeRequest):
     try:
         req.symbol = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
@@ -565,8 +576,8 @@ async def place_trade(req: TradeRequest):
         logger.exception("trade failed")
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e), "result": None})
 
-# -------- Grid (מוגן, DRY-RUN אם אין מודול ייעודי) --------
-@app.post("/grid/trade", tags=["Grid"], summary="Grid Trade", response_model=GridTradeResponse, dependencies=[Depends(require_bearer_token)])
+# -------- Grid (מוגן) --------
+@app.post("/grid/trade", tags=["Grid"], summary="Grid Trade", response_model=GridTradeResponse, dependencies=[Depends(require_bearer_token)], operation_id="postGridTrade")
 async def execute_grid(req: GridTradeRequest):
     try:
         sym = normalize_symbol(req.symbol, market="futures", cache=symbols_cache)
@@ -591,10 +602,9 @@ async def execute_grid(req: GridTradeRequest):
         return {"status": "error", "error": str(e), "plan": plan}
 
 # -------- LIVE Trade (מוגן) --------
-@app.post("/trade/live", tags=["Trades"], summary="Place LIVE Futures Trade", response_model=LiveTradeResponse, dependencies=[Depends(require_bearer_token)])
+@app.post("/trade/live", tags=["Trades"], summary="Place LIVE Futures Trade", response_model=LiveTradeResponse, dependencies=[Depends(require_bearer_token)], operation_id="postTradeLive")
 async def trade_live(req: LiveTradeRequest):
     global binance_futures_trade, BINANCE_IMPORT_ERR
-    # טעינה עצלה אם האפליקציה עלתה לפני שהמודול היה בדיפלוי
     if binance_futures_trade is None:
         try:
             from utils.binance_trader import binance_futures_trade as _f  # type: ignore
@@ -611,7 +621,6 @@ async def trade_live(req: LiveTradeRequest):
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
-    # Gate לפי BTC Anchor
     anchor = await compute_btc_anchor(frames=["15m", "1h"], market="futures")
     gate = anchor_gate(req.side, anchor, strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
     if ANCHOR_ENFORCE and gate["action"] == "block":
@@ -637,24 +646,24 @@ async def trade_live(req: LiveTradeRequest):
 # -------- Executor (in-mem demo) --------
 EXECUTOR_RUNNING = False
 
-@app.get("/executor/start", tags=["Executor"], summary="Executor Start", dependencies=[Depends(require_bearer_token)])
+@app.get("/executor/start", tags=["Executor"], summary="Executor Start", dependencies=[Depends(require_bearer_token)], operation_id="getExecutorStart")
 async def start_executor():
     global EXECUTOR_RUNNING
     EXECUTOR_RUNNING = True
     return {"started": True, "running": EXECUTOR_RUNNING}
 
-@app.get("/executor/stop", tags=["Executor"], summary="Executor Stop", dependencies=[Depends(require_bearer_token)])
+@app.get("/executor/stop", tags=["Executor"], summary="Executor Stop", dependencies=[Depends(require_bearer_token)], operation_id="getExecutorStop")
 async def stop_executor():
     global EXECUTOR_RUNNING
     EXECUTOR_RUNNING = False
     return {"stopped": True, "running": EXECUTOR_RUNNING}
 
-@app.get("/executor/status", tags=["Executor"], summary="Executor Status", dependencies=[Depends(require_bearer_token)])
+@app.get("/executor/status", tags=["Executor"], summary="Executor Status", dependencies=[Depends(require_bearer_token)], operation_id="getExecutorStatus")
 async def executor_status():
     return {"running": EXECUTOR_RUNNING}
 
 # -------- Reports (מוגן) --------
-@app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF", response_model=PnlPdfResponse, dependencies=[Depends(require_bearer_token)])
+@app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF", response_model=PnlPdfResponse, dependencies=[Depends(require_bearer_token)], operation_id="getReportPnlPdf")
 async def generate_pnl_pdf_route():
     try:
         from utils.pnl_tracker import generate_pnl_pdf
@@ -672,7 +681,7 @@ async def generate_pnl_pdf_route():
         raise HTTPException(status_code=500, detail=str(e))
 
 # -------- Debug Futures (מוגן) --------
-@app.get("/debug/binance-futures", tags=["Debug"], summary="Binance Futures connectivity", dependencies=[Depends(require_bearer_token)])
+@app.get("/debug/binance-futures", tags=["Debug"], summary="Binance Futures connectivity", dependencies=[Depends(require_bearer_token)], operation_id="getDebugBinanceFutures")
 async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = False):
     out: Dict[str, Any] = {
         "ping_ok": False, "mark_price": None, "symbols_count": None,
@@ -694,6 +703,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
