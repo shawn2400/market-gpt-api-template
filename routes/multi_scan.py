@@ -15,11 +15,11 @@ async def scan_multi(
     trending_only: Optional[bool] = Query(False, description="האם לסנן רק מטבעות טרנדיים"),
     trending_source: Optional[str] = Query("coingecko", description="מקור למטבעות טרנדיים"),
     hard_btc_filter: Optional[bool] = Query(False, description="סינון קשיח לפי מגמת BTC (עשוי להחזיר ריק)"),
-    allow_divergence: Optional[bool] = Query(False, description="להתיר סימבולים נגד מגמת BTC (preview בלבד)")
+    allow_divergence: Optional[bool] = Query(False, description="להתיר הצגת מועמדים נגד BTC (preview בלבד)")
 ):
     """
     סריקה רכה (Soft) כברירת מחדל. ניתן להפעיל hard_btc_filter לסינון קשיח.
-    התגובה כוללת Hard Preview לכל מועמד: btc_dir/aligned/hard_status/executable/fast_reply.
+    התגובה כוללת Hard Preview לכל מועמד: btc_dir/aligned/hard_status/executable/fast_reply/leverage_suggest.
     """
     try:
         timeframes = tuple([s.strip() for s in (interval or "").split(",") if s.strip()])
@@ -41,6 +41,7 @@ async def scan_multi(
         return {"results": results}
     except Exception as e:
         return {"error": str(e), "results": await fallback_scan_manual("BTCUSDT")}
+
 
 
 
