@@ -6,7 +6,10 @@ from typing import Any, Optional
 
 def _f(x: Any, default: float = 0.0) -> float:
     try:
-        return float(x)
+        v = float(x)
+        if v != v or v in (float("inf"), float("-inf")):  # NaN/Inf
+            return float(default)
+        return v
     except Exception:
         return float(default)
 
@@ -17,7 +20,9 @@ def _b(x: Any) -> int:
         if x is None:
             return 0
         v = float(x)
-        return 1 if v != 0.0 else 0
+        if v != v or v == 0.0:
+            return 0
+        return 1
     except Exception:
         return 0
 
@@ -37,6 +42,10 @@ def compute_quality_score(
     direction: Optional[str] = None,
     verbose: bool = False
 ) -> float:
+    """
+    ניקוד איכות 0–10 משוקלל מסיגנלים טכניים (RSI/ADX/MACD/EMA/VWAP/Patterns/Volume).
+    תומך בקלט dict של "שורת האינדיקטורים האחרונה" או DataFrame עם אינדיקטורים.
+    """
     try:
         if isinstance(data, pd.DataFrame) and not data.empty:
             last = data.iloc[-1].to_dict()
@@ -59,7 +68,7 @@ def compute_quality_score(
         if macd > macd_signal:
             score += 1; reasons.append("MACD > signal")
 
-        rsi = _f(last.get("rsi"), 0)
+        rsi = _f(last.get("rsi"), 50)
         if 45 <= rsi <= 65:
             score += 1; reasons.append("RSI neutral")
         if rsi >= 65:
@@ -92,7 +101,7 @@ def compute_quality_score(
         if macd_hist > 0:
             score += 1; reasons.append("MACD hist > 0")
 
-        vwap = _f(last.get("vwap"), close)
+        vwap = _f(last.get("vwap"), close if close > 0 else 1.0)
         if close > vwap:
             score += 1; reasons.append("> VWAP")
 
@@ -100,6 +109,7 @@ def compute_quality_score(
         if dir_use not in ("LONG", "SHORT"):
             dir_use = _infer_direction(last, prev)
 
+        # דגלי תבניות (אם קיימים)
         bulls_eng = _b(last.get("is_bullish_engulfing"))
         bears_eng = _b(last.get("is_bearish_engulfing"))
         hammer    = _b(last.get("is_hammer"))
@@ -107,7 +117,7 @@ def compute_quality_score(
         shoot     = _b(last.get("is_shooting_star"))
         morning   = _b(last.get("is_morning_star"))
         evening   = _b(last.get("is_evening_star"))
-        # doji ניטרלי
+        # doji – ניטרלי
 
         if dir_use == "LONG":
             if bulls_eng: score += 1
@@ -123,8 +133,9 @@ def compute_quality_score(
             if bulls_eng: score -= 1
             if hammer:    score -= 1
             if morning:   score -= 1
-            if inv_ham:   score -= 0.5
+            if inv_ham:   score -= 0.5  # היפוך לטובת לונג → מינוס בשורט
 
+        # Clamp 0..10
         final_score = float(min(max(score, 0.0), 10.0))
         if verbose:
             logging.info(f"[quality_score] score={final_score} dir={dir_use} reasons={reasons}")
@@ -133,6 +144,7 @@ def compute_quality_score(
     except Exception as e:
         logging.error(f"[quality_score] error: {e}", exc_info=True)
         return 0.0
+
 
 def calculate_quality_score(indicators: dict, direction: Optional[str] = None) -> float:
     return compute_quality_score(indicators, direction=direction, verbose=False)
