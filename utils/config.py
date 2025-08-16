@@ -89,7 +89,7 @@ API_BEARER_TOKEN         = _get_str("API_BEARER_TOKEN", "secret-token")
 ENABLE_AUTO_TRADING      = _get_bool("ENABLE_AUTO_TRADING", False)
 EXECUTE_TRADES           = _get_bool("EXECUTE_TRADES", False)
 
-# ---------- SL/TP (חדשים) ----------
+# ---------- SL/TP ----------
 SLTP_MIN_PCT_FLOOR       = _get_float("SLTP_MIN_PCT_FLOOR", 0.003)   # 0.3%
 SLTP_TP_PCT_FLOOR        = _get_float("SLTP_TP_PCT_FLOOR", 0.006)   # 0.6%
 SLTP_ATR_SL_MULT         = _get_float("SLTP_ATR_SL_MULT", 1.5)
@@ -97,7 +97,6 @@ SLTP_ATR_TP_MULT         = _get_float("SLTP_ATR_TP_MULT", 2.5)
 
 # ---------- Scan tuning ----------
 SCAN_REF_TF              = _get_str("SCAN_REF_TF", "15m")
-# פסיק-מופרד → tuple floats
 TP_TIER_MULTS            = tuple(
     float(x) for x in _get_str("TP_TIER_MULTS", "0.8,1.6,2.5").split(",") if x.strip()
 )
