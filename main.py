@@ -190,6 +190,22 @@ class GridTradeResponse(BaseModel):
     result: Optional[dict] = None
     error: Optional[str] = None
 
+# ---- Extra response models to tighten OpenAPI ----
+class AiHealthResp(BaseModel):
+    ok: bool
+    model: Optional[str] = None
+    latency_ms: Optional[float] = None
+    error: Optional[str] = None
+
+class EgressIpResponse(BaseModel):
+    egress_ip: Optional[str] = None
+    client_ip: Optional[str] = None
+
+class AnchorSnapshot(BaseModel):
+    direction: str  # UP/DOWN/SIDEWAYS
+    strength: int
+    frames: List[str]
+
 # -------- FastAPI --------
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION)
 app.add_middleware(
@@ -274,14 +290,21 @@ async def root():
     return {"status": "ok", "version": APP_VERSION}
 
 # -------- AI health (פומבי) --------
-@app.get("/ai/health", tags=["AI"], summary="AI health (OpenAI/Azure)", operation_id="getAiHealth")
+@app.get("/ai/health", tags=["AI"], summary="AI health (OpenAI/Azure)", operation_id="getAiHealth", response_model=AiHealthResp)
 async def ai_health():
     if ping_openai is None:
-        return {"ok": False, "error": "ai_health not loaded"}
-    return await ping_openai()
+        return AiHealthResp(ok=False, error="ai_health not loaded")
+    data = await ping_openai()
+    # ping_openai מחזיר dict; נמפה בבטחה
+    return AiHealthResp(
+        ok=bool(data.get("ok")),
+        model=data.get("model"),
+        latency_ms=data.get("latency_ms"),
+        error=data.get("error"),
+    )
 
 # -------- Public egress IP (פומבי) --------
-@app.get("/net/ip", tags=["Config"], summary="Public egress IP (best-effort)", operation_id="getEgressIp")
+@app.get("/net/ip", tags=["Config"], summary="Public egress IP (best-effort)", operation_id="getEgressIp", response_model=EgressIpResponse)
 async def get_egress_ip(request: Request):
     client_ip = None
     try:
@@ -299,7 +322,7 @@ async def get_egress_ip(request: Request):
                     break
         except Exception:
             pass
-    return {"egress_ip": egress, "client_ip": client_ip}
+    return EgressIpResponse(egress_ip=egress, client_ip=client_ip)
 
 # -------- Debug auth/env (מוגן) --------
 @app.get("/debug/auth-check", tags=["Debug"], summary="Token check (401 אם לא תואם)", dependencies=[Depends(require_bearer_token)], operation_id="debugAuthCheck")
@@ -334,10 +357,16 @@ async def live_ready():
     }
 
 # -------- Anchor (פומבי) --------
-@app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)", operation_id="getBtcAnchor")
+@app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)", operation_id="getBtcAnchor", response_model=AnchorSnapshot)
 async def get_btc_anchor(frames: str = "15m,1h", market: str = "futures"):
     fr = [s.strip() for s in frames.split(",") if s.strip()]
-    return await compute_btc_anchor(frames=fr, market=market)
+    data = await compute_btc_anchor(frames=fr, market=market)
+    # התאמה ל־AnchorSnapshot
+    return AnchorSnapshot(
+        direction=str(data.get("direction")),
+        strength=int(data.get("strength", 0)),
+        frames=list(data.get("frames") or fr),
+    )
 
 # -------- Scanner (פומבי, קשיח נגד נפילות) --------
 @app.get("/scan/multi", tags=["Trades"], summary="Scan Multi", response_model=ScanResponse, operation_id="scanMulti")
@@ -695,6 +724,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None  # הרחבה עתידית
     return out
+
 
 
 
