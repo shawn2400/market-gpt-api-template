@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  version: 2.13.2
+  version: 1.0.0
   description: >
     AlgoGPT – Real-time algorithmic trader for Binance. Supports Futures/Spot/Grid,
-    Multi-TF Scan with AI, live trades, smart SL/TP, Auto Executor, and daily PnL PDF.
+    Multi-TF Scan with AI (rich), live trades, smart SL/TP, Auto Executor, and PnL PDF.
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
@@ -19,113 +19,22 @@ components:
   schemas:
     Error:
       type: object
-      required: [error]
       properties:
         error: { type: string }
         code:  { type: string }
-      example: { error: Unauthorized, code: UNAUTHORIZED }
 
-    TradeRequest:
-      type: object
-      required: [symbol, side]
-      properties:
-        symbol:   { type: string, example: BTCUSDT }
-        side:     { type: string, enum: [LONG, SHORT], example: LONG }
-        entry:
-          oneOf: [ {type: number}, {type: 'null'} ]
-          description: If null, live price is used
-          example: null
-        sl: { oneOf: [ {type: number}, {type: 'null'} ] }
-        tp: { oneOf: [ {type: number}, {type: 'null'} ] }
-        budget:   { type: number, minimum: 0.01, default: 100 }
-        leverage: { type: integer, minimum: 1, maximum: 125, default: 10 }
-
-    TradeResponse:
+    PriceResponse:
       type: object
       properties:
-        status: { type: string, enum: [success, error] }
-        result:
-          oneOf:
-            - { type: object, additionalProperties: true }
-            - { type: 'null' }
-        error:
-          oneOf:
-            - { type: string }
-            - { type: 'null' }
-
-    AiAnalyzeRequest:
-      type: object
-      required: [symbol, rsi, adx, trend, pattern, volume]
-      properties:
-        symbol:  { type: string, example: BTCUSDT }
-        rsi:     { type: number, example: 54.2 }
-        adx:     { type: number, example: 23.1 }
-        trend:   { type: string, example: UP }
-        pattern: { type: string, example: breakout }
-        volume:  { type: number, example: 1520000 }
+        symbol: { type: string }
+        price:  { type: number }
 
     AnchorSnapshot:
       type: object
       properties:
-        direction:
-          type: string
-          enum: [UP, DOWN, SIDEWAYS]
-          example: UP
-        strength:
-          type: number
-          minimum: 0
-          maximum: 100
-          example: 72
-        frames:
-          type: array
-          items: { type: string }
-          example: ["15m", "1h"]
-
-    AiAnalyzeResponse:
-      type: object
-      required: [symbol, direction, signal, confidence, reason, frames]
-      properties:
-        symbol:     { type: string, example: BTCUSDT }
-        direction:  { type: string, enum: [LONG, SHORT, SIDEWAYS], example: LONG }
-        signal:     { type: string, enum: [BUY, SELL, HOLD], example: BUY }
-        confidence: { type: number, minimum: 0, maximum: 100, example: 74 }
-        reason:     { type: string, example: "RSI>50, EMA21>EMA50, breakout with volume" }
-        frames:
-          type: array
-          items: { type: string }
-          example: ["15m", "1h"]
-        metrics:
-          type: object
-          additionalProperties: true
-          description: Optional numeric metrics (e.g., rsi, adx, atr, macd...)
-          example:
-            rsi: 56.8
-            adx: 22.1
-            atr: 312.5
-        anchor:
-          oneOf:
-            - { $ref: "#/components/schemas/AnchorSnapshot" }
-            - { type: 'null' }
-          description: BTC anchor context (optional)
-
-    SLTPRequest:
-      type: object
-      required: [symbol, direction, entry]
-      properties:
-        symbol:    { type: string, example: BTCUSDT }
-        direction: { type: string, enum: [LONG, SHORT] }
-        entry:     { type: number, example: 65000 }
-        atr:
-          oneOf: [ {type: number}, {type: 'null'} ]
-          description: Optional ATR
-
-    SLTPResponse:
-      type: object
-      properties:
-        symbol:    { type: string }
-        direction: { type: string, enum: [LONG, SHORT] }
-        sl:        { type: number }
-        tp:        { type: number }
+        direction: { type: string, enum: [UP, DOWN, SIDEWAYS] }
+        strength:  { type: number, minimum: 0, maximum: 100 }
+        frames:    { type: array, items: { type: string } }
 
     ScanResultItem:
       type: object
@@ -152,18 +61,82 @@ components:
           type: array
           items: { $ref: "#/components/schemas/ScanResultItem" }
 
-    PriceResponse:
+    SLTPRequest:
+      type: object
+      required: [symbol, direction, entry]
+      properties:
+        symbol:    { type: string, example: BTCUSDT }
+        direction: { type: string, enum: [LONG, SHORT] }
+        entry:     { type: number, example: 65000 }
+        atr:
+          oneOf: [ {type: number}, {type: 'null'} ]
+          description: Optional ATR
+
+    SLTPResponse:
       type: object
       properties:
-        symbol: { type: string }
-        price:  { type: number }
-      example: { symbol: BTCUSDT, price: 118369.86 }
+        symbol:    { type: string }
+        direction: { type: string, enum: [LONG, SHORT] }
+        sl:        { type: number }
+        tp:        { type: number }
+
+    TradeRequest:
+      type: object
+      required: [symbol, side]
+      properties:
+        symbol:   { type: string, example: BTCUSDT }
+        side:     { type: string, enum: [LONG, SHORT], example: LONG }
+        entry:
+          oneOf: [ {type: number}, {type: 'null'} ]
+          description: If null, live price is used
+          example: null
+        sl:      { oneOf: [ {type: number}, {type: 'null'} ] }
+        tp:      { oneOf: [ {type: number}, {type: 'null'} ] }
+        budget:  { type: number, minimum: 0.01, default: 100 }
+        leverage:{ type: integer, minimum: 1, maximum: 125, default: 10 }
+
+    TradeResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [success, error] }
+        result:
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: 'null' }
+        error:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+
+    AiAnalyzeRequest:
+      type: object
+      required: [symbol, rsi, adx, trend, pattern, volume]
+      properties:
+        symbol:  { type: string, example: BTCUSDT }
+        rsi:     { type: number, example: 54.2 }
+        adx:     { type: number, example: 23.1 }
+        trend:   { type: string, example: UP }
+        pattern: { type: string, example: breakout }
+        volume:  { type: number, example: 1520000 }
+
+    AiAnalyzeResponse:
+      type: object
+      required: [symbol, direction, signal, confidence, reason, frames]
+      properties:
+        symbol:     { type: string, example: BTCUSDT }
+        direction:  { type: string, enum: [LONG, SHORT, SIDEWAYS], example: LONG }
+        signal:     { type: string, enum: [BUY, SELL, HOLD], example: BUY }
+        confidence: { type: number, minimum: 0, maximum: 100, example: 74 }
+        reason:     { type: string, example: "RSI>50, EMA21>EMA50, breakout with volume" }
+        frames:     { type: array, items: { type: string }, example: ["15m","1h"] }
+        metrics:    { type: object, additionalProperties: true }
+        anchor:
+          oneOf: [ { $ref: "#/components/schemas/AnchorSnapshot" }, { type: 'null' } ]
 
     PnlPdfResponse:
       type: object
       properties:
         path: { type: string, description: Server path to the PDF }
-      example: { path: static/reports/pnl_report.pdf }
 
     GridTradeRequest:
       type: object
@@ -199,7 +172,6 @@ paths:
       security: []
       tags: [Config]
       summary: Server status
-      operationId: checkServerStatus
       responses:
         "200":
           description: Server is up
@@ -209,14 +181,13 @@ paths:
                 type: object
                 properties:
                   status:  { type: string, example: ok }
-                  version: { type: string, example: 2.13.2 }
+                  version: { type: string, example: 2.13.4 }
 
   /health:
     get:
       security: []
       tags: [Config]
       summary: Basic health
-      operationId: health
       responses:
         "200":
           description: ok
@@ -228,12 +199,34 @@ paths:
                   status: { type: string }
                   version: { type: string }
 
+  /health/strategy-version:
+    get:
+      security: []
+      tags: [Health]
+      summary: Strategy metadata & dependency versions
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /health/live:
+    get:
+      security: []
+      tags: [Health]
+      summary: Liveness probe
+      responses:
+        "200":
+          description: ok
+
   /net/ip:
     get:
       security: []
       tags: [Config]
       summary: Public egress IP (best-effort)
-      operationId: getEgressIp
       responses:
         "200":
           description: ok
@@ -252,7 +245,6 @@ paths:
       security: []
       tags: [Debug]
       summary: Current BTC anchor (cached)
-      operationId: getBtcAnchor
       parameters:
         - name: frames
           in: query
@@ -271,12 +263,11 @@ paths:
     get:
       security: []
       tags: [Trades]
-      summary: Market scan (Multi-TF + AI) — public
-      operationId: scanMulti
+      summary: Market scan (Multi-TF + AI) — RICH plan with order_template
       parameters:
         - name: interval
           in: query
-          schema: { type: string, default: "15m,1h" }
+          schema: { type: string, default: "5m,15m,1h" }
         - name: min_quality
           in: query
           schema: { type: integer, minimum: 1, maximum: 10, default: 6 }
@@ -288,54 +279,47 @@ paths:
           schema: { type: string, enum: [futures, spot], default: futures }
         - name: trending_only
           in: query
-          description: If null, taken from config
-          schema:
-            oneOf: [ {type: boolean}, {type: 'null'} ]
-            default: null
+          schema: { type: boolean, default: false }
         - name: trending_source
           in: query
           schema: { type: string, default: coingecko }
+        - name: budget_usd
+          in: query
+          schema: { type: number, minimum: 50 }
+        - name: include_results
+          in: query
+          schema: { type: boolean, default: true }
       responses:
         "200":
-          description: Filtered trades
+          description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ScanResponse" }
+              schema:
+                type: object
+                additionalProperties: true
 
   /price:
     get:
-      security: [{ HTTPBearer: [] }]
+      security: [ { HTTPBearer: [] } ]
       tags: [Trades]
-      summary: Get live Binance price
-      operationId: getPrice
+      summary: Get futures price (mark/ticker fallback)
       parameters:
         - name: symbol
           in: query
           required: true
-          schema: { type: string, example: BTCUSDT }
+          schema: { type: string }
       responses:
         "200":
-          description: Price fetched
+          description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PriceResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "422":
-          description: Validation error
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /sltp:
     post:
-      security: [{ HTTPBearer: [] }]
+      security: [ { HTTPBearer: [] } ]
       tags: [Trades]
-      summary: Suggest optimal SL/TP
-      operationId: suggestSLTP
+      summary: Suggest SL/TP (with BTC anchor adjust)
       requestBody:
         required: true
         content:
@@ -343,27 +327,16 @@ paths:
             schema: { $ref: "#/components/schemas/SLTPRequest" }
       responses:
         "200":
-          description: Suggested levels
+          description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SLTPResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "422":
-          description: Validation error
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /ai-analyze:
     post:
-      security: [{ HTTPBearer: [] }]
+      security: [ { HTTPBearer: [] } ]
       tags: [AI]
-      summary: Manual AI analysis (with BTC anchor)
-      operationId: aiAnalyze
+      summary: Manual AI analysis (signal/confidence/reason)
       requestBody:
         required: true
         content:
@@ -371,27 +344,16 @@ paths:
             schema: { $ref: "#/components/schemas/AiAnalyzeRequest" }
       responses:
         "200":
-          description: Analysis created
+          description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "422":
-          description: Validation error
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /trade:
     post:
-      security: [{ HTTPBearer: [] }]
+      security: [ { HTTPBearer: [] } ]
       tags: [Trades]
-      summary: Execute a trade (dry-run unless a trade core is installed)
-      operationId: placeTrade
+      summary: Place trade (dry-run via external core if present)
       requestBody:
         required: true
         content:
@@ -399,32 +361,16 @@ paths:
             schema: { $ref: "#/components/schemas/TradeRequest" }
       responses:
         "200":
-          description: Execution result
+          description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TradeResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "422":
-          description: Validation error
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "501":
-          description: Trade core not installed
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /grid/trade:
     post:
-      security: [{ HTTPBearer: [] }]
+      security: [ { HTTPBearer: [] } ]
       tags: [Grid]
-      summary: Open grid orders (Spot/Futures)
-      operationId: executeGrid
+      summary: Grid trade plan (dry-run unless executor present)
       requestBody:
         required: true
         content:
@@ -432,158 +378,50 @@ paths:
             schema: { $ref: "#/components/schemas/GridTradeRequest" }
       responses:
         "200":
-          description: Plan and execution/DRY-RUN
+          description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GridTradeResponse" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "422":
-          description: Validation error
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
-  /executor/start:
-    get:
-      security: [{ HTTPBearer: [] }]
-      tags: [Executor]
-      summary: Start Auto Executor
-      operationId: startExecutor
+  /trade/live:
+    post:
+      security: [ { HTTPBearer: [] } ]
+      tags: [Trades]
+      summary: Place LIVE Futures trade (LIMIT+SL/TP OCO style)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol, side, entry, sl, tp, leverage, budget]
+              properties:
+                symbol:   { type: string }
+                side:     { type: string, enum: [LONG, SHORT] }
+                entry:    { type: number }
+                sl:       { type: number }
+                tp:       { type: number }
+                leverage: { type: integer, minimum: 1, maximum: 125, default: 10 }
+                budget:   { type: number, minimum: 0.01 }
       responses:
         "200":
-          description: Started
+          description: ok
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  started: { type: boolean }
-                  running: { type: boolean }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /executor/stop:
-    get:
-      security: [{ HTTPBearer: [] }]
-      tags: [Executor]
-      summary: Stop Auto Executor
-      operationId: stopExecutor
-      responses:
-        "200":
-          description: Stopped
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  stopped: { type: boolean }
-                  running: { type: boolean }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /executor/status:
-    get:
-      security: [{ HTTPBearer: [] }]
-      tags: [Executor]
-      summary: Auto Executor status
-      operationId: executorStatus
-      responses:
-        "200":
-          description: Current status
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  running: { type: boolean }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/TradeResponse" }
 
   /report/pnl/pdf:
     get:
-      security: [{ HTTPBearer: [] }]
+      security: [ { HTTPBearer: [] } ]
       tags: [Reports]
-      summary: Generate daily PnL PDF
-      operationId: generatePnlPdf
+      summary: Generate PnL PDF
       responses:
         "200":
-          description: PDF path created
+          description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PnlPdfResponse" }
-        "404":
-          description: No data to export
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
-  /debug/binance-futures:
-    get:
-      security: [{ HTTPBearer: [] }]
-      tags: [Debug]
-      summary: Binance Futures connectivity/permissions check (no test order)
-      operationId: debugBinanceFutures
-      parameters:
-        - name: symbol
-          in: query
-          schema: { type: string, default: BTCUSDT }
-        - name: place_test
-          in: query
-          schema:
-            type: boolean
-            default: false
-            description: "If true, checks private perms via lightweight account call (no order)."
-      responses:
-        "200":
-          description: Binance debug results
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ping_ok: { type: boolean }
-                  mark_price:
-                    oneOf:
-                      - { type: object, additionalProperties: true }
-                      - { type: 'null' }
-                  symbols_count:
-                    oneOf:
-                      - { type: integer }
-                      - { type: 'null' }
-                  permission_ok:
-                    oneOf:
-                      - { type: boolean }
-                      - { type: 'null' }
-                  test_error:
-                    oneOf:
-                      - { type: string }
-                      - { type: 'null' }
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-security:
-  - HTTPBearer: []
 
 
 
