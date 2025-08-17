@@ -41,3 +41,4 @@ async def get_ai_health() -> AiHealthResponse:
     if not has_key:
         return AiHealthResponse(ok=False, model=model_hint, latency_ms=None, error="OPENAI_API_KEY missing")
     return AiHealthResponse(ok=True, model=model_hint, latency_ms=None, error=None)
+
