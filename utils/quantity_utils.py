@@ -32,13 +32,13 @@ def compute_quality(
     tp: Optional[float],
     leverage: int,
     budget: float,
-    anchor,                 # צפוי AnchorDecision מ-utils.anchor/btc_anchor (שדות bias/score/severity)
+    anchor,                 # צפוי AnchorDecision מ-utils.anchor (או btc_anchor), אופציונלי ברמת תכונות
     atr: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     מחזיר:
       - quality_score בסקאלה 0..10
-      - success_pct באחוזים (היוריסטי, עדיף להחליף ב-WR היסטורי כשיהיה)
+      - success_pct באחוזים (היוריסטי; עדיף להחליף ב-WR היסטורי כשיהיה)
       - components לפירוט הניקוד
     """
     max_leverage = _env_int("MAX_LEVERAGE", 35)
@@ -107,7 +107,7 @@ def compute_quality(
     combined_100 = _clamp(base_100 + anchor_adj_100 + budget_adj_100 - leverage_penalty_100, 0.0, 100.0)
     quality_score = round(combined_100 / 10.0, 2)
 
-    # success% היוריסטי (עדיף להחליף בהמשך בסטטיסטיקת ביצועים אמתית)
+    # success% היוריסטי
     anchor_dir = 0.0
     if anchor_bias:
         if (side == "LONG" and anchor_bias == "bull") or (side == "SHORT" and anchor_bias == "bear"):
@@ -141,6 +141,7 @@ def compute_quality(
     }
 
 __all__ = ["compute_quality"]
+
 
 
 
