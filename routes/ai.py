@@ -1,40 +1,58 @@
+# routes/ai.py
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from typing import Optional
+
 from utils.auth import require_bearer_token
-from utils.metrics import metrics_tracker
 from utils.scanner_utils import analyze_symbol
 
 router = APIRouter()
+
+class ManualScanItem(BaseModel):
+    symbol: str
+    market: str
+    interval: str
+    frames: list[str]
+    trend: str
+    direction: str
+    rsi: float
+    adx: float
+    volume: float
+    quality_score: float
+    signal: str
+    confidence: int
+    reason: str
+    close: float
+    atr: Optional[float] = None
+
+class AiManualScanResponse(BaseModel):
+    symbol: str
+    results: ManualScanItem
 
 @router.get(
     "/health",
     tags=["AI"],
     operation_id="getAiHealth",
-    summary="AI health (OpenAI)",
 )
 async def ai_health():
-    # בדיקת זמינות כללית פשוטה (ללא קריאה ל-OpenAI בפועל)
+    # “דמה” — אפשר לשלב כאן בדיקות מול OpenAI אם תרצה
     return {"ok": True, "model": None, "latency_ms": None, "error": None}
 
 @router.get(
     "/manual-scan",
     tags=["AI"],
     operation_id="getAiManualScan",
-    summary="Manual scan (per symbol)",
+    dependencies=[Depends(require_bearer_token)],
+    response_model=AiManualScanResponse,
 )
-async def ai_manual_scan(
-    symbol: str = Query(..., min_length=3, max_length=20),
-    _: None = Depends(require_bearer_token),
-):
-    try:
-        item = await analyze_symbol(symbol, market_type="futures", interval="15m", limit=150)
-        if not item:
-            raise HTTPException(status_code=404, detail="No data")
-        return {"symbol": symbol.upper(), "results": item}
-    except HTTPException:
-        raise
-    except Exception as e:
-        metrics_tracker.record_error()
-        raise HTTPException(status_code=500, detail=str(e))
+async def manual_scan(symbol: str = Query(..., example="BTCUSDT")):
+    res = await analyze_symbol(symbol, interval="15m", limit=150)
+    if not res:
+        raise HTTPException(status_code=404, detail="no data for symbol")
+    return {"symbol": symbol.upper(), "results": res}
+
 
 
 
