@@ -19,7 +19,7 @@ from utils.auth import require_bearer_token
 # --- Health routes ---
 from routes import health_full  # /health, /health/strategy-version, /health/live
 
-# --- Indicators router (FIXED PATH) ---
+# --- Indicators router ---
 from routes.routes_indicators import router as indicators_router
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
@@ -247,7 +247,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # include routes
 app.include_router(health_full.router)
-app.include_router(indicators_router)  # <— FIXED
+app.include_router(indicators_router)
 
 # --- Startup / Shutdown ---
 @app.on_event("startup")
@@ -397,15 +397,15 @@ async def live_ready():
     }
 
 # -------- Anchor (public) --------
-@app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)", operation_id="getBtcAnchor", response_model=AnchorSnapshot)
+@app.get("/anchor/btc", tags=["Debug"], summary="Current BTC anchor (cached)", operation_id="getBtcAnchor")
 async def get_btc_anchor(frames: str = None, market: str = "futures"):
     fr = _env_frames() if not frames else [s.strip() for s in frames.split(",") if s.strip()]
     data = await compute_btc_anchor(frames=fr, market=market)
-    return AnchorSnapshot(
-        direction=str(data.get("direction")),
-        strength=int(data.get("strength", 0)),
-        frames=fr,
-    )
+    return {
+        "direction": str(data.get("direction")),
+        "strength": int(data.get("strength", 0)),
+        "frames": fr,
+    }
 
 # -------- Scanner (public) --------
 @app.get("/scan/multi", tags=["Trades"], summary="Market scan (Multi-TF + AI)", response_model=ScanResponse, operation_id="getScanMulti")
@@ -461,7 +461,6 @@ async def scan_multi(
         except Exception:
             gate = {"action": "none"}
 
-        # Manual mode: do not hard-block on anchor unless enforced
         if ANCHOR_ENFORCE and gate.get("action") == "block":
             continue
 
@@ -673,7 +672,6 @@ async def trade_live(req: LiveTradeRequest):
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
-    # Optional block on anchor if enforced
     if ANCHOR_ENFORCE:
         anchor = await compute_btc_anchor(frames=_env_frames(), market="futures")
         gate = anchor_gate(req.side, anchor, strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
@@ -765,6 +763,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
