@@ -15,7 +15,6 @@ except Exception:
     _CFG_ATR_SL_MULT   = 1.5
     _CFG_ATR_TP_MULT   = 2.5
 
-
 def _to_float(x, default: float = 0.0) -> float:
     try:
         v = float(x)
@@ -25,31 +24,24 @@ def _to_float(x, default: float = 0.0) -> float:
     except Exception:
         return float(default)
 
-
 def _clamp(x: float, lo: float, hi: float) -> float:
     if lo > hi:
         lo, hi = hi, lo
     return max(lo, min(hi, x))
 
-
 def _norm_dir(direction: str) -> str:
     d = (direction or "").strip().upper()
-    if d in ("LONG", "BUY"):
-        return "LONG"
-    if d in ("SHORT", "SELL"):
-        return "SHORT"
+    if d in ("LONG", "BUY"): return "LONG"
+    if d in ("SHORT", "SELL"): return "SHORT"
     return "SHORT"
 
-
 def get_sltp_params() -> dict:
-    """החזרת הפרמטרים האפקטיביים (לאבחון/לוגים)."""
     return {
         "min_pct_floor": float(_CFG_MIN_PCT_FLOOR),
         "tp_pct_floor":  float(_CFG_TP_PCT_FLOOR),
         "atr_sl_mult":   float(_CFG_ATR_SL_MULT),
         "atr_tp_mult":   float(_CFG_ATR_TP_MULT),
     }
-
 
 def calculate_sl_tp(
     entry_price: float,
@@ -61,12 +53,6 @@ def calculate_sl_tp(
     atr_sl_mult: Optional[float] = None,
     atr_tp_mult: Optional[float] = None,
 ) -> Tuple[float, float]:
-    """
-    מחשב SL/TP אוטומטיים:
-    - אם ATR קיים: SL = max(ATR*mult, entry*min_pct), TP = max(ATR*mult, entry*tp_pct)
-    - אם ATR חסר: רצפות אחוזיות בלבד
-    הערכים המוחזרים אינם מעוגנים ל-tickSize; העיגון יתבצע בשכבת ההרצה.
-    """
     entry = _to_float(entry_price)
     if entry <= 0:
         raise ValueError("entry_price must be positive")
@@ -76,7 +62,6 @@ def calculate_sl_tp(
     slm     = _to_float(atr_sl_mult,   _CFG_ATR_SL_MULT)
     tpm     = _to_float(atr_tp_mult,   _CFG_ATR_TP_MULT)
 
-    # סייגים הגיוניים כדי למנוע שגיאות קיצון
     min_pct = _clamp(min_pct if min_pct > 0 else _CFG_MIN_PCT_FLOOR, 0.0005, 0.15)
     tp_pct  = _clamp(tp_pct  if tp_pct  > 0 else _CFG_TP_PCT_FLOOR,  0.0005, 0.25)
     slm     = _clamp(slm     if slm     > 0 else _CFG_ATR_SL_MULT,   0.2,    10.0)
@@ -94,19 +79,32 @@ def calculate_sl_tp(
     if d == "LONG":
         sl = entry - sl_off
         tp = entry + tp_off
-        if sl >= entry:
-            sl = entry * (1 - min_pct)
-        if tp <= entry:
-            tp = entry * (1 + tp_pct)
-    else:  # SHORT
+        if sl >= entry: sl = entry * (1 - min_pct)
+        if tp <= entry: tp = entry * (1 + tp_pct)
+    else:
         sl = entry + sl_off
         tp = entry - tp_off
-        if sl <= entry:
-            sl = entry * (1 + min_pct)
-        if tp >= entry:
-            tp = entry * (1 - tp_pct)
+        if sl <= entry: sl = entry * (1 + min_pct)
+        if tp >= entry: tp = entry * (1 - tp_pct)
 
     return (round(float(sl), 6), round(float(tp), 6))
+
+# עטיפה תואמת לראוטר: תחזיר גם TP נוסף (למשל 1.8× מהראשון) כהמלצה מדורגת
+async def predict_sltp_levels(symbol: str, entry: float, direction: str, atr: float | None = None):
+    sl, tp = calculate_sl_tp(entry, direction, atr=atr)
+    # TP1 / TP2 – מדרג פשוט
+    tp1 = tp
+    if direction.upper() == "LONG":
+        tp2 = round(entry + (tp - entry) * 1.8, 6)
+    else:
+        tp2 = round(entry - (entry - tp) * 1.8, 6)
+    return sl, tp1, tp2
+
+# תאימות לאחור לשם הישן שעלה בלוגים
+async def predict_optimal_sl_tp(symbol: str, direction: str, entry: float):
+    sl, tp = calculate_sl_tp(entry, direction)
+    return sl, tp
+
 
 
 
