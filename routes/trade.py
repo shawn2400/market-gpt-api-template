@@ -1,52 +1,79 @@
-# main.py
+# routes/trade.py
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
+from typing import Literal, Optional
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-import os
-
-from routes.trade import router as trade_router
-from routes.ai import router as ai_router
-from routes.backtest import router as backtest_router
-from routes.dashboard import router as dashboard_router  # ⬅️ חדש
+from utils.auth import require_bearer_token
+from utils.ws_fallback import get_price
+from utils.sl_tp_utils import calculate_sl_tp
+from utils.trade_executor import execute_trade_live
 from utils.metrics import metrics_tracker
 
-app = FastAPI(
-    title="AlgoGPT API",
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ל־Binance Futures",
-    version=os.getenv("ALGOGPT_VERSION", "2.14.0"),
-)
+router = APIRouter()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class TradeRequest(BaseModel):
+    symbol: str
+    side: Literal["LONG", "SHORT"]
+    budget: float = 30
+    leverage: int = 10
+    entry: Optional[float] = None
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    atr: Optional[float] = None
+    dry_run: bool = True
 
-# Static files (ל־plugin של ChatGPT או Dashboard)
-if os.path.isdir(".well-known"):
-    app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static")
+@router.post("/execute", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
+async def execute_trade(trade: TradeRequest):
+    try:
+        price = trade.entry or await get_price(trade.symbol)
 
-# בריאות
-@app.get("/", operation_id="getRootStatus")
-def root():
-    return {"status": "ok", "version": app.version}
+        # אם לא נשלחו sl/tp – נחשב אוטומטית (כולל ATR אם קיים)
+        sl = trade.sl
+        tp = trade.tp
+        if sl is None or tp is None:
+            sl, tp = calculate_sl_tp(price, trade.side, atr=trade.atr)
 
-# מדדים
-@app.get("/metrics", operation_id="getBasicMetrics")
-async def get_metrics():
-    return metrics_tracker.get_metrics()
+        result = await execute_trade_live(
+            symbol=trade.symbol,
+            side=trade.side,
+            budget=trade.budget,
+            leverage=trade.leverage,
+            entry=price,
+            sl=sl,
+            tp=tp,
+            dry_run=trade.dry_run,
+        )
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        metrics_tracker.record_error()
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ראוטים
-app.include_router(dashboard_router, tags=["Dashboard"])          # ⬅️ /dashboard
-app.include_router(ai_router, prefix="/ai", tags=["AI"])          # ⬅️ routes/ai.py בלי prefix פנימי
-app.include_router(trade_router, prefix="/trade", tags=["Trades"])
-app.include_router(backtest_router, tags=["Backtest"])            # /backtest (ללא prefix נוסף)
+class SLTPRequest(BaseModel):
+    symbol: str
+    direction: Literal["LONG", "SHORT"]
+    entry: float
+    atr: Optional[float] = None
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+@router.post("/sltp", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
+async def suggest_sltp(req: SLTPRequest):
+    try:
+        sl, tp1 = calculate_sl_tp(req.entry, req.direction, atr=req.atr)
+        # TP2: מרחק גדול ב־50% מ־TP1 (פשוט ושקוף)
+        if req.direction == "LONG":
+            tp2 = req.entry + (tp1 - req.entry) * 1.5
+        else:
+            tp2 = req.entry - (req.entry - tp1) * 1.5
+        return {
+            "symbol": req.symbol,
+            "direction": req.direction,
+            "sl": round(sl, 6),
+            "tp1": round(tp1, 6),
+            "tp2": round(tp2, 6),
+        }
+    except Exception as e:
+        metrics_tracker.record_error()
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
