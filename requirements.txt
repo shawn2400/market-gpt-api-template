@@ -1,3 +1,8 @@
+
+---
+
+### `requirements.txt`
+```txt
 # --- API Server stack ---
 fastapi==0.110.0
 starlette==0.36.3
@@ -37,6 +42,7 @@ openai==1.30.1
 fpdf2==2.7.9
 Pillow==10.3.0
 matplotlib==3.8.4
+
 
 
 
