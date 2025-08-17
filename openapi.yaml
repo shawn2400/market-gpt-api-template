@@ -1,5 +1,6 @@
 openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+
 info:
   title: AlgoGPT API
   version: 2.14.0
@@ -17,6 +18,7 @@ tags:
   - name: Trades
   - name: Backtest
   - name: Scan
+  - name: Health
   - name: Dashboard
 
 components:
@@ -55,10 +57,13 @@ components:
         uptime_sec:
           type: integer
         requests:
-          type: integer
-        errors:
-          type: integer
+          type: object
+          additionalProperties: true
+        latency_ms:
+          type: object
+          additionalProperties: true
 
+    # ---------- AI ----------
     AiHealthResponse:
       type: object
       properties:
@@ -78,6 +83,110 @@ components:
             - string
             - "null"
 
+    AiQualityRequest:
+      type: object
+      required: [symbol, side]
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          enum: [LONG, SHORT]
+        entry:
+          type:
+            - number
+            - "null"
+        sl:
+          type:
+            - number
+            - "null"
+        tp:
+          type:
+            - number
+            - "null"
+        leverage:
+          type: integer
+          default: 10
+        budget:
+          type: number
+          default: 100
+        atr:
+          type:
+            - number
+            - "null"
+
+    AiAnalyzeResponse:
+      type: object
+      properties:
+        quality_score:
+          type: number
+        success_pct:
+          type: number
+        anchor:
+          type: object
+          additionalProperties: true
+        components:
+          type: object
+          additionalProperties: true
+
+    ManualScanItem:
+      type: object
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        market:
+          type: string
+          example: futures
+        interval:
+          type: string
+          example: 15m
+        frames:
+          type: array
+          items:
+            type: string
+        trend:
+          type: string
+          enum: [UP, DOWN]
+        direction:
+          type: string
+          enum: [LONG, SHORT]
+        rsi:
+          type: number
+        adx:
+          type: number
+        volume:
+          type: number
+        quality_score:
+          type: number
+          minimum: 0
+          maximum: 10
+        signal:
+          type: string
+          enum: [BUY, SELL, HOLD]
+        confidence:
+          type: integer
+          minimum: 0
+          maximum: 100
+        reason:
+          type: string
+        close:
+          type: number
+        atr:
+          type:
+            - number
+            - "null"
+
+    AiManualScanResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+        results:
+          $ref: "#/components/schemas/ManualScanItem"
+
+    # ---------- Trades ----------
     SLTP3Response:
       type: object
       properties:
@@ -140,53 +249,7 @@ components:
           type: object
           additionalProperties: true
 
-    AiQualityRequest:
-      type: object
-      required: [symbol, side]
-      properties:
-        symbol:
-          type: string
-          example: BTCUSDT
-        side:
-          type: string
-          enum: [LONG, SHORT]
-        entry:
-          type:
-            - number
-            - "null"
-        sl:
-          type:
-            - number
-            - "null"
-        tp:
-          type:
-            - number
-            - "null"
-        leverage:
-          type: integer
-          default: 10
-        budget:
-          type: number
-          default: 100
-        atr:
-          type:
-            - number
-            - "null"
-
-    AiAnalyzeResponse:
-      type: object
-      properties:
-        quality_score:
-          type: number
-        success_pct:
-          type: number
-        anchor:
-          type: object
-          additionalProperties: true
-        components:
-          type: object
-          additionalProperties: true
-
+    # ---------- Backtest ----------
     BacktestTrade:
       type: object
       properties:
@@ -219,6 +282,7 @@ components:
         count:
           type: integer
 
+    # ---------- Scan ----------
     ScanSignal:
       type: object
       required: [symbol, timeframe, score]
@@ -259,6 +323,73 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ScanSignal"
+
+    # ---------- Health ----------
+    BasicHealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: 2.14.0
+
+    LiveResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: live
+        uptime_sec:
+          type: integer
+        now_utc:
+          type: string
+
+    StrategyVersionEnvFlags:
+      type: object
+      properties:
+        execute_trades:
+          type: boolean
+        skip_mutations:
+          type: boolean
+
+    StrategyVersionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        app_version:
+          type: string
+          example: 2.14.0
+        strategy_version:
+          type: string
+          example: 2.14.0
+        git_commit:
+          type:
+            - string
+            - "null"
+        req_hash:
+          type:
+            - string
+            - "null"
+        python_version:
+          type: string
+        libs:
+          type: object
+          additionalProperties:
+            type:
+              - string
+              - "null"
+        env_flags:
+          $ref: "#/components/schemas/StrategyVersionEnvFlags"
+        boot_ts:
+          type: integer
+        uptime_sec:
+          type: integer
+        now_utc:
+          type: string
 
 paths:
   /:
@@ -367,6 +498,34 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /ai/manual-scan:
+    get:
+      tags: [AI]
+      security:
+        - HTTPBearer: []
+      summary: Manual scan (per symbol)
+      operationId: getAiManualScan
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+            example: BTCUSDT
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiManualScanResponse"
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /trade/sltp:
     post:
       tags: [Trades]
@@ -384,13 +543,11 @@ paths:
               properties:
                 symbol:
                   type: string
-                  example: BTCUSDT
                 direction:
                   type: string
                   enum: [LONG, SHORT]
                 entry:
                   type: number
-                  example: 65000
                 atr:
                   type:
                     - number
@@ -573,6 +730,46 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /health:
+    get:
+      tags: [Config]
+      summary: Basic health
+      operationId: getBasicHealth
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BasicHealthResponse"
+
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      operationId: getLiveness
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveResponse"
+
+  /health/strategy-version:
+    get:
+      tags: [Health]
+      summary: Strategy metadata & dependency versions
+      operationId: getStrategyVersion
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyVersionResponse"
+
 
 
 
