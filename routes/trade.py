@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from utils.auth import require_bearer_token
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.binance_trader import binance_futures_trade
-from utils.btc_anchor import evaluate_anchor, AnchorDecision   # <-- תוקן
+from utils.btc_anchor import evaluate_anchor, AnchorDecision  # <-- תוקן
 from utils.quality import compute_quality
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ class ErrorResponse(BaseModel):
 # ---------- Dependencies ----------
 
 async def _anchor_dep(payload: TradeExecuteRequest = Body(...)) -> AnchorDecision:
-    # מחליט SOFT/HARD אוטומטי לפי BTC anchor
+    # קובע SOFT/HARD אוטומטי לפי BTC anchor
     return evaluate_anchor(payload.side)
 
 # ---------- Endpoints ----------
@@ -175,6 +175,7 @@ async def post_execute(
     except Exception as e:
         logger.exception("Trade execution failed")
         raise HTTPException(status_code=400, detail=f"trade failed: {e}")
+
 
 
 
