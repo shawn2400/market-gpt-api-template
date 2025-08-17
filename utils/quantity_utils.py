@@ -32,14 +32,14 @@ def compute_quality(
     tp: Optional[float],
     leverage: int,
     budget: float,
-    anchor,                 # צפוי AnchorDecision מ-utils.anchor (או btc_anchor), אבל אופציונלי ברמת תכונות
+    anchor,                 # AnchorDecision-אופציונלי ברמת תכונות
     atr: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     מחזיר:
       - quality_score בסקאלה 0..10
-      - success_pct באחוזים (היוריסטי, עדיף להחליף ב-WR היסטורי כשיהיה)
-      - components לפירוט הניקוד
+      - success_pct באחוזים (היוריסטי)
+      - components לפירוט
     """
     max_leverage = _env_int("MAX_LEVERAGE", 35)
     max_budget   = _env_float("MAX_TRADE_BUDGET", 100.0)
@@ -63,12 +63,12 @@ def compute_quality(
     rr = _safe_div(reward, risk) if risk > 0 else 0.0
     rr_score_100 = _clamp((rr / 2.0) * 100.0, 0.0, 100.0)  # RR=2 → 100
 
-    # Leverage penalty (חזק יותר ככל שמתקרבים למקסימום המותר)
+    # Leverage penalty
     lev_ref = max(5, min(max_leverage, 125))
     lev_norm = _clamp((leverage - 5) / max(1, (lev_ref - 5)), 0.0, 1.0)
     leverage_penalty_100 = 30.0 * lev_norm  # עד -30 נק׳
 
-    # ATR fit (אם קיים ATR)
+    # ATR fit (אם יש)
     atr_score_100, atr_mult = 50.0, None
     if atr and atr > 0:
         sl_dist = abs(entry - sl)
@@ -80,7 +80,7 @@ def compute_quality(
             atr_score_100 = 100.0 - _clamp(abs(atr_mult - 1.5) / 1.5 * 40.0, 0.0, 40.0)
     atr_score_100 = _clamp(atr_score_100, 0.0, 100.0)
 
-    # Anchor adjustment (SOFT בלבד; HARD נחסם ב-/trade/execute לפני זה)
+    # Anchor adjustment (SOFT בלבד; HARD נחסם upstream)
     anchor_adj_100 = 0.0
     anchor_bias = getattr(anchor, "bias", None)
     anchor_score = float(getattr(anchor, "score", 0.0) or 0.0)
@@ -107,7 +107,7 @@ def compute_quality(
     combined_100 = _clamp(base_100 + anchor_adj_100 + budget_adj_100 - leverage_penalty_100, 0.0, 100.0)
     quality_score = round(combined_100 / 10.0, 2)
 
-    # success% היוריסטי (עדיף להחליף בהמשך בסטטיסטיקת ביצועים אמתית)
+    # success% היוריסטי
     anchor_dir = 0.0
     if anchor_bias:
         if (side == "LONG" and anchor_bias == "bull") or (side == "SHORT" and anchor_bias == "bear"):
@@ -139,6 +139,7 @@ def compute_quality(
             "success_pct_note": "heuristic; replace with historical win-rate when available",
         },
     }
+
 
 
 
