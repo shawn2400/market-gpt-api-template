@@ -199,7 +199,7 @@ components:
           type: integer
           description: epoch seconds
         price:
-            type: number
+          type: number
         side:
           type: string
           enum: [LONG, SHORT]
@@ -414,6 +414,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
 
 
 
