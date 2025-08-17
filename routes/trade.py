@@ -1,69 +1,67 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
-from typing import Optional
-import logging
-
-# אימות
+from typing import Literal
 from utils.auth import require_bearer_token
-
-# פונקציות
-from utils.ws_fallback import get_price
 from utils.trade_executor import execute_trade_live
-from utils.sl_tp_utils import predict_optimal_sl_tp
+from utils.sl_tp_utils import predict_sltp_levels
+from utils.ws_fallback import get_price
 from utils.metrics import metrics_tracker
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
-
 
 class TradeRequest(BaseModel):
     symbol: str
-    side: str  # "LONG" or "SHORT"
-    entry: Optional[float] = None
-    sl: Optional[float] = None
-    tp: Optional[float] = None
-    leverage: Optional[int] = 10
-    budget: Optional[float] = 50.0
-    dry_run: Optional[bool] = False
+    side: Literal["LONG", "SHORT"]
+    budget: float = 30
+    leverage: int = 10
+    entry: float | None = None
+    sl: float | None = None
+    tp: float | None = None
+    dry_run: bool = True
 
-
-@router.get("/price")
-async def price(symbol: str, _: str = Depends(require_bearer_token)):
+@router.post("/execute", tags=["Trade"])
+async def execute_trade(
+    trade: TradeRequest, 
+    request: Request = Depends(require_bearer_token)
+):
     try:
-        price = await get_price(symbol)
-        return {"symbol": symbol, "price": price}
-    except Exception as e:
-        logger.error(f"[Price] Failed to get price for {symbol}: {e}")
-        metrics_tracker.record_error()
-        raise HTTPException(status_code=500, detail="Failed to fetch price")
-
-
-@router.post("/sltp")
-async def get_sltp(trade: TradeRequest, _: str = Depends(require_bearer_token)):
-    try:
-        sl, tp = await predict_optimal_sl_tp(
+        price = trade.entry or await get_price(trade.symbol)
+        result = await execute_trade_live(
             symbol=trade.symbol,
-            direction=trade.side,
-            entry=trade.entry,
+            side=trade.side,
+            budget=trade.budget,
+            leverage=trade.leverage,
+            entry=price,
+            sl=trade.sl,
+            tp=trade.tp,
+            dry_run=trade.dry_run,
         )
-        return {"symbol": trade.symbol, "side": trade.side, "sl": sl, "tp": tp}
+        return {"status": "ok", "result": result}
     except Exception as e:
-        logger.error(f"[SLTP] Error predicting SL/TP: {e}")
         metrics_tracker.record_error()
-        raise HTTPException(status_code=500, detail="Failed to predict SL/TP")
+        raise HTTPException(status_code=500, detail=str(e))
 
+class SLTPRequest(BaseModel):
+    symbol: str
+    direction: Literal["LONG", "SHORT"]
+    entry: float
 
-@router.post("/execute-trade")
-async def execute(trade: TradeRequest, _: str = Depends(require_bearer_token)):
+@router.post("/sltp", tags=["Trade"])
+async def suggest_sltp(
+    req: SLTPRequest,
+    request: Request = Depends(require_bearer_token),
+):
     try:
-        result = await execute_trade_live(trade.dict())
-        pnl = result.get("pnl", 0)
-        metrics_tracker.record_trade(pnl)
-        return result
+        sl, tp1, tp2 = await predict_sltp_levels(
+            symbol=req.symbol, 
+            entry=req.entry, 
+            direction=req.direction
+        )
+        return {"sl": sl, "tp1": tp1, "tp2": tp2}
     except Exception as e:
-        logger.error(f"[TRADE] Execution failed: {e}")
         metrics_tracker.record_error()
-        raise HTTPException(status_code=500, detail="Trade execution failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
