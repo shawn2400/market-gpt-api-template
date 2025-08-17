@@ -1,30 +1,37 @@
 # routes/multi_scan.py
 from __future__ import annotations
-import asyncio, math
+import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, Query
+import os
+import requests
+import pandas as pd
 
 try:
     from utils.auth import require_bearer_token
 except Exception:
-    def require_bearer_token(): return None
+    def require_bearer_token():
+        return None
 
 from utils.top_volume import get_top_volume_symbols
 from utils.indicators import prepare_indicators_for_backtest as _prep
 
-import os, requests, pandas as pd
-
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+
 _S = requests.Session()
 _S.trust_env = False
-_S.headers.update({"User-Agent": "AlgoGPT/2 scan-top-vol"})
+_S.headers.update({
+    "User-Agent": "AlgoGPT/2 scan-top-vol",
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+})
 
 router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
 
 def _klines(symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
     try:
         url = f"{FUTURES_BASE}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={int(limit)}"
-        r = _S.get(url, timeout=7)
+        r = _S.get(url, timeout=8)
         if r.status_code != 200:
             return None
         arr = r.json()
@@ -39,25 +46,22 @@ def _klines(symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
         return None
 
 def _score_row(row: pd.Series) -> Dict[str, Any]:
-    # ניקוד מהיר: RSI + מעל/מתחת EMA21 + ADX
+    # ניקוד מהיר: RSI + מעל/מתחת EMA21 + ADX → 0..10 ; side רופף
     score = 0.0
-    side = None
     rsi  = float(row.get("rsi") or 50.0)
     ema  = float(row.get("ema_21") or row.get("close") or 0.0)
     adx  = float(row.get("adx") or 18.0)
     close= float(row.get("close") or 0.0)
 
     if close and ema:
-        if close > ema: score += 1.0
-        else: score -= 1.0
+        score += 1.0 if close > ema else -1.0
     if rsi >= 70: score -= 1.0
     elif rsi <= 30: score += 1.0
-
     if adx >= 20: score += 0.5
 
-    side = "LONG" if score >= 0.8 else ("SHORT" if score <= -0.8 else None)
-    return {"score": round(max(0.0, min(10.0, 5.0 + score*2.0)), 2),
-            "side": side, "rsi": rsi, "adx": adx}
+    s10 = max(0.0, min(10.0, 5.0 + score*2.0))
+    side = "LONG" if s10 >= 6.6 else ("SHORT" if s10 <= 3.4 else None)
+    return {"score": round(s10, 2), "side": side, "rsi": rsi, "adx": adx}
 
 async def _scan_one(symbol: str, timeframe: str, limit: int) -> Dict[str, Any]:
     df = await asyncio.to_thread(_klines, symbol, timeframe, limit)
@@ -74,6 +78,7 @@ async def _scan_one(symbol: str, timeframe: str, limit: int) -> Dict[str, Any]:
         "timeframe": timeframe,
         "side": s["side"],
         "score": s["score"],
+        "note": f"rsi={round(s['rsi'],1)} adx={round(s['adx'],1)} ema21={float(row.get('ema_21') or 0.0)}",
         "details": {
             "rsi": s["rsi"],
             "adx": s["adx"],
@@ -110,6 +115,7 @@ async def scan_top_volume(
             continue
         out.append(r)
     return {"ok": True, "count": len(out), "signals": out}
+
 
 
 
