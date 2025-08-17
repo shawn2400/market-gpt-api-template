@@ -6,7 +6,8 @@ from utils.auth import require_bearer_token
 from utils.ai_health import ping_openai
 from utils.multi_tf_scanner import fallback_scan_manual
 
-router = APIRouter(prefix="/ai", tags=["AI"])
+# שים לב: אין prefix כאן. main מוסיף prefix="/ai"
+router = APIRouter(tags=["AI"])
 
 @router.get("/health")
 async def ai_health() -> Dict[str, Any]:
