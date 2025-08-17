@@ -6,9 +6,7 @@ from typing import List, Tuple
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_BASE    = os.getenv("BINANCE_SPOT_HTTP_BASE",    "https://api.binance.com")
-
-# ברירת-מחדל כללית מסביבה (אפשרOverride בפרמטר של הפונקציה/Query):
-ENV_MIN_QV = float(os.getenv("TOP_VOLUME_MIN_QV", "0"))
+ENV_MIN_QV   = float(os.getenv("TOP_VOLUME_MIN_QV", "0"))
 
 _S = requests.Session()
 _S.trust_env = False
@@ -25,7 +23,6 @@ def get_top_volume_symbols(
     limit: int = 50,
     min_quote_volume: float | None = None,
 ) -> Tuple[bool, List[str]]:
-    """מחזיר זוגות ממוין לפי quoteVolume 24h; מסנן לפי quote & min_quote_volume (אם קיים)."""
     try:
         eff_min_qv = ENV_MIN_QV if (min_quote_volume is None) else float(min_quote_volume)
         if market == "futures":
