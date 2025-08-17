@@ -1,10 +1,11 @@
-# routes/ai.py (הוסף/עדכן את הקובץ כדי לכלול את ה-endpoint הזה)
+# routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any
 from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
+
 from utils.auth import require_bearer_token
-from utils.anchor import evaluate_anchor, AnchorDecision
+from utils.btc_anchor import evaluate_anchor, AnchorDecision   # <-- תוקן
 from utils.quality import compute_quality
 
 router = APIRouter(
@@ -32,7 +33,7 @@ class QualityResponse(BaseModel):
 async def _anchor_dep(payload: QualityRequest = Body(...)) -> AnchorDecision:
     return evaluate_anchor(payload.side)
 
-@router.post("/quality", response_model=QualityResponse, operation_id="postAiQuality")
+@router.post("/quality", response_model=QualityResponse, operation_id="postAiQuality", tags=["AI"])
 async def post_ai_quality(
     payload: QualityRequest = Body(...),
     anchor: AnchorDecision = Depends(_anchor_dep),
@@ -61,6 +62,7 @@ async def post_ai_quality(
             "reason": anchor.reason,
         },
     )
+
 
 
 
