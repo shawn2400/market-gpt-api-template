@@ -1,7 +1,7 @@
 # 📊 AlgoGPT — מערכת מסחר חכמה בזמן אמת
 
-API למסחר אלגוריתמי ב-Binance (Futures/Spot/Grid), סריקות Multi-TF עם אינדיקטורים, חישובי SL/TP, Backtest ודשבורד HTML קליל.  
-נבנה ב-FastAPI ומוכן לפריסה ב-Docker/Render.
+API למסחר אלגוריתמי ב־Binance (Futures / Spot / Grid), סריקות Multi-TF עם אינדיקטורים, חישובי SL/TP, Backtest ודשבורד HTML קליל.  
+נבנה ב־FastAPI ומוכן לפריסה באמצעות Docker / Render.
 
 ---
 
@@ -16,6 +16,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 export PORT=10000
 uvicorn main:app --host 0.0.0.0 --port ${PORT}
+
 
 
 
