@@ -1,136 +1,86 @@
-# utils/btc_anchor.py
+# utils/anchor.py
 from __future__ import annotations
-import math
-from typing import List, Dict, Any, Optional, Tuple
+import os
+from dataclasses import dataclass
+from typing import Literal
 
-import pandas as pd
+Side = Literal["LONG", "SHORT"]
 
-from utils.get_klines import aget_klines   # עטיפה אסינכרונית
-from utils.indicators import compute_indicators
+@dataclass
+class AnchorDecision:
+    mode_requested: str
+    mode_applied: str
+    bias: str
+    score: float
+    allow: bool
+    severity: str
+    reason: str
 
-def _norm_dir(v: Any) -> Optional[str]:
-    s = str(v or "").strip().upper()
-    if s in ("LONG", "BUY", "UP", "BULL", "BULLISH"):
-        return "LONG"
-    if s in ("SHORT", "SELL", "DOWN", "BEAR", "BEARISH"):
-        return "SHORT"
-    return None
-
-def _ema_slope_strength(ema_fast: float, ema_slow: float, close: float) -> float:
+def _env_float(key: str, default: float) -> float:
+    v = os.getenv(key, "").strip()
     try:
-        gap = abs(float(ema_fast) - float(ema_slow))
-        if close <= 0:
-            return 0.0
-        pct = (gap / float(close)) * 100.0
-        if pct >= 2.0:
-            return 100.0
-        if pct >= 1.0:
-            return 80.0 + (pct - 1.0) * 20.0
-        return min(80.0, pct * 100.0)
+        return float(v) if v else default
     except Exception:
-        return 0.0
+        return default
 
-async def _anchor_for_tf(tf: str, market: str) -> Optional[Dict[str, Any]]:
-    df = await aget_klines("BTCUSDT", interval=tf, limit=180, market_type=market)
-    if df is None or df.empty:
-        return None
-    dfi = compute_indicators(df)
-    if dfi is None or dfi.empty:
-        return None
-    last = dfi.iloc[-1]
-    close = float(last.get("close", 0.0) or 0.0)
-    ema21 = float(last.get("ema_21", 0.0) or 0.0)
-    ema50 = float(last.get("ema_50", 0.0) or 0.0)
+def _env_list(key: str, default: str) -> list[str]:
+    raw = os.getenv(key, default)
+    return [x.strip() for x in raw.split(",") if x.strip()]
 
-    direction = "LONG" if ema21 > ema50 else "SHORT" if ema21 < ema50 else None
-    if direction is None:
-        return None
+def _get_anchor_mode() -> str:
+    mode = os.getenv("BTC_ANCHOR_MODE", "").strip().lower()
+    if not mode:
+        enforce = os.getenv("BTC_ANCHOR_ENFORCE", "false").strip().lower() == "true"
+        return "hard" if enforce else "soft"
+    return mode if mode in {"off","soft","hard"} else "soft"
 
-    strength = _ema_slope_strength(ema21, ema50, close)
-    try:
-        adx = float(last.get("adx", 0.0) or 0.0)
-        if adx > 10:
-            strength = min(100.0, strength + min(10.0, (adx - 10.0) * 0.33))
-    except Exception:
-        pass
-
-    return {
-        "tf": tf,
-        "direction": direction,
-        "strength": round(float(strength), 2),
-        "close": close,
-        "ema_21": ema21,
-        "ema_50": ema50,
-    }
-
-async def compute_btc_anchor(*, frames: List[str] | Tuple[str, ...] = ("15m", "1h"), market: str = "futures") -> Dict[str, Any]:
-    fr = [str(x).strip() for x in (frames or ("15m", "1h")) if str(x).strip()]
-    details: List[Dict[str, Any]] = []
-    for tf in fr:
+def _get_anchor_reading() -> tuple[str, float]:
+    forced = os.getenv("BTC_ANCHOR_FORCE", "").strip().lower()
+    if forced:
         try:
-            item = await _anchor_for_tf(tf, market)
-            if item:
-                details.append(item)
+            if ":" in forced:
+                b, s = forced.split(":", 1)
+                bias = b.strip()
+                score = float(s.strip())
+            else:
+                bias = forced
+                score = 0.0
+            if bias not in {"bull","bear","neutral"}:
+                bias = "neutral"
+            score = max(0.0, min(100.0, score))
+            return bias, score
         except Exception:
-            continue
+            return "neutral", 0.0
+    return "neutral", 0.0  # TODO: לחבר למקור נתונים אמיתי
 
-    if not details:
-        return {"direction": None, "strength": 0.0, "trend": None, "frames": fr, "details": []}
+def evaluate_anchor(side: Side) -> AnchorDecision:
+    mode_req = _get_anchor_mode()
+    frames = _env_list("BTC_ANCHOR_FRAMES", "15m,1h")
+    strong_th = _env_float("BTC_ANCHOR_STRONG_TH", 70.0)
+    weak_th   = _env_float("BTC_ANCHOR_WEAK_TH",   55.0)
 
-    longs = sum(1 for d in details if d.get("direction") == "LONG")
-    shorts = sum(1 for d in details if d.get("direction") == "SHORT")
-    direction = "LONG" if longs >= shorts else "SHORT"
+    bias, score = _get_anchor_reading()
+    conflict = ((side=="LONG" and bias=="bear") or (side=="SHORT" and bias=="bull"))
 
-    strength = sum(float(d.get("strength", 0.0)) for d in details) / max(1, len(details))
-    trend = "UP" if direction == "LONG" else "DOWN"
+    if mode_req == "off":
+        return AnchorDecision("off","off",bias,score,True,"none","Anchor disabled")
 
-    return {
-        "direction": direction,
-        "strength": round(float(strength), 2),
-        "trend": trend,
-        "frames": fr,
-        "details": details,
-    }
+    if bias == "neutral" or score <= weak_th:
+        return AnchorDecision(mode_req,mode_req,bias,score,True,"none" if bias=="neutral" else "weak",
+                              f"Anchor {bias} ({score:.1f}) on frames {frames}; no strong conflict")
 
-def anchor_gate(direction: Optional[str], anchor: Optional[Dict[str, Any]], *, strong_th: int = 70, weak_th: int = 55) -> Dict[str, Any]:
-    d = _norm_dir(direction)
-    if not anchor or not isinstance(anchor, dict):
-        return {"action": "none", "reason": "no anchor"}
+    if conflict:
+        if score >= strong_th:
+            return AnchorDecision(mode_req,"hard",bias,score,False,"strong",
+                                  f"Strong conflict with BTC anchor ({bias} {score:.1f}≥{strong_th}); HARD block")
+        if mode_req == "hard":
+            return AnchorDecision("hard","hard",bias,score,False,"weak",
+                                  f"Conflict with BTC anchor ({bias} {score:.1f}); HARD mode blocks")
+        return AnchorDecision("soft","soft",bias,score,True,"weak",
+                              f"Conflict with BTC anchor ({bias} {score:.1f}); SOFT mode allows with warning")
 
-    a_dir = _norm_dir(anchor.get("direction"))
-    strength = float(anchor.get("strength", 0.0) or 0.0)
-    if not d or not a_dir:
-        return {"action": "none", "reason": "indeterminate"}
-
-    if d == a_dir:
-        if strength >= strong_th:
-            return {"action": "boost", "bonus": 12, "reason": f"aligned with BTC ({a_dir}, {strength})"}
-        return {"action": "none", "reason": f"aligned (weak, {strength})"}
-
-    if strength >= strong_th:
-        return {"action": "block", "reason": f"against BTC ({a_dir}, {strength})"}
-    return {"action": "downgrade", "penalty": 15, "reason": f"against (weak, {strength})"}
-
-def sltp_multipliers(direction: str, anchor: Optional[Dict[str, Any]], *, strong_th: int = 70, weak_th: int = 55) -> Tuple[float, float]:
-    d = _norm_dir(direction)
-    if not anchor or not d:
-        return (1.0, 1.0)
-
-    a_dir = _norm_dir(anchor.get("direction"))
-    strength = float(anchor.get("strength", 0.0) or 0.0)
-
-    if a_dir == d:
-        if strength >= strong_th:
-            return (0.90, 1.15)
-        if strength >= weak_th:
-            return (1.00, 1.08)
-        return (1.00, 1.02)
-    else:
-        if strength >= strong_th:
-            return (1.25, 0.85)
-        if strength >= weak_th:
-            return (1.10, 0.95)
-        return (1.05, 0.98)
+    return AnchorDecision(mode_req,mode_req,bias,score,True,"none",
+                          f"Aligned with BTC anchor ({bias} {score:.1f})")
 
 
 
