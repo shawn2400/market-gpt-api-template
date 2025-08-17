@@ -25,41 +25,49 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
-# --- Core routers (must exist) ---
-from routes.ai import router as ai_router            # /ai/*
-from routes.trade import router as trade_router      # /trade/*
+# --- Required routers ---
+from routes.ai import router as ai_router
+from routes.trade import router as trade_router
 
-# --- Optional routers: will not crash the app if missing ---
+# --- Optional routers (loaded defensively) ---
 backtest_router: Optional[object] = None
 scan_router: Optional[object] = None
 ai_analyze_router: Optional[object] = None
-dashboard_router: Optional[object] = None
 ai_health_router: Optional[object] = None
+health_router: Optional[object] = None
 
+# Backtest
 try:
     from routes.backtest import router as backtest_router  # type: ignore
 except Exception as _bt_exc:
     logger.warning("Backtest router not loaded: %s", _bt_exc)
 
+# Scan (/scan, /scan/multi)
 try:
-    from routes.scan import router as scan_router  # /scan, /scan/multi
+    from routes.scan import router as scan_router  # type: ignore
 except Exception as _scan_exc:
     logger.warning("Scan router not loaded: %s", _scan_exc)
 
+# AI analyze (/ai-analyze)
 try:
-    from routes.ai_analyze import router as ai_analyze_router  # /ai-analyze
+    from routes.ai_analyze import router as ai_analyze_router  # type: ignore
 except Exception as _aia_exc:
     logger.warning("AI Analyze router not loaded: %s", _aia_exc)
 
+# AI health (/ai/health)
 try:
-    from routes.dashboard import router as dashboard_router  # /dashboard (HTML)
-except Exception as _dash_exc:
-    logger.warning("Dashboard router not loaded: %s", _dash_exc)
+    from routes.ai_health import router as ai_health_router  # type: ignore
+except Exception as _aih_exc:
+    logger.warning("AI Health router not loaded: %s", _aih_exc)
 
+# Health – prefer health_full (models + יותר נתיבים), otherwise fallback ל-health (עם prefix)
 try:
-    from routes.health import router as ai_health_router  # /ai/health
-except Exception as _h_exc:
-    logger.warning("AI Health router not loaded: %s", _h_exc)
+    from routes.health_full import router as health_router  # type: ignore
+except Exception as _hf_exc:
+    try:
+        from routes.health import router as health_router  # type: ignore
+    except Exception as _h_exc:
+        logger.warning("Health routers not loaded: health_full=%s; health=%s", _hf_exc, _h_exc)
 
 # --- App ---
 app = FastAPI(
@@ -101,7 +109,7 @@ async def _metrics_middleware(request: Request, call_next):
         dt_ms = (time.perf_counter() - t0) * 1000.0
         metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
-# --- Global error handler (safety net) ---
+# --- Global error handler ---
 @app.exception_handler(Exception)
 async def _unhandled_exc_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error")
@@ -121,30 +129,30 @@ async def get_metrics():
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
+if ai_analyze_router:
+    app.include_router(ai_analyze_router, tags=["AI"])  # /ai-analyze
+else:
+    logger.warning("AI Analyze route is not loaded (import failed).")
+
+if ai_health_router:
+    app.include_router(ai_health_router, tags=["AI"])    # /ai/health
+else:
+    logger.warning("AI Health route is not loaded (import failed).")
+
+if scan_router:
+    app.include_router(scan_router, tags=["Scan"])       # /scan, /scan/multi
+else:
+    logger.warning("Scan routes are not loaded (import failed).")
+
 if backtest_router:
     app.include_router(backtest_router, tags=["Backtest"])
 else:
     logger.warning("Backtest routes are not loaded (import failed).")
 
-if scan_router:
-    app.include_router(scan_router, tags=["Scan"])          # /scan, /scan/multi
+if health_router:
+    app.include_router(health_router)                    # /health, /health/live, /health/strategy-version
 else:
-    logger.warning("Scan routes are not loaded (import failed).")
-
-if ai_analyze_router:
-    app.include_router(ai_analyze_router, tags=["AI"])      # /ai-analyze
-else:
-    logger.warning("AI Analyze route is not loaded (import failed).")
-
-if dashboard_router:
-    app.include_router(dashboard_router, tags=["Dashboard"])  # /dashboard
-else:
-    logger.warning("Dashboard route is not loaded (import failed).")
-
-if ai_health_router:
-    app.include_router(ai_health_router, prefix="/ai", tags=["AI"])  # /ai/health
-else:
-    logger.warning("AI Health route is not loaded (import failed).")
+    logger.warning("Health routes are not loaded (import failed).")
 
 # --- Lifecycle ---
 @app.on_event("startup")
