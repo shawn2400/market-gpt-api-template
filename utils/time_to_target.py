@@ -2,29 +2,38 @@
 from __future__ import annotations
 from typing import Dict, Any, Optional
 
-_TF_MINUTES = {
-    "1m":1, "3m":3, "5m":5, "15m":15, "30m":30,
-    "1h":60, "2h":120, "4h":240, "6h":360, "8h":480, "12h":720,
-    "1d":1440
+_MINUTES = {
+    "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+    "1h": 60, "2h": 120, "4h": 240, "6h": 360, "8h": 480, "12h": 720,
+    "1d": 1440,
 }
 
-def eta_to_target(*, entry: float, tp: float, sl: float, atr: float, timeframe: str) -> Dict[str, Any]:
-    """
-    הערכת זמן (בדקות) לפי יחס מרחק / ATR.
-    """
-    tf_min = _TF_MINUTES.get(timeframe, 15)
-    def _mins(dist: float) -> Optional[float]:
-        try:
-            bars = max(0.2, dist / max(atr, 1e-9))  # לא פחות מחמישית בר
-            return round(bars * tf_min, 2)
-        except Exception:
-            return None
+def _mins(tf: str) -> int:
+    return int(_MINUTES.get(tf, 15))
 
-    dist_tp = abs(tp - entry)
-    dist_sl = abs(entry - sl)
-    eta_tp = _mins(dist_tp)
-    eta_sl = _mins(dist_sl)
+def eta_by_atr(
+    *, entry: float, tp: float, sl: float, atr: float, timeframe: str
+) -> Dict[str, Any]:
+    """
+    אומדן לינארי: זמן ≈ (מרחק יעד / ATR) * משך־בר (בדקות).
+    """
+    if entry <= 0 or atr is None or atr <= 0:
+        return {"ok": False, "eta_tp_minutes": None, "eta_sl_minutes": None, "speed_note": "missing/invalid inputs"}
 
-    note = "scalp" if (eta_tp and eta_tp <= 30) else ("swing" if (eta_tp and eta_tp >= 180) else "intraday")
-    return {"ok": True, "eta_tp_minutes": eta_tp, "eta_sl_minutes": eta_sl, "speed_note": note}
+    d_tp = abs(tp - entry)
+    d_sl = abs(entry - sl)
+    bars_tp = d_tp / atr
+    bars_sl = d_sl / atr
+    m = _mins(timeframe)
+    eta_tp = bars_tp * m
+    eta_sl = bars_sl * m
+
+    note = "scalp" if eta_tp <= 45 else ("swing" if eta_tp >= 6*60 else "intra")
+    return {
+        "ok": True,
+        "eta_tp_minutes": round(float(eta_tp), 1),
+        "eta_sl_minutes": round(float(eta_sl), 1),
+        "speed_note": note,
+    }
+
 
