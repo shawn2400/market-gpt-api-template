@@ -1,7 +1,6 @@
 # routes/trade.py
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional, Literal
 
@@ -18,6 +17,7 @@ router = APIRouter()
 # ======== Pydantic models ========
 
 SideLiteral = Literal["LONG", "SHORT"]
+MarginLiteral = Literal["ISOLATED", "CROSSED"]
 
 class SLTPRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
@@ -42,6 +42,7 @@ class TradeExecuteRequest(BaseModel):
     tp: Optional[float] = Field(None, gt=0)
     atr: Optional[float] = Field(None, gt=0, description="Optional ATR for SL/TP calculation")
     dry_run: bool = Field(True, description="By default we simulate only")
+    margin_type: MarginLiteral = Field("ISOLATED", description="Futures margin mode to use")
 
 class TradeExecuteResponse(BaseModel):
     status: str = "ok"
@@ -66,10 +67,11 @@ async def post_sltp(payload: SLTPRequest):
         direction=payload.direction,
         atr=payload.atr,
     )
-    # שתי מטרות (tp1=tp, tp2 קצת רחוק יותר)
-    # אפשר לכייל כרצונך; כאן +40% מעבר ל-tp1
-    tp2 = round(tp + (tp - payload.entry) * 0.4 if payload.direction == "LONG"
-                else tp - (payload.entry - tp) * 0.4, 6)
+    # שתי מטרות (tp1=tp, tp2 קצת רחוק יותר). כאן: +40% מהמרחק של tp1 מה־entry
+    if payload.direction == "LONG":
+        tp2 = round(tp + (tp - payload.entry) * 0.4, 6)
+    else:
+        tp2 = round(tp - (payload.entry - tp) * 0.4, 6)
 
     return SLTP3Response(
         symbol=payload.symbol.upper(),
@@ -94,6 +96,7 @@ async def post_execute(payload: TradeExecuteRequest):
     """
     symbol = payload.symbol.upper()
     side = payload.side
+    margin_type = payload.margin_type
 
     entry = payload.entry
     sl = payload.sl
@@ -122,11 +125,12 @@ async def post_execute(payload: TradeExecuteRequest):
             "tp": tp,
             "budget": payload.budget,
             "leverage": payload.leverage,
+            "margin_type": margin_type,
             "note": "No orders sent (dry_run=true).",
         }
         return TradeExecuteResponse(status="ok", result=result)
 
-    # Live — מבצע דרך binance_futures_trade (יכשל אם מוגדרות חסימות ב-ENV)
+    # Live — מבצע דרך binance_futures_trade (יכשל אם EXECUTE_TRADES=false או SKIP_MUTATIONS=true)
     try:
         trade_result = await binance_futures_trade(
             symbol=symbol,
@@ -139,11 +143,13 @@ async def post_execute(payload: TradeExecuteRequest):
             quantity=None,
             market_type="futures",
             cid_prefix="algogpt",
+            margin_type=margin_type,  # <<< חשוב
         )
         return TradeExecuteResponse(status="ok", result=trade_result)
     except Exception as e:
         logger.exception("Trade execution failed")
         raise HTTPException(status_code=400, detail=f"trade failed: {e}")
+
 
 
 
