@@ -1,19 +1,24 @@
-# utils/ws_fallback.py
+import asyncio
 import httpx
 
+FAPI = "https://fapi.binance.com"
+
 async def get_price(symbol: str) -> float:
-    s = symbol.upper()
-    # נסה Mark Price, אם לא – Ticker
-    async with httpx.AsyncClient(timeout=8) as x:
-        r = await x.get("https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": s})
-        if r.status_code == 200:
-            data = r.json()
-            p = float(data.get("markPrice", 0))
-            if p > 0:
-                return p
-        r2 = await x.get("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": s})
-        r2.raise_for_status()
-        return float(r2.json().get("price"))
+    sym = symbol.upper()
+    url = f"{FAPI}/fapi/v1/premiumIndex"
+    params = {"symbol": sym}
+    for i in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as x:
+                r = await x.get(url, params=params)
+            r.raise_for_status()
+            j = r.json()
+            price = float(j.get("markPrice") or j.get("lastFundingRate") or 0.0)
+            if price and price > 0:
+                return price
+        except Exception:
+            await asyncio.sleep(0.5 * (i + 1))
+    raise RuntimeError(f"failed to fetch price for {sym}")
 
 
 
