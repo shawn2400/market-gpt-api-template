@@ -37,42 +37,37 @@ ai_health_router: Optional[object] = None
 health_router: Optional[object] = None
 dashboard_router: Optional[object] = None
 
-# Backtest
 try:
     from routes.backtest import router as backtest_router  # type: ignore
 except Exception as _bt_exc:
     logger.warning("Backtest router not loaded: %s", _bt_exc)
 
-# Scan (/scan, /scan/multi)
 try:
-    from routes.scan import router as scan_router  # type: ignore
+    from routes.scan import router as scan_router  # /scan, /scan/multi  # type: ignore
 except Exception as _scan_exc:
     logger.warning("Scan router not loaded: %s", _scan_exc)
 
-# AI analyze (/ai-analyze)
 try:
-    from routes.ai_analyze import router as ai_analyze_router  # type: ignore
+    from routes.ai_analyze import router as ai_analyze_router  # /ai-analyze  # type: ignore
 except Exception as _aia_exc:
     logger.warning("AI Analyze router not loaded: %s", _aia_exc)
 
-# AI health (/ai/health)
 try:
-    from routes.ai_health import router as ai_health_router  # type: ignore
+    from routes.ai_health import router as ai_health_router  # /ai/health  # type: ignore
 except Exception as _aih_exc:
     logger.warning("AI Health router not loaded: %s", _aih_exc)
 
 # Health – prefer health_full; fallback ל-health
 try:
-    from routes.health_full import router as health_router  # type: ignore
+    from routes.health_full import router as health_router  # /health, /health/live, /health/strategy-version  # type: ignore
 except Exception as _hf_exc:
     try:
         from routes.health import router as health_router  # type: ignore
     except Exception as _h_exc:
         logger.warning("Health routers not loaded: health_full=%s; health=%s", _hf_exc, _h_exc)
 
-# Dashboard (HTML קטן)
 try:
-    from routes.dashboard import router as dashboard_router  # type: ignore
+    from routes.dashboard import router as dashboard_router  # /dashboard  # type: ignore
 except Exception as _db_exc:
     logger.warning("Dashboard router not loaded: %s", _db_exc)
 
@@ -152,7 +147,7 @@ else:
     logger.warning("Scan routes are not loaded (import failed).")
 
 if backtest_router:
-    app.include_router(backtest_router, tags=["Backtest"])
+    app.include_router(backtest_router, tags=["Backtest"])  # /backtest
 else:
     logger.warning("Backtest routes are not loaded (import failed).")
 
@@ -162,7 +157,7 @@ else:
     logger.warning("Dashboard route is not loaded (import failed).")
 
 if health_router:
-    app.include_router(health_router)                     # /health, /health/live, /health/strategy-version
+    app.include_router(health_router)   # /health, /health/live, /health/strategy-version
 else:
     logger.warning("Health routes are not loaded (import failed).")
 
