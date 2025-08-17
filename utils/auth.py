@@ -1,132 +1,72 @@
-# utils/anchor.py
+# utils/auth.py
 from __future__ import annotations
+
 import os
-from dataclasses import dataclass
-from typing import Literal, Optional, Dict, Any
+import re
+from fastapi import HTTPException, Request, status
 
-Side = Literal["LONG", "SHORT"]
+__all__ = ["require_bearer_token"]
 
-@dataclass
-class AnchorDecision:
-    mode_requested: str          # off / soft / hard
-    mode_applied: str            # off / soft / hard (לאחר הסלמה אוטומטית אם צריך)
-    bias: str                    # bull / bear / neutral
-    score: float                 # 0-100 עוצמת בייס
-    allow: bool                  # האם לאפשר טרייד
-    severity: str                # none / weak / strong
-    reason: str                  # הסבר קריא
+# שם משתנה הסביבה שמחזיק את הטוקן
+_ENV_TOKEN_KEY = os.getenv("API_BEARER_ENV_KEY", "API_BEARER_TOKEN")
 
-def _env_float(key: str, default: float) -> float:
-    v = os.getenv(key, "").strip()
-    try:
-        return float(v) if v else default
-    except Exception:
-        return default
+def _clean(s: str | None) -> str:
+    """ניקוי רווחים ותווי בקר (כולל CR/LF/טאבים/רווחים נסתרים)."""
+    if not s:
+        return ""
+    # הסר תווי בקרה ורווחים נסתרים
+    s = re.sub(r"[\x00-\x1F\x7F]", "", s)
+    return s.strip()
 
-def _env_list(key: str, default: str) -> list[str]:
-    raw = os.getenv(key, default)
-    return [x.strip() for x in raw.split(",") if x.strip()]
+def _get_expected_token() -> str:
+    """שליפת הטוקן מה-ENV + ניקוי."""
+    raw = os.getenv(_ENV_TOKEN_KEY, "")
+    return _clean(raw)
 
-def _get_anchor_mode() -> str:
-    # off / soft / hard
-    mode = os.getenv("BTC_ANCHOR_MODE", "").strip().lower()
-    if not mode:
-        # תאימות לאחור:
-        enforce = os.getenv("BTC_ANCHOR_ENFORCE", "false").strip().lower() == "true"
-        return "hard" if enforce else "soft"
-    if mode not in {"off", "soft", "hard"}:
-        return "soft"
-    return mode
-
-def _get_anchor_reading() -> tuple[str, float]:
+async def require_bearer_token(request: Request) -> str:
     """
-    השג קריאת עוגן BTC: (bias, score).
-    bias: bull/bear/neutral, score: 0-100.
-    *** חשוב ***: הנקודה הזו אמורה להיות מוזנת ממנוע השוק שלך.
-    כרגע נתמכות 2 אפשרויות:
-    1) משתנה ENV "BTC_ANCHOR_FORCE" בפורמט "bull:75" / "bear:60" / "neutral:0"
-    2) ברירת מחדל: neutral,0 (לא חוסם)
+    Dependency לאימות Bearer:
+    - קורא Authorization: Bearer <token>
+    - משווה לטוקן מה-ENV (API_BEARER_TOKEN או לפי API_BEARER_ENV_KEY)
+    - מחזיר את הטוקן אם תקין, אחרת 401
     """
-    forced = os.getenv("BTC_ANCHOR_FORCE", "").strip().lower()
-    if forced:
-        try:
-            if ":" in forced:
-                b, s = forced.split(":", 1)
-                bias = b.strip()
-                score = float(s.strip())
-            else:
-                bias = forced
-                score = 0.0
-            if bias not in {"bull", "bear", "neutral"}:
-                bias = "neutral"
-            score = max(0.0, min(100.0, score))
-            return bias, score
-        except Exception:
-            return "neutral", 0.0
-    # TODO: לחבר כאן מקור דאטה אמיתי (WS/REST) לחישוב הבייס והסקור
-    return "neutral", 0.0
-
-def evaluate_anchor(side: Side) -> AnchorDecision:
-    """
-    סינון SOFT→HARD:
-    - STRONG_TH: אם קונפליקט חזק → הסלמה ל-HARD וחסימה.
-    - WEAK_TH:   אם קונפליקט חלש/בינוני → מצב SOFT רק מתריע (לא חוסם).
-    """
-    mode_req = _get_anchor_mode()           # off/soft/hard
-    frames = _env_list("BTC_ANCHOR_FRAMES", "15m,1h")
-    strong_th = _env_float("BTC_ANCHOR_STRONG_TH", 70.0)
-    weak_th   = _env_float("BTC_ANCHOR_WEAK_TH",   55.0)
-
-    bias, score = _get_anchor_reading()     # bull/bear/neutral, 0-100
-
-    # קביעה אם יש קונפליקט בין כיוון הטרייד לעוגן
-    conflict = (
-        (side == "LONG" and bias == "bear") or
-        (side == "SHORT" and bias == "bull")
-    )
-
-    if mode_req == "off":
-        return AnchorDecision(
-            mode_requested="off", mode_applied="off",
-            bias=bias, score=score, allow=True, severity="none",
-            reason="Anchor disabled"
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if bias == "neutral" or score <= weak_th:
-        # ניטרלי/חלש: ב-SOFT נתיר, ב-HARD גם נתיר (אין קייס חוסם)
-        return AnchorDecision(
-            mode_requested=mode_req, mode_applied=mode_req,
-            bias=bias, score=score, allow=True, severity="none" if bias=="neutral" else "weak",
-            reason=f"Anchor {bias} ({score:.1f}) on frames {frames}; no strong conflict"
+    # פורמט צפוי: "Bearer <token>"
+    parts = auth_header.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header format",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if conflict:
-        # יש קונפליקט: אם מעל strong_th → הסלמה ל-HARD וחסימה
-        if score >= strong_th:
-            return AnchorDecision(
-                mode_requested=mode_req, mode_applied="hard",
-                bias=bias, score=score, allow=False, severity="strong",
-                reason=f"Strong conflict with BTC anchor ({bias} {score:.1f}≥{strong_th}); HARD block"
-            )
-        # קונפליקט בינוני: ב-SOFT מתריעים (לא חוסם), ב-HARD יחסום
-        if mode_req == "hard":
-            return AnchorDecision(
-                mode_requested="hard", mode_applied="hard",
-                bias=bias, score=score, allow=False, severity="weak",
-                reason=f"Conflict with BTC anchor ({bias} {score:.1f}); HARD mode blocks"
-            )
-        return AnchorDecision(
-            mode_requested="soft", mode_applied="soft",
-            bias=bias, score=score, allow=True, severity="weak",
-            reason=f"Conflict with BTC anchor ({bias} {score:.1f}); SOFT mode allows with warning"
+    presented = _clean(parts[1])
+    expected = _get_expected_token()
+
+    if not expected:
+        # הגנה: אם אין טוקן מוגדר בסביבה – נחסום (עדיף מאשר להשאיר פתוח)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Server token not configured",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # אין קונפליקט (alignment): תמיד נתיר
-    return AnchorDecision(
-        mode_requested=mode_req, mode_applied=mode_req,
-        bias=bias, score=score, allow=True, severity="none",
-        reason=f"Aligned with BTC anchor ({bias} {score:.1f})"
-    )
+    if presented != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # אפשר להחזיר claims/אובייקט משתמש בעתיד; כרגע מחזירים את הטוקן התקין
+    return presented
 
 
 
