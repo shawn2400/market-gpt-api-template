@@ -1,4 +1,3 @@
-# utils/ai_analysis.py
 import logging
 import re
 import traceback
@@ -181,6 +180,11 @@ async def analyze_with_ai(
         confidence = int(round(parsed["confidence"]))
         reason = parsed.get("reason", "")
 
+        # ✅ המלצה: הפוך ל-HOLD אם confidence נמוך מדי
+        if confidence < 70:
+            signal = "HOLD"
+            reason = reason + "; confidence below threshold"
+
         if anchor_used:
             gate = anchor_gate(direction, anchor_used)
             if gate["action"] == "block":
@@ -218,81 +222,6 @@ async def analyze_with_ai(
         logging.error(f"[AI] analyze_with_ai exception: {e}\n{traceback.format_exc()}")
         return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
 
-async def predict_optimal_sl_tp(
-    symbol: str,
-    direction: str,
-    entry_price: float,
-    atr: Optional[float] = None,
-    *,
-    use_anchor: bool = True,
-    anchor_frames: Optional[List[str]] = None,
-    anchor_market: str = "futures",
-    btc_anchor: Optional[Dict[str, Any]] = None,
-) -> Tuple[float, float]:
-    sl_val: Optional[float] = None
-    tp_val: Optional[float] = None
-    try:
-        prompt = (
-            "You are a crypto trading assistant.\n"
-            f"Symbol: {symbol}\n"
-            f"Trend: {direction.upper()}\n"
-            f"Entry Price: {entry_price}\n"
-            f"ATR: {atr if atr is not None else 'N/A'}\n\n"
-            "Suggest optimized SL and TP levels based on trend and entry. "
-            "Return exactly: SL: <number>, TP: <number>"
-        )
-
-        logging.info(f"[AI] SL/TP analysis for {symbol}")
-        content = await _safe_chat(
-            prompt,
-            system="Reply with 'SL: <num>, TP: <num>' only.",
-            model=getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=0.2,
-            max_tokens=40,
-            timeout_sec=min(20.0, float(getattr(config, "OPENAI_TIMEOUT_SECONDS", 30.0))),
-        )
-
-        m = re.search(r"SL\W*:\W*([0-9]*\.?[0-9]+)\W*,\W*TP\W*:\W*([0-9]*\.?[0-9]+)", content or "", re.IGNORECASE)
-        if m:
-            sl_val, tp_val = float(m.group(1)), float(m.group(2))
-            if sl_val > 0 and tp_val > 0:
-                if direction.upper() == "LONG":
-                    if tp_val < entry_price:
-                        tp_val = entry_price * 1.003
-                    if sl_val > entry_price:
-                        sl_val = entry_price * 0.997
-                elif direction.upper() == "SHORT":
-                    if tp_val > entry_price:
-                        tp_val = entry_price * 0.997
-                    if sl_val < entry_price:
-                        sl_val = entry_price * 1.003
-    except Exception as e:
-        logging.warning(f"[AI-SLTP] Exception: {e}; will fallback if needed")
-
-    if not (sl_val and tp_val and sl_val > 0 and tp_val > 0):
-        sl_val, tp_val = calculate_sl_tp(entry_price=entry_price, direction=direction, atr=atr)
-
-    try:
-        if use_anchor:
-            anchor_used = btc_anchor or await compute_btc_anchor(
-                frames=(anchor_frames or ["15m", "1h"]),
-                market=anchor_market,
-            )
-            sl_mult, tp_mult = sltp_multipliers(direction, anchor_used)
-            if direction.upper() == "LONG":
-                sl_dist = abs(entry_price - sl_val) * sl_mult
-                tp_dist = abs(tp_val - entry_price) * tp_mult
-                sl_val = entry_price - sl_dist
-                tp_val = entry_price + tp_dist
-            else:
-                sl_dist = abs(sl_val - entry_price) * sl_mult
-                tp_dist = abs(entry_price - tp_val) * tp_mult
-                sl_val = entry_price + sl_dist
-                tp_val = entry_price - tp_dist
-    except Exception as e:
-        logging.warning(f"[AI-SLTP] anchor adjust failed: {e}")
-
-    return round(float(sl_val), 6), round(float(tp_val), 6)
 
 
 
