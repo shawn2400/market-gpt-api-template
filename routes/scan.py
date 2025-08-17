@@ -7,13 +7,12 @@ import inspect
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Body, status
-from pydantic import BaseModel, Field
 
 logger = logging.getLogger("algogpt.scan")
 router = APIRouter(prefix="", tags=["Scan"])
 
 # ---------------------------
-# Auth (hard dependency, עם fallback בטוח ל-dev בלבד)
+# Auth (עם fallback בטוח ל-dev)
 # ---------------------------
 try:
     from utils.auth import require_bearer_token
@@ -21,7 +20,7 @@ except Exception as e:  # pragma: no cover
     logger.warning("Auth fallback active: %s", e)
 
     def require_bearer_token():
-        # Fallback לשימוש מקומי בלבד; בפרודקשן יש להשתמש ב־utils.auth
+        # עבור GET /scan לא נשתמש בזה; רק ב-POSTים
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
 # ---------------------------
@@ -48,6 +47,8 @@ except Exception as e:
 # Models
 # ---------------------------
 Side = Literal["LONG", "SHORT"]
+
+from pydantic import BaseModel, Field
 
 class ScanSignal(BaseModel):
     symbol: str = Field(..., description="Trading symbol, e.g., BTCUSDT")
@@ -94,14 +95,21 @@ def _normalize_symbols(symbols: Iterable[str]) -> List[str]:
 # Routes
 # ---------------------------
 
-@router.get("/scan", response_model=ScanResponse, summary="Basic scanner heartbeat")
-async def scan_info(_: Any = Depends(require_bearer_token)):
+# פתוח ללא טוקן – heartbeat/info
+@router.get("/scan", response_model=ScanResponse, summary="Basic scanner heartbeat (no auth)")
+async def scan_info():
     """
-    מידע בסיסי/בדיקת חיים לראוטר הסריקה.
+    מידע בסיסי/בדיקת חיים לראוטר הסריקה (ללא צורך ב־Authorization).
     """
     _ensure_scanner_available()
     return ScanResponse(ok=True, count=0, signals=[])
 
+# alias תואם ללקוחות ישנים (גם ללא אימות)
+@router.get("/scan-info", response_model=ScanResponse, summary="Scanner heartbeat (alias)")
+async def scan_info_alias():
+    return await scan_info()
+
+# מוגן בטוקן
 @router.post(
     "/scan",
     response_model=ScanResponse,
@@ -109,7 +117,7 @@ async def scan_info(_: Any = Depends(require_bearer_token)):
 )
 async def scan_single(
     payload: SingleScanPayload = Body(...),
-    _: Any = Depends(require_bearer_token),
+    _=Depends(require_bearer_token),
 ):
     _ensure_scanner_available()
 
@@ -119,13 +127,11 @@ async def scan_single(
 
     try:
         if _analyze_symbol is None:
-            # אין פונקציה ספציפית — ננסה scan_all עם רשימה של סימבול אחד
             results = await _maybe_await(_scan_all, symbols=[symbol], timeframe=timeframe, limit=limit)  # type: ignore
             sigs = _convert_results(results)
         else:
-            res = await _maybe_await(_analyze_symbol, symbol=symbol, timeframe=timeframe, limit=limit)  # type: ignore
+            res = await _maybe_await(_analyze_symbol, symbol=symbol, interval=timeframe, limit=limit)  # type: ignore
             sigs = _convert_results([res] if res is not None else [])
-
         return ScanResponse(ok=True, count=len(sigs), signals=sigs)
     except HTTPException:
         raise
@@ -133,6 +139,7 @@ async def scan_single(
         logger.exception("scan_single failed: %s", e)
         raise HTTPException(status_code=500, detail=f"scan_single error: {e}")
 
+# מוגן בטוקן
 @router.post(
     "/scan/multi",
     response_model=ScanResponse,
@@ -140,7 +147,7 @@ async def scan_single(
 )
 async def scan_multi(
     payload: MultiScanPayload = Body(...),
-    _: Any = Depends(require_bearer_token),
+    _=Depends(require_bearer_token),
 ):
     _ensure_scanner_available()
 
@@ -156,10 +163,9 @@ async def scan_multi(
             results = await _maybe_await(_scan_all, symbols=symbols, timeframe=timeframe, limit=limit)  # type: ignore
             sigs = _convert_results(results)
         else:
-            # אין scan_all — נרוץ בטור או במקביל על analyze_symbol
             if _analyze_symbol is None:
                 raise RuntimeError("No scanner functions available")
-            tasks = [ _maybe_await(_analyze_symbol, symbol=s, timeframe=timeframe, limit=limit) for s in symbols ]  # type: ignore
+            tasks = [_maybe_await(_analyze_symbol, symbol=s, interval=timeframe, limit=limit) for s in symbols]  # type: ignore
             results = await asyncio.gather(*tasks, return_exceptions=True)
             clean: List[Any] = []
             for r in results:
@@ -180,11 +186,6 @@ async def scan_multi(
 # Result normalization
 # ---------------------------
 def _convert_results(results: Union[List[Any], Any]) -> List[ScanSignal]:
-    """
-    ממיר פלט כללי מ־scanner_utils לתצורת ScanSignal אחידה.
-    תומך ב־dict / Pydantic / DataClass / אובייקט עם שדות.
-    מצפה לשדות: symbol, timeframe, side, score, note, details (לא כולם חייבים).
-    """
     out: List[ScanSignal] = []
     if results is None:
         return out
@@ -197,13 +198,12 @@ def _convert_results(results: Union[List[Any], Any]) -> List[ScanSignal]:
             if isinstance(r, dict):
                 data = r
             else:
-                # נסה להוציא כשדות אובייקט
                 data = {
                     "symbol": getattr(r, "symbol", None),
-                    "timeframe": getattr(r, "timeframe", None),
+                    "timeframe": getattr(r, "interval", None) or getattr(r, "timeframe", None),
                     "side": getattr(r, "side", None),
-                    "score": getattr(r, "score", None),
-                    "note": getattr(r, "note", None),
+                    "score": getattr(r, "quality_score", None) or getattr(r, "score", None),
+                    "note": getattr(r, "reason", None) or getattr(r, "note", None),
                     "details": getattr(r, "details", None),
                 }
 
@@ -225,10 +225,13 @@ def _convert_results(results: Union[List[Any], Any]) -> List[ScanSignal]:
                     side=side,  # type: ignore
                     score=max(0.0, min(10.0, score)),
                     note=note if (note is None or isinstance(note, str)) else str(note),
-                    details=details if isinstance(details, dict) else None,
+                    details=details if isinstance(details, dict) else (
+                        {"raw": details} if details is not None else None
+                    ),
                 )
             )
         except Exception as e:
             logger.warning("Skipping bad scan result: %s (raw=%r)", e, r)
             continue
     return out
+
