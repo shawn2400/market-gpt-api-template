@@ -14,10 +14,7 @@ from utils.binance_trader import binance_futures_trade
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ======== Pydantic models ========
-
 SideLiteral = Literal["LONG", "SHORT"]
-MarginLiteral = Literal["ISOLATED", "CROSSED"]
 
 class SLTPRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
@@ -42,13 +39,10 @@ class TradeExecuteRequest(BaseModel):
     tp: Optional[float] = Field(None, gt=0)
     atr: Optional[float] = Field(None, gt=0, description="Optional ATR for SL/TP calculation")
     dry_run: bool = Field(True, description="By default we simulate only")
-    margin_type: MarginLiteral = Field("ISOLATED", description="Futures margin mode to use")
 
 class TradeExecuteResponse(BaseModel):
     status: str = "ok"
     result: dict
-
-# ======== Routes ========
 
 @router.post(
     "/sltp",
@@ -58,16 +52,8 @@ class TradeExecuteResponse(BaseModel):
     response_model=SLTP3Response,
 )
 async def post_sltp(payload: SLTPRequest):
-    """
-    החזרת SL/TP מוצעים (ATR-aware). בטוח – לא מבצע טרייד.
-    """
-    # חישוב SL/TP ראשי
-    sl, tp = calculate_sl_tp(
-        entry_price=payload.entry,
-        direction=payload.direction,
-        atr=payload.atr,
-    )
-    # שתי מטרות (tp1=tp, tp2 קצת רחוק יותר). כאן: +40% מהמרחק של tp1 מה־entry
+    sl, tp = calculate_sl_tp(entry_price=payload.entry, direction=payload.direction, atr=payload.atr)
+    # tp2: הרחבה מתונה של היעד הראשון (40%)
     if payload.direction == "LONG":
         tp2 = round(tp + (tp - payload.entry) * 0.4, 6)
     else:
@@ -81,7 +67,6 @@ async def post_sltp(payload: SLTPRequest):
         tp2=tp2,
     )
 
-
 @router.post(
     "/execute",
     tags=["Trades"],
@@ -90,31 +75,21 @@ async def post_sltp(payload: SLTPRequest):
     response_model=TradeExecuteResponse,
 )
 async def post_execute(payload: TradeExecuteRequest):
-    """
-    ביצוע טרייד. כברירת מחדל dry_run=True (סימולציה בלבד).
-    אם entry/sl/tp לא סופקו – נחשב אותם (לפי ATR אם קיים).
-    """
     symbol = payload.symbol.upper()
     side = payload.side
-    margin_type = payload.margin_type
-
     entry = payload.entry
     sl = payload.sl
     tp = payload.tp
 
-    # אם חסר SL/TP – נחשב
+    # חישוב אוטומטי אם חסר
     if entry is None or sl is None or tp is None:
         if entry is None:
             raise HTTPException(status_code=400, detail="entry is required when auto-calculating SL/TP")
-        sl_auto, tp_auto = calculate_sl_tp(
-            entry_price=entry,
-            direction=side,
-            atr=payload.atr,
-        )
+        sl_auto, tp_auto = calculate_sl_tp(entry_price=entry, direction=side, atr=payload.atr)
         sl = sl if sl is not None else sl_auto
         tp = tp if tp is not None else tp_auto
 
-    # Dry run — לא נוגעים בחשבון
+    # Dry-run
     if payload.dry_run:
         result = {
             "dry_run": True,
@@ -125,12 +100,11 @@ async def post_execute(payload: TradeExecuteRequest):
             "tp": tp,
             "budget": payload.budget,
             "leverage": payload.leverage,
-            "margin_type": margin_type,
             "note": "No orders sent (dry_run=true).",
         }
         return TradeExecuteResponse(status="ok", result=result)
 
-    # Live — מבצע דרך binance_futures_trade (יכשל אם EXECUTE_TRADES=false או SKIP_MUTATIONS=true)
+    # Live
     try:
         trade_result = await binance_futures_trade(
             symbol=symbol,
@@ -143,12 +117,12 @@ async def post_execute(payload: TradeExecuteRequest):
             quantity=None,
             market_type="futures",
             cid_prefix="algogpt",
-            margin_type=margin_type,  # <<< חשוב
         )
         return TradeExecuteResponse(status="ok", result=trade_result)
     except Exception as e:
         logger.exception("Trade execution failed")
         raise HTTPException(status_code=400, detail=f"trade failed: {e}")
+
 
 
 
