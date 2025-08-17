@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 import pandas as pd
@@ -18,6 +18,7 @@ _HDRS = {
     "Accept": "application/json",
     "Accept-Encoding": "gzip",
 }
+
 
 async def _http_get_json(
     url: str,
@@ -46,15 +47,17 @@ async def _http_get_json(
         raise last_err
     raise RuntimeError("binance http unknown error")
 
+
 async def _fetch_klines(symbol: str, interval: str, limit: int = 200) -> List[list]:
     url = f"{BINANCE_FAPI}/fapi/v1/klines"
     return await _http_get_json(
         url, params={"symbol": symbol, "interval": interval, "limit": int(limit)}
     )
 
+
 async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> pd.DataFrame:
     """
-    מחזיר DataFrame עם עמודות open/high/low/close/volume + timestamp לפי klines Futures.
+    מחזיר DataFrame עם OHLCV מסודר על ציר זמן UTC מתוך Binance Futures klines.
     """
     raw = await _fetch_klines(symbol.upper(), interval=interval, limit=max(50, int(limit)))
     if not raw or len(raw) < 10:
@@ -69,19 +72,11 @@ async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> p
     for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df.dropna(inplace=True)
-    df.rename(columns={"open_time":"timestamp"}, inplace=True)
+    df.rename(columns={"open_time": "timestamp"}, inplace=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
     return df
 
-def _to_float(x, default: float = 0.0) -> float:
-    try:
-        v = float(x)
-        if v != v:  # NaN
-            return default
-        return v
-    except Exception:
-        return default
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     try:
@@ -90,23 +85,25 @@ def _clamp(v: float, lo: float, hi: float) -> float:
         v = lo
     return max(lo, min(hi, v))
 
+
 async def analyze_symbol(
     symbol: str,
     *,
     market_type: str = "futures",
-    # תאימות: אפשר להעביר timeframe או interval — נבחר את מה שסופק
+    # תאימות: ניתן להעביר timeframe או interval
     timeframe: Optional[str] = None,
     interval: Optional[str] = None,
     limit: int = 150,
-    trending_only: bool = False,
+    trending_only: bool = False,  # שמור לעתיד
     frames: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    מנתח סימבול ייעודי ל-Binance Futures: RSI/ADX/EMA/ATR + ציון איכות.
-    מחזיר dict; כולל מפתחות המתאימים ל-/scan (timeframe/side/score/note/details).
+    ניתוח סימבול ל-Binance Futures: RSI/ADX/EMA/ATR + ציון איכות 0–10.
+    החזרה בפורמט שה-routers של /scan מצפים לו (timeframe/side/score/note/details).
     """
     sym = str(symbol).upper().strip()
     tf = (timeframe or interval or "15m").strip()
+
     raw = await _fetch_klines(sym, interval=tf, limit=max(100, int(limit)))
     if not raw or len(raw) < 60:
         return None
@@ -144,7 +141,7 @@ async def analyze_symbol(
         "SHORT" if (trend == "DOWN" and last_rsi <= 48) else ("LONG" if last_close > last_ema50 else "SHORT")
     )
 
-    # סיגנל/ביטחון
+    # סיגנל/ביטחון בסיסיים
     signal = "HOLD"
     conf = 40
     if last_adx >= 20:
@@ -163,12 +160,11 @@ async def analyze_symbol(
 
     reason = f"trend={trend} rsi={last_rsi:.1f} adx={last_adx:.1f} ema21/50={last_ema21:.1f}/{last_ema50:.1f}"
 
-    # החזרה בתצורה ידידותית ל-/scan:
-    return {
-        # שדות “גנריים” ש-/scan מצפה להם:
+    # מבנה “גנרי” ל-/scan
+    generic = {
         "symbol": sym,
-        "timeframe": tf,          # ← חשוב: scan.py מחפש timeframe (לא interval)
-        "side": direction,        # ← scan.py מצפה side
+        "timeframe": tf,                     # חשוב: scan.py מחפש timeframe
+        "side": direction,                   # כיוון מוצע
         "score": round(quality, 2),
         "note": reason,
         "details": {
@@ -185,7 +181,10 @@ async def analyze_symbol(
             "close": round(last_close, 6),
             "atr": round(last_atr, 6),
         },
-        # נשמור גם על השדות “המקוריים” למקרי שימוש אחרים:
+    }
+
+    # שדות “מקוריים” לשימושים אחרים/תאימות
+    extras = {
         "market": market_type,
         "interval": tf,
         "frames": [tf] if not frames else frames,
@@ -202,6 +201,10 @@ async def analyze_symbol(
         "atr": round(last_atr, 6),
     }
 
+    out = {**generic, **extras}
+    return out
+
+
 async def scan_all(
     symbols: List[str],
     *,
@@ -209,7 +212,7 @@ async def scan_all(
     limit: int = 150,
 ) -> List[Dict[str, Any]]:
     """
-    סריקה מרובת סימבולים; מחזיר רשימת תוצאות במבנה התואם ל-/scan.
+    סריקה מרובת סימבולים; מחזיר רשימה בפורמט התואם ל-/scan.
     """
     tasks = [
         analyze_symbol(s, timeframe=timeframe, limit=limit)
@@ -222,6 +225,7 @@ async def scan_all(
             continue
         out.append(r)
     return out
+
 
 
 
