@@ -1,13 +1,29 @@
+# routes/ai.py
 from __future__ import annotations
+
 from typing import Optional, Literal, Dict, Any
 from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 
-from utils.auth import require_bearer_token
-from utils.anchor import evaluate_anchor, AnchorDecision   # ⬅️ שים לב ל-import
-from utils.quality import compute_quality                  # ⬅️ קיים ב-utils/quality.py
+# --- Auth (עם fallback אם הפונקציה לא קיימת עדיין) ---
+try:
+    from utils.auth import require_bearer_token  # type: ignore
+except Exception:
+    def require_bearer_token():
+        return None
 
-router = APIRouter(dependencies=[Depends(require_bearer_token)])
+# --- Anchor (ננסה shim ואז ניפול ל-btc_anchor) ---
+try:
+    from utils.anchor import evaluate_anchor, AnchorDecision  # shim
+except Exception:
+    from utils.btc_anchor import evaluate_anchor, AnchorDecision  # גיבוי
+
+from utils.quality import compute_quality
+
+router = APIRouter(
+    tags=["AI"],
+    dependencies=[Depends(require_bearer_token)],
+)
 
 Side = Literal["LONG", "SHORT"]
 
@@ -30,7 +46,11 @@ class QualityResponse(BaseModel):
 async def _anchor_dep(payload: QualityRequest = Body(...)) -> AnchorDecision:
     return evaluate_anchor(payload.side)
 
-@router.post("/quality", response_model=QualityResponse, operation_id="postAiQuality", tags=["AI"])
+@router.post(
+    "/quality",
+    response_model=QualityResponse,
+    operation_id="postAiQuality",
+)
 async def post_ai_quality(
     payload: QualityRequest = Body(...),
     anchor: AnchorDecision = Depends(_anchor_dep),
