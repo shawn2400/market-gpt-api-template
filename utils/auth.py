@@ -1,18 +1,18 @@
-from fastapi import Header, HTTPException, status
+# utils/auth.py
+from __future__ import annotations
+from fastapi import Header, HTTPException
 
-async def require_bearer_token(authorization: str = Header(default="")) -> None:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid bearer token",
-        )
+def require_bearer_token(authorization: str | None = Header(default=None)):
+    """
+    בדיקת Authorization: Bearer <token>. כל טוקן לא-ריק מתקבל (אפשר להחליף לאימות אמיתי).
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail={"error": "unauthorized", "code": "NO_BEARER"})
     token = authorization.split(" ", 1)[1].strip()
     if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Empty token",
-        )
+        raise HTTPException(status_code=401, detail={"error": "unauthorized", "code": "EMPTY_TOKEN"})
     return None
+
 
 
 
