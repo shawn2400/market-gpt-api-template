@@ -1,226 +1,59 @@
+import os
 import logging
-import re
-import traceback
-from typing import Tuple, List, Dict, Any, Optional
-import asyncio
+import openai
+from typing import Tuple, Optional
 
-from utils import config
-from utils.ai_client import chat
-from utils.sl_tp_utils import calculate_sl_tp
+openai.api_key = os.getenv("OPENAI_API_KEY")
+logger = logging.getLogger(__name__)
 
-from utils.btc_anchor import (
-    compute_btc_anchor,
-    anchor_gate,
-    sltp_multipliers,
-)
-
-def _avg(vals, default: float = 0.0) -> float:
-    xs: List[float] = []
-    for v in (vals or []):
-        try:
-            if v is None:
-                continue
-            xs.append(float(v))
-        except Exception:
-            continue
-    return round(sum(xs) / len(xs), 4) if xs else float(default)
-
-def _clamp(v: float, lo: float, hi: float) -> float:
+async def analyze_with_ai(symbol: str, rsi: float, adx: float, trend: str, pattern: str, volume: float) -> str:
+    prompt = (
+        f"Analyze the following crypto setup and decide whether it's a good LONG or SHORT opportunity.\n\n"
+        f"Symbol: {symbol}\n"
+        f"RSI: {rsi}\n"
+        f"ADX: {adx}\n"
+        f"Trend: {trend}\n"
+        f"Pattern: {pattern}\n"
+        f"Volume: {volume}\n\n"
+        f"Return a short summary and a recommendation: LONG or SHORT."
+    )
     try:
-        v = float(v)
-    except Exception:
-        v = lo
-    return max(lo, min(hi, v))
-
-def _dedup_str(seq: List[str]) -> List[str]:
-    seen: set = set()
-    out: List[str] = []
-    for s in (seq or []):
-        if not s:
-            continue
-        s2 = str(s).strip()
-        if s2 and s2 not in seen:
-            seen.add(s2)
-            out.append(s2)
-    return out
-
-def _truncate(s: str, max_len: int) -> str:
-    if not isinstance(s, str):
-        return ""
-    return s if len(s) <= max_len else (s[: max_len - 3] + "...")
-
-_SIG_RE = re.compile(r"Signal\W*:\W*(BUY|SELL|HOLD)", re.IGNORECASE)
-_CONF_RE = re.compile(r"Confidence\W*:\W*([0-9]+(?:\.[0-9]+)?)\s*%?", re.IGNORECASE)
-_REASON_RE = re.compile(r"Reason\W*:\W*(.+)$", re.IGNORECASE)
-
-def _parse_signal_conf(text: str) -> Dict[str, Any]:
-    out = {"signal": "HOLD", "confidence": 0.0, "reason": ""}
-    if not isinstance(text, str) or not text.strip():
-        return out
-    try:
-        m_sig = _SIG_RE.search(text)
-        if m_sig:
-            out["signal"] = m_sig.group(1).upper()
-        m_conf = _CONF_RE.search(text)
-        if m_conf:
-            out["confidence"] = _clamp(m_conf.group(1), 0.0, 100.0)
-        m_reason = _REASON_RE.search(text)
-        if m_reason:
-            reason = m_reason.group(1).strip()
-            out["reason"] = _truncate(reason, 240)
-    except Exception:
-        pass
-    if out["signal"] not in ("BUY", "SELL", "HOLD"):
-        out["signal"] = "HOLD"
-    out["confidence"] = _clamp(out["confidence"], 0.0, 100.0)
-    return out
-
-def _get_metric(d: Dict[str, Any], key: str):
-    if key in d:
-        return d.get(key)
-    inds = d.get("indicators") or {}
-    return inds.get(key)
-
-async def _safe_chat(
-    prompt: str,
-    *,
-    system: str,
-    model: Optional[str],
-    temperature: float,
-    max_tokens: int,
-    timeout_sec: float = 20.0,
-    **kwargs,
-) -> str:
-    try:
-        prompt = _truncate(prompt, 6000)
-        coro = chat(
-            prompt,
-            system=system,
-            model=model or getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=150,
         )
-        return await asyncio.wait_for(coro, timeout=timeout_sec)
-    except asyncio.TimeoutError:
-        logging.warning("[AI] chat timeout")
-        return ""
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        logging.error(f"[AI] chat failed: {e}")
-        return ""
+        logger.error(f"AI analysis failed: {e}")
+        return "AI analysis unavailable."
 
-async def analyze_with_ai(
-    tf_results: List[Dict[str, Any]],
-    *,
-    use_anchor: bool = True,
-    anchor_frames: Optional[List[str]] = None,
-    anchor_market: str = "futures",
-    btc_anchor: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+async def predict_optimal_sl_tp(symbol: str, direction: str, entry: float) -> Tuple[float, float]:
+    prompt = (
+        f"You are a crypto trading assistant. Given the symbol {symbol}, direction {direction}, "
+        f"and entry price {entry}, calculate the optimal Stop Loss and Take Profit levels. "
+        f"Use technical knowledge. Return ONLY two numbers: sl,tp"
+    )
     try:
-        if not tf_results or not isinstance(tf_results, list):
-            return {"error": "empty tf_results", "signal": "HOLD", "confidence": 0.0}
-
-        first = tf_results[0] or {}
-        symbol = str(first.get("symbol", "UNKNOWN")).upper()
-        direction = str(first.get("direction", "LONG")).upper()
-
-        frames = _dedup_str([str(x.get("interval", "?")) for x in tf_results if isinstance(x, dict)])[:6]
-        avg_rsi = _avg([_get_metric(x, "rsi") for x in tf_results], default=50.0)
-        avg_adx = _avg([_get_metric(x, "adx") for x in tf_results], default=20.0)
-        avg_volume = _avg([(x.get("volume") if isinstance(x, dict) else None) for x in tf_results], default=1_000_000.0)
-        q_scores: List[float] = []
-        for x in tf_results:
-            try:
-                q_scores.append(float((x or {}).get("quality_score", 0.0) or 0.0))
-            except Exception:
-                q_scores.append(0.0)
-        avg_q = round(sum(q_scores) / len(q_scores), 2) if q_scores else 0.0
-
-        anchor_used: Optional[Dict[str, Any]] = None
-        if use_anchor:
-            if btc_anchor is not None:
-                anchor_used = btc_anchor
-            else:
-                afr = anchor_frames or (frames if frames else ["15m", "1h"])
-                anchor_used = await compute_btc_anchor(frames=afr, market=anchor_market)
-
-        anchor_line = ""
-        if anchor_used:
-            anchor_line = (
-                f"- BTC Anchor: dir={anchor_used.get('direction')}, "
-                f"strength={anchor_used.get('strength')}, frames={','.join(anchor_used.get('frames', []))}\n"
-            )
-
-        prompt = (
-            "You are a professional crypto analyst.\n"
-            f"Technical analysis for {symbol} across frames: {', '.join(frames)}\n"
-            f"- Direction: {direction}\n"
-            f"- Avg RSI: {avg_rsi:.2f}\n"
-            f"- Avg ADX: {avg_adx:.2f}\n"
-            f"- Avg Volume: {avg_volume:,.0f}\n"
-            f"- Avg Quality: {avg_q:.2f}\n"
-            f"{anchor_line}\n"
-            "Return exactly this format on a single line:\n"
-            "Signal: BUY/SELL/HOLD | Confidence: <0-100> | Reason: <short reason>\n"
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=30,
         )
-
-        logging.info(f"[AI] analyze_with_ai prompt for {symbol} (frames={frames})")
-        content = await _safe_chat(
-            prompt,
-            system="Be concise and deterministic. No markdown.",
-            model=getattr(config, "OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=0.0,
-            max_tokens=200,
-            timeout_sec=float(getattr(config, "OPENAI_TIMEOUT_SECONDS", 30.0)),
-        )
-
-        parsed = _parse_signal_conf(content)
-        signal = parsed["signal"]
-        confidence = int(round(parsed["confidence"]))
-        reason = parsed.get("reason", "")
-
-        # ✅ המלצה: הפוך ל-HOLD אם confidence נמוך מדי
-        if confidence < 70:
-            signal = "HOLD"
-            reason = reason + "; confidence below threshold"
-
-        if anchor_used:
-            gate = anchor_gate(direction, anchor_used)
-            if gate["action"] == "block":
-                signal = "HOLD"
-                confidence = min(confidence, 40)
-                reason = (reason + "; " if reason else "") + f"blocked by BTC ({gate['reason']})"
-            elif gate["action"] == "downgrade":
-                confidence = max(0, confidence - int(gate.get("penalty", 15)))
-                reason = (reason + "; " if reason else "") + gate["reason"]
-            elif gate["action"] == "boost":
-                confidence = min(100, confidence + int(gate.get("bonus", 10)))
-                reason = (reason + "; " if reason else "") + gate["reason"]
-
-        result = {
-            "symbol": symbol,
-            "direction": direction,
-            "quality_score": avg_q,
-            "frames": frames,
-            "signal": signal,
-            "confidence": int(confidence),
-            "raw": content,
-            "details": tf_results,
-            "reason": reason,
-        }
-        if anchor_used:
-            result["anchor"] = {
-                "direction": anchor_used.get("direction"),
-                "strength": anchor_used.get("strength"),
-                "trend": anchor_used.get("trend"),
-                "frames": anchor_used.get("frames"),
-            }
-        return result
-
+        content = response.choices[0].message.content.strip()
+        if "," in content:
+            sl_str, tp_str = content.split(",", 1)
+            return float(sl_str), float(tp_str)
+        else:
+            raise ValueError("Invalid format from AI.")
     except Exception as e:
-        logging.error(f"[AI] analyze_with_ai exception: {e}\n{traceback.format_exc()}")
-        return {"error": str(e), "signal": "HOLD", "confidence": 0.0}
+        logger.warning(f"SL/TP AI fallback triggered: {e}")
+        sl = round(entry * 0.985, 4) if direction == "LONG" else round(entry * 1.015, 4)
+        tp = round(entry * 1.03, 4) if direction == "LONG" else round(entry * 0.97, 4)
+        return sl, tp
+
 
 
 
