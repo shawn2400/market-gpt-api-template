@@ -1,6 +1,6 @@
 # routes/scan_top_volume.py
 from __future__ import annotations
-import asyncio
+import os, asyncio
 from typing import Dict, Any, List
 import pandas as pd
 import requests
@@ -12,10 +12,16 @@ except Exception:
     def require_bearer_token():
         return None
 
+from utils.cache import aget_or_set
 from utils.top_volume import get_top_volume_symbols
 from utils.indicators_ext import enrich_ext, market_structure
 
-FUTURES_BASE = "https://fapi.binance.com"
+FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+
+# TTLs מה־ENV (אפשר לכוונן בלי לגעת בקוד)
+TV_LIST_TTL    = float(os.getenv("SCAN_TOP_VOLUME_TTL", "60"))   # cache לרשימת Top Volume
+TV_KLINES_TTL  = float(os.getenv("SCAN_TOP_VOLUME_KLINES_TTL", "30"))  # cache ל־klines
+ENV_MIN_QV     = float(os.getenv("TOP_VOLUME_MIN_QV", "0"))
 
 router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
 
@@ -36,39 +42,36 @@ def _score_signal(d: pd.DataFrame) -> Dict[str, Any]:
     last = d.tail(1).iloc[0]
     score = 0.0
     note = []
-    # בסיס: EMA
     if last["ema_fast"] > last["ema_slow"]:
         score += 2.0; note.append("ema_cross=up")
     else:
         score += 0.5; note.append("ema_cross=down")
-    # ADX
     if last["adx"] >= 25:
         score += 2.0; note.append("adx≥25")
     elif last["adx"] >= 18:
         score += 1.0; note.append("adx≥18")
-    # Supertrend
     if bool(last["st_trend_up"]):
         score += 1.5; note.append("st=up")
-    # Ichimoku
     if bool(last["ich_bull"]):
         score += 1.5; note.append("ich=bull")
-    # StochRSI
     try:
-        if last["stochrsi_k"] > last["stochrsi_d"] and last["stochrsi_k"] < 0.8:
+        if last.get("stochrsi_k", 1.0) > last.get("stochrsi_d", 1.0) and last.get("stochrsi_k", 1.0) < 0.8:
             score += 1.0; note.append("stochrsi=buy")
     except Exception:
         pass
-    # נירמול ל-0..10
     return {"score": min(10.0, round(score * 1.6, 2)), "note": ", ".join(note)}
 
-async def _scan_one(
-    symbol: str, timeframe: str, bars: int,
-    ema_fast:int, ema_slow:int, adx_len:int,
-    st_period:int, st_factor:float,
-    ich_conv:int, ich_base:int, ich_span_b:int,
-    ms_lookback:int, ms_pivot_span:int,
-) -> Dict[str, Any]:
-    df = await asyncio.to_thread(_fetch_klines, symbol, timeframe, bars)
+async def _scan_one(symbol: str, timeframe: str, bars: int,
+                    ema_fast:int, ema_slow:int, adx_len:int,
+                    st_period:int, st_factor:float,
+                    ich_conv:int, ich_base:int, ich_span_b:int,
+                    ms_lookback:int, ms_pivot_span:int) -> Dict[str, Any]:
+    # cache ל־klines לפי (symbol, timeframe, bars)
+    kkey = f"kl|{symbol}|{timeframe}|{bars}"
+    async def load_kl():
+        return await asyncio.to_thread(_fetch_klines, symbol, timeframe, bars)
+    df = await aget_or_set(kkey, TV_KLINES_TTL, load_kl)
+
     ext = await asyncio.to_thread(enrich_ext, df,
                                   ema_fast=ema_fast, ema_slow=ema_slow,
                                   adx_len=adx_len, st_period=st_period, st_factor=st_factor,
@@ -104,6 +107,7 @@ async def get_scan_top_volume(
     timeframe: str = Query("15m"),
     bars: int = Query(200, ge=50, le=1500),
     trending_only: bool = Query(False),
+    min_quote_volume: float | None = Query(None, ge=0.0, description="Override ENV TOP_VOLUME_MIN_QV"),
     min_adx: float = Query(20.0, ge=5.0, le=60.0),
     ema_fast: int = Query(21, ge=3, le=200),
     ema_slow: int = Query(50, ge=5, le=400),
@@ -117,22 +121,28 @@ async def get_scan_top_volume(
     ms_pivot_span: int = Query(3, ge=1, le=10),
     concurrency: int = Query(16, ge=2, le=64),
 ):
-    ok, syms = await asyncio.to_thread(get_top_volume_symbols, market, quote, limit, 0.0)
+    eff_min_qv = ENV_MIN_QV if (min_quote_volume is None) else float(min_quote_volume)
+
+    # cache לרשימת ה־Top Volume
+    list_key = f"topvol|{market}|{quote}|{limit}|{eff_min_qv}"
+    async def load_syms():
+        return await asyncio.to_thread(get_top_volume_symbols, market, quote, limit, eff_min_qv)
+    ok, syms = await aget_or_set(list_key, TV_LIST_TTL, load_syms)
+
     if not ok or not syms:
         return {"ok": False, "count": 0, "signals": []}
 
     sem = asyncio.Semaphore(concurrency)
     async def worker(sym: str):
         async with sem:
-            res = await _scan_one(sym, timeframe, bars, ema_fast, ema_slow, adx_len,
-                                  st_period, st_factor, ich_conv, ich_base, ich_span_b,
-                                  ms_lookback, ms_pivot_span)
-            return res
+            return await _scan_one(sym, timeframe, bars, ema_fast, ema_slow, adx_len,
+                                   st_period, st_factor, ich_conv, ich_base, ich_span_b,
+                                   ms_lookback, ms_pivot_span)
 
     results = await asyncio.gather(*[worker(s) for s in syms], return_exceptions=False)
 
     if trending_only:
-        filtered = []
+        filtered: List[Dict[str, Any]] = []
         for r in results:
             adx_ok = r.get("details", {}).get("adx", 0.0) >= min_adx
             st_ok  = r.get("details", {}).get("supertrend_up", False)
@@ -144,3 +154,4 @@ async def get_scan_top_volume(
 
     results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(results), "signals": results}
+
