@@ -1,50 +1,35 @@
-# routes/trade.py
-from fastapi import APIRouter, HTTPException, Query, Depends
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
 from utils.auth import require_bearer_token
-from utils.multi_tf_scanner import multi_tf_scan_with_ai
+from utils.binance_trader import binance_futures_trade
 from utils.ai_analysis import predict_optimal_sl_tp
 
-router = APIRouter(tags=["Trades"], dependencies=[Depends(require_bearer_token)])
+router = APIRouter()
 
-@router.get("/trade/best")
-async def get_best_trade(
-    min_quality: int = Query(6, ge=1, le=10, description="ציון איכות מינימלי"),
-    top: int = Query(1, ge=1, description="מספר הטריידים שברצונך לקבל"),
-    timeframes: Optional[str] = Query("5m,15m,1h", description="טיימפריימים"),
-    market_type: Optional[str] = Query("futures", description="סוג שוק"),
-    trending_only: Optional[bool] = Query(True, description="האם לסנן רק טרנדים"),
-    trending_source: Optional[str] = Query("coingecko", description="מקור טרנדים")
-):
-    tfs = tuple(tf.strip() for tf in timeframes.split(","))
-    results = await multi_tf_scan_with_ai(
-        timeframes=tfs,
-        markets=(market_type,),
-        min_quality=min_quality,
-        top=top,
-        trending_only=trending_only,
-        trending_source=trending_source
+class TradeRequest(BaseModel):
+    symbol: str
+    side: str
+    entry: float
+    quantity: float
+
+@router.post("/trade/live")
+async def execute_trade(req: TradeRequest, auth: bool = Depends(require_bearer_token)):
+    if req.side not in ["LONG", "SHORT"]:
+        raise HTTPException(status_code=400, detail="Side must be LONG or SHORT")
+    
+    sl, tp = await predict_optimal_sl_tp(req.symbol, req.side, req.entry)
+    
+    result = await binance_futures_trade(
+        symbol=req.symbol,
+        side=req.side,
+        entry=req.entry,
+        quantity=req.quantity,
+        sl=sl,
+        tp=tp,
     )
-    if not results:
-        raise HTTPException(status_code=404, detail="לא נמצאו טריידים איכותיים כרגע")
-    best_trade = results[0]
-    sl, tp = await predict_optimal_sl_tp(
-        symbol=best_trade["symbol"],
-        direction=best_trade["direction"],
-        entry_price=best_trade.get("entry") or 0,
-        atr=best_trade.get("atr")
-    )
-    trade_info = {
-        "symbol": best_trade["symbol"],
-        "direction": best_trade["direction"],
-        "quality_score": best_trade["quality_score"],
-        "entry": best_trade.get("entry") or "שימוש במחיר שוק",
-        "sl": sl,
-        "tp": tp,
-        "leverage": 10,
-        "budget_usd": 100,
-    }
-    return {"best_trade": trade_info}
+    
+    return {"status": "executed", "sl": sl, "tp": tp, "result": result}
+
 
 
 
