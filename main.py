@@ -13,9 +13,16 @@ from starlette.responses import Response
 
 from routes.trade import router as trade_router
 from routes.ai import router as ai_router
-from routes.backtest import router as backtest_router
-from routes.dashboard import router as dashboard_router
 from utils.metrics import metrics_tracker
+
+# --- ננסה לייבא את backtest באופן חסין ---
+try:
+    from routes.backtest import router as backtest_router  # type: ignore
+except Exception as _bt_exc:
+    backtest_router = None  # type: ignore
+    # נאתחל לוגינג מוקדם כדי שהאזהרה תודפס
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    logging.getLogger("algogpt").warning("Backtest router disabled: %s", _bt_exc)
 
 # --- Config / ENV ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
@@ -86,11 +93,12 @@ async def get_metrics():
     return metrics_tracker.get_metrics()
 
 # --- Routers ---
-app.include_router(dashboard_router, tags=["Dashboard"])
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
-# חשוב: הנתיבים בפועל יהיו /trade/sltp ו-/trade/execute
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
-app.include_router(backtest_router, tags=["Backtest"])
+if backtest_router:
+    app.include_router(backtest_router, tags=["Backtest"])
+else:
+    logger.warning("Backtest routes are not loaded (import failed).")
 
 # --- Lifecycle ---
 @app.on_event("startup")
