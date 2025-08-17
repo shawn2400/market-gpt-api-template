@@ -1,37 +1,45 @@
-# utils/trade_executor.py
 import os
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
 from utils.binance_trader import binance_futures_trade
 
-def _bool_env(name: str, default: bool = False) -> bool:
-    return str(os.getenv(name, str(default))).lower() in ("1","true","yes","y","on")
+EXECUTE_TRADES = str(os.getenv("EXECUTE_TRADES", "false")).lower() in ("1", "true", "yes", "on")
 
 async def execute_trade_live(
+    *,
     symbol: str,
     side: str,
     budget: float,
     leverage: int,
     entry: float,
-    sl: Optional[float] = None,
-    tp: Optional[float] = None,
+    sl: float,
+    tp: float,
     dry_run: bool = True,
+    quantity: Optional[float] = None,
 ) -> Dict[str, Any]:
-    if dry_run or _bool_env("BINANCE_SKIP_ACCOUNT_MUTATIONS", True) or not _bool_env("EXECUTE_TRADES", False):
-        # מצב יבש – מחזיר תכנית פעולה
+    if dry_run or not EXECUTE_TRADES:
         return {
             "mode": "dry_run",
             "symbol": symbol.upper(),
             "side": side.upper(),
             "entry": float(entry),
-            "sl": float(sl) if sl else None,
-            "tp": float(tp) if tp else None,
+            "sl": float(sl),
+            "tp": float(tp),
             "leverage": int(leverage),
             "budget": float(budget),
+            "quantity": quantity,
         }
-    if sl is None or tp is None:
-        raise ValueError("SL/TP must be provided for live execution")
+    # LIVE (Binance)
     return await binance_futures_trade(
-        symbol=symbol, side=side, entry=entry, sl=sl, tp=tp, leverage=leverage, budget=budget
+        symbol=symbol,
+        side=side,
+        entry=entry,
+        sl=sl,
+        tp=tp,
+        leverage=leverage,
+        budget=budget,
+        quantity=quantity,
+        market_type="futures",
     )
 
 
