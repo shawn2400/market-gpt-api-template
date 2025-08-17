@@ -1,153 +1,125 @@
-# utils/quality_score.py
-import logging
-import numpy as np
-import pandas as pd
-from typing import Any, Optional
+# utils/quality.py
+from __future__ import annotations
+import json, math, os
+from typing import Optional, Dict, Any, Literal
+from utils.anchor import AnchorDecision
 
-def _f(x: Any, default: float = 0.0) -> float:
-    try:
-        v = float(x)
-        if v != v or v in (float("inf"), float("-inf")):  # NaN/Inf
-            return float(default)
-        return v
-    except Exception:
-        return float(default)
+Side = Literal["LONG", "SHORT"]
 
-def _b(x: Any) -> int:
+def _safe_load_history(path: str) -> list[dict]:
     try:
-        if isinstance(x, (bool, np.bool_)):
-            return int(bool(x))
-        if x is None:
-            return 0
-        v = float(x)
-        if v != v or v == 0.0:
-            return 0
-        return 1
+        if not os.path.isfile(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
     except Exception:
-        return 0
+        return []
 
-def _infer_direction(last: dict, prev: Optional[dict] = None) -> str:
-    try:
-        st = last.get("supertrend_dir", None)
-        if st is not None:
-            return "LONG" if int(st) == 1 else "SHORT"
-    except Exception:
+def _empirical_win_rate(history: list[dict], symbol: str, side: Side, limit: int = 200) -> Optional[float]:
+    if not history:
+        return None
+    rows = [r for r in history if str(r.get("symbol","")).upper()==symbol.upper() and r.get("side")==side]
+    rows = rows[-limit:] if len(rows) > limit else rows
+    if not rows:
+        return None
+    wins = 0
+    total = 0
+    for r in rows:
+        status = (r.get("status") or r.get("result",{}).get("status") or "").lower()
+        pnl = r.get("pnl") or r.get("result",{}).get("pnl")
+        if status:
+            total += 1
+            if status in {"win","success","closed_tp","tp"} or (isinstance(pnl,(int,float)) and pnl>0):
+                wins += 1
+    if total == 0:
+        return None
+    return wins/total
+
+def _sigmoid(x: float) -> float:
+    return 1.0/(1.0+math.exp(-x))
+
+def compute_quality(
+    *,
+    symbol: str,
+    side: Side,
+    entry: Optional[float],
+    sl: Optional[float],
+    tp: Optional[float],
+    leverage: int,
+    budget: float,
+    anchor: AnchorDecision,
+    atr: Optional[float] = None,
+    trades_log_path: str = None,
+) -> Dict[str, Any]:
+    components: Dict[str, Any] = {}
+    score = 5.0
+
+    rr = None
+    if entry and sl and tp:
+        risk = abs(entry - sl)
+        reward = abs(tp - entry)
+        rr = (reward / risk) if risk > 0 else None
+        if rr is not None:
+            if rr >= 2.0: score += 2.0
+            elif rr >= 1.5: score += 1.0
+            elif rr < 1.0: score -= 1.0
+    components["rr"] = rr
+
+    if leverage <= 10: score += 0.5
+    elif leverage >= 30: score -= 0.8
+    components["leverage"] = leverage
+
+    if atr and entry and sl:
+        stop_dist = abs(entry - sl)
+        atr_mult = (stop_dist / atr) if atr > 0 else None
+        components["atr_mult"] = atr_mult
+        if atr_mult is not None:
+            if atr_mult < 1.0: score -= 0.7
+            elif atr_mult >= 1.5: score += 0.3
+
+    if anchor.bias == "neutral":
         pass
-    ema21 = _f(last.get("ema_21"), last.get("close"))
-    ema50 = _f(last.get("ema_50"), last.get("close"))
-    return "LONG" if ema21 >= ema50 else "SHORT"
-
-def compute_quality_score(
-    data: Any,
-    direction: Optional[str] = None,
-    verbose: bool = False
-) -> float:
-    """
-    ניקוד איכות 0–10 משוקלל מסיגנלים טכניים (RSI/ADX/MACD/EMA/VWAP/Patterns/Volume).
-    תומך בקלט dict של "שורת האינדיקטורים האחרונה" או DataFrame עם אינדיקטורים.
-    """
-    try:
-        if isinstance(data, pd.DataFrame) and not data.empty:
-            last = data.iloc[-1].to_dict()
-            prev = data.iloc[-2].to_dict() if len(data) > 1 else None
-        elif isinstance(data, dict):
-            last = data
-            prev = None
+    else:
+        aligned = (side=="LONG" and anchor.bias=="bull") or (side=="SHORT" and anchor.bias=="bear")
+        if aligned:
+            bonus = min(1.2, max(0.2, anchor.score/100.0*1.2))
+            score += bonus
+            components["anchor_alignment"] = f"aligned(+{bonus:.2f})"
         else:
-            logging.warning("[quality_score] unsupported data")
-            return 0.0
+            penalty = min(1.8, max(0.4, anchor.score/100.0*1.8))
+            score -= penalty
+            components["anchor_alignment"] = f"conflict(-{penalty:.2f})"
+    components["anchor"] = {"bias": anchor.bias, "score": anchor.score, "mode": anchor.mode_applied}
 
-        score = 0.0
-        reasons = []
+    score = max(0.0, min(10.0, score))
+    components["raw_score"] = score
 
-        atr = _f(last.get("atr"), 0)
-        if atr > 0:
-            score += 1; reasons.append("ATR ok")
+    x = (score - 5.0) / 1.6
+    p_model = _sigmoid(x)
+    success_pct_model = p_model * 100.0
 
-        macd = _f(last.get("macd"), 0); macd_signal = _f(last.get("macd_signal"), 0)
-        if macd > macd_signal:
-            score += 1; reasons.append("MACD > signal")
+    if trades_log_path is None:
+        trades_log_path = os.getenv("TRADES_LOG_PATH", "data/trades_log.json")
+    hist = _safe_load_history(trades_log_path)
+    wr = _empirical_win_rate(hist, symbol, side, limit=200)
+    components["emp_win_rate"] = wr
 
-        rsi = _f(last.get("rsi"), 50)
-        if 45 <= rsi <= 65:
-            score += 1; reasons.append("RSI neutral")
-        if rsi >= 65:
-            score += 0.5; reasons.append("RSI high")
+    if wr is not None:
+        success_pct = 100.0 * (0.6*wr + 0.4*(success_pct_model/100.0))
+        score += (wr - 0.5) * 2.0
+        score = max(0.0, min(10.0, score))
+        components["blend"] = "empirical(0.6)+model(0.4)"
+    else:
+        success_pct = success_pct_model
+        components["blend"] = "model_only"
 
-        adx = _f(last.get("adx"), 0)
-        if adx > 20:
-            score += 1; reasons.append("ADX strong")
+    return {
+        "quality_score": round(score, 2),
+        "success_pct": round(success_pct, 1),
+        "components": components,
+    }
 
-        vol = _f(last.get("volume"), 0); vol_mean = max(1e-9, _f(last.get("volume_mean"), 1))
-        if vol > vol_mean * 1.5:
-            score += 1; reasons.append("Volume high")
-
-        close = _f(last.get("close"), 0)
-        ema21 = _f(last.get("ema_21"), close)
-        ema50 = _f(last.get("ema_50"), close)
-        if close > ema21:
-            score += 1; reasons.append("> EMA21")
-        if close > ema50:
-            score += 1; reasons.append("> EMA50")
-
-        if prev is not None:
-            try:
-                if _f(last.get("ema_21")) > _f(last.get("ema_50")) and _f(prev.get("ema_21")) <= _f(prev.get("ema_50")):
-                    score += 1; reasons.append("EMA21 crossed up EMA50")
-            except Exception:
-                pass
-
-        macd_hist = _f(last.get("macd_hist"), 0)
-        if macd_hist > 0:
-            score += 1; reasons.append("MACD hist > 0")
-
-        vwap = _f(last.get("vwap"), close if close > 0 else 1.0)
-        if close > vwap:
-            score += 1; reasons.append("> VWAP")
-
-        dir_use = (direction or "").strip().upper()
-        if dir_use not in ("LONG", "SHORT"):
-            dir_use = _infer_direction(last, prev)
-
-        # דגלי תבניות (אם קיימים)
-        bulls_eng = _b(last.get("is_bullish_engulfing"))
-        bears_eng = _b(last.get("is_bearish_engulfing"))
-        hammer    = _b(last.get("is_hammer"))
-        inv_ham   = _b(last.get("is_inverted_hammer"))
-        shoot     = _b(last.get("is_shooting_star"))
-        morning   = _b(last.get("is_morning_star"))
-        evening   = _b(last.get("is_evening_star"))
-        # doji – ניטרלי
-
-        if dir_use == "LONG":
-            if bulls_eng: score += 1
-            if hammer:    score += 1
-            if morning:   score += 1
-            if bears_eng: score -= 1
-            if shoot:     score -= 1
-            if evening:   score -= 1
-        else:
-            if bears_eng: score += 1
-            if shoot:     score += 1
-            if evening:   score += 1
-            if bulls_eng: score -= 1
-            if hammer:    score -= 1
-            if morning:   score -= 1
-            if inv_ham:   score -= 0.5  # היפוך לטובת לונג → מינוס בשורט
-
-        # Clamp 0..10
-        final_score = float(min(max(score, 0.0), 10.0))
-        if verbose:
-            logging.info(f"[quality_score] score={final_score} dir={dir_use} reasons={reasons}")
-        return final_score
-
-    except Exception as e:
-        logging.error(f"[quality_score] error: {e}", exc_info=True)
-        return 0.0
-
-
-def calculate_quality_score(indicators: dict, direction: Optional[str] = None) -> float:
-    return compute_quality_score(indicators, direction=direction, verbose=False)
 
 
 
