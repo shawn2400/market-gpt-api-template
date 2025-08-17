@@ -13,7 +13,7 @@ from starlette.responses import Response
 
 from utils.metrics import metrics_tracker
 
-# --- Config / ENV (מוקדם כדי שנוכל ללוגגר נכון גם בזמן import) ---
+# --- Config / ENV (מוקדם כדי שלוג יעבוד גם בזמן import) ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -29,10 +29,11 @@ logger = logging.getLogger("algogpt")
 from routes.ai import router as ai_router            # /ai/*
 from routes.trade import router as trade_router      # /trade/*
 
-# --- אופציונליים: backtest / scan / ai-analyze (לא מפילים שרת אם חסרים) ---
+# --- אופציונליים: backtest / scan / ai-analyze / dashboard (לא מפילים שרת אם חסרים) ---
 backtest_router: Optional[object] = None
 scan_router: Optional[object] = None
 ai_analyze_router: Optional[object] = None
+dashboard_router: Optional[object] = None
 
 try:
     from routes.backtest import router as backtest_router  # type: ignore
@@ -48,6 +49,11 @@ try:
     from routes.ai_analyze import router as ai_analyze_router  # /ai-analyze
 except Exception as _aia_exc:
     logger.warning("AI Analyze router not loaded: %s", _aia_exc)
+
+try:
+    from routes.dashboard import router as dashboard_router  # /dashboard
+except Exception as _dash_exc:
+    logger.warning("Dashboard router not loaded: %s", _dash_exc)
 
 # --- App ---
 app = FastAPI(
@@ -107,24 +113,29 @@ async def get_metrics():
 
 # --- Routers registration ---
 # קיימים תמיד
-app.include_router(ai_router, prefix="/ai", tags=["AI"])
-app.include_router(trade_router, prefix="/trade", tags=["Trades"])
+app.include_router(ai_router, prefix="/ai")
+app.include_router(trade_router, prefix="/trade")
 
 # אופציונליים
 if backtest_router:
-    app.include_router(backtest_router, tags=["Backtest"])
+    app.include_router(backtest_router)
 else:
     logger.warning("Backtest routes are not loaded (import failed).")
 
 if scan_router:
-    app.include_router(scan_router, tags=["Scan"])          # /scan, /scan/multi
+    app.include_router(scan_router)          # /scan, /scan/multi
 else:
     logger.warning("Scan routes are not loaded (import failed).")
 
 if ai_analyze_router:
-    app.include_router(ai_analyze_router, tags=["AI"])      # /ai-analyze
+    app.include_router(ai_analyze_router)    # /ai-analyze
 else:
     logger.warning("AI Analyze route is not loaded (import failed).")
+
+if dashboard_router:
+    app.include_router(dashboard_router)     # /dashboard
+else:
+    logger.warning("Dashboard route is not loaded (import failed).")
 
 # --- Lifecycle ---
 @app.on_event("startup")
@@ -140,6 +151,7 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "10000")),
         log_level=LOG_LEVEL.lower(),
     )
+
 
 
 
