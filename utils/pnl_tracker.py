@@ -1,12 +1,10 @@
 # utils/pnl_tracker.py
 from __future__ import annotations
-
 import json
 import os
 import tempfile
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
-
 from fpdf import FPDF
 
 PNL_FILE = "pnl_tracker.json"
