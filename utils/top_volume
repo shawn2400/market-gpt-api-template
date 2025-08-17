@@ -1,0 +1,72 @@
+# utils/top_volume.py
+from __future__ import annotations
+
+import os
+import time
+from typing import List, Dict, Any, Optional
+
+import httpx
+
+BINANCE_FAPI = "https://fapi.binance.com"
+_USER_AGENT = "AlgoGPT/2 top-volume"
+_TTL_SEC = int(os.getenv("TOP_VOLUME_CACHE_SEC", "300"))
+_DEFAULT_LIMIT = int(os.getenv("TOP_VOLUME_LIMIT", "50"))
+_DEFAULT_QUOTE = os.getenv("TOP_VOLUME_QUOTE", "USDT").upper()
+
+_HDRS = {
+    "User-Agent": _USER_AGENT,
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+}
+
+_cache: Dict[str, Any] = {"ts": 0.0, "quote": _DEFAULT_QUOTE, "limit": _DEFAULT_LIMIT, "symbols": []}
+
+
+async def _get_24hr() -> list[dict]:
+    url = f"{BINANCE_FAPI}/fapi/v1/ticker/24hr"
+    async with httpx.AsyncClient(timeout=10.0, headers=_HDRS) as x:
+        r = await x.get(url)
+    r.raise_for_status()
+    data = r.json()
+    return data if isinstance(data, list) else []
+
+
+def _pick_symbols(rows: list[dict], *, quote: str, limit: int) -> list[str]:
+    out: list[tuple[str, float]] = []
+    q = quote.upper()
+    for it in rows:
+        sym = str(it.get("symbol", "")).upper()
+        if not sym or not sym.endswith(q):
+            continue
+        # נעדיף חוזי פרפצ'ואל (ללא '_' בשם)
+        if "_" in sym:
+            continue
+        qv = 0.0
+        try:
+            qv = float(it.get("quoteVolume", 0.0))
+        except Exception:
+            pass
+        if qv > 0:
+            out.append((sym, qv))
+    out.sort(key=lambda t: t[1], reverse=True)
+    return [s for s, _ in out[: max(1, limit)]]
+
+
+async def get_top_volume_symbols(*, quote: Optional[str] = None, limit: Optional[int] = None) -> list[str]:
+    """
+    מחזיר רשימת סימבולים (למשל ['BTCUSDT', ...]) לפי quoteVolume בירידה.
+    תומך בקאשינג (TTL), ניתן לשליטה ע"י TOP_VOLUME_CACHE_SEC.
+    """
+    q = (quote or _DEFAULT_QUOTE).upper()
+    lim = int(limit or _DEFAULT_LIMIT)
+    now = time.time()
+
+    # Cache hit?
+    if _cache["symbols"] and (now - float(_cache["ts"])) < max(30, _TTL_SEC) and _cache["quote"] == q and _cache["limit"] == lim:
+        return list(_cache["symbols"])
+
+    rows = await _get_24hr()
+    syms = _pick_symbols(rows, quote=q, limit=lim)
+
+    _cache.update({"ts": now, "quote": q, "limit": lim, "symbols": syms})
+    return syms
