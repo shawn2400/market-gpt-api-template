@@ -1,7 +1,6 @@
 # utils/precision_utils.py
 from __future__ import annotations
 from decimal import Decimal, ROUND_DOWN, getcontext
-from functools import lru_cache
 from typing import Dict, Any, Optional, Tuple
 import threading
 import time
@@ -13,7 +12,6 @@ from utils.binance_client import futures_exchange_info_safe
 getcontext().prec = 28
 
 # ===================== ExchangeInfo Cache =====================
-# קאש עם TTL ורענון יזום כדי לשמור על LIVE עקבי ללא עומס
 _EX_INFO_LOCK = threading.Lock()
 _EX_INFO_DATA: Optional[Dict[str, Any]] = None
 _EX_INFO_TS: float = 0.0
@@ -24,7 +22,7 @@ def _load_ex_info_live() -> Dict[str, Any]:
         data = futures_exchange_info_safe()
         return data or {}
     except Exception as e:
-        logging.warning(f"[precision_utils] exchange_info load failed: {e}")
+        logging.warning("[precision_utils] exchange_info load failed: %s", e)
         return {}
 
 def _ensure_ex_info(ttl_sec: int = _EX_INFO_TTL_SEC) -> Dict[str, Any]:
@@ -77,6 +75,7 @@ def round_to_precision(value: float, digits: int) -> float:
 def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         return value
+    # Floor למכפלה הקרובה כדי למנוע דחיית הזמנות בבינאנס
     return (value // step) * step
 
 def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
@@ -228,6 +227,16 @@ def calc_quantity_from_budget(
         "min_notional": float(mn) if mn is not None else None,
         "min_qty": float(min_qty) if min_qty is not None else None,
     }
+
+__all__ = [
+    "refresh_exchange_info",
+    "get_precision_info",
+    "round_to_precision",
+    "apply_price_tick",
+    "apply_qty_step",
+    "calc_quantity_from_budget",
+]
+
 
 
 
