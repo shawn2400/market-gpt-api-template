@@ -1,26 +1,32 @@
-# routes/backtest.py
-
-from fastapi import APIRouter, Query
-from typing import Optional, List
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
-from utils.backtest_utils import run_backtest
+from typing import Literal
+from utils.auth import require_bearer_token
+from utils.backtest_utils import run_backtest_for_symbol
+from utils.metrics import metrics_tracker
 
 router = APIRouter()
 
-class BacktestResult(BaseModel):
-    timestamp: int
-    price: float
-    score: float
-    rsi: Optional[float]
-    adx: Optional[float]
-    trend: Optional[str]
-    pattern: Optional[str]
+class BacktestRequest(BaseModel):
+    symbol: str
+    timeframe: Literal["5m", "15m", "1h", "4h"] = "15m"
+    limit: int = 200
+    slippage_pct: float = 0.1
 
-@router.get("/backtest", response_model=List[BacktestResult])
+@router.post("/backtest", tags=["Backtest"])
 async def backtest(
-    symbol: str = Query(..., example="BTCUSDT"),
-    interval: str = Query("15m", example="15m"),
-    limit: int = Query(200, ge=100, le=1000),
+    req: BacktestRequest, 
+    request: Request = Depends(require_bearer_token)
 ):
-    result = run_backtest(symbol=symbol, interval=interval, limit=limit)
-    return result or []
+    try:
+        result = await run_backtest_for_symbol(
+            symbol=req.symbol,
+            timeframe=req.timeframe,
+            limit=req.limit,
+            slippage_pct=req.slippage_pct,
+        )
+        return {"status": "ok", "backtest": result}
+    except Exception as e:
+        metrics_tracker.record_error()
+        raise HTTPException(status_code=500, detail=str(e))
+
