@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 
 from utils.auth import require_bearer_token
-from utils.btc_anchor import evaluate_anchor, AnchorDecision   # <-- תוקן
+from utils.btc_anchor import evaluate_anchor, AnchorDecision  # <-- תוקן
 from utils.quality import compute_quality
 
 router = APIRouter(
