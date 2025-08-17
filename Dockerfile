@@ -12,39 +12,29 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=UTC \
     PORT=10000
 
-# בסיס מערכת מינימלי + curl ל-HEALTHCHECK
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini \
     libfreetype6 libpng16-16 fonts-dejavu-core \
     libjpeg62-turbo zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
-# משתמש לא-root
 RUN useradd -ms /bin/bash appuser
 WORKDIR /app
 
-# תלותים
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# קוד
 COPY . /app
 
-# תיקיות עבודה והרשאות
 RUN mkdir -p /app/static/reports /app/static/img /tmp/matplotlib \
  && chown -R appuser:appuser /app /tmp/matplotlib
 
-# בריאות פנימית של הקונטיינר
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/" || exit 1
 
 USER appuser
 
-# tini לטיפול בסיגנלים/זומבים
 ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Gunicorn + UvicornWorker מחוסן לפרודקשן
-# ניתן לשנות WORKERS בזמן ריצה: -e WORKERS=2
 CMD ["bash", "-lc", "exec gunicorn main:app \
   -k uvicorn.workers.UvicornWorker \
   --workers ${WORKERS:-1} \
