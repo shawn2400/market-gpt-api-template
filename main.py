@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Tuple
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request
@@ -67,6 +67,16 @@ try:
 except Exception:
     _ai_client = None
 
+# --- Auto Executor (optional, safe fallback) ---
+AUTO_RUN = str(os.getenv("AUTO_RUN", "false")).lower() in ("1", "true", "yes", "on")
+_executor_loaded = False
+try:
+    from auto_executor import start_executor as _start_exec, stop_executor as _stop_exec, is_executor_running as _is_exec_running
+    _executor_loaded = True
+except Exception as e:
+    _start_exec = _stop_exec = _is_exec_running = None
+    logger.info("[EXECUTOR] auto_executor not loaded: %s", e)
+
 # --- Live trader (lazy) ---
 BINANCE_IMPORT_ERR: str | None = None
 binance_grid_trade = None
@@ -80,12 +90,12 @@ except Exception as e:
     logger.error("[LIVE] binance_trader import failed: %s", BINANCE_IMPORT_ERR)
 
 # --- Anchor config from ENV ---
-def _parse_bool(s: str, default: bool = False) -> bool:
+def _parse_bool(s: str | None, default: bool = False) -> bool:
     if s is None:
         return default
     return str(s).strip().lower() in ("1", "true", "yes", "on", "y")
 
-ANCHOR_ENFORCE = _parse_bool(os.getenv("BTC_ANCHOR_ENFORCE", "false"), False)  # default=false (manual mode)
+ANCHOR_ENFORCE = _parse_bool(os.getenv("BTC_ANCHOR_ENFORCE", "false"), False)
 ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
 ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
 
@@ -234,15 +244,28 @@ app.include_router(health_full.router)
 # --- Startup / Shutdown ---
 @app.on_event("startup")
 async def _on_startup():
+    # AI client warmup
     if _ai_client is not None:
         try:
             await _ai_client.warmup()
             logger.info("[BOOT] AI client warmup done (ready=%s)", getattr(_ai_client, "ready", False))
         except Exception as e:
             logger.warning("[BOOT] AI warmup failed: %s", e)
+    # Optional auto-executor
+    if AUTO_RUN and _executor_loaded and _start_exec:
+        try:
+            _start_exec()
+            logger.info("[AUTO] AUTO_RUN=true → executor started")
+        except Exception as e:
+            logger.warning("[AUTO] start failed: %s", e)
 
 @app.on_event("shutdown")
 async def _on_shutdown():
+    if _executor_loaded and _stop_exec:
+        try:
+            _stop_exec()
+        except Exception:
+            pass
     if _ai_client is not None:
         try:
             await _ai_client.close()
@@ -347,6 +370,7 @@ async def env_check():
         "live_flags": {
             "EXECUTE_TRADES": EXECUTE_TRADES,
             "BINANCE_SKIP_ACCOUNT_MUTATIONS": SKIP_MUTATIONS,
+            "AUTO_RUN": AUTO_RUN,
         },
         "keys_present": {
             "BINANCE_API_KEY": _is_set("BINANCE_API_KEY"),
@@ -429,7 +453,7 @@ async def scan_multi(
         except Exception:
             gate = {"action": "none"}
 
-        # במצב ידני נרצה רק דירוג, לא חסימה. ANCHOR_ENFORCE כבר false ב־.env.
+        # מצב ידני: לא חוסמים לפי עוגן
         if ANCHOR_ENFORCE and gate.get("action") == "block":
             continue
 
@@ -586,7 +610,6 @@ async def place_trade(req: TradeRequest):
     except Exception as e:
         return JSONResponse(status_code=422, content={"status": "error", "error": str(e), "result": None})
 
-    # ב"ידני" לא נחסום — רק נעדכן confidence/SLTP ברקע. ANCHOR_ENFORCE=false ב-.env.
     if _ext_dry_run_trade is None:
         return JSONResponse(status_code=501, content={"status": "error", "error": "trade core not installed", "result": None})
 
@@ -642,12 +665,12 @@ async def trade_live(req: LiveTradeRequest):
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
-    # במצב ידני, לא חוסמים לפי עוגן (ANCHOR_ENFORCE=false), רק נשתמש בעוגן לחישובי sltp אם צריך.
+    # ידני: לא חוסמים עם העוגן, רק מידע
     if ANCHOR_ENFORCE:
         anchor = await compute_btc_anchor(frames=_env_frames(), market="futures")
         gate = anchor_gate(req.side, anchor, strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
         if gate.get("action") == "block":
-            return {"status": "error", "error": f"blocked by BTC anchor: {gate['reason']}"}
+            return {"status": "error", "error": f"blocked by BTC anchor: {gate.get('reason','')}"}
 
     try:
         res = await binance_futures_trade(
@@ -666,25 +689,32 @@ async def trade_live(req: LiveTradeRequest):
         logger.exception("live trade failed")
         return {"status": "error", "error": str(e)}
 
-# -------- Executor (manual mode: off by default) --------
-EXECUTOR_RUNNING = False
-
+# -------- Executor (manual mode default; auto optional) --------
 @app.get("/executor/start", tags=["Executor"], summary="Executor Start", dependencies=[Depends(require_bearer_token)], operation_id="getExecutorStart")
 async def start_executor():
-    # במצב ידני לא מריצים לופ אוטומטי; זה endpoint no-op/תואם API
-    global EXECUTOR_RUNNING
-    EXECUTOR_RUNNING = False
-    return {"started": True, "running": EXECUTOR_RUNNING, "note": "manual mode; auto loop disabled"}
+    if not _executor_loaded or not _start_exec:
+        return {"started": False, "running": False, "note": "executor module not loaded (manual mode)"}
+    try:
+        _start_exec()
+        return {"started": True, "running": bool(_is_exec_running and _is_exec_running())}
+    except Exception as e:
+        return {"started": False, "running": False, "error": str(e)}
 
 @app.get("/executor/stop", tags=["Executor"], summary="Executor Stop", dependencies=[Depends(require_bearer_token)], operation_id="getExecutorStop")
 async def stop_executor():
-    global EXECUTOR_RUNNING
-    EXECUTOR_RUNNING = False
-    return {"stopped": True, "running": EXECUTOR_RUNNING}
+    if not _executor_loaded or not _stop_exec:
+        return {"stopped": True, "running": False, "note": "no-op (manual mode)"}
+    try:
+        _stop_exec()
+        return {"stopped": True, "running": bool(_is_exec_running and _is_exec_running())}
+    except Exception as e:
+        return {"stopped": False, "running": None, "error": str(e)}
 
 @app.get("/executor/status", tags=["Executor"], summary="Executor Status", dependencies=[Depends(require_bearer_token)], operation_id="getExecutorStatus")
 async def executor_status():
-    return {"running": EXECUTOR_RUNNING, "mode": "manual"}
+    if _executor_loaded and _is_exec_running:
+        return {"running": bool(_is_exec_running()), "mode": "auto" if AUTO_RUN else "manual"}
+    return {"running": False, "mode": "manual"}
 
 # -------- Reports (protected) --------
 @app.get("/report/pnl/pdf", tags=["Reports"], summary="Generate PnL PDF", response_model=PnlPdfResponse, dependencies=[Depends(require_bearer_token)], operation_id="getReportPnlPdf")
@@ -727,6 +757,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
