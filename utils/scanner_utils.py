@@ -1,10 +1,11 @@
 # utils/scanner_utils.py
 from __future__ import annotations
+
 import asyncio
+from typing import Dict, Any, Optional, List, Tuple
+
 import httpx
 import pandas as pd
-import numpy as np
-from typing import Dict, Any, Optional, List, Tuple
 from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, EMAIndicator
 from ta.volatility import AverageTrueRange
@@ -18,7 +19,12 @@ _HDRS = {
     "Accept-Encoding": "gzip",
 }
 
-async def _http_get_json(url: str, params: Dict[str, Any] | None = None, tries: int = 4, timeout: float = 8.0):
+async def _http_get_json(
+    url: str,
+    params: Dict[str, Any] | None = None,
+    tries: int = 4,
+    timeout: float = 8.0,
+):
     last_err: Optional[Exception] = None
     for attempt in range(tries):
         try:
@@ -42,7 +48,9 @@ async def _http_get_json(url: str, params: Dict[str, Any] | None = None, tries: 
 
 async def _fetch_klines(symbol: str, interval: str, limit: int = 200) -> List[list]:
     url = f"{BINANCE_FAPI}/fapi/v1/klines"
-    return await _http_get_json(url, params={"symbol": symbol, "interval": interval, "limit": int(limit)})
+    return await _http_get_json(
+        url, params={"symbol": symbol, "interval": interval, "limit": int(limit)}
+    )
 
 async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> pd.DataFrame:
     """
@@ -51,8 +59,13 @@ async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> p
     raw = await _fetch_klines(symbol.upper(), interval=interval, limit=max(50, int(limit)))
     if not raw or len(raw) < 10:
         return pd.DataFrame()
-    cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","taker_base","taker_quote","ignore"]
-    df = pd.DataFrame(raw, columns=cols)[["open_time","open","high","low","close","volume"]].copy()
+    cols = [
+        "open_time","open","high","low","close","volume",
+        "close_time","qav","trades","taker_base","taker_quote","ignore",
+    ]
+    df = pd.DataFrame(raw, columns=cols)[
+        ["open_time","open","high","low","close","volume"]
+    ].copy()
     for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df.dropna(inplace=True)
@@ -64,7 +77,7 @@ async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> p
 def _to_float(x, default: float = 0.0) -> float:
     try:
         v = float(x)
-        if v != v:
+        if v != v:  # NaN
             return default
         return v
     except Exception:
@@ -81,21 +94,27 @@ async def analyze_symbol(
     symbol: str,
     *,
     market_type: str = "futures",
-    interval: str = "15m",
+    # תאימות: אפשר להעביר timeframe או interval — נבחר את מה שסופק
+    timeframe: Optional[str] = None,
+    interval: Optional[str] = None,
     limit: int = 150,
     trending_only: bool = False,
     frames: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     מנתח סימבול ייעודי ל-Binance Futures: RSI/ADX/EMA/ATR + ציון איכות.
-    מחזיר dict בפורמט שמותאם ל-/scan/multi.
+    מחזיר dict; כולל מפתחות המתאימים ל-/scan (timeframe/side/score/note/details).
     """
     sym = str(symbol).upper().strip()
-    raw = await _fetch_klines(sym, interval=interval, limit=max(100, int(limit)))
+    tf = (timeframe or interval or "15m").strip()
+    raw = await _fetch_klines(sym, interval=tf, limit=max(100, int(limit)))
     if not raw or len(raw) < 60:
         return None
 
-    cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","taker_base","taker_quote","ignore"]
+    cols = [
+        "open_time","open","high","low","close","volume",
+        "close_time","qav","trades","taker_base","taker_quote","ignore",
+    ]
     df = pd.DataFrame(raw, columns=cols)
     for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -121,7 +140,9 @@ async def analyze_symbol(
     last_vol   = float(vol.iloc[-1])
 
     trend = "UP" if last_ema21 > last_ema50 else "DOWN"
-    direction = "LONG" if (trend == "UP" and last_rsi >= 52) else ("SHORT" if (trend == "DOWN" and last_rsi <= 48) else ("LONG" if last_close > last_ema50 else "SHORT"))
+    direction = "LONG" if (trend == "UP" and last_rsi >= 52) else (
+        "SHORT" if (trend == "DOWN" and last_rsi <= 48) else ("LONG" if last_close > last_ema50 else "SHORT")
+    )
 
     # סיגנל/ביטחון
     signal = "HOLD"
@@ -133,17 +154,41 @@ async def analyze_symbol(
             signal, conf = "SELL", 65
 
     # ציון איכות 0–10
-    align_bonus = 2.0 if ((direction == "LONG" and trend == "UP") or (direction == "SHORT" and trend == "DOWN")) else 0.0
+    align_bonus = 2.0 if (
+        (direction == "LONG" and trend == "UP") or
+        (direction == "SHORT" and trend == "DOWN")
+    ) else 0.0
     q = (max(0.0, last_adx - 15.0) / 5.0) + (abs(last_rsi - 50.0) / 10.0) + align_bonus
     quality = float(_clamp(q, 0.0, 10.0))
 
     reason = f"trend={trend} rsi={last_rsi:.1f} adx={last_adx:.1f} ema21/50={last_ema21:.1f}/{last_ema50:.1f}"
 
+    # החזרה בתצורה ידידותית ל-/scan:
     return {
+        # שדות “גנריים” ש-/scan מצפה להם:
         "symbol": sym,
+        "timeframe": tf,          # ← חשוב: scan.py מחפש timeframe (לא interval)
+        "side": direction,        # ← scan.py מצפה side
+        "score": round(quality, 2),
+        "note": reason,
+        "details": {
+            "market": market_type,
+            "frames": [tf] if not frames else frames,
+            "trend": trend,
+            "rsi": round(last_rsi, 2),
+            "adx": round(last_adx, 2),
+            "volume": round(last_vol, 2),
+            "quality_score": round(quality, 2),
+            "signal": signal,
+            "confidence": int(_clamp(conf + (quality * 3), 0, 100)),
+            "reason": reason,
+            "close": round(last_close, 6),
+            "atr": round(last_atr, 6),
+        },
+        # נשמור גם על השדות “המקוריים” למקרי שימוש אחרים:
         "market": market_type,
-        "interval": interval,
-        "frames": [interval] if not frames else frames,
+        "interval": tf,
+        "frames": [tf] if not frames else frames,
         "trend": trend,
         "direction": direction,
         "rsi": round(last_rsi, 2),
@@ -156,6 +201,27 @@ async def analyze_symbol(
         "close": round(last_close, 6),
         "atr": round(last_atr, 6),
     }
+
+async def scan_all(
+    symbols: List[str],
+    *,
+    timeframe: str = "15m",
+    limit: int = 150,
+) -> List[Dict[str, Any]]:
+    """
+    סריקה מרובת סימבולים; מחזיר רשימת תוצאות במבנה התואם ל-/scan.
+    """
+    tasks = [
+        analyze_symbol(s, timeframe=timeframe, limit=limit)
+        for s in symbols if (s or "").strip()
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    out: List[Dict[str, Any]] = []
+    for r in results:
+        if isinstance(r, Exception) or r is None:
+            continue
+        out.append(r)
+    return out
 
 
 
