@@ -1,108 +1,126 @@
-# utils/btc_anchor.py
 from __future__ import annotations
 import os
-from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional, Dict, Any
 
 Side = Literal["LONG", "SHORT"]
 
-@dataclass
-class AnchorDecision:
-    mode_requested: str   # off / soft / hard
-    mode_applied: str     # off / soft / hard
-    bias: str             # bull / bear / neutral
-    score: float          # 0-100
-    allow: bool           # האם לאפשר טרייד
-    severity: str         # none / weak / strong
-    reason: str           # הסבר
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
 
-def _env_float(key: str, default: float) -> float:
-    v = os.getenv(key, "").strip()
+def _env_int(key: str, default: int) -> int:
     try:
-        return float(v) if v else default
+        return int(os.getenv(key, "").strip() or default)
     except Exception:
         return default
 
-def _env_list(key: str, default: str) -> list[str]:
-    raw = os.getenv(key, default)
-    return [x.strip() for x in raw.split(",") if x.strip()]
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, "").strip() or default)
+    except Exception:
+        return default
 
-def _get_anchor_mode() -> str:
-    # אפשר MOSDE חדש או תאימות לאחור עם BTC_ANCHOR_ENFORCE
-    mode = os.getenv("BTC_ANCHOR_MODE", "").strip().lower()
-    if not mode:
-        enforce = os.getenv("BTC_ANCHOR_ENFORCE", "false").strip().lower() == "true"
-        return "hard" if enforce else "soft"
-    return mode if mode in {"off", "soft", "hard"} else "soft"
+def _safe_div(a: float, b: float) -> float:
+    return a / b if (b is not None and b != 0) else 0.0
 
-def _get_anchor_reading() -> tuple[str, float]:
-    """
-    מקור הקריאה לעוגן BTC:
-    - בזמן פיתוח/בדיקה: ENV BTC_ANCHOR_FORCE="bull:75" / "bear:60" / "neutral:0"
-    - ב-Prod: חבר כאן למקור הדאטה שלך (WS/REST)
-    """
-    forced = os.getenv("BTC_ANCHOR_FORCE", "").strip().lower()
-    if forced:
-        try:
-            if ":" in forced:
-                b, s = forced.split(":", 1)
-                bias = b.strip()
-                score = float(s.strip())
-            else:
-                bias = forced
-                score = 0.0
-            if bias not in {"bull", "bear", "neutral"}:
-                bias = "neutral"
-            score = max(0.0, min(100.0, score))
-            return bias, score
-        except Exception:
-            return "neutral", 0.0
-    # TODO: חבר למנוע העוגן האמיתי שלך
-    return "neutral", 0.0
+def compute_quality(
+    *,
+    symbol: str,
+    side: Side,
+    entry: Optional[float],
+    sl: Optional[float],
+    tp: Optional[float],
+    leverage: int,
+    budget: float,
+    anchor,                 # AnchorDecision מ-utils/btc_anchor
+    atr: Optional[float] = None,
+) -> Dict[str, Any]:
+    max_leverage = _env_int("MAX_LEVERAGE", 35)
+    max_budget   = _env_float("MAX_TRADE_BUDGET", 100.0)
 
-def evaluate_anchor(side: Side) -> AnchorDecision:
-    """
-    SOFT כברירת מחדל; אם קונפליקט חזק (>= STRONG_TH) → הסלמה ל-HARD וחסימה.
-    """
-    mode_req = _get_anchor_mode()  # off / soft / hard
-    frames = _env_list("BTC_ANCHOR_FRAMES", "15m,1h")
-    strong_th = _env_float("BTC_ANCHOR_STRONG_TH", 70.0)
-    weak_th   = _env_float("BTC_ANCHOR_WEAK_TH",   55.0)
+    if entry is None or sl is None or tp is None:
+        return {"quality_score": 5.0, "success_pct": 50.0,
+                "components": {"note": "missing pricing inputs; returned neutral scores"}}
 
-    bias, score = _get_anchor_reading()
-    conflict = ((side == "LONG" and bias == "bear") or (side == "SHORT" and bias == "bull"))
+    # Risk/Reward
+    if side == "LONG":
+        risk, reward = max(0.0, entry - sl), max(0.0, tp - entry)
+    else:
+        risk, reward = max(0.0, sl - entry), max(0.0, entry - tp)
+    rr = _safe_div(reward, risk) if risk > 0 else 0.0
+    rr_score_100 = _clamp((rr / 2.0) * 100.0, 0.0, 100.0)
 
-    if mode_req == "off":
-        return AnchorDecision("off", "off", bias, score, True, "none", "Anchor disabled")
+    # Leverage penalty
+    lev_ref = max(5, min(max_leverage, 125))
+    lev_norm = _clamp((leverage - 5) / max(1, (lev_ref - 5)), 0.0, 1.0)
+    leverage_penalty_100 = 30.0 * lev_norm
 
-    if bias == "neutral" or score <= weak_th:
-        return AnchorDecision(
-            mode_req, mode_req, bias, score, True,
-            "none" if bias == "neutral" else "weak",
-            f"Anchor {bias} ({score:.1f}) on frames {frames}; no strong conflict"
-        )
+    # ATR fit (אם יש)
+    atr_score_100, atr_mult = 50.0, None
+    if atr and atr > 0:
+        sl_dist = abs(entry - sl)
+        atr_mult = _safe_div(sl_dist, atr)
+        if atr_mult <= 0:
+            atr_score_100 = 10.0
+        else:
+            atr_score_100 = 100.0 - _clamp(abs(atr_mult - 1.5) / 1.5 * 40.0, 0.0, 40.0)
+    atr_score_100 = _clamp(atr_score_100, 0.0, 100.0)
 
-    if conflict:
-        if score >= strong_th:
-            return AnchorDecision(
-                mode_req, "hard", bias, score, False, "strong",
-                f"Strong conflict with BTC anchor ({bias} {score:.1f}≥{strong_th}); HARD block"
-            )
-        if mode_req == "hard":
-            return AnchorDecision(
-                "hard", "hard", bias, score, False, "weak",
-                f"Conflict with BTC anchor ({bias} {score:.1f}); HARD mode blocks"
-            )
-        return AnchorDecision(
-            "soft", "soft", bias, score, True, "weak",
-            f"Conflict with BTC anchor ({bias} {score:.1f}); SOFT mode allows with warning"
-        )
+    # Anchor adjustment (רך בלבד; HARD נחסם upstream)
+    anchor_adj_100 = 0.0
+    if anchor and getattr(anchor, "bias", None):
+        align = ((side == "LONG" and anchor.bias == "bull") or
+                 (side == "SHORT" and anchor.bias == "bear"))
+        conflict = ((side == "LONG" and anchor.bias == "bear") or
+                    (side == "SHORT" and anchor.bias == "bull"))
+        s = float(getattr(anchor, "score", 0.0))
+        sev = getattr(anchor, "severity", "none")
+        if align:
+            anchor_adj_100 = _clamp(s * 0.20, 0.0, 20.0)
+        elif conflict and sev in ("weak",):
+            anchor_adj_100 = -_clamp(s * 0.25, 0.0, 25.0)
 
-    return AnchorDecision(
-        mode_req, mode_req, bias, score, True, "none",
-        f"Aligned with BTC anchor ({bias} {score:.1f})"
-    )
+    # Budget sanity
+    budget_adj_100 = 0.0
+    if budget > max_budget:
+        over = (budget - max_budget) / max_budget
+        budget_adj_100 = -_clamp(over * 10.0, 0.0, 10.0)
 
+    # שילוב 0..100
+    base_100 = 0.45 * rr_score_100 + 0.20 * atr_score_100
+    combined_100 = _clamp(base_100 + anchor_adj_100 + budget_adj_100 - leverage_penalty_100, 0.0, 100.0)
+
+    # מיפוי סופי
+    quality_score = round(combined_100 / 10.0, 2)
+    anchor_dir = 0.0
+    if anchor and getattr(anchor, "bias", None):
+        if (side == "LONG" and anchor.bias == "bull") or (side == "SHORT" and anchor.bias == "bear"):
+            anchor_dir = 1.0
+        elif (side == "LONG" and anchor.bias == "bear") or (side == "SHORT" and anchor.bias == "bull"):
+            anchor_dir = -1.0
+    success_p = 0.35 + 0.40 * (combined_100 / 100.0) \
+                + 0.15 * anchor_dir * (_clamp(float(getattr(anchor, "score", 0.0)), 0.0, 100.0) / 100.0) \
+                - 0.10 * lev_norm
+    success_pct = round(_clamp(success_p, 0.05, 0.95) * 100.0, 2)
+
+    return {
+        "quality_score": quality_score,
+        "success_pct": success_pct,
+        "components": {
+            "symbol": symbol, "side": side, "entry": entry, "sl": sl, "tp": tp,
+            "risk": risk, "reward": reward, "rr": rr, "rr_score_100": round(rr_score_100, 2),
+            "leverage": leverage, "max_leverage": max_leverage,
+            "leverage_penalty_100": round(leverage_penalty_100, 2),
+            "atr": atr, "sl_atr_multiple": atr_mult, "atr_score_100": round(atr_score_100, 2),
+            "anchor_bias": getattr(anchor, "bias", None),
+            "anchor_score": getattr(anchor, "score", None),
+            "anchor_severity": getattr(anchor, "severity", None),
+            "anchor_adj_100": round(anchor_adj_100, 2),
+            "budget": budget, "max_budget": max_budget, "budget_adj_100": round(budget_adj_100, 2),
+            "combined_100": round(combined_100, 2),
+            "quality_scale": "0-10",
+            "success_pct_note": "heuristic; replace with historical win-rate when available",
+        },
+    }
 
 
 
