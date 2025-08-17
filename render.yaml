@@ -4,29 +4,42 @@ services:
     env: docker
     plan: starter
 
-    # עצירת פריסות אוטומטיות עד שנאתר את הטריגר החיצוני
+    # עצירת פריסות אוטומטיות עד שנאתר טריגרים חיצוניים
     autoDeploy: false
     pullRequestPreviewsEnabled: false
 
-    # בריאות – שומר על 200 מהיר
+    # בדיקת בריאות מהירה (תואם ל-/ של האפליקציה)
     healthCheckPath: /
 
-    # פורט ריצה (האפליקציה מאזינה ל-$PORT בתוך הקונטיינר)
+    # === Environment ===
     envVars:
+      # ריצה
       - key: PORT
         value: "10000"
+      - key: WORKERS          # מאפשר לשנות worker count בלי לגעת בתמונה
+        value: "1"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+      - key: ALGOGPT_VERSION  # אופציונלי: למעקב לוגים בין דיפלויים
+        value: "2.14.0"
 
+      # Auth
       - key: API_BEARER_TOKEN
         sync: false
 
-      # --- App Flags ---
+      # Flags / Scanner
       - key: AUTO_RUN
+        value: "false"
+      - key: ENABLE_AUTO_TRADING
         value: "false"
       - key: SCAN_INTERVAL
         value: "60"
       - key: DEFAULT_INTERVAL
         value: "15m"
 
+      # סינונים/ניהול סיכון
       - key: MIN_QUALITY_SCORE
         value: "6"
       - key: MIN_VOLUME
@@ -40,24 +53,12 @@ services:
         value: "0.25"
       - key: PRICE_MAX_AGE_SEC
         value: "10"
-
       - key: MAX_TRADE_BUDGET
         value: "100"
       - key: MAX_LEVERAGE
         value: "35"
 
-      - key: LOG_LEVEL
-        value: "INFO"
-      - key: CORS_ALLOW_ORIGINS
-        value: "*"
-
-      # --- Binance (שים ערכים רק דרך ה־Dashboard/Secrets) ---
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
-
-      # --- OpenAI ---
+      # OpenAI
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -67,7 +68,7 @@ services:
       - key: OPENAI_MAX_CONCURRENCY
         value: "4"
 
-      # --- Binance Endpoints ---
+      # Binance Endpoints
       - key: BINANCE_SPOT_HTTP_BASE
         value: "https://api.binance.com"
       - key: BINANCE_FUTURES_HTTP_BASE
@@ -77,7 +78,7 @@ services:
       - key: BINANCE_WS_STREAM_SUFFIX
         value: "/stream?streams="
 
-      # --- Binance timing / retries ---
+      # Binance timing / retries
       - key: BINANCE_BACKOFF_BASE
         value: "0.7"
       - key: BINANCE_MAX_RETRIES
@@ -89,19 +90,25 @@ services:
       - key: BINANCE_EXCHANGE_INFO_ON_START
         value: "false"
 
-      # --- Account modes ---
+      # Binance Account modes
       - key: BINANCE_FORCE_HEDGE_MODE
         value: "false"
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # --- Egress IP helper (אופציונלי) ---
+      # Binance Secrets (מוזנים רק דרך ה-UI של Render)
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+
+      # Egress/IP (אופציונלי)
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
         value: ""
 
-    # דיסק קטן ל־/tmp (אופציונלי; טוב ללוגים/קבצים זמניים)
+    # דיסק קטן ל-/tmp (דוחות/קבצים זמניים)
     disk:
       name: tmp
       mountPath: /tmp
