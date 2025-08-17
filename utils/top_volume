@@ -7,6 +7,9 @@ from typing import List, Tuple
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_BASE    = os.getenv("BINANCE_SPOT_HTTP_BASE",    "https://api.binance.com")
 
+# ברירת-מחדל כללית מסביבה (אפשרOverride בפרמטר של הפונקציה/Query):
+ENV_MIN_QV = float(os.getenv("TOP_VOLUME_MIN_QV", "0"))
+
 _S = requests.Session()
 _S.trust_env = False
 _S.headers.update({"User-Agent": "AlgoGPT/2 top-volume", "Accept": "application/json"})
@@ -20,27 +23,24 @@ def get_top_volume_symbols(
     market: str = "futures",
     quote: str = "USDT",
     limit: int = 50,
-    min_quote_volume: float = 0.0,
+    min_quote_volume: float | None = None,
 ) -> Tuple[bool, List[str]]:
+    """מחזיר זוגות ממוין לפי quoteVolume 24h; מסנן לפי quote & min_quote_volume (אם קיים)."""
     try:
+        eff_min_qv = ENV_MIN_QV if (min_quote_volume is None) else float(min_quote_volume)
         if market == "futures":
             arr = _get_json(f"{FUTURES_BASE}/fapi/v1/ticker/24hr")
-            # סינון חוזים מתמשכים USDT בלבד
-            rows = [x for x in arr if str(x.get("symbol","")).endswith(quote)]
-            rows.sort(key=lambda x: float(x.get("quoteVolume", 0.0)), reverse=True)
-            if min_quote_volume > 0:
-                rows = [x for x in rows if float(x.get("quoteVolume", 0.0)) >= float(min_quote_volume)]
-            syms = [x["symbol"] for x in rows[:limit]]
-            return True, syms
         else:
             arr = _get_json(f"{SPOT_BASE}/api/v3/ticker/24hr")
-            rows = [x for x in arr if str(x.get("symbol","")).endswith(quote)]
-            rows.sort(key=lambda x: float(x.get("quoteVolume", 0.0)), reverse=True)
-            if min_quote_volume > 0:
-                rows = [x for x in rows if float(x.get("quoteVolume", 0.0)) >= float(min_quote_volume)]
-            syms = [x["symbol"] for x in rows[:limit]]
-            return True, syms
+
+        rows = [x for x in arr if str(x.get("symbol","")).endswith(quote)]
+        rows.sort(key=lambda x: float(x.get("quoteVolume", 0.0)), reverse=True)
+        if eff_min_qv > 0:
+            rows = [x for x in rows if float(x.get("quoteVolume", 0.0)) >= eff_min_qv]
+        syms = [x["symbol"] for x in rows[:limit]]
+        return True, syms
     except Exception:
         return False, []
+
 
 
