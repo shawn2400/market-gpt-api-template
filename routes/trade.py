@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel, Field
 
 from utils.auth import require_bearer_token
@@ -12,15 +12,27 @@ from utils.sl_tp_utils import calculate_sl_tp
 from utils.binance_trader import binance_futures_trade
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+
+# ✅ אימות ברמת ה־router (אין צורך לשים בכל endpoint בנפרד)
+router = APIRouter(
+    prefix="/trade",
+    tags=["Trades"],
+    dependencies=[Depends(require_bearer_token)],
+)
 
 SideLiteral = Literal["LONG", "SHORT"]
+
+
+# ---------- Models ----------
 
 class SLTPRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
     direction: SideLiteral
     entry: float = Field(..., gt=0, example=65000)
-    atr: Optional[float] = Field(None, gt=0)
+    atr: Optional[float] = Field(
+        None, gt=0, description="אופציונלי: ATR לדיוק חישוב SL/TP"
+    )
+
 
 class SLTP3Response(BaseModel):
     symbol: str
@@ -28,6 +40,7 @@ class SLTP3Response(BaseModel):
     sl: float
     tp1: float
     tp2: float
+
 
 class TradeExecuteRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
@@ -38,80 +51,106 @@ class TradeExecuteRequest(BaseModel):
     sl: Optional[float] = Field(None, gt=0)
     tp: Optional[float] = Field(None, gt=0)
     atr: Optional[float] = Field(None, gt=0, description="Optional ATR for SL/TP calculation")
-    dry_run: bool = Field(True, description="By default we simulate only")
+    dry_run: bool = Field(True, description="ברירת מחדל: סימולציה בלבד (לא שולח הזמנות)")
+
 
 class TradeExecuteResponse(BaseModel):
-    status: str = "ok"
-    result: dict
+    status: str = Field(default="ok", description="ok / error")
+    result: Dict[str, Any]
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+
+
+# ---------- Endpoints ----------
 
 @router.post(
     "/sltp",
-    tags=["Trades"],
     operation_id="postTradeSltp",
-    dependencies=[Depends(require_bearer_token)],
     response_model=SLTP3Response,
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad Request"},
+        401: {"model": ErrorResponse, "description": "Unauthorized"},
+    },
 )
-async def post_sltp(payload: SLTPRequest):
-    sl, tp = calculate_sl_tp(entry_price=payload.entry, direction=payload.direction, atr=payload.atr)
-    # tp2: הרחבה מתונה של היעד הראשון (40%)
+async def post_sltp(payload: SLTPRequest = Body(...)) -> SLTP3Response:
+    """
+    חישוב SL/TP לפי כניסה וכיוון. אם סופק ATR — משתמשים בו לחישוב.
+    """
+    sl, tp1 = calculate_sl_tp(
+        entry_price=payload.entry,
+        direction=payload.direction,
+        atr=payload.atr,
+    )
+
+    # tp2: הרחבה מתונה של היעד הראשון (40% מהמֶרחק entry→tp1)
     if payload.direction == "LONG":
-        tp2 = round(tp + (tp - payload.entry) * 0.4, 6)
+        tp2 = round(tp1 + (tp1 - payload.entry) * 0.4, 6)
     else:
-        tp2 = round(tp - (payload.entry - tp) * 0.4, 6)
+        tp2 = round(tp1 - (payload.entry - tp1) * 0.4, 6)
 
     return SLTP3Response(
         symbol=payload.symbol.upper(),
         direction=payload.direction,
         sl=sl,
-        tp1=tp,
+        tp1=tp1,
         tp2=tp2,
     )
 
+
 @router.post(
     "/execute",
-    tags=["Trades"],
     operation_id="postTradeExecute",
-    dependencies=[Depends(require_bearer_token)],
     response_model=TradeExecuteResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad Request"},
+        401: {"model": ErrorResponse, "description": "Unauthorized"},
+    },
 )
-async def post_execute(payload: TradeExecuteRequest):
+async def post_execute(payload: TradeExecuteRequest = Body(...)) -> TradeExecuteResponse:
+    """
+    ביצוע טרייד Futures:
+    - אם חסר SL/TP ונמסרה כניסה → מחשב אוטומטית לפי הכללים.
+    - dry_run=True לא שולח הזמנות בפועל (סימולציה).
+    """
     symbol = payload.symbol.upper()
     side = payload.side
     entry = payload.entry
     sl = payload.sl
     tp = payload.tp
 
-    # חישוב אוטומטי אם חסר
-    if entry is None or sl is None or tp is None:
+    # חישוב אוטומטי אם חסר SL/TP (נדרשת נקודת כניסה)
+    if (sl is None or tp is None):
         if entry is None:
             raise HTTPException(status_code=400, detail="entry is required when auto-calculating SL/TP")
         sl_auto, tp_auto = calculate_sl_tp(entry_price=entry, direction=side, atr=payload.atr)
         sl = sl if sl is not None else sl_auto
         tp = tp if tp is not None else tp_auto
 
-    # Dry-run
+    # Dry-run (סימולציה)
     if payload.dry_run:
         result = {
             "dry_run": True,
             "symbol": symbol,
             "side": side,
-            "entry": entry,
-            "sl": sl,
-            "tp": tp,
-            "budget": payload.budget,
-            "leverage": payload.leverage,
+            "entry": float(entry) if entry is not None else None,
+            "sl": float(sl) if sl is not None else None,
+            "tp": float(tp) if tp is not None else None,
+            "budget": float(payload.budget),
+            "leverage": int(payload.leverage),
             "note": "No orders sent (dry_run=true).",
         }
         return TradeExecuteResponse(status="ok", result=result)
 
-    # Live
+    # Live (ביצוע בפועל)
     try:
         trade_result = await binance_futures_trade(
             symbol=symbol,
             side=side,
-            entry=float(entry),
-            sl=float(sl),
-            tp=float(tp),
+            entry=float(entry) if entry is not None else None,
+            sl=float(sl) if sl is not None else None,
+            tp=float(tp) if tp is not None else None,
             leverage=int(payload.leverage),
             budget=float(payload.budget),
             quantity=None,
@@ -119,9 +158,13 @@ async def post_execute(payload: TradeExecuteRequest):
             cid_prefix="algogpt",
         )
         return TradeExecuteResponse(status="ok", result=trade_result)
+    except HTTPException:
+        # אם פונקציית המסחר זרקה HTTPException, להעביר הלאה כפי שהוא
+        raise
     except Exception as e:
         logger.exception("Trade execution failed")
         raise HTTPException(status_code=400, detail=f"trade failed: {e}")
+
 
 
 
