@@ -4,16 +4,12 @@ services:
     env: docker
     plan: starter
     autoDeploy: true
-    healthCheckPath: /health   # ✅ מסלול בריאות ייעודי
+    healthCheckPath: /     # 🔁 שים לב: תואם ל-main.py ששלחתי (שימוש ב־@app.get("/"))
 
     envVars:
-      # --- Security / API Gateway ---
       - key: API_BEARER_TOKEN
-        # ❗ אל תתחייב טוקן אמיתי לקוד. הגדר אותו כ-Encrypted בדשבורד של Render.
-        # value: "PUT-YOUR-TOKEN-IN-RENDER-DASHBOARD"
         sync: false
 
-      # --- Runtime ---
       - key: AUTO_RUN
         value: "false"
       - key: SCAN_INTERVAL
@@ -21,7 +17,6 @@ services:
       - key: DEFAULT_INTERVAL
         value: "15m"
 
-      # --- Scanner / Filters ---
       - key: MIN_QUALITY_SCORE
         value: "6"
       - key: MIN_VOLUME
@@ -31,25 +26,22 @@ services:
       - key: TRENDING_ONLY
         value: "false"
 
-      # --- Guards ---
       - key: PRICE_PROTECT_PCT
         value: "0.25"
       - key: PRICE_MAX_AGE_SEC
         value: "10"
 
-      # --- Trading limits ---
       - key: MAX_TRADE_BUDGET
         value: "100"
       - key: MAX_LEVERAGE
         value: "35"
 
-      # --- Logging / CORS ---
       - key: LOG_LEVEL
         value: "INFO"
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
-      # --- Binance keys (Encrypted בדשבורד) ---
+      # --- Binance (אל תכניס כאן ערכים אמיתיים!) ---
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -65,7 +57,7 @@ services:
       - key: OPENAI_MAX_CONCURRENCY
         value: "4"
 
-      # --- Binance endpoints ---
+      # --- Binance Endpoints ---
       - key: BINANCE_SPOT_HTTP_BASE
         value: "https://api.binance.com"
       - key: BINANCE_FUTURES_HTTP_BASE
@@ -93,11 +85,12 @@ services:
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # --- Egress IP helper (לא חובה) ---
+      # --- Egress IP helper ---
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
         value: ""
+
 
 
 
