@@ -15,38 +15,26 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from utils.metrics import metrics_tracker
 
-# =========================
-# Config / ENV
-# =========================
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 
-# =========================
-# Logging
-# =========================
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("algogpt")
 
-# =========================
-# Routers (required)
-# =========================
-from routes.ai import router as ai_router            # /ai/*
-from routes.trade import router as trade_router      # /trade/*
+from routes.ai import router as ai_router
+from routes.trade import router as trade_router
 
-# =========================
-# Routers (optional / defensive import)
-# =========================
 backtest_router: Optional[object] = None
 scan_router: Optional[object] = None
 ai_analyze_router: Optional[object] = None
 ai_health_router: Optional[object] = None
 health_router: Optional[object] = None
 dashboard_router: Optional[object] = None
-price_router: Optional[object] = None  # /price, /price/{symbol}
+price_router: Optional[object] = None
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
     try:
@@ -57,31 +45,23 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         return None
 
 backtest_router   = _try_import("routes.backtest")
-scan_router       = _try_import("routes.scan")          # /scan, /scan/multi
-ai_analyze_router = _try_import("routes.ai_analyze")    # /ai-analyze
-ai_health_router  = _try_import("routes.ai_health")     # /ai/health
-# health_full עדיף; אם לא קיים – ננסה health
+scan_router       = _try_import("routes.scan")
+ai_analyze_router = _try_import("routes.ai_analyze")
+ai_health_router  = _try_import("routes.ai_health")
 health_router     = _try_import("routes.health_full") or _try_import("routes.health")
-dashboard_router  = _try_import("routes.dashboard")     # /dashboard
-price_router      = _try_import("routes.price")         # /price, /price/{symbol}
+dashboard_router  = _try_import("routes.dashboard")
+price_router      = _try_import("routes.price")
 
-# =========================
-# App
-# =========================
 app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ל־Binance Futures",
     version=APP_VERSION,
 )
 
-# =========================
-# CORS
-# =========================
 if CORS_ALLOW_ORIGINS == "*":
     allow_origins: List[str] = ["*"]
 else:
     allow_origins = [o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -89,17 +69,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# Static mounts (optional)
-# =========================
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# =========================
-# Metrics middleware
-# =========================
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
@@ -110,7 +84,6 @@ async def _metrics_middleware(request: Request, call_next):
         return response
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
-        # נוסיף מעט קונטקסט למטריקות
         try:
             metrics_tracker.observe_request(
                 status_code=status_code,
@@ -119,27 +92,18 @@ async def _metrics_middleware(request: Request, call_next):
                 path=request.url.path,
             )
         except TypeError:
-            # תאימות לאחור אם observe_request הישן לא מקבל method/path
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
-# =========================
-# Error handlers
-# =========================
-# חשוב: לא לבלוע HTTPException – להחזיר כמו שהוא
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-# שאר החריגות → 500
 @app.exception_handler(Exception)
 async def _unhandled_exc_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error")
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-# =========================
-# Health / Metrics
-# =========================
 @app.get("/", operation_id="getRootStatus", tags=["Config"])
 def root():
     return {"status": "ok", "version": app.version}
@@ -148,34 +112,31 @@ def root():
 async def get_metrics():
     return metrics_tracker.get_metrics()
 
-# =========================
-# Routers registration
-# =========================
 app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
 if ai_analyze_router:
-    app.include_router(ai_analyze_router, tags=["AI"])   # /ai-analyze
+    app.include_router(ai_analyze_router, tags=["AI"])
 else:
     logger.warning("AI Analyze route is not loaded (import failed).")
 
 if ai_health_router:
-    app.include_router(ai_health_router, tags=["AI"])    # /ai/health
+    app.include_router(ai_health_router, tags=["AI"])
 else:
     logger.warning("AI Health route is not loaded (import failed).")
 
 if scan_router:
-    app.include_router(scan_router, tags=["Scan"])       # /scan, /scan/multi
+    app.include_router(scan_router, tags=["Scan"])  # /scan, /scan-info, /scan/multi
 else:
     logger.warning("Scan routes are not loaded (import failed).")
 
 if backtest_router:
-    app.include_router(backtest_router, tags=["Backtest"])  # /backtest
+    app.include_router(backtest_router, tags=["Backtest"])
 else:
     logger.warning("Backtest routes are not loaded (import failed).")
 
 if dashboard_router:
-    app.include_router(dashboard_router, tags=["Dashboard"])  # /dashboard
+    app.include_router(dashboard_router, tags=["Dashboard"])
 else:
     logger.warning("Dashboard route is not loaded (import failed).")
 
@@ -185,25 +146,18 @@ else:
     logger.warning("Health routes are not loaded (import failed).")
 
 if price_router:
-    app.include_router(price_router, tags=["Price"])  # /price, /price/{symbol}
+    app.include_router(price_router, tags=["Price"])
 else:
     logger.warning("Price route is not loaded (import failed).")
 
-# =========================
-# Lifecycle
-# =========================
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
 
-# אופציונלי: אם יש לך לקוחות HTTP/WS – סגור אותם כאן
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
 
-# =========================
-# Dev run
-# =========================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
