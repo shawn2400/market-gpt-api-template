@@ -1,58 +1,71 @@
 import os
-import logging
 import openai
-from typing import Tuple, Optional
+import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 logger = logging.getLogger(__name__)
 
-async def analyze_with_ai(symbol: str, rsi: float, adx: float, trend: str, pattern: str, volume: float) -> str:
-    prompt = (
-        f"Analyze the following crypto setup and decide whether it's a good LONG or SHORT opportunity.\n\n"
-        f"Symbol: {symbol}\n"
-        f"RSI: {rsi}\n"
-        f"ADX: {adx}\n"
-        f"Trend: {trend}\n"
-        f"Pattern: {pattern}\n"
-        f"Volume: {volume}\n\n"
-        f"Return a short summary and a recommendation: LONG or SHORT."
-    )
+# 🧠 ניתוח GPT של סימבול
+async def analyze_with_ai(indicators: dict) -> dict:
     try:
-        response = await openai.ChatCompletion.acreate(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=150,
+        prompt = (
+            "Based on the following technical indicators, provide a trading recommendation "
+            "(LONG/SHORT/NEUTRAL), with a confidence score (0-100), and a 1-line explanation.\n\n"
+            f"RSI: {indicators.get('rsi')}\n"
+            f"ADX: {indicators.get('adx')}\n"
+            f"Trend: {indicators.get('trend')}\n"
+            f"Pattern: {indicators.get('pattern')}\n"
+            f"Volume: {indicators.get('volume')}\n\n"
+            "Respond in this JSON format only:\n"
+            '{"direction": "LONG", "confidence": 92, "note": "RSI rising, ADX strong"}'
         )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"AI analysis failed: {e}")
-        return "AI analysis unavailable."
 
-async def predict_optimal_sl_tp(symbol: str, direction: str, entry: float) -> Tuple[float, float]:
-    prompt = (
-        f"You are a crypto trading assistant. Given the symbol {symbol}, direction {direction}, "
-        f"and entry price {entry}, calculate the optimal Stop Loss and Take Profit levels. "
-        f"Use technical knowledge. Return ONLY two numbers: sl,tp"
-    )
-    try:
         response = await openai.ChatCompletion.acreate(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=30,
+            temperature=0.3,
+            max_tokens=100
         )
-        content = response.choices[0].message.content.strip()
-        if "," in content:
-            sl_str, tp_str = content.split(",", 1)
-            return float(sl_str), float(tp_str)
-        else:
-            raise ValueError("Invalid format from AI.")
+
+        content = response.choices[0].message.content
+        return eval(content) if isinstance(content, str) else content
+
     except Exception as e:
-        logger.warning(f"SL/TP AI fallback triggered: {e}")
-        sl = round(entry * 0.985, 4) if direction == "LONG" else round(entry * 1.015, 4)
-        tp = round(entry * 1.03, 4) if direction == "LONG" else round(entry * 0.97, 4)
+        logger.error(f"[AI Analysis] GPT Error: {e}")
+        return {"direction": "NEUTRAL", "confidence": 50, "note": "Fallback – AI unavailable"}
+
+# 🤖 חיזוי SL/TP לפי נתוני טרייד
+async def predict_optimal_sl_tp(symbol: str, direction: str, entry: float) -> tuple:
+    try:
+        prompt = (
+            f"Suggest Stop Loss (SL) and Take Profit (TP) for a {direction} trade on {symbol}.\n"
+            f"Entry Price: {entry}\n"
+            f"Assume Binance Futures, high volatility. Use this format:\n"
+            '{"sl": 123.45, "tp": 145.67}'
+        )
+
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            max_tokens=100
+        )
+
+        content = response.choices[0].message.content
+        result = eval(content) if isinstance(content, str) else content
+        return result.get("sl"), result.get("tp")
+
+    except Exception as e:
+        logger.warning(f"[SLTP AI] Failed to predict: {e}")
+        # fallback: ±1.5% מהכניסה
+        delta = entry * 0.015
+        sl = round(entry - delta, 2) if direction == "LONG" else round(entry + delta, 2)
+        tp = round(entry + 2 * delta, 2) if direction == "LONG" else round(entry - 2 * delta, 2)
         return sl, tp
+
 
 
 
