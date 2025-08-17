@@ -48,16 +48,12 @@ components:
       properties:
         boot_ts:
           type: integer
-          example: 1723880000
         uptime_sec:
           type: integer
-          example: 3600
         requests:
           type: integer
-          example: 128
         errors:
           type: integer
-          example: 1
 
     AiHealthResponse:
       type: object
@@ -69,13 +65,11 @@ components:
           type:
             - string
             - "null"
-          example: gpt-4o
         latency_ms:
           type:
             - number
             - "null"
           format: float
-          example: 123.0
         error:
           type:
             - string
@@ -203,7 +197,6 @@ components:
       type: object
       properties:
         timestamp:
-          description: ISO8601 if available
           type:
             - string
             - "null"
@@ -366,7 +359,6 @@ paths:
                   type:
                     - number
                     - "null"
-                  example: 350
       responses:
         '200':
           description: ok
@@ -434,6 +426,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
 
 
 
