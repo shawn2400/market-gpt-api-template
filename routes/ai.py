@@ -1,16 +1,13 @@
-# routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any
 from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 
 from utils.auth import require_bearer_token
-from utils.btc_anchor import evaluate_anchor, AnchorDecision  # <-- תוקן
+from utils.btc_anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 
-router = APIRouter(
-    dependencies=[Depends(require_bearer_token)],
-)
+router = APIRouter(dependencies=[Depends(require_bearer_token)])
 
 Side = Literal["LONG", "SHORT"]
 
