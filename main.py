@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
-from typing import Optional, List, Any, Dict, Tuple
+from typing import Optional, List, Any, Dict
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request
@@ -18,6 +18,9 @@ from utils.auth import require_bearer_token
 
 # --- Health routes ---
 from routes import health_full  # /health, /health/strategy-version, /health/live
+
+# --- Indicators router (FIXED PATH) ---
+from routes.routes_indicators import router as indicators_router
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
 
@@ -68,10 +71,19 @@ except Exception:
     _ai_client = None
 
 # --- Auto Executor (optional, safe fallback) ---
-AUTO_RUN = str(os.getenv("AUTO_RUN", "false")).lower() in ("1", "true", "yes", "on")
+def _parse_bool(s: str | None, default: bool = False) -> bool:
+    if s is None:
+        return default
+    return str(s).strip().lower() in ("1", "true", "yes", "on", "y")
+
+AUTO_RUN = _parse_bool(os.getenv("AUTO_RUN", "false"), False)
 _executor_loaded = False
 try:
-    from auto_executor import start_executor as _start_exec, stop_executor as _stop_exec, is_executor_running as _is_exec_running
+    from auto_executor import (
+        start_executor as _start_exec,
+        stop_executor as _stop_exec,
+        is_executor_running as _is_exec_running,
+    )
     _executor_loaded = True
 except Exception as e:
     _start_exec = _stop_exec = _is_exec_running = None
@@ -90,14 +102,9 @@ except Exception as e:
     logger.error("[LIVE] binance_trader import failed: %s", BINANCE_IMPORT_ERR)
 
 # --- Anchor config from ENV ---
-def _parse_bool(s: str | None, default: bool = False) -> bool:
-    if s is None:
-        return default
-    return str(s).strip().lower() in ("1", "true", "yes", "on", "y")
-
 ANCHOR_ENFORCE = _parse_bool(os.getenv("BTC_ANCHOR_ENFORCE", "false"), False)
 ANCHOR_STRONG_TH = int(os.getenv("BTC_ANCHOR_STRONG_TH", "70"))
-ANCHOR_WEAK_TH   = int(os.getenv("BTC_ANCHOR_WEAK_TH",   "55"))
+ANCHOR_WEAK_TH = int(os.getenv("BTC_ANCHOR_WEAK_TH", "55"))
 
 _ANCHOR_FRAMES_ENV = os.getenv("BTC_ANCHOR_FRAMES", "15m,1h")
 def _env_frames() -> List[str]:
@@ -238,8 +245,9 @@ for d in ("static", "static/reports", "static/img"):
     os.makedirs(d, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# include routes/health_full.py
+# include routes
 app.include_router(health_full.router)
+app.include_router(indicators_router)  # <— FIXED
 
 # --- Startup / Shutdown ---
 @app.on_event("startup")
@@ -453,7 +461,7 @@ async def scan_multi(
         except Exception:
             gate = {"action": "none"}
 
-        # מצב ידני: לא חוסמים לפי עוגן
+        # Manual mode: do not hard-block on anchor unless enforced
         if ANCHOR_ENFORCE and gate.get("action") == "block":
             continue
 
@@ -665,7 +673,7 @@ async def trade_live(req: LiveTradeRequest):
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
-    # ידני: לא חוסמים עם העוגן, רק מידע
+    # Optional block on anchor if enforced
     if ANCHOR_ENFORCE:
         anchor = await compute_btc_anchor(frames=_env_frames(), market="futures")
         gate = anchor_gate(req.side, anchor, strong_th=ANCHOR_STRONG_TH, weak_th=ANCHOR_WEAK_TH)
@@ -757,6 +765,7 @@ async def debug_binance_futures(symbol: str = "BTCUSDT", place_test: bool = Fals
     if place_test:
         out["permission_ok"] = None
     return out
+
 
 
 
