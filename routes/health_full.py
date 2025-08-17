@@ -12,12 +12,10 @@ from pydantic import BaseModel, Field
 
 router = APIRouter()
 
-# --- קבועים/זמן עלייה ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
 STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", APP_VERSION)
 BOOT_TS = int(time.time())
 
-# --- מודלים להידוק OpenAPI ---
 class StrategyVersionEnvFlags(BaseModel):
     execute_trades: bool
     skip_mutations: bool
@@ -80,25 +78,11 @@ def _get_lib_versions() -> Dict[str, Optional[str]]:
 def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-# ---------------- Endpoints ----------------
-
-@router.get(
-    "/health",
-    tags=["Config"],
-    summary="Basic health",
-    operation_id="getBasicHealth",
-    response_model=BasicHealthResponse,
-)
+@router.get("/health", tags=["Config"], summary="Basic health", operation_id="getBasicHealth", response_model=BasicHealthResponse)
 async def basic_health():
     return BasicHealthResponse(status="ok", version=APP_VERSION)
 
-@router.get(
-    "/health/strategy-version",
-    tags=["Health"],
-    summary="Strategy metadata & dependency versions",
-    operation_id="getStrategyVersion",
-    response_model=StrategyVersionResponse,
-)
+@router.get("/health/strategy-version", tags=["Health"], summary="Strategy metadata & dependency versions", operation_id="getStrategyVersion", response_model=StrategyVersionResponse)
 async def strategy_version():
     uptime = int(time.time()) - BOOT_TS
     libs = _get_lib_versions()
@@ -121,24 +105,11 @@ async def strategy_version():
         now_utc=_now_iso_utc(),
     )
 
-@router.get(
-    "/health/live",
-    tags=["Health"],
-    summary="Liveness probe",
-    operation_id="getLiveness",
-    response_model=LiveResponse,
-)
+@router.get("/health/live", tags=["Health"], summary="Liveness probe", operation_id="getLiveness", response_model=LiveResponse)
 async def liveness():
     uptime = int(time.time()) - BOOT_TS
     return LiveResponse(status="live", uptime_sec=uptime, now_utc=_now_iso_utc())
 
-@router.get(
-    "/healthz",
-    tags=["Health"],
-    summary="Alias for health checks",
-)
-async def healthz():
-    return {"ok": True, "version": APP_VERSION}
 
 
 
