@@ -69,7 +69,6 @@ components:
           type:
             - number
             - "null"
-          format: float
         error:
           type:
             - string
@@ -123,9 +122,22 @@ components:
             - number
             - "null"
 
+    AiManualScanResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+        results:
+          $ref: '#/components/schemas/ManualScanItem'
+
     SLTP3Response:
       type: object
       properties:
+        symbol:
+          type: string
+        direction:
+          type: string
+          enum: [LONG, SHORT]
         sl:
           type: number
         tp1:
@@ -161,6 +173,11 @@ components:
           type:
             - number
             - "null"
+        atr:
+          type:
+            - number
+            - "null"
+          description: Optional ATR for SL/TP calculation
         dry_run:
           type: boolean
           default: true
@@ -175,73 +192,37 @@ components:
           type: object
           additionalProperties: true
 
-    BacktestRequest:
-      type: object
-      required: [symbol]
-      properties:
-        symbol:
-          type: string
-          example: BTCUSDT
-        timeframe:
-          type: string
-          enum: [5m, 15m, 1h, 4h]
-          default: 15m
-        limit:
-          type: integer
-          default: 200
-        slippage_pct:
-          type: number
-          default: 0.1
-
     BacktestTrade:
       type: object
       properties:
         timestamp:
-          type:
-            - string
-            - "null"
-        signal:
+          type: integer
+          description: epoch seconds
+        price:
+            type: number
+        side:
           type: string
           enum: [LONG, SHORT]
-        entry:
-          type: number
-        stop:
-          type: number
-        tp:
-          type: number
-        exit:
-          type: number
-        rrr:
-          type: number
         pnl:
           type: number
-        success:
-          type: boolean
-        quality_score:
-          type: number
 
-    BacktestPayload:
+    BacktestResult:
       type: object
       properties:
         symbol:
           type: string
         timeframe:
           type: string
-        count:
-          type: integer
         trades:
           type: array
           items:
             $ref: '#/components/schemas/BacktestTrade'
-
-    BacktestResponse:
-      type: object
-      properties:
-        status:
-          type: string
-          example: ok
-        backtest:
-          $ref: '#/components/schemas/BacktestPayload'
+        win_rate:
+          type: number
+        total_pnl:
+          type: number
+        count:
+          type: integer
 
 paths:
   /:
@@ -316,14 +297,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  symbol:
-                    type: string
-                  results:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ManualScanItem'
+                $ref: '#/components/schemas/AiManualScanResponse'
         '401':
           description: unauthorized
           content:
@@ -412,20 +386,35 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BacktestRequest'
+              type: object
+              properties:
+                symbol:
+                  type: string
+                  example: BTCUSDT
+                timeframe:
+                  type: string
+                  enum: [5m, 15m, 1h, 4h]
+                  default: 15m
+                limit:
+                  type: integer
+                  default: 200
+                slippage_pct:
+                  type: number
+                  default: 0.1
       responses:
         '200':
           description: ok
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BacktestResponse'
+                $ref: '#/components/schemas/BacktestResult'
         '401':
           description: unauthorized
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
 
 
 
