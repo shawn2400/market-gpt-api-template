@@ -10,14 +10,12 @@ from utils.binance_client import get_client, retry_call, futures_exchange_info_s
 
 EXECUTE_TRADES = bool(getattr(config, "EXECUTE_TRADES", False))
 BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV = str(
-    getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
-            os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))
+    getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS", os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))
 ).lower() in ("1", "true", "yes", "y", "on")
 SKIP_MUTATIONS = (not EXECUTE_TRADES) or BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV
 
-FORCE_HEDGE   = (str(getattr(config, "BINANCE_FORCE_HEDGE_MODE",
-                              os.getenv("BINANCE_FORCE_HEDGE_MODE", "false"))).lower() == "true")
-MAX_LEVERAGE  = int(getattr(config, "MAX_LEVERAGE", os.getenv("MAX_LEVERAGE", "35")))
+FORCE_HEDGE = (str(getattr(config, "BINANCE_FORCE_HEDGE_MODE", os.getenv("BINANCE_FORCE_HEDGE_MODE", "false"))).lower() == "true")
+MAX_LEVERAGE = int(getattr(config, "MAX_LEVERAGE", os.getenv("MAX_LEVERAGE", "35")))
 
 getcontext().prec = 28
 
@@ -42,22 +40,18 @@ def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     return (value // step) * step
 
 def _fmt_decimal(x: Decimal, precision: Optional[int]) -> str:
-    if precision is None or precision < 0:
-        q = Decimal("0.0000000001")
-    else:
-        q = Decimal(1).scaleb(-precision)
+    q = Decimal(1).scaleb(-precision) if (precision is not None and precision >= 0) else Decimal("0.0000000001")
     return format(x.quantize(q, rounding=ROUND_DOWN).normalize(), 'f')
 
-def _apply_price_tick(price: float, tick: float, price_precision: Optional[int]) -> Tuple[Decimal, str]:
-    v = Decimal(str(price))
-    t = Decimal(str(tick)) if tick else Decimal("0")
+def _apply_price_tick(price: float, tick: float, precision: Optional[int]) -> Tuple[Decimal, str]:
+    v = Decimal(str(price)); t = Decimal(str(tick)) if tick else Decimal("0")
     dec = _decimal_step_round(v, t) if t > 0 else v
-    return dec, _fmt_decimal(dec, price_precision)
+    return dec, _fmt_decimal(dec, precision)
 
-def _apply_qty_step(qty: Decimal, step: float, qty_precision: Optional[int]) -> Tuple[Decimal, str]:
+def _apply_qty_step(qty: Decimal, step: float, precision: Optional[int]) -> Tuple[Decimal, str]:
     s = Decimal(str(step)) if step else Decimal("0")
     dec = _decimal_step_round(qty, s) if s > 0 else qty
-    return dec, _fmt_decimal(dec, qty_precision)
+    return dec, _fmt_decimal(dec, precision)
 
 def _read_position_mode(client) -> Optional[bool]:
     try:
@@ -75,10 +69,9 @@ def _ensure_position_mode(client, hedge: bool) -> bool:
             return False
         if cur != hedge:
             if SKIP_MUTATIONS:
-                logging.warning("[TRADER] hedge mode mismatch (cur=%s, want=%s) but mutations disabled.", cur, hedge)
+                logging.warning("[TRADER] hedge mode mismatch but mutations disabled.")
                 return False
-            resp = retry_call(lambda: client.futures_change_position_mode(dualSidePosition=hedge),
-                              "futures_change_position_mode")
+            resp = retry_call(lambda: client.futures_change_position_mode(dualSidePosition=hedge), "futures_change_position_mode")
             logging.info("[TRADER] position_mode set -> hedge=%s | resp=%s", hedge, resp)
         return True
     except Exception as e:
@@ -91,8 +84,7 @@ def _set_leverage(client, symbol: str, leverage: int) -> bool:
         if SKIP_MUTATIONS:
             logging.warning("[TRADER] leverage set skipped (mutations disabled). requested=%s", lev)
             return False
-        resp = retry_call(lambda: client.futures_change_leverage(symbol=symbol.upper(), leverage=lev),
-                          f"change_leverage({symbol})")
+        resp = retry_call(lambda: client.futures_change_leverage(symbol=symbol.upper(), leverage=lev), f"change_leverage({symbol})")
         logging.info("[TRADER] leverage set %s -> %s", symbol, resp)
         return True
     except Exception as e:
@@ -125,7 +117,7 @@ def _place_stop_like(client, symbol: str, direction: str, stop_price_s: str, lim
     params = dict(
         symbol=symbol.upper(),
         side=_exit_side_for(direction),
-        type=kind,                  # "STOP" / "TAKE_PROFIT"
+        type=kind,  # "STOP" / "TAKE_PROFIT"
         timeInForce="GTC",
         stopPrice=stop_price_s,
         price=limit_price_s,
@@ -155,9 +147,8 @@ async def binance_futures_trade(
 ) -> Dict[str, Any]:
     if market_type.lower() != "futures":
         raise ValueError("Only futures is supported in this trader")
-
     if SKIP_MUTATIONS:
-        raise RuntimeError("Mutations disabled (EXECUTE_TRADES=false or BINANCE_SKIP_ACCOUNT_MUTATIONS=true).")
+        raise RuntimeError("Mutations disabled (EXECUTE_TRADES=false או BINANCE_SKIP_ACCOUNT_MUTATIONS=true).")
 
     side = side.upper()
     if side not in ("LONG", "SHORT"):
@@ -191,15 +182,11 @@ async def binance_futures_trade(
         raise RuntimeError("invalid entry price after rounding")
 
     if side == "LONG":
-        if sl_dec >= entry_dec:
-            raise RuntimeError(f"SL must be < entry for LONG (sl={sl_dec}, entry={entry_dec})")
-        if tp_dec <= entry_dec:
-            raise RuntimeError(f"TP must be > entry for LONG (tp={tp_dec}, entry={entry_dec})")
+        if sl_dec >= entry_dec: raise RuntimeError(f"SL must be < entry for LONG (sl={sl_dec}, entry={entry_dec})")
+        if tp_dec <= entry_dec: raise RuntimeError(f"TP must be > entry for LONG (tp={tp_dec}, entry={entry_dec})")
     else:
-        if sl_dec <= entry_dec:
-            raise RuntimeError(f"SL must be > entry for SHORT (sl={sl_dec}, entry={entry_dec})")
-        if tp_dec >= entry_dec:
-            raise RuntimeError(f"TP must be < entry for SHORT (tp={tp_dec}, entry={entry_dec})")
+        if sl_dec <= entry_dec: raise RuntimeError(f"SL must be > entry for SHORT (sl={sl_dec}, entry={entry_dec})")
+        if tp_dec >= entry_dec: raise RuntimeError(f"TP must be < entry for SHORT (tp={tp_dec}, entry={entry_dec})")
 
     if quantity is None:
         raw_qty = (Decimal(str(budget)) * Decimal(str(lev))) / entry_dec
@@ -207,13 +194,11 @@ async def binance_futures_trade(
         raw_qty = Decimal(str(quantity))
 
     qty_dec, qty_s = _apply_qty_step(raw_qty, float(step_size), qty_precision)
-
     if qty_dec < min_qty or qty_dec <= 0:
         min_budget = (min_qty * entry_dec) / Decimal(str(lev))
         raise RuntimeError(
             f"quantity too small after rounding: {qty_dec} < minQty {min_qty}. "
-            f"Try budget ≥ {min_budget.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} "
-            f"(at leverage={lev}) or increase leverage (≤ MAX_LEVERAGE={MAX_LEVERAGE})."
+            f"Try budget ≥ {min_budget.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} (lev={lev})."
         )
 
     notional = (qty_dec * entry_dec)
@@ -221,8 +206,7 @@ async def binance_futures_trade(
         min_budget_notional = (min_notional / Decimal(str(lev)))
         raise RuntimeError(
             f"notional too small: qty*entry={notional} < minNotional={min_notional}. "
-            f"Try budget ≥ {min_budget_notional.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} "
-            f"(at leverage={lev})."
+            f"Try budget ≥ {min_budget_notional.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)} (lev={lev})."
         )
 
     position_side: Optional[str] = None
@@ -237,30 +221,20 @@ async def binance_futures_trade(
     await asyncio.to_thread(_set_leverage, client, symbol, lev)
 
     base_cid = f"{cid_prefix}:{symbol.upper()}:{side}:{int(entry_dec*1000)}"
-    entry_cid = f"{base_cid}:E"
-    sl_cid    = f"{base_cid}:SL"
-    tp_cid    = f"{base_cid}:TP"
+    entry_cid = f"{base_cid}:E"; sl_cid = f"{base_cid}:SL"; tp_cid = f"{base_cid}:TP"
 
-    logging.info(
-        "[TRADER] %s %s | entry=%s sl=%s tp=%s | qty=%s | tick=%s step=%s minQty=%s minNotional=%s | lev=%s budget=%s notional=%s",
-        symbol.upper(), side, entry_s, sl_s, tp_s, qty_s, tick_size, step_size, min_qty, min_notional, lev, budget, notional
-    )
+    logging.info("[TRADER] %s %s | entry=%s sl=%s tp=%s | qty=%s | lev=%s budget=%s notional=%s",
+                 symbol.upper(), side, entry_s, sl_s, tp_s, qty_s, lev, budget, notional)
 
-    entry_resp = await asyncio.to_thread(
-        _place_limit_entry, client, symbol, side, entry_s, qty_s, position_side, entry_cid
-    )
+    entry_resp = await asyncio.to_thread(_place_limit_entry, client, symbol, side, entry_s, qty_s, position_side, entry_cid)
     if not entry_resp or not isinstance(entry_resp, dict) or "orderId" not in entry_resp:
         raise RuntimeError(f"Failed to place entry LIMIT: {entry_resp}")
 
-    sl_resp = await asyncio.to_thread(
-        _place_stop_like, client, symbol, side, sl_s, sl_s, qty_s, "STOP", position_side, sl_cid
-    )
+    sl_resp = await asyncio.to_thread(_place_stop_like, client, symbol, side, sl_s, sl_s, qty_s, "STOP", position_side, sl_cid)
     if not sl_resp or not isinstance(sl_resp, dict) or "orderId" not in sl_resp:
         raise RuntimeError(f"Failed to place STOP (SL): {sl_resp}")
 
-    tp_resp = await asyncio.to_thread(
-        _place_stop_like, client, symbol, side, tp_s, tp_s, qty_s, "TAKE_PROFIT", position_side, tp_cid
-    )
+    tp_resp = await asyncio.to_thread(_place_stop_like, client, symbol, side, tp_s, tp_s, qty_s, "TAKE_PROFIT", position_side, tp_cid)
     if not tp_resp or not isinstance(tp_resp, dict) or "orderId" not in tp_resp:
         raise RuntimeError(f"Failed to place TAKE_PROFIT (TP): {tp_resp}")
 
@@ -275,21 +249,16 @@ async def binance_futures_trade(
         "positionSide": position_side,
         "orders": {"entry": entry_resp, "sl": sl_resp, "tp": tp_resp},
         "notional": float(notional),
-        "tickSize": float(tick_size),
-        "stepSize": float(step_size),
-        "minQty": float(min_qty),
-        "minNotional": float(min_notional),
     }
 
-# --------------------------------------------------------------------
 # Grid dry-run shim
-# --------------------------------------------------------------------
 async def binance_grid_trade(plan: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "mode": "dry_run",
-        "reason": "grid executor not implemented in this module",
-        "echo_plan": plan,
-    }
+    return {"mode": "dry_run", "reason": "grid executor not implemented in this module", "echo_plan": plan}
+
+# Spot stub כדי למנוע אזהרת import
+async def binance_spot_trade(*args, **kwargs):
+    return {"mode": "dry_run", "reason": "spot trade stub", "args": args, "kwargs": kwargs}
+
 
 
 
