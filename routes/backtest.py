@@ -1,10 +1,10 @@
-# routes/backtest.py
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Literal
+
 from utils.auth import require_bearer_token
-from utils.backtest_utils import run_backtest_for_symbol
 from utils.metrics import metrics_tracker
+from utils.backtest_utils import run_backtest_for_symbol
 
 router = APIRouter()
 
@@ -14,8 +14,16 @@ class BacktestRequest(BaseModel):
     limit: int = 200
     slippage_pct: float = 0.1
 
-@router.post("/backtest", tags=["Backtest"], dependencies=[Depends(require_bearer_token)])
-async def backtest(req: BacktestRequest):
+@router.post(
+    "/backtest",
+    tags=["Backtest"],
+    operation_id="postBacktestRun",
+    summary="Run strategy backtest for a symbol",
+)
+async def backtest(
+    req: BacktestRequest,
+    _: None = Depends(require_bearer_token),
+):
     try:
         result = await run_backtest_for_symbol(
             symbol=req.symbol,
@@ -23,11 +31,11 @@ async def backtest(req: BacktestRequest):
             limit=req.limit,
             slippage_pct=req.slippage_pct,
         )
-        # שומרים את מבנה התגובה כפי שהיה אצלך (status + backtest)
-        return {"status": "ok", "backtest": result}
+        return result  # כבר בפורמט BacktestResult
     except Exception as e:
         metrics_tracker.record_error()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
