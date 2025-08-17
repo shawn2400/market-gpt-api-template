@@ -1,37 +1,62 @@
 # utils/decision_engine.py
 from __future__ import annotations
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
+import math
 
-def pick_best_trades(candidates: List[Dict[str, Any]], top_n: int = 5, diversify_by_symbol: bool = True) -> Dict[str, Any]:
-    """
-    ניקוד רב-קריטריוני:
-      base = 0.55*quality + 0.20*success + 0.10*(1 - corr_pen) + 0.15*speed_bonus
-      corr_pen = max(0, |corr_to_btc| - 0.7) / 0.3  (מעבר ל-0.7 מקבלים קנס עד 1)
-      speed_bonus = clamp( (180 - eta)/180, 0..1 )  (ETA קצר יותר = עדיפות)
-    """
-    def _clamp(x, a, b): return max(a, min(b, x))
-    scored = []
+def _sym_bucket(sym: str) -> str:
+    # דוגמה: "ETHUSDT" → "ETH"
+    s = (sym or "").upper()
+    for suf in ("USDT","USD","BUSD","USDC","PERP"):
+        if s.endswith(suf):
+            return s[:-len(suf)]
+    return s
+
+def _score_row(c: Dict[str, Any]) -> float:
+    qs  = float(c.get("quality_score") or 0.0)  # 0..10
+    sp  = float(c.get("success_pct") or 50.0)   # 0..100
+    vol = float(c.get("volatility") or 0.0)     # (נורמליזציה להלן)
+    eta = c.get("eta_minutes")
+    corr= c.get("corr_to_btc")
+    # נרמל
+    sp01 = max(0.0, min(1.0, sp/100.0))
+    vol01= max(0.0, min(1.0, vol/100.0))  # בהנחה שנתון באחוזי תנודתיות
+    eta01= 0.5
+    if isinstance(eta, (int,float)) and eta>0:
+        # מהיר יותר → ציון גבוה יותר
+        eta01 = max(0.0, min(1.0, 1.0 / math.log10(eta + 9.0)))
+    corr01= 0.5
+    if isinstance(corr, (int,float)):
+        corr01 = max(0.0, min(1.0, 1.0 - abs(corr)))  # העדפה לקורלציה נמוכה עם BTC לצורך גיוון
+
+    # שקלול
+    score = (0.40 * (qs/10.0)) + (0.25 * sp01) + (0.15 * eta01) + (0.10 * vol01) + (0.10 * corr01)
+    return round(score * 100.0, 2)  # 0..100
+
+def select_best_trades(
+    candidates: List[Dict[str, Any]],
+    top_n: int = 5,
+    diversify_by_symbol: bool = True,
+) -> List[Dict[str, Any]]:
+    rows = []
     for c in candidates or []:
-        q = float(c.get("quality_score") or 0.0) / 10.0  # → 0..1
-        s = float(c.get("success_pct") or 0.0) / 100.0   # → 0..1
-        corr = abs(float(c.get("corr_to_btc") or 0.0))
-        eta = float(c.get("eta_minutes") or 120.0)
-        corr_pen = _clamp((corr - 0.7) / 0.3, 0.0, 1.0)
-        speed_bonus = _clamp((180.0 - eta) / 180.0, 0.0, 1.0)
-        score = 0.55*q + 0.20*s + 0.10*(1.0 - corr_pen) + 0.15*speed_bonus
-        scored.append({**c, "decision_score": round(score, 4)})
-    scored.sort(key=lambda x: x["decision_score"], reverse=True)
+        sc = _score_row(c)
+        rows.append({**c, "score": sc})
 
-    if diversify_by_symbol:
-        seen = set()
-        dedup = []
-        for it in scored:
-            sym = (it.get("symbol") or "").upper()
-            if sym in seen: 
-                continue
-            seen.add(sym)
-            dedup.append(it)
-        scored = dedup
+    rows.sort(key=lambda x: x["score"], reverse=True)
 
-    return {"ok": True, "selected": scored[:max(1, int(top_n))], "note": "Decision by multi-criteria score"}
+    if not diversify_by_symbol:
+        return rows[:top_n]
+
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        b = _sym_bucket(r.get("symbol",""))
+        if b in seen:
+            continue
+        seen.add(b)
+        out.append(r)
+        if len(out) >= top_n:
+            break
+    return out
+
 
