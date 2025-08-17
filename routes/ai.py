@@ -1,127 +1,67 @@
-# routes/trade.py
+# routes/ai.py (הוסף/עדכן את הקובץ כדי לכלול את ה-endpoint הזה)
 from __future__ import annotations
-
-import logging
-from typing import Optional, Literal
-
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional, Literal, Dict, Any
+from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
-
 from utils.auth import require_bearer_token
-from utils.sl_tp_utils import calculate_sl_tp
-from utils.binance_trader import binance_futures_trade
+from utils.anchor import evaluate_anchor, AnchorDecision
+from utils.quality import compute_quality
 
-logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(
+    dependencies=[Depends(require_bearer_token)],
+)
 
-SideLiteral = Literal["LONG", "SHORT"]
+Side = Literal["LONG", "SHORT"]
 
-class SLTPRequest(BaseModel):
+class QualityRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
-    direction: SideLiteral
-    entry: float = Field(..., gt=0, example=65000)
-    atr: Optional[float] = Field(None, gt=0)
-
-class SLTP3Response(BaseModel):
-    symbol: str
-    direction: SideLiteral
-    sl: float
-    tp1: float
-    tp2: float
-
-class TradeExecuteRequest(BaseModel):
-    symbol: str = Field(..., example="BTCUSDT")
-    side: SideLiteral
-    budget: float = Field(..., gt=0, example=100)
-    leverage: int = Field(..., ge=1, le=125, example=10)
+    side: Side
     entry: Optional[float] = Field(None, gt=0)
     sl: Optional[float] = Field(None, gt=0)
     tp: Optional[float] = Field(None, gt=0)
-    atr: Optional[float] = Field(None, gt=0, description="Optional ATR for SL/TP calculation")
-    dry_run: bool = Field(True, description="By default we simulate only")
+    leverage: int = Field(10, ge=1, le=125)
+    budget: float = Field(100.0, gt=0)
+    atr: Optional[float] = Field(None, gt=0)
 
-class TradeExecuteResponse(BaseModel):
-    status: str = "ok"
-    result: dict
+class QualityResponse(BaseModel):
+    quality_score: float
+    success_pct: float
+    anchor: Dict[str, Any]
+    components: Dict[str, Any]
 
-@router.post(
-    "/sltp",
-    tags=["Trades"],
-    operation_id="postTradeSltp",
-    dependencies=[Depends(require_bearer_token)],
-    response_model=SLTP3Response,
-)
-async def post_sltp(payload: SLTPRequest):
-    sl, tp = calculate_sl_tp(entry_price=payload.entry, direction=payload.direction, atr=payload.atr)
-    # tp2: הרחבה מתונה של היעד הראשון (40%)
-    if payload.direction == "LONG":
-        tp2 = round(tp + (tp - payload.entry) * 0.4, 6)
-    else:
-        tp2 = round(tp - (payload.entry - tp) * 0.4, 6)
+async def _anchor_dep(payload: QualityRequest = Body(...)) -> AnchorDecision:
+    return evaluate_anchor(payload.side)
 
-    return SLTP3Response(
-        symbol=payload.symbol.upper(),
-        direction=payload.direction,
-        sl=sl,
-        tp1=tp,
-        tp2=tp2,
+@router.post("/quality", response_model=QualityResponse, operation_id="postAiQuality")
+async def post_ai_quality(
+    payload: QualityRequest = Body(...),
+    anchor: AnchorDecision = Depends(_anchor_dep),
+) -> QualityResponse:
+    q = compute_quality(
+        symbol=payload.symbol,
+        side=payload.side,
+        entry=payload.entry,
+        sl=payload.sl,
+        tp=payload.tp,
+        leverage=payload.leverage,
+        budget=payload.budget,
+        anchor=anchor,
+        atr=payload.atr,
+    )
+    return QualityResponse(
+        quality_score=q["quality_score"],
+        success_pct=q["success_pct"],
+        components=q["components"],
+        anchor={
+            "mode_requested": anchor.mode_requested,
+            "mode_applied": anchor.mode_applied,
+            "bias": anchor.bias,
+            "score": anchor.score,
+            "severity": anchor.severity,
+            "reason": anchor.reason,
+        },
     )
 
-@router.post(
-    "/execute",
-    tags=["Trades"],
-    operation_id="postTradeExecute",
-    dependencies=[Depends(require_bearer_token)],
-    response_model=TradeExecuteResponse,
-)
-async def post_execute(payload: TradeExecuteRequest):
-    symbol = payload.symbol.upper()
-    side = payload.side
-    entry = payload.entry
-    sl = payload.sl
-    tp = payload.tp
-
-    # חישוב אוטומטי אם חסר
-    if entry is None or sl is None or tp is None:
-        if entry is None:
-            raise HTTPException(status_code=400, detail="entry is required when auto-calculating SL/TP")
-        sl_auto, tp_auto = calculate_sl_tp(entry_price=entry, direction=side, atr=payload.atr)
-        sl = sl if sl is not None else sl_auto
-        tp = tp if tp is not None else tp_auto
-
-    # Dry-run
-    if payload.dry_run:
-        result = {
-            "dry_run": True,
-            "symbol": symbol,
-            "side": side,
-            "entry": entry,
-            "sl": sl,
-            "tp": tp,
-            "budget": payload.budget,
-            "leverage": payload.leverage,
-            "note": "No orders sent (dry_run=true).",
-        }
-        return TradeExecuteResponse(status="ok", result=result)
-
-    # Live
-    try:
-        trade_result = await binance_futures_trade(
-            symbol=symbol,
-            side=side,
-            entry=float(entry),
-            sl=float(sl),
-            tp=float(tp),
-            leverage=int(payload.leverage),
-            budget=float(payload.budget),
-            quantity=None,
-            market_type="futures",
-            cid_prefix="algogpt",
-        )
-        return TradeExecuteResponse(status="ok", result=trade_result)
-    except Exception as e:
-        logger.exception("Trade execution failed")
-        raise HTTPException(status_code=400, detail=f"trade failed: {e}")
 
 
 
