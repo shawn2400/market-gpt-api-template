@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+from fastapi.staticfiles import StaticFiles
 import os
 
 from routes.trade import router as trade_router
@@ -12,7 +12,7 @@ app = FastAPI(
     version=os.getenv("ALGOGPT_VERSION", "1.0.0")
 )
 
-# 🌐 CORS
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,18 +20,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔍 Health Check
+# Static files (ל־plugin של ChatGPT)
+if os.path.isdir(".well-known"):
+    app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static")
+
 @app.get("/")
 def root():
     return {"status": "ok", "version": app.version}
 
-# 📦 Include Routers
+# Routes
 app.include_router(trade_router, prefix="/trade")
 app.include_router(ai_router, prefix="/ai")
 
-# 🚀 Uvicorn Execution (not used on Render/Railway usually)
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+
 
 
 
