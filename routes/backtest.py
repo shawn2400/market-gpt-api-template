@@ -30,3 +30,4 @@ async def backtest(
         metrics_tracker.record_error()
         raise HTTPException(status_code=500, detail=str(e))
 
+
