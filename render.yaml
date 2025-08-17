@@ -3,13 +3,23 @@ services:
     name: algogpt-docker
     env: docker
     plan: starter
-    autoDeploy: true
-    healthCheckPath: /     # 🔁 שים לב: תואם ל-main.py ששלחתי (שימוש ב־@app.get("/"))
 
+    # עצירת פריסות אוטומטיות עד שנאתר את הטריגר החיצוני
+    autoDeploy: false
+    pullRequestPreviewsEnabled: false
+
+    # בריאות – שומר על 200 מהיר
+    healthCheckPath: /
+
+    # פורט ריצה (האפליקציה מאזינה ל-$PORT בתוך הקונטיינר)
     envVars:
+      - key: PORT
+        value: "10000"
+
       - key: API_BEARER_TOKEN
         sync: false
 
+      # --- App Flags ---
       - key: AUTO_RUN
         value: "false"
       - key: SCAN_INTERVAL
@@ -41,7 +51,7 @@ services:
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
-      # --- Binance (אל תכניס כאן ערכים אמיתיים!) ---
+      # --- Binance (שים ערכים רק דרך ה־Dashboard/Secrets) ---
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -85,11 +95,17 @@ services:
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # --- Egress IP helper ---
+      # --- Egress IP helper (אופציונלי) ---
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
         value: ""
+
+    # דיסק קטן ל־/tmp (אופציונלי; טוב ללוגים/קבצים זמניים)
+    disk:
+      name: tmp
+      mountPath: /tmp
+      sizeGB: 1
 
 
 
