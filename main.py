@@ -13,32 +13,33 @@ from starlette.responses import Response
 
 from utils.metrics import metrics_tracker
 
-# --- Config / ENV (מוקדם כדי שלוג יעבוד גם בזמן import) ---
+# --- Config / ENV ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 
-# --- Logging מוקדם ---
+# --- Logging ---
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("algogpt")
 
-# --- Routers עיקריים (אמורים להתקיים) ---
+# --- Core routers (must exist) ---
 from routes.ai import router as ai_router            # /ai/*
 from routes.trade import router as trade_router      # /trade/*
 
-# --- אופציונליים: backtest / scan / ai-analyze / dashboard (לא מפילים שרת אם חסרים) ---
+# --- Optional routers: will not crash the app if missing ---
 backtest_router: Optional[object] = None
 scan_router: Optional[object] = None
 ai_analyze_router: Optional[object] = None
 dashboard_router: Optional[object] = None
+ai_health_router: Optional[object] = None
 
 try:
     from routes.backtest import router as backtest_router  # type: ignore
 except Exception as _bt_exc:
-    logger.warning("Backtest router disabled: %s", _bt_exc)
+    logger.warning("Backtest router not loaded: %s", _bt_exc)
 
 try:
     from routes.scan import router as scan_router  # /scan, /scan/multi
@@ -51,9 +52,14 @@ except Exception as _aia_exc:
     logger.warning("AI Analyze router not loaded: %s", _aia_exc)
 
 try:
-    from routes.dashboard import router as dashboard_router  # /dashboard
+    from routes.dashboard import router as dashboard_router  # /dashboard (HTML)
 except Exception as _dash_exc:
     logger.warning("Dashboard router not loaded: %s", _dash_exc)
+
+try:
+    from routes.health import router as ai_health_router  # /ai/health
+except Exception as _h_exc:
+    logger.warning("AI Health router not loaded: %s", _h_exc)
 
 # --- App ---
 app = FastAPI(
@@ -112,30 +118,33 @@ async def get_metrics():
     return metrics_tracker.get_metrics()
 
 # --- Routers registration ---
-# קיימים תמיד
-app.include_router(ai_router, prefix="/ai")
-app.include_router(trade_router, prefix="/trade")
+app.include_router(ai_router, prefix="/ai", tags=["AI"])
+app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
-# אופציונליים
 if backtest_router:
-    app.include_router(backtest_router)
+    app.include_router(backtest_router, tags=["Backtest"])
 else:
     logger.warning("Backtest routes are not loaded (import failed).")
 
 if scan_router:
-    app.include_router(scan_router)          # /scan, /scan/multi
+    app.include_router(scan_router, tags=["Scan"])          # /scan, /scan/multi
 else:
     logger.warning("Scan routes are not loaded (import failed).")
 
 if ai_analyze_router:
-    app.include_router(ai_analyze_router)    # /ai-analyze
+    app.include_router(ai_analyze_router, tags=["AI"])      # /ai-analyze
 else:
     logger.warning("AI Analyze route is not loaded (import failed).")
 
 if dashboard_router:
-    app.include_router(dashboard_router)     # /dashboard
+    app.include_router(dashboard_router, tags=["Dashboard"])  # /dashboard
 else:
     logger.warning("Dashboard route is not loaded (import failed).")
+
+if ai_health_router:
+    app.include_router(ai_health_router, prefix="/ai", tags=["AI"])  # /ai/health
+else:
+    logger.warning("AI Health route is not loaded (import failed).")
 
 # --- Lifecycle ---
 @app.on_event("startup")
@@ -151,6 +160,7 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "10000")),
         log_level=LOG_LEVEL.lower(),
     )
+
 
 
 
