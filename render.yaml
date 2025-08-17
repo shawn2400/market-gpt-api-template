@@ -4,25 +4,20 @@ services:
     env: docker
     plan: starter
 
-    # עצירת פריסות אוטומטיות עד שנאתר טריגרים חיצוניים
     autoDeploy: false
     pullRequestPreviewsEnabled: false
-
-    # בדיקת בריאות מהירה (תואם ל-/ של האפליקציה)
     healthCheckPath: /
 
-    # === Environment ===
     envVars:
-      # ריצה
       - key: PORT
         value: "10000"
-      - key: WORKERS          # מאפשר לשנות worker count בלי לגעת בתמונה
+      - key: WORKERS
         value: "1"
       - key: LOG_LEVEL
         value: "INFO"
       - key: CORS_ALLOW_ORIGINS
         value: "*"
-      - key: ALGOGPT_VERSION  # אופציונלי: למעקב לוגים בין דיפלויים
+      - key: ALGOGPT_VERSION
         value: "2.14.0"
 
       # Auth
@@ -39,7 +34,7 @@ services:
       - key: DEFAULT_INTERVAL
         value: "15m"
 
-      # סינונים/ניהול סיכון
+      # Risk/filters
       - key: MIN_QUALITY_SCORE
         value: "6"
       - key: MIN_VOLUME
@@ -68,7 +63,7 @@ services:
       - key: OPENAI_MAX_CONCURRENCY
         value: "4"
 
-      # Binance Endpoints
+      # Binance endpoints
       - key: BINANCE_SPOT_HTTP_BASE
         value: "https://api.binance.com"
       - key: BINANCE_FUTURES_HTTP_BASE
@@ -90,25 +85,24 @@ services:
       - key: BINANCE_EXCHANGE_INFO_ON_START
         value: "false"
 
-      # Binance Account modes
+      # Account modes
       - key: BINANCE_FORCE_HEDGE_MODE
         value: "false"
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # Binance Secrets (מוזנים רק דרך ה-UI של Render)
+      # Secrets via UI
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
         sync: false
 
-      # Egress/IP (אופציונלי)
+      # Egress/IP (optional)
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
         value: ""
 
-    # דיסק קטן ל-/tmp (דוחות/קבצים זמניים)
     disk:
       name: tmp
       mountPath: /tmp
