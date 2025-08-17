@@ -1,61 +1,29 @@
 # utils/auth.py
 from __future__ import annotations
-import os, re
-from fastapi import HTTPException, Request, status
+import hmac, os
+from fastapi import Header, HTTPException, status
 
-# אפשר לשנות את שם משתנה הסביבה שמחזיק את הטוקן ע"י API_BEARER_ENV_KEY
-_ENV_TOKEN_KEY = os.getenv("API_BEARER_ENV_KEY", "API_BEARER_TOKEN")
+_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
 
-def _clean(s: str | None) -> str:
-    if not s:
-        return ""
-    s = re.sub(r"[\x00-\x1F\x7F]", "", s)
-    return s.strip()
+def _is_valid(token: str) -> bool:
+    # תומך בריבוי טוקנים מופרדים בפסיקים אם תרצה לגלגל הדרגתית
+    valid_tokens = [t.strip() for t in _TOKEN.split(",") if t.strip()]
+    for vt in valid_tokens:
+        if hmac.compare_digest(token, vt):
+            return True
+    return False
 
-def _get_expected_token() -> str:
-    """שליפת הטוקן מה־ENV לפי השם שב-_ENV_TOKEN_KEY."""
-    return _clean(os.getenv(_ENV_TOKEN_KEY, ""))
-
-async def require_bearer_token(request: Request) -> str:
-    """
-    FastAPI dependency:
-    - קורא Authorization: Bearer <token>
-    - משווה מול הטוקן ב־ENV (API_BEARER_TOKEN או שם אחר אם הוגדר API_BEARER_ENV_KEY)
-    - מחזיר את הטוקן אם תקין, אחרת 401
-    """
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not auth_header:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    parts = auth_header.split(" ", 1)
+async def require_bearer_token(authorization: str | None = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization header")
+    parts = authorization.split(None, 1)
     if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Authorization header format",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Authorization scheme")
+    token = parts[1].strip()
+    if not token or not _is_valid(token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    return True
 
-    presented = _clean(parts[1])
-    expected = _get_expected_token()
-    if not expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Server token not configured",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    if presented != expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return presented
-
-__all__ = ["require_bearer_token"]
 
 
 
