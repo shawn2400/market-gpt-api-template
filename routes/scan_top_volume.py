@@ -18,9 +18,8 @@ from utils.indicators_ext import enrich_ext, market_structure
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
-# TTLs מה־ENV (אפשר לכוונן בלי לגעת בקוד)
-TV_LIST_TTL    = float(os.getenv("SCAN_TOP_VOLUME_TTL", "60"))   # cache לרשימת Top Volume
-TV_KLINES_TTL  = float(os.getenv("SCAN_TOP_VOLUME_KLINES_TTL", "30"))  # cache ל־klines
+TV_LIST_TTL    = float(os.getenv("SCAN_TOP_VOLUME_TTL", "60"))
+TV_KLINES_TTL  = float(os.getenv("SCAN_TOP_VOLUME_KLINES_TTL", "30"))
 ENV_MIN_QV     = float(os.getenv("TOP_VOLUME_MIN_QV", "0"))
 
 router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
@@ -66,7 +65,6 @@ async def _scan_one(symbol: str, timeframe: str, bars: int,
                     st_period:int, st_factor:float,
                     ich_conv:int, ich_base:int, ich_span_b:int,
                     ms_lookback:int, ms_pivot_span:int) -> Dict[str, Any]:
-    # cache ל־klines לפי (symbol, timeframe, bars)
     kkey = f"kl|{symbol}|{timeframe}|{bars}"
     async def load_kl():
         return await asyncio.to_thread(_fetch_klines, symbol, timeframe, bars)
@@ -106,7 +104,7 @@ async def get_scan_top_volume(
     limit: int = Query(50, ge=1, le=200),
     timeframe: str = Query("15m"),
     bars: int = Query(200, ge=50, le=1500),
-    trending_only: bool = Query(False),
+    trending_only: bool = Query(False, description="אם true – מחזיר רק סמבולים בטרנד פעיל"),
     min_quote_volume: float | None = Query(None, ge=0.0, description="Override ENV TOP_VOLUME_MIN_QV"),
     min_adx: float = Query(20.0, ge=5.0, le=60.0),
     ema_fast: int = Query(21, ge=3, le=200),
@@ -123,7 +121,6 @@ async def get_scan_top_volume(
 ):
     eff_min_qv = ENV_MIN_QV if (min_quote_volume is None) else float(min_quote_volume)
 
-    # cache לרשימת ה־Top Volume
     list_key = f"topvol|{market}|{quote}|{limit}|{eff_min_qv}"
     async def load_syms():
         return await asyncio.to_thread(get_top_volume_symbols, market, quote, limit, eff_min_qv)
@@ -144,14 +141,16 @@ async def get_scan_top_volume(
     if trending_only:
         filtered: List[Dict[str, Any]] = []
         for r in results:
-            adx_ok = r.get("details", {}).get("adx", 0.0) >= min_adx
-            st_ok  = r.get("details", {}).get("supertrend_up", False)
-            ema_ok = r.get("details", {}).get("ema_fast", 0.0) > r.get("details", {}).get("ema_slow", 0.0)
-            ich_ok = r.get("details", {}).get("ich_bull", False)
-            if (adx_ok and (st_ok or ich_ok) and ema_ok) or (adx_ok and r.get("side") is not None):
+            det = r.get("details", {}) or {}
+            adx_ok = det.get("adx", 0.0) >= min_adx
+            st_ok  = bool(det.get("supertrend_up", False))
+            ema_ok = (det.get("ema_fast", 0.0) > det.get("ema_slow", 0.0))
+            ich_ok = bool(det.get("ich_bull", False))
+            if (adx_ok and ema_ok and (st_ok or ich_ok)) or (adx_ok and r.get("side") is not None):
                 filtered.append(r)
         results = filtered
 
     results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(results), "signals": results}
+
 
