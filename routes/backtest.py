@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Depends, Request
+# routes/backtest.py
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Literal
 from utils.auth import require_bearer_token
@@ -14,10 +15,7 @@ class BacktestRequest(BaseModel):
     slippage_pct: float = 0.1
 
 @router.post("/backtest", tags=["Backtest"])
-async def backtest(
-    req: BacktestRequest, 
-    request: Request = Depends(require_bearer_token)
-):
+async def backtest(req: BacktestRequest, _: None = Depends(require_bearer_token)):
     try:
         result = await run_backtest_for_symbol(
             symbol=req.symbol,
@@ -29,5 +27,6 @@ async def backtest(
     except Exception as e:
         metrics_tracker.record_error()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
