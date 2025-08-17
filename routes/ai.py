@@ -18,7 +18,11 @@ try:
 except Exception:
     from utils.btc_anchor import evaluate_anchor, AnchorDecision  # גיבוי
 
-from utils.quality import compute_quality
+# --- Quality (ננסה את השם ההיסטורי; אם אין, נייבא מהקובץ אצלך) ---
+try:
+    from utils.quality import compute_quality  # דרך ה-shim
+except Exception:
+    from utils.quantity_utils import compute_quality  # גיבוי ישיר
 
 router = APIRouter(
     tags=["AI"],
@@ -79,8 +83,6 @@ async def post_ai_quality(
             "reason": anchor.reason,
         },
     )
-
-
 
 
 
