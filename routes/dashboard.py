@@ -1,12 +1,10 @@
 # routes/dashboard.py
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
-router = APIRouter()
+router = APIRouter(tags=["Dashboard"])
 
-@router.get("/dashboard", response_class=HTMLResponse, operation_id="getDashboardHtml")
-async def dashboard_ui():
-    return """
+_HTML = """
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
@@ -96,7 +94,12 @@ async def dashboard_ui():
   </script>
 </body>
 </html>
-    """
+"""
+
+@router.api_route("/dashboard", methods=["GET", "HEAD"], response_class=HTMLResponse, operation_id="getDashboardHtml")
+async def dashboard_ui():
+    return Response(content=_HTML, media_type="text/html")
+
 
 
 
