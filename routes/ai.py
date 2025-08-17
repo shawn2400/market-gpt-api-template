@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 
 from utils.auth import require_bearer_token
-from utils.btc_anchor import evaluate_anchor, AnchorDecision
-from utils.quality import compute_quality
+from utils.anchor import evaluate_anchor, AnchorDecision   # ⬅️ שים לב ל-import
+from utils.quality import compute_quality                  # ⬅️ קיים ב-utils/quality.py
 
 router = APIRouter(dependencies=[Depends(require_bearer_token)])
 
