@@ -1,4 +1,3 @@
-# routes/trade.py
 from __future__ import annotations
 
 import logging
@@ -10,7 +9,7 @@ from pydantic import BaseModel, Field
 from utils.auth import require_bearer_token
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.binance_trader import binance_futures_trade
-from utils.btc_anchor import evaluate_anchor, AnchorDecision  # <-- תוקן
+from utils.btc_anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 
 logger = logging.getLogger(__name__)
@@ -21,8 +20,6 @@ router = APIRouter(
 )
 
 SideLiteral = Literal["LONG", "SHORT"]
-
-# ---------- Models ----------
 
 class SLTPRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
@@ -55,38 +52,21 @@ class TradeExecuteResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
 
-# ---------- Dependencies ----------
-
 async def _anchor_dep(payload: TradeExecuteRequest = Body(...)) -> AnchorDecision:
-    # קובע SOFT/HARD אוטומטי לפי BTC anchor
     return evaluate_anchor(payload.side)
 
-# ---------- Endpoints ----------
-
-@router.post(
-    "/sltp",
-    operation_id="postTradeSltp",
-    response_model=SLTP3Response,
-    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
-)
+@router.post("/sltp", operation_id="postTradeSltp", response_model=SLTP3Response,
+             responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}})
 async def post_sltp(payload: SLTPRequest = Body(...)) -> SLTP3Response:
     sl, tp1 = calculate_sl_tp(entry_price=payload.entry, direction=payload.direction, atr=payload.atr)
     if payload.direction == "LONG":
         tp2 = round(tp1 + (tp1 - payload.entry) * 0.4, 6)
     else:
         tp2 = round(tp1 - (payload.entry - tp1) * 0.4, 6)
-    return SLTP3Response(
-        symbol=payload.symbol.upper(),
-        direction=payload.direction,
-        sl=sl, tp1=tp1, tp2=tp2,
-    )
+    return SLTP3Response(symbol=payload.symbol.upper(), direction=payload.direction, sl=sl, tp1=tp1, tp2=tp2)
 
-@router.post(
-    "/execute",
-    operation_id="postTradeExecute",
-    response_model=TradeExecuteResponse,
-    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
-)
+@router.post("/execute", operation_id="postTradeExecute", response_model=TradeExecuteResponse,
+             responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}})
 async def post_execute(
     payload: TradeExecuteRequest = Body(...),
     anchor: AnchorDecision = Depends(_anchor_dep),
@@ -97,11 +77,9 @@ async def post_execute(
     sl = payload.sl
     tp = payload.tp
 
-    # 1) Anchor gate: HARD או הסלמה ל-HARD חוסמים
     if not anchor.allow:
         raise HTTPException(status_code=400, detail=f"blocked by BTC anchor: {anchor.reason}")
 
-    # 2) Auto-calc SL/TP אם חסר (דורש entry)
     if (sl is None or tp is None):
         if entry is None:
             raise HTTPException(status_code=400, detail="entry is required when auto-calculating SL/TP")
@@ -109,14 +87,12 @@ async def post_execute(
         sl = sl if sl is not None else sl_auto
         tp = tp if tp is not None else tp_auto
 
-    # 3) Quality scoring (תמיד מוחזר)
     quality = compute_quality(
         symbol=symbol, side=side, entry=entry, sl=sl, tp=tp,
         leverage=payload.leverage, budget=payload.budget,
         anchor=anchor, atr=payload.atr,
     )
 
-    # 4) DRY-RUN
     if payload.dry_run:
         result = {
             "dry_run": True,
@@ -141,7 +117,6 @@ async def post_execute(
         }
         return TradeExecuteResponse(status="ok", result=result)
 
-    # 5) LIVE
     try:
         trade_result = await binance_futures_trade(
             symbol=symbol,
@@ -155,7 +130,6 @@ async def post_execute(
             market_type="futures",
             cid_prefix="algogpt",
         )
-        # שילוב הנתונים ל־result
         trade_result = {
             **trade_result,
             "quality_score": quality["quality_score"],
@@ -175,6 +149,7 @@ async def post_execute(
     except Exception as e:
         logger.exception("Trade execution failed")
         raise HTTPException(status_code=400, detail=f"trade failed: {e}")
+
 
 
 
