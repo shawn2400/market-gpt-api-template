@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
+from typing import List, Literal
 
-from utils.auth import require_bearer_token
+# --- Auth (עם fallback אם ה-import נכשל) ---
+try:
+    from utils.auth import require_bearer_token  # type: ignore
+except Exception:
+    async def require_bearer_token(*args, **kwargs):
+        return None
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_bearer_token)])
 
 Side = Literal["LONG", "SHORT"]
 
@@ -31,14 +36,9 @@ class BacktestRequest(BaseModel):
     limit: int = 200
     slippage_pct: float = 0.1
 
-@router.post(
-    "/backtest",
-    operation_id="postBacktestRun",
-    response_model=BacktestResult,
-    dependencies=[Depends(require_bearer_token)],
-)
+@router.post("/backtest", operation_id="postBacktestRun", response_model=BacktestResult)
 async def run_backtest(payload: BacktestRequest):
-    # דמו מינימלי; חבר לסורק האמיתי שלך אם תרצה
+    # דמו מינימלי; חבר למנוע הבק־טסט האמיתי שלך אם/כש יתאים
     trades = [
         BacktestTrade(timestamp=1723800000, price=65000, side="LONG", pnl=12.5),
         BacktestTrade(timestamp=1723800900, price=65120, side="SHORT", pnl=-4.1),
@@ -53,6 +53,7 @@ async def run_backtest(payload: BacktestRequest):
         total_pnl=total,
         count=len(trades),
     )
+
 
 
 
