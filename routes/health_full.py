@@ -10,9 +10,9 @@ from typing import Dict, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-router = APIRouter()
+router = APIRouter(tags=["Health"])
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.13.4")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
 STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", APP_VERSION)
 BOOT_TS = int(time.time())
 
@@ -22,8 +22,8 @@ class StrategyVersionEnvFlags(BaseModel):
 
 class StrategyVersionResponse(BaseModel):
     status: str = Field(example="ok")
-    app_version: str = Field(example="2.13.4")
-    strategy_version: str = Field(example="2.13.4")
+    app_version: str = Field(example="2.14.0")
+    strategy_version: str = Field(example="2.14.0")
     git_commit: Optional[str] = None
     req_hash: Optional[str] = None
     python_version: str
@@ -82,7 +82,7 @@ def _now_iso_utc() -> str:
 async def basic_health():
     return BasicHealthResponse(status="ok", version=APP_VERSION)
 
-@router.get("/health/strategy-version", tags=["Health"], summary="Strategy metadata & dependency versions", operation_id="getStrategyVersion", response_model=StrategyVersionResponse)
+@router.get("/health/strategy-version", summary="Strategy metadata & dependency versions", operation_id="getStrategyVersion", response_model=StrategyVersionResponse)
 async def strategy_version():
     uptime = int(time.time()) - BOOT_TS
     libs = _get_lib_versions()
@@ -105,10 +105,11 @@ async def strategy_version():
         now_utc=_now_iso_utc(),
     )
 
-@router.get("/health/live", tags=["Health"], summary="Liveness probe", operation_id="getLiveness", response_model=LiveResponse)
+@router.get("/health/live", summary="Liveness probe", operation_id="getLiveness", response_model=LiveResponse)
 async def liveness():
     uptime = int(time.time()) - BOOT_TS
     return LiveResponse(status="live", uptime_sec=uptime, now_utc=_now_iso_utc())
+
 
 
 
