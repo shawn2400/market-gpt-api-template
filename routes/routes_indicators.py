@@ -29,7 +29,8 @@ def _is_ccxt_symbol(symbol: str) -> bool:
 # ---------- Data fetchers ----------
 
 def _fetch_with_ccxt(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-    import ccxt  # ייטען רק אם קיים
+    # נטען רק אם מותקן – לא מפיל את האפליקציה בזמן import של המודול
+    import ccxt  # type: ignore
     ex = ccxt.binance()
     ohlcv = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -37,8 +38,8 @@ def _fetch_with_ccxt(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
     return df
 
 def _fetch_with_binance_futures(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-    # UMFutures מקבל interval בדיוק כמו '1m','5m','1h','4h','1d' וכו'
-    from binance.um_futures import UMFutures
+    # UMFutures מקבל interval כמו '1m','5m','1h','4h','1d' וכו'
+    from binance.um_futures import UMFutures  # type: ignore
     um = UMFutures()  # אין צורך במפתחות לפעולות ציבוריות
     kl = um.klines(symbol=symbol, interval=timeframe, limit=limit)
     # מבנה: [ openTime, open, high, low, close, volume, closeTime, ... ]
@@ -52,7 +53,7 @@ def _fetch_with_binance_futures(symbol: str, timeframe: str, limit: int) -> pd.D
     return df[["timestamp","open","high","low","close","volume"]]
 
 def _fetch_with_binance_spot(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-    from binance import Client
+    from binance import Client  # type: ignore
     interval_map = {
         "1m": Client.KLINE_INTERVAL_1MINUTE,
         "3m": Client.KLINE_INTERVAL_3MINUTE,
@@ -85,23 +86,19 @@ def _fetch_with_binance_spot(symbol: str, timeframe: str, limit: int) -> pd.Data
 
 async def _fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
     """
-    אסטרטגיית הבאה:
-    1) אם סימבול בפורמט ccxt (עם '/'): נסה ccxt → אם נכשל, 501 ברור.
-    2) אחרת (BNBUSDT): נסה Futures (UMFutures) → אם נכשל, נסה Spot → אם נכשל, 502.
-    * שים לב: מפעיל קריאות חוסמות ב-threadpool כדי לא לחסום את event loop.
+    סדר פעולות:
+    1) אם הסימבול בפורמט ccxt (עם '/'): נסה ccxt → אם נכשל, 501 מוסבר.
+    2) אחרת (BNBUSDT): נסה Futures (UMFutures) → אם נכשל, Spot → אם נכשל, 502.
     """
-    # CCXT path
     if _is_ccxt_symbol(symbol):
         try:
             return await asyncio.to_thread(_fetch_with_ccxt, symbol, timeframe, limit)
         except Exception as e:
             raise HTTPException(status_code=501, detail=f"ccxt unavailable or fetch failed: {type(e).__name__}: {e}")
 
-    # Binance Futures (עדיף ל־USDT Perp)
     try:
         return await asyncio.to_thread(_fetch_with_binance_futures, symbol, timeframe, limit)
     except Exception as e_fut:
-        # Binance Spot fallback
         try:
             return await asyncio.to_thread(_fetch_with_binance_spot, symbol, timeframe, limit)
         except Exception as e_spot:
@@ -114,9 +111,10 @@ async def _fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
 
 @router.get("/", summary="Indicators sample (sanity)")
 async def indicators_sample():
+    nowh = pd.Timestamp.utcnow().floor("h")
     data = [
-        {"timestamp": pd.Timestamp.utcnow().floor("h"), "open": 100.0, "high": 110.0, "low": 95.0,  "close": 105.0, "volume": 12345},
-        {"timestamp": pd.Timestamp.utcnow().floor("h"), "open": 105.0, "high": 115.0, "low": 100.0, "close": 110.0, "volume": 23456},
+        {"timestamp": nowh, "open": 100.0, "high": 110.0, "low": 95.0,  "close": 105.0, "volume": 12345},
+        {"timestamp": nowh, "open": 105.0, "high": 115.0, "low": 100.0, "close": 110.0, "volume": 23456},
     ]
     df = pd.DataFrame(data)
     df = _apply_indicators(df)
@@ -125,11 +123,12 @@ async def indicators_sample():
 @router.get("/{symbol}", summary="Indicators from Binance/ccxt with fallback")
 async def indicators_symbol(symbol: str = "BNBUSDT", timeframe: str = "1h", limit: int = 180):
     """
-    תומך בשני פורמטים:
-    - "BNBUSDT" → Binance Futures קודם, ואז Spot כ־fallback.
+    פורמטים נתמכים:
+    - "BNBUSDT" → Binance Futures קודם, ואז Spot fallback.
     - "BNB/USDT" → ccxt.
     """
     df = await _fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
     df = _apply_indicators(df)
     return df.tail(1).to_dict(orient="records")[0]
+
 
