@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
-    # ⚠️ Fallback זמני: לא מבצע אימות. מומלץ לתקן את utils/auth.py ולהחזיר את הייבוא המקורי.
     def require_bearer_token():
         return None
 
@@ -20,11 +19,15 @@ from utils.binance_trader import binance_futures_trade
 
 # --- Anchor (ננסה shim ואז ניפול ל-btc_anchor) ---
 try:
-    from utils.anchor import evaluate_anchor, AnchorDecision  # shim לתאימות
+    from utils.anchor import evaluate_anchor, AnchorDecision
 except Exception:
-    from utils.btc_anchor import evaluate_anchor, AnchorDecision  # גיבוי ישיר
+    from utils.btc_anchor import evaluate_anchor, AnchorDecision
 
-from utils.quality import compute_quality
+# --- Quality (ננסה את השם ההיסטורי; אם אין, נייבא מהקובץ אצלך) ---
+try:
+    from utils.quality import compute_quality  # דרך ה-shim
+except Exception:
+    from utils.quantity_utils import compute_quality  # גיבוי ישיר
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +37,6 @@ router = APIRouter(
 )
 
 SideLiteral = Literal["LONG", "SHORT"]
-
-# ---------- Models ----------
 
 class SLTPRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
@@ -68,13 +69,8 @@ class TradeExecuteResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
 
-# ---------- Dependencies ----------
-
 async def _anchor_dep(payload: TradeExecuteRequest = Body(...)) -> AnchorDecision:
-    # שימוש ב-anchor להחלטת ALLOW/HARD/SOFT
     return evaluate_anchor(payload.side)
-
-# ---------- Endpoints ----------
 
 @router.post(
     "/sltp",
@@ -110,11 +106,9 @@ async def post_execute(
     sl = payload.sl
     tp = payload.tp
 
-    # 1) Anchor gate: HARD או הסלמה ל-HARD חוסמים
     if not anchor.allow:
         raise HTTPException(status_code=400, detail=f"blocked by BTC anchor: {anchor.reason}")
 
-    # 2) Auto-calc SL/TP אם חסר (דורש entry)
     if (sl is None or tp is None):
         if entry is None:
             raise HTTPException(status_code=400, detail="entry is required when auto-calculating SL/TP")
@@ -122,14 +116,12 @@ async def post_execute(
         sl = sl if sl is not None else sl_auto
         tp = tp if tp is not None else tp_auto
 
-    # 3) Quality scoring (תמיד מוחזר)
     quality = compute_quality(
         symbol=symbol, side=side, entry=entry, sl=sl, tp=tp,
         leverage=payload.leverage, budget=payload.budget,
         anchor=anchor, atr=payload.atr,
     )
 
-    # 4) DRY-RUN
     if payload.dry_run:
         result = {
             "dry_run": True,
@@ -154,7 +146,6 @@ async def post_execute(
         }
         return TradeExecuteResponse(status="ok", result=result)
 
-    # 5) LIVE
     try:
         trade_result = await binance_futures_trade(
             symbol=symbol,
@@ -168,7 +159,6 @@ async def post_execute(
             market_type="futures",
             cid_prefix="algogpt",
         )
-        # שילוב הנתונים ל־result
         trade_result = {
             **trade_result,
             "quality_score": quality["quality_score"],
@@ -188,6 +178,7 @@ async def post_execute(
     except Exception as e:
         logger.exception("Trade execution failed")
         raise HTTPException(status_code=400, detail=f"trade failed: {e}")
+
 
 
 
