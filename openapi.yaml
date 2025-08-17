@@ -1,124 +1,265 @@
-# openapi.yaml
 openapi: 3.1.0
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: AlgoGPT API
   version: 2.14.0
   description: |
-    AlgoGPT – Real-time algorithmic trader for Binance (Futures/Spot/Grid),
-    Multi-TF Scan with AI, dry-run/live trades, smart SL/TP, Auto-Backtest, and PnL PDF.
+    AlgoGPT – Real-time algorithmic trader for Binance (Futures),
+    Multi-TF Scan with AI, dry-run/live trades, smart SL/TP, and Backtest.
+
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
+
 tags:
   - name: Config
-  - name: Dashboard
   - name: AI
   - name: Trades
   - name: Backtest
+  - name: Scan
+  - name: Dashboard
+
 components:
   securitySchemes:
     HTTPBearer:
       type: http
       scheme: bearer
       bearerFormat: JWT
+
   schemas:
     Error:
       type: object
       properties:
-        error: { type: string }
-        code: { type: string }
+        detail:
+          type: string
+        code:
+          type:
+            - string
+            - "null"
+
     StatusResponse:
       type: object
       properties:
-        status: { type: string, example: ok }
-        version: { type: string, example: 2.14.0 }
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: 2.14.0
+
     MetricsResponse:
       type: object
       properties:
-        boot_ts: { type: integer }
-        uptime_sec: { type: integer }
-        requests: { type: integer }
-        errors: { type: integer }
+        boot_ts:
+          type: integer
+        uptime_sec:
+          type: integer
+        requests:
+          type: integer
+        errors:
+          type: integer
+
     AiHealthResponse:
       type: object
       properties:
-        ok: { type: boolean, example: true }
-        model: { type: [string, "null"] }
-        latency_ms: { type: [number, "null"] }
-        error: { type: [string, "null"] }
-    ManualScanItem:
-      type: object
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        market: { type: string, example: futures }
-        interval: { type: string, example: 15m }
-        frames:
-          type: array
-          items: { type: string }
-        trend: { type: string, enum: [UP, DOWN] }
-        direction: { type: string, enum: [LONG, SHORT] }
-        rsi: { type: number }
-        adx: { type: number }
-        volume: { type: number }
-        quality_score: { type: number, minimum: 0, maximum: 10 }
-        signal: { type: string, enum: [BUY, SELL, HOLD] }
-        confidence: { type: integer, minimum: 0, maximum: 100 }
-        reason: { type: string }
-        close: { type: number }
-        atr: { type: [number, "null"] }
-    AiManualScanResponse:
-      type: object
-      properties:
-        symbol: { type: string }
-        results:
-          $ref: '#/components/schemas/ManualScanItem'
+        ok:
+          type: boolean
+          example: true
+        model:
+          type:
+            - string
+            - "null"
+        latency_ms:
+          type:
+            - number
+            - "null"
+        error:
+          type:
+            - string
+            - "null"
+
     SLTP3Response:
       type: object
       properties:
-        symbol: { type: string }
-        direction: { type: string, enum: [LONG, SHORT] }
-        sl: { type: number }
-        tp1: { type: number }
-        tp2: { type: number }
+        symbol:
+          type: string
+        direction:
+          type: string
+          enum: [LONG, SHORT]
+        sl:
+          type: number
+        tp1:
+          type: number
+        tp2:
+          type: number
+
     TradeExecuteRequest:
       type: object
       required: [symbol, side, budget, leverage]
       properties:
-        symbol: { type: string, example: BTCUSDT }
-        side: { type: string, enum: [LONG, SHORT] }
-        budget: { type: number, example: 100 }
-        leverage: { type: integer, example: 10 }
-        entry: { type: [number, "null"] }
-        sl: { type: [number, "null"] }
-        tp: { type: [number, "null"] }
-        atr: { type: [number, "null"], description: Optional ATR for SL/TP calculation }
-        dry_run: { type: boolean, default: true }
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          enum: [LONG, SHORT]
+        budget:
+          type: number
+          example: 100
+        leverage:
+          type: integer
+          example: 10
+        entry:
+          type:
+            - number
+            - "null"
+        sl:
+          type:
+            - number
+            - "null"
+        tp:
+          type:
+            - number
+            - "null"
+        atr:
+          type:
+            - number
+            - "null"
+          description: Optional ATR for SL/TP calculation
+        dry_run:
+          type: boolean
+          default: true
+
     TradeExecuteResponse:
       type: object
       properties:
-        status: { type: string, example: ok }
+        status:
+          type: string
+          example: ok
         result:
           type: object
           additionalProperties: true
+
+    AiQualityRequest:
+      type: object
+      required: [symbol, side]
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          enum: [LONG, SHORT]
+        entry:
+          type:
+            - number
+            - "null"
+        sl:
+          type:
+            - number
+            - "null"
+        tp:
+          type:
+            - number
+            - "null"
+        leverage:
+          type: integer
+          default: 10
+        budget:
+          type: number
+          default: 100
+        atr:
+          type:
+            - number
+            - "null"
+
+    AiAnalyzeResponse:
+      type: object
+      properties:
+        quality_score:
+          type: number
+        success_pct:
+          type: number
+        anchor:
+          type: object
+          additionalProperties: true
+        components:
+          type: object
+          additionalProperties: true
+
     BacktestTrade:
       type: object
       properties:
-        timestamp: { type: integer, description: epoch seconds }
-        price: { type: number }
-        side: { type: string, enum: [LONG, SHORT] }
-        pnl: { type: number }
+        timestamp:
+          type: integer
+          description: epoch seconds
+        price:
+          type: number
+        side:
+          type: string
+          enum: [LONG, SHORT]
+        pnl:
+          type: number
+
     BacktestResult:
       type: object
       properties:
-        symbol: { type: string }
-        timeframe: { type: string }
+        symbol:
+          type: string
+        timeframe:
+          type: string
         trades:
           type: array
-          items: { $ref: '#/components/schemas/BacktestTrade' }
-        win_rate: { type: number }
-        total_pnl: { type: number }
-        count: { type: integer }
+          items:
+            $ref: "#/components/schemas/BacktestTrade"
+        win_rate:
+          type: number
+        total_pnl:
+          type: number
+        count:
+          type: integer
+
+    ScanSignal:
+      type: object
+      required: [symbol, timeframe, score]
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        timeframe:
+          type: string
+          example: 15m
+        side:
+          type:
+            - string
+            - "null"
+          enum: [LONG, SHORT]
+        score:
+          type: number
+          minimum: 0
+          maximum: 10
+        note:
+          type:
+            - string
+            - "null"
+        details:
+          type:
+            - object
+            - "null"
+            - array
+
+    ScanResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        count:
+          type: integer
+        signals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScanSignal"
+
 paths:
   /:
     get:
@@ -126,70 +267,111 @@ paths:
       summary: Server status
       operationId: getRootStatus
       responses:
-        '200':
+        "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/StatusResponse' }
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
   /metrics:
     get:
       tags: [Config]
       summary: Basic metrics
       operationId: getBasicMetrics
       responses:
-        '200':
+        "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MetricsResponse' }
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+
   /dashboard:
     get:
       tags: [Dashboard]
       summary: Minimal HTML dashboard
       operationId: getDashboardHtml
       responses:
-        '200':
+        "200":
           description: HTML
           content:
             text/html:
-              schema: { type: string }
+              schema:
+                type: string
+
   /ai/health:
     get:
       tags: [AI]
       summary: AI health (OpenAI)
       operationId: getAiHealth
       responses:
-        '200':
+        "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AiHealthResponse' }
-  /ai/manual-scan:
-    get:
+              schema:
+                $ref: "#/components/schemas/AiHealthResponse"
+
+  /ai/quality:
+    post:
       tags: [AI]
-      security: [ { HTTPBearer: [] } ]
-      summary: Manual scan (per symbol)
-      operationId: getAiManualScan
-      parameters:
-        - name: symbol
-          in: query
-          required: true
-          schema: { type: string, example: BTCUSDT }
+      security:
+        - HTTPBearer: []
+      summary: Compute trade quality score
+      operationId: postAiQuality
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiQualityRequest"
       responses:
-        '200':
+        "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AiManualScanResponse' }
-        '401':
+              schema:
+                $ref: "#/components/schemas/AiAnalyzeResponse"
+        "401":
           description: unauthorized
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /ai-analyze:
+    post:
+      tags: [AI]
+      security:
+        - HTTPBearer: []
+      summary: Analyze trade idea (AI, same engine as /ai/quality)
+      operationId: postAiAnalyze
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiQualityRequest"
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiAnalyzeResponse"
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /trade/sltp:
     post:
       tags: [Trades]
-      security: [ { HTTPBearer: [] } ]
+      security:
+        - HTTPBearer: []
       summary: Suggest SL/TP (ATR-aware)
       operationId: postTradeSltp
       requestBody:
@@ -200,47 +382,65 @@ paths:
               type: object
               required: [symbol, direction, entry]
               properties:
-                symbol: { type: string, example: BTCUSDT }
-                direction: { type: string, enum: [LONG, SHORT] }
-                entry: { type: number, example: 65000 }
-                atr: { type: [number, "null"] }
+                symbol:
+                  type: string
+                  example: BTCUSDT
+                direction:
+                  type: string
+                  enum: [LONG, SHORT]
+                entry:
+                  type: number
+                  example: 65000
+                atr:
+                  type:
+                    - number
+                    - "null"
       responses:
-        '200':
+        "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/SLTP3Response' }
-        '401':
+              schema:
+                $ref: "#/components/schemas/SLTP3Response"
+        "401":
           description: unauthorized
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /trade/execute:
     post:
       tags: [Trades]
-      security: [ { HTTPBearer: [] } ]
+      security:
+        - HTTPBearer: []
       summary: Execute trade (dry-run by default)
       operationId: postTradeExecute
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/TradeExecuteRequest' }
+            schema:
+              $ref: "#/components/schemas/TradeExecuteRequest"
       responses:
-        '200':
+        "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TradeExecuteResponse' }
-        '401':
+              schema:
+                $ref: "#/components/schemas/TradeExecuteResponse"
+        "401":
           description: unauthorized
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /backtest:
     post:
       tags: [Backtest]
-      security: [ { HTTPBearer: [] } ]
+      security:
+        - HTTPBearer: []
       summary: Run strategy backtest for a symbol
       operationId: postBacktestRun
       requestBody:
@@ -250,21 +450,130 @@ paths:
             schema:
               type: object
               properties:
-                symbol: { type: string, example: BTCUSDT }
-                timeframe: { type: string, enum: [5m, 15m, 1h, 4h], default: 15m }
-                limit: { type: integer, default: 200 }
-                slippage_pct: { type: number, default: 0.1 }
+                symbol:
+                  type: string
+                  example: BTCUSDT
+                timeframe:
+                  type: string
+                  enum: [5m, 15m, 1h, 4h]
+                  default: 15m
+                limit:
+                  type: integer
+                  default: 200
+                slippage_pct:
+                  type: number
+                  default: 0.1
       responses:
-        '200':
+        "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/BacktestResult' }
-        '401':
+              schema:
+                $ref: "#/components/schemas/BacktestResult"
+        "401":
           description: unauthorized
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /scan:
+    get:
+      tags: [Scan]
+      security:
+        - HTTPBearer: []
+      summary: Scanner heartbeat / info
+      operationId: getScanInfo
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResponse"
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      tags: [Scan]
+      security:
+        - HTTPBearer: []
+      summary: Run single-symbol scan
+      operationId: postScanSingle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol]
+              properties:
+                symbol:
+                  type: string
+                  example: BTCUSDT
+                timeframe:
+                  type: string
+                  default: 15m
+                limit:
+                  type: integer
+                  default: 200
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResponse"
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /scan/multi:
+    post:
+      tags: [Scan]
+      security:
+        - HTTPBearer: []
+      summary: Run multi-symbol scan
+      operationId: postScanMulti
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbols]
+              properties:
+                symbols:
+                  type: array
+                  items:
+                    type: string
+                timeframe:
+                  type: string
+                  default: 15m
+                limit:
+                  type: integer
+                  default: 200
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResponse"
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 
 
 
