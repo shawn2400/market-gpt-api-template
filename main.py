@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import logging
 import time
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,30 +11,43 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
-from routes.trade import router as trade_router
-from routes.ai import router as ai_router
 from utils.metrics import metrics_tracker
 
-# --- ננסה לייבא את backtest באופן חסין ---
-try:
-    from routes.backtest import router as backtest_router  # type: ignore
-except Exception as _bt_exc:
-    backtest_router = None  # type: ignore
-    # נאתחל לוגינג מוקדם כדי שהאזהרה תודפס
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-    logging.getLogger("algogpt").warning("Backtest router disabled: %s", _bt_exc)
-
-# --- Config / ENV ---
+# --- Config / ENV (מוקדם כדי שנוכל ללוגגר נכון גם בזמן import) ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 
-# --- Logging ---
+# --- Logging מוקדם ---
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("algogpt")
+
+# --- Routers עיקריים (אמורים להתקיים) ---
+from routes.ai import router as ai_router            # /ai/*
+from routes.trade import router as trade_router      # /trade/*
+
+# --- אופציונליים: backtest / scan / ai-analyze (לא מפילים שרת אם חסרים) ---
+backtest_router: Optional[object] = None
+scan_router: Optional[object] = None
+ai_analyze_router: Optional[object] = None
+
+try:
+    from routes.backtest import router as backtest_router  # type: ignore
+except Exception as _bt_exc:
+    logger.warning("Backtest router disabled: %s", _bt_exc)
+
+try:
+    from routes.scan import router as scan_router  # /scan, /scan/multi
+except Exception as _scan_exc:
+    logger.warning("Scan router not loaded: %s", _scan_exc)
+
+try:
+    from routes.ai_analyze import router as ai_analyze_router  # /ai-analyze
+except Exception as _aia_exc:
+    logger.warning("AI Analyze router not loaded: %s", _aia_exc)
 
 # --- App ---
 app = FastAPI(
@@ -92,13 +105,26 @@ def root():
 async def get_metrics():
     return metrics_tracker.get_metrics()
 
-# --- Routers ---
+# --- Routers registration ---
+# קיימים תמיד
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
+
+# אופציונליים
 if backtest_router:
     app.include_router(backtest_router, tags=["Backtest"])
 else:
     logger.warning("Backtest routes are not loaded (import failed).")
+
+if scan_router:
+    app.include_router(scan_router, tags=["Scan"])          # /scan, /scan/multi
+else:
+    logger.warning("Scan routes are not loaded (import failed).")
+
+if ai_analyze_router:
+    app.include_router(ai_analyze_router, tags=["AI"])      # /ai-analyze
+else:
+    logger.warning("AI Analyze route is not loaded (import failed).")
 
 # --- Lifecycle ---
 @app.on_event("startup")
@@ -114,6 +140,7 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "10000")),
         log_level=LOG_LEVEL.lower(),
     )
+
 
 
 
