@@ -1,3 +1,4 @@
+# routes/dashboard.py
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
@@ -5,7 +6,8 @@ router = APIRouter()
 
 @router.get("/dashboard", response_class=HTMLResponse, operation_id="getDashboardHtml")
 async def dashboard_ui():
-    return """<!doctype html>
+    return """
+<!doctype html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8" />
@@ -93,7 +95,8 @@ async def dashboard_ui():
     }
   </script>
 </body>
-</html>"""
+</html>
+    """
 
 
 
