@@ -1,40 +1,44 @@
 # routes/scan.py
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Dict, Any, Iterable, Union
 import asyncio
 import inspect
 import logging
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Body, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("algogpt.scan")
 router = APIRouter(prefix="", tags=["Scan"])
 
-# ---------------------------
-# Auth (עם fallback בטוח ל-dev)
-# ---------------------------
+# =========================
+# Auth (fallback בטוח ל-dev)
+# =========================
 try:
-    from utils.auth import require_bearer_token
+    from utils.auth import require_bearer_token  # type: ignore
 except Exception as e:  # pragma: no cover
     logger.warning("Auth fallback active: %s", e)
 
     def require_bearer_token():
-        # עבור GET /scan לא נשתמש בזה; רק ב-POSTים
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        # ב־dev בלבד. בפרודקשן נדרשת utils.auth תקינה.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
 
-# ---------------------------
+# =========================
 # Utilities / Symbols
-# ---------------------------
+# =========================
 try:
-    from utils.symbols import normalize_symbol
+    from utils.symbols import normalize_symbol  # type: ignore
 except Exception:
     def normalize_symbol(sym: str) -> str:  # type: ignore
         return (sym or "").upper().replace(" ", "").replace("-", "")
 
-# ---------------------------
-# Scanner functions
-# ---------------------------
+# =========================
+# Scanner functions (optional)
+# =========================
 _analyze_symbol = None
 _scan_all = None
 try:
@@ -43,12 +47,10 @@ try:
 except Exception as e:
     logger.error("scanner_utils missing or invalid: %s", e)
 
-# ---------------------------
+# =========================
 # Models
-# ---------------------------
+# =========================
 Side = Literal["LONG", "SHORT"]
-
-from pydantic import BaseModel, Field
 
 class ScanSignal(BaseModel):
     symbol: str = Field(..., description="Trading symbol, e.g., BTCUSDT")
@@ -56,7 +58,9 @@ class ScanSignal(BaseModel):
     side: Optional[Side] = Field(None, description="Suggested direction")
     score: float = Field(0.0, ge=0.0, le=10.0, description="Quality score 0–10")
     note: Optional[str] = Field(None, description="Short rationale / flags")
-    details: Optional[Dict[str, Any]] = Field(default=None, description="Raw scanner details")
+    details: Optional[Dict[str, Any]] = Field(
+        default=None, description="Raw scanner details"
+    )
 
 class ScanResponse(BaseModel):
     ok: bool
@@ -73,119 +77,65 @@ class MultiScanPayload(BaseModel):
     timeframe: str = Field("15m")
     limit: int = Field(200, ge=50, le=1500)
 
-# ---------------------------
+# =========================
 # Helpers
-# ---------------------------
-async def _maybe_await(func, *args, **kwargs):
-    if inspect.iscoroutinefunction(func):
-        return await func(*args, **kwargs)
-    return func(*args, **kwargs)
-
+# =========================
 def _ensure_scanner_available():
     if _analyze_symbol is None and _scan_all is None:
         raise HTTPException(
             status_code=500,
-            detail="Scanner module not available (utils/scanner_utils.py)."
+            detail="Scanner module not available (utils/scanner_utils.py).",
         )
 
 def _normalize_symbols(symbols: Iterable[str]) -> List[str]:
     return [normalize_symbol(s) for s in symbols if (s or "").strip()]
 
-# ---------------------------
-# Routes
-# ---------------------------
+async def _maybe_await(func, *args, **kwargs):
+    if inspect.iscoroutinefunction(func):
+        return await func(*args, **kwargs)
+    return func(*args, **kwargs)
 
-# פתוח ללא טוקן – heartbeat/info
-@router.get("/scan", response_model=ScanResponse, summary="Basic scanner heartbeat (no auth)")
-async def scan_info():
-    """
-    מידע בסיסי/בדיקת חיים לראוטר הסריקה (ללא צורך ב־Authorization).
-    """
-    _ensure_scanner_available()
-    return ScanResponse(ok=True, count=0, signals=[])
+def _kw_for_frame(sig: inspect.Signature, timeframe: str, limit: int) -> Dict[str, Any]:
+    """תמיכה גם ב־timeframe וגם ב־interval לפי חתימת הפונקציה."""
+    params = sig.parameters
+    out: Dict[str, Any] = {"limit": limit}
+    if "timeframe" in params:
+        out["timeframe"] = timeframe
+    elif "interval" in params:
+        out["interval"] = timeframe
+    else:
+        # אם אין אף אחד — נזריק בכל זאת בשם "timeframe"
+        out["timeframe"] = timeframe
+    return out
 
-# alias תואם ללקוחות ישנים (גם ללא אימות)
-@router.get("/scan-info", response_model=ScanResponse, summary="Scanner heartbeat (alias)")
-async def scan_info_alias():
-    return await scan_info()
+async def _call_analyze(symbol: str, timeframe: str, limit: int) -> Any:
+    if _analyze_symbol is None:
+        raise RuntimeError("analyze_symbol not available")
+    sig = inspect.signature(_analyze_symbol)
+    kwargs = _kw_for_frame(sig, timeframe, limit)
+    kwargs["symbol"] = symbol
+    return await _maybe_await(_analyze_symbol, **kwargs)  # type: ignore
 
-# מוגן בטוקן
-@router.post(
-    "/scan",
-    response_model=ScanResponse,
-    summary="Run single-symbol scan",
-)
-async def scan_single(
-    payload: SingleScanPayload = Body(...),
-    _=Depends(require_bearer_token),
-):
-    _ensure_scanner_available()
+async def _call_scan_all(symbols: List[str], timeframe: str, limit: int) -> Any:
+    if _scan_all is None:
+        raise RuntimeError("scan_all not available")
+    sig = inspect.signature(_scan_all)
+    kwargs = _kw_for_frame(sig, timeframe, limit)
+    # תמיכה ב־symbols / tickers
+    if "symbols" in sig.parameters:
+        kwargs["symbols"] = symbols
+    elif "tickers" in sig.parameters:
+        kwargs["tickers"] = symbols
+    else:
+        kwargs["symbols"] = symbols
+    return await _maybe_await(_scan_all, **kwargs)  # type: ignore
 
-    symbol = normalize_symbol(payload.symbol)
-    timeframe = payload.timeframe
-    limit = payload.limit
-
-    try:
-        if _analyze_symbol is None:
-            results = await _maybe_await(_scan_all, symbols=[symbol], timeframe=timeframe, limit=limit)  # type: ignore
-            sigs = _convert_results(results)
-        else:
-            res = await _maybe_await(_analyze_symbol, symbol=symbol, interval=timeframe, limit=limit)  # type: ignore
-            sigs = _convert_results([res] if res is not None else [])
-        return ScanResponse(ok=True, count=len(sigs), signals=sigs)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("scan_single failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"scan_single error: {e}")
-
-# מוגן בטוקן
-@router.post(
-    "/scan/multi",
-    response_model=ScanResponse,
-    summary="Run multi-symbol scan",
-)
-async def scan_multi(
-    payload: MultiScanPayload = Body(...),
-    _=Depends(require_bearer_token),
-):
-    _ensure_scanner_available()
-
-    symbols = _normalize_symbols(payload.symbols)
-    if not symbols:
-        raise HTTPException(status_code=400, detail="symbols list is empty")
-
-    timeframe = payload.timeframe
-    limit = payload.limit
-
-    try:
-        if _scan_all is not None:
-            results = await _maybe_await(_scan_all, symbols=symbols, timeframe=timeframe, limit=limit)  # type: ignore
-            sigs = _convert_results(results)
-        else:
-            if _analyze_symbol is None:
-                raise RuntimeError("No scanner functions available")
-            tasks = [_maybe_await(_analyze_symbol, symbol=s, interval=timeframe, limit=limit) for s in symbols]  # type: ignore
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            clean: List[Any] = []
-            for r in results:
-                if isinstance(r, Exception):
-                    logger.warning("scan_multi: symbol failed: %s", r)
-                    continue
-                clean.append(r)
-            sigs = _convert_results(clean)
-
-        return ScanResponse(ok=True, count=len(sigs), signals=sigs)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("scan_multi failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"scan_multi error: {e}")
-
-# ---------------------------
-# Result normalization
-# ---------------------------
 def _convert_results(results: Union[List[Any], Any]) -> List[ScanSignal]:
+    """
+    ממיר פלט כללי מ־scanner_utils לתצורת ScanSignal אחידה.
+    תומך ב־dict / Pydantic / DataClass / אובייקט עם שדות.
+    מנסה חכם: interval/timeframe, score/quality_score, note/reason.
+    """
     out: List[ScanSignal] = []
     if results is None:
         return out
@@ -194,16 +144,18 @@ def _convert_results(results: Union[List[Any], Any]) -> List[ScanSignal]:
 
     for r in results:
         try:
-            data: Dict[str, Any]
             if isinstance(r, dict):
                 data = r
             else:
                 data = {
                     "symbol": getattr(r, "symbol", None),
-                    "timeframe": getattr(r, "interval", None) or getattr(r, "timeframe", None),
+                    "timeframe": getattr(r, "timeframe", None)
+                    or getattr(r, "interval", None),
                     "side": getattr(r, "side", None),
-                    "score": getattr(r, "quality_score", None) or getattr(r, "score", None),
-                    "note": getattr(r, "reason", None) or getattr(r, "note", None),
+                    "score": getattr(r, "score", None)
+                    or getattr(r, "quality_score", None),
+                    "note": getattr(r, "note", None)
+                    or getattr(r, "reason", None),
                     "details": getattr(r, "details", None),
                 }
 
@@ -225,13 +177,98 @@ def _convert_results(results: Union[List[Any], Any]) -> List[ScanSignal]:
                     side=side,  # type: ignore
                     score=max(0.0, min(10.0, score)),
                     note=note if (note is None or isinstance(note, str)) else str(note),
-                    details=details if isinstance(details, dict) else (
-                        {"raw": details} if details is not None else None
-                    ),
+                    details=details
+                    if isinstance(details, dict)
+                    else ({"raw": details} if details is not None else None),
                 )
             )
         except Exception as e:
             logger.warning("Skipping bad scan result: %s (raw=%r)", e, r)
             continue
     return out
+
+# =========================
+# Routes
+# =========================
+
+# Heartbeat פתוח ללא טוקן
+@router.get("/scan", response_model=ScanResponse, summary="Basic scanner heartbeat (no auth)")
+async def scan_info():
+    """
+    מידע בסיסי/בדיקת חיים לראוטר הסריקה (ללא Authorization).
+    """
+    _ensure_scanner_available()
+    return ScanResponse(ok=True, count=0, signals=[])
+
+# Alias תואם לקליינטים ישנים (גם ללא אימות)
+@router.get("/scan-info", response_model=ScanResponse, summary="Scanner heartbeat (alias)")
+async def scan_info_alias():
+    return await scan_info()
+
+# מוגן בטוקן — סריקה לסימבול יחיד
+@router.post("/scan", response_model=ScanResponse, summary="Run single-symbol scan")
+async def scan_single(
+    payload: SingleScanPayload = Body(...),
+    _auth: Any = Depends(require_bearer_token),
+):
+    _ensure_scanner_available()
+    symbol = normalize_symbol(payload.symbol)
+    timeframe = payload.timeframe
+    limit = payload.limit
+
+    try:
+        if _analyze_symbol is not None:
+            res = await _call_analyze(symbol, timeframe, limit)
+            sigs = _convert_results([res] if res is not None else [])
+        else:
+            results = await _call_scan_all([symbol], timeframe, limit)
+            sigs = _convert_results(results)
+
+        return ScanResponse(ok=True, count=len(sigs), signals=sigs)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("scan_single failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"scan_single error: {e}")
+
+# מוגן בטוקן — סריקה למספר סימבולים
+@router.post("/scan/multi", response_model=ScanResponse, summary="Run multi-symbol scan")
+async def scan_multi(
+    payload: MultiScanPayload = Body(...),
+    _auth: Any = Depends(require_bearer_token),
+):
+    _ensure_scanner_available()
+    symbols = _normalize_symbols(payload.symbols)
+    if not symbols:
+        raise HTTPException(status_code=400, detail="symbols list is empty")
+
+    timeframe = payload.timeframe
+    limit = payload.limit
+
+    try:
+        if _scan_all is not None:
+            results = await _call_scan_all(symbols, timeframe, limit)
+            sigs = _convert_results(results)
+        else:
+            if _analyze_symbol is None:
+                raise RuntimeError("No scanner functions available")
+            tasks = [
+                _call_analyze(s, timeframe, limit)  # type: ignore
+                for s in symbols
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            clean: List[Any] = []
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning("scan_multi: symbol failed: %s", r)
+                    continue
+                clean.append(r)
+            sigs = _convert_results(clean)
+
+        return ScanResponse(ok=True, count=len(sigs), signals=sigs)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("scan_multi failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"scan_multi error: {e}")
 
