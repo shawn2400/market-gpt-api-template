@@ -1,28 +1,39 @@
 # routes/ai.py
-from fastapi import APIRouter, Query, HTTPException, Depends
+from __future__ import annotations
+
+import os
 from typing import Any, Dict
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
+
 from utils.auth import require_bearer_token
+from utils.scanner_utils import analyze_symbol
 
-from utils.ai_health import ping_openai
-from utils.multi_tf_scanner import fallback_scan_manual
-
-router = APIRouter()
+router = APIRouter(prefix="/ai", tags=["AI"])
 
 @router.get("/health", operation_id="getAiHealth")
 async def ai_health() -> Dict[str, Any]:
-    return await ping_openai()
+    """
+    בדיקת זמינות OpenAI: אם יש OPENAI_API_KEY נחזיר ok=true; אחרת ok=false + error.
+    (ללא קריאה חיצונית כדי למנוע כשלי רשת/חסימות בזמן deploy)
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    return {"ok": bool(api_key), "model": None, "latency_ms": None, "error": None if api_key else "OPENAI_API_KEY not set"}
 
-@router.get("/manual-scan", dependencies=[Depends(require_bearer_token)], operation_id="getAiManualScan")
+@router.get(
+    "/manual-scan",
+    operation_id="getAiManualScan",
+    dependencies=[Depends(require_bearer_token)],
+)
 async def manual_scan(symbol: str = Query(..., description="סימבול כמו BTCUSDT")):
-    try:
-        results = await fallback_scan_manual(symbol.upper())
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"תקלה פנימית בניתוח {symbol}: {e}")
-    if not results:
-        raise HTTPException(status_code=404, detail=f"לא נמצאו תוצאות עבור {symbol}")
-    return {"symbol": symbol.upper(), "results": results}
+    """
+    ניתוח סימבול בודד (RSI/ADX/EMA/ATR) ומדד איכות. משתמש ב-Binance Futures klines.
+    """
+    res = await analyze_symbol(symbol.upper())
+    if not res:
+        raise HTTPException(status_code=404, detail=f"לא נמצאו נתונים ל-{symbol}")
+    return {"symbol": symbol.upper(), "results": res}
 
 
 
