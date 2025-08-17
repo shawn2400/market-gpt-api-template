@@ -1,25 +1,31 @@
 # routes/ai_analyze.py
 from __future__ import annotations
+
 from typing import Optional, Literal, Dict, Any
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-# Auth (fallback אם צריך)
+# --- Auth (fallback מחמיר: אם אין utils.auth → 401) ---
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
     def require_bearer_token():
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
 
-# Anchor + quality
+# --- Anchor + quality ---
 try:
     from utils.anchor import evaluate_anchor, AnchorDecision
 except Exception:
+    # גיבוי ישיר אם shim לא קיים
     from utils.btc_anchor import evaluate_anchor, AnchorDecision  # type: ignore
 
 from utils.quality import compute_quality
 
 Side = Literal["LONG", "SHORT"]
+
 router = APIRouter(
     tags=["AI"],
     dependencies=[Depends(require_bearer_token)],
@@ -44,7 +50,11 @@ class AnalyzeResponse(BaseModel):
 async def _anchor_dep(payload: AnalyzeRequest = Body(...)) -> AnchorDecision:
     return evaluate_anchor(payload.side)
 
-@router.post("/ai-analyze", response_model=AnalyzeResponse, operation_id="postAiAnalyze")
+@router.post(
+    "/ai-analyze",
+    response_model=AnalyzeResponse,
+    operation_id="postAiAnalyze",
+)
 async def post_ai_analyze(
     payload: AnalyzeRequest = Body(...),
     anchor: AnchorDecision = Depends(_anchor_dep),
@@ -73,3 +83,4 @@ async def post_ai_analyze(
             "reason": anchor.reason,
         },
     )
+
