@@ -14,7 +14,6 @@ class AiHealthResponse(BaseModel):
     latency_ms: Optional[float] = Field(None, description="Ping latency (ms)")
     error: Optional[str] = Field(None, description="Error details if not ok")
 
-# אם יש util פנימי – נשתמש בו, אחרת fallback
 try:
     from utils.ai_health import ai_health_check as _ai_health_check  # type: ignore
 except Exception:
@@ -41,4 +40,5 @@ async def get_ai_health() -> AiHealthResponse:
     if not has_key:
         return AiHealthResponse(ok=False, model=model_hint, latency_ms=None, error="OPENAI_API_KEY missing")
     return AiHealthResponse(ok=True, model=model_hint, latency_ms=None, error=None)
+
 
