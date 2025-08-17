@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field
 from utils.auth import require_bearer_token
 from utils.sl_tp_utils import calculate_sl_tp
 from utils.binance_trader import binance_futures_trade
-from utils.btc_anchor import evaluate_anchor, AnchorDecision
-from utils.quality import compute_quality
+from utils.anchor import evaluate_anchor, AnchorDecision    # ⬅️ shim
+from utils.quality import compute_quality                   # ⬅️ quality
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +77,11 @@ async def post_execute(
     sl = payload.sl
     tp = payload.tp
 
+    # Anchor HARD gate
     if not anchor.allow:
         raise HTTPException(status_code=400, detail=f"blocked by BTC anchor: {anchor.reason}")
 
+    # Auto-calc SL/TP אם חסר (דורש entry)
     if (sl is None or tp is None):
         if entry is None:
             raise HTTPException(status_code=400, detail="entry is required when auto-calculating SL/TP")
@@ -87,12 +89,14 @@ async def post_execute(
         sl = sl if sl is not None else sl_auto
         tp = tp if tp is not None else tp_auto
 
+    # Quality scoring (תמיד מוחזר)
     quality = compute_quality(
         symbol=symbol, side=side, entry=entry, sl=sl, tp=tp,
         leverage=payload.leverage, budget=payload.budget,
         anchor=anchor, atr=payload.atr,
     )
 
+    # DRY RUN
     if payload.dry_run:
         result = {
             "dry_run": True,
@@ -117,6 +121,7 @@ async def post_execute(
         }
         return TradeExecuteResponse(status="ok", result=result)
 
+    # LIVE
     try:
         trade_result = await binance_futures_trade(
             symbol=symbol,
