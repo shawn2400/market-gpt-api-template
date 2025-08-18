@@ -34,7 +34,6 @@ async def post_trade_snapshot(payload: Dict[str, Any] = Body(..., embed=False)) 
     if not path:
         return {"ok": False, "detail": "Failed to render snapshot (check entry/stop/tp are positive)"}
 
-    # הכנת URL ציבורי
     rel_path = path.replace("\\", "/")
     if rel_path.startswith("static/"):
         rel_path = "/" + rel_path  # => /static/...
@@ -43,3 +42,4 @@ async def post_trade_snapshot(payload: Dict[str, Any] = Body(..., embed=False)) 
     url = f"{base}{rel_path}" if base else rel_path
 
     return {"ok": True, "file_path": path, "url": url}
+
