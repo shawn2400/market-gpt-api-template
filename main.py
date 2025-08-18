@@ -48,7 +48,9 @@ market_router     = _try_import("routes.market")
 analytics_router  = _try_import("routes.analytics")
 news_router       = _try_import("routes.news")
 decision_router   = _try_import("routes.decision")
-grid_router       = _try_import("routes.grid")  # optional
+grid_router       = _try_import("routes.grid")            # optional
+orderflow_router  = _try_import("routes.orderflow")       # NEW
+onchain_router    = _try_import("routes.onchain")         # NEW
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -112,7 +114,8 @@ app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 for r in [
     ai_analyze_router, ai_health_router, scan_router, backtest_router, dashboard_router,
     health_router, price_router, ind_router, multi_scan_router, market_router,
-    analytics_router, news_router, decision_router, grid_router
+    analytics_router, news_router, decision_router, grid_router,
+    orderflow_router, onchain_router
 ]:
     if r:
         app.include_router(r)
@@ -128,6 +131,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
