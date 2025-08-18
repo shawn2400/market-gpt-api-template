@@ -1,4 +1,4 @@
-# main.py
+# main.py (גרסה מלאה מוכנה)
 from __future__ import annotations
 import os, logging, time
 from typing import List, Optional
@@ -22,7 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
-# חובה
+# ליבה
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
@@ -34,11 +34,11 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         logger.warning("%s not loaded: %s", name, exc)
         return None
 
-# אופציונלי
+# אופציונליים
 backtest_router    = _try_import("routes.backtest")
-scan_router        = None  # מכבים את הגרסה הישנה למניעת כפילויות
-multi_scan_router  = None  # מכבים (הייתה בעיית תחביר ב-indicators_ext)
-scan_topvol_router = _try_import("routes.scan_top_volume")  # <<< חדש וחשוב
+scan_router        = None
+multi_scan_router  = None
+scan_topvol_router = _try_import("routes.scan_top_volume")  # <<< חדש
 ai_analyze_router  = _try_import("routes.ai_analyze")
 ai_health_router   = _try_import("routes.ai_health")
 health_router      = _try_import("routes.health_full") or _try_import("routes.health")
@@ -69,7 +69,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static (לא חובה)
+# Static (אופציה)
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
 if os.path.isdir("static"):
@@ -109,7 +109,7 @@ def root():
 async def get_metrics():
     return metrics_tracker.get_metrics()
 
-# דיבוג – לראות אילו נתיבים נטענו בפועל
+# כלי דיבוג לראות נתיבים רשומים
 @app.get("/__routes", tags=["Config"], operation_id="getRegisteredRoutes", include_in_schema=False)
 def get_registered_routes():
     out = []
@@ -130,7 +130,7 @@ for r in [
     ai_analyze_router, ai_health_router, backtest_router, dashboard_router,
     health_router, price_router, ind_router, market_router,
     analytics_router, news_router, decision_router, grid_router,
-    risk_router, snapshot_router, scan_topvol_router  # <<< חשוב: כאן
+    risk_router, snapshot_router, scan_topvol_router,  # <<< כאן
 ]:
     if r:
         app.include_router(r)
@@ -146,6 +146,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
