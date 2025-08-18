@@ -34,19 +34,19 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
 
 # Optional routers
 backtest_router   = _try_import("routes.backtest")
-scan_router       = None  # <<< חשוב: לא לטעון את routes.scan הישן (מונע כפילות getScanTopVolume)
+scan_router       = None  # <<< לא לטעון routes.scan (ישן)
 ai_analyze_router = _try_import("routes.ai_analyze")
 ai_health_router  = _try_import("routes.ai_health")
 health_router     = _try_import("routes.health_full") or _try_import("routes.health")
 dashboard_router  = _try_import("routes.dashboard")
 price_router      = _try_import("routes.price")
 ind_router        = _try_import("routes.routes_indicators")
-multi_scan_router = _try_import("routes.multi_scan")    # הסורק היחיד ל-/scan/top-volume
+multi_scan_router = _try_import("routes.multi_scan")    # הסורק היחיד
 market_router     = _try_import("routes.market")
 analytics_router  = _try_import("routes.analytics")     # ציבורי
 news_router       = _try_import("routes.news")          # ציבורי
-decision_router   = _try_import("routes.decision")      # מוגן (Bearer)
-grid_router       = _try_import("routes.grid")          # מוגן (Bearer)
+decision_router   = _try_import("routes.decision")      # מוגן
+grid_router       = _try_import("routes.grid")          # מוגן
 risk_router       = _try_import("routes.risk")          # אופציונלי
 snapshot_router   = _try_import("routes.snapshot")      # אופציונלי
 
@@ -129,6 +129,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
