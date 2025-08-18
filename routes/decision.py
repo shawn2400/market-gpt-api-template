@@ -1,25 +1,45 @@
 # routes/decision.py
 from __future__ import annotations
-from typing import Dict, Any
-from fastapi import APIRouter, Depends, Body
 
+from typing import Any, Dict
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+# אימות Bearer Token (fallback בטוח אם המודול לא קיים בסביבה)
 try:
-    from utils.auth import require_bearer_token
+    from utils.auth import require_bearer_token  # type: ignore
 except Exception:
-    def require_bearer_token():
-        return None
+    def require_bearer_token():  # pragma: no cover
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-from utils.decision_engine import select_best_trades
+# חישוב ציון החלטה
+try:
+    from utils.scoring import decision_score  # type: ignore
+except Exception:
+    def decision_score(_: Dict[str, Any]) -> float:  # pragma: no cover
+        return 0.0
 
-router = APIRouter(prefix="/decision", tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
+router = APIRouter(
+    prefix="/decision",
+    tags=["Decision"],
+    dependencies=[Depends(require_bearer_token)],
+)
 
-@router.post("/best-trades", summary="Select best trades (quality/speed/diversify)", operation_id="postDecisionBestTrades")
-async def post_best_trades(payload: Dict[str, Any] = Body(..., embed=False)) -> Dict[str, Any]:
-    import asyncio
-    cands = payload.get("candidates") or []
-    top_n = int(payload.get("top_n") or 5)
-    diversify = bool(payload.get("diversify_by_symbol", True))
-    selected = await asyncio.to_thread(select_best_trades, cands, top_n, diversify)
-    return {"ok": True, "selected": selected, "note": f"diversify={diversify}, top_n={top_n}"}
+class DecisionIn(BaseModel):
+    components: Dict[str, Any] = {}
+
+class DecisionOut(BaseModel):
+    score: float
+
+@router.post("/", response_model=DecisionOut, operation_id="postDecisionScore_v2140")
+async def post_decision(payload: DecisionIn) -> DecisionOut:
+    """
+    נקודת קצה קלה לחישוב ציון החלטה משוקלל לפי רכיבי האות.
+    לא מפילה את השרת גם אם חסרים רכיבים — תחזיר 0.0 כשאין מידע.
+    """
+    score = decision_score(payload.components or {})
+    return DecisionOut(score=score)
+
 
 
