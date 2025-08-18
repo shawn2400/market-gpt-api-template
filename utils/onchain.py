@@ -1,39 +1,62 @@
-# routes/onchain.py
+# utils/onchain.py
 from __future__ import annotations
-import asyncio
+import time
 from typing import Dict, Any, List
+import requests
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+_S = requests.Session()
+_S.trust_env = False
+_S.headers.update({"User-Agent": "AlgoGPT/2 onchain", "Accept": "application/json"})
 
-try:
-    from utils.auth import require_bearer_token
-except Exception:
-    def require_bearer_token():
-        raise HTTPException(status_code=401, detail="Unauthorized")
+def _get(url: str, timeout: float = 6.5):
+    r = _S.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
 
-from utils.onchain import get_onchain_overview
+def _btc_sources() -> Dict[str, Any]:
+    warnings: List[str] = []
+    fees = None
+    stats = None
+    try:
+        # mempool.space recommended fees
+        fees = _get("https://mempool.space/api/v1/fees/recommended")
+    except Exception as e:
+        warnings.append(f"fees: {e}")
+    try:
+        # blockchair stats
+        stats = _get("https://api.blockchair.com/bitcoin/stats").get("data", {})
+    except Exception as e:
+        warnings.append(f"stats: {e}")
+    return {"ok": True, "chain": "BTC", "fees": fees, "stats": stats, "warnings": warnings or None}
 
-router = APIRouter(tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
+def _eth_sources() -> Dict[str, Any]:
+    warnings: List[str] = []
+    fees = None
+    stats = None
+    try:
+        # Ethereum gas (blockchair has gas_price, suggested EIP-1559 base fee info)
+        stats_all = _get("https://api.blockchair.com/ethereum/stats")
+        stats = stats_all.get("data", {})
+        fees = {
+            "gas_price_wei": stats.get("gas_price"),
+            "gas_price_gwei": (stats.get("gas_price") or 0) / 1e9 if stats.get("gas_price") else None,
+            "pending_tx": stats.get("mempool_transactions"),
+        }
+    except Exception as e:
+        warnings.append(f"stats/fees: {e}")
+    return {"ok": True, "chain": "ETH", "fees": fees, "stats": stats, "warnings": warnings or None}
 
-@router.get(
-    "/onchain/overview",
-    summary="On-chain overview (BTC/ETH)",
-    operation_id="getOnchainOverview",
-)
-async def onchain_overview(
-    targets: str = Query(
-        "BTC,ETH",
-        description="Comma-separated chains, e.g. BTC,ETH",
-        examples=["BTC", "ETH", "BTC,ETH"],
-    )
-) -> Dict[str, Any]:
-    """
-    אגרגציית אונצ׳יין מהירה מ־public endpoints (ללא מפתח):
-    - BTC: mempool.space (עמלות), blockchair (סטטיסטיקות)
-    - ETH: blockchair (סטטיסטיקות + Gas)
-    """
-    target_list: List[str] = [t.strip().upper() for t in str(targets).split(",") if t.strip()]
-    result = await asyncio.to_thread(get_onchain_overview, target_list or ["BTC", "ETH"])
-    return result
+def get_onchain_overview(targets: List[str]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for t in targets:
+        t = t.upper()
+        if t == "BTC":
+            out["BTC"] = _btc_sources()
+        elif t == "ETH":
+            out["ETH"] = _eth_sources()
+        else:
+            out[t] = {"ok": False, "chain": t, "fees": None, "stats": None, "warnings": [f"unsupported chain: {t}"]}
+    return {"ok": True, "chains": out, "ts": int(time.time())}
+
 
 
