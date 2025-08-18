@@ -1,35 +1,29 @@
-# 📊 AlgoGPT — מערכת מסחר חכמה בזמן אמת
+# 📊 AlgoGPT — מערכת מסחר חכמה בזמן אמת (Binance Futures / Spot / Grid)
 
-AlgoGPT היא מערכת מסחר בזמן אמת עבור Binance (Futures / Spot / Grid) המבצעת:
-- סריקות שוק חכמות עם אינדיקטורים (RSI, MACD, BB וכו')
-- חישובי SL/TP כולל Trailing
-- Backtest אסטרטגיות
-- הפקת דוחות AI, חיבור חדשות, סטטיסטיקות ועוד
-
-### 🚀 REST API — נתיבים פעילים
-
-| נתיב | תיאור |
-|------|--------|
-| `/` | בדיקת תקינות |
-| `/metrics` | מדדי ביצועים |
-| `/__routes` | כל המסלולים הפעילים |
-| `/trade/execute` | ביצוע טרייד (LIVE או בדיקה) |
-| `/ai/ai-analyze` | ניתוח איכות טרייד עם עוגן |
-| `/backtest` | סימולציית אסטרטגיה |
-| `/scan/top-volume` | סריקת סמלים לפי טרנד |
-| `/scan/info` | סטטוס סורק ו־Executor |
-| `/news` | חדשות שוק |
-| `/grid/status` | סטטוס גריד פעיל (נדרש Token) |
+AlgoGPT היא מערכת מסחר אלגוריתמית חיה מבוססת FastAPI שמתחברת ל־Binance ומבצעת:
+- ניתוח טכני חכם (RSI, MACD, EMA, FVG)
+- חישובי SL/TP ודינמיקת ATR
+- סריקות לפי טרנד ונפח
+- Backtest לאסטרטגיות
+- אינטגרציה עם OpenAI (GPT-4o)
+- הפקת דוחות, סטטיסטיקות ודשבורד
 
 ---
 
-### ⚙️ התקנה מהירה
+## 🚀 התקנה מקומית
 
 ```bash
+git clone https://github.com/your-org/algogpt.git
+cd algogpt
+
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+pip install --upgrade pip
 pip install -r requirements.txt
+
 uvicorn main:app --reload --port 10000
+
 
 
 
