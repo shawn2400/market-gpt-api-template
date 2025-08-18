@@ -548,10 +548,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
         "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+            description: unauthorized
+            content:
+              application/json:
+                schema: { $ref: "#/components/schemas/Error" }
 
   /ai-analyze:
     post:
@@ -1046,6 +1046,7 @@ paths:
       tags: [Analytics]
       summary: On-chain overview (BTC/ETH)
       operationId: getOnchainOverview
+      security: []
       parameters:
         - in: query
           name: targets
@@ -1154,6 +1155,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
 
 
 
