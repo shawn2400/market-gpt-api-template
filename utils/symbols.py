@@ -20,7 +20,8 @@ class SymbolsCache:
             info = futures_exchange_info_safe()
             symbols = set()
             for s in info.get("symbols", []):
-                if str(s.get("contractType") or "").upper().endswith("PERPETUAL"):
+                ct = str(s.get("contractType") or "").upper()
+                if ct.endswith("PERPETUAL"):  # USDⓈ-M/COIN-M perpetual
                     symbols.add((s.get("symbol") or "").upper())
             self._symbols = symbols
         else:
@@ -50,10 +51,9 @@ def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[Symbo
         cache = SymbolsCache(market=market)
     cache.ensure()
     if not cache.has(s):
-        # מאפשרים סמלים “לא סטנדרטיים” – ננסה בכל זאת, אבל מסמנים חריגה
-        # אפשר גם להרים כאן Exception אם תרצה החמרה:
-        # raise ValueError(f"Unknown symbol for {market}: {s}")
+        # אם לא נמצא—נחזיר את הקיים כדי לא לחסום זרימה (אפשר להקשיח ל-Exception אם תרצה)
         return s
+    # נמצא—נחזיר את הסימבול התקין
     return s
 
 
