@@ -3,13 +3,11 @@ services:
     name: algogpt-docker
     env: docker
     plan: starter
-
     autoDeploy: false
     pullRequestPreviewsEnabled: false
     healthCheckPath: /
 
     envVars:
-      # CORE
       - key: PORT
         value: "10000"
       - key: WORKERS
@@ -21,11 +19,9 @@ services:
       - key: ALGOGPT_VERSION
         value: "2.14.3"
 
-      # AUTH / TOKENS
       - key: API_BEARER_TOKEN
-        sync: false  # הזן דרך הממשק בלבד
+        sync: false
 
-      # RUNTIME FLAGS
       - key: AUTO_RUN
         value: "false"
       - key: ENABLE_AUTO_TRADING
@@ -35,7 +31,6 @@ services:
       - key: DEFAULT_INTERVAL
         value: "15m"
 
-      # FILTERS / LOGIC
       - key: MIN_QUALITY_SCORE
         value: "6"
       - key: MIN_VOLUME
@@ -44,6 +39,7 @@ services:
         value: "30"
       - key: TRENDING_ONLY
         value: "false"
+
       - key: PRICE_PROTECT_PCT
         value: "0.25"
       - key: PRICE_MAX_AGE_SEC
@@ -53,7 +49,6 @@ services:
       - key: MAX_LEVERAGE
         value: "35"
 
-      # OPENAI
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -63,7 +58,6 @@ services:
       - key: OPENAI_MAX_CONCURRENCY
         value: "4"
 
-      # BINANCE
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -91,7 +85,6 @@ services:
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # EGRESS/IP
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
@@ -101,6 +94,7 @@ services:
       name: tmp
       mountPath: /tmp
       sizeGB: 1
+
 
 
 
