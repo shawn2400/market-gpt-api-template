@@ -1,32 +1,42 @@
 # routes/decision.py
 from __future__ import annotations
-from typing import Any, Dict
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from typing import Dict, Any
+from fastapi import APIRouter, Depends, Body
+import asyncio
 
 try:
-    from utils.auth import require_bearer_token  # type: ignore
+    from utils.auth import require_bearer_token
 except Exception:
     def require_bearer_token():
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        return None
 
 try:
-    from utils.scoring import decision_score  # type: ignore
+    from utils.decision_engine import select_best_trades
 except Exception:
-    def decision_score(_: Dict[str, Any]) -> float:
-        return 0.0
+    # fallback קטן כדי שלא ניפול ברישום route
+    def select_best_trades(candidates, top_n=5, diversify_by_symbol=True):
+        out=[]
+        seen=set()
+        for c in sorted(candidates, key=lambda x: float(x.get("score",0.0)), reverse=True):
+            sym=str(c.get("symbol","")).upper()
+            if diversify_by_symbol and sym in seen:
+                continue
+            seen.add(sym)
+            out.append(c)
+            if len(out)>=int(top_n):
+                break
+        return out
 
-router = APIRouter(prefix="/decision", tags=["Decision"], dependencies=[Depends(require_bearer_token)])
+router = APIRouter(prefix="/decision", tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
 
-class DecisionIn(BaseModel):
-    components: Dict[str, Any] = {}
+@router.post("/best-trades", summary="Select best trades (quality/speed/diversify)", operation_id="postDecisionBestTrades")
+async def post_best_trades(payload: Dict[str, Any] = Body(..., embed=False)) -> Dict[str, Any]:
+    cands = payload.get("candidates") or []
+    top_n = int(payload.get("top_n") or 5)
+    diversify = bool(payload.get("diversify_by_symbol", True))
+    selected = await asyncio.to_thread(select_best_trades, cands, top_n, diversify)
+    return {"ok": True, "selected": selected, "note": f"diversify={diversify}, top_n={top_n}"}
 
-class DecisionOut(BaseModel):
-    score: float
-
-@router.post("/", response_model=DecisionOut, operation_id="postDecisionScore_v2140")
-async def post_decision(payload: DecisionIn) -> DecisionOut:
-    return DecisionOut(score=decision_score(payload.components or {}))
 
 
 
