@@ -12,7 +12,6 @@ except Exception:
 
 router = APIRouter(prefix="/grid", tags=["Health"], dependencies=[Depends(require_bearer_token)])
 
-# אם יש לך grid_tracker אמיתי—ייבא והשתמש. אחרת פולבאק.
 try:
     from utils.grid_tracker import get_status as _get_status  # type: ignore
     _HAS_TRACKER = True
