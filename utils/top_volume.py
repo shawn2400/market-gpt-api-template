@@ -19,12 +19,10 @@ _S.headers.update({
 
 _cache = {"t": 0.0, "key": "", "data": []}
 
-
 def _get_json(url: str, timeout: float = 8.0):
     r = _S.get(url, timeout=timeout)
     r.raise_for_status()
     return r.json()
-
 
 def get_top_volume_symbols(
     market: str = "futures",
@@ -34,8 +32,8 @@ def get_top_volume_symbols(
     cache_ttl: float = 10.0,
 ) -> Tuple[bool, List[str]]:
     """
-    (ok, symbols) ממויין לפי quoteVolume 24h יורד, עבור סימבולים שנגמרים ב־quote.
-    מכבד TOP_VOLUME_MIN_QV מהסביבה אם min_quote_volume לא עבר.
+    מחזיר (ok, symbols) ממוין לפי 24h quoteVolume (יורד) לסימבולים שמסתיימים ב-quote.
+    מכבד TOP_VOLUME_MIN_QV אם min_quote_volume לא הועבר.
     """
     try:
         eff_min_qv = ENV_MIN_QV if (min_quote_volume is None) else float(min_quote_volume)
@@ -59,6 +57,7 @@ def get_top_volume_symbols(
         return True, syms
     except Exception:
         return False, []
+
 
 
 
