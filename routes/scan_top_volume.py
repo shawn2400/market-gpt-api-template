@@ -38,7 +38,7 @@ _S.headers.update({
     "Accept-Encoding": "gzip",
 })
 
-# שים לב: אם API_BEARER_TOKEN מוגדר – הנתיב יהיה מוגן; אם לא – ציבורי.
+# אם API_BEARER_TOKEN קיים – מוגן; אחרת – ציבורי.
 router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
 
 # --------- Top Volume (מעדיף utils/top_volume אם קיים) ---------
@@ -99,7 +99,7 @@ def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.
     except Exception:
         return None
 
-# --------- אינדיקטורים קלים (ללא תלות חיצונית) ---------
+# --------- אינדיקטורים קלים ---------
 def _ema(s: pd.Series, n: int) -> pd.Series:
     n = max(1, int(n))
     return s.ewm(span=n, adjust=False).mean()
@@ -212,7 +212,7 @@ def _score_row(row: pd.Series) -> tuple[float, str, int, str]:
 @router.get(
     "/top-volume",
     summary="Scan top-volume symbols concurrently (extended)",
-    operation_id="getScanTopVolume",  # תואם OpenAPI שלך
+    operation_id="getScanTopVolume",
 )
 async def scan_top_volume(
     market: str = Query("futures", enum=["futures","spot"]),
@@ -221,7 +221,7 @@ async def scan_top_volume(
     timeframe: str = Query("15m"),
     bars: int = Query(200, ge=50, le=1500),
 
-    trending_only: bool = Query(False, description="אם true – מחזיר רק סימבולים בטרנד פעיל"),
+    trending_only: bool = Query(False, description="אם true – רק בטרנד פעיל"),
     min_adx: float = Query(20.0, ge=5.0, le=60.0),
 
     ema_fast: int = Query(21, ge=3, le=200),
@@ -235,8 +235,8 @@ async def scan_top_volume(
     ich_base: int = Query(26, ge=10, le=100),
     ich_span_b: int = Query(52, ge=20, le=200),
 
-    ms_lookback: int = Query(5, ge=2, le=20),    # תאימות קדימה (לא בשימוש כאן)
-    ms_pivot_span: int = Query(3, ge=1, le=10),  # תאימות קדימה (לא בשימוש כאן)
+    ms_lookback: int = Query(5, ge=2, le=20),    # שמורים לתאימות קדימה
+    ms_pivot_span: int = Query(3, ge=1, le=10),
 
     concurrency: int = Query(16, ge=2, le=64),
 ) -> Dict[str, Any]:
@@ -273,7 +273,7 @@ async def scan_top_volume(
                     score = round(max(0.0, score - 0.8), 2)
                     reason = (reason + " non-trend")[:140]
 
-                # שמות שדות “ישנים” + החדשים
+                # תאימות לשמות שדות "ישנים"
                 ich_raw = str(row.get("ichimoku_state") or "NEUTRAL").upper()
                 ich_state = "BULL" if ich_raw == "BULLISH" else ("BEAR" if ich_raw == "BEARISH" else "NEUTRAL")
                 trend_dir = str(row.get("trend_dir") or "FLAT").upper()
@@ -294,7 +294,7 @@ async def scan_top_volume(
                         "ms_trend": ms_trend,      # תאימות אחורה
                         "trending": is_trending,
                         "confidence": conf,
-                        # גם החדשים:
+                        # גם השמות החדשים:
                         "trend_dir": trend_dir,
                         "ichimoku_state": ich_raw,
                         "atr": float(row.get("atr") or 0.0),
@@ -314,6 +314,7 @@ async def scan_top_volume(
             out.append(r)
     out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(out), "signals": out}
+
 
 
 
