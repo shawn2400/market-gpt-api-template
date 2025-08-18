@@ -144,6 +144,169 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /trade/execute:
+    post:
+      summary: ביצוע עסקה (LIVE או בדיקה)
+      operationId: postTradeExecute
+      tags: [Trades]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                side:
+                  type: string
+                  enum: [LONG, SHORT]
+                budget:
+                  type: number
+                leverage:
+                  type: integer
+                entry:
+                  type: number
+                sl:
+                  type: number
+                tp:
+                  type: number
+                dry_run:
+                  type: boolean
+              required: [symbol, side, budget, leverage, entry, sl, tp]
+      responses:
+        "200":
+          description: תוצאה מוצלחת
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode:
+                    type: string
+                  symbol:
+                    type: string
+                  side:
+                    type: string
+                  entry:
+                    type: number
+                  sl:
+                    type: number
+                  tp:
+                    type: number
+                  leverage:
+                    type: integer
+                  budget:
+                    type: number
+                  quantity:
+                    type: number
+        "401":
+          description: לא מורשה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /backtest:
+    post:
+      summary: הרצת Backtest על סמלים נבחרים
+      operationId: postBacktestRun
+      tags: [Backtest]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                timeframe:
+                  type: string
+                limit:
+                  type: integer
+      responses:
+        "200":
+          description: תוצאה עם עסקאות וסטטיסטיקות
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbol:
+                    type: string
+                  timeframe:
+                    type: string
+                  win_rate:
+                    type: number
+                  total_pnl:
+                    type: number
+                  count:
+                    type: integer
+                  trades:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: integer
+                        price:
+                          type: number
+                        side:
+                          type: string
+                        pnl:
+                          type: number
+        "401":
+          description: לא מורשה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /scan/top-volume:
+    get:
+      summary: סריקת סמלים לפי ווליום ומגמה
+      operationId: getScanTopVolume
+      tags: [Scan]
+      parameters:
+        - name: market
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: תוצאה עם סימונים
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  count:
+                    type: integer
+                  signals:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        symbol:
+                          type: string
+                        timeframe:
+                          type: string
+                        side:
+                          type: string
+                        score:
+                          type: number
+                        note:
+                          type: string
+
 components:
   securitySchemes:
     HTTPBearer:
