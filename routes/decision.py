@@ -1,28 +1,39 @@
 # routes/decision.py
 from __future__ import annotations
 from typing import Dict, Any
-import asyncio
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, Body, Header, HTTPException, status
+import asyncio, os
 
+# ---- Auth (Bearer) ----
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
-    async def require_bearer_token(*_, **__):  # fallback: אם אין מודול — לא לחסום
+    def require_bearer_token(authorization: str = Header(default="")):
+        expected = os.getenv("API_BEARER_TOKEN", "").strip()
+        if not expected:
+            return None
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+        got = authorization.split(" ", 1)[1].strip()
+        if got != expected:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
         return None
 
+# ---- Engine ----
 try:
     from utils.decision_engine import select_best_trades  # type: ignore
 except Exception:
     def select_best_trades(candidates, top_n=5, diversify_by_symbol=True):
-        out=[]; seen=set()
-        for c in sorted(candidates, key=lambda x: float(x.get("score",0.0)), reverse=True):
-            sym=str(c.get("symbol","")).upper()
+        out = []
+        seen = set()
+        for c in sorted(candidates, key=lambda x: float(c.get("score", 0.0)), reverse=True):
+            sym = str(c.get("symbol", "")).upper()
             if diversify_by_symbol and sym in seen:
                 continue
             seen.add(sym)
-            c["rank"]=len(out)+1
             out.append(c)
-            if len(out)>=int(top_n): break
+            if len(out) >= int(top_n):
+                break
         return out
 
 router = APIRouter(prefix="/decision", tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
