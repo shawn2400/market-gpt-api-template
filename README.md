@@ -1,21 +1,36 @@
 # 📊 AlgoGPT — מערכת מסחר חכמה בזמן אמת
 
-API למסחר אלגוריתמי ב־Binance (Futures / Spot / Grid), סריקות Multi-TF עם אינדיקטורים, חישובי SL/TP, Backtest ודשבורד HTML קליל.  
-נבנה ב־FastAPI ומוכן לפריסה באמצעות Docker / Render.
+AlgoGPT היא מערכת מסחר בזמן אמת עבור Binance (Futures / Spot / Grid) המבצעת:
+- סריקות שוק חכמות עם אינדיקטורים (RSI, MACD, BB וכו')
+- חישובי SL/TP כולל Trailing
+- Backtest אסטרטגיות
+- הפקת דוחות AI, חיבור חדשות, סטטיסטיקות ועוד
+
+### 🚀 REST API — נתיבים פעילים
+
+| נתיב | תיאור |
+|------|--------|
+| `/` | בדיקת תקינות |
+| `/metrics` | מדדי ביצועים |
+| `/__routes` | כל המסלולים הפעילים |
+| `/trade/execute` | ביצוע טרייד (LIVE או בדיקה) |
+| `/ai/ai-analyze` | ניתוח איכות טרייד עם עוגן |
+| `/backtest` | סימולציית אסטרטגיה |
+| `/scan/top-volume` | סריקת סמלים לפי טרנד |
+| `/scan/info` | סטטוס סורק ו־Executor |
+| `/news` | חדשות שוק |
+| `/grid/status` | סטטוס גריד פעיל (נדרש Token) |
 
 ---
 
-## 🚀 התחלה מהירה
-
-### A) הרצה מקומית (Python)
+### ⚙️ התקנה מהירה
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install --upgrade pip
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
-export PORT=10000
-uvicorn main:app --host 0.0.0.0 --port ${PORT}
+uvicorn main:app --reload --port 10000
+
 
 
 
