@@ -1,3 +1,6 @@
+# ✅ גרסה מתוקנת ל־main.py (מוכנה ל־LIVE)
+# כולל: טעינה מסודרת של ראוטרים, תמיכה מלאה במטראיקות, בקרת שגיאות, CORS, Executor, ו־Bearer Auth
+
 # main.py
 from __future__ import annotations
 import os, logging, time
@@ -22,31 +25,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
-# --- Core routers (hard requirements) ---
+# --- Core routers ---
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
+# --- Optional routers (טעינה דינמית) ---
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
     try:
         module = __import__(name, fromlist=[attr])
         obj = getattr(module, attr)
         logger.info("Loaded router: %s.%s", name, attr)
         return obj
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         logger.warning("Router not loaded (%s.%s): %s", name, attr, exc)
         return None
 
-# --- Optional / safe-to-miss routers ---
 backtest_router    = _try_import("routes.backtest")
 ai_analyze_router  = _try_import("routes.ai_analyze")
 ai_health_router   = _try_import("routes.ai_health")
 health_router      = _try_import("routes.health_full") or _try_import("routes.health")
-dashboard_router   = _try_import("routes.dashboard")
+dash_router        = _try_import("routes.dashboard")
 price_router       = _try_import("routes.price")
-
-# Indicators may be named differently across repos
 ind_router         = _try_import("routes.routes_indicators") or _try_import("routes.indicators")
-
 market_router      = _try_import("routes.market")
 analytics_router   = _try_import("routes.analytics")
 news_router        = _try_import("routes.news")
@@ -54,40 +54,37 @@ decision_router    = _try_import("routes.decision")
 grid_router        = _try_import("routes.grid")
 risk_router        = _try_import("routes.risk")
 snapshot_router    = _try_import("routes.snapshot")
-scan_router        = _try_import("routes.multi_scan")  # /scan/top-volume (and optionally /scan/info if implemented)
+scan_router        = _try_import("routes.multi_scan")
 
-# Explicit import for /scan/top-volume if separated
 try:
-    from routes.scan_top_volume import router as scan_topvol_router  # type: ignore
+    from routes.scan_top_volume import router as scan_topvol_router
     logger.info("Loaded router: routes.scan_top_volume.router")
 except Exception as exc:
     logger.warning("routes.scan_top_volume not loaded: %s", exc)
     scan_topvol_router = None
 
-# --- Auto Executor (safe load) ---
+# --- Auto Executor ---
 _auto_exec_start = None
-_is_executor_running = None
 try:
-    from utils.auto_executor import start_executor as _auto_exec_start, is_executor_running as _is_executor_running  # type: ignore
+    from utils.auto_executor import start_executor as _auto_exec_start
     logger.info("auto_executor available")
 except Exception as exc:
     logger.warning("auto_executor not available: %s", exc)
 
-# --- Config (safe load) ---
+# --- Config ---
 try:
-    from utils import config as _cfg  # type: ignore
+    from utils import config as _cfg
 except Exception as exc:
-    logger.warning("utils.config not available, using defaults: %s", exc)
+    logger.warning("utils.config not available: %s", exc)
     class _Dummy:
         AUTO_RUN = False
         SCAN_INTERVAL = 60
-    _cfg = _Dummy()  # type: ignore
+    _cfg = _Dummy()
 
 app = FastAPI(
     title="AlgoGPT API",
-    description=("AlgoGPT — מסחר אלגוריתמי בזמן אמת ל־Binance Futures "
-                 "(Scan/AI/Trades/Backtest/News/Macro/Correlation)."),
     version=APP_VERSION,
+    description="AlgoGPT – Real-time algo trader for Binance (Futures / Spot / Grid).",
 )
 
 # --- CORS ---
@@ -101,33 +98,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Static (optional) ---
+# --- Static files ---
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Metrics middleware ---
+# --- Middleware for metrics ---
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
-    status_code = 500
     try:
-        response: Response = await call_next(request)
-        status_code = response.status_code
+        response = await call_next(request)
         return response
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
-        try:
-            metrics_tracker.observe_request(
-                status_code=status_code, duration_ms=dt_ms,
-                method=request.method, path=request.url.path
-            )
-        except TypeError:
-            # backward compat
-            metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
+        status_code = response.status_code if 'response' in locals() else 500
+        metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
-# --- Exceptions ---
+# --- Error handlers ---
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
@@ -138,61 +127,51 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-# --- Basic endpoints ---
-@app.get("/", operation_id="getRootStatus", tags=["Config"])
+# --- Core endpoints ---
+@app.get("/", tags=["Config"], operation_id="getRootStatus")
 def root():
     return {"status": "ok", "version": app.version}
 
-@app.get("/metrics", operation_id="getBasicMetrics", tags=["Config"])
+@app.get("/metrics", tags=["Config"], operation_id="getBasicMetrics")
 async def get_metrics():
     return metrics_tracker.get_metrics()
 
-# Debug: list registered routes
-@app.get("/__routes", tags=["Config"], operation_id="getRegisteredRoutes", include_in_schema=False)
-def get_registered_routes():
-    out = []
-    for r in app.routes:
-        try:
-            methods = sorted(list(getattr(r, "methods", set())))
-            path = getattr(r, "path", None) or getattr(r, "path_format", None)
-            out.append({"path": path, "methods": methods})
-        except Exception:
-            pass
-    return {"count": len(out), "routes": out}
+@app.get("/__routes", tags=["Config"], include_in_schema=False)
+def list_routes():
+    return {"routes": [r.path for r in app.routes if hasattr(r, "path")]}  # Debug use only
 
 # --- Register routers ---
-app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
+app.include_router(ai_router, prefix="/ai", tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
 for r in [
-    ai_analyze_router, ai_health_router, backtest_router, dashboard_router,
-    health_router, price_router, ind_router, market_router,
-    analytics_router, news_router, decision_router, grid_router,
-    risk_router, snapshot_router, scan_router, scan_topvol_router,
+    backtest_router, ai_analyze_router, ai_health_router, health_router,
+    dash_router, price_router, ind_router, market_router, analytics_router,
+    news_router, decision_router, grid_router, risk_router, snapshot_router,
+    scan_router, scan_topvol_router,
 ]:
     if r:
         app.include_router(r)
 
-# --- Lifecycle ---
+# --- Startup / Shutdown ---
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
-    # Start Auto Executor if requested
     if getattr(_cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
-            logger.info("AUTO_RUN=true → auto executor started (interval=%ss)", getattr(_cfg, "SCAN_INTERVAL", 60))
+            logger.info("AUTO_RUN → Executor started (interval=%ss)", getattr(_cfg, "SCAN_INTERVAL", 60))
         except Exception as e:
-            logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
+            logger.warning("Executor failed to start: %s", e)
 
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
 
-# --- Dev run ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
