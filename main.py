@@ -1,4 +1,3 @@
-# main.py
 from __future__ import annotations
 import os, logging, time
 from typing import List, Optional
@@ -20,7 +19,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
-# Core routers (existing)
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
@@ -35,7 +33,6 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
 # Optional routers
 backtest_router   = _try_import("routes.backtest")
 scan_router       = _try_import("routes.scan")
-scan_tv_router    = _try_import("routes.scan_top_volume")   # ⬅️ חדש
 ai_analyze_router = _try_import("routes.ai_analyze")
 ai_health_router  = _try_import("routes.ai_health")
 health_router     = _try_import("routes.health_full") or _try_import("routes.health")
@@ -47,6 +44,7 @@ market_router     = _try_import("routes.market")
 analytics_router  = _try_import("routes.analytics")
 news_router       = _try_import("routes.news")
 decision_router   = _try_import("routes.decision")
+grid_router       = _try_import("routes.grid")  # חדש
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -108,9 +106,9 @@ app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
 for r in [
-    ai_analyze_router, ai_health_router, scan_router, scan_tv_router, backtest_router, dashboard_router,
+    ai_analyze_router, ai_health_router, scan_router, backtest_router, dashboard_router,
     health_router, price_router, ind_router, multi_scan_router, market_router,
-    analytics_router, news_router, decision_router
+    analytics_router, news_router, decision_router, grid_router
 ]:
     if r:
         app.include_router(r)
@@ -126,6 +124,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
