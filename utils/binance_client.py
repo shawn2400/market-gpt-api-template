@@ -63,10 +63,10 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     return _ex_info_cache
 
 def futures_ping() -> bool:
-    client = get_futures_client()
     try:
-        _retry_call(lambda: client.futures_ping(), "futures_ping", tries=2)
-        return True
+        url = f"{_FUT_HTTP_BASE}/fapi/v1/ping"
+        response = _requests_session.get(url, timeout=5)
+        return response.status_code == 200
     except Exception:
         return False
 
@@ -78,6 +78,7 @@ def futures_mark_price(symbol: str) -> Dict[str, Any]:
         return response.json()
     except Exception as e:
         return {"error": str(e)}
+
 
 
 
