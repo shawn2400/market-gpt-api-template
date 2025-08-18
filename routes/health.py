@@ -1,9 +1,5 @@
-# routes/health_full.py
 from __future__ import annotations
-
-import os
-import time
-import platform
+import os, time, platform
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -109,6 +105,7 @@ async def strategy_version():
 async def liveness():
     uptime = int(time.time()) - BOOT_TS
     return LiveResponse(status="live", uptime_sec=uptime, now_utc=_now_iso_utc())
+
 
 
 
