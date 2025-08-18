@@ -1,4 +1,3 @@
-# utils/indicators_ext.py
 from __future__ import annotations
 import pandas as pd
 from ta.trend import EMAIndicator, ADXIndicator
@@ -54,6 +53,7 @@ def extended_score_last_row(row: pd.Series) -> tuple[float, str, int, str]:
     conf = int(max(0, min(100, adx * 2)))
     reason = f"{dir_} ema_fast={ema_fast:.4f} ema_slow={ema_slow:.4f} adx={adx:.1f}"
     return round(score, 2), side, conf, reason
+
 
 
 
