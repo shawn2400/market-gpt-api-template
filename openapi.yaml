@@ -57,11 +57,9 @@ components:
         uptime_sec: { type: integer }
         requests:
           type: object
-          properties: {}
           additionalProperties: true
         latency_ms:
           type: object
-          properties: {}
           additionalProperties: true
 
     # ---------- AI ----------
@@ -69,12 +67,9 @@ components:
       type: object
       properties:
         ok: { type: boolean, example: true }
-        model:
-          oneOf: [ {type: string}, {type: "null"} ]
-        latency_ms:
-          oneOf: [ {type: number}, {type: "null"} ]
-        error:
-          oneOf: [ {type: string}, {type: "null"} ]
+        model: { oneOf: [ {type: string}, {type: "null"} ] }
+        latency_ms: { oneOf: [ {type: number}, {type: "null"} ] }
+        error: { oneOf: [ {type: string}, {type: "null"} ] }
 
     AiQualityRequest:
       type: object
@@ -94,14 +89,8 @@ components:
       properties:
         quality_score: { type: number }
         success_pct:   { type: number }
-        anchor:
-          type: object
-          properties: {}
-          additionalProperties: true
-        components:
-          type: object
-          properties: {}
-          additionalProperties: true
+        anchor: { type: object, additionalProperties: true }
+        components: { type: object, additionalProperties: true }
 
     ManualScanItem:
       type: object
@@ -110,36 +99,14 @@ components:
         market: { type: string, example: futures }
         interval: { type: string, example: 15m }
         frames: { type: array, items: { type: string } }
-        trend:
-          oneOf:
-            - type: string
-              enum: [UP, DOWN]
-            - type: "null"
-        direction:
-          oneOf:
-            - type: string
-              enum: [LONG, SHORT]
-            - type: "null"
+        trend: { oneOf: [ {type: string, enum: [UP, DOWN]}, {type: "null"} ] }
+        direction: { oneOf: [ {type: string, enum: [LONG, SHORT]}, {type: "null"} ] }
         rsi: { oneOf: [ {type: number}, {type: "null"} ] }
         adx: { oneOf: [ {type: number}, {type: "null"} ] }
         volume: { oneOf: [ {type: number}, {type: "null"} ] }
-        quality_score:
-          oneOf:
-            - type: number
-              minimum: 0
-              maximum: 10
-            - type: "null"
-        signal:
-          oneOf:
-            - type: string
-              enum: [BUY, SELL, HOLD]
-            - type: "null"
-        confidence:
-          oneOf:
-            - type: integer
-              minimum: 0
-              maximum: 100
-            - type: "null"
+        quality_score: { oneOf: [ {type: number, minimum: 0, maximum: 10}, {type: "null"} ] }
+        signal: { oneOf: [ {type: string, enum: [BUY, SELL, HOLD]}, {type: "null"} ] }
+        confidence: { oneOf: [ {type: integer, minimum: 0, maximum: 100}, {type: "null"} ] }
         reason: { oneOf: [ {type: string}, {type: "null"} ] }
         close:  { oneOf: [ {type: number}, {type: "null"} ] }
         atr:    { oneOf: [ {type: number}, {type: "null"} ] }
@@ -182,10 +149,7 @@ components:
       type: object
       properties:
         status: { type: string, example: ok }
-        result:
-          type: object
-          properties: {}
-          additionalProperties: true
+        result: { type: object, additionalProperties: true }
 
     # ---------- Backtest ----------
     BacktestTrade:
@@ -213,19 +177,10 @@ components:
       properties:
         symbol: { type: string, example: BTCUSDT }
         timeframe: { type: string, example: 15m }
-        side:
-          oneOf:
-            - type: string
-              enum: [LONG, SHORT]
-            - type: "null"
+        side: { oneOf: [ {type: string, enum: [LONG, SHORT]}, {type: "null"} ] }
         score: { type: number, minimum: 0, maximum: 10 }
         note:  { oneOf: [ {type: string}, {type: "null"} ] }
-        details:
-          oneOf:
-            - type: object
-              properties: {}
-              additionalProperties: true
-            - type: "null"
+        details: { oneOf: [ {type: object, additionalProperties: true}, {type: "null"} ] }
 
     ScanResponse:
       type: object
@@ -236,9 +191,25 @@ components:
 
     # ---------- Indicators ----------
     IndicatorsRecord:
+      title: IndicatorsRecord
+      description: Flexible indicators map (string keys -> arbitrary values).
       type: object
-      properties: {}
-      additionalProperties: true
+      properties: {}            # <-- מוסיף properties ריק למען ולידטורים מחמירים
+      additionalProperties:     # ערכים גמישים: מספרים/מחרוזות/בוליאן/נאל/מערכים/אובייקטים
+        anyOf:
+          - type: number
+          - type: string
+          - type: boolean
+          - type: "null"
+          - type: array
+            items:
+              anyOf:
+                - type: number
+                - type: string
+                - type: boolean
+                - type: "null"
+          - type: object
+            additionalProperties: true
 
     # ---------- Analytics / News ----------
     TopVolumeResponse:
@@ -290,17 +261,8 @@ components:
         url: { type: string }
         published_at: { oneOf: [ {type: string}, {type: "null"} ] }
         impact_score: { type: integer }
-        source:
-          oneOf:
-            - type: object
-              properties: {}
-              additionalProperties: true
-            - type: "null"
-        currencies:
-          oneOf:
-            - type: array
-              items: { type: object, properties: {}, additionalProperties: true }
-            - type: "null"
+        source: { oneOf: [ {type: object, additionalProperties: true}, {type: "null"} ] }
+        currencies: { oneOf: [ {type: array, items: { type: object, additionalProperties: true }}, {type: "null"} ] }
 
     NewsResponse:
       type: object
@@ -314,10 +276,7 @@ components:
       properties:
         ok: { type: boolean }
         score: { type: number, description: "-100..100" }
-        buckets:
-          type: object
-          properties: {}
-          additionalProperties: { type: integer }
+        buckets: { type: object, additionalProperties: { type: integer } }
         samples: { type: integer }
 
     EtaRequest:
@@ -372,30 +331,21 @@ components:
         side:   { type: string, enum: [LONG, SHORT] }
         entry:  { type: number }
         sl:     { type: number }
-        tp:     { type: number, nullable: true }
-        atr:    { type: number, nullable: true }
-        equity_usdt:     { type: number, nullable: true }
-        confidence:      { type: number, nullable: true, minimum: 0, maximum: 100, default: 55 }
-        max_budget_usdt: { type: number, nullable: true }
-        max_leverage:    { type: integer, nullable: true, minimum: 1, maximum: 125 }
+        tp:     { oneOf: [ {type: number}, {type: "null"} ] }
+        atr:    { oneOf: [ {type: number}, {type: "null"} ] }
+        equity_usdt:     { oneOf: [ {type: number}, {type: "null"} ] }
+        confidence:      { oneOf: [ {type: number, minimum: 0, maximum: 100, default: 55}, {type: "null"} ] }
+        max_budget_usdt: { oneOf: [ {type: number}, {type: "null"} ] }
+        max_leverage:    { oneOf: [ {type: integer, minimum: 1, maximum: 125}, {type: "null"} ] }
 
     RiskSuggestResponse:
       type: object
       properties:
         ok: { type: boolean }
-        suggested:
-          type: object
-          additionalProperties: true
-        inputs:
-          type: object
-          additionalProperties: true
-        constraints:
-          type: object
-          nullable: true
-          additionalProperties: true
-        note:
-          type: string
-          nullable: true
+        suggested: { type: object, additionalProperties: true }
+        inputs: { type: object, additionalProperties: true }
+        constraints: { oneOf: [ {type: object, additionalProperties: true}, {type: "null"} ] }
+        note: { oneOf: [ {type: string}, {type: "null"} ] }
 
     # ---------- Orderflow / Onchain ----------
     DepthSnapshot:
@@ -458,13 +408,11 @@ components:
         fees:
           oneOf:
             - type: object
-              properties: {}
               additionalProperties: true
             - type: "null"
         stats:
           oneOf:
             - type: object
-              properties: {}
               additionalProperties: true
             - type: "null"
         warnings:
@@ -512,7 +460,7 @@ paths:
     get:
       tags: [Dashboard]
       summary: Minimal HTML dashboard
-      operationId: getDashboardHtml
+      operationId: getDashboardHtml_v2
       security: []
       responses:
         "200":
@@ -726,34 +674,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /scan/multi:
-    post:
-      tags: [Scan]
-      summary: Run multi-symbol scan
-      operationId: postScanMulti
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [symbols]
-              properties:
-                symbols: { type: array, items: { type: string } }
-                timeframe: { type: string, default: 15m }
-                limit: { type: integer, default: 200 }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ScanResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
   /scan/top-volume:
     get:
       tags: [Scan]
@@ -897,23 +817,20 @@ paths:
       tags: [Analytics]
       summary: Macro snapshot (DXY/NDX/SPX/FG/BTC.D)
       operationId: getMacro
+      security: []
       responses:
         "200":
           description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MacroSnapshot" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /news/crypto:
     get:
       tags: [News]
       summary: Crypto news (CryptoPanic) with impact score
       operationId: getCryptoNews
+      security: []
       parameters:
         - in: query
           name: filter
@@ -925,28 +842,19 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/NewsResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /sentiment/summary:
     get:
       tags: [Analytics]
       summary: Sentiment summary (-100..100)
       operationId: getSentiment
+      security: []
       responses:
         "200":
           description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SentimentSummary" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   /eta/time-to-target:
     post:
@@ -1105,11 +1013,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OnchainOverview" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
   # ---------- Health ----------
   /health:
