@@ -4,18 +4,25 @@ import time
 import threading
 from typing import Callable, Any, Dict, Optional
 
+import requests
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
 _SPOT_HTTP_BASE = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
-_FUT_HTTP_BASE  = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+_FUT_HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
 _client: Optional[Client] = None
 _client_lock = threading.Lock()
 
-_ex_info_cache: Dict[str, Any] | None = None
+_ex_info_cache: Optional[Dict[str, Any]] = None
 _ex_info_ts: float = 0.0
 _EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))  # 30 דקות
+
+# הגדר session עם User-Agent
+_requests_session = requests.Session()
+_requests_session.headers.update({
+    "User-Agent": "Mozilla/5.0",
+})
 
 def get_client() -> Client:
     global _client
@@ -23,8 +30,7 @@ def get_client() -> Client:
         if _client is None:
             api = os.getenv("BINANCE_API_KEY") or ""
             secret = os.getenv("BINANCE_API_SECRET") or ""
-            _client = Client(api, secret)
-            # כיוון בסיסי URL-ים
+            _client = Client(api, secret, requests_params={"session": _requests_session})
             _client.API_URL = _SPOT_HTTP_BASE
             _client.FUTURES_URL = _FUT_HTTP_BASE
         return _client
@@ -56,18 +62,25 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     return _ex_info_cache
 
 def futures_ping() -> bool:
-    client = get_futures_client()
     try:
-        _retry_call(lambda: client.futures_ping(), "futures_ping", tries=2)
+        _retry_call(lambda: get_futures_client().futures_ping(), "futures_ping", tries=2)
         return True
     except Exception:
         return False
 
 def futures_mark_price(symbol: str) -> Dict[str, Any]:
-    client = get_futures_client()
     sym = (symbol or "").upper()
-    data = _retry_call(lambda: client.futures_mark_price(symbol=sym), "futures_mark_price", tries=3)
-    return data or {}
+    try:
+        return _retry_call(lambda: get_futures_client().futures_mark_price(symbol=sym), "futures_mark_price", tries=3)
+    except Exception:
+        # fallback עם requests
+        url = f"{_FUT_HTTP_BASE}/fapi/v1/premiumIndex?symbol={sym}"
+        try:
+            res = _requests_session.get(url, timeout=5)
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            raise RuntimeError(f"futures_mark_price failed via both client and requests: {e}")
 
 
 
