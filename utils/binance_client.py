@@ -22,6 +22,7 @@ _requests_session = requests.Session()
 _requests_session.headers.update({
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json",
+    "X-MBX-APIKEY": os.getenv("BINANCE_API_KEY", "")
 })
 
 def get_client() -> Client:
@@ -77,6 +78,7 @@ def futures_mark_price(symbol: str) -> Dict[str, Any]:
         return response.json()
     except Exception as e:
         return {"error": str(e)}
+
 
 
 
