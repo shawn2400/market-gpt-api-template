@@ -1,85 +1,70 @@
-# utils/binance_client.py
+# routes/risk.py
 from __future__ import annotations
-import os, time, threading
-from typing import Any, Dict, Callable, Optional
+from typing import Any, Dict
+from fastapi import APIRouter, Depends, HTTPException, Body
 
-from binance.client import Client
-from binance.exceptions import BinanceAPIException, BinanceRequestException
+try:
+    from utils.auth import require_bearer_token
+except Exception:
+    async def require_bearer_token():
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-_client: Optional[Client] = None
-_lock = threading.Lock()
+router = APIRouter(prefix="/risk", tags=["Risk"], dependencies=[Depends(require_bearer_token)])
 
-_BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
-_MAX_TRIES    = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
-_RECV_WINDOW  = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
-
-def _mk_client() -> Client:
-    api = os.getenv("BINANCE_API_KEY", "") or ""
-    sec = os.getenv("BINANCE_API_SECRET", "") or ""
-    # client סינכרוני; קריאות futures_* ייצאו ל-Futures URL של הספרייה
-    return Client(api_key=api, api_secret=sec, requests_params={"timeout": 10})
-
-def get_futures_client() -> Client:
-    global _client
-    with _lock:
-        if _client is None:
-            _client = _mk_client()
-        return _client
-
-def _retry(label: str, fn: Callable[[], Any], tries: int = _MAX_TRIES):
-    delay = _BACKOFF_BASE
-    last = None
-    for i in range(tries):
-        try:
-            return fn()
-        except (BinanceAPIException, BinanceRequestException, Exception) as e:
-            last = e
-            if i == tries - 1:
-                break
-            time.sleep(delay)
-            delay *= 2
-    if last:
-        raise last
-    raise RuntimeError(f"{label} failed")
-
-def futures_ping() -> bool:
-    c = get_futures_client()
-    try:
-        _retry("futures_ping", lambda: c.futures_ping())
-        return True
-    except Exception:
-        return False
-
-def futures_server_time() -> Dict[str, Any]:
-    c = get_futures_client()
-    return _retry("futures_time", lambda: c.futures_time())
-
-def futures_mark_price(symbol: str) -> Dict[str, Any]:
-    c = get_futures_client()
-    return _retry(
-        "futures_mark_price",
-        lambda: c.futures_mark_price(symbol=symbol, recvWindow=_RECV_WINDOW),
-    )
-
-def futures_exchange_info_safe() -> Dict[str, Any]:
-    c = get_futures_client()
-    return _retry("futures_exchange_info", lambda: c.futures_exchange_info())
-
-def ensure_hedge_mode(force: bool = False) -> Optional[bool]:
+def _fallback_suggest_risk(**payload) -> Dict[str, Any]:
     """
-    אם BINANCE_FORCE_HEDGE_MODE=true או force=True — נאכוף Hedge Mode (dualSidePosition).
+    Fallback פשוט כאשר utils.risk לא קיים.
+    לוגיקה: תקציב = min(max_budget_usdt, equity*RISK%); מינוף <= max_leverage;
+    כמות = budget * leverage / entry.
     """
-    if not force and str(os.getenv("BINANCE_FORCE_HEDGE_MODE", "false")).lower() not in ("1","true","yes"):
-        return None
-    c = get_futures_client()
+    import os
+    sym = str(payload.get("symbol", ""))
+    side = str(payload.get("side", "")).upper()
+    entry = float(payload.get("entry", 0) or 0)
+    sl    = float(payload.get("sl", 0) or 0)
+    tp    = payload.get("tp")
+
+    equity   = float(payload.get("equity_usdt") or 0.0)
+    max_bu   = float(payload.get("max_budget_usdt") or float(os.getenv("MAX_TRADE_BUDGET", "100")))
+    max_lev  = int(payload.get("max_leverage") or int(os.getenv("MAX_LEVERAGE", "35")))
+    risk_pct = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))
+
+    if not sym or side not in ("LONG", "SHORT") or entry <= 0 or sl <= 0:
+        return {"ok": False, "suggested": {}, "inputs": payload, "note": "invalid inputs"}
+
+    # תקציב מוצע
+    budget_risk = equity * (risk_pct / 100.0) if equity > 0 else max_bu
+    budget = min(max_bu, budget_risk) if budget_risk > 0 else max_bu
+    budget = max(5.0, float(budget))  # רצפה קטנה
+
+    leverage = max(1, min(max_lev, 20))
+    qty = (budget * leverage) / entry
+
+    suggested = {
+        "symbol": sym,
+        "side": side,
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+        "budget_usdt": round(budget, 2),
+        "leverage": leverage,
+        "quantity": round(qty, 6),
+    }
+    return {"ok": True, "suggested": suggested, "inputs": payload, "constraints": None, "note": "fallback-risk"}
+
+@router.post("/suggest", summary="Suggest budget/leverage/qty from risk engine", operation_id="postRiskSuggest")
+async def post_risk_suggest(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
-        pos = _retry("futures_get_position_mode", lambda: c.futures_get_position_mode())
-        dual_now = bool(pos.get("dualSidePosition"))
-        if not dual_now:
-            _retry("futures_change_position_mode", lambda: c.futures_change_position_mode(dualSidePosition=True))
-        return True
+        from utils.risk import suggest_risk  # type: ignore
+        result = suggest_risk(**payload)  # type: ignore
+        if not isinstance(result, dict):
+            return {"ok": False, "suggested": {}, "inputs": payload, "note": "invalid risk output"}
+        result.setdefault("ok", True)
+        return result
     except Exception:
-        return False
+        # אין מודול risk → fallback
+        return _fallback_suggest_risk(**payload)
+
 
 
 
