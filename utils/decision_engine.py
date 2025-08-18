@@ -4,10 +4,11 @@ from typing import List, Dict, Any, Tuple
 import math
 
 try:
-    from utils.scoring import weights_norm   # (W_QS,W_SP,W_ETA,W_VOL,W_CORR) מנורמלים
+    # (W_QS,W_SP,W_ETA,W_VOL,W_CORR) מנורמלים מה־env (עם דיפולטים סבירים)
+    from utils.scoring import weights_norm
 except Exception:
     # ברירת מחדל קשיחה אם אין קובץ/ייבוא (לא אמור לקרות אצלך)
-    def weights_norm() -> Tuple[float,float,float,float,float]:
+    def weights_norm() -> Tuple[float, float, float, float, float]:
         return (0.40, 0.25, 0.15, 0.10, 0.10)
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -112,7 +113,7 @@ def select_best_trades(
         )
     )
 
-    # Diversify לפי סימבול (אם יש כפילות ב־input)
+    # Diversify לפי סימבול
     out: List[Dict[str, Any]] = []
     seen = set()
     for it in scored:
@@ -139,6 +140,7 @@ def select_best_trades(
             break
 
     return out
+
 
 
 
