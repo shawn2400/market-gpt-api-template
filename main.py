@@ -49,7 +49,7 @@ decision_router    = _try_import("routes.decision")
 grid_router        = _try_import("routes.grid")
 risk_router        = _try_import("routes.risk")
 snapshot_router    = _try_import("routes.snapshot")
-scan_router        = _try_import("routes.multi_scan")       # <<< חדש: /scan/info + /scan/top-volume
+scan_router        = _try_import("routes.multi_scan")       # /scan/info + /scan/top-volume
 
 # חשוב: ייבוא מפורש של /scan/top-volume כדי לא להחליק בשקט
 try:
@@ -57,6 +57,23 @@ try:
 except Exception as exc:
     logger.warning("routes.scan_top_volume not loaded: %s", exc)
     scan_topvol_router = None
+
+# Auto Executor (טעינה בטוחה)
+_auto_exec_start = None
+_is_executor_running = None
+try:
+    from utils.auto_executor import start_executor as _auto_exec_start, is_executor_running as _is_executor_running
+except Exception as exc:
+    logger.warning("auto_executor not available: %s", exc)
+
+# קונפיג
+try:
+    from utils import config as _cfg
+except Exception as exc:
+    class _Dummy:
+        AUTO_RUN = False
+        SCAN_INTERVAL = 60
+    _cfg = _Dummy()  # type: ignore
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -135,7 +152,7 @@ for r in [
     ai_analyze_router, ai_health_router, backtest_router, dashboard_router,
     health_router, price_router, ind_router, market_router,
     analytics_router, news_router, decision_router, grid_router,
-    risk_router, snapshot_router, scan_router, scan_topvol_router,   # <<< נוסף scan_router
+    risk_router, snapshot_router, scan_router, scan_topvol_router,
 ]:
     if r:
         app.include_router(r)
@@ -143,6 +160,13 @@ for r in [
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
+    # הפעלת Auto Executor אם הוגדר
+    if getattr(_cfg, "AUTO_RUN", False) and _auto_exec_start:
+        try:
+            _auto_exec_start()
+            logger.info("AUTO_RUN=true → auto executor started (interval=%ss)", getattr(_cfg, "SCAN_INTERVAL", 60))
+        except Exception as e:
+            logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -151,6 +175,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
