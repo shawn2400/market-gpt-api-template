@@ -16,7 +16,6 @@ def _get_json(url: str, timeout: float = 6.0) -> Optional[dict]:
         r = _S.get(url, timeout=timeout)
         if r.status_code == 200:
             return r.json()
-        # נסיון מהיר נוסף לשגיאות זמניות
         if r.status_code in (429, 500, 502, 503, 504):
             time.sleep(0.5)
             r2 = _S.get(url, timeout=timeout)
@@ -28,11 +27,9 @@ def _get_json(url: str, timeout: float = 6.0) -> Optional[dict]:
 
 # ---------- BTC (mempool.space) ----------
 def _btc_fees() -> Optional[Dict[str, Any]]:
-    # https://mempool.space/api/v1/fees/recommended
     j = _get_json("https://mempool.space/api/v1/fees/recommended")
     if not j:
         return None
-    # מחזיר ביחידות sat/vB
     return {
         "fastestFee": j.get("fastestFee"),
         "halfHourFee": j.get("halfHourFee"),
@@ -43,19 +40,14 @@ def _btc_fees() -> Optional[Dict[str, Any]]:
     }
 
 def _btc_stats() -> Dict[str, Any]:
-    # height
     h = None
     try:
-        # https://mempool.space/api/blocks/tip/height  מחזיר מספר גולמי
         r = _S.get("https://mempool.space/api/blocks/tip/height", timeout=5)
         if r.status_code == 200:
             h = int(r.text.strip())
     except Exception:
         pass
-
-    # mempool summary
     mem = _get_json("https://mempool.space/api/mempool") or {}
-    # mem => {count, vsize, total_fee}
     return {
         "height": h,
         "mempool": {
@@ -68,20 +60,18 @@ def _btc_stats() -> Dict[str, Any]:
 def _btc_overview() -> Dict[str, Any]:
     fees = _btc_fees()
     stats = _btc_stats()
-    warnings: List[str] = []
+    warnings = []
     if fees is None:
         warnings.append("fees_unavailable")
     if not stats.get("height"):
         warnings.append("height_unavailable")
     return {"ok": True, "fees": fees, "stats": stats, "warnings": warnings or None}
 
-# ---------- ETH (etherchain.org + (אופציונלי) Blockchair) ----------
+# ---------- ETH ----------
 def _eth_gas_oracle() -> Optional[Dict[str, Any]]:
-    # https://www.etherchain.org/api/gasPriceOracle  (ללא מפתח)
     j = _get_json("https://www.etherchain.org/api/gasPriceOracle")
     if not j:
         return None
-    # שדות לדוגמה: { "safeLow": 7.7, "standard": 8.2, "fast": 8.9, "fastest": 10.5 }
     return {
         "safeLow": j.get("safeLow"),
         "standard": j.get("standard"),
@@ -91,25 +81,22 @@ def _eth_gas_oracle() -> Optional[Dict[str, Any]]:
     }
 
 def _eth_stats_blockchair() -> Optional[Dict[str, Any]]:
-    # public – עלול להיות rate-limited, לכן אופציונלי
     j = _get_json("https://api.blockchair.com/ethereum/stats")
     if not j or "data" not in j:
         return None
-    data = j["data"]
-    # תת-קבוצה שימושית; אפשר להרחיב לפי הצורך
-    out = {
-        "blocks": data.get("blocks"),
-        "transactions_24h": data.get("transactions_24h"),
-        "mempool_transactions": data.get("mempool_transactions"),
-        "hashrate": data.get("hashrate_24h"),  # H/s
-        "difficulty": data.get("difficulty"),
+    d = j["data"]
+    return {
+        "blocks": d.get("blocks"),
+        "transactions_24h": d.get("transactions_24h"),
+        "mempool_transactions": d.get("mempool_transactions"),
+        "hashrate": d.get("hashrate_24h"),
+        "difficulty": d.get("difficulty"),
     }
-    return out
 
 def _eth_overview() -> Dict[str, Any]:
     fees = _eth_gas_oracle()
     stats = _eth_stats_blockchair() or {}
-    warnings: List[str] = []
+    warnings = []
     if fees is None:
         warnings.append("gas_oracle_unavailable")
     if not stats:
@@ -118,10 +105,6 @@ def _eth_overview() -> Dict[str, Any]:
 
 # ---------- Public API ----------
 def overview(chains: List[str]) -> Dict[str, Any]:
-    """
-    מחזיר מבט־על On-Chain לפי רשימת שרשראות (למשל ['BTC','ETH']).
-    לא נכשל אם ספק לא זמין — מחזיר אזהרות.
-    """
     out: Dict[str, Any] = {}
     for c in chains:
         up = str(c or "").upper()
@@ -132,6 +115,7 @@ def overview(chains: List[str]) -> Dict[str, Any]:
         else:
             out[up] = {"ok": False, "fees": None, "stats": None, "warnings": ["unsupported_chain"]}
     return {"ok": True, "chains": out}
+
 
 
 
