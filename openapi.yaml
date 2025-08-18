@@ -110,6 +110,15 @@ components:
           items: { type: string }
       additionalProperties: false
 
+    ScanRoot:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        endpoints:
+          type: array
+          items: { type: string, example: /scan/top-volume }
+      additionalProperties: false
+
     ScanSignal:
       type: object
       properties:
@@ -786,11 +795,25 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
 
   # ---------- Scan ----------
+  /scan:
+    get:
+      tags: [Scan]
+      summary: Scan root
+      operationId: getScanRoot
+      security: []
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScanRoot" }
+
   /scan/info:
     get:
       tags: [Scan]
       summary: Scanner/Executor status
       operationId: getScanInfo
+      security: []
       responses:
         "200":
           description: ok
@@ -803,6 +826,7 @@ paths:
       tags: [Scan]
       summary: Scan top-volume symbols concurrently (extended)
       operationId: getScanTopVolume
+      security: []
       parameters:
         - in: query
           name: market
@@ -835,27 +859,6 @@ paths:
           name: adx_len
           schema: { type: integer, default: 14, minimum: 5, maximum: 50 }
         - in: query
-          name: st_period
-          schema: { type: integer, default: 10, minimum: 5, maximum: 50 }
-        - in: query
-          name: st_factor
-          schema: { type: number, default: 3.0, minimum: 1.0, maximum: 10.0 }
-        - in: query
-          name: ich_conv
-          schema: { type: integer, default: 9, minimum: 5, maximum: 50 }
-        - in: query
-          name: ich_base
-          schema: { type: integer, default: 26, minimum: 10, maximum: 100 }
-        - in: query
-          name: ich_span_b
-          schema: { type: integer, default: 52, minimum: 20, maximum: 200 }
-        - in: query
-          name: ms_lookback
-          schema: { type: integer, default: 5, minimum: 2, maximum: 20 }
-        - in: query
-          name: ms_pivot_span
-          schema: { type: integer, default: 3, minimum: 1, maximum: 10 }
-        - in: query
           name: concurrency
           schema: { type: integer, default: 16, minimum: 2, maximum: 64 }
       responses:
@@ -875,6 +878,7 @@ paths:
       tags: [Analytics]
       summary: Top symbols by volume (Binance)
       operationId: getTopVolumeSymbols
+      security: []
       parameters:
         - in: query
           name: market
@@ -1148,6 +1152,19 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/MacroSnapshot" }
 
+  /macro:
+    get:
+      tags: [Analytics]
+      summary: Macro snapshot (alias for /analytics/macro)
+      operationId: getMacroAlias
+      security: []
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MacroSnapshot" }
+
   /sentiment/summary:
     get:
       tags: [Analytics]
@@ -1248,6 +1265,7 @@ paths:
       tags: [Analytics]
       summary: Orderflow snapshot (CVD / Depth / Icebergs)
       operationId: getOrderflowSnapshot
+      security: []
       parameters:
         - in: path
           name: symbol
@@ -1313,6 +1331,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SnapshotTradeResponse" }
+
 
 
 
