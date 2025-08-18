@@ -2,13 +2,14 @@
 import os
 import time
 import threading
-from typing import Callable, Any, Dict, Optional
+from typing import Callable, Any, Dict
 from binance.client import Client
 
 _client = None
 _client_lock = threading.Lock()
 _ex_info_cache: Dict[str, Any] | None = None
 _ex_info_ts: float = 0.0
+_EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))  # 30 דקות כברירת מחדל
 
 def get_client() -> Client:
     global _client
@@ -32,13 +33,14 @@ def retry_call(fn: Callable[[], Any], label: str, tries: int = 3, delay: float =
 def futures_exchange_info_safe() -> Dict[str, Any]:
     global _ex_info_cache, _ex_info_ts
     now = time.time()
-    if _ex_info_cache and (now - _ex_info_ts) < 300:
+    if _ex_info_cache and (now - _ex_info_ts) < _EX_TTL:
         return _ex_info_cache
     client = get_client()
     data = retry_call(lambda: client.futures_exchange_info(), "futures_exchange_info", tries=3)
     _ex_info_cache = data or {}
     _ex_info_ts = now
     return _ex_info_cache
+
 
 
 
