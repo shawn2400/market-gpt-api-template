@@ -23,14 +23,12 @@ def _to_float(x, default: float = np.nan) -> float:
     except Exception:
         return default
 
-
 def _ensure_numeric_ohlcv(d: pd.DataFrame) -> pd.DataFrame:
     out = d.copy()
-    for c in ("open", "high", "low", "close", "volume"):
+    for c in ("open","high","low","close","volume"):
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
-
 
 def enrich_base_indicators(
     df: pd.DataFrame,
@@ -45,7 +43,7 @@ def enrich_base_indicators(
     ich_span_b: int = 52,
 ) -> pd.DataFrame:
     d = _ensure_numeric_ohlcv(df)
-    d.dropna(subset=["open", "high", "low", "close"], inplace=True)
+    d.dropna(subset=["open","high","low","close"], inplace=True)
 
     if len(d) < max(ich_span_b + ich_base, ema_slow + adx_len + st_period + 20):
         return d
@@ -60,13 +58,13 @@ def enrich_base_indicators(
     d["adx"] = ADXIndicator(high=high, low=low, close=close, window=int(adx_len)).adx()
 
     # ATR
-    atr_series = AverageTrueRange(high=high, low=low, close=close, window=int(st_period)).average_true_range()
-    d["atr"] = atr_series
+    atr = AverageTrueRange(high=high, low=low, close=close, window=int(st_period)).average_true_range()
+    d["atr"] = atr
 
-    # Supertrend קל
+    # Supertrend מינימלי
     hl2 = (high + low) / 2.0
-    upper = hl2 + float(st_factor) * atr_series
-    lower = hl2 - float(st_factor) * atr_series
+    upper = hl2 + float(st_factor) * atr
+    lower = hl2 - float(st_factor) * atr
     st = pd.Series(index=d.index, dtype=float)
     last_upper = np.nan; last_lower = np.nan; dir_up = True
     for i in range(len(d)):
@@ -108,12 +106,11 @@ def enrich_base_indicators(
         d["stoch_k"] = np.nan
         d["stoch_d"] = np.nan
 
-    # כיוון ומצב טרנדינג בסיסי
+    # מגמת EMA / ADX בסיסית
     d["trend_dir"] = np.where(d["ema_fast"] > d["ema_slow"], "UP", "DOWN")
     d["trending"] = (d["adx"] >= 20.0)
 
     return d
-
 
 def add_extended_indicators(
     df: pd.DataFrame,
@@ -141,9 +138,9 @@ def add_extended_indicators(
         ich_span_b=ichimoku_span_b,
     )
 
-    # Market Structure
-    if ("ms_label" not in d.columns) or ("ms_trend" not in d.columns):
-        try:
+    # Market Structure — חובה להוסיף ms_label/ms_trend
+    try:
+        if ("ms_label" not in d.columns) or ("ms_trend" not in d.columns):
             d = add_market_structure_columns(
                 d,
                 ms_lookback=int(ms_lookback),
@@ -151,22 +148,22 @@ def add_extended_indicators(
                 high_col="high",
                 low_col="low",
             )
-        except Exception:
-            d["ms_label"] = ""
-            d["ms_trend"] = "RANGE"
+    except Exception:
+        d["ms_label"] = d.get("ms_label", "")
+        d["ms_trend"] = d.get("ms_trend", "RANGE")
 
     # ודא שכל העמודות קיימות
-    for col, default in [
-        ("adx", np.nan), ("ema_fast", np.nan), ("ema_slow", np.nan), ("atr", np.nan),
-        ("ichimoku_state", "NEUTRAL"), ("stoch_k", np.nan), ("stoch_d", np.nan),
-        ("supertrend", np.nan), ("trend_dir", "DOWN"), ("trending", False),
-        ("ms_label", ""), ("ms_trend", "RANGE"), ("close", np.nan),
-    ]:
+    defaults = {
+        "adx": np.nan, "ema_fast": np.nan, "ema_slow": np.nan, "atr": np.nan,
+        "ichimoku_state": "NEUTRAL", "stoch_k": np.nan, "stoch_d": np.nan,
+        "supertrend": np.nan, "trend_dir": "DOWN", "trending": False,
+        "ms_label": "", "ms_trend": "RANGE", "close": np.nan,
+    }
+    for col, val in defaults.items():
         if col not in d.columns:
-            d[col] = default
+            d[col] = val
 
     return d
-
 
 def extended_score_last_row(row: pd.Series) -> Tuple[float, Optional[str], int, str]:
     ema_fast = _to_float(row.get("ema_fast"))
