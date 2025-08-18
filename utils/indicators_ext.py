@@ -1,20 +1,32 @@
 # utils/indicators_ext.py
 from __future__ import annotations
-import pandas as pd
+import math
+from typing import Dict, Any, Optional, Tuple
+
 import numpy as np
-from typing import Dict, Any, Optional
+import pandas as pd
 
 from ta.trend import ADXIndicator, EMAIndicator
 from ta.volatility import AverageTrueRange
 from ta.momentum import StochRSIIndicator
 
-# Market Structure (לא להפיל את הייבוא אם חסר)
-try:
-    from utils.market_structure import add_market_structure_columns as _ms_add
-except Exception:
-    _ms_add = None
+from utils.market_structure import add_market_structure_columns
 
-def add_extended_indicators(
+def _to_float(x, default: float = np.nan) -> float:
+    try:
+        v = float(x)
+        return v if math.isfinite(v) else default
+    except Exception:
+        return default
+
+def _ensure_numeric_ohlcv(d: pd.DataFrame) -> pd.DataFrame:
+    out = d.copy()
+    for c in ("open","high","low","close","volume"):
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
+
+def enrich_base_indicators(
     df: pd.DataFrame,
     *,
     ema_fast: int = 21,
@@ -22,45 +34,39 @@ def add_extended_indicators(
     adx_len: int = 14,
     st_period: int = 10,
     st_factor: float = 3.0,
-    ichimoku_conv: int = 9,
-    ichimoku_base: int = 26,
-    ichimoku_span_b: int = 52,
-    ms_lookback: int = 5,
-    ms_pivot_span: int = 3,
+    ich_conv: int = 9,
+    ich_base: int = 26,
+    ich_span_b: int = 52,
 ) -> pd.DataFrame:
-    """
-    מוסיף EMA, ADX, ATR/Supertrend, Ichimoku, StochRSI, Market-Structure (ms_label/ms_trend),
-    ועמודות סיכום: trend_dir, trending.
-    """
-    d = df.copy()
-    for c in ("open","high","low","close","volume"):
-        d[c] = pd.to_numeric(d[c], errors="coerce")
-    d.dropna(inplace=True)
-    if d.empty:
+    d = _ensure_numeric_ohlcv(df)
+    d.dropna(subset=["open","high","low","close"], inplace=True)
+
+    if len(d) < max(ich_span_b + ich_base, ema_slow + adx_len + st_period + 20):
         return d
 
     close = d["close"]; high = d["high"]; low = d["low"]
 
     # EMA
-    d["ema_fast"] = EMAIndicator(close=close, window=ema_fast).ema_indicator()
-    d["ema_slow"] = EMAIndicator(close=close, window=ema_slow).ema_indicator()
+    d["ema_fast"] = EMAIndicator(close=close, window=int(ema_fast)).ema_indicator()
+    d["ema_slow"] = EMAIndicator(close=close, window=int(ema_slow)).ema_indicator()
 
     # ADX
-    d["adx"] = ADXIndicator(high=high, low=low, close=close, window=adx_len).adx()
+    d["adx"] = ADXIndicator(high=high, low=low, close=close, window=int(adx_len)).adx()
 
-    # ATR + Supertrend (טריילינג בסיסי)
-    d["atr"] = AverageTrueRange(high=high, low=low, close=close, window=st_period).average_true_range()
+    # ATR
+    atr = AverageTrueRange(high=high, low=low, close=close, window=int(st_period)).average_true_range()
+    d["atr"] = atr
+
+    # Supertrend (פשטני)
     hl2 = (high + low) / 2.0
-    upper = hl2 + st_factor * d["atr"]
-    lower = hl2 - st_factor * d["atr"]
+    upper = hl2 + float(st_factor) * atr
+    lower = hl2 - float(st_factor) * atr
     st = pd.Series(index=d.index, dtype=float)
     last_upper = np.nan; last_lower = np.nan; dir_up = True
     for i in range(len(d)):
-        u = float(upper.iat[i]); l = float(lower.iat[i]); c = float(close.iat[i])
+        u = upper.iat[i]; l = lower.iat[i]; c = close.iat[i]
         if i == 0:
-            st.iat[i] = l
-            last_upper, last_lower = u, l
-            dir_up = True
+            st.iat[i] = l; last_upper, last_lower = u, l; dir_up = True
             continue
         if c > last_upper: dir_up = True
         elif c < last_lower: dir_up = False
@@ -73,11 +79,12 @@ def add_extended_indicators(
     d["supertrend"] = st
     d["st_trend_up"] = (close >= st)
 
-    # Ichimoku (ללא שיפט קדימה)
-    conv   = (high.rolling(ichimoku_conv).max() + low.rolling(ichimoku_conv).min()) / 2
-    base   = (high.rolling(ichimoku_base).max() + low.rolling(ichimoku_base).min()) / 2
-    span_b = (high.rolling(ichimoku_span_b).max() + low.rolling(ichimoku_span_b).min()) / 2
-    span_a = (conv + base) / 2
+    # Ichimoku (ללא הסטה קדימה)
+    conv = (high.rolling(int(ich_conv)).max() + low.rolling(int(ich_conv)).min()) / 2.0
+    base = (high.rolling(int(ich_base)).max() + low.rolling(int(ich_base)).min()) / 2.0
+    span_b = (high.rolling(int(ich_span_b)).max() + low.rolling(int(ich_span_b)).min()) / 2.0
+    span_a = (conv + base) / 2.0
+
     d["ich_conv"] = conv
     d["ich_base"] = base
     d["ich_span_a"] = span_a
@@ -95,85 +102,119 @@ def add_extended_indicators(
         d["stoch_k"] = np.nan
         d["stoch_d"] = np.nan
 
-    # Market Structure (ms_label/ms_trend)
+    # סיגנל מגמה בסיסי
+    d["trend_dir"] = np.where(d["ema_fast"] > d["ema_slow"], "UP", "DOWN")
+    d["trending"] = (d["adx"] >= 20.0)
+
+    return d
+
+def add_extended_indicators(
+    df: pd.DataFrame,
+    *,
+    ema_fast: int = 21,
+    ema_slow: int = 50,
+    adx_len: int = 14,
+    st_period: int = 10,
+    st_factor: float = 3.0,
+    ichimoku_conv: int = 9,
+    ichimoku_base: int = 26,
+    ichimoku_span_b: int = 52,
+    ms_lookback: int = 5,
+    ms_pivot_span: int = 3,
+) -> pd.DataFrame:
+    d = enrich_base_indicators(
+        df,
+        ema_fast=ema_fast,
+        ema_slow=ema_slow,
+        adx_len=adx_len,
+        st_period=st_period,
+        st_factor=st_factor,
+        ich_conv=ichimoku_conv,
+        ich_base=ichimoku_base,
+        ich_span_b=ichimoku_span_b,
+    )
+
+    # Market Structure
     try:
-        if _ms_add:
-            d = _ms_add(
+        if ("ms_label" not in d.columns) or ("ms_trend" not in d.columns):
+            d = add_market_structure_columns(
                 d,
                 ms_lookback=int(ms_lookback),
                 ms_pivot_span=int(ms_pivot_span),
                 high_col="high",
                 low_col="low",
             )
-        else:
-            if "ms_label" not in d.columns: d["ms_label"] = ""
-            if "ms_trend" not in d.columns: d["ms_trend"] = "RANGE"
     except Exception:
-        if "ms_label" not in d.columns: d["ms_label"] = ""
-        if "ms_trend" not in d.columns: d["ms_trend"] = "RANGE"
+        d["ms_label"] = d.get("ms_label", "")
+        d["ms_trend"] = d.get("ms_trend", "RANGE")
 
-    # סיכום מגמה
-    trend_dir = np.where(d["ema_fast"] > d["ema_slow"], "UP",
-                 np.where(d["ema_fast"] < d["ema_slow"], "DOWN", "FLAT"))
-    d["trend_dir"] = trend_dir
-    d["trending"] = (d["adx"] >= 20) & (trend_dir != "FLAT")
+    # ודא עמודות
+    defaults = {
+        "adx": np.nan, "ema_fast": np.nan, "ema_slow": np.nan, "atr": np.nan,
+        "ichimoku_state": "NEUTRAL", "stoch_k": np.nan, "stoch_d": np.nan,
+        "supertrend": np.nan, "trend_dir": "DOWN", "trending": False,
+        "ms_label": "", "ms_trend": "RANGE", "close": np.nan,
+    }
+    for col, val in defaults.items():
+        if col not in d.columns:
+            d[col] = val
 
     return d
 
-
-def extended_score_last_row(row: pd.Series) -> tuple[float, str, float, str]:
-    """
-    מחזיר: (score 0..10, side 'LONG'/'SHORT', confidence 0..100, reason)
-    חישוב פשוט לפי הסכמת אינדיקטורים (EMA/ADX/Supertrend/Ichimoku/MS/StochRSI).
-    """
-    ema_fast = float(row.get("ema_fast") or 0.0)
-    ema_slow = float(row.get("ema_slow") or 0.0)
-    st_up    = bool(row.get("st_trend_up"))
-    ich      = str(row.get("ichimoku_state") or "NEUTRAL")
+def extended_score_last_row(row: pd.Series) -> Tuple[float, Optional[str], int, str]:
+    ema_fast = _to_float(row.get("ema_fast"))
+    ema_slow = _to_float(row.get("ema_slow"))
+    adx = _to_float(row.get("adx"), 0.0)
+    st_up = bool(row.get("st_trend_up"))
+    ich_state = str(row.get("ichimoku_state") or "NEUTRAL")
     ms_trend = str(row.get("ms_trend") or "RANGE")
-    adx      = float(row.get("adx") or 0.0)
-    k        = float(row.get("stoch_k") or row.get("stochrsi_k") or 0.0)
-    dval     = float(row.get("stoch_d") or row.get("stochrsi_d") or 0.0)
+    k = _to_float(row.get("stoch_k"))
+    d = _to_float(row.get("stoch_d"))
 
-    # כיוון בסיסי
-    side = "LONG" if (ema_fast >= ema_slow and st_up) else "SHORT"
+    score = 5.0
+    long_bias = 0.0
+    short_bias = 0.0
+    reasons = []
 
-    votes = 0; total = 0; reasons: list[str] = []
+    if np.isfinite(ema_fast) and np.isfinite(ema_slow)):
+        if ema_fast > ema_slow:
+            score += 1.0; long_bias += 1.0; reasons.append("ema_fast>ema_slow")
+        elif ema_fast < ema_slow:
+            score -= 1.0; short_bias += 1.0; reasons.append("ema_fast<ema_slow")
 
-    # EMA
-    total += 1
-    if (side == "LONG" and ema_fast >= ema_slow) or (side == "SHORT" and ema_fast <= ema_slow):
-        votes += 1; reasons.append("EMA align")
+    if adx >= 25: score += 1.0; reasons.append("adx>=25")
+    elif adx >= 20: score += 0.5; reasons.append("adx>=20")
+    elif adx < 15: score -= 0.5; reasons.append("adx<15")
 
-    # ADX
-    total += 1
-    if adx >= 20:
-        votes += 1; reasons.append(f"ADX {adx:.1f}")
+    if st_up: score += 1.0; long_bias += 0.5; reasons.append("supertrend_up")
+    else:     score -= 1.0; short_bias += 0.5; reasons.append("supertrend_down")
 
-    # Supertrend
-    total += 1
-    if (side == "LONG" and st_up) or (side == "SHORT" and not st_up):
-        votes += 1; reasons.append("Supertrend")
+    if ich_state == "BULL": score += 1.5; long_bias += 1.0; reasons.append("ich_bull")
+    elif ich_state == "BEAR": score -= 1.5; short_bias += 1.0; reasons.append("ich_bear")
 
-    # Ichimoku
-    total += 1
-    if (side == "LONG" and ich == "BULL") or (side == "SHORT" and ich == "BEAR"):
-        votes += 1; reasons.append(f"Ich:{ich}")
+    if ms_trend == "UP": score += 1.5; long_bias += 1.0; reasons.append("ms_up")
+    elif ms_trend == "DOWN": score -= 1.5; short_bias += 1.0; reasons.append("ms_down")
 
-    # Market Structure
-    total += 1
-    if (side == "LONG" and ms_trend == "UP") or (side == "SHORT" and ms_trend == "DOWN"):
-        votes += 1; reasons.append(f"MS:{ms_trend}")
+    if np.isfinite(k) and np.isfinite(d):
+        if k > d and k < 0.85:
+            score += 0.5; long_bias += 0.25; reasons.append("stoch_bullish")
+        elif k < d and k > 0.15:
+            score -= 0.5; short_bias += 0.25; reasons.append("stoch_bearish")
 
-    # StochRSI
-    total += 1
-    if (side == "LONG" and k >= dval) or (side == "SHORT" and k <= dval):
-        votes += 1; reasons.append("StochRSI")
+    score = float(max(0.0, min(10.0, round(score, 2))))
+    if long_bias > short_bias and score >= 5.2:
+        side = "LONG"
+    elif short_bias > long_bias and score <= 4.8:
+        side = "SHORT"
+    else:
+        side = None
 
-    score = round((votes / max(1, total)) * 10.0, 2)
-    conf  = round((votes / max(1, total)) * 100.0, 1)
-    reason = ", ".join(reasons) if reasons else "weak"
-    return (score, side, conf, reason)
+    center_dist = abs(score - 5.0) / 5.0
+    bias_spread = abs(long_bias - short_bias) / max(1.0, (long_bias + short_bias + 1e-9))
+    confidence = int(max(0.0, min(1.0, 0.6 * center_dist + 0.4 * bias_spread)) * 100)
+    reason = ", ".join(reasons) if reasons else "neutral"
+    return score, side, confidence, reason
+
 
 
 
