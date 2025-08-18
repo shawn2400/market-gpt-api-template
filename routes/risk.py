@@ -1,62 +1,38 @@
-# utils/risk.py
+# routes/risk.py
 from __future__ import annotations
-from typing import Any, Dict, Optional
-import math
+from typing import Any, Dict
+from fastapi import APIRouter, Depends, HTTPException, Body
 
 try:
-    from utils import config
+    from utils.auth import require_bearer_token
 except Exception:
-    class _C:
-        RISK_PER_TRADE_PCT = 1.0
-        MAX_LEVERAGE = 35
-        MAX_TRADE_BUDGET = 100.0
-    config = _C()
+    async def require_bearer_token(*_args, **_kwargs):
+        # אם אין מודול auth — נחזיר 401 כדי לא לחשוף בטעות
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-def suggest_risk(
-    symbol: str, side: str, entry: float, sl: float,
-    tp: Optional[float] = None, atr: Optional[float] = None,
-    equity_usdt: Optional[float] = None, confidence: Optional[float] = None,
-    max_budget_usdt: Optional[float] = None, max_leverage: Optional[int] = None,
-) -> Dict[str, Any]:
-    if entry <= 0 or sl <= 0:
-        raise ValueError("entry/sl must be > 0")
+router = APIRouter(prefix="/risk", tags=["Risk"], dependencies=[Depends(require_bearer_token)])
 
-    risk_pct   = float(getattr(config, "RISK_PER_TRADE_PCT", 1.0))
-    max_lev    = int(max_leverage or getattr(config, "MAX_LEVERAGE", 35))
-    budget_cap = float(max_budget_usdt or getattr(config, "MAX_TRADE_BUDGET", 100.0))
+@router.post("/suggest", summary="Suggest budget/leverage/qty from risk engine", operation_id="postRiskSuggest")
+async def post_risk_suggest(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """
+    מעטפת ל-utils.risk.suggest_risk, מחזירה {ok, suggested, inputs, constraints?, note?}
+    """
+    try:
+        from utils.risk import suggest_risk  # הלוגיקה יושבת ב-utils/risk.py
+    except Exception:
+        raise HTTPException(status_code=500, detail="Risk engine not available")
 
-    # סיכון דולרי (1% מההון כברירת מחדל)
-    risk_usd = (equity_usdt or budget_cap) * (risk_pct / 100.0)
-    dist = abs(entry - sl)
-    if dist <= 0:
-        raise ValueError("entry/sl distance must be > 0")
+    try:
+        result = suggest_risk(**payload)  # type: ignore
+        if not isinstance(result, dict):
+            return {"ok": False, "note": "Invalid risk output"}
+        result.setdefault("ok", True)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"risk error: {e}")
 
-    # כמות לפי סיכון עד ה-SL
-    qty = risk_usd / dist
-    notion = qty * entry
-    if notion > budget_cap:
-        scale = budget_cap / max(notion, 1e-9)
-        qty *= scale
-        notion = qty * entry
-
-    # מינוף משוער
-    lev = min(max_lev, max(1, math.floor((notion / max(risk_usd, 1e-9)))))
-
-    rr = None
-    if tp and tp > 0:
-        reward = abs(tp - entry) * qty
-        rr = reward / max(risk_usd, 1e-9)
-
-    suggested = {
-        "symbol": symbol, "side": side.upper(),
-        "entry": entry, "sl": sl, "tp": tp,
-        "leverage": lev, "budget_usdt": round(notion, 2),
-        "qty": float(qty), "risk_usd": round(risk_usd, 2), "rr": rr,
-    }
-    return {"ok": True, "suggested": suggested, "inputs": {
-        "equity_usdt": equity_usdt, "risk_pct": risk_pct,
-        "max_budget_usdt": budget_cap, "max_leverage": max_lev
-    }}
 
   
 
