@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 import os, logging, time
 from typing import List, Optional
@@ -19,16 +20,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
+# Core routers
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
+
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
     try:
         module = __import__(name, fromlist=[attr])
         return getattr(module, attr)
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover
         logger.warning("%s not loaded: %s", name, exc)
         return None
+
 
 # Optional routers
 backtest_router   = _try_import("routes.backtest")
@@ -44,7 +48,7 @@ market_router     = _try_import("routes.market")
 analytics_router  = _try_import("routes.analytics")
 news_router       = _try_import("routes.news")
 decision_router   = _try_import("routes.decision")
-grid_router       = _try_import("routes.grid")  # חדש
+grid_router       = _try_import("routes.grid")  # optional
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -124,6 +128,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
