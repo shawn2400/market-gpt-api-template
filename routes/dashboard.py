@@ -49,15 +49,15 @@ _HTML = """
 </html>
 """
 
-# חשוף רק GET ל־OpenAPI; FastAPI ייתן HEAD אוטומטית, אבל לא יופיע בסכמה.
+# GET בלבד נכנס ל־OpenAPI (operationId חדש); HEAD נרשם בלי סכימה כדי למנוע כפילות.
 @router.get("/dashboard", response_class=HTMLResponse, operation_id="getDashboardHtml_v2")
 async def dashboard_ui():
     return HTMLResponse(content=_HTML, media_type="text/html")
 
-# אופציונלי: תמיכה ב־HEAD אך בלי להיכלל ב־OpenAPI (לא חובה; מונע כפילויות)
 @router.head("/dashboard", include_in_schema=False)
 async def dashboard_head():
     return Response(status_code=200)
+
 
 
 
