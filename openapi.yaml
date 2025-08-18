@@ -26,7 +26,6 @@ tags:
   - name: Dashboard
   - name: Risk
 
-# כל ה־operations מוגנים כברירת מחדל ב־Bearer
 security:
   - HTTPBearer: []
 
@@ -397,6 +396,90 @@ components:
         note:
           type: string
           nullable: true
+
+    # ---------- Orderflow / Onchain ----------
+    DepthSnapshot:
+      type: object
+      properties:
+        bids:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: number }
+        asks:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: number }
+        bid_volume: { type: number }
+        ask_volume: { type: number }
+        imbalance:  { type: number, description: "-1..+1 (חיובי=לחץ קניה)" }
+        mid:        { oneOf: [ {type: number}, {type: "null"} ] }
+        best_bid:   { oneOf: [ {type: number}, {type: "null"} ] }
+        best_ask:   { oneOf: [ {type: number}, {type: "null"} ] }
+        levels:     { type: integer }
+
+    CvdMetrics:
+      type: object
+      properties:
+        cvd_last:     { type: number }
+        cvd_change_n: { type: number }
+        buy_ratio:    { type: number }
+        sell_ratio:   { type: number }
+        mean_qty:     { type: number }
+
+    IcebergSignal:
+      type: object
+      properties:
+        present:  { type: boolean }
+        score:    { type: number }
+        clusters: { type: integer }
+
+    OrderflowSnapshot:
+      type: object
+      properties:
+        ok:     { type: boolean }
+        symbol: { type: string }
+        cvd:    { $ref: "#/components/schemas/CvdMetrics" }
+        depth:  { $ref: "#/components/schemas/DepthSnapshot" }
+        icebergs: { $ref: "#/components/schemas/IcebergSignal" }
+        ts: { type: integer }
+        error: { oneOf: [ {type: string}, {type: "null"} ] }
+
+    OnchainChain:
+      type: object
+      properties:
+        ok: { type: boolean }
+        chain: { type: string }
+        fees:
+          oneOf:
+            - type: object
+              properties: {}
+              additionalProperties: true
+            - type: "null"
+        stats:
+          oneOf:
+            - type: object
+              properties: {}
+              additionalProperties: true
+            - type: "null"
+        warnings:
+          oneOf:
+            - type: array
+              items: { type: string }
+            - type: "null"
+
+    OnchainOverview:
+      type: object
+      properties:
+        ok: { type: boolean }
+        chains:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/OnchainChain" }
 
 paths:
   /:
@@ -970,6 +1053,64 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  # ---------- Orderflow / Onchain ----------
+  /orderflow/{symbol}:
+    get:
+      tags: [Analytics]
+      summary: Orderflow snapshot (CVD / Depth / Icebergs)
+      operationId: getOrderflowSnapshot
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+        - in: query
+          name: trades_limit
+          schema: { type: integer, default: 800, minimum: 1, maximum: 1000 }
+        - in: query
+          name: depth_limit
+          schema: { type: integer, default: 500, minimum: 5, maximum: 1000 }
+        - in: query
+          name: cvd_window
+          schema: { type: integer, default: 300, minimum: 1, maximum: 1000 }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderflowSnapshot" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /onchain/overview:
+    get:
+      tags: [Analytics]
+      summary: On-chain overview (BTC/ETH)
+      operationId: getOnchainOverview
+      parameters:
+        - in: query
+          name: targets
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string, example: BTC }
+          description: "Comma-separated chain list, e.g. BTC,ETH"
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OnchainOverview" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   # ---------- Health ----------
   /health:
     get:
@@ -1044,6 +1185,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
 
 
 
