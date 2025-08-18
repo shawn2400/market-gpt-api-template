@@ -1,4 +1,3 @@
-# main.py
 from __future__ import annotations
 import os, logging, time
 from typing import List, Optional
@@ -32,6 +31,13 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         return getattr(module, attr)
     except Exception:
         return None
+
+# auto-executor (טעינה בטוחה)
+_auto_exec_start = None
+try:
+    from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
+except Exception as exc:
+    logger.warning("auto_executor not available: %s", exc)
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -110,13 +116,14 @@ app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
     "routes.dashboard", "routes.routes_indicators", "routes.price",
-    "routes.multi_scan", "routes.health", "routes.risk", "routes.snapshot"
+    "routes.multi_scan", "routes.health", "routes.risk", "routes.snapshot",
+    "routes.analytics"
 ]:
     r = _try_import(mod, "router")
     if r:
         app.include_router(r)
 
-# Special-case: routes.scan_top_volume exposes TWO routers: router, router_symbols
+# Special-case: scan routers (two routers in same module)
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
     app.include_router(_scan_router)
@@ -124,9 +131,25 @@ _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
     app.include_router(_scan_sym_router)
 
+# analytics compat (/macro)
+_analytics_compat = _try_import("routes.analytics", "router_compat")
+if _analytics_compat:
+    app.include_router(_analytics_compat)
+
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
+    try:
+        from utils import config as cfg  # type: ignore
+    except Exception:
+        class _D: AUTO_RUN=False
+        cfg = _D()  # type: ignore
+    if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
+        try:
+            _auto_exec_start()
+            logger.info("AUTO_RUN=true → auto executor started")
+        except Exception as e:
+            logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -135,6 +158,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
