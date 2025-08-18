@@ -1,4 +1,3 @@
-# utils/binance_client.py
 from __future__ import annotations
 import os
 import time
@@ -8,7 +7,6 @@ from typing import Callable, Any, Dict, Optional
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# בסיסים מה-ENV (עם דיפולטים נכונים)
 _SPOT_HTTP_BASE = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
 _FUT_HTTP_BASE  = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
@@ -17,24 +15,19 @@ _client_lock = threading.Lock()
 
 _ex_info_cache: Dict[str, Any] | None = None
 _ex_info_ts: float = 0.0
-_EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))  # 30 דקות
+_EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))
 
 def get_client() -> Client:
-    """
-    מחזיר מופע Client (משותף ל-Spot/Futures של python-binance).
-    """
     global _client
     with _client_lock:
         if _client is None:
             api = os.getenv("BINANCE_API_KEY") or ""
             secret = os.getenv("BINANCE_API_SECRET") or ""
             _client = Client(api, secret)
-            # נוודא שה-Endpoints מכוונים לכתובות הסביבה (במידה והוגדרו)
             _client.API_URL = _SPOT_HTTP_BASE.rstrip("/")
             _client.FUTURES_URL = _FUT_HTTP_BASE.rstrip("/")
         return _client
 
-# שמים Alias מפורש—חלק מהקוד מצפה לשם הזה:
 def get_futures_client() -> Client:
     return get_client()
 
@@ -51,9 +44,6 @@ def _retry_call(fn: Callable[[], Any], label: str, tries: int = 3, delay: float 
     raise RuntimeError(f"{label} failed")
 
 def futures_exchange_info_safe() -> Dict[str, Any]:
-    """
-    שליפת exchangeInfo של Futures עם cache ל-EX_TTL.
-    """
     global _ex_info_cache, _ex_info_ts
     now = time.time()
     if _ex_info_cache and (now - _ex_info_ts) < _EX_TTL:
@@ -65,9 +55,6 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     return _ex_info_cache
 
 def futures_ping() -> bool:
-    """
-    בדיקת קישוריות ל-Futures. מחזיר True אם הצליח.
-    """
     client = get_futures_client()
     try:
         _retry_call(lambda: client.futures_ping(), "futures_ping", tries=2)
@@ -76,9 +63,6 @@ def futures_ping() -> bool:
         return False
 
 def futures_mark_price(symbol: str) -> Dict[str, Any]:
-    """
-    שליפת Mark Price (dict) עבור symbol. מרים חריגה במקרה כישלון.
-    """
     client = get_futures_client()
     sym = (symbol or "").upper()
     data = _retry_call(lambda: client.futures_mark_price(symbol=sym), "futures_mark_price", tries=3)
