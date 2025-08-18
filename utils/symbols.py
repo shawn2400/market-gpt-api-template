@@ -1,7 +1,6 @@
-# utils/symbols.py
 from __future__ import annotations
 import os, time, threading, requests
-from typing import Optional, Dict, Set
+from typing import Optional, Set
 
 from utils.binance_client import futures_exchange_info_safe
 
@@ -20,8 +19,7 @@ class SymbolsCache:
             info = futures_exchange_info_safe()
             symbols = set()
             for s in info.get("symbols", []):
-                ct = str(s.get("contractType") or "").upper()
-                if ct.endswith("PERPETUAL"):  # USDⓈ-M/COIN-M perpetual
+                if str(s.get("contractType") or "").upper().endswith("PERPETUAL"):
                     symbols.add((s.get("symbol") or "").upper())
             self._symbols = symbols
         else:
@@ -51,9 +49,7 @@ def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[Symbo
         cache = SymbolsCache(market=market)
     cache.ensure()
     if not cache.has(s):
-        # אם לא נמצא—נחזיר את הקיים כדי לא לחסום זרימה (אפשר להקשיח ל-Exception אם תרצה)
         return s
-    # נמצא—נחזיר את הסימבול התקין
     return s
 
 
