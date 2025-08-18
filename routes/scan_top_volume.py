@@ -1,15 +1,12 @@
-# routes/scan_top_volume.py
 from __future__ import annotations
 import asyncio
 import os
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 import requests
 from fastapi import APIRouter, Query
 
-# בסיסים
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_BASE    = os.getenv("BINANCE_SPOT_HTTP_BASE",    "https://api.binance.com")
 
@@ -21,13 +18,9 @@ _S.headers.update({
     "Accept-Encoding": "gzip",
 })
 
-# ---------- Router 1: /scan ----------
 router = APIRouter(prefix="/scan", tags=["Scan"])
-
-# ---------- Router 2: /symbols ----------
 router_symbols = APIRouter(prefix="/symbols", tags=["Analytics"])
 
-# === עזר: רשימת סמלים מובילי נפח ===
 def _get_top_symbols(market: str, quote: str, limit: int, min_qv: float = 0.0) -> List[str]:
     try:
         from utils.top_volume import get_top_volume_symbols
@@ -61,12 +54,7 @@ def _get_top_symbols(market: str, quote: str, limit: int, min_qv: float = 0.0) -
     except Exception:
         return []
 
-# === /symbols/top-volume (פשוט) ===
-@router_symbols.get(
-    "/top-volume",
-    summary="Top symbols by 24h quote volume (Binance)",
-    operation_id="getTopVolumeSymbols"
-)
+@router_symbols.get("/top-volume", operation_id="getTopVolumeSymbols", summary="Top symbols by 24h quote volume (Binance)")
 async def symbols_top_volume(
     market: str = Query("futures", pattern="^(futures|spot)$"),
     quote: str = Query("USDT"),
@@ -74,15 +62,8 @@ async def symbols_top_volume(
     min_quote_volume: float = Query(0.0, ge=0.0),
 ) -> Dict[str, Any]:
     symbols = _get_top_symbols(market, quote, limit, min_quote_volume)
-    return {
-        "ok": True,
-        "market": market,
-        "quote": quote.upper(),
-        "limit": limit,
-        "symbols": symbols,
-    }
+    return {"ok": True, "market": market, "quote": quote.upper(), "limit": limit, "symbols": symbols}
 
-# === /scan/top-volume (מורחב – כולל ניקוד טרנד בסיסי) ===
 def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.DataFrame]:
     try:
         base = FUTURES_BASE if market == "futures" else SPOT_BASE
@@ -109,11 +90,7 @@ def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.
     except Exception:
         return None
 
-@router.get(
-    "/top-volume",
-    summary="Scan top-volume symbols concurrently (extended)",
-    operation_id="getScanTopVolume",
-)
+@router.get("/top-volume", operation_id="getScanTopVolume", summary="Scan top-volume symbols concurrently (extended)")
 async def scan_top_volume(
     market: str = Query("futures", pattern="^(futures|spot)$"),
     quote: str = Query("USDT"),
@@ -127,13 +104,11 @@ async def scan_top_volume(
     adx_len: int = Query(14, ge=5, le=50),
     concurrency: int = Query(16, ge=2, le=64),
 ) -> Dict[str, Any]:
-    # שלב 1: סמלים
+    from utils.indicators_ext import add_extended_indicators, extended_score_last_row
+
     symbols = _get_top_symbols(market, quote, limit)
     if not symbols:
         return {"ok": True, "count": 0, "signals": []}
-
-    # שלב 2: משיכת נתונים + ניקוד בסיסי
-    from utils.indicators_ext import add_extended_indicators, extended_score_last_row
 
     sem = asyncio.Semaphore(concurrency)
     results: List[Dict[str, Any]] = []
@@ -168,10 +143,9 @@ async def scan_top_volume(
             })
 
     await asyncio.gather(*[_process(s) for s in symbols])
-
-    # מיון לפי score
     results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(results), "signals": results}
+
 
 
 
