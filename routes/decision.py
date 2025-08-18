@@ -1,30 +1,28 @@
 # routes/decision.py
 from __future__ import annotations
 from typing import Dict, Any
-from fastapi import APIRouter, Depends, Body
 import asyncio
+from fastapi import APIRouter, Depends, Body
 
 try:
-    from utils.auth import require_bearer_token
+    from utils.auth import require_bearer_token  # type: ignore
 except Exception:
-    def require_bearer_token():
+    async def require_bearer_token(*_, **__):  # fallback: אם אין מודול — לא לחסום
         return None
 
 try:
-    from utils.decision_engine import select_best_trades
+    from utils.decision_engine import select_best_trades  # type: ignore
 except Exception:
-    # fallback קטן כדי שלא ניפול ברישום route
     def select_best_trades(candidates, top_n=5, diversify_by_symbol=True):
-        out=[]
-        seen=set()
+        out=[]; seen=set()
         for c in sorted(candidates, key=lambda x: float(x.get("score",0.0)), reverse=True):
             sym=str(c.get("symbol","")).upper()
             if diversify_by_symbol and sym in seen:
                 continue
             seen.add(sym)
+            c["rank"]=len(out)+1
             out.append(c)
-            if len(out)>=int(top_n):
-                break
+            if len(out)>=int(top_n): break
         return out
 
 router = APIRouter(prefix="/decision", tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
