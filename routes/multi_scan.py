@@ -5,13 +5,13 @@ import asyncio
 from typing import List, Dict, Any, Optional
 import pandas as pd
 import requests
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 
 try:
     from utils.auth import require_bearer_token
 except Exception:
-    def require_bearer_token():  # fallback
-        return None
+    def require_bearer_token():  # fallback: חסר auth -> נטרפד
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 from utils.top_volume import get_top_volume_symbols
 from utils.indicators import prepare_indicators_for_backtest as _prep_base
@@ -71,17 +71,15 @@ async def _scan_one(
         return {"symbol": symbol, "timeframe": timeframe, "score": 0.0, "note": "no indicators"}
 
     row = last.iloc[0]
-    # טרנד/סינון
     adx = float(row.get("adx") or 0.0)
     trend_dir = str(row.get("trend_dir") or "FLAT")
     trending = bool(row.get("trending") is True and adx >= float(min_adx or 0.0))
 
     if trending_only and not trending:
-        return None  # מסונן החוצה
+        return None
 
     score, side, conf, reason = extended_score_last_row(row)
     if not trending:
-        # אם לא טרנדינג – נשאיר אבל נעניש מעט את הניקוד
         score = round(max(0.0, score - 0.8), 2)
         reason = (reason + " non-trend")[:140]
 
@@ -109,7 +107,11 @@ async def _scan_one(
         "details": details,
     }
 
-@router.get("/top-volume", summary="Scan top-volume symbols concurrently (extended)", operation_id="getScanTopVolume")
+@router.get(
+    "/top-volume",
+    summary="Scan top-volume symbols concurrently (extended)",
+    operation_id="getScanTopVolume",
+)
 async def scan_top_volume(
     market: str = Query("futures", enum=["futures","spot"]),
     quote:  str = Query("USDT"),
@@ -117,25 +119,20 @@ async def scan_top_volume(
     timeframe: str = Query("15m"),
     bars: int = Query(200, ge=50, le=1500),
 
-    # פילטרים/פרמטרים מתקדמים
     trending_only: bool = Query(False, description="אם true – מחזיר רק סימבולים בטרנד פעיל"),
     min_adx: float = Query(20.0, ge=5.0, le=60.0),
 
-    # משקלי מגמה
     ema_fast: int = Query(21, ge=3, le=200),
     ema_slow: int = Query(50, ge=5, le=400),
     adx_len: int = Query(14, ge=5, le=50),
 
-    # Supertrend
     st_period: int = Query(10, ge=5, le=50),
     st_factor: float = Query(3.0, ge=1.0, le=10.0),
 
-    # Ichimoku
     ich_conv: int = Query(9, ge=5, le=50),
     ich_base: int = Query(26, ge=10, le=100),
     ich_span_b: int = Query(52, ge=20, le=200),
 
-    # Market Structure
     ms_lookback: int = Query(5, ge=2, le=20),
     ms_pivot_span: int = Query(3, ge=1, le=10),
 
@@ -165,9 +162,9 @@ async def scan_top_volume(
             continue
         out.append(r)
 
-    # סדר עדיפות: score ואז confidence עקיף (דרך הניקוד)
     out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(out), "signals": out}
+
 
 
 
