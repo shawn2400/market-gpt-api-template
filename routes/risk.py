@@ -2,10 +2,11 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional
 import math
+
 try:
     from utils import config
 except Exception:
-    class _C:  # ברירות מחדל
+    class _C:
         RISK_PER_TRADE_PCT = 1.0
         MAX_LEVERAGE = 35
         MAX_TRADE_BUDGET = 100.0
@@ -19,26 +20,28 @@ def suggest_risk(
 ) -> Dict[str, Any]:
     if entry <= 0 or sl <= 0:
         raise ValueError("entry/sl must be > 0")
-    risk_pct = float(getattr(config, "RISK_PER_TRADE_PCT", 1.0))
-    max_lev = int(max_leverage or getattr(config, "MAX_LEVERAGE", 35))
+
+    risk_pct   = float(getattr(config, "RISK_PER_TRADE_PCT", 1.0))
+    max_lev    = int(max_leverage or getattr(config, "MAX_LEVERAGE", 35))
     budget_cap = float(max_budget_usdt or getattr(config, "MAX_TRADE_BUDGET", 100.0))
 
-    # סיכון כספי
+    # סיכון דולרי (1% מההון כברירת מחדל)
     risk_usd = (equity_usdt or budget_cap) * (risk_pct / 100.0)
     dist = abs(entry - sl)
     if dist <= 0:
         raise ValueError("entry/sl distance must be > 0")
 
-    # כמות: כמה יחידות נכס כדי שהפסד עד ה-SL ≈ risk_usd
+    # כמות לפי סיכון עד ה-SL
     qty = risk_usd / dist
-    # לא לעבור תקציב:
     notion = qty * entry
     if notion > budget_cap:
         scale = budget_cap / max(notion, 1e-9)
         qty *= scale
         notion = qty * entry
 
-    lev = min(max_lev, max(1, math.floor((notion / max(risk_usd, 1e-9)))))  # קירוב סביר
+    # מינוף משוער
+    lev = min(max_lev, max(1, math.floor((notion / max(risk_usd, 1e-9)))))
+
     rr = None
     if tp and tp > 0:
         reward = abs(tp - entry) * qty
@@ -51,7 +54,10 @@ def suggest_risk(
         "qty": float(qty), "risk_usd": round(risk_usd, 2), "rr": rr,
     }
     return {"ok": True, "suggested": suggested, "inputs": {
-        "equity_usdt": equity_usdt, "risk_pct": risk_pct, "max_budget_usdt": budget_cap, "max_leverage": max_lev
+        "equity_usdt": equity_usdt, "risk_pct": risk_pct,
+        "max_budget_usdt": budget_cap, "max_leverage": max_lev
     }}
+
+  
 
 
