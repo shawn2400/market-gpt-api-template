@@ -1,83 +1,83 @@
 # utils/decision_engine.py
 from __future__ import annotations
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Tuple
 import math
 
-# משקלים מה-ENV (עם דיפולטים), מנורמלים לסכום 1
 try:
-    from utils.scoring import weights_norm  # W_QS, W_SP, W_ETA, W_VOL, W_CORR → נרמול
-except Exception as exc:  # fallback בטוח
-    def weights_norm() -> Tuple[float, float, float, float, float]:
-        # איכות/הצלחה/מהירות/תנודתיות/דקורלציה
-        base = (0.40, 0.25, 0.15, 0.10, 0.10)
-        s = sum(base)
-        return tuple(x / s for x in base)  # type: ignore
+    from utils.scoring import weights_norm   # (W_QS,W_SP,W_ETA,W_VOL,W_CORR) מנורמלים
+except Exception:
+    # ברירת מחדל קשיחה אם אין קובץ/ייבוא (לא אמור לקרות אצלך)
+    def weights_norm() -> Tuple[float,float,float,float,float]:
+        return (0.40, 0.25, 0.15, 0.10, 0.10)
 
-# ------- עזרי נרמול -------
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
 
-def _to_float(x, default: float = float("nan")) -> float:
+def _safe_float(x, default: float = 0.0) -> float:
     try:
         v = float(x)
-        return v if math.isfinite(v) else default
+        if math.isfinite(v):
+            return v
+        return default
     except Exception:
         return default
 
-def _norm_series(vals: List[float], *, higher_is_better: bool = True) -> List[float]:
-    clean = [v for v in vals if math.isfinite(v)]
-    if not clean:
-        return [0.5] * len(vals)  # ללא מידע – אמצע
-    lo, hi = min(clean), max(clean)
-    if not math.isfinite(lo) or not math.isfinite(hi) or abs(hi - lo) < 1e-12:
-        return [0.5] * len(vals)
-    out = []
-    for v in vals:
-        if not math.isfinite(v):
-            out.append(0.5)
-            continue
-        z = (v - lo) / (hi - lo)  # 0..1
-        out.append(z if higher_is_better else (1.0 - z))
-    return out
+def _normalize_quality(score_0_10: float) -> float:
+    return _clamp(_safe_float(score_0_10, 0.0) / 10.0, 0.0, 1.0)
 
-# ------- חילוץ פיצ'רים גמיש (מקבל שמות שונים) -------
+def _normalize_success(success_pct_0_100: float) -> float:
+    return _clamp(_safe_float(success_pct_0_100, 0.0) / 100.0, 0.0, 1.0)
 
-def _pick(d: Dict[str, Any], keys: List[str]) -> Optional[float]:
-    for k in keys:
-        if k in d:
-            return _to_float(d.get(k))
-    return None
+def _normalize_inv_by_max(values: List[float], v: float) -> float:
+    """הופך סולם: קטן=טוב. אם כולם 0 → 1.0 כדי לא לפגוע בנרמול."""
+    vmax = max([_safe_float(x, 0.0) for x in values] + [0.0])
+    if vmax <= 0:
+        return 1.0
+    return _clamp(1.0 - (_safe_float(v, 0.0) / vmax), 0.0, 1.0)
 
-def _extract_features(c: Dict[str, Any]) -> Dict[str, float]:
+def _normalize_decorr(cand: Dict[str, Any]) -> float:
     """
-    מחלץ:
-      - qs: quality score (0..10/100) → ננרמל פנימית
-      - sp: success/win rate (0..100)
-      - eta: זמן/מהירות (קטן=טוב)
-      - vol: תנודתיות (גדול=טוב)
-      - decorr: דקורלציה מול BTC (גדול=טוב). אם יש corr_btc → משתמשים ב-1-|corr|
+    תומך בשדות שונים:
+    - 'decorr' (0..1 – גדול=טוב), או
+    - 'corr_btc'/'corr' (-1..1 או 0..1) → נשתמש ב- 1 - |corr|.
+    חסר/לא תקף → 0.5.
     """
-    qs = _pick(c, ["quality", "quality_score", "qs", "score"])
-    if math.isfinite(qs if qs is not None else float("nan")) and qs and qs > 10:
-        qs = qs / 10.0  # אם הגיע בסקאלה 0..100
+    if "decorr" in cand:
+        return _clamp(_safe_float(cand.get("decorr"), 0.5), 0.0, 1.0)
+    corr = cand.get("corr_btc", cand.get("corr"))
+    if corr is None:
+        return 0.5
+    c = _safe_float(corr, 0.0)
+    # אם נראה כמו טווח -1..1:
+    if -1.0 <= c <= 1.0:
+        return _clamp(1.0 - abs(c), 0.0, 1.0)
+    # אחרת נניח 0..1:
+    return _clamp(1.0 - _clamp(c, 0.0, 1.0), 0.0, 1.0)
 
-    sp = _pick(c, ["success", "win_rate", "success_rate"])
-    eta = _pick(c, ["eta", "eta_minutes", "eta_min", "time_to_signal", "time_minutes"])
-    vol = _pick(c, ["volatility", "vol", "atr_pct", "atrp", "stdev_pct"])
-    decorr = _pick(c, ["decorrelation", "decorr", "decorrelation_vs_btc", "decorr_btc"])
+def _composite_score(cands: List[Dict[str, Any]], c: Dict[str, Any]) -> Tuple[float, Dict[str, float]]:
+    W_QS, W_SP, W_ETA, W_VOL, W_CORR = weights_norm()
 
-    # אם יש קורלציה (corr_btc), הפוך לדקורלציה
-    corr = _pick(c, ["corr_btc", "correlation_btc"])
-    if corr is not None and (decorrelation := 1.0 - abs(float(corr))) is not None:
-        decorr = decorrelation if math.isfinite(decorrelation) else decorr
+    # איכות/הצלחה
+    qs = _normalize_quality(c.get("score", c.get("quality", 0.0)))
+    sp = _normalize_success(c.get("success", c.get("win_rate", 0.0)))
 
-    return {
-        "qs": _to_float(qs),
-        "sp": _to_float(sp),
-        "eta": _to_float(eta),
-        "vol": _to_float(vol),
-        "decorr": _to_float(decorr),
+    # מהירות (ETA נמוך=טוב) + תנודתיות (נמוך=טוב)
+    etas = [x.get("eta", x.get("speed", 0.0)) for x in cands]
+    vols = [x.get("volatility", x.get("vol", 0.0)) for x in cands]
+    eta_raw = c.get("eta", c.get("speed", 0.0))
+    vol_raw = c.get("volatility", c.get("vol", 0.0))
+    eta = _normalize_inv_by_max(etas, eta_raw)
+    vol = _normalize_inv_by_max(vols, vol_raw)
+
+    # דקורלציה
+    de  = _normalize_decorr(c)
+
+    parts = {
+        "qs": qs, "sp": sp, "eta": eta, "vol": vol, "decorr": de,
+        "W_QS": W_QS, "W_SP": W_SP, "W_ETA": W_ETA, "W_VOL": W_VOL, "W_CORR": W_CORR
     }
-
-# ------- API ציבורי -------
+    total = (qs * W_QS) + (sp * W_SP) + (eta * W_ETA) + (vol * W_VOL) + (de * W_CORR)
+    return float(total), parts
 
 def select_best_trades(
     candidates: List[Dict[str, Any]],
@@ -85,61 +85,61 @@ def select_best_trades(
     diversify_by_symbol: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    מקבל רשימת מועמדים (dict לכל סימבול/סיגנל) ומחזיר את הטופ N לפי ציון משוקלל.
-    תומך במפתחות שונים (ראה _extract_features).
-    אם diversify=True – מונע בחירה מרובה של אותו symbol.
+    מחזיר רשימת מועמדים מסודרת לפי ניקוד מרוכב.
+    אם diversify_by_symbol=True – נמנע מכפילויות סימבול (אם היו).
     """
     if not candidates:
         return []
 
-    feats = [_extract_features(c) for c in candidates]
+    # חישוב ניקוד
+    scored: List[Dict[str, Any]] = []
+    for c in candidates:
+        total, parts = _composite_score(candidates, c)
+        item = dict(c)
+        item["_score_composite"] = total
+        item["_score_parts"] = parts
+        scored.append(item)
 
-    qs_norm   = _norm_series([f["qs"]   for f in feats], higher_is_better=True)
-    sp_norm   = _norm_series([f["sp"]   for f in feats], higher_is_better=True)
-    eta_norm  = _norm_series([f["eta"]  for f in feats], higher_is_better=False)  # קטן=טוב
-    vol_norm  = _norm_series([f["vol"]  for f in feats], higher_is_better=True)
-    dc_norm   = _norm_series([f["decorr"] for f in feats], higher_is_better=True)
+    # סידור עם "טיי־ברייקרים" רכים:
+    # 1) ניקוד מרוכב יורד
+    # 2) איכות 0..10 יורד
+    # 3) ETA עולה
+    scored.sort(
+        key=lambda x: (
+            -_safe_float(x.get("_score_composite"), 0.0),
+            -_safe_float(x.get("score", x.get("quality", 0.0)), 0.0),
+             _safe_float(x.get("eta", x.get("speed", 0.0)), 1e9),
+        )
+    )
 
-    w_qs, w_sp, w_eta, w_vol, w_dc = weights_norm()
-
-    scored: List[Tuple[float, int]] = []
-    for i in range(len(candidates)):
-        score = (w_qs * qs_norm[i] +
-                 w_sp * sp_norm[i] +
-                 w_eta * eta_norm[i] +
-                 w_vol * vol_norm[i] +
-                 w_dc * dc_norm[i])
-        scored.append((float(score), i))
-
-    # מיון יורד
-    scored.sort(key=lambda t: t[0], reverse=True)
-
-    picked: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-
-    for s, idx in scored:
-        c = dict(candidates[idx])  # העתק
-        c["_decision"] = {
-            "score_weighted_0_1": round(s, 6),
+    # Diversify לפי סימבול (אם יש כפילות ב־input)
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for it in scored:
+        sym = str(it.get("symbol", "")).upper()
+        if diversify_by_symbol and sym in seen:
+            continue
+        seen.add(sym)
+        out.append({
+            "rank": len(out) + 1,
+            "symbol": sym,
+            "side": it.get("side"),
+            "score": round(_safe_float(it.get("_score_composite"), 0.0), 6),
             "components": {
-                "qs": qs_norm[idx], "sp": sp_norm[idx], "speed": eta_norm[idx],
-                "vol": vol_norm[idx], "decorr": dc_norm[idx],
-                "weights": {"qs": w_qs, "sp": w_sp, "eta": w_eta, "vol": w_vol, "decorr": w_dc},
-            }
-        }
-
-        if diversify_by_symbol:
-            sym = str(c.get("symbol") or c.get("base") or c.get("ticker") or "")
-            if sym and sym in seen:
-                continue
-            if sym:
-                seen.add(sym)
-
-        picked.append(c)
-        if len(picked) >= int(top_n):
+                "quality": _safe_float(it.get("score", it.get("quality", 0.0)), 0.0),
+                "success_pct": _safe_float(it.get("success", it.get("win_rate", 0.0)), 0.0),
+                "eta": _safe_float(it.get("eta", it.get("speed", 0.0)), 0.0),
+                "volatility": _safe_float(it.get("volatility", it.get("vol", 0.0)), 0.0),
+                "decorr": _normalize_decorr(it),
+                "weights": it.get("_score_parts", {}),
+            },
+            "raw": it,  # שומר את המקור (נוח לדיבוג)
+        })
+        if len(out) >= int(top_n):
             break
 
-    return picked
+    return out
+
 
 
 
