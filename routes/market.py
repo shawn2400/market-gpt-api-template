@@ -1,5 +1,5 @@
 # routes/market.py
-from __future__import annotations
+from __future__ import annotations
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, Query, HTTPException
 
