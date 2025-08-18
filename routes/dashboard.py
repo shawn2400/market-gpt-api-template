@@ -1,4 +1,5 @@
 # routes/dashboard.py
+from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, Response
 
@@ -27,10 +28,7 @@ _HTML = """
   </style>
 </head>
 <body>
-  <header>
-    <h1>📊 AlgoGPT Dashboard</h1>
-  </header>
-
+  <header><h1>📊 AlgoGPT Dashboard</h1></header>
   <div class="card">
     <h3>סטטוס שרת</h3>
     <div class="row">
@@ -42,63 +40,25 @@ _HTML = """
     <pre id="metricsOut"></pre>
     <pre id="aiOut"></pre>
   </div>
-
-  <div class="card">
-    <h3>סריקה ידנית (AI)</h3>
-    <div class="row">
-      <input id="sym" type="text" placeholder="BTCUSDT" value="BTCUSDT"/>
-      <input id="tok" type="text" placeholder="Bearer <TOKEN>"/>
-      <button onclick="manualScan()">סרוק</button>
-    </div>
-    <pre id="scanOut"></pre>
-  </div>
-
   <script>
-    async function pingRoot() {
-      const o = document.getElementById('rootOut');
-      o.textContent = 'טוען...';
-      try {
-        const r = await fetch('/', {cache:'no-store'});
-        o.textContent = JSON.stringify(await r.json(), null, 2);
-      } catch(e){ o.textContent = 'שגיאה: ' + e; }
-    }
-    async function pingMetrics() {
-      const o = document.getElementById('metricsOut');
-      o.textContent = 'טוען...';
-      try {
-        const r = await fetch('/metrics', {cache:'no-store'});
-        o.textContent = JSON.stringify(await r.json(), null, 2);
-      } catch(e){ o.textContent = 'שגיאה: ' + e; }
-    }
-    async function pingAI() {
-      const o = document.getElementById('aiOut');
-      o.textContent = 'טוען...';
-      try {
-        const r = await fetch('/ai/health', {cache:'no-store'});
-        o.textContent = JSON.stringify(await r.json(), null, 2);
-      } catch(e){ o.textContent = 'שגיאה: ' + e; }
-    }
-    async function manualScan() {
-      const out = document.getElementById('scanOut');
-      const sym = document.getElementById('sym').value.trim();
-      const tok = document.getElementById('tok').value.trim();
-      if(!sym){ out.textContent = 'יש להזין סימבול.'; return; }
-      out.textContent = 'טוען...';
-      try {
-        const r = await fetch(`/ai/manual-scan?symbol=${encodeURIComponent(sym)}`, {
-          headers: tok ? { 'Authorization': tok } : {}
-        });
-        out.textContent = JSON.stringify(await r.json(), null, 2);
-      } catch(e){ out.textContent = 'שגיאה: ' + e; }
-    }
+    async function pingRoot(){const o=document.getElementById('rootOut');o.textContent='טוען...';try{const r=await fetch('/',{cache:'no-store'});o.textContent=JSON.stringify(await r.json(),null,2)}catch(e){o.textContent='שגיאה: '+e}}
+    async function pingMetrics(){const o=document.getElementById('metricsOut');o.textContent='טוען...';try{const r=await fetch('/metrics',{cache:'no-store'});o.textContent=JSON.stringify(await r.json(),null,2)}catch(e){o.textContent='שגיאה: '+e}}
+    async function pingAI(){const o=document.getElementById('aiOut');o.textContent='טוען...';try{const r=await fetch('/ai/health',{cache:'no-store'});o.textContent=JSON.stringify(await r.json(),null,2)}catch(e){o.textContent='שגיאה: '+e}}
   </script>
 </body>
 </html>
 """
 
+# חשוף רק GET ל־OpenAPI; FastAPI ייתן HEAD אוטומטית, אבל לא יופיע בסכמה.
 @router.get("/dashboard", response_class=HTMLResponse, operation_id="getDashboardHtml_v2")
 async def dashboard_ui():
-    return Response(content=_HTML, media_type="text/html")
+    return HTMLResponse(content=_HTML, media_type="text/html")
+
+# אופציונלי: תמיכה ב־HEAD אך בלי להיכלל ב־OpenAPI (לא חובה; מונע כפילויות)
+@router.head("/dashboard", include_in_schema=False)
+async def dashboard_head():
+    return Response(status_code=200)
+
 
 
 
