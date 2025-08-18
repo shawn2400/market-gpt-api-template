@@ -1,11 +1,14 @@
+# utils/top_volume.py
 from __future__ import annotations
-import os
+import os, time
 import requests
 from typing import List, Tuple
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_BASE    = os.getenv("BINANCE_SPOT_HTTP_BASE",    "https://api.binance.com")
 ENV_MIN_QV   = float(os.getenv("TOP_VOLUME_MIN_QV", "0"))
+
+__all__ = ["get_top_volume_symbols"]
 
 _S = requests.Session()
 _S.trust_env = False
@@ -14,23 +17,33 @@ _S.headers.update({
     "Accept": "application/json",
 })
 
+_cache = {"t": 0.0, "key": "", "data": []}
+
+
 def _get_json(url: str, timeout: float = 8.0):
     r = _S.get(url, timeout=timeout)
     r.raise_for_status()
     return r.json()
+
 
 def get_top_volume_symbols(
     market: str = "futures",
     quote: str = "USDT",
     limit: int = 50,
     min_quote_volume: float | None = None,
+    cache_ttl: float = 10.0,
 ) -> Tuple[bool, List[str]]:
     """
-    Returns (ok, symbols) sorted by 24h quoteVolume desc for symbols ending with `quote`.
-    Respects TOP_VOLUME_MIN_QV env if `min_quote_volume` is None.
+    (ok, symbols) ממויין לפי quoteVolume 24h יורד, עבור סימבולים שנגמרים ב־quote.
+    מכבד TOP_VOLUME_MIN_QV מהסביבה אם min_quote_volume לא עבר.
     """
     try:
         eff_min_qv = ENV_MIN_QV if (min_quote_volume is None) else float(min_quote_volume)
+        key = f"{market}:{quote}:{limit}:{eff_min_qv}"
+        now = time.monotonic()
+        if _cache["key"] == key and (now - _cache["t"] <= cache_ttl):
+            return True, list(_cache["data"])
+
         if market == "futures":
             arr = _get_json(f"{FUTURES_BASE}/fapi/v1/ticker/24hr")
         else:
@@ -41,9 +54,12 @@ def get_top_volume_symbols(
         if eff_min_qv > 0:
             rows = [x for x in rows if float(x.get("quoteVolume", 0.0)) >= eff_min_qv]
         syms = [x["symbol"] for x in rows[:limit]]
+
+        _cache.update({"t": now, "key": key, "data": syms})
         return True, syms
     except Exception:
         return False, []
+
 
 
 
