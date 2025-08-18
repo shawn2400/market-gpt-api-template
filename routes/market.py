@@ -1,7 +1,8 @@
-# routes/market.py
+# routes/market.py (אופציונלי – מעט יותר גמיש בשגיאות)
 from __future__ import annotations
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, Query, HTTPException
+import asyncio
 
 try:
     from utils.auth import require_bearer_token
@@ -20,9 +21,12 @@ async def get_top_volume(
     limit:  int = Query(50, ge=1, le=200),
     min_quote_volume: float = Query(0.0, ge=0.0),
 ) -> Dict[str, Any]:
-    import asyncio
-    ok, symbols = await asyncio.to_thread(get_top_volume_symbols, market, quote, limit, min_quote_volume)
-    return {"ok": bool(ok), "market": market, "quote": quote, "limit": limit, "symbols": symbols or []}
+    try:
+        ok, symbols = await asyncio.to_thread(get_top_volume_symbols, market, quote, limit, min_quote_volume)
+        return {"ok": bool(ok), "market": market, "quote": quote, "limit": limit, "symbols": symbols or []}
+    except Exception as e:
+        return {"ok": False, "market": market, "quote": quote, "limit": limit, "symbols": [], "error": str(e)}
+
 
 
 
