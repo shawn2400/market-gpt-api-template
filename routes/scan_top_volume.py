@@ -9,11 +9,9 @@ import pandas as pd
 import requests
 from fastapi import APIRouter, Query
 
-# בסיסי Binance
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_BASE    = os.getenv("BINANCE_SPOT_HTTP_BASE",    "https://api.binance.com")
 
-# סשן HTTP
 _S = requests.Session()
 _S.trust_env = False
 _S.headers.update({
@@ -22,21 +20,18 @@ _S.headers.update({
     "Accept-Encoding": "gzip",
 })
 
-router = APIRouter(prefix="/scan", tags=["Scan"])  # ציבורי, ללא Bearer — כמו שביקשת
+router = APIRouter(prefix="/scan", tags=["Scan"])  # ציבורי
 
 
-# --------- Top Volume (עדיף דרך utils/top_volume אם קיים) ---------
+# --------- Top Volume (מעדיף utils/top_volume אם קיים) ---------
 def _get_top_symbols(market: str, quote: str, limit: int) -> List[str]:
     try:
-        # שימוש בספק הקיים אצלך אם נמצא
         from utils.top_volume import get_top_volume_symbols  # type: ignore
         ok, symbols = get_top_volume_symbols(market=market, quote=quote, limit=limit)
         if ok and symbols:
             return symbols
     except Exception:
         pass
-
-    # fallback ישיר
     url = f"{FUTURES_BASE}/fapi/v1/ticker/24hr" if market == "futures" else f"{SPOT_BASE}/api/v3/ticker/24hr"
     try:
         r = _S.get(url, timeout=8)
@@ -84,7 +79,7 @@ def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.
         return None
 
 
-# --------- אינדיקטורים (ללא תלות חיצונית) ---------
+# --------- אינדיקטורים (self-contained) ---------
 def _ema(s: pd.Series, n: int) -> pd.Series:
     n = max(1, int(n))
     return s.ewm(span=n, adjust=False).mean()
@@ -221,8 +216,8 @@ async def scan_top_volume(
     ich_base: int = Query(26, ge=10, le=100),
     ich_span_b: int = Query(52, ge=20, le=200),
 
-    ms_lookback: int = Query(5, ge=2, le=20),    # שמור לתאימות קדימה
-    ms_pivot_span: int = Query(3, ge=1, le=10),  # שמור לתאימות קדימה
+    ms_lookback: int = Query(5, ge=2, le=20),
+    ms_pivot_span: int = Query(3, ge=1, le=10),
 
     concurrency: int = Query(16, ge=2, le=64),
 ) -> Dict[str, Any]:
@@ -287,4 +282,5 @@ async def scan_top_volume(
             out.append(r)
     out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(out), "signals": out}
+
 
