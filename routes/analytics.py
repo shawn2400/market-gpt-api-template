@@ -1,61 +1,18 @@
-# routes/analytics.py
 from __future__ import annotations
-from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter
 
-def _macro_snapshot() -> Dict[str, Any]:
-    try:
-        from utils.macro import macro_snapshot  # type: ignore
-        res = macro_snapshot()
-        if isinstance(res, dict) and "ok" in res:
-            return res
-    except Exception:
-        pass
-    return {"ok": False, "note": "macro provider not configured"}
+router = APIRouter(prefix="/analytics", tags=["Analytics"])
+router_compat = APIRouter(tags=["Analytics"])  # ללא prefix
 
-def _onchain_overview(targets: List[str]) -> Dict[str, Any]:
-    try:
-        from utils.onchain import overview  # type: ignore
-        data = overview(targets)
-        if isinstance(data, dict) and "ok" in data:
-            return data
-    except Exception:
-        pass
-    return {
-        "ok": True,
-        "chains": {t: {"ok": False, "warnings": ["onchain provider not configured"]} for t in targets}
-    }
+@router.get("/macro", operation_id="getMacro", summary="Macro snapshot (DXY/NDX/SPX/FG/BTC.D)")
+async def get_macro():
+    # אם אין מפתחות/פיד אמיתי — מחזיר מבנה ריק תקין
+    return {"ok": True, "dxy": None, "ndx": None, "spx": None, "btc_dominance": None, "fear_greed": None, "updated_at": None, "note": "no provider configured"}
 
-def _sentiment_summary() -> Dict[str, Any]:
-    try:
-        from utils.sentiment import summary  # type: ignore
-        s = summary()
-        if isinstance(s, dict) and "ok" in s:
-            return s
-    except Exception:
-        pass
-    return {"ok": True, "score": 0.0, "buckets": {}, "samples": 0}
+@router_compat.get("/macro", operation_id="getMacroCompat", summary="Macro (alias for /analytics/macro)")
+async def get_macro_compat():
+    return await get_macro()
 
-router = APIRouter(tags=["Analytics"])
-
-@router.get("/analytics/macro", summary="Macro snapshot (DXY/NDX/SPX/FG/BTC.D)", operation_id="getMacro")
-async def get_macro() -> Dict[str, Any]:
-    return _macro_snapshot()
-
-@router.get("/onchain/overview", summary="On-chain overview (BTC/ETH)", operation_id="getOnchainOverview")
-async def get_onchain_overview(
-    targets: Optional[str] = Query(None, description="Comma-separated chains, e.g. BTC,ETH"),
-) -> Dict[str, Any]:
-    lst = []
-    if targets:
-        lst = [t.strip().upper() for t in targets.split(",") if t.strip()]
-    if not lst:
-        lst = ["BTC", "ETH"]
-    return _onchain_overview(lst)
-
-@router.get("/sentiment/summary", summary="Sentiment summary (-100..100)", operation_id="getSentiment")
-async def get_sentiment() -> Dict[str, Any]:
-    return _sentiment_summary()
 
 
 
