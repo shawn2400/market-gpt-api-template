@@ -1,85 +1,89 @@
 # utils/binance_client.py
 from __future__ import annotations
-import os, time, threading
-from typing import Any, Dict, Callable, Optional
+import os
+import time
+import threading
+from typing import Callable, Any, Dict, Optional
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
+# בסיסים מה-ENV (עם דיפולטים נכונים)
+_SPOT_HTTP_BASE = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
+_FUT_HTTP_BASE  = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+
 _client: Optional[Client] = None
-_lock = threading.Lock()
+_client_lock = threading.Lock()
 
-_BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
-_MAX_TRIES    = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
-_RECV_WINDOW  = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
+_ex_info_cache: Dict[str, Any] | None = None
+_ex_info_ts: float = 0.0
+_EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))  # 30 דקות
 
-def _mk_client() -> Client:
-    api = os.getenv("BINANCE_API_KEY", "") or ""
-    sec = os.getenv("BINANCE_API_SECRET", "") or ""
-    # Client סינכרוני; כולל futures_* על אותו אובייקט
-    return Client(api_key=api, api_secret=sec, requests_params={"timeout": 10})
-
-def get_futures_client() -> Client:
-    """מאתחל/מחזיר Client יחיד (thread-safe)."""
+def get_client() -> Client:
+    """
+    מחזיר מופע Client (משותף ל-Spot/Futures של python-binance).
+    """
     global _client
-    with _lock:
+    with _client_lock:
         if _client is None:
-            _client = _mk_client()
+            api = os.getenv("BINANCE_API_KEY") or ""
+            secret = os.getenv("BINANCE_API_SECRET") or ""
+            _client = Client(api, secret)
+            # נוודא שה-Endpoints מכוונים לכתובות הסביבה (במידה והוגדרו)
+            _client.API_URL = _SPOT_HTTP_BASE.rstrip("/")
+            _client.FUTURES_URL = _FUT_HTTP_BASE.rstrip("/")
         return _client
 
-def _retry(label: str, fn: Callable[[], Any], tries: int = _MAX_TRIES):
-    delay = _BACKOFF_BASE
+# שמים Alias מפורש—חלק מהקוד מצפה לשם הזה:
+def get_futures_client() -> Client:
+    return get_client()
+
+def _retry_call(fn: Callable[[], Any], label: str, tries: int = 3, delay: float = 0.5):
     last = None
     for i in range(tries):
         try:
             return fn()
         except (BinanceAPIException, BinanceRequestException, Exception) as e:
             last = e
-            if i == tries - 1:
-                break
-            time.sleep(delay)
-            delay *= 2
+            time.sleep(delay * (2 ** i))
     if last:
         raise last
     raise RuntimeError(f"{label} failed")
 
+def futures_exchange_info_safe() -> Dict[str, Any]:
+    """
+    שליפת exchangeInfo של Futures עם cache ל-EX_TTL.
+    """
+    global _ex_info_cache, _ex_info_ts
+    now = time.time()
+    if _ex_info_cache and (now - _ex_info_ts) < _EX_TTL:
+        return _ex_info_cache
+    client = get_futures_client()
+    data = _retry_call(lambda: client.futures_exchange_info(), "futures_exchange_info", tries=3)
+    _ex_info_cache = data or {}
+    _ex_info_ts = now
+    return _ex_info_cache
+
 def futures_ping() -> bool:
-    c = get_futures_client()
+    """
+    בדיקת קישוריות ל-Futures. מחזיר True אם הצליח.
+    """
+    client = get_futures_client()
     try:
-        _retry("futures_ping", lambda: c.futures_ping())
+        _retry_call(lambda: client.futures_ping(), "futures_ping", tries=2)
         return True
     except Exception:
         return False
-
-def futures_server_time() -> Dict[str, Any]:
-    c = get_futures_client()
-    return _retry("futures_time", lambda: c.futures_time())
 
 def futures_mark_price(symbol: str) -> Dict[str, Any]:
-    """מחזיר dict עם markPrice ועוד (לא דורש הרשאות מסחר)."""
-    c = get_futures_client()
-    return _retry(
-        "futures_mark_price",
-        lambda: c.futures_mark_price(symbol=symbol, recvWindow=_RECV_WINDOW),
-    )
+    """
+    שליפת Mark Price (dict) עבור symbol. מרים חריגה במקרה כישלון.
+    """
+    client = get_futures_client()
+    sym = (symbol or "").upper()
+    data = _retry_call(lambda: client.futures_mark_price(symbol=sym), "futures_mark_price", tries=3)
+    return data or {}
 
-def futures_exchange_info_safe() -> Dict[str, Any]:
-    c = get_futures_client()
-    return _retry("futures_exchange_info", lambda: c.futures_exchange_info())
-
-def ensure_hedge_mode(force: bool = False) -> Optional[bool]:
-    """אם force או BINANCE_FORCE_HEDGE_MODE=true → נאכוף dualSidePosition=True."""
-    if not force and str(os.getenv("BINANCE_FORCE_HEDGE_MODE", "false")).lower() not in ("1","true","yes"):
-        return None
-    c = get_futures_client()
-    try:
-        pos = _retry("futures_get_position_mode", lambda: c.futures_get_position_mode())
-        dual_now = bool(pos.get("dualSidePosition"))
-        if not dual_now:
-            _retry("futures_change_position_mode", lambda: c.futures_change_position_mode(dualSidePosition=True))
-        return True
-    except Exception:
-        return False
 
 
 
