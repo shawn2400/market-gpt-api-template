@@ -24,6 +24,7 @@ tags:
   - name: News
   - name: Health
   - name: Dashboard
+  - name: Risk
 
 # כל ה־operations מוגנים כברירת מחדל ב־Bearer
 security:
@@ -362,6 +363,40 @@ components:
         ok: { type: boolean }
         selected: { type: array, items: { $ref: "#/components/schemas/DecisionCandidate" } }
         note: { oneOf: [ {type: string}, {type: "null"} ] }
+
+    # ---------- Risk ----------
+    RiskSuggestRequest:
+      type: object
+      required: [symbol, side, entry, sl]
+      properties:
+        symbol: { type: string, example: BTCUSDT }
+        side:   { type: string, enum: [LONG, SHORT] }
+        entry:  { type: number }
+        sl:     { type: number }
+        tp:     { type: number, nullable: true }
+        atr:    { type: number, nullable: true }
+        equity_usdt:     { type: number, nullable: true }
+        confidence:      { type: number, nullable: true, minimum: 0, maximum: 100, default: 55 }
+        max_budget_usdt: { type: number, nullable: true }
+        max_leverage:    { type: integer, nullable: true, minimum: 1, maximum: 125 }
+
+    RiskSuggestResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        suggested:
+          type: object
+          additionalProperties: true
+        inputs:
+          type: object
+          additionalProperties: true
+        constraints:
+          type: object
+          nullable: true
+          additionalProperties: true
+        note:
+          type: string
+          nullable: true
 
 paths:
   /:
@@ -912,6 +947,29 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/IndicatorsRecord" }
 
+  # ---------- Risk ----------
+  /risk/suggest:
+    post:
+      tags: [Risk]
+      summary: Suggest budget/leverage/qty from risk engine
+      operationId: postRiskSuggest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RiskSuggestRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskSuggestResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   # ---------- Health ----------
   /health:
     get:
@@ -986,6 +1044,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
 
 
 
