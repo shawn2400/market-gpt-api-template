@@ -1,1103 +1,168 @@
 openapi: 3.1.0
-jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
-
 info:
   title: AlgoGPT API
   version: 2.14.3
   description: |
-    AlgoGPT – Real-time algorithmic trader for Binance (Futures).
-    Scanner, AI quality scoring, Backtest, Dashboard, Health, Analytics, News.
+    AlgoGPT — מערכת מסחר בזמן אמת ב-Binance (Futures, Spot, Grid), כולל Backtest, ניתוח AI, חדשות, אינדיקטורים.
 
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
 
-tags:
-  - name: Config
-  - name: AI
-  - name: Trades
-  - name: Backtest
-  - name: Scan
-  - name: Indicators
-  - name: Analytics
-  - name: News
-  - name: Health
-  - name: Dashboard
-  - name: Risk
-  - name: Snapshots
+paths:
+  /:
+    get:
+      summary: בדיקת תקינות
+      operationId: getRootStatus
+      tags: [Config]
+      responses:
+        "200":
+          description: תקין
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: 2.14.3
 
-security:
-  - HTTPBearer: []
+  /metrics:
+    get:
+      summary: מדדי ביצועים
+      operationId: getBasicMetrics
+      tags: [Config]
+      responses:
+        "200":
+          description: JSON עם מדדים
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uptime_sec:
+                    type: integer
+                  requests:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      errors_total:
+                        type: integer
+                      by_status:
+                        type: object
+                      rps_5s:
+                        type: number
+                      rps_60s:
+                        type: number
+                  latency_ms:
+                    type: object
+                    properties:
+                      count:
+                        type: integer
+                      avg:
+                        type: number
+                      min:
+                        type: number
+                      max:
+                        type: number
+                      p50:
+                        type: number
+                      p95:
+                        type: number
+
+  /__routes:
+    get:
+      summary: כל המסלולים הפעילים
+      operationId: getRegisteredRoutes
+      tags: [Config]
+      responses:
+        "200":
+          description: רשימת נתיבי API
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  routes:
+                    type: array
+                    items:
+                      type: string
+
+  /ai/ai-analyze:
+    post:
+      summary: ניתוח איכות עסקה עם עוגן
+      operationId: postAiAnalyze
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                side:
+                  type: string
+                  enum: [LONG, SHORT]
+                entry:
+                  type: number
+                sl:
+                  type: number
+                tp:
+                  type: number
+                leverage:
+                  type: integer
+                budget:
+                  type: number
+                atr:
+                  type: number
+      responses:
+        "200":
+          description: תוצאה מוצלחת
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quality_score:
+                    type: number
+                  success_pct:
+                    type: number
+                  anchor:
+                    type: object
+                  components:
+                    type: object
+        "401":
+          description: לא מורשה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
 components:
   securitySchemes:
     HTTPBearer:
       type: http
       scheme: bearer
-      bearerFormat: opaque
-
   schemas:
     Error:
       type: object
       properties:
-        detail: { type: string }
+        detail:
+          type: string
         code:
-          oneOf: [ {type: string}, {type: 'null'} ]
-
-    StatusResponse:
-      type: object
-      properties:
-        status: { type: string, example: ok }
-        version: { type: string, example: 2.14.3 }
-
-    MetricsResponse:
-      type: object
-      properties:
-        boot_ts: { type: integer }
-        uptime_sec: { type: integer }
-        requests:
-          type: object
-          additionalProperties: true
-        latency_ms:
-          type: object
-          additionalProperties: true
-
-    # ---------- AI ----------
-    AiHealthResponse:
-      type: object
-      properties:
-        ok: { type: boolean, example: true }
-        model: { oneOf: [ {type: string}, {type: 'null'} ] }
-        latency_ms: { oneOf: [ {type: number}, {type: 'null'} ] }
-        error: { oneOf: [ {type: string}, {type: 'null'} ] }
-
-    AiQualityRequest:
-      type: object
-      required: [symbol, side]
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        side:   { type: string, enum: [LONG, SHORT] }
-        entry:  { oneOf: [ {type: number}, {type: 'null'} ] }
-        sl:     { oneOf: [ {type: number}, {type: 'null'} ] }
-        tp:     { oneOf: [ {type: number}, {type: 'null'} ] }
-        leverage: { type: integer, default: 10 }
-        budget:   { type: number, default: 100 }
-        atr:      { oneOf: [ {type: number}, {type: 'null'} ] }
-
-    AiAnalyzeResponse:
-      type: object
-      properties:
-        quality_score: { type: number }
-        success_pct:   { type: number }
-        anchor: { type: object, additionalProperties: true }
-        components: { type: object, additionalProperties: true }
-
-    # ---------- Trades ----------
-    SLTP3Response:
-      type: object
-      properties:
-        symbol:    { type: string }
-        direction: { type: string, enum: [LONG, SHORT] }
-        sl:  { type: number }
-        tp1: { type: number }
-        tp2: { type: number }
-
-    TradeExecuteRequest:
-      type: object
-      required: [symbol, side, budget, leverage]
-      properties:
-        symbol:   { type: string, example: BTCUSDT }
-        side:     { type: string, enum: [LONG, SHORT] }
-        budget:   { type: number, example: 100 }
-        leverage: { type: integer, example: 10 }
-        entry:    { oneOf: [ {type: number}, {type: 'null'} ] }
-        sl:       { oneOf: [ {type: number}, {type: 'null'} ] }
-        tp:       { oneOf: [ {type: number}, {type: 'null'} ] }
-        atr:
-          oneOf:
-            - type: number
-              description: Optional ATR for SL/TP calculation
-            - type: 'null'
-        dry_run:  { type: boolean, default: true }
-
-    TradeExecuteResponse:
-      type: object
-      properties:
-        status: { type: string, example: ok }
-        result: { type: object, additionalProperties: true }
-
-    # ---------- Backtest ----------
-    BacktestTrade:
-      type: object
-      properties:
-        timestamp: { type: integer, description: epoch seconds }
-        price: { type: number }
-        side:  { type: string, enum: [LONG, SHORT] }
-        pnl:   { type: number }
-
-    BacktestResult:
-      type: object
-      properties:
-        symbol: { type: string }
-        timeframe: { type: string }
-        trades: { type: array, items: { $ref: "#/components/schemas/BacktestTrade" } }
-        win_rate:  { type: number }
-        total_pnl: { type: number }
-        count:     { type: integer }
-
-    # ---------- Scan ----------
-    ScanSignal:
-      type: object
-      required: [symbol, timeframe, score]
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        timeframe: { type: string, example: 15m }
-        side: { oneOf: [ {type: string, enum: [LONG, SHORT]}, {type: 'null'} ] }
-        score: { type: number, minimum: 0, maximum: 10 }
-        note:  { oneOf: [ {type: string}, {type: 'null'} ] }
-        details: { oneOf: [ {type: object, additionalProperties: true}, {type: 'null'} ] }
-
-    ScanResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        count: { type: integer }
-        signals: { type: array, items: { $ref: "#/components/schemas/ScanSignal" } }
-
-    # ---------- Indicators ----------
-    IndicatorsRecord:
-      title: IndicatorsRecord
-      description: Flexible indicators map (string keys -> arbitrary values).
-      type: object
-      properties: {}
-      additionalProperties:
-        anyOf:
-          - type: number
-          - type: string
-          - type: boolean
-          - type: 'null'
-          - type: array
-            items:
-              anyOf:
-                - type: number
-                - type: string
-                - type: boolean
-                - type: 'null'
-          - type: object
-            additionalProperties: true
-
-    # ---------- Analytics / News ----------
-    TopVolumeResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        market: { type: string, example: futures }
-        quote:  { type: string, example: USDT }
-        limit:  { type: integer, example: 50 }
-        symbols: { type: array, items: { type: string, example: BTCUSDT } }
-
-    CorrelationItem:
-      type: object
-      properties:
-        symbol: { type: string, example: ETHUSDT }
-        ref_symbol: { type: string, example: BTCUSDT }
-        window: { type: integer, example: 200 }
-        corr_close:
-          oneOf:
-            - type: number
-              description: Pearson correlation of returns
-            - type: 'null'
-        beta: { oneOf: [ {type: number}, {type: 'null'} ] }
-        lead_lag_bars: { oneOf: [ {type: integer}, {type: 'null'} ] }
-        note: { oneOf: [ {type: string}, {type: 'null'} ] }
-
-    CorrelationResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        items: { type: array, items: { $ref: "#/components/schemas/CorrelationItem" } }
-
-    MacroSnapshot:
-      type: object
-      properties:
-        ok: { type: boolean }
-        dxy: { oneOf: [ {type: number}, {type: 'null'} ] }
-        ndx: { oneOf: [ {type: number}, {type: 'null'} ] }
-        spx: { oneOf: [ {type: number}, {type: 'null'} ] }
-        btc_dominance: { oneOf: [ {type: number}, {type: 'null'} ] }
-        fear_greed: { oneOf: [ {type: integer}, {type: 'null'} ] }
-        updated_at: { oneOf: [ {type: string}, {type: 'null'} ] }
-        note: { oneOf: [ {type: string}, {type: 'null'} ] }
-
-    NewsItem:
-      type: object
-      properties:
-        title: { type: string }
-        url: { type: string }
-        published_at: { oneOf: [ {type: string}, {type: 'null'} ] }
-        impact_score: { type: integer }
-        source: { oneOf: [ {type: object, additionalProperties: true}, {type: 'null'} ] }
-        currencies: { oneOf: [ {type: array, items: { type: object, additionalProperties: true }}, {type: 'null'} ] }
-
-    NewsResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        count: { type: integer }
-        items: { type: array, items: { $ref: "#/components/schemas/NewsItem" } }
-
-    SentimentSummary:
-      type: object
-      properties:
-        ok: { type: boolean }
-        score: { type: number, description: "-100..100" }
-        buckets: { type: object, additionalProperties: { type: integer } }
-        samples: { type: integer }
-
-    EtaRequest:
-      type: object
-      required: [entry, tp, sl, atr, timeframe]
-      properties:
-        entry: { type: number }
-        tp:    { type: number }
-        sl:    { type: number }
-        atr:   { type: number }
-        timeframe: { type: string, example: 15m }
-
-    EtaResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        eta_tp_minutes: { oneOf: [ {type: number}, {type: 'null'} ] }
-        eta_sl_minutes: { oneOf: [ {type: number}, {type: 'null'} ] }
-        speed_note: { oneOf: [ {type: string}, {type: 'null'} ] }
-
-    DecisionCandidate:
-      type: object
-      properties:
-        symbol: { type: string }
-        side:   { type: string, enum: [LONG, SHORT] }
-        quality_score: { type: number }
-        success_pct:   { oneOf: [ {type: number}, {type: 'null'} ] }
-        volatility:    { oneOf: [ {type: number}, {type: 'null'} ] }
-        eta_minutes:   { oneOf: [ {type: number}, {type: 'null'} ] }
-        corr_to_btc:   { oneOf: [ {type: number}, {type: 'null'} ] }
-
-    DecisionRequest:
-      type: object
-      properties:
-        candidates: { type: array, items: { $ref: "#/components/schemas/DecisionCandidate" } }
-        top_n: { type: integer, default: 5 }
-        diversify_by_symbol: { type: boolean, default: true }
-
-    DecisionSelectedItem:
-      type: object
-      properties:
-        rank: { type: integer }
-        symbol: { type: string }
-        side:
           oneOf:
             - type: string
-              enum: [LONG, SHORT]
-            - type: 'null'
-        score: { type: number }
-        components:
-          type: object
-          properties:
-            quality: { type: number }
-            success_pct: { oneOf: [ {type: number}, {type: 'null'} ] }
-            eta: { oneOf: [ {type: number}, {type: 'null'} ] }
-            volatility: { oneOf: [ {type: number}, {type: 'null'} ] }
-            decorr: { oneOf: [ {type: number}, {type: 'null'} ] }
-            weights: { type: object, additionalProperties: true }
-          additionalProperties: false
-        raw:
-          type: object
-          additionalProperties: true
-
-    DecisionResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        selected: { type: array, items: { $ref: "#/components/schemas/DecisionSelectedItem" } }
-        note: { oneOf: [ {type: string}, {type: 'null'} ] }
-
-    # ---------- Risk ----------
-    RiskSuggestRequest:
-      type: object
-      required: [symbol, side, entry, sl]
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        side:   { type: string, enum: [LONG, SHORT] }
-        entry:  { type: number }
-        sl:     { type: number }
-        tp:     { oneOf: [ {type: number}, {type: 'null'} ] }
-        atr:    { oneOf: [ {type: number}, {type: 'null'} ] }
-        equity_usdt:     { oneOf: [ {type: number}, {type: 'null'} ] }
-        confidence:      { oneOf: [ {type: number, minimum: 0, maximum: 100, default: 55}, {type: 'null'} ] }
-        max_budget_usdt: { oneOf: [ {type: number}, {type: 'null'} ] }
-        max_leverage:    { oneOf: [ {type: integer, minimum: 1, maximum: 125}, {type: 'null'} ] }
-
-    RiskSuggestResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        suggested: { type: object, additionalProperties: true }
-        inputs: { type: object, additionalProperties: true }
-        constraints: { oneOf: [ {type: object, additionalProperties: true}, {type: 'null'} ] }
-        note: { oneOf: [ {type: string}, {type: 'null'} ] }
-
-    # ---------- Orderflow / Onchain ----------
-    DepthSnapshot:
-      type: object
-      properties:
-        bids:
-          type: array
-          items:
-            type: array
-            minItems: 2
-            maxItems: 2
-            items: { type: number }
-        asks:
-          type: array
-          items:
-            type: array
-            minItems: 2
-            maxItems: 2
-            items: { type: number }
-        bid_volume: { type: number }
-        ask_volume: { type: number }
-        imbalance:  { type: number, description: "-1..+1 (חיובי=לחץ קניה)" }
-        mid:        { oneOf: [ {type: number}, {type: 'null'} ] }
-        best_bid:   { oneOf: [ {type: number}, {type: 'null'} ] }
-        best_ask:   { oneOf: [ {type: number}, {type: 'null'} ] }
-        levels:     { type: integer }
-
-    CvdMetrics:
-      type: object
-      properties:
-        cvd_last:     { type: number }
-        cvd_change_n: { type: number }
-        buy_ratio:    { type: number }
-        sell_ratio:   { type: number }
-        mean_qty:     { type: number }
-
-    IcebergSignal:
-      type: object
-      properties:
-        present:  { type: boolean }
-        score:    { type: number }
-        clusters: { type: integer }
-
-    OrderflowSnapshot:
-      type: object
-      properties:
-        ok:     { type: boolean }
-        symbol: { type: string }
-        cvd:    { $ref: "#/components/schemas/CvdMetrics" }
-        depth:  { $ref: "#/components/schemas/DepthSnapshot" }
-        icebergs: { $ref: "#/components/schemas/IcebergSignal" }
-        ts: { type: integer }
-        error: { oneOf: [ {type: string}, {type: 'null'} ] }
-
-    OnchainChain:
-      type: object
-      properties:
-        ok: { type: boolean }
-        chain: { type: string }
-        fees:
-          oneOf:
-            - type: object
-              additionalProperties: true
-            - type: 'null'
-        stats:
-          oneOf:
-            - type: object
-              additionalProperties: true
-            - type: 'null'
-        warnings:
-          oneOf:
-            - type: array
-              items: { type: string }
             - type: 'null'
 
-    OnchainOverview:
-      type: object
-      properties:
-        ok: { type: boolean }
-        chains:
-          type: object
-          additionalProperties: { $ref: "#/components/schemas/OnchainChain" }
+security:
+  - HTTPBearer: []
 
-    # ---------- Snapshots ----------
-    SnapshotTradeRequest:
-      type: object
-      required: [symbol, direction, entry, sl, tp]
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        direction: { type: string, enum: [LONG, SHORT] }
-        entry: { type: number }
-        sl:    { type: number }
-        tp:    { type: number }
-        price_now: { oneOf: [ {type: number}, {type: 'null'} ] }
-        budget:    { oneOf: [ {type: number}, {type: 'null'} ] }
-        leverage:  { oneOf: [ {type: number}, {type: 'null'} ] }
-        quality_score: { oneOf: [ {type: number}, {type: 'null'} ] }
-
-    SnapshotTradeResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        file_path: { type: string }
-        url: { type: string }
-
-paths:
-  /:
-    get:
-      tags: [Config]
-      summary: Server status
-      operationId: getRootStatus
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/StatusResponse" }
-
-  /metrics:
-    get:
-      tags: [Config]
-      summary: Basic metrics
-      operationId: getBasicMetrics
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/MetricsResponse" }
-
-  /dashboard:
-    get:
-      tags: [Dashboard]
-      summary: Minimal HTML dashboard
-      operationId: getDashboardHtml_v2
-      security: []
-      responses:
-        "200":
-          description: HTML
-          content:
-            text/html:
-              schema: { type: string }
-
-  # ---------- AI ----------
-  /ai/health:
-    get:
-      tags: [AI]
-      summary: AI health (OpenAI)
-      operationId: getAiHealth
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AiHealthResponse" }
-
-  /ai/quality:
-    post:
-      tags: [AI]
-      summary: Compute trade quality score
-      operationId: postAiQuality
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AiQualityRequest" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /ai-analyze:
-    post:
-      tags: [AI]
-      summary: Analyze trade idea (AI, same engine as /ai/quality)
-      operationId: postAiAnalyze
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AiQualityRequest" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  # ---------- Trades ----------
-  /trade/sltp:
-    post:
-      tags: [Trades]
-      summary: Suggest SL/TP (ATR-aware)
-      operationId: postTradeSltp
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [symbol, direction, entry]
-              properties:
-                symbol: { type: string }
-                direction: { type: string, enum: [LONG, SHORT] }
-                entry: { type: number }
-                atr: { oneOf: [ {type: number}, {type: 'null'} ] }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/SLTP3Response" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /trade/execute:
-    post:
-      tags: [Trades]
-      summary: Execute trade (dry-run by default)
-      operationId: postTradeExecute
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/TradeExecuteRequest" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TradeExecuteResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  # ---------- Backtest ----------
-  /backtest:
-    post:
-      tags: [Backtest]
-      summary: Run strategy backtest for a symbol
-      operationId: postBacktestRun
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:    { type: string, example: BTCUSDT }
-                timeframe: { type: string, enum: ['5m', '15m', '1h', '4h'], default: '15m' }
-                limit:     { type: integer, default: 200 }
-                slippage_pct: { type: number, default: 0.1 }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BacktestResult" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  # ---------- Scan ----------
-  /scan/info:
-    get:
-      tags: [Scan]
-      summary: Scanner heartbeat / info
-      operationId: getScanInfo
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  running: { type: boolean }
-                  last_run_ts: { oneOf: [ {type: number}, {type: 'null'} ] }
-                  last_run_ago_sec: { oneOf: [ {type: number}, {type: 'null'} ] }
-                  symbols:
-                    type: array
-                    items: { type: string }
-                  last_errors:
-                    type: array
-                    items: { type: string }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /scan/top-volume:
-    get:
-      tags: [Scan]
-      summary: Scan top-volume symbols concurrently (extended)
-      operationId: getScanTopVolume
-      parameters:
-        - in: query
-          name: market
-          schema: { type: string, enum: [futures, spot], default: futures }
-        - in: query
-          name: quote
-          schema: { type: string, default: USDT }
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
-        - in: query
-          name: timeframe
-          schema: { type: string, default: 15m }
-        - in: query
-          name: bars
-          schema: { type: integer, default: 200, minimum: 50, maximum: 1500 }
-        - in: query
-          name: trending_only
-          schema: { type: boolean, default: false }
-        - in: query
-          name: min_adx
-          schema: { type: number, default: 20.0, minimum: 5.0, maximum: 60.0 }
-        - in: query
-          name: ema_fast
-          schema: { type: integer, default: 21, minimum: 3, maximum: 200 }
-        - in: query
-          name: ema_slow
-          schema: { type: integer, default: 50, minimum: 5, maximum: 400 }
-        - in: query
-          name: adx_len
-          schema: { type: integer, default: 14, minimum: 5, maximum: 50 }
-        - in: query
-          name: st_period
-          schema: { type: integer, default: 10, minimum: 5, maximum: 50 }
-        - in: query
-          name: st_factor
-          schema: { type: number, default: 3.0, minimum: 1.0, maximum: 10.0 }
-        - in: query
-          name: ich_conv
-          schema: { type: integer, default: 9, minimum: 5, maximum: 50 }
-        - in: query
-          name: ich_base
-          schema: { type: integer, default: 26, minimum: 10, maximum: 100 }
-        - in: query
-          name: ich_span_b
-          schema: { type: integer, default: 52, minimum: 20, maximum: 200 }
-        - in: query
-          name: ms_lookback
-          schema: { type: integer, default: 5, minimum: 2, maximum: 20 }
-        - in: query
-          name: ms_pivot_span
-          schema: { type: integer, default: 3, minimum: 1, maximum: 10 }
-        - in: query
-          name: concurrency
-          schema: { type: integer, default: 16, minimum: 2, maximum: 64 }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ScanResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /symbols/top-volume:
-    get:
-      tags: [Analytics]
-      summary: Top symbols by volume (Binance)
-      operationId: getTopVolumeSymbols
-      parameters:
-        - in: query
-          name: market
-          schema: { type: string, enum: [futures, spot], default: futures }
-        - in: query
-          name: quote
-          schema: { type: string, default: USDT }
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50 }
-        - in: query
-          name: min_quote_volume
-          schema: { type: number, default: 0.0 }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TopVolumeResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /analytics/correlation:
-    get:
-      tags: [Analytics]
-      summary: Correlation ALT to BTC
-      operationId: getCorrelation
-      parameters:
-        - in: query
-          name: symbols
-          required: true
-          style: form
-          explode: false
-          schema:
-            type: array
-            items: { type: string }
-        - in: query
-          name: ref_symbol
-          schema: { type: string, default: BTCUSDT }
-        - in: query
-          name: timeframe
-          schema: { type: string, default: 15m }
-        - in: query
-          name: window
-          schema: { type: integer, default: 200 }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CorrelationResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /analytics/macro:
-    get:
-      tags: [Analytics]
-      summary: Macro snapshot (DXY/NDX/SPX/FG/BTC.D)
-      operationId: getMacro
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/MacroSnapshot" }
-
-  /news/crypto:
-    get:
-      tags: [News]
-      summary: Crypto news (CryptoPanic) with impact score
-    # operationId intentionally stable for clients
-      operationId: getCryptoNews
-      security: []
-      parameters:
-        - in: query
-          name: filter
-          schema:
-            oneOf: [ {type: string}, {type: 'null'} ]
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/NewsResponse" }
-
-  /sentiment/summary:
-    get:
-      tags: [Analytics]
-      summary: Sentiment summary (-100..100)
-      operationId: getSentiment
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/SentimentSummary" }
-
-  /eta/time-to-target:
-    post:
-      tags: [Analytics]
-      summary: ETA to TP/SL by ATR speed
-      operationId: postEtaToTarget
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/EtaRequest" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/EtaResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /decision/best-trades:
-    post:
-      tags: [Analytics]
-      summary: Select best trades (quality/speed/diversify)
-      operationId: postDecisionBestTrades
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/DecisionRequest" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/DecisionResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  # ---------- Indicators ----------
-  /indicators:
-    get:
-      tags: [Indicators]
-      summary: Indicators sample (sanity)
-      operationId: getIndicatorsSample
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/IndicatorsRecord" }
-
-  /indicators/{symbol}:
-    get:
-      tags: [Indicators]
-      summary: Indicators from Binance/ccxt with fallback
-      operationId: getIndicatorsSymbol
-      security: []
-      parameters:
-        - in: path
-          name: symbol
-          required: true
-          schema: { type: string }
-        - in: query
-          name: timeframe
-          schema: { type: string, default: 1h }
-        - in: query
-          name: limit
-          schema: { type: integer, default: 180 }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/IndicatorsRecord" }
-
-  # ---------- Risk ----------
-  /risk/suggest:
-    post:
-      tags: [Risk]
-      summary: Suggest budget/leverage/qty from risk engine
-      operationId: postRiskSuggest
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/RiskSuggestRequest" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RiskSuggestResponse" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  # ---------- Orderflow / Onchain ----------
-  /orderflow/{symbol}:
-    get:
-      tags: [Analytics]
-      summary: Orderflow snapshot (CVD / Depth / Icebergs)
-      operationId: getOrderflowSnapshot
-      parameters:
-        - in: path
-          name: symbol
-          required: true
-          schema: { type: string, example: BTCUSDT }
-        - in: query
-          name: trades_limit
-          schema: { type: integer, default: 800, minimum: 1, maximum: 1000 }
-        - in: query
-          name: depth_limit
-          schema: { type: integer, default: 500, minimum: 5, maximum: 1000 }
-        - in: query
-          name: cvd_window
-          schema: { type: integer, default: 300, minimum: 1, maximum: 1000 }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OrderflowSnapshot" }
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /onchain/overview:
-    get:
-      tags: [Analytics]
-      summary: On-chain overview (BTC/ETH)
-      operationId: getOnchainOverview
-      security: []
-      parameters:
-        - in: query
-          name: targets
-          style: form
-          explode: false
-          schema:
-            type: array
-            items: { type: string, example: BTC }
-          description: "Comma-separated chain list, e.g. BTC,ETH"
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OnchainOverview" }
-
-  # ---------- Snapshots ----------
-  /snapshot/trade:
-    post:
-      tags: [Snapshots]
-      summary: Create trade snapshot (PNG) and return its URL
-      operationId: postTradeSnapshot
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SnapshotTradeRequest" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/SnapshotTradeResponse" }
-
-  # ---------- Health ----------
-  /health:
-    get:
-      tags: [Config]
-      summary: Basic health
-      operationId: getBasicHealth
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/StatusResponse" }
-
-  /health/live:
-    get:
-      tags: [Health]
-      summary: Liveness probe
-      operationId: getLiveness
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status: { type: string, example: live }
-                  uptime_sec: { type: integer }
-                  now_utc: { type: string }
-                additionalProperties: true
-
-  /health/strategy-version:
-    get:
-      tags: [Health]
-      summary: Strategy metadata & dependency versions
-      operationId: getStrategyVersion
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: {}
-                additionalProperties: true
-
-  # ---------- Grid ----------
-  /grid/status:
-    get:
-      tags: [Health]
-      summary: Grid status (workers/queue/concurrency)
-      operationId: getGridStatus
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  running: { type: boolean }
-                  workers: { type: integer }
-                  queue_size: { type: integer }
-                  concurrency: { type: integer }
-                  last_heartbeat: { type: string }
-                  binance_keys: { type: boolean }
-                  api_present: { type: boolean }
-                  secret_present: { type: boolean }
-                  futures_access: { type: boolean }
-                  futures_error: { oneOf: [ {type: string}, {type: 'null'} ] }
-                additionalProperties: true
-        "401":
-          description: unauthorized
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
 
 
