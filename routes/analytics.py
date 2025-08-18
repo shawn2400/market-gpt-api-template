@@ -3,19 +3,16 @@ from __future__ import annotations
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Query
 
-# --- Macro snapshot (DXY/NDX/SPX/F&G/BTC.D) ---
 def _macro_snapshot() -> Dict[str, Any]:
     try:
         from utils.macro import macro_snapshot  # type: ignore
         res = macro_snapshot()
-        # שמירה על פורמט צפוי
         if isinstance(res, dict) and "ok" in res:
             return res
     except Exception:
         pass
     return {"ok": False, "note": "macro provider not configured"}
 
-# --- Onchain overview (BTC/ETH) ---
 def _onchain_overview(targets: List[str]) -> Dict[str, Any]:
     try:
         from utils.onchain import overview  # type: ignore
@@ -24,13 +21,11 @@ def _onchain_overview(targets: List[str]) -> Dict[str, Any]:
             return data
     except Exception:
         pass
-    # fallback ריק – לא 404
     return {
         "ok": True,
         "chains": {t: {"ok": False, "warnings": ["onchain provider not configured"]} for t in targets}
     }
 
-# --- Sentiment (סיכום -100..100) ---
 def _sentiment_summary() -> Dict[str, Any]:
     try:
         from utils.sentiment import summary  # type: ignore
@@ -61,6 +56,7 @@ async def get_onchain_overview(
 @router.get("/sentiment/summary", summary="Sentiment summary (-100..100)", operation_id="getSentiment")
 async def get_sentiment() -> Dict[str, Any]:
     return _sentiment_summary()
+
 
 
 
