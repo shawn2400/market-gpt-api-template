@@ -16,11 +16,8 @@ _RECV_WINDOW  = int(os.getenv("BINANCE_RECV_WINDOW", "10000"))
 def _mk_client() -> Client:
     api = os.getenv("BINANCE_API_KEY", "") or ""
     sec = os.getenv("BINANCE_API_SECRET", "") or ""
-    # שים לב: זהו client סינכרוני (תואם לקוד שלך שמשתמש ב-to_thread)
-    c = Client(api_key=api, api_secret=sec)
-    # עדיף לעבוד רק מול Futures
-    c.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
-    return c
+    # client סינכרוני; קריאות futures_* ייצאו ל-Futures URL של הספרייה
+    return Client(api_key=api, api_secret=sec, requests_params={"timeout": 10})
 
 def get_futures_client() -> Client:
     global _client
@@ -43,7 +40,7 @@ def _retry(label: str, fn: Callable[[], Any], tries: int = _MAX_TRIES):
             delay *= 2
     if last:
         raise last
-    raise RuntimeError(f"{label} failed (no exception captured)")
+    raise RuntimeError(f"{label} failed")
 
 def futures_ping() -> bool:
     c = get_futures_client()
@@ -70,20 +67,20 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
 
 def ensure_hedge_mode(force: bool = False) -> Optional[bool]:
     """
-    אם BINANCE_FORCE_HEDGE_MODE=true — ננסה לאכוף Hedge Mode.
+    אם BINANCE_FORCE_HEDGE_MODE=true או force=True — נאכוף Hedge Mode (dualSidePosition).
     """
     if not force and str(os.getenv("BINANCE_FORCE_HEDGE_MODE", "false")).lower() not in ("1","true","yes"):
         return None
     c = get_futures_client()
     try:
         pos = _retry("futures_get_position_mode", lambda: c.futures_get_position_mode())
-        # pos = {'dualSidePosition': True/False}
         dual_now = bool(pos.get("dualSidePosition"))
         if not dual_now:
             _retry("futures_change_position_mode", lambda: c.futures_change_position_mode(dualSidePosition=True))
         return True
     except Exception:
         return False
+
 
 
 
