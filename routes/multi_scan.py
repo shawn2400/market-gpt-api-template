@@ -3,17 +3,16 @@ from __future__ import annotations
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, Query, Header, HTTPException, status
 import concurrent.futures as cf
-import os
+import os, time
 
 # ---- Auth (Bearer) ----
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
-    # Fallback: אם מוגדר API_BEARER_TOKEN – נדרוש אותו; אם לא – נרשה (ל-dev)
     def require_bearer_token(authorization: str = Header(default="")):
-        expected = os.getenv("API_BEARER_TOKEN", "").strip()
+        expected = (os.getenv("API_BEARER_TOKEN") or "").strip()
         if not expected:
-            return None  # dev mode: אין טוקן → public
+            return None
         if not authorization.startswith("Bearer "):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
         got = authorization.split(" ", 1)[1].strip()
@@ -21,7 +20,15 @@ except Exception:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
         return None
 
-# ---- Utilities ----
+# ---- Optional global scan state (אם יש לכם מנהל מצב פנימי, החלף בזה) ----
+class _ScanState:
+    running: bool = False
+    last_run_ts: float | None = None
+    symbols: list[str] = []
+    errors: list[str] = []
+
+scan_state = _ScanState()
+
 def _safe_float(x, d: float = 0.0) -> float:
     try:
         v = float(x)
@@ -29,17 +36,14 @@ def _safe_float(x, d: float = 0.0) -> float:
     except Exception:
         return d
 
-# Top-volume list (עם תאימות לשם ישן)
 try:
     from utils.top_volume import get_top_volume_symbols  # type: ignore
 except Exception:
     try:
-        # תמיכה לאחור אם מישהו שם את הקובץ תחת analytics/
         from analytics.top_volume import get_top_volume_symbols  # type: ignore
     except Exception:
         get_top_volume_symbols = None  # type: ignore
 
-# OHLCV + indicators — הייבוא ייעשה בפונקציה כדי לא להפיל טעינת מודול
 def _scan_one(symbol: str, timeframe: str, bars: int, ind_kwargs: Dict[str, Any]) -> Dict[str, Any]:
     out = {"symbol": symbol, "timeframe": timeframe, "side": None, "score": 0.0, "note": None, "details": None}
     try:
@@ -81,6 +85,16 @@ def _scan_one(symbol: str, timeframe: str, bars: int, ind_kwargs: Dict[str, Any]
 
 router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
 
+@router.get("/info", summary="Scanner heartbeat/info", operation_id="getScanInfo")
+def get_scan_info():
+    return {
+        "running": bool(scan_state.running),
+        "last_run_ts": scan_state.last_run_ts,
+        "last_run_ago_sec": (time.time() - scan_state.last_run_ts) if scan_state.last_run_ts else None,
+        "symbols": scan_state.symbols,
+        "last_errors": scan_state.errors,
+    }
+
 @router.get("/top-volume", summary="Scan top-volume symbols concurrently (extended)", operation_id="getScanTopVolume")
 def get_scan_top_volume(
     market: str = Query("futures", enum=["futures", "spot"]),
@@ -102,7 +116,7 @@ def get_scan_top_volume(
     ms_pivot_span: int = Query(3, ge=1, le=10),
     concurrency: int = Query(16, ge=2, le=64),
 ):
-    # 1) קבל רשימת סימבולים
+    # 1) רשימת סימבולים
     symbols: List[str] = []
     if get_top_volume_symbols is not None:
         try:
@@ -122,22 +136,31 @@ def get_scan_top_volume(
     )
 
     # 2) סריקה מקבילית
-    signals: List[Dict[str, Any]] = []
-    with cf.ThreadPoolExecutor(max_workers=int(concurrency)) as pool:
-        futures = [pool.submit(_scan_one, s, timeframe, bars, ind_kwargs) for s in symbols]
-        for f in futures:
-            try:
-                signals.append(f.result(timeout=60))
-            except Exception:
-                pass
+    scan_state.running = True
+    scan_state.last_run_ts = time.time()
+    scan_state.symbols = symbols
+    scan_state.errors = []
 
-    # 3) סינונים
+    signals: List[Dict[str, Any]] = []
+    try:
+        with cf.ThreadPoolExecutor(max_workers=int(concurrency)) as pool:
+            futs = [pool.submit(_scan_one, s, timeframe, bars, ind_kwargs) for s in symbols]
+            for f in futs:
+                try:
+                    signals.append(f.result(timeout=60))
+                except Exception as e:
+                    scan_state.errors.append(str(e))
+    finally:
+        scan_state.running = False
+
+    # 3) סינון
     if trending_only:
         signals = [x for x in signals if x.get("details") and bool(x["details"].get("trending"))]
     if min_adx is not None:
         signals = [x for x in signals if x.get("details") and _safe_float(x["details"].get("adx"), 0.0) >= float(min_adx)]
 
     return {"ok": True, "count": len(signals), "signals": signals}
+
 
 
 
