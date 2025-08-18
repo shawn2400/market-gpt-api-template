@@ -1,4 +1,3 @@
-# utils/top_volume.py
 from __future__ import annotations
 import os
 import requests
@@ -10,7 +9,10 @@ ENV_MIN_QV   = float(os.getenv("TOP_VOLUME_MIN_QV", "0"))
 
 _S = requests.Session()
 _S.trust_env = False
-_S.headers.update({"User-Agent": "AlgoGPT/2 top-volume", "Accept": "application/json"})
+_S.headers.update({
+    "User-Agent": "AlgoGPT/2 top-volume",
+    "Accept": "application/json",
+})
 
 def _get_json(url: str, timeout: float = 8.0):
     r = _S.get(url, timeout=timeout)
@@ -23,6 +25,10 @@ def get_top_volume_symbols(
     limit: int = 50,
     min_quote_volume: float | None = None,
 ) -> Tuple[bool, List[str]]:
+    """
+    Returns (ok, symbols) sorted by 24h quoteVolume desc for symbols ending with `quote`.
+    Respects TOP_VOLUME_MIN_QV env if `min_quote_volume` is None.
+    """
     try:
         eff_min_qv = ENV_MIN_QV if (min_quote_volume is None) else float(min_quote_volume)
         if market == "futures":
@@ -30,7 +36,7 @@ def get_top_volume_symbols(
         else:
             arr = _get_json(f"{SPOT_BASE}/api/v3/ticker/24hr")
 
-        rows = [x for x in arr if str(x.get("symbol","")).endswith(quote)]
+        rows = [x for x in arr if str(x.get("symbol", "")).endswith(quote)]
         rows.sort(key=lambda x: float(x.get("quoteVolume", 0.0)), reverse=True)
         if eff_min_qv > 0:
             rows = [x for x in rows if float(x.get("quoteVolume", 0.0)) >= eff_min_qv]
