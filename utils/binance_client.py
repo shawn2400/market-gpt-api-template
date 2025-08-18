@@ -7,15 +7,15 @@ from typing import Callable, Any, Dict, Optional
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-_SPOT_HTTP_BASE = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
-_FUT_HTTP_BASE  = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+_SPOT_HTTP_BASE = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
+_FUT_HTTP_BASE  = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
 _client: Optional[Client] = None
 _client_lock = threading.Lock()
 
 _ex_info_cache: Dict[str, Any] | None = None
 _ex_info_ts: float = 0.0
-_EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))
+_EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))  # 30 דקות
 
 def get_client() -> Client:
     global _client
@@ -24,8 +24,9 @@ def get_client() -> Client:
             api = os.getenv("BINANCE_API_KEY") or ""
             secret = os.getenv("BINANCE_API_SECRET") or ""
             _client = Client(api, secret)
-            _client.API_URL = _SPOT_HTTP_BASE.rstrip("/")
-            _client.FUTURES_URL = _FUT_HTTP_BASE.rstrip("/")
+            # כיוון בסיסי URL-ים
+            _client.API_URL = _SPOT_HTTP_BASE
+            _client.FUTURES_URL = _FUT_HTTP_BASE
         return _client
 
 def get_futures_client() -> Client:
