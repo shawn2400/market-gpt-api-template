@@ -21,6 +21,10 @@ _S.headers.update({
 router = APIRouter(prefix="/scan", tags=["Scan"])
 router_symbols = APIRouter(prefix="/symbols", tags=["Analytics"])
 
+@router.get("", summary="Scan root", operation_id="getScanRoot")
+async def scan_root():
+    return {"ok": True, "endpoints": ["/scan/info", "/scan/top-volume"]}
+
 def _get_top_symbols(market: str, quote: str, limit: int, min_qv: float = 0.0) -> List[str]:
     try:
         from utils.top_volume import get_top_volume_symbols
@@ -90,6 +94,8 @@ def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.
     except Exception:
         return None
 
+from utils.indicators_ext import add_extended_indicators, extended_score_last_row
+
 @router.get("/top-volume", operation_id="getScanTopVolume", summary="Scan top-volume symbols concurrently (extended)")
 async def scan_top_volume(
     market: str = Query("futures", pattern="^(futures|spot)$"),
@@ -104,8 +110,6 @@ async def scan_top_volume(
     adx_len: int = Query(14, ge=5, le=50),
     concurrency: int = Query(16, ge=2, le=64),
 ) -> Dict[str, Any]:
-    from utils.indicators_ext import add_extended_indicators, extended_score_last_row
-
     symbols = _get_top_symbols(market, quote, limit)
     if not symbols:
         return {"ok": True, "count": 0, "signals": []}
@@ -125,26 +129,6 @@ async def scan_top_volume(
             score, side, conf, reason = extended_score_last_row(row)
             if trending_only and not bool(row.get("trending") is True):
                 return
-            if float(row.get("adx") or 0.0) < float(min_adx):
-                return
-            results.append({
-                "symbol": sym,
-                "timeframe": timeframe,
-                "side": side,
-                "score": float(score),
-                "confidence": int(conf),
-                "note": reason,
-                "details": {
-                    "adx": float(row.get("adx") or 0.0),
-                    "ema_fast": float(row.get("ema_fast") or 0.0),
-                    "ema_slow": float(row.get("ema_slow") or 0.0),
-                    "close": float(row.get("close") or 0.0),
-                }
-            })
-
-    await asyncio.gather(*[_process(s) for s in symbols])
-    results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
-    return {"ok": True, "count": len(results), "signals": results}
 
 
 
