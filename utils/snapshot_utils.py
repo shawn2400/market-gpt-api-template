@@ -60,11 +60,13 @@ def save_trade_snapshot(trade: dict) -> str | None:
             # פורמט ידידותי: שלמות או עד 6 ספרות אחרי הנקודה
             return f"{v:.6f}".rstrip("0").rstrip(".")
 
-        ax.axhline(entry, linestyle="--", linewidth=1.6, label=f"Entry: {_fmt(entry)}")
-        ax.axhline(stop, linestyle="--", linewidth=1.6, label=f"Stop: {_fmt(stop)}")
-        ax.axhline(tp, linestyle="--", linewidth=1.6, label=f"TP: {_fmt(tp)}")
+        # צבעים עקביים:
+        # Entry = כחול, Stop = אדום, TP = ירוק, Now = כתום
+        ax.axhline(entry, linestyle="--", linewidth=1.8, color="#1f77b4", label=f"Entry: {_fmt(entry)}")
+        ax.axhline(stop,  linestyle="--", linewidth=1.8, color="#d62728", label=f"Stop: {_fmt(stop)}")
+        ax.axhline(tp,    linestyle="--", linewidth=1.8, color="#2ca02c", label=f"TP: {_fmt(tp)}")
         if price_now > 0:
-            ax.axhline(price_now, linestyle=":", linewidth=1.2, label=f"Now: {_fmt(price_now)}")
+            ax.axhline(price_now, linestyle=":", linewidth=1.6, color="#ff7f0e", label=f"Now: {_fmt(price_now)}")
 
         ax.set_ylim([y_min, y_max])
         ax.set_title(f"{symbol} ({direction}) — Trade Snapshot", fontsize=14)
@@ -78,10 +80,10 @@ def save_trade_snapshot(trade: dict) -> str | None:
         # חץ קטן המציין כיוון
         if direction == "LONG":
             ax.annotate("↑ LONG", xy=(0.01, entry), xycoords=("axes fraction", "data"),
-                        fontsize=12, weight="bold")
+                        fontsize=12, weight="bold", color="#1f77b4")
         else:
             ax.annotate("↓ SHORT", xy=(0.01, entry), xycoords=("axes fraction", "data"),
-                        fontsize=12, weight="bold")
+                        fontsize=12, weight="bold", color="#d62728")
 
         # טקסט נתוני עזר
         extras = []
@@ -122,6 +124,7 @@ def save_trade_snapshot(trade: dict) -> str | None:
 
 # תאימות לשמות קודמים
 generate_trade_snapshot = save_trade_snapshot
+
 
 
 
