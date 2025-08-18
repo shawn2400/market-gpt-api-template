@@ -1,4 +1,3 @@
-# utils/risk.py
 from __future__ import annotations
 from typing import Any, Dict, Optional
 import math
@@ -63,5 +62,6 @@ def suggest_risk(
             "confidence": confidence, "atr": atr,
         }
     }
+
 
 
