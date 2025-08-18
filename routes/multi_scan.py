@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 try:
     from utils.auth import require_bearer_token
 except Exception:
-    def require_bearer_token():  # fallback: חסר auth -> נטרפד
+    def require_bearer_token():  # fallback – מחייב Authorization
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 from utils.top_volume import get_top_volume_symbols
@@ -164,6 +164,7 @@ async def scan_top_volume(
 
     out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(out), "signals": out}
+
 
 
 
