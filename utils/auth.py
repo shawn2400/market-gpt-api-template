@@ -3,21 +3,31 @@ from __future__ import annotations
 import os
 from fastapi import Header, HTTPException, status
 
-_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
+def _expected_token() -> str:
+    return (
+        os.getenv("ALGOGPT_TOKEN")
+        or os.getenv("ALGOGPT_API_TOKEN")
+        or os.getenv("API_BEARER")
+        or ""
+    ).strip()
 
-def require_bearer_token(authorization: str | None = Header(default=None)) -> None:
+_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "").lower() in ("1", "true", "yes"))
+
+async def require_bearer_token(authorization: str | None = Header(None)) -> None:
     """
-    Validates Authorization: Bearer <token> against API_BEARER_TOKEN env.
-    Raises 401 on missing/invalid; 500 if token not configured on server.
+    Secure-by-default: אם אין טוקן בהגדרות — 401.
+    כדי לפתוח פומבית (פיתוח), הגדר SECURITY_ALLOW_ALL=1.
     """
-    if not _TOKEN:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Auth not configured")
-    if not authorization or not authorization.startswith("Bearer "):
+    if _ALLOW_ALL:
+        return
+    expected = _expected_token()
+    if not expected:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    token = authorization.split(" ", 1)[1].strip()
-    if token != _TOKEN:
+    if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    return None
+    provided = authorization.split(None, 1)[1].strip()
+    if provided != expected:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
 
