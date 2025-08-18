@@ -12,7 +12,7 @@ from importlib import metadata as importlib_metadata
 
 router = APIRouter(prefix="/health", tags=["Health"])
 
-# שמירת זמן עלייה ל-uptime פשוט
+# זמן עלייה
 _BOOT_TS = time.time()
 
 def _pkg_ver(name: str) -> str | None:
@@ -29,16 +29,19 @@ async def health_live() -> Dict[str, Any]:
         "now_utc": datetime.now(timezone.utc).isoformat(),
     }
 
+@router.get("/basic", summary="Basic health check", operation_id="getBasicHealth")
+async def health_basic() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "uptime_sec": int(time.time() - _BOOT_TS),
+        "now_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
 @router.get("/strategy-version", summary="Strategy metadata & dependency versions", operation_id="getStrategyVersion")
 async def health_strategy_version() -> Dict[str, Any]:
-    """
-    מחזיר מטא-דאטה על הגרסה, פירוט חבילות עיקריות ודגלי LIVE.
-    """
-    # גרסת אפליקציה (מ-ENV) וגרסת אסטרטגיה אם תבחר לשים
     app_version = os.getenv("ALGOGPT_VERSION", "unknown")
     strategy_version = os.getenv("STRATEGY_VERSION", app_version)
 
-    # גרסאות ספריות עיקריות (best-effort)
     libs = {
         "python": platform.python_version(),
         "fastapi": _pkg_ver("fastapi"),
@@ -59,8 +62,8 @@ async def health_strategy_version() -> Dict[str, Any]:
     }
 
     env_flags = {
-        "execute_trades": str(os.getenv("EXECUTE_TRADES", "false")).lower() in ("1","true","yes","on"),
-        "skip_mutations": str(os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true")).lower() in ("1","true","yes","on"),
+        "execute_trades": str(os.getenv("EXECUTE_TRADES", "false")).lower() in ("1", "true", "yes", "on"),
+        "skip_mutations": str(os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true")).lower() in ("1", "true", "yes", "on"),
     }
 
     return {
@@ -76,4 +79,3 @@ async def health_strategy_version() -> Dict[str, Any]:
         "uptime_sec": int(time.time() - _BOOT_TS),
         "now_utc": datetime.now(timezone.utc).isoformat(),
     }
-
