@@ -7,11 +7,29 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import requests
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Header, HTTPException, status, Depends
 
+# ==== Auth (Bearer) ====
+try:
+    from utils.auth import require_bearer_token  # type: ignore
+except Exception:
+    # אם יש API_BEARER_TOKEN נדרוש אותו; אם לא – נרשה (dev/public mode)
+    def require_bearer_token(authorization: str = Header(default="")):
+        expected = os.getenv("API_BEARER_TOKEN", "").strip()
+        if not expected:
+            return None
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+        got = authorization.split(" ", 1)[1].strip()
+        if got != expected:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+        return None
+
+# ==== Binance bases ====
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 SPOT_BASE    = os.getenv("BINANCE_SPOT_HTTP_BASE",    "https://api.binance.com")
 
+# ==== HTTP session ====
 _S = requests.Session()
 _S.trust_env = False
 _S.headers.update({
@@ -20,8 +38,8 @@ _S.headers.update({
     "Accept-Encoding": "gzip",
 })
 
-router = APIRouter(prefix="/scan", tags=["Scan"])  # ציבורי
-
+# שים לב: אם API_BEARER_TOKEN מוגדר – הנתיב יהיה מוגן; אם לא – ציבורי.
+router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
 
 # --------- Top Volume (מעדיף utils/top_volume אם קיים) ---------
 def _get_top_symbols(market: str, quote: str, limit: int) -> List[str]:
@@ -32,11 +50,12 @@ def _get_top_symbols(market: str, quote: str, limit: int) -> List[str]:
             return symbols
     except Exception:
         pass
+
+    # fallback ישיר
     url = f"{FUTURES_BASE}/fapi/v1/ticker/24hr" if market == "futures" else f"{SPOT_BASE}/api/v3/ticker/24hr"
     try:
         r = _S.get(url, timeout=8)
-        if r.status_code != 200:
-            return []
+        r.raise_for_status()
         items = r.json()
         rows: List[tuple[str, float]] = []
         for it in items:
@@ -53,7 +72,6 @@ def _get_top_symbols(market: str, quote: str, limit: int) -> List[str]:
     except Exception:
         return []
 
-
 # --------- Klines ---------
 def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.DataFrame]:
     try:
@@ -68,7 +86,10 @@ def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.
             return None
         df = pd.DataFrame(
             data,
-            columns=["openTime","open","high","low","close","volume","closeTime","qv","nTrades","takerBase","takerQuote","x"]
+            columns=[
+                "openTime","open","high","low","close","volume",
+                "closeTime","qv","nTrades","takerBase","takerQuote","x"
+            ],
         )
         for c in ("open","high","low","close","volume"):
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -78,8 +99,7 @@ def _klines(symbol: str, interval: str, limit: int, market: str) -> Optional[pd.
     except Exception:
         return None
 
-
-# --------- אינדיקטורים (self-contained) ---------
+# --------- אינדיקטורים קלים (ללא תלות חיצונית) ---------
 def _ema(s: pd.Series, n: int) -> pd.Series:
     n = max(1, int(n))
     return s.ewm(span=n, adjust=False).mean()
@@ -98,9 +118,9 @@ def _adx(h: pd.Series, l: pd.Series, c: pd.Series, n: int = 14) -> pd.Series:
     dn = -l.diff()
     plus_dm  = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=h.index)
     minus_dm = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=h.index)
-    atr_rma = _atr(h, l, c, n)
-    plus_di = 100.0 * _rma(plus_dm, n) / atr_rma.replace(0, np.nan)
-    minus_di= 100.0 * _rma(minus_dm, n) / atr_rma.replace(0, np.nan)
+    atr_rma = _atr(h, l, c, n).replace(0, np.nan)
+    plus_di = 100.0 * _rma(plus_dm, n) / atr_rma
+    minus_di= 100.0 * _rma(minus_dm, n) / atr_rma
     dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     return _rma(dx.fillna(0.0), n).fillna(0.0)
 
@@ -188,12 +208,11 @@ def _score_row(row: pd.Series) -> tuple[float, str, int, str]:
     except Exception:
         return 0.0, "LONG", 50, "scoring_error"
 
-
 # --------- Endpoint: /scan/top-volume ---------
 @router.get(
     "/top-volume",
     summary="Scan top-volume symbols concurrently (extended)",
-    operation_id="getScanTopVolume_v2143",
+    operation_id="getScanTopVolume",  # תואם OpenAPI שלך
 )
 async def scan_top_volume(
     market: str = Query("futures", enum=["futures","spot"]),
@@ -216,8 +235,8 @@ async def scan_top_volume(
     ich_base: int = Query(26, ge=10, le=100),
     ich_span_b: int = Query(52, ge=20, le=200),
 
-    ms_lookback: int = Query(5, ge=2, le=20),
-    ms_pivot_span: int = Query(3, ge=1, le=10),
+    ms_lookback: int = Query(5, ge=2, le=20),    # תאימות קדימה (לא בשימוש כאן)
+    ms_pivot_span: int = Query(3, ge=1, le=10),  # תאימות קדימה (לא בשימוש כאן)
 
     concurrency: int = Query(16, ge=2, le=64),
 ) -> Dict[str, Any]:
@@ -243,13 +262,23 @@ async def scan_top_volume(
                     return None
                 row = ext.iloc[-1]
                 adx_val = float(row.get("adx") or 0.0)
+
+                # Trending check & optional filter
                 is_trending = bool(row.get("trending") is True and adx_val >= float(min_adx or 0.0))
                 if trending_only and not is_trending:
                     return None
+
                 score, side, conf, reason = _score_row(row)
                 if not is_trending:
                     score = round(max(0.0, score - 0.8), 2)
                     reason = (reason + " non-trend")[:140]
+
+                # שמות שדות “ישנים” + החדשים
+                ich_raw = str(row.get("ichimoku_state") or "NEUTRAL").upper()
+                ich_state = "BULL" if ich_raw == "BULLISH" else ("BEAR" if ich_raw == "BEARISH" else "NEUTRAL")
+                trend_dir = str(row.get("trend_dir") or "FLAT").upper()
+                ms_trend = "UP" if trend_dir == "UP" else ("DOWN" if trend_dir == "DOWN" else "RANGE")
+
                 return {
                     "symbol": sym,
                     "timeframe": timeframe,
@@ -257,18 +286,21 @@ async def scan_top_volume(
                     "score": score,
                     "note": reason,
                     "details": {
-                        "trend_dir": str(row.get("trend_dir") or "FLAT"),
-                        "trending": is_trending,
-                        "adx": adx_val,
+                        "close": float(row.get("close") or 0.0),
                         "ema_fast": float(row.get("ema_fast") or 0.0),
                         "ema_slow": float(row.get("ema_slow") or 0.0),
+                        "adx": adx_val,
+                        "ich_state": ich_state,    # תאימות אחורה
+                        "ms_trend": ms_trend,      # תאימות אחורה
+                        "trending": is_trending,
+                        "confidence": conf,
+                        # גם החדשים:
+                        "trend_dir": trend_dir,
+                        "ichimoku_state": ich_raw,
                         "atr": float(row.get("atr") or 0.0),
-                        "ichimoku_state": str(row.get("ichimoku_state") or ""),
                         "stoch_k": float(row.get("stoch_k") or 0.0),
                         "stoch_d": float(row.get("stoch_d") or 0.0),
                         "supertrend": float(row.get("supertrend") or 0.0),
-                        "close": float(row.get("close") or 0.0),
-                        "confidence": conf,
                     },
                 }
             except Exception:
@@ -282,5 +314,6 @@ async def scan_top_volume(
             out.append(r)
     out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
     return {"ok": True, "count": len(out), "signals": out}
+
 
 
