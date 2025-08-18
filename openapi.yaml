@@ -2,8 +2,7 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   version: 2.14.3
-  description: |
-    AlgoGPT — מערכת מסחר בזמן אמת ב-Binance (Futures, Spot, Grid), כולל Backtest, ניתוח AI, חדשות, אינדיקטורים.
+  description: AlgoGPT — מערכת מסחר בזמן אמת ב־Binance
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -17,7 +16,7 @@ paths:
       tags: [Config]
       responses:
         "200":
-          description: תקין
+          description: OK
           content:
             application/json:
               schema:
@@ -25,19 +24,17 @@ paths:
                 properties:
                   status:
                     type: string
-                    example: ok
                   version:
                     type: string
-                    example: 2.14.3
 
   /metrics:
     get:
       summary: מדדי ביצועים
-      operationId: getBasicMetrics
+      operationId: getMetrics
       tags: [Config]
       responses:
         "200":
-          description: JSON עם מדדים
+          description: OK
           content:
             application/json:
               schema:
@@ -45,43 +42,17 @@ paths:
                 properties:
                   uptime_sec:
                     type: integer
-                  requests:
-                    type: object
-                    properties:
-                      total:
-                        type: integer
-                      errors_total:
-                        type: integer
-                      by_status:
-                        type: object
-                      rps_5s:
-                        type: number
-                      rps_60s:
-                        type: number
-                  latency_ms:
-                    type: object
-                    properties:
-                      count:
-                        type: integer
-                      avg:
-                        type: number
-                      min:
-                        type: number
-                      max:
-                        type: number
-                      p50:
-                        type: number
-                      p95:
-                        type: number
+                  rps_5s:
+                    type: number
 
   /__routes:
     get:
-      summary: כל המסלולים הפעילים
+      summary: כל הנתיבים
       operationId: getRegisteredRoutes
-      tags: [Config]
+      tags: [Debug]
       responses:
         "200":
-          description: רשימת נתיבי API
+          description: רשימת נתיבים
           content:
             application/json:
               schema:
@@ -92,9 +63,41 @@ paths:
                     items:
                       type: string
 
+  /trade/execute:
+    post:
+      summary: ביצוע עסקה
+      operationId: postTradeExecute
+      tags: [Trades]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol, side, budget, leverage, entry, sl, tp]
+              properties:
+                symbol: { type: string }
+                side: { type: string, enum: [LONG, SHORT] }
+                budget: { type: number }
+                leverage: { type: integer }
+                entry: { type: number }
+                sl: { type: number }
+                tp: { type: number }
+                dry_run: { type: boolean }
+      responses:
+        "200":
+          description: עסקה נשלחה
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string }
+                  quantity: { type: number }
+
   /ai/ai-analyze:
     post:
-      summary: ניתוח איכות עסקה עם עוגן
+      summary: ניתוח איכות עסקה עם AI
       operationId: postAiAnalyze
       tags: [AI]
       requestBody:
@@ -104,112 +107,28 @@ paths:
             schema:
               type: object
               properties:
-                symbol:
-                  type: string
-                side:
-                  type: string
-                  enum: [LONG, SHORT]
-                entry:
-                  type: number
-                sl:
-                  type: number
-                tp:
-                  type: number
-                leverage:
-                  type: integer
-                budget:
-                  type: number
-                atr:
-                  type: number
+                symbol: { type: string }
+                side: { type: string, enum: [LONG, SHORT] }
+                entry: { type: number }
+                sl: { type: number }
+                tp: { type: number }
+                leverage: { type: integer }
+                budget: { type: number }
+                atr: { type: number }
       responses:
         "200":
-          description: תוצאה מוצלחת
+          description: תוצאה
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  quality_score:
-                    type: number
-                  success_pct:
-                    type: number
-                  anchor:
-                    type: object
-                  components:
-                    type: object
-        "401":
-          description: לא מורשה
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /trade/execute:
-    post:
-      summary: ביצוע עסקה (LIVE או בדיקה)
-      operationId: postTradeExecute
-      tags: [Trades]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                symbol:
-                  type: string
-                side:
-                  type: string
-                  enum: [LONG, SHORT]
-                budget:
-                  type: number
-                leverage:
-                  type: integer
-                entry:
-                  type: number
-                sl:
-                  type: number
-                tp:
-                  type: number
-                dry_run:
-                  type: boolean
-              required: [symbol, side, budget, leverage, entry, sl, tp]
-      responses:
-        "200":
-          description: תוצאה מוצלחת
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  mode:
-                    type: string
-                  symbol:
-                    type: string
-                  side:
-                    type: string
-                  entry:
-                    type: number
-                  sl:
-                    type: number
-                  tp:
-                    type: number
-                  leverage:
-                    type: integer
-                  budget:
-                    type: number
-                  quantity:
-                    type: number
-        "401":
-          description: לא מורשה
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                  quality_score: { type: number }
+                  success_pct: { type: number }
 
   /backtest:
     post:
-      summary: הרצת Backtest על סמלים נבחרים
+      summary: Backtest אסטרטגיה
       operationId: postBacktestRun
       tags: [Backtest]
       requestBody:
@@ -219,159 +138,105 @@ paths:
             schema:
               type: object
               properties:
-                symbol:
-                  type: string
-                timeframe:
-                  type: string
-                limit:
-                  type: integer
+                symbol: { type: string }
+                timeframe: { type: string }
+                limit: { type: integer }
       responses:
         "200":
-          description: תוצאה עם עסקאות וסטטיסטיקות
+          description: הצלחה
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  symbol:
-                    type: string
-                  timeframe:
-                    type: string
-                  win_rate:
-                    type: number
-                  total_pnl:
-                    type: number
-                  count:
-                    type: integer
-                  trades:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        timestamp:
-                          type: integer
-                        price:
-                          type: number
-                        side:
-                          type: string
-                        pnl:
-                          type: number
-        "401":
-          description: לא מורשה
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                  win_rate: { type: number }
+                  total_pnl: { type: number }
 
   /scan/top-volume:
     get:
-      summary: סריקת סמלים לפי ווליום ומגמה
+      summary: סריקה לפי טרנד ונפח
       operationId: getScanTopVolume
       tags: [Scan]
       parameters:
         - name: market
           in: query
           required: false
-          schema:
-            type: string
+          schema: { type: string }
         - name: limit
           in: query
           required: false
-          schema:
-            type: integer
+          schema: { type: integer }
       responses:
         "200":
-          description: תוצאה עם סימונים
+          description: תוצאה
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok:
-                    type: boolean
-                  count:
-                    type: integer
+                  count: { type: integer }
                   signals:
                     type: array
-                    items:
-                      type: object
-                      properties:
-                        symbol:
-                          type: string
-                        timeframe:
-                          type: string
-                        side:
-                          type: string
-                        score:
-                          type: number
-                        note:
-                          type: string
+                    items: { type: object }
 
   /scan/info:
     get:
-      summary: סטטוס Executor והגדרות סורק
+      summary: סטטוס הסורק וה־Executor
       operationId: getScanInfo
       tags: [Scan]
       responses:
         "200":
-          description: מידע על ה־executor והקונפיג
+          description: מידע
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok:
-                    type: boolean
-                  now_utc:
-                    type: string
-                  executor_running:
-                    type: boolean
-                  config:
-                    type: object
-                    properties:
-                      AUTO_RUN:
-                        type: boolean
-                      ENABLE_AUTO_TRADING:
-                        type: boolean
-                      EXECUTE_TRADES:
-                        type: boolean
-                      SCAN_INTERVAL:
-                        type: integer
-                      MIN_QUALITY_SCORE:
-                        type: number
-                      MAX_TRADE_BUDGET:
-                        type: number
-                      TRENDING_ONLY:
-                        type: boolean
-                      DEFAULT_INTERVAL:
-                        type: string
-                      SYMBOL_COOLDOWN_SEC:
-                        type: integer
-                      MAX_TRADES_PER_TICK:
-                        type: integer
-                  notes:
+                  executor_running: { type: boolean }
+                  config: { type: object }
+
+  /news:
+    get:
+      summary: חדשות מעודכנות
+      operationId: getNews
+      tags: [News]
+      responses:
+        "200":
+          description: חדשות
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  news:
                     type: array
-                    items:
-                      type: string
+                    items: { type: object }
+
+  /grid/status:
+    get:
+      summary: סטטוס גריד חי (דורש הרשאות)
+      operationId: getGridStatus
+      tags: [Grid]
+      responses:
+        "200":
+          description: סטטוס גריד
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active: { type: boolean }
 
 components:
   securitySchemes:
     HTTPBearer:
       type: http
       scheme: bearer
-  schemas:
-    Error:
-      type: object
-      properties:
-        detail:
-          type: string
-        code:
-          oneOf:
-            - type: string
-            - type: 'null'
+  schemas: {}
 
 security:
   - HTTPBearer: []
+
 
 
 
