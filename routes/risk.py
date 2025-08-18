@@ -1,4 +1,3 @@
-# routes/risk.py
 from __future__ import annotations
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Body
@@ -17,17 +16,17 @@ async def post_risk_suggest(payload: Dict[str, Any] = Body(...)) -> Dict[str, An
         from utils.risk import suggest_risk
     except Exception:
         raise HTTPException(status_code=500, detail="Risk engine not available")
-
     try:
-        result = suggest_risk(**payload)  # type: ignore[arg-type]
-        if not isinstance(result, dict):
+        res = suggest_risk(**payload)  # type: ignore[arg-type]
+        if not isinstance(res, dict):
             return {"ok": False, "note": "Invalid risk output"}
-        result.setdefault("ok", True)
-        return result
+        res.setdefault("ok", True)
+        return res
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"risk error: {e}")
+
 
 
 
