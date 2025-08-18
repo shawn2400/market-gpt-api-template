@@ -9,6 +9,7 @@ services:
     healthCheckPath: /
 
     envVars:
+      # CORE
       - key: PORT
         value: "10000"
       - key: WORKERS
@@ -18,13 +19,13 @@ services:
       - key: CORS_ALLOW_ORIGINS
         value: "*"
       - key: ALGOGPT_VERSION
-        value: "2.14.0"
+        value: "2.14.3"
 
-      # Auth
+      # AUTH / TOKENS
       - key: API_BEARER_TOKEN
-        sync: false
+        sync: false  # הזן דרך הממשק בלבד
 
-      # Flags / Scanner
+      # RUNTIME FLAGS
       - key: AUTO_RUN
         value: "false"
       - key: ENABLE_AUTO_TRADING
@@ -34,7 +35,7 @@ services:
       - key: DEFAULT_INTERVAL
         value: "15m"
 
-      # Risk/filters
+      # FILTERS / LOGIC
       - key: MIN_QUALITY_SCORE
         value: "6"
       - key: MIN_VOLUME
@@ -43,7 +44,6 @@ services:
         value: "30"
       - key: TRENDING_ONLY
         value: "false"
-
       - key: PRICE_PROTECT_PCT
         value: "0.25"
       - key: PRICE_MAX_AGE_SEC
@@ -53,7 +53,7 @@ services:
       - key: MAX_LEVERAGE
         value: "35"
 
-      # OpenAI
+      # OPENAI
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -63,7 +63,11 @@ services:
       - key: OPENAI_MAX_CONCURRENCY
         value: "4"
 
-      # Binance endpoints
+      # BINANCE
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
       - key: BINANCE_SPOT_HTTP_BASE
         value: "https://api.binance.com"
       - key: BINANCE_FUTURES_HTTP_BASE
@@ -72,8 +76,6 @@ services:
         value: "wss://fstream.binance.com"
       - key: BINANCE_WS_STREAM_SUFFIX
         value: "/stream?streams="
-
-      # Binance timing / retries
       - key: BINANCE_BACKOFF_BASE
         value: "0.7"
       - key: BINANCE_MAX_RETRIES
@@ -84,20 +86,12 @@ services:
         value: "900"
       - key: BINANCE_EXCHANGE_INFO_ON_START
         value: "false"
-
-      # Account modes
       - key: BINANCE_FORCE_HEDGE_MODE
         value: "false"
       - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
         value: "false"
 
-      # Secrets via UI
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
-
-      # Egress/IP (optional)
+      # EGRESS/IP
       - key: EGRESS_IP_ENDPOINT
         value: "https://algogpt-docker.onrender.com/net/ip"
       - key: BINANCE_ALLOWED_EGRESS_IPS
