@@ -25,6 +25,7 @@ tags:
   - name: Health
   - name: Dashboard
   - name: Risk
+  - name: Snapshots
 
 security:
   - HTTPBearer: []
@@ -42,7 +43,7 @@ components:
       properties:
         detail: { type: string }
         code:
-          oneOf: [ {type: string}, {type: "null"} ]
+          oneOf: [ {type: string}, {type: 'null'} ]
 
     StatusResponse:
       type: object
@@ -67,9 +68,9 @@ components:
       type: object
       properties:
         ok: { type: boolean, example: true }
-        model: { oneOf: [ {type: string}, {type: "null"} ] }
-        latency_ms: { oneOf: [ {type: number}, {type: "null"} ] }
-        error: { oneOf: [ {type: string}, {type: "null"} ] }
+        model: { oneOf: [ {type: string}, {type: 'null'} ] }
+        latency_ms: { oneOf: [ {type: number}, {type: 'null'} ] }
+        error: { oneOf: [ {type: string}, {type: 'null'} ] }
 
     AiQualityRequest:
       type: object
@@ -77,12 +78,12 @@ components:
       properties:
         symbol: { type: string, example: BTCUSDT }
         side:   { type: string, enum: [LONG, SHORT] }
-        entry:  { oneOf: [ {type: number}, {type: "null"} ] }
-        sl:     { oneOf: [ {type: number}, {type: "null"} ] }
-        tp:     { oneOf: [ {type: number}, {type: "null"} ] }
+        entry:  { oneOf: [ {type: number}, {type: 'null'} ] }
+        sl:     { oneOf: [ {type: number}, {type: 'null'} ] }
+        tp:     { oneOf: [ {type: number}, {type: 'null'} ] }
         leverage: { type: integer, default: 10 }
         budget:   { type: number, default: 100 }
-        atr:      { oneOf: [ {type: number}, {type: "null"} ] }
+        atr:      { oneOf: [ {type: number}, {type: 'null'} ] }
 
     AiAnalyzeResponse:
       type: object
@@ -99,17 +100,17 @@ components:
         market: { type: string, example: futures }
         interval: { type: string, example: 15m }
         frames: { type: array, items: { type: string } }
-        trend: { oneOf: [ {type: string, enum: [UP, DOWN]}, {type: "null"} ] }
-        direction: { oneOf: [ {type: string, enum: [LONG, SHORT]}, {type: "null"} ] }
-        rsi: { oneOf: [ {type: number}, {type: "null"} ] }
-        adx: { oneOf: [ {type: number}, {type: "null"} ] }
-        volume: { oneOf: [ {type: number}, {type: "null"} ] }
-        quality_score: { oneOf: [ {type: number, minimum: 0, maximum: 10}, {type: "null"} ] }
-        signal: { oneOf: [ {type: string, enum: [BUY, SELL, HOLD]}, {type: "null"} ] }
-        confidence: { oneOf: [ {type: integer, minimum: 0, maximum: 100}, {type: "null"} ] }
-        reason: { oneOf: [ {type: string}, {type: "null"} ] }
-        close:  { oneOf: [ {type: number}, {type: "null"} ] }
-        atr:    { oneOf: [ {type: number}, {type: "null"} ] }
+        trend: { oneOf: [ {type: string, enum: [UP, DOWN]}, {type: 'null'} ] }
+        direction: { oneOf: [ {type: string, enum: [LONG, SHORT]}, {type: 'null'} ] }
+        rsi: { oneOf: [ {type: number}, {type: 'null'} ] }
+        adx: { oneOf: [ {type: number}, {type: 'null'} ] }
+        volume: { oneOf: [ {type: number}, {type: 'null'} ] }
+        quality_score: { oneOf: [ {type: number, minimum: 0, maximum: 10}, {type: 'null'} ] }
+        signal: { oneOf: [ {type: string, enum: [BUY, SELL, HOLD]}, {type: 'null'} ] }
+        confidence: { oneOf: [ {type: integer, minimum: 0, maximum: 100}, {type: 'null'} ] }
+        reason: { oneOf: [ {type: string}, {type: 'null'} ] }
+        close:  { oneOf: [ {type: number}, {type: 'null'} ] }
+        atr:    { oneOf: [ {type: number}, {type: 'null'} ] }
 
     AiManualScanResponse:
       type: object
@@ -135,14 +136,14 @@ components:
         side:     { type: string, enum: [LONG, SHORT] }
         budget:   { type: number, example: 100 }
         leverage: { type: integer, example: 10 }
-        entry:    { oneOf: [ {type: number}, {type: "null"} ] }
-        sl:       { oneOf: [ {type: number}, {type: "null"} ] }
-        tp:       { oneOf: [ {type: number}, {type: "null"} ] }
+        entry:    { oneOf: [ {type: number}, {type: 'null'} ] }
+        sl:       { oneOf: [ {type: number}, {type: 'null'} ] }
+        tp:       { oneOf: [ {type: number}, {type: 'null'} ] }
         atr:
           oneOf:
             - type: number
               description: Optional ATR for SL/TP calculation
-            - type: "null"
+            - type: 'null'
         dry_run:  { type: boolean, default: true }
 
     TradeExecuteResponse:
@@ -177,10 +178,10 @@ components:
       properties:
         symbol: { type: string, example: BTCUSDT }
         timeframe: { type: string, example: 15m }
-        side: { oneOf: [ {type: string, enum: [LONG, SHORT]}, {type: "null"} ] }
+        side: { oneOf: [ {type: string, enum: [LONG, SHORT]}, {type: 'null'} ] }
         score: { type: number, minimum: 0, maximum: 10 }
-        note:  { oneOf: [ {type: string}, {type: "null"} ] }
-        details: { oneOf: [ {type: object, additionalProperties: true}, {type: "null"} ] }
+        note:  { oneOf: [ {type: string}, {type: 'null'} ] }
+        details: { oneOf: [ {type: object, additionalProperties: true}, {type: 'null'} ] }
 
     ScanResponse:
       type: object
@@ -194,20 +195,20 @@ components:
       title: IndicatorsRecord
       description: Flexible indicators map (string keys -> arbitrary values).
       type: object
-      properties: {}            # <-- מוסיף properties ריק למען ולידטורים מחמירים
-      additionalProperties:     # ערכים גמישים: מספרים/מחרוזות/בוליאן/נאל/מערכים/אובייקטים
+      properties: {}
+      additionalProperties:
         anyOf:
           - type: number
           - type: string
           - type: boolean
-          - type: "null"
+          - type: 'null'
           - type: array
             items:
               anyOf:
                 - type: number
                 - type: string
                 - type: boolean
-                - type: "null"
+                - type: 'null'
           - type: object
             additionalProperties: true
 
@@ -231,10 +232,10 @@ components:
           oneOf:
             - type: number
               description: Pearson correlation of returns
-            - type: "null"
-        beta: { oneOf: [ {type: number}, {type: "null"} ] }
-        lead_lag_bars: { oneOf: [ {type: integer}, {type: "null"} ] }
-        note: { oneOf: [ {type: string}, {type: "null"} ] }
+            - type: 'null'
+        beta: { oneOf: [ {type: number}, {type: 'null'} ] }
+        lead_lag_bars: { oneOf: [ {type: integer}, {type: 'null'} ] }
+        note: { oneOf: [ {type: string}, {type: 'null'} ] }
 
     CorrelationResponse:
       type: object
@@ -246,23 +247,23 @@ components:
       type: object
       properties:
         ok: { type: boolean }
-        dxy: { oneOf: [ {type: number}, {type: "null"} ] }
-        ndx: { oneOf: [ {type: number}, {type: "null"} ] }
-        spx: { oneOf: [ {type: number}, {type: "null"} ] }
-        btc_dominance: { oneOf: [ {type: number}, {type: "null"} ] }
-        fear_greed: { oneOf: [ {type: integer}, {type: "null"} ] }
-        updated_at: { oneOf: [ {type: string}, {type: "null"} ] }
-        note: { oneOf: [ {type: string}, {type: "null"} ] }
+        dxy: { oneOf: [ {type: number}, {type: 'null'} ] }
+        ndx: { oneOf: [ {type: number}, {type: 'null'} ] }
+        spx: { oneOf: [ {type: number}, {type: 'null'} ] }
+        btc_dominance: { oneOf: [ {type: number}, {type: 'null'} ] }
+        fear_greed: { oneOf: [ {type: integer}, {type: 'null'} ] }
+        updated_at: { oneOf: [ {type: string}, {type: 'null'} ] }
+        note: { oneOf: [ {type: string}, {type: 'null'} ] }
 
     NewsItem:
       type: object
       properties:
         title: { type: string }
         url: { type: string }
-        published_at: { oneOf: [ {type: string}, {type: "null"} ] }
+        published_at: { oneOf: [ {type: string}, {type: 'null'} ] }
         impact_score: { type: integer }
-        source: { oneOf: [ {type: object, additionalProperties: true}, {type: "null"} ] }
-        currencies: { oneOf: [ {type: array, items: { type: object, additionalProperties: true }}, {type: "null"} ] }
+        source: { oneOf: [ {type: object, additionalProperties: true}, {type: 'null'} ] }
+        currencies: { oneOf: [ {type: array, items: { type: object, additionalProperties: true }}, {type: 'null'} ] }
 
     NewsResponse:
       type: object
@@ -293,9 +294,9 @@ components:
       type: object
       properties:
         ok: { type: boolean }
-        eta_tp_minutes: { oneOf: [ {type: number}, {type: "null"} ] }
-        eta_sl_minutes: { oneOf: [ {type: number}, {type: "null"} ] }
-        speed_note: { oneOf: [ {type: string}, {type: "null"} ] }
+        eta_tp_minutes: { oneOf: [ {type: number}, {type: 'null'} ] }
+        eta_sl_minutes: { oneOf: [ {type: number}, {type: 'null'} ] }
+        speed_note: { oneOf: [ {type: string}, {type: 'null'} ] }
 
     DecisionCandidate:
       type: object
@@ -303,10 +304,10 @@ components:
         symbol: { type: string }
         side:   { type: string, enum: [LONG, SHORT] }
         quality_score: { type: number }
-        success_pct:   { oneOf: [ {type: number}, {type: "null"} ] }
-        volatility:    { oneOf: [ {type: number}, {type: "null"} ] }
-        eta_minutes:   { oneOf: [ {type: number}, {type: "null"} ] }
-        corr_to_btc:   { oneOf: [ {type: number}, {type: "null"} ] }
+        success_pct:   { oneOf: [ {type: number}, {type: 'null'} ] }
+        volatility:    { oneOf: [ {type: number}, {type: 'null'} ] }
+        eta_minutes:   { oneOf: [ {type: number}, {type: 'null'} ] }
+        corr_to_btc:   { oneOf: [ {type: number}, {type: 'null'} ] }
 
     DecisionRequest:
       type: object
@@ -315,12 +316,37 @@ components:
         top_n: { type: integer, default: 5 }
         diversify_by_symbol: { type: boolean, default: true }
 
+    DecisionSelectedItem:
+      type: object
+      properties:
+        rank: { type: integer }
+        symbol: { type: string }
+        side:
+          oneOf:
+            - type: string
+              enum: [LONG, SHORT]
+            - type: 'null'
+        score: { type: number }
+        components:
+          type: object
+          properties:
+            quality: { type: number }
+            success_pct: { oneOf: [ {type: number}, {type: 'null'} ] }
+            eta: { oneOf: [ {type: number}, {type: 'null'} ] }
+            volatility: { oneOf: [ {type: number}, {type: 'null'} ] }
+            decorr: { oneOf: [ {type: number}, {type: 'null'} ] }
+            weights: { type: object, additionalProperties: true }
+          additionalProperties: false
+        raw:
+          type: object
+          additionalProperties: true
+
     DecisionResponse:
       type: object
       properties:
         ok: { type: boolean }
-        selected: { type: array, items: { $ref: "#/components/schemas/DecisionCandidate" } }
-        note: { oneOf: [ {type: string}, {type: "null"} ] }
+        selected: { type: array, items: { $ref: "#/components/schemas/DecisionSelectedItem" } }
+        note: { oneOf: [ {type: string}, {type: 'null'} ] }
 
     # ---------- Risk ----------
     RiskSuggestRequest:
@@ -331,12 +357,12 @@ components:
         side:   { type: string, enum: [LONG, SHORT] }
         entry:  { type: number }
         sl:     { type: number }
-        tp:     { oneOf: [ {type: number}, {type: "null"} ] }
-        atr:    { oneOf: [ {type: number}, {type: "null"} ] }
-        equity_usdt:     { oneOf: [ {type: number}, {type: "null"} ] }
-        confidence:      { oneOf: [ {type: number, minimum: 0, maximum: 100, default: 55}, {type: "null"} ] }
-        max_budget_usdt: { oneOf: [ {type: number}, {type: "null"} ] }
-        max_leverage:    { oneOf: [ {type: integer, minimum: 1, maximum: 125}, {type: "null"} ] }
+        tp:     { oneOf: [ {type: number}, {type: 'null'} ] }
+        atr:    { oneOf: [ {type: number}, {type: 'null'} ] }
+        equity_usdt:     { oneOf: [ {type: number}, {type: 'null'} ] }
+        confidence:      { oneOf: [ {type: number, minimum: 0, maximum: 100, default: 55}, {type: 'null'} ] }
+        max_budget_usdt: { oneOf: [ {type: number}, {type: 'null'} ] }
+        max_leverage:    { oneOf: [ {type: integer, minimum: 1, maximum: 125}, {type: 'null'} ] }
 
     RiskSuggestResponse:
       type: object
@@ -344,8 +370,8 @@ components:
         ok: { type: boolean }
         suggested: { type: object, additionalProperties: true }
         inputs: { type: object, additionalProperties: true }
-        constraints: { oneOf: [ {type: object, additionalProperties: true}, {type: "null"} ] }
-        note: { oneOf: [ {type: string}, {type: "null"} ] }
+        constraints: { oneOf: [ {type: object, additionalProperties: true}, {type: 'null'} ] }
+        note: { oneOf: [ {type: string}, {type: 'null'} ] }
 
     # ---------- Orderflow / Onchain ----------
     DepthSnapshot:
@@ -368,9 +394,9 @@ components:
         bid_volume: { type: number }
         ask_volume: { type: number }
         imbalance:  { type: number, description: "-1..+1 (חיובי=לחץ קניה)" }
-        mid:        { oneOf: [ {type: number}, {type: "null"} ] }
-        best_bid:   { oneOf: [ {type: number}, {type: "null"} ] }
-        best_ask:   { oneOf: [ {type: number}, {type: "null"} ] }
+        mid:        { oneOf: [ {type: number}, {type: 'null'} ] }
+        best_bid:   { oneOf: [ {type: number}, {type: 'null'} ] }
+        best_ask:   { oneOf: [ {type: number}, {type: 'null'} ] }
         levels:     { type: integer }
 
     CvdMetrics:
@@ -398,7 +424,7 @@ components:
         depth:  { $ref: "#/components/schemas/DepthSnapshot" }
         icebergs: { $ref: "#/components/schemas/IcebergSignal" }
         ts: { type: integer }
-        error: { oneOf: [ {type: string}, {type: "null"} ] }
+        error: { oneOf: [ {type: string}, {type: 'null'} ] }
 
     OnchainChain:
       type: object
@@ -409,17 +435,17 @@ components:
           oneOf:
             - type: object
               additionalProperties: true
-            - type: "null"
+            - type: 'null'
         stats:
           oneOf:
             - type: object
               additionalProperties: true
-            - type: "null"
+            - type: 'null'
         warnings:
           oneOf:
             - type: array
               items: { type: string }
-            - type: "null"
+            - type: 'null'
 
     OnchainOverview:
       type: object
@@ -428,6 +454,28 @@ components:
         chains:
           type: object
           additionalProperties: { $ref: "#/components/schemas/OnchainChain" }
+
+    # ---------- Snapshots ----------
+    SnapshotTradeRequest:
+      type: object
+      required: [symbol, direction, entry, sl, tp]
+      properties:
+        symbol: { type: string, example: BTCUSDT }
+        direction: { type: string, enum: [LONG, SHORT] }
+        entry: { type: number }
+        sl:    { type: number }
+        tp:    { type: number }
+        price_now: { oneOf: [ {type: number}, {type: 'null'} ] }
+        budget:    { oneOf: [ {type: number}, {type: 'null'} ] }
+        leverage:  { oneOf: [ {type: number}, {type: 'null'} ] }
+        quality_score: { oneOf: [ {type: number}, {type: 'null'} ] }
+
+    SnapshotTradeResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        file_path: { type: string }
+        url: { type: string }
 
 paths:
   /:
@@ -566,7 +614,7 @@ paths:
                 symbol: { type: string }
                 direction: { type: string, enum: [LONG, SHORT] }
                 entry: { type: number }
-                atr: { oneOf: [ {type: number}, {type: "null"} ] }
+                atr: { oneOf: [ {type: number}, {type: 'null'} ] }
       responses:
         "200":
           description: ok
@@ -615,7 +663,7 @@ paths:
               type: object
               properties:
                 symbol:    { type: string, example: BTCUSDT }
-                timeframe: { type: string, enum: [5m, 15m, 1h, 4h], default: 15m }
+                timeframe: { type: string, enum: ['5m', '15m', '1h', '4h'], default: '15m' }
                 limit:     { type: integer, default: 200 }
                 slippage_pct: { type: number, default: 0.1 }
       responses:
@@ -835,7 +883,7 @@ paths:
         - in: query
           name: filter
           schema:
-            oneOf: [ {type: string}, {type: "null"} ]
+            oneOf: [ {type: string}, {type: 'null'} ]
       responses:
         "200":
           description: ok
@@ -1014,6 +1062,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OnchainOverview" }
 
+  # ---------- Snapshots ----------
+  /snapshot/trade:
+    post:
+      tags: [Snapshots]
+      summary: Create trade snapshot (PNG) and return its URL
+      operationId: postTradeSnapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SnapshotTradeRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SnapshotTradeResponse" }
+
   # ---------- Health ----------
   /health:
     get:
@@ -1088,6 +1154,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
 
 
 
