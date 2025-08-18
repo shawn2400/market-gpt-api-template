@@ -1,13 +1,13 @@
 # routes/market.py
-from __future__ import annotations
+from __future__import annotations
 from typing import Dict, Any
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 
 try:
     from utils.auth import require_bearer_token
 except Exception:
     def require_bearer_token():
-        return None
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 from utils.top_volume import get_top_volume_symbols
 
@@ -23,6 +23,7 @@ async def get_top_volume(
     import asyncio
     ok, symbols = await asyncio.to_thread(get_top_volume_symbols, market, quote, limit, min_quote_volume)
     return {"ok": bool(ok), "market": market, "quote": quote, "limit": limit, "symbols": symbols or []}
+
 
 
 
