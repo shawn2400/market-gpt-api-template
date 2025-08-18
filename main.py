@@ -49,6 +49,7 @@ decision_router    = _try_import("routes.decision")
 grid_router        = _try_import("routes.grid")
 risk_router        = _try_import("routes.risk")
 snapshot_router    = _try_import("routes.snapshot")
+scan_router        = _try_import("routes.multi_scan")       # <<< חדש: /scan/info + /scan/top-volume
 
 # חשוב: ייבוא מפורש של /scan/top-volume כדי לא להחליק בשקט
 try:
@@ -134,7 +135,7 @@ for r in [
     ai_analyze_router, ai_health_router, backtest_router, dashboard_router,
     health_router, price_router, ind_router, market_router,
     analytics_router, news_router, decision_router, grid_router,
-    risk_router, snapshot_router, scan_topvol_router,   # <<< חשוב
+    risk_router, snapshot_router, scan_router, scan_topvol_router,   # <<< נוסף scan_router
 ]:
     if r:
         app.include_router(r)
@@ -150,6 +151,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
