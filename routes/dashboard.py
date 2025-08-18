@@ -1,5 +1,4 @@
 # routes/dashboard.py
-from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, Response
 
@@ -48,7 +47,7 @@ _HTML = """
     <h3>סריקה ידנית (AI)</h3>
     <div class="row">
       <input id="sym" type="text" placeholder="BTCUSDT" value="BTCUSDT"/>
-      <input id="tok" type="text" placeholder="Bearer &lt;TOKEN&gt;"/>
+      <input id="tok" type="text" placeholder="Bearer <TOKEN>"/>
       <button onclick="manualScan()">סרוק</button>
     </div>
     <pre id="scanOut"></pre>
@@ -97,15 +96,10 @@ _HTML = """
 </html>
 """
 
-# שינוי operation_id לפתרון האזהרה על Duplicate Operation ID
-@router.api_route(
-    "/dashboard",
-    methods=["GET", "HEAD"],
-    response_class=HTMLResponse,
-    operation_id="getDashboardHtml_v2"
-)
+@router.get("/dashboard", response_class=HTMLResponse, operation_id="getDashboardHtml_v2")
 async def dashboard_ui():
     return Response(content=_HTML, media_type="text/html")
+
 
 
 
