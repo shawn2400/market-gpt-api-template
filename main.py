@@ -1,13 +1,18 @@
 # main.py
 from __future__ import annotations
-import os, logging, time
+
+import logging
+import os
+import time
 from typing import List, Optional
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
-from starlette.responses import Response
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+
 from utils.metrics import metrics_tracker
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
@@ -20,11 +25,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
-# Core routers
+# ---- Core routers (חובה) ----
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
+
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
+    """מנסה לייבא מודול/ראוטר בצורה בטוחה כדי לא לשבור את האפליקציה בהיעדר תלות."""
     try:
         module = __import__(name, fromlist=[attr])
         return getattr(module, attr)
@@ -32,32 +39,57 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         logger.warning("%s not loaded: %s", name, exc)
         return None
 
-# Optional routers
-backtest_router   = _try_import("routes.backtest")
-scan_router       = None  # <<< לא לטעון routes.scan (ישן)
+
+# ---- Optional routers (נטענים רק אם קיימים) ----
+backtest_router = _try_import("routes.backtest")
+
+# אל תטעין את routes.scan הישן כדי למנוע כפילויות ב-/scan/top-volume
+scan_router = None
+
 ai_analyze_router = _try_import("routes.ai_analyze")
-ai_health_router  = _try_import("routes.ai_health")
-health_router     = _try_import("routes.health_full") or _try_import("routes.health")
-dashboard_router  = _try_import("routes.dashboard")
-price_router      = _try_import("routes.price")
-ind_router        = _try_import("routes.routes_indicators")
-multi_scan_router = _try_import("routes.multi_scan")    # הסורק היחיד
-market_router     = _try_import("routes.market")
-analytics_router  = _try_import("routes.analytics")     # ציבורי
-news_router       = _try_import("routes.news")          # ציבורי
-decision_router   = _try_import("routes.decision")      # מוגן
-grid_router       = _try_import("routes.grid")          # מוגן
-risk_router       = _try_import("routes.risk")          # אופציונלי
-snapshot_router   = _try_import("routes.snapshot")      # אופציונלי
+ai_health_router = _try_import("routes.ai_health")
+
+# Health: קודם הגרסה המלאה, ואם אין — בסיסית
+health_router = _try_import("routes.health_full") or _try_import("routes.health")
+
+dashboard_router = _try_import("routes.dashboard")
+price_router = _try_import("routes.price")
+ind_router = _try_import("routes.routes_indicators")
+
+# זה הראוטר שאחראי על /scan/top-volume (החדש)
+multi_scan_router = _try_import("routes.multi_scan")
+
+market_router = _try_import("routes.market")
+
+# אנליטיקה ציבורי (macro/onchain/…)
+analytics_router = _try_import("routes.analytics")
+
+# חדשות ציבורי (יחזיר feed ריק והערה אם אין מפתח)
+news_router = _try_import("routes.news")
+
+# מוגנים (Bearer) — החלטה וגריד
+decision_router = _try_import("routes.decision")
+grid_router = _try_import("routes.grid")
+
+# אופציונליים
+risk_router = _try_import("routes.risk")
+snapshot_router = _try_import("routes.snapshot")  # אם לא קיים — ידלג בשקט
 
 app = FastAPI(
     title="AlgoGPT API",
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ל־Binance Futures (Scan/AI/Trades/Backtest/News/Macro/Correlation).",
+    description=(
+        "AlgoGPT — מסחר אלגוריתמי בזמן אמת ל־Binance Futures "
+        "(Scan/AI/Trades/Backtest/News/Macro/Correlation)."
+    ),
     version=APP_VERSION,
 )
 
-# CORS
-allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+# ---- CORS ----
+allow_origins: List[str] = (
+    ["*"]
+    if CORS_ALLOW_ORIGINS == "*"
+    else [o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -65,13 +97,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static (optional)
+# ---- Static mounts (לא חובה) ----
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Metrics middleware
+# ---- Metrics middleware ----
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
@@ -83,13 +115,21 @@ async def _metrics_middleware(request: Request, call_next):
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
         try:
-            metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms, method=request.method, path=request.url.path)
+            metrics_tracker.observe_request(
+                status_code=status_code,
+                duration_ms=dt_ms,
+                method=request.method,
+                path=request.url.path,
+            )
         except TypeError:
+            # תאימות לאחור לגירסה ישנה של metrics_tracker
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
+# ---- Exception handlers ----
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
 
 @app.exception_handler(Exception)
 async def _unhandled_exc_handler(request: Request, exc: Exception):
@@ -97,38 +137,61 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
+# ---- Basic endpoints ----
 @app.get("/", operation_id="getRootStatus", tags=["Config"])
 def root():
     return {"status": "ok", "version": app.version}
+
 
 @app.get("/metrics", operation_id="getBasicMetrics", tags=["Config"])
 async def get_metrics():
     return metrics_tracker.get_metrics()
 
-# Include routers
-app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
+# ---- Include routers ----
+app.include_router(ai_router, prefix="/ai", tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
 for r in [
-    ai_analyze_router, ai_health_router, backtest_router, dashboard_router,
-    health_router, price_router, ind_router, multi_scan_router, market_router,
-    analytics_router, news_router, decision_router, grid_router,
-    risk_router, snapshot_router
+    ai_analyze_router,
+    ai_health_router,
+    backtest_router,
+    dashboard_router,
+    health_router,
+    price_router,
+    ind_router,
+    multi_scan_router,
+    market_router,
+    analytics_router,
+    news_router,
+    decision_router,
+    grid_router,
+    risk_router,
+    snapshot_router,
 ]:
     if r:
         app.include_router(r)
 
+# ---- Lifecycle ----
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "10000")),
+        log_level=LOG_LEVEL.lower(),
+    )
+
 
 
 
