@@ -1,1 +1,208 @@
+# utils/market_structure.py
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional, Tuple, Literal
+import numpy as np
+import pandas as pd
+
+Trend = Literal["UP", "DOWN", "RANGE"]
+StructLabel = Literal["HH", "HL", "LH", "LL", ""]
+
+@dataclass(frozen=True)
+class MSConfig:
+    """הגדרות Market Structure"""
+    pivot_span: int = 3      # כמה נרות משמאל/ימין לצורך Pivot
+    lookback_swings: int = 4 # כמה סווינגים אחרונים לשקלול מגמה (2–6 מומלץ)
+    tie_epsilon: float = 0.0 # טיפול בשוויון מחירים (0 = השוואה קשיחה)
+
+def _is_pivot_high(high: np.ndarray, i: int, span: int, eps: float = 0.0) -> bool:
+    L = max(0, i - span)
+    R = min(len(high), i + span + 1)
+    center = high[i]
+    # strict: חייב להיות גדול מהשכנים
+    return np.all(center >= high[L:R] - eps) and np.all(center > high[L:i] + eps) and np.all(center >= high[i+1:R] - eps)
+
+def _is_pivot_low(low: np.ndarray, i: int, span: int, eps: float = 0.0) -> bool:
+    L = max(0, i - span)
+    R = min(len(low), i + span + 1)
+    center = low[i]
+    return np.all(center <= low[L:R] + eps) and np.all(center < low[L:i] - eps) and np.all(center <= low[i+1:R] + eps)
+
+def _labels_from_swings(
+    highs: np.ndarray,
+    lows:  np.ndarray,
+    is_ph: np.ndarray,
+    is_pl: np.ndarray,
+    eps: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    מחזיר:
+      last_sw_high_price[i], last_sw_low_price[i], ms_label[i] (HH/HL/LH/LL/"")
+    """
+    n = len(highs)
+    last_h = np.full(n, np.nan, dtype=float)
+    last_l = np.full(n, np.nan, dtype=float)
+    label  = np.full(n, "", dtype=object)
+
+    prev_h: Optional[float] = None
+    prev_l: Optional[float] = None
+    last_lbl = ""
+
+    for i in range(n):
+        if is_ph[i]:
+            cur = float(highs[i])
+            if prev_h is None:
+                last_lbl = ""  # אין השוואה קודמת
+            else:
+                if cur > prev_h + eps:
+                    last_lbl = "HH"
+                elif cur < prev_h - eps:
+                    last_lbl = "LH"
+                else:
+                    # שוויון: לא נשנה תווית
+                    pass
+            prev_h = cur
+
+        if is_pl[i]:
+            cur = float(lows[i])
+            if prev_l is None:
+                # אין השוואה קודמת
+                if last_lbl == "":
+                    last_lbl = ""
+            else:
+                if cur > prev_l + eps:
+                    last_lbl = "HL"
+                elif cur < prev_l - eps:
+                    last_lbl = "LL"
+                else:
+                    pass
+            prev_l = cur
+
+        last_h[i] = prev_h if prev_h is not None else np.nan
+        last_l[i] = prev_l if prev_l is not None else np.nan
+        label[i]  = last_lbl
+
+    return last_h, last_l, label
+
+def _trend_from_labels(
+    labels: np.ndarray,
+    last_h: np.ndarray,
+    last_l: np.ndarray,
+    lookback_swings: int
+) -> np.ndarray:
+    """
+    גזירת מגמה לפי סיכום תוויות אחרונות:
+      UP   אם קיים HH ו-HL באופן דומיננטי/עדכני
+      DOWN אם קיים LH ו-LL באופן דומיננטי/עדכני
+      אחרת RANGE
+    """
+    n = len(labels)
+    out = np.full(n, "RANGE", dtype=object)
+
+    # נשתמש בחלון של lookback_swings תוויות לא ריקות
+    for i in range(n):
+        # אסוף תוויות לא ריקות אחורה
+        bucket = []
+        j = i
+        while j >= 0 and len(bucket) < lookback_swings * 2:  # בוסטר קטן
+            lab = labels[j]
+            if lab:
+                bucket.append(lab)
+            j -= 1
+        if not bucket:
+            out[i] = "RANGE"
+            continue
+
+        has_HH = any(l == "HH" for l in bucket)
+        has_HL = any(l == "HL" for l in bucket)
+        has_LH = any(l == "LH" for l in bucket)
+        has_LL = any(l == "LL" for l in bucket)
+
+        if (has_HH and has_HL) and not (has_LH and has_LL):
+            out[i] = "UP"
+        elif (has_LH and has_LL) and not (has_HH and has_HL):
+            out[i] = "DOWN"
+        else:
+            # אם גם וגם—נכניס פקטור אחרון עדכני
+            recent = bucket[: min(len(bucket), lookback_swings)]
+            score = 0
+            for l in recent:
+                if l in ("HH", "HL"):
+                    score += 1
+                elif l in ("LH", "LL"):
+                    score -= 1
+            if score > 0:
+                out[i] = "UP"
+            elif score < 0:
+                out[i] = "DOWN"
+            else:
+                out[i] = "RANGE"
+
+    return out
+
+def apply_market_structure(
+    df: pd.DataFrame,
+    *,
+    high_col: str = "high",
+    low_col: str  = "low",
+    config: Optional[MSConfig] = None,
+) -> pd.DataFrame:
+    """
+    קלט: DataFrame עם עמודות 'high','low' (רצוי גם 'close','timestamp' אבל לא חובה)
+    פלט: DataFrame (עותק) עם שדות:
+      ms_pivot_high(bool), ms_pivot_low(bool),
+      ms_last_sw_high(float), ms_last_sw_low(float),
+      ms_label(str: HH/HL/LH/LL/""),
+      ms_trend(str: UP/DOWN/RANGE)
+    """
+    cfg = config or MSConfig()
+    if high_col not in df.columns or low_col not in df.columns:
+        raise ValueError(f"DataFrame must include '{high_col}' and '{low_col}' columns")
+
+    out = df.copy()
+    highs = pd.to_numeric(out[high_col], errors="coerce").to_numpy()
+    lows  = pd.to_numeric(out[low_col],  errors="coerce").to_numpy()
+    n = len(out)
+
+    span = max(1, int(cfg.pivot_span))
+    eps  = float(cfg.tie_epsilon)
+
+    is_ph = np.zeros(n, dtype=bool)
+    is_pl = np.zeros(n, dtype=bool)
+
+    # חישוב פיבוטים – O(n*span). ל-span קטן זה מהיר מאוד.
+    for i in range(n):
+        if not np.isnan(highs[i]):
+            try:
+                is_ph[i] = _is_pivot_high(highs, i, span, eps)
+            except Exception:
+                is_ph[i] = False
+        if not np.isnan(lows[i]):
+            try:
+                is_pl[i] = _is_pivot_low(lows, i, span, eps)
+            except Exception:
+                is_pl[i] = False
+
+    last_h, last_l, labels = _labels_from_swings(highs, lows, is_ph, is_pl, eps)
+    trend = _trend_from_labels(labels, last_h, last_l, lookback_swings=max(2, int(cfg.lookback_swings)))
+
+    out["ms_pivot_high"]   = is_ph
+    out["ms_pivot_low"]    = is_pl
+    out["ms_last_sw_high"] = last_h
+    out["ms_last_sw_low"]  = last_l
+    out["ms_label"]        = labels
+    out["ms_trend"]        = trend
+    return out
+
+# נוחות: API פשוט שמקביל לפרמטרים אצלך (ms_lookback, ms_pivot_span)
+def add_market_structure_columns(
+    df: pd.DataFrame,
+    *,
+    ms_lookback: int = 5,
+    ms_pivot_span: int = 3,
+    high_col: str = "high",
+    low_col: str  = "low",
+) -> pd.DataFrame:
+    cfg = MSConfig(pivot_span=int(ms_pivot_span), lookback_swings=max(2, int(ms_lookback)))
+    return apply_market_structure(df, high_col=high_col, low_col=low_col, config=cfg)
 
