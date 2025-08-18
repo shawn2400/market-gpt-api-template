@@ -47,7 +47,7 @@ def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
         elif "openTime" in work.columns: work.rename(columns={"openTime": "timestamp"}, inplace=True)
     return work
 
-# Backward-compat aliases (לוגים שלך חיפשו שמות אלה)
+# תאימות לאחור ללוגים/יבוא קיימים:
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return prepare_indicators_for_backtest(df)
 
@@ -55,6 +55,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return prepare_indicators_for_backtest(df)
 
 __all__ = ["prepare_indicators_for_backtest", "compute_indicators", "add_indicators"]
+
 
 
 
