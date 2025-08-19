@@ -108,7 +108,6 @@ async def _metrics_middleware(request: Request, call_next):
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
         try:
-            # חתימה חדשה — עם method/path
             metrics_tracker.observe_request(
                 status_code=status_code,
                 duration_ms=dt_ms,
@@ -116,7 +115,6 @@ async def _metrics_middleware(request: Request, call_next):
                 path=request.url.path,
             )
         except TypeError:
-            # תאימות לאחור
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
         except Exception as e:
             logger.debug("metrics observe_request failed: %s", e)
@@ -170,18 +168,18 @@ app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 for mod in [
     "routes.backtest",
     "routes.ai_analyze",
-    "routes.ai_health",
-    "routes.news",
+    "routes.ai_health",       # /ai/health (נשלח למטה גרסה יציבה)
+    "routes.news",            # /news, /news/crypto (בטוח)
     "routes.grid",
     "routes.dashboard",
     "routes.routes_indicators",
-    "routes.price",
+    "routes.price",           # /price, /price/{symbol} (בטוח)
     "routes.multi_scan",
-    "routes.health",          # כולל /health/live ו-/health/strategy-version (אם קיים)
-    "routes.health_compat",   # מוסיף /health בסיסי (200) — לא מתנגש
+    "routes.health",          # אם יש — משאיר /health/live ו-/health/strategy-version
+    "routes.health_compat",   # מוסיף /health בסיסי (200)
     "routes.risk",
     "routes.snapshot",
-    "routes.analytics",
+    "routes.analytics",       # כולל /analytics/macro ו-/macro (compat)
 ]:
     r = _try_import(mod, "router")
     if r:
@@ -260,6 +258,7 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "10000")),
         log_level=LOG_LEVEL.lower(),
     )
+
 
 
 
