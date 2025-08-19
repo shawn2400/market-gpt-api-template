@@ -1,16 +1,13 @@
-# main.py
 from __future__ import annotations
 import os
 import logging
 import time
 from typing import List, Optional
 
-# --- Load .env early ---
-try:
-    from dotenv import load_dotenv
-    load_dotenv(override=False)
-except Exception:
-    pass
+# ✅ Load .env early and force load from specific path
+from dotenv import load_dotenv
+load_dotenv(dotenv_path="/app/.env", override=True)
+print("🔐 DEBUG: Loaded ALGOGPT_TOKENS =", os.getenv("ALGOGPT_TOKENS"))
 
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,7 +32,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
-# Optional: WS Mark Price bus
 _mark_bus = None
 try:
     from utils.mark_ws import bus as _mark_bus  # type: ignore
@@ -44,7 +40,6 @@ except Exception as exc:
     _mark_bus = None
     logger.warning("mark_ws not available: %s", exc)
 
-# Core routers
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
@@ -65,14 +60,12 @@ try:
 except Exception as exc:
     logger.warning("auto_executor not available: %s", exc)
 
-# FastAPI app
 app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — Binance Futures LIVE (Scan/AI/Trades/Backtest/News/Grid/Risk).",
     version=APP_VERSION,
 )
 
-# CORS
 allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [
     o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()
 ]
@@ -83,17 +76,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Middlewares: GZIP + Response size limiter
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(ResponseSizeLimiter, max_bytes=cfg.RESPONSE_MAX_BYTES)
 
-# Static (optional)
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Metrics middleware
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
@@ -112,7 +102,6 @@ async def _metrics_middleware(request: Request, call_next):
         except TypeError:
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
-# Exception handlers
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
@@ -123,7 +112,6 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-# Basics (public)
 @app.get("/", operation_id="getRootStatus", tags=["Config"])
 def root():
     return {"status": "ok", "version": app.version}
@@ -144,13 +132,11 @@ def list_routes():
             pass
     return {"count": len(out), "routes": out}
 
-# Public health router
 health_router = _try_import("routes.health", "router")
 if health_router:
-    app.include_router(health_router)  # ציבורי
+    app.include_router(health_router)
 
-# Protected routers (Bearer)
-app.include_router(ai_router,    prefix="/ai",    tags=["AI"],    dependencies=[Depends(require_bearer_token)])
+app.include_router(ai_router, prefix="/ai", tags=["AI"], dependencies=[Depends(require_bearer_token)])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
 
 for mod in [
@@ -164,22 +150,18 @@ for mod in [
     if r:
         app.include_router(r, dependencies=[Depends(require_bearer_token)])
 
-# Special-case: scan_top_volume router_symbols (אם קיים)
 _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
     app.include_router(_scan_sym_router, dependencies=[Depends(require_bearer_token)])
 
-# analytics compat (/macro)
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat, dependencies=[Depends(require_bearer_token)])
 
-# Lifecycle
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
 
-    # AI warmup (non-fatal)
     try:
         from utils.ai_client import ai_client  # type: ignore
         await ai_client.warmup()
@@ -187,7 +169,6 @@ async def on_startup():
     except Exception as e:
         logger.warning("AI warmup failed (ignored): %s", e)
 
-    # Auto executor
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
@@ -195,7 +176,6 @@ async def on_startup():
         except Exception as e:
             logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
 
-    # Mark Price WS bus (optional)
     try:
         if _mark_bus and hasattr(_mark_bus, "start"):
             _mark_bus.start()
@@ -218,6 +198,7 @@ if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0",
                 port=int(os.getenv("PORT", "10000")),
                 log_level=LOG_LEVEL.lower())
+
 
 
 
