@@ -1,7 +1,7 @@
 # routes/ai_analyze.py
 from __future__ import annotations
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Iterable
 from fastapi import APIRouter, Query, Depends
 import httpx
 import pandas as pd
@@ -39,13 +39,8 @@ def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     return 100.0 - (100.0 / (1.0 + rs))
 
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    prev_close = np.roll(close, 1)
-    prev_close[0] = close[0]
-    tr = np.maximum.reduce([
-        high - low,
-        np.abs(high - prev_close),
-        np.abs(low - prev_close)
-    ])
+    prev_close = np.roll(close, 1); prev_close[0] = close[0]
+    tr = np.maximum.reduce([high - low, np.abs(high - prev_close), np.abs(low - prev_close)])
     return _rma(tr, period)
 
 def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -128,12 +123,25 @@ def _analyze(df: pd.DataFrame, interval: str) -> Dict[str, Any]:
         "atr": round(atr_last, 6),
     }
 
+def _parse_fields(fields: Optional[str]) -> Optional[List[str]]:
+    if not fields:
+        return None
+    return [f.strip() for f in fields.split(",") if f.strip()]
+
+def _select_fields(item: Dict[str, Any], fields: Optional[Iterable[str]], compact: bool) -> Dict[str, Any]:
+    if compact and not fields:
+        fields = ("symbol","market","interval","signal","quality_score","confidence","reason","close","atr")
+    if fields:
+        return {k: item.get(k) for k in fields if k in item}
+    return item
+
 @router.get("/ai/manual-scan", operation_id="getAiManualScan")
 async def ai_manual_scan(
     symbol: str = Query(..., description="e.g. BTCUSDT"),
     interval: str = Query("15m"),
     limit: int = Query(200, ge=50, le=1500),
-    compact: bool = Query(True, description="return a compact result to reduce payload size"),
+    fields: Optional[str] = Query(None),
+    compact: bool = Query(True),
 ) -> Dict[str, Any]:
     symbol = symbol.upper().strip()
     try:
@@ -141,26 +149,19 @@ async def ai_manual_scan(
         df = _frame_to_df(rows)
         if len(df) < 60:
             base = {"symbol": symbol, "market": "futures", "interval": interval, "signal": "HOLD", "reason": "lite (not enough data)"}
-            return {"symbol": symbol, "results": base}
+            return {"symbol": symbol, "results": _select_fields(base, _parse_fields(fields), compact)}
         res = _analyze(df, interval)
         res["symbol"] = symbol
-        if compact:
-            keep = ("symbol","market","interval","trend","direction","rsi","adx","quality_score","signal","confidence","reason","close","atr")
-            res = {k: v for k, v in res.items() if k in keep}
-        return {"symbol": symbol, "results": res}
+        return {"symbol": symbol, "results": _select_fields(res, _parse_fields(fields), compact)}
     except Exception as e:
-        return {
-            "symbol": symbol,
-            "results": {
-                "symbol": symbol, "market": "futures", "interval": interval,
-                "frames": [interval],
-                "trend": None, "direction": None,
-                "rsi": None, "adx": None, "volume": None, "quality_score": None,
-                "signal": None, "confidence": None, "close": None, "atr": None,
-                "reason": f"lite (analyze-fallback: {type(e).__name__})"
-            }
+        base = {
+            "symbol": symbol, "market": "futures", "interval": interval,
+            "frames": [interval], "trend": None, "direction": None,
+            "rsi": None, "adx": None, "volume": None, "quality_score": None,
+            "signal": None, "confidence": None, "close": None, "atr": None,
+            "reason": f"lite (analyze-fallback: {type(e).__name__})"
         }
-
+        return {"symbol": symbol, "results": _select_fields(base, _parse_fields(fields), compact)}
 
 
 
