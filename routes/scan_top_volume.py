@@ -4,7 +4,7 @@ import asyncio
 from typing import List, Dict, Any, Literal
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 
-# Auth (Bearer) — אם utils.auth לא קיים, נאפשר DEV
+# Auth (Bearer) — אם utils.auth לא קיים, לא נחסום פיתוח
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
@@ -24,8 +24,7 @@ router_symbols = APIRouter(
     dependencies=[Depends(require_bearer_token)],
 )
 
-async def _build_signal_lite(symbol: str, timeframe: str) -> Dict[str, Any]:
-    """תשובה מינימלית ויציבה — לא קורסת לעולם."""
+async def _signal_lite(symbol: str, timeframe: str) -> Dict[str, Any]:
     return {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -35,8 +34,7 @@ async def _build_signal_lite(symbol: str, timeframe: str) -> Dict[str, Any]:
         "details": None,
     }
 
-async def _build_signal_auto(symbol: str, timeframe: str) -> Dict[str, Any]:
-    """ניסיון אנליזה אמיתי אם קיים מודול; אחרת חזרה ל-lite."""
+async def _signal_auto(symbol: str, timeframe: str) -> Dict[str, Any]:
     try:
         from utils.multi_tf_scanner import analyze_symbol  # type: ignore
         res = await analyze_symbol(symbol=symbol, interval=timeframe, market_type="futures", bars=200)
@@ -52,10 +50,10 @@ async def _build_signal_auto(symbol: str, timeframe: str) -> Dict[str, Any]:
                 "atr": (res or {}).get("atr"),
                 "trend": (res or {}).get("trend"),
                 "signal": (res or {}).get("signal"),
-            } if isinstance(res, dict) else None
+            } if isinstance(res, dict) else None,
         }
     except Exception:
-        return await _build_signal_lite(symbol, timeframe)
+        return await _signal_lite(symbol, timeframe)
 
 @router.get("/top-volume", operation_id="getScanTopVolume")
 async def get_scan_top_volume(
@@ -66,24 +64,19 @@ async def get_scan_top_volume(
     mode: Literal["lite", "auto", "deep"] = Query("lite"),
     concurrency: int = Query(16, ge=2, le=64),
 ):
-    """
-    mode=lite (ברירת מחדל) → תמיד מחזיר (ללא מודולים כבדים).
-    mode=auto → ננסה סורק אם קיים; אחרת lite.
-    mode=deep → מחייב מודול סורק; אם לא קיים → 503.
-    """
     ok, symbols = get_top_volume_symbols(market=market, quote=quote, limit=limit)
     if not ok:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch top-volume symbols")
 
     sem = asyncio.Semaphore(concurrency)
 
-    async def _wrap(sym: str):
+    async def _work(sym: str):
         async with sem:
             if mode == "lite":
-                return await _build_signal_lite(sym, timeframe)
+                return await _signal_lite(sym, timeframe)
             if mode == "auto":
-                return await _build_signal_auto(sym, timeframe)
-            # deep (יחייב סורק; אחרת 503)
+                return await _signal_auto(sym, timeframe)
+            # deep → מחייב מודול; אם אין — 503
             try:
                 from utils.multi_tf_scanner import analyze_symbol  # type: ignore
             except Exception:
@@ -98,7 +91,7 @@ async def get_scan_top_volume(
                 "details": res if isinstance(res, dict) else None,
             }
 
-    tasks = [asyncio.create_task(_wrap(s)) for s in symbols]
+    tasks = [asyncio.create_task(_work(s)) for s in symbols]
     signals: List[Dict[str, Any]] = await asyncio.gather(*tasks, return_exceptions=False)
     return {"ok": True, "count": len(signals), "signals": signals}
 
@@ -113,6 +106,7 @@ def get_top_volume_symbols_endpoint(
         market=market, quote=quote, limit=limit, min_quote_volume=min_quote_volume
     )
     return {"ok": ok, "market": market, "quote": quote, "limit": limit, "symbols": symbols}
+
 
 
 
