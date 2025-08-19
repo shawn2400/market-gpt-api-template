@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 from typing import Dict, Any, List
-from fastapi import APIRouter, Query, Depends, HTTPException
+from fastapi import APIRouter, Query, Depends
 import httpx
 import pandas as pd
 import numpy as np
@@ -155,6 +155,7 @@ async def ai_manual_scan(
                 "reason": f"lite (analyze-fallback: {type(e).__name__})"
             }
         }
+
 
 
 
