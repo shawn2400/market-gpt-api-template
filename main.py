@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-# ---- Metrics (נוכחות חובה בפרויקט; קיימת אצלך) ----
+# ---- Metrics (חובה בקוד שלך) ----
 from utils.metrics import metrics_tracker  # type: ignore
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
@@ -177,7 +177,8 @@ for mod in [
     "routes.routes_indicators",
     "routes.price",
     "routes.multi_scan",
-    "routes.health",
+    "routes.health",          # כולל /health/live ו-/health/strategy-version (אם קיים)
+    "routes.health_compat",   # מוסיף /health בסיסי (200) — לא מתנגש
     "routes.risk",
     "routes.snapshot",
     "routes.analytics",
