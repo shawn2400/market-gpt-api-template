@@ -9,7 +9,6 @@ _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstri
 async def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_limit: int = 500, cvd_window: int = 300) -> Dict[str, Any]:
     sym = symbol.upper().strip()
     async with httpx.AsyncClient(timeout=10.0) as client:
-        # ספרד/דאפ׳
         depth = await client.get(f"{_FAPI}/fapi/v1/depth", params={"symbol": sym, "limit": depth_limit})
         depth.raise_for_status()
         d = depth.json()
@@ -21,31 +20,25 @@ async def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_lim
         ask_vol = sum(q for _, q in asks)
         imbalance = (bid_vol - ask_vol) / max(1e-9, (bid_vol + ask_vol))
 
-        # 24h (טייקר)
         stat = await client.get(f"{_FAPI}/fapi/v1/ticker/24hr", params={"symbol": sym})
         stat.raise_for_status()
         s = stat.json()
         taker_buy = float(s.get("takerBuyBaseVolume", 0.0))
         volume = float(s.get("volume", 0.0))
 
-        # aggTrades לחלון CVD
         trades = await client.get(f"{_FAPI}/fapi/v1/aggTrades", params={"symbol": sym, "limit": min(1000, trades_limit)})
         trades.raise_for_status()
         tjs = trades.json()
-        # m = isBuyerMaker (True ⇒ הקונה הוא ה-maker ⇒ הטייקר היה מוכר)
+
         cvd = 0.0
         buy_count = sell_count = 0
         for t in tjs[-cvd_window:]:
             q = float(t.get("q", 0.0))
             is_buyer_maker = bool(t.get("m", False))
             if is_buyer_maker:
-                # טייקר = SELL
-                cvd -= q
-                sell_count += 1
+                cvd -= q; sell_count += 1
             else:
-                # טייקר = BUY
-                cvd += q
-                buy_count += 1
+                cvd += q; buy_count += 1
 
         return {
             "ok": True,
@@ -69,5 +62,6 @@ async def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_lim
                 "volume_base": volume,
             },
         }
+
 
 
