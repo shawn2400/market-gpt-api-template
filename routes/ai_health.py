@@ -1,9 +1,10 @@
 # routes/ai_health.py
 from __future__ import annotations
+
 import time
+from typing import Optional, Any, Dict
 from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Optional, Any, Dict
 
 router = APIRouter(tags=["AI"])
 
@@ -28,6 +29,7 @@ async def get_ai_health() -> AiHealthResponse:
         )
     except Exception as e:
         return AiHealthResponse(ok=False, model=None, latency_ms=None, error=str(e))
+
 
 
 
