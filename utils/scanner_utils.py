@@ -56,9 +56,6 @@ async def _fetch_klines(symbol: str, interval: str, limit: int = 200) -> List[li
 
 
 async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> pd.DataFrame:
-    """
-    מחזיר DataFrame עם OHLCV מסודר על ציר זמן UTC מתוך Binance Futures klines.
-    """
     raw = await _fetch_klines(symbol.upper(), interval=interval, limit=max(50, int(limit)))
     if not raw or len(raw) < 10:
         return pd.DataFrame()
@@ -90,17 +87,12 @@ async def analyze_symbol(
     symbol: str,
     *,
     market_type: str = "futures",
-    # תאימות: ניתן להעביר timeframe או interval
     timeframe: Optional[str] = None,
     interval: Optional[str] = None,
     limit: int = 150,
-    trending_only: bool = False,  # שמור לעתיד
+    trending_only: bool = False,
     frames: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    ניתוח סימבול ל-Binance Futures: RSI/ADX/EMA/ATR + ציון איכות 0–10.
-    החזרה בפורמט שה-routers של /scan מצפים לו (timeframe/side/score/note/details).
-    """
     sym = str(symbol).upper().strip()
     tf = (timeframe or interval or "15m").strip()
 
@@ -141,7 +133,6 @@ async def analyze_symbol(
         "SHORT" if (trend == "DOWN" and last_rsi <= 48) else ("LONG" if last_close > last_ema50 else "SHORT")
     )
 
-    # סיגנל/ביטחון בסיסיים
     signal = "HOLD"
     conf = 40
     if last_adx >= 20:
@@ -150,7 +141,6 @@ async def analyze_symbol(
         elif direction == "SHORT" and last_rsi <= 45:
             signal, conf = "SELL", 65
 
-    # ציון איכות 0–10
     align_bonus = 2.0 if (
         (direction == "LONG" and trend == "UP") or
         (direction == "SHORT" and trend == "DOWN")
@@ -160,11 +150,10 @@ async def analyze_symbol(
 
     reason = f"trend={trend} rsi={last_rsi:.1f} adx={last_adx:.1f} ema21/50={last_ema21:.1f}/{last_ema50:.1f}"
 
-    # מבנה “גנרי” ל-/scan
     generic = {
         "symbol": sym,
-        "timeframe": tf,                     # חשוב: scan.py מחפש timeframe
-        "side": direction,                   # כיוון מוצע
+        "timeframe": tf,
+        "side": direction,
         "score": round(quality, 2),
         "note": reason,
         "details": {
@@ -183,7 +172,6 @@ async def analyze_symbol(
         },
     }
 
-    # שדות “מקוריים” לשימושים אחרים/תאימות
     extras = {
         "market": market_type,
         "interval": tf,
@@ -211,9 +199,6 @@ async def scan_all(
     timeframe: str = "15m",
     limit: int = 150,
 ) -> List[Dict[str, Any]]:
-    """
-    סריקה מרובת סימבולים; מחזיר רשימה בפורמט התואם ל-/scan.
-    """
     tasks = [
         analyze_symbol(s, timeframe=timeframe, limit=limit)
         for s in symbols if (s or "").strip()
@@ -225,6 +210,7 @@ async def scan_all(
             continue
         out.append(r)
     return out
+
 
 
 
