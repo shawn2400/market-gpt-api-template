@@ -1,38 +1,50 @@
 # utils/auth.py
 from __future__ import annotations
-import os, hmac, re
-from fastapi import Header, HTTPException, status
+import os
+from typing import Set, Optional
+from fastapi import Header, HTTPException, status, Request
 
-# ננקה CR/LF/טאבים ו־ZWSP — אבל לא רווחים רגילים!
-_CLEANCTL_RE = re.compile(r"[\r\n\t\u200B\u200C\u200D\u2060\ufeff]+")
-_BEARER_RE = re.compile(r"(?i)^\s*Bearer\s+(.+?)\s*$")
+def _split_tokens(val: str) -> Set[str]:
+    parts = [p.strip() for p in val.replace(";", ",").split(",")]
+    return {p for p in parts if p}
 
-def _strip_ctl(s: str | None) -> str:
-    return "" if not s else _CLEANCTL_RE.sub("", s).strip()
+# קונפיג: תמיכה במספר שמות משתנים / רשימות
+_TOKENS: Set[str] = set()
+for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER"):
+    v = (os.getenv(key) or "").strip()
+    if not v:
+        continue
+    if "," in v or ";" in v:
+        _TOKENS |= _split_tokens(v)
+    else:
+        _TOKENS.add(v)
 
-def _expected_token() -> str:
-    for name in ("API_BEARER_TOKEN", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER"):
-        v = os.getenv(name)
-        if v:
-            return _strip_ctl(v)
-    return ""
+_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
 
-_ALLOW_ALL = (_strip_ctl(os.getenv("SECURITY_ALLOW_ALL", "")).lower() in ("1","true","yes"))
-
-async def require_bearer_token(authorization: str | None = Header(None)) -> None:
-    if _ALLOW_ALL:
-        return
-    expected = _expected_token()
-    if not expected:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    m = _BEARER_RE.match(authorization)
-    if not m:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    provided = _strip_ctl(m.group(1))
-    if not (provided and hmac.compare_digest(provided, expected)):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+        return None
+    # תומך גם ב־"bearer" קטנות או רווחים כפולים
+    parts = authorization.strip().split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return None
+
+def require_bearer_token(authorization: Optional[str] = Header(default=None), request: Request = None):
+    """
+    תלוי־ראוט: בודק Authorization: Bearer <token>.
+    אם SECURITY_ALLOW_ALL=1 — עוקף (לסביבת פיתוח/סמוק).
+    """
+    if _ALLOW_ALL:
+        return None
+    token = _extract_bearer(authorization)
+    if token and token in _TOKENS:
+        return None
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized",
+    )
+
 
 
 
