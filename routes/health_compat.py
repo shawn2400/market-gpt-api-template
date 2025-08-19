@@ -12,7 +12,5 @@ class BasicStatus(BaseModel):
 
 @router.get("/health", response_model=BasicStatus, operation_id="getBasicHealth")
 def health() -> BasicStatus:
-    """
-    נקודת בריאות בסיסית (תאימות ל-OpenAPI).
-    """
     return BasicStatus(status="ok", version=os.getenv("ALGOGPT_VERSION", "unknown"))
+
