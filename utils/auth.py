@@ -8,7 +8,7 @@ def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
-# תומך במספר שמות ENV (לכיסוי תצורות שונות)
+# מרכיב סט טוקנים מכל שמות ה-ENV הנפוצים
 _TOKENS: Set[str] = set()
 for key in (
     "ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN",
@@ -22,7 +22,7 @@ for key in (
     else:
         _TOKENS.add(v)
 
-_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
+_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1","true","yes"))
 
 def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
@@ -38,18 +38,18 @@ def require_bearer_token(
     request: Request = None
 ):
     """
-    אימות: Authorization: Bearer <token> או X-API-Key: <token> או ?token=<token>
-    SECURITY_ALLOW_ALL=1 עוקף (לבדיקות בלבד).
+    מקבל:
+      - Authorization: Bearer <token>
+      - X-API-Key: <token>
+      - ?token=<token>
+    SECURITY_ALLOW_ALL=1 → מעקף (פיתוח בלבד).
     """
     if _ALLOW_ALL:
         return None
 
-    # Authorization
     token = _extract_bearer(authorization)
-    # X-API-Key
     if not token and x_api_key:
         token = x_api_key.strip()
-    # ?token=...
     if not token and request is not None:
         qp = request.query_params.get("token")
         if qp:
@@ -58,10 +58,7 @@ def require_bearer_token(
     if token and token in _TOKENS:
         return None
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized",
-    )
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
 
