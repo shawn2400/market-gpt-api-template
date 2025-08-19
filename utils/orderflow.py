@@ -1,47 +1,41 @@
+# utils/auth.py
 from __future__ import annotations
 import os
-from typing import Dict, Any, List, Tuple
-import httpx
+from typing import Set, Optional
+from fastapi import Header, HTTPException, status
 
-_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+def _split_tokens(val: str) -> Set[str]:
+    parts = [p.strip() for p in val.replace(";", ",").split(",")]
+    return {p for p in parts if p}
 
-async def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_limit: int = 500, cvd_window: int = 300) -> Dict[str, Any]:
-    sym = symbol.upper().strip()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        depth = await client.get(f"{_FAPI}/fapi/v1/depth", params={"symbol": sym, "limit": depth_limit})
-        depth.raise_for_status()
-        d = depth.json()
-        bids: List[Tuple[float,float]] = [(float(p), float(q)) for p, q in d.get("bids", [])]
-        asks: List[Tuple[float,float]] = [(float(p), float(q)) for p, q in d.get("asks", [])]
-        best_bid = bids[0][0] if bids else None
-        best_ask = asks[0][0] if asks else None
-        bid_vol = sum(q for _, q in bids)
-        ask_vol = sum(q for _, q in asks)
-        imbalance = (bid_vol - ask_vol) / max(1e-9, (bid_vol + ask_vol))
+_TOKENS: Set[str] = set()
+for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER", "API_BEARER_TOKEN"):
+    v = (os.getenv(key) or "").strip()
+    if not v:
+        continue
+    if "," in v or ";" in v:
+        _TOKENS |= _split_tokens(v)
+    else:
+        _TOKENS.add(v)
 
-        stat = await client.get(f"{_FAPI}/fapi/v1/ticker/24hr", params={"symbol": sym})
-        stat.raise_for_status()
-        s = stat.json()
-        taker_buy = float(s.get("takerBuyBaseVolume", 0.0))
-        volume = float(s.get("volume", 0.0))
+_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
 
-        trades = await client.get(f"{_FAPI}/fapi/v1/aggTrades", params={"symbol": sym, "limit": min(1000, trades_limit)})
-        trades.raise_for_status()
-        tjs = trades.json()
+def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
+    if not authorization:
+        return None
+    parts = authorization.strip().split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return None
 
-        cvd = 0.0; buy = sell = 0
-        for t in tjs[-cvd_window:]:
-            q = float(t.get("q", 0.0))
-            if bool(t.get("m", False)): cvd -= q; sell += 1
-            else:                         cvd += q; buy  += 1
+def require_bearer_token(authorization: Optional[str] = Header(default=None)):
+    if _ALLOW_ALL:
+        return None
+    token = _extract_bearer(authorization)
+    if token and token in _TOKENS:
+        return None
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-        return {
-            "ok": True, "symbol": sym,
-            "best_bid": best_bid, "best_ask": best_ask,
-            "orderbook": {"bid_volume": bid_vol, "ask_volume": ask_vol, "imbalance": imbalance, "levels": {"bids": len(bids), "asks": len(asks)}},
-            "trades": {"taker_buy_count": buy, "taker_sell_count": sell, "cvd_window": min(cvd_window, len(tjs)), "cvd": cvd},
-            "stats_24h": {"taker_buy_base_volume": taker_buy, "volume_base": volume},
-        }
 
 
 
