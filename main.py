@@ -5,6 +5,13 @@ import logging
 import time
 from typing import List, Optional
 
+# --- NEW: load .env early so all modules see the env vars ---
+try:
+    from dotenv import load_dotenv  # requires python-dotenv
+    load_dotenv(override=False)
+except Exception:
+    pass
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -129,7 +136,7 @@ def list_routes():
             pass
     return {"count": len(out), "routes": out}
 
-# Register routers
+# Register routers (order matters)
 app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
@@ -138,13 +145,13 @@ for mod in [
     "routes.dashboard", "routes.routes_indicators", "routes.price",
     "routes.multi_scan", "routes.health", "routes.risk", "routes.snapshot",
     "routes.analytics", "routes.ai_health", "routes.executor",
-    "routes.orderflow",  # Orderflow router
+    "routes.orderflow",  # NEW: Orderflow router
 ]:
     r = _try_import(mod, "router")
     if r:
         app.include_router(r)
 
-# Special-case: scan routers (two routers in same module)
+# Special-case: scan routers
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
     app.include_router(_scan_router)
