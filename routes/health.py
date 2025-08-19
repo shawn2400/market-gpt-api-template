@@ -17,7 +17,7 @@ def _get_pkg_ver(name: str):
 def _libs_meta():
     meta = {"python": platform.python_version()}
     try:
-        import fastapi, starlette, uvicorn, gunicorn, httpx, requests, aiohttp  # noqa: F401
+        import fastapi, starlette, uvicorn, gunicorn, httpx, requests, aiohttp  # noqa
         meta.update({
             "fastapi": _get_pkg_ver("fastapi"),
             "starlette": _get_pkg_ver("starlette"),
@@ -55,8 +55,7 @@ def liveness():
 
 @router.get("/health/strategy-version", operation_id="getStrategyVersion")
 def strategy_version():
-    # מגבלות (רק אם נדרש לחשוף)
-    limits = None
+    limits = {}
     try:
         from utils import config as cfg  # type: ignore
         if getattr(cfg, "EXPOSE_LIMITS", True):
@@ -65,7 +64,10 @@ def strategy_version():
                 "scan_max_limit": getattr(cfg, "SCAN_MAX_LIMIT", None),
             }
     except Exception:
-        limits = None
+        limits = {}
+
+    allowed_ips_env = (os.getenv("BINANCE_ALLOWED_EGRESS_IPS") or "").strip()
+    allowed_ips = [ip.strip() for ip in allowed_ips_env.split(",") if ip.strip()] or None
 
     return {
         "status": "ok",
@@ -79,7 +81,11 @@ def strategy_version():
             "execute_trades": os.getenv("EXECUTE_TRADES","false").lower() in ("1","true","yes"),
             "skip_mutations": os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS","false").lower() in ("1","true","yes"),
         },
-        "limits": limits,
+        "limits": limits or None,
+        "network": {
+            "allowed_egress_ips": allowed_ips,
+            "egress_ip_endpoint": os.getenv("EGRESS_IP_ENDPOINT"),
+        },
         "boot_ts": _BOOT_TS,
         "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS,
         "now_utc": datetime.now(tz=timezone.utc).isoformat(),
