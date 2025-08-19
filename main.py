@@ -109,6 +109,7 @@ async def _metrics_middleware(request: Request, call_next):
                 path=request.url.path
             )
         except TypeError:
+            # תאימות לאחור
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
 # -----------------------------------------------------------------------------
@@ -178,6 +179,22 @@ if _analytics_compat:
     app.include_router(_analytics_compat)
 
 # -----------------------------------------------------------------------------
+# Health fallback (register only if /health not provided by routes.health)
+# -----------------------------------------------------------------------------
+def _health_fallback():
+    return {"status": "ok", "version": app.version}
+
+# add fallback dynamically to avoid duplicate route conflicts
+_has_health = any(
+    (getattr(r, "path", None) or getattr(r, "path_format", None)) == "/health"
+    and "GET" in (getattr(r, "methods", set()) or set())
+    for r in app.routes
+)
+if not _has_health:
+    app.add_api_route("/health", _health_fallback, methods=["GET"], tags=["Health"], name="getBasicHealth")
+    logger.info("Registered /health fallback route")
+
+# -----------------------------------------------------------------------------
 # Lifecycle
 # -----------------------------------------------------------------------------
 @app.on_event("startup")
@@ -231,6 +248,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
