@@ -18,7 +18,7 @@ orjson==3.10.5
 pandas==2.2.2
 numpy==1.26.4
 ta==0.11.0
-pandas-ta==0.3.14b0       # ← מוסיף; שימושי לסורקים מתקדמים
+pandas-ta==0.3.14b0       # ← שימושי לסורקים מתקדמים
 python-binance==1.0.19
 websockets>=12.0,<13.0
 ccxt==4.4.34
@@ -27,6 +27,7 @@ fpdf2==2.7.9
 Pillow==10.3.0
 matplotlib==3.8.4
 python-multipart==0.0.9
+
 
 
 
