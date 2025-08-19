@@ -45,6 +45,7 @@ from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
+    """Safe import of routers (logs on failure, doesn't crash app)."""
     try:
         module = __import__(name, fromlist=[attr])
         obj = getattr(module, attr)
@@ -54,7 +55,7 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         logger.warning("failed to load %s.%s: %s", name, attr, exc)
         return None
 
-# auto-executor (טעינה בטוחה)
+# auto-executor (safe load)
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
@@ -109,7 +110,7 @@ async def _metrics_middleware(request: Request, call_next):
                 path=request.url.path
             )
         except TypeError:
-            # תאימות לאחור
+            # backward-compat signature
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
 # -----------------------------------------------------------------------------
@@ -179,19 +180,22 @@ if _analytics_compat:
     app.include_router(_analytics_compat)
 
 # -----------------------------------------------------------------------------
-# Health fallback (register only if /health not provided by routes.health)
+# Health fallback — ensure /health exists even if health router didn't load
 # -----------------------------------------------------------------------------
-def _health_fallback():
-    return {"status": "ok", "version": app.version}
+def _route_exists(path: str, method: str = "GET") -> bool:
+    m = method.upper()
+    for r in app.routes:
+        p = getattr(r, "path", None) or getattr(r, "path_format", None)
+        if p == path:
+            methods = (getattr(r, "methods", set()) or set())
+            if m in methods:
+                return True
+    return False
 
-# add fallback dynamically to avoid duplicate route conflicts
-_has_health = any(
-    (getattr(r, "path", None) or getattr(r, "path_format", None)) == "/health"
-    and "GET" in (getattr(r, "methods", set()) or set())
-    for r in app.routes
-)
-if not _has_health:
-    app.add_api_route("/health", _health_fallback, methods=["GET"], tags=["Health"], name="getBasicHealth")
+if not _route_exists("/health", "GET"):
+    @app.get("/health", operation_id="getBasicHealth", tags=["Health"])
+    def _health_fallback():
+        return {"status": "ok", "version": app.version}
     logger.info("Registered /health fallback route")
 
 # -----------------------------------------------------------------------------
@@ -201,7 +205,7 @@ if not _has_health:
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
 
-    # קונפיג — הידלקת האוטו־אקסקיוטר אם מוגדר
+    # config — auto executor on boot if requested
     try:
         from utils import config as cfg  # type: ignore
     except Exception:
@@ -248,6 +252,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
