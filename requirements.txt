@@ -1,17 +1,10 @@
-# requirements.txt (LIVE PRO)
-
-# Core API
 fastapi==0.110.0
 starlette==0.36.3
 uvicorn[standard]==0.29.0
 gunicorn==21.2.0
-
-# HTTP clients
 requests==2.32.3
 httpx[http2]==0.27.2
 aiohttp==3.9.5
-
-# Serialization / utils
 ujson==5.10.0
 python-dotenv==1.0.1
 pydantic==2.7.1
@@ -21,28 +14,18 @@ certifi==2024.7.4
 idna==3.7
 tzdata==2024.1
 PyYAML>=6.0.1,<7.0.0
-orjson==3.10.5          # אופציונלי: JSON מהיר (אפשר להשאיר מותקן גם בלי להשתמש)
-
-# Data / analytics
+orjson==3.10.5
 pandas==2.2.2
 numpy==1.26.4
 ta==0.11.0
-
-# Binance / Crypto
 python-binance==1.0.19
 websockets>=12.0,<13.0
 ccxt==4.4.34
-
-# OpenAI SDK
 openai==1.30.1
-
-# Reporting / Images
 fpdf2==2.7.9
 Pillow==10.3.0
 matplotlib==3.8.4
-
-# Uploads (אם אי פעם תאפשר קבצים ב-FastAPI)
-python-multipart==0.0.9  # אופציונלי
+python-multipart==0.0.9
 
 
 
