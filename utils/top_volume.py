@@ -1,3 +1,4 @@
+# utils/top_volume.py
 from __future__ import annotations
 import os
 from typing import Tuple, List
@@ -22,6 +23,9 @@ def get_top_volume_symbols(
         r.raise_for_status()
         data = r.json()
         rows: List[tuple[str, float]] = []
+        min_qv_env = float(os.getenv("TOP_VOLUME_MIN_QV", "0") or 0.0)
+        mql = max(float(min_quote_volume or 0.0), min_qv_env)
+
         for item in data:
             sym = (item.get("symbol") or "").upper()
             if not sym.endswith(quote.upper()):
@@ -30,7 +34,7 @@ def get_top_volume_symbols(
                 qv = float(item.get("quoteVolume") or 0.0)
             except Exception:
                 qv = 0.0
-            if qv < float(min_quote_volume or 0.0):
+            if qv < mql:
                 continue
             rows.append((sym, qv))
         rows.sort(key=lambda t: t[1], reverse=True)
