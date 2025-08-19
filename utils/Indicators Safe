@@ -1,0 +1,31 @@
+from __future__ import annotations
+import pandas as pd
+from ta.volatility import AverageTrueRange
+
+def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    מנרמל את דפ ה־OHLCV ודואג לשדות חיוניים; מוסיף ATR בסיסי. עמיד ל־LIVE ולא יזרוק שגיאה.
+    """
+    need = ["open", "high", "low", "close", "volume"]
+    base = df.copy()
+    for c in need:
+        if c not in base.columns:
+            base[c] = 0.0  # ערך ברירת מחדל במקום לזרוק שגיאה
+
+    if "timestamp" not in base.columns:
+        if "close_time" in base.columns:
+            base["timestamp"] = pd.to_datetime(base["close_time"], utc=True)
+        elif "open_time" in base.columns:
+            base["timestamp"] = pd.to_datetime(base["open_time"], utc=True)
+        else:
+            base["timestamp"] = pd.RangeIndex(start=0, stop=len(base), step=1)
+
+    base = base.sort_values("timestamp").reset_index(drop=True)
+
+    try:
+        atr = AverageTrueRange(high=base["high"], low=base["low"], close=base["close"], window=14)
+        base["atr"] = atr.average_true_range()
+    except Exception:
+        base["atr"] = 0.0
+
+    return base
