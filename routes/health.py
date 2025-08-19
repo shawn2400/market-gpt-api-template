@@ -27,9 +27,9 @@ def _libs_meta():
             "pandas": getattr(pandas, "__version__", None),
             "numpy": getattr(numpy, "__version__", None),
             "ta": getattr(ta, "__version__", None),
-            "python-binance": os.getenv("PYBIN_VERSION") or "1.0.19",
+            "python-binance": "1.0.19",
             "openai": getattr(openai_sdk, "__version__", None),
-            "fpdf2": os.getenv("FPDF2_VERSION") or "2.7.9",
+            "fpdf2": "2.7.9",
             "Pillow": getattr(PIL, "__version__", None),
             "matplotlib": getattr(matplotlib, "__version__", None),
         }
@@ -53,8 +53,8 @@ def liveness():
 def strategy_version():
     return {
         "status": "ok",
-        "app_version": os.getenv("ALGOGPT_VERSION", None),
-        "strategy_version": os.getenv("STRATEGY_VERSION", None),
+        "app_version": os.getenv("ALGOGPT_VERSION"),
+        "strategy_version": os.getenv("STRATEGY_VERSION"),
         "git_commit": os.getenv("GIT_COMMIT"),
         "req_hash": os.getenv("REQ_HASH"),
         "python_version": platform.python_version(),
@@ -67,6 +67,7 @@ def strategy_version():
         "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS,
         "now_utc": datetime.now(tz=timezone.utc).isoformat(),
     }
+
 
 
 
