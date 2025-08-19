@@ -11,7 +11,6 @@ router = APIRouter(tags=["AI"])
 
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
-# ---------- math helpers (Wilder/EMA/RSI/ATR/ADX) ----------
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
     alpha = 2.0 / (period + 1.0)
     out = np.empty_like(arr, dtype=float)
@@ -21,7 +20,6 @@ def _ema(arr: np.ndarray, period: int) -> np.ndarray:
     return out
 
 def _rma(arr: np.ndarray, period: int) -> np.ndarray:
-    # Wilder's smoothing (RMA)
     out = np.empty_like(arr, dtype=float)
     out[0] = arr[:period].mean()
     alpha = 1.0 / period
@@ -36,8 +34,7 @@ def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     avg_gain = _rma(gain, period)
     avg_loss = _rma(loss, period)
     rs = np.where(avg_loss == 0, np.inf, avg_gain / avg_loss)
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-    return rsi
+    return 100.0 - (100.0 / (1.0 + rs))
 
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
     prev_close = np.roll(close, 1)
@@ -54,26 +51,16 @@ def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14)
     down_move = low[:-1] - low[1:]
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
     minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-
-    tr = _atr(high, low, close, period)  # this is already Wilder-smoothed TR
-    # כדי ליישר אורכי מערכים:
-    # נעשה ריפוד בתחילת הסדרות ב־0 עבור +DM/-DM כדי להתאים לאורך TR
+    tr = _atr(high, low, close, period)
     plus_dm_full = np.concatenate([[0.0], plus_dm])
     minus_dm_full = np.concatenate([[0.0], minus_dm])
-
     plus_dm_rma = _rma(plus_dm_full, period)
     minus_dm_rma = _rma(minus_dm_full, period)
-
     plus_di = 100.0 * np.where(tr == 0, 0.0, plus_dm_rma / tr)
     minus_di = 100.0 * np.where(tr == 0, 0.0, minus_dm_rma / tr)
+    dx = 100.0 * np.where((plus_di + minus_di) == 0, 0.0, np.abs(plus_di - minus_di) / (plus_di + minus_di))
+    return _rma(dx, period)
 
-    dx = 100.0 * np.where(
-        (plus_di + minus_di) == 0, 0.0, np.abs(plus_di - minus_di) / (plus_di + minus_di)
-    )
-    adx = _rma(dx, period)
-    return adx
-
-# ---------- data fetch ----------
 async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> List[List[Any]]:
     url = f"{_FAPI}/fapi/v1/klines"
     params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
@@ -138,9 +125,11 @@ def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 @router.get("/ai/manual-scan", operation_id="getAiManualScan")
-async def ai_manual_scan(symbol: str = Query(..., description="e.g. BTCUSDT"),
-                         interval: str = Query("15m"),
-                         limit: int = Query(200, ge=50, le=1500)) -> Dict[str, Any]:
+async def ai_manual_scan(
+    symbol: str = Query(..., description="e.g. BTCUSDT"),
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=1500),
+) -> Dict[str, Any]:
     symbol = symbol.upper().strip()
     try:
         rows = await _fetch_klines(symbol, interval=interval, limit=limit)
@@ -148,7 +137,6 @@ async def ai_manual_scan(symbol: str = Query(..., description="e.g. BTCUSDT"),
         if len(df) < 60:
             return {"symbol": symbol, "results": {"signal": "HOLD", "reason": "lite (not enough data)"}}
         res = _analyze(df)
-        # שימור שדות נוחים לתצוגה
         res_out = dict(res)
         res_out.update({"symbol": symbol, "market": "futures", "interval": interval})
         return {"symbol": symbol, "results": res_out}
