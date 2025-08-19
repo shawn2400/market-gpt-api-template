@@ -13,7 +13,7 @@ except Exception:
 from utils.top_volume import get_top_volume_symbols
 from routes.ai_analyze import _fetch_klines, _frame_to_df, _analyze
 
-router_symbols = APIRouter(tags=["Analytics"])  # פתוח
+router_symbols = APIRouter(tags=["Analytics"])                           # פתוח
 router = APIRouter(tags=["Scan"], dependencies=[Depends(require_bearer_token)])  # מוגן
 
 @router_symbols.get("/symbols/top-volume", operation_id="getTopVolumeSymbols")
@@ -35,17 +35,12 @@ async def _scan_symbol(symbol: str, timeframe: str, bars: int) -> Dict[str, Any]
         res = _analyze(df)
         side = {"BUY":"LONG", "SELL":"SHORT", "HOLD":None}.get(res["signal"])
         return {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "side": side,
+            "symbol": symbol, "timeframe": timeframe, "side": side,
             "score": float(res["quality_score"] or 0.0) if res.get("quality_score") is not None else 0.0,
             "note": res.get("reason"),
             "details": {
-                "rsi": res.get("rsi"),
-                "adx": res.get("adx"),
-                "atr": res.get("atr"),
-                "trend": res.get("trend"),
-                "close": res.get("close"),
+                "rsi": res.get("rsi"), "adx": res.get("adx"), "atr": res.get("atr"),
+                "trend": res.get("trend"), "close": res.get("close"),
             }
         }
     except Exception as e:
@@ -66,11 +61,9 @@ async def scan_top_volume(
     if not ok or not symbols:
         return {"ok": False, "count": 0, "signals": []}
 
-    use_symbols = symbols
-    if trending_only:
-        use_symbols = [s for i, s in enumerate(symbols) if i < max(5, limit // 2)]
-
+    use_symbols = symbols if not trending_only else [s for i, s in enumerate(symbols) if i < max(5, limit // 2)]
     sem = asyncio.Semaphore(concurrency)
+
     async def _task(sym: str):
         async with sem:
             return await _scan_symbol(sym, timeframe, bars)
