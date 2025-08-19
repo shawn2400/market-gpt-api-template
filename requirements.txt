@@ -27,6 +27,9 @@ fpdf2==2.7.9
 Pillow==10.3.0
 matplotlib==3.8.4
 python-multipart==0.0.9
+scipy==1.13.1
+scikit-learn==1.5.1
+numba==0.59.1
 
 
 
