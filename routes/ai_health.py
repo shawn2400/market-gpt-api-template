@@ -22,8 +22,8 @@ async def ai_health():
             "error": res.get("error"),
         }
     except Exception as e:
-        # אל תזרוק חריגה – תחזיר 200 עם ok=false
         return {"ok": False, "model": None, "latency_ms": None, "error": str(e)}
+
 
 
 
