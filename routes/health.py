@@ -7,33 +7,34 @@ from fastapi import APIRouter
 router = APIRouter(tags=["Health"])
 _BOOT_TS = int(datetime.now(tz=timezone.utc).timestamp())
 
+def _ver(name: str):
+    try:
+        import importlib.metadata as md
+        return md.version(name)
+    except Exception:
+        try:
+            mod = __import__(name)
+            return getattr(mod, "__version__", None)
+        except Exception:
+            return None
+
 def _libs_meta():
-    meta = {"python": platform.python_version()}
-    try:
-        import fastapi, starlette, uvicorn, gunicorn, httpx, requests, aiohttp
-        meta.update({
-            "fastapi": getattr(fastapi, "__version__", None),
-            "starlette": getattr(starlette, "__version__", None),
-            "uvicorn": getattr(uvicorn, "__version__", None),
-            "gunicorn": getattr(gunicorn, "__version__", None),
-            "httpx": getattr(httpx, "__version__", None),
-            "requests": getattr(requests, "__version__", None),
-            "aiohttp": getattr(aiohttp, "__version__", None),
-        })
-    except Exception:
-        pass
-    try:
-        import pandas, numpy, PIL, matplotlib, openai
-        meta.update({
-            "pandas": getattr(pandas, "__version__", None),
-            "numpy": getattr(numpy, "__version__", None),
-            "Pillow": getattr(PIL, "__version__", None),
-            "matplotlib": getattr(matplotlib, "__version__", None),
-            "openai": getattr(openai, "__version__", None),
-        })
-    except Exception:
-        pass
-    return meta
+    return {
+        "python": platform.python_version(),
+        "fastapi": _ver("fastapi"),
+        "starlette": _ver("starlette"),
+        "uvicorn": _ver("uvicorn"),
+        "gunicorn": _ver("gunicorn"),
+        "httpx": _ver("httpx"),
+        "requests": _ver("requests"),
+        "aiohttp": _ver("aiohttp"),
+        "pandas": _ver("pandas"),
+        "numpy": _ver("numpy"),
+        "ta": _ver("ta"),               # ← חשוב לראות אם ta נטען
+        "openai": _ver("openai"),
+        "Pillow": _ver("Pillow"),
+        "matplotlib": _ver("matplotlib"),
+    }
 
 @router.get("/health", operation_id="getBasicHealth")
 def health():
@@ -62,6 +63,7 @@ def strategy_version():
         "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS,
         "now_utc": datetime.now(tz=timezone.utc).isoformat(),
     }
+
 
 
 
