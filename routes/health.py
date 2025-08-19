@@ -2,86 +2,78 @@
 from __future__ import annotations
 
 import os
-import time
+import sys
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Any, Dict
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["Health"])
 
-# נשמר בזמן טעינת המודול לצורך חישוב uptime
-_BOOT_TS = int(time.time())
+BOOT_TS = int(datetime.now(tz=timezone.utc).timestamp())
 
-
-# ====== Models (לנוחות/תיעוד; ה־OpenAPI שלך מאפשר additionalProperties) ======
 class BasicStatus(BaseModel):
     status: str = Field("ok", examples=["ok"])
     version: str = Field(..., examples=["2.14.3"])
 
-
-class LiveStatus(BaseModel):
-    status: str = Field("live", examples=["live"])
-    uptime_sec: int = Field(..., ge=0)
-    now_utc: str = Field(..., examples=["2025-08-19T10:32:23.074820+00:00"])
-    # שדות נוספים מותרים לפי ה־OpenAPI (additionalProperties: true)
-
-
-class StrategyVersion(BaseModel):
-    algogpt_version: Optional[str] = None
-    strategy_version: Optional[str] = None
-    git_commit: Optional[str] = None
-    requirements_hash: Optional[str] = None
-    python_version: Optional[str] = None
-    notes: Optional[str] = None
-
-
-# ====== Endpoints ======
 @router.get("/health", response_model=BasicStatus, operation_id="getBasicHealth")
 def health() -> BasicStatus:
-    """
-    בדיקת בריאות בסיסית. תואם להגדרה ב־OpenAPI (status + version).
-    """
-    return BasicStatus(
-        status="ok",
-        version=os.getenv("ALGOGPT_VERSION", "unknown"),
-    )
+    return BasicStatus(status="ok", version=os.getenv("ALGOGPT_VERSION", "unknown"))
 
-
-@router.get("/health/live", response_model=LiveStatus, operation_id="getLiveness")
+@router.get("/health/live", operation_id="getLiveness")
 def liveness() -> Dict[str, Any]:
-    """
-    Liveness / Uptime. תמיד מחזיר 200 עם זמן ריצה ונקודת זמן נוכחית ב־UTC.
-    """
-    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=timezone.utc).isoformat()
     return {
         "status": "live",
-        "uptime_sec": int(time.time()) - _BOOT_TS,
-        "now_utc": now_iso,
+        "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - BOOT_TS,
+        "now_utc": now,
     }
 
+@router.get("/health/strategy-version", operation_id="getStrategyVersion")
+def strategy_version() -> Dict[str, Any]:
+    def _ver(mod: str) -> str | None:
+        try:
+            m = __import__(mod)
+            return getattr(m, "__version__", None) or getattr(m, "version", None)
+        except Exception:
+            return None
 
-@router.get("/health/strategy-version", response_model=StrategyVersion, operation_id="getStrategyVersion")
-def strategy_version() -> StrategyVersion:
-    """
-    מטא־דאטה של הגרסה/תלויות. additionalProperties מותרים בסכימה שלך,
-    לכן מחזירים רק שדות ידידותיים בלי להציף מידע רגיש.
-    """
-    try:
-        import sys
-        pyver = sys.version.split()[0]
-    except Exception:
-        pyver = None
+    libs = {
+        "python": sys.version.split()[0],
+        "fastapi": _ver("fastapi"),
+        "starlette": _ver("starlette"),
+        "uvicorn": _ver("uvicorn"),
+        "gunicorn": _ver("gunicorn"),
+        "httpx": _ver("httpx"),
+        "requests": _ver("requests"),
+        "aiohttp": _ver("aiohttp"),
+        "pandas": _ver("pandas"),
+        "numpy": _ver("numpy"),
+        "ta": _ver("ta"),
+        "python-binance": _ver("binance"),
+        "openai": _ver("openai"),
+        "fpdf2": _ver("fpdf"),
+        "Pillow": _ver("PIL"),
+        "matplotlib": _ver("matplotlib"),
+    }
 
-    return StrategyVersion(
-        algogpt_version=os.getenv("ALGOGPT_VERSION"),
-        strategy_version=os.getenv("STRATEGY_VERSION"),
-        git_commit=os.getenv("GIT_COMMIT"),
-        requirements_hash=os.getenv("REQ_HASH"),
-        python_version=pyver,
-        notes=None,
-    )
+    return {
+        "status": "ok",
+        "app_version": os.getenv("ALGOGPT_VERSION", "unknown"),
+        "strategy_version": os.getenv("STRATEGY_VERSION", os.getenv("ALGOGPT_VERSION", "unknown")),
+        "git_commit": os.getenv("GIT_COMMIT"),
+        "req_hash": os.getenv("REQ_HASH"),
+        "python_version": libs["python"],
+        "libs": libs,
+        "env_flags": {
+            "execute_trades": os.getenv("EXECUTE_TRADES", "false").lower() in ("1", "true", "yes"),
+            "skip_mutations": os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "false").lower() in ("1", "true", "yes"),
+        },
+        "boot_ts": BOOT_TS,
+        "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - BOOT_TS,
+        "now_utc": datetime.now(tz=timezone.utc).isoformat(),
+    }
 
 
 
