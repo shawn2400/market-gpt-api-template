@@ -1,151 +1,87 @@
 # routes/scan_top_volume.py
 from __future__ import annotations
 
-import asyncio
-import logging
-from typing import List, Optional, Literal, Dict, Any
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Query, Depends
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
-
-logger = logging.getLogger("algogpt.scan")
-
-# --- Auth (אם קיים utils.auth → יאכוף Bearer; אחרת NO-OP) ---
+# אימות לנתיבים המורחבים; את /symbols/top-volume נשאיר פתוח
 try:
-    from utils.auth import require_bearer_token as _raw_require_bearer  # type: ignore
-    def require_bearer_token():
-        return _raw_require_bearer()
+    from utils.auth import require_bearer_token  # type: ignore
 except Exception:
     def require_bearer_token():
         return None
 
-# ===== Models =====
-class ScanSignal(BaseModel):
-    symbol: str = Field(..., example="BTCUSDT")
-    timeframe: str = Field(..., example="15m")
-    side: Optional[Literal["LONG", "SHORT"]] = None
-    score: float = 0.0
-    note: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
-
-class ScanTopVolumeResponse(BaseModel):
-    ok: bool = True
-    count: int = 0
-    signals: List[ScanSignal] = Field(default_factory=list)
-
-class TopVolumeResponse(BaseModel):
-    ok: bool = True
-    market: str = "futures"
-    quote: str = "USDT"
-    limit: int = 50
-    symbols: List[str] = Field(default_factory=list)
-
-# ===== Routers =====
 router = APIRouter(tags=["Scan"], dependencies=[Depends(require_bearer_token)])
-router_symbols = APIRouter(tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
+router_symbols = APIRouter(tags=["Analytics"])  # פתוח לקריאה
 
-# ===== Helpers =====
-async def _get_top_symbols(market: str, quote: str, limit: int, min_qv: float) -> List[str]:
+# --- lite source (תמיד זמין) ---
+def _top_symbols(market: str, quote: str, limit: int, min_qv: float) -> List[str]:
     try:
         from utils.top_volume import get_top_volume_symbols  # type: ignore
-        ok, symbols = get_top_volume_symbols(
-            market=market, quote=quote, limit=limit, min_quote_volume=min_qv
-        )
-        return symbols if ok else []
-    except Exception as e:
-        logger.warning("top_volume fetch failed: %s", e)
+        ok, syms = get_top_volume_symbols(market=market, quote=quote, limit=limit, min_quote_volume=min_qv)
+        return syms if ok else []
+    except Exception:
         return []
 
-async def _scan_symbol_lite(symbol: str, timeframe: str) -> ScanSignal:
-    # מצב בטוח: לא תלוי בסורקים כבדים
-    return ScanSignal(symbol=symbol, timeframe=timeframe, side=None, score=0.0, note="lite", details=None)
-
-async def _scan_symbol_auto(symbol: str, timeframe: str, bars: int) -> ScanSignal:
-    # מנסה “כבד”, נופל ל-lite אם אין מודולים/שגיאה
-    try:
-        from utils.multi_tf_scanner import analyze_symbol  # type: ignore
-        r = await analyze_symbol(symbol=symbol, interval=timeframe, market_type="futures", bars=bars)
-        if r:
-            side = None
-            sig = str(r.get("signal", "")).upper()
-            if sig == "BUY":
-                side = "LONG"
-            elif sig == "SELL":
-                side = "SHORT"
-            score = 0.0
-            for k in ("quality_score", "score"):
-                v = r.get(k)
-                if v is not None:
-                    try:
-                        score = float(v); break
-                    except Exception:
-                        pass
-            return ScanSignal(
-                symbol=symbol, timeframe=timeframe, side=side, score=score,
-                note=r.get("reason") or "auto",
-                details={"rsi": r.get("rsi"), "adx": r.get("adx"), "atr": r.get("atr"), "close": r.get("close")},
-            )
-    except Exception as e:
-        logger.info("auto path failed for %s: %s", symbol, e)
-    return await _scan_symbol_lite(symbol, timeframe)
-
-async def _bounded(coro, sem: asyncio.Semaphore) -> ScanSignal:
-    async with sem:
-        return await coro
-
-# ===== Endpoints =====
-@router_symbols.get("/symbols/top-volume", response_model=TopVolumeResponse, operation_id="getTopVolumeSymbols")
-async def get_top_volume_symbols_api(
-    market: Literal["futures", "spot"] = Query("futures"),
+@router_symbols.get("/symbols/top-volume", operation_id="getTopVolumeSymbols")
+def get_top_volume_symbols_endpoint(
+    market: str = Query("futures", pattern="^(futures|spot)$"),
     quote: str = Query("USDT"),
     limit: int = Query(50, ge=1, le=200),
-    min_quote_volume: float = Query(0.0),
-) -> TopVolumeResponse:
-    symbols = await _get_top_symbols(market, quote, limit, min_quote_volume)
-    return TopVolumeResponse(ok=True, market=market, quote=quote, limit=limit, symbols=symbols)
+    min_quote_volume: float = Query(0.0, ge=0.0),
+):
+    syms = _top_symbols(market, quote, limit, min_quote_volume)
+    return {"ok": True, "market": market, "quote": quote, "limit": limit, "symbols": syms}
 
-@router.get("/scan/top-volume", response_model=ScanTopVolumeResponse, operation_id="getScanTopVolume")
-async def scan_top_volume_api(
-    market: Literal["futures", "spot"] = Query("futures"),
+@router.get("/scan/top-volume", operation_id="getScanTopVolume")
+async def scan_top_volume(
+    market: str = Query("futures"),
     quote: str = Query("USDT"),
     limit: int = Query(50, ge=1, le=200),
     timeframe: str = Query("15m"),
-    bars: int = Query(200, ge=50, le=1500),
     trending_only: bool = Query(False),
-    min_adx: float = Query(20.0, ge=5.0, le=60.0),
-    concurrency: int = Query(16, ge=2, le=64),
-    mode: Literal["lite", "auto"] = Query("lite", description="lite=בטוח, auto=ניסיון סריקה מלאה"),
-) -> ScanTopVolumeResponse:
+    mode: str = Query("lite", pattern="^(lite|auto)$"),
+):
+    """
+    mode=lite → רק רשימת סמלים לפי נפח (מהיר, תמיד 200).
+    mode=auto → ניסיון לסריקה מלאה (עם נפילות-חסינות → fallback ל-lite).
+    """
+    symbols = _top_symbols(market, quote, limit, 0.0)
+    if not symbols:
+        return {"ok": True, "count": 0, "signals": [], "note": "no symbols (top-volume empty)"}
+
+    if mode == "lite":
+        # מחזיר “סיגנלים ריקים” — רק תעלות בדיקות/תזמונים
+        sigs = [{"symbol": s, "timeframe": timeframe, "side": None, "score": None, "note": "lite"} for s in symbols]
+        return {"ok": True, "count": len(sigs), "signals": sigs}
+
+    # mode=auto → ננסה סריקה מלאה — ואם נכשל, ניפול ללייט
     try:
-        symbols = await _get_top_symbols(market, quote, limit, min_qv=0.0)
-        if not symbols:
-            return ScanTopVolumeResponse(ok=True, count=0, signals=[])
-
-        sem = asyncio.Semaphore(concurrency)
-        tasks = []
-        for sym in symbols:
-            coro = _scan_symbol_auto(sym, timeframe, bars) if mode == "auto" else _scan_symbol_lite(sym, timeframe)
-            tasks.append(asyncio.create_task(_bounded(coro, sem)))
-
-        signals: List[ScanSignal] = []
-        for t in asyncio.as_completed(tasks):
-            try:
-                sig = await t
-                if trending_only and sig.details and isinstance(sig.details.get("adx"), (int, float)):
-                    try:
-                        if float(sig.details["adx"]) < float(min_adx):
-                            continue
-                    except Exception:
-                        pass
-                signals.append(sig)
-            except Exception as e:
-                logger.warning("scan task failed (ignored): %s", e)
-
-        return ScanTopVolumeResponse(ok=True, count=len(signals), signals=signals)
+        from utils.multi_tf_scanner import multi_tf_scan_with_ai  # type: ignore
+        results: List[Dict[str, Any]] = await multi_tf_scan_with_ai(
+            timeframes=(timeframe, "1h"),
+            markets=(market,),
+            min_quality=6.0,
+            top=min(30, limit),
+            trending_only=trending_only,
+            trending_source="binance24h",
+        )
+        signals = []
+        for r in results or []:
+            signals.append({
+                "symbol": r.get("symbol"),
+                "timeframe": timeframe,
+                "side": r.get("signal"),
+                "score": r.get("quality_score"),
+                "note": r.get("reason"),
+                "details": r.get("details"),
+            })
+        return {"ok": True, "count": len(signals), "signals": signals}
     except Exception as e:
-        logger.error("scan_top_volume_api fatal: %s", e)
-        # לעולם לא מחזיר 500 — תמיד 200 עם רשימה ריקה
-        return ScanTopVolumeResponse(ok=True, count=0, signals=[])
+        # fallback → lite
+        sigs = [{"symbol": s, "timeframe": timeframe, "side": None, "score": None, "note": f"fallback-lite: {type(e).__name__}"} for s in symbols]
+        return {"ok": True, "count": len(sigs), "signals": sigs, "fallback": True}
+
 
 
 
