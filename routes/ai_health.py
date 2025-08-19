@@ -1,29 +1,30 @@
 # routes/ai_health.py
 from __future__ import annotations
-import time
 from fastapi import APIRouter
+from time import perf_counter
 
 router = APIRouter(tags=["AI"])
 
 @router.get("/ai/health", operation_id="getAiHealth")
-async def get_ai_health():
+async def ai_health():
     try:
-        t0 = time.perf_counter()
-        from utils.ai_client import ai_healthcheck  # type: ignore
+        from utils.ai_client import ai_healthcheck  # async
+        t0 = perf_counter()
         res = await ai_healthcheck()
-        dt = round((time.perf_counter() - t0) * 1000.0, 2)
+        dt = (perf_counter() - t0) * 1000.0
         return {
             "ok": bool(res.get("ok")),
             "model": res.get("model"),
-            "latency_ms": dt,
+            "latency_ms": round(dt, 2),
             "mode": res.get("mode"),
             "base": res.get("base"),
             "http2": res.get("http2"),
-            "reply": res.get("reply"),
             "error": res.get("error"),
         }
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        # אל תזרוק חריגה – תחזיר 200 עם ok=false
+        return {"ok": False, "model": None, "latency_ms": None, "error": str(e)}
+
 
 
 
