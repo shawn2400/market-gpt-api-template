@@ -23,17 +23,21 @@ def _libs_meta():
     except Exception:
         pass
     try:
-        import pandas, numpy, PIL, matplotlib, openai, ta
+        import pandas, numpy, PIL, matplotlib, openai
         meta.update({
             "pandas": getattr(pandas, "__version__", None),
             "numpy": getattr(numpy, "__version__", None),
             "Pillow": getattr(PIL, "__version__", None),
             "matplotlib": getattr(matplotlib, "__version__", None),
             "openai": getattr(openai, "__version__", None),
-            "ta": getattr(ta, "__version__", None),
         })
     except Exception:
         pass
+    try:
+        import ta
+        meta["ta"] = getattr(ta, "__version__", None)
+    except Exception:
+        meta["ta"] = None
     return meta
 
 @router.get("/health", operation_id="getBasicHealth")
@@ -63,6 +67,7 @@ def strategy_version():
         "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS,
         "now_utc": datetime.now(tz=timezone.utc).isoformat(),
     }
+
 
 
 
