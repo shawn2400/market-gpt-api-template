@@ -1,27 +1,21 @@
 # main.py
 from __future__ import annotations
-import os
-import logging
-import time
+import os, logging, time
 from typing import List, Optional
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
-
 from utils.metrics import metrics_tracker
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)s: %(message)s",
-)
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("algogpt")
 
 _mark_bus = None
@@ -58,15 +52,8 @@ app = FastAPI(
     version=APP_VERSION,
 )
 
-allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [
-    o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=allow_origins, allow_methods=["*"], allow_headers=["*"])
 
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
@@ -84,10 +71,7 @@ async def _metrics_middleware(request: Request, call_next):
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
         try:
-            metrics_tracker.observe_request(
-                status_code=status_code, duration_ms=dt_ms,
-                method=request.method, path=request.url.path
-            )
+            metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms, method=request.method, path=request.url.path)
         except TypeError:
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
@@ -121,11 +105,11 @@ def list_routes():
             pass
     return {"count": len(out), "routes": out}
 
-# Routers
+# בסיסיים
 app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
-# Optional
+# אופציונליים / חדשים
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
     "routes.dashboard", "routes.routes_indicators", "routes.price",
@@ -144,7 +128,7 @@ _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
     app.include_router(_scan_sym_router)
 
-# analytics compat (/macro)
+# תאימות /macro
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat)
@@ -193,6 +177,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
