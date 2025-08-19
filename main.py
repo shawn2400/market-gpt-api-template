@@ -46,6 +46,7 @@ from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
 def _try_import(mod_name: str, attr: str = "router") -> Optional[object]:
+    """Lazy import for optional routers; logs warning on failure."""
     try:
         module = __import__(mod_name, fromlist=[attr])
         obj = getattr(module, attr)
@@ -55,7 +56,7 @@ def _try_import(mod_name: str, attr: str = "router") -> Optional[object]:
         logger.warning("failed to load %s.%s: %s", mod_name, attr, exc)
         return None
 
-# Auto-executor (optional)
+# Optional auto-executor
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
@@ -159,19 +160,18 @@ def list_routes():
 app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
-# Optional routers (loaded if present)
+# Optional routers (load if present)
 for mod in [
     "routes.backtest",
     "routes.ai_analyze",
-    "routes.ai_health",       # /ai/health (ציבורי)
+    "routes.ai_health",       # /ai/health (ציבורי; לא נופל)
     "routes.news",
     "routes.grid",
     "routes.dashboard",
     "routes.routes_indicators",
     "routes.price",
     "routes.multi_scan",
-    "routes.health",          # /health/live + /health/strategy-version (אם קיים)
-    "routes.health_compat",   # מוסיף /health בסיסי (200) — בטוח
+    "routes.health",          # /health, /health/live, /health/strategy-version
     "routes.risk",
     "routes.snapshot",
     "routes.analytics",
@@ -180,7 +180,7 @@ for mod in [
     if r:
         app.include_router(r)
 
-# Special-case: scan routers (שני ראוטרים באותו מודול)
+# Special-case: scan routers (two routers in same module)
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
     app.include_router(_scan_router)
@@ -188,7 +188,7 @@ _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
     app.include_router(_scan_sym_router)
 
-# analytics compat (/macro → alias)
+# analytics compat (/macro alias)
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat)
@@ -200,7 +200,7 @@ if _analytics_compat:
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
 
-    # Config
+    # Config flags
     try:
         from utils import config as cfg  # type: ignore
     except Exception:
@@ -252,6 +252,7 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "10000")),
         log_level=LOG_LEVEL.lower(),
     )
+
 
 
 
