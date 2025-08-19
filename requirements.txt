@@ -1,11 +1,16 @@
+# 🚀 Web framework
 fastapi==0.110.0
 starlette==0.36.3
 uvicorn[standard]==0.29.0
 gunicorn==21.2.0
+
+# 🌐 HTTP clients
 requests==2.32.3
 httpx[http2]==0.27.2
 aiohttp==3.9.5
 ujson==5.10.0
+
+# ⚙️ Config / Utils
 python-dotenv==1.0.1
 pydantic==2.7.1
 typing_extensions>=4.10.0,<5.0
@@ -15,21 +20,31 @@ idna==3.7
 tzdata==2024.1
 PyYAML>=6.0.1,<7.0.0
 orjson==3.10.5
+
+# 📊 Data science / TA
 pandas==2.2.2
 numpy==1.26.4
 ta==0.11.0
-pandas-ta==0.3.14b0       # ← שימושי לסורקים מתקדמים
-python-binance==1.0.19
-websockets>=12.0,<13.0
-ccxt==4.4.34
-openai==1.30.1
-fpdf2==2.7.9
-Pillow==10.3.0
-matplotlib==3.8.4
-python-multipart==0.0.9
+pandas-ta==0.3.14b0
 scipy==1.13.1
 scikit-learn==1.5.1
 numba==0.59.1
+
+# 💹 Trading
+python-binance==1.0.19
+ccxt==4.4.34
+websockets>=12.0,<13.0
+
+# 🤖 AI
+openai==1.30.1
+
+# 🖼 Reports / PDF / Viz
+fpdf2==2.7.9
+Pillow==10.3.0
+matplotlib==3.8.4
+
+# 📦 Misc
+python-multipart==0.0.9
 
 
 
