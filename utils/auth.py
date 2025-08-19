@@ -8,29 +8,36 @@ def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
+# -------------------------------------------------
+# טוקנים נטענים – עדיפות ל-ALGOGPT_TOKENS
+# -------------------------------------------------
 _TOKENS: Set[str] = set()
-for key in (
-    "ALGOGPT_TOKENS",
-    "ALGOGPT_TOKEN",
-    "ALGOGPT_API_TOKEN",
-    "API_BEARER",
-    "API_BEARER_TOKEN",
-    "AUTH_TOKEN",              # ← הוספנו
-):
-    v = (os.getenv(key) or "").strip()
-    if not v:
-        continue
-    if "," in v or ";" in v:
+
+primary = (os.getenv("ALGOGPT_TOKENS") or "").strip()
+if primary:
+    _TOKENS |= _split_tokens(primary)
+else:
+    # fallback לשמות אחרים – לשמירה על תאימות
+    for key in (
+        "ALGOGPT_TOKEN",
+        "ALGOGPT_API_TOKEN",
+        "API_BEARER",
+        "API_BEARER_TOKEN",
+        "AUTH_TOKEN",
+    ):
+        v = (os.getenv(key) or "").strip()
+        if not v:
+            continue
         _TOKENS |= _split_tokens(v)
-    else:
-        _TOKENS.add(v)
 
 _ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
 
+# -------------------------------------------------
+# פונקציות עזר
+# -------------------------------------------------
 def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     if authorization is None:
         return None
-    # לפעמים יעבור טיפוס לא־מחרוזתי אם קוראים לפונקציה לא דרך DI של FastAPI
     if not isinstance(authorization, str):
         try:
             authorization = str(authorization)
@@ -55,6 +62,7 @@ def require_bearer_token(
     if candidate and candidate in _TOKENS:
         return None
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
 
 
 
