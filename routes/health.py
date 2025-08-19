@@ -48,10 +48,24 @@ def health():
 @router.get("/health/live", operation_id="getLiveness")
 def liveness():
     now = datetime.now(tz=timezone.utc).isoformat()
-    return {"status": "live", "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS, "now_utc": now}
+    return {
+        "status": "live",
+        "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS,
+        "now_utc": now
+    }
 
 @router.get("/health/strategy-version", operation_id="getStrategyVersion")
 def strategy_version():
+    limits = {}
+    try:
+        from utils import config as cfg  # type: ignore
+        if getattr(cfg, "EXPOSE_LIMITS", True):
+            limits = {
+                "response_max_bytes": getattr(cfg, "RESPONSE_MAX_BYTES", None),
+                "scan_max_limit": getattr(cfg, "SCAN_MAX_LIMIT", None),
+            }
+    except Exception:
+        limits = {}
     return {
         "status": "ok",
         "app_version": os.getenv("ALGOGPT_VERSION"),
@@ -64,6 +78,7 @@ def strategy_version():
             "execute_trades": os.getenv("EXECUTE_TRADES","false").lower() in ("1","true","yes"),
             "skip_mutations": os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS","false").lower() in ("1","true","yes"),
         },
+        "limits": limits or None,
         "boot_ts": _BOOT_TS,
         "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS,
         "now_utc": datetime.now(tz=timezone.utc).isoformat(),
