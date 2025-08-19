@@ -22,11 +22,12 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from utils.metrics import metrics_tracker
 from utils.auth import require_bearer_token
-from utils.response_limits import ResponseSizeLimiter  # ← NEW
+from utils.response_limits import ResponseSizeLimiter
+from utils import config  # ← כל ההגדרות במקום אחד
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", config.ALGOGPT_VERSION)
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or config.LOG_LEVEL).upper()
+CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", config.CORS_ALLOW_ORIGINS)
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -34,6 +35,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
+# Optional: WS Mark Price bus
 _mark_bus = None
 try:
     from utils.mark_ws import bus as _mark_bus  # type: ignore
@@ -42,6 +44,7 @@ except Exception as exc:
     _mark_bus = None
     logger.warning("mark_ws not available: %s", exc)
 
+# Core routers
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
@@ -62,6 +65,7 @@ try:
 except Exception as exc:
     logger.warning("auto_executor not available: %s", exc)
 
+# FastAPI app
 app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — Binance Futures LIVE (Scan/AI/Trades/Backtest/News/Grid/Risk).",
@@ -79,12 +83,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Compression + Global response size guard
+# Middlewares: GZip + Response guard (413 אם גדול מדי)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-app.add_middleware(
-    ResponseSizeLimiter,
-    max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "1048576")),  # 1MB default
-)
+app.add_middleware(ResponseSizeLimiter, max_bytes=config.RESPONSE_MAX_BYTES)
 
 # Static (optional)
 if os.path.isdir(".well-known"):
@@ -143,14 +144,15 @@ def list_routes():
             pass
     return {"count": len(out), "routes": out}
 
-# Register routers
+# Public health router first
 health_router = _try_import("routes.health", "router")
 if health_router:
-    app.include_router(health_router)  # public
+    app.include_router(health_router)
 
-# protected
-app.include_router(ai_router,    prefix="/ai",    tags=["AI"],    dependencies=[Depends(require_bearer_token)])
-app.include_router(trade_router, prefix="/trade", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
+# Protected routers (token/header/query)
+protected_dep = [Depends(require_bearer_token)]
+app.include_router(ai_router,    prefix="/ai",    tags=["AI"],    dependencies=protected_dep)
+app.include_router(trade_router, prefix="/trade", tags=["Trades"], dependencies=protected_dep)
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
@@ -161,29 +163,25 @@ for mod in [
 ]:
     r = _try_import(mod, "router")
     if r:
-        app.include_router(r, dependencies=[Depends(require_bearer_token)])
+        app.include_router(r, dependencies=protected_dep)
 
+# scan_top_volume has two routers
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
-    app.include_router(_scan_router, dependencies=[Depends(require_bearer_token)])
+    app.include_router(_scan_router, dependencies=protected_dep)
 _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
-    app.include_router(_scan_sym_router, dependencies=[Depends(require_bearer_token)])
+    app.include_router(_scan_sym_router, dependencies=protected_dep)
 
+# analytics compat (/macro)
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
-    app.include_router(_analytics_compat, dependencies=[Depends(require_bearer_token)])
+    app.include_router(_analytics_compat, dependencies=protected_dep)
 
 # Lifecycle
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
-
-    try:
-        from utils import config as cfg  # type: ignore
-    except Exception:
-        class _D: AUTO_RUN = False
-        cfg = _D()  # type: ignore
 
     try:
         from utils.ai_client import ai_client  # type: ignore
@@ -192,7 +190,7 @@ async def on_startup():
     except Exception as e:
         logger.warning("AI warmup failed (ignored): %s", e)
 
-    if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
+    if getattr(config, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
             logger.info("AUTO_RUN=true → auto executor started")
@@ -218,7 +216,13 @@ async def on_shutdown():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "10000")),
+        log_level=LOG_LEVEL.lower(),
+    )
+
 
 
 
