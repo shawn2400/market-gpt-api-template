@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-# ---- Metrics (חובה בקוד שלך) ----
 from utils.metrics import metrics_tracker  # type: ignore
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
@@ -30,11 +29,10 @@ logging.basicConfig(
 logger = logging.getLogger("algogpt")
 
 # -----------------------------------------------------------------------------
-# Optional: WS Mark Price bus (will start on startup if available)
+# Optional: WS Mark Price bus
 # -----------------------------------------------------------------------------
 _mark_bus = None
 try:
-    # מצופה אובייקט בשם bus עם start()/stop() (ראה utils/mark_ws.py)
     from utils.mark_ws import bus as _mark_bus  # type: ignore
     logger.info("mark_ws module available; will attempt to start on startup")
 except Exception as exc:
@@ -42,15 +40,12 @@ except Exception as exc:
     logger.warning("mark_ws not available: %s", exc)
 
 # -----------------------------------------------------------------------------
-# Core routers (מחייבים להיות קיימים)
+# Core routers (must exist)
 # -----------------------------------------------------------------------------
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
 def _try_import(mod_name: str, attr: str = "router") -> Optional[object]:
-    """
-    טעינת ראוטר בצורה בטוחה — כשל לא מפיל את האפליקציה.
-    """
     try:
         module = __import__(mod_name, fromlist=[attr])
         obj = getattr(module, attr)
@@ -60,7 +55,7 @@ def _try_import(mod_name: str, attr: str = "router") -> Optional[object]:
         logger.warning("failed to load %s.%s: %s", mod_name, attr, exc)
         return None
 
-# Auto-executor (אופציונלי)
+# Auto-executor (optional)
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
@@ -168,18 +163,18 @@ app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 for mod in [
     "routes.backtest",
     "routes.ai_analyze",
-    "routes.ai_health",       # /ai/health (נשלח למטה גרסה יציבה)
-    "routes.news",            # /news, /news/crypto (בטוח)
+    "routes.ai_health",       # /ai/health (ציבורי)
+    "routes.news",
     "routes.grid",
     "routes.dashboard",
     "routes.routes_indicators",
-    "routes.price",           # /price, /price/{symbol} (בטוח)
+    "routes.price",
     "routes.multi_scan",
-    "routes.health",          # אם יש — משאיר /health/live ו-/health/strategy-version
-    "routes.health_compat",   # מוסיף /health בסיסי (200)
+    "routes.health",          # /health/live + /health/strategy-version (אם קיים)
+    "routes.health_compat",   # מוסיף /health בסיסי (200) — בטוח
     "routes.risk",
     "routes.snapshot",
-    "routes.analytics",       # כולל /analytics/macro ו-/macro (compat)
+    "routes.analytics",
 ]:
     r = _try_import(mod, "router")
     if r:
@@ -205,7 +200,7 @@ if _analytics_compat:
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
 
-    # קונפיג — הדלקת האוטו־אקסקיוטר אם מוגדר
+    # Config
     try:
         from utils import config as cfg  # type: ignore
     except Exception:
@@ -239,7 +234,6 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
-    # כיבוי מסודר ל־WS bus אם תומך
     try:
         if _mark_bus and hasattr(_mark_bus, "stop"):
             _mark_bus.stop()
@@ -258,6 +252,7 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "10000")),
         log_level=LOG_LEVEL.lower(),
     )
+
 
 
 
