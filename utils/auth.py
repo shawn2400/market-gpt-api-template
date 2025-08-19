@@ -8,7 +8,7 @@ def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
-# קונפיג: תמיכה במספר שמות משתנים / רשימות
+# תמיכה במספר משתני סביבה / מספר טוקנים
 _TOKENS: Set[str] = set()
 for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER"):
     v = (os.getenv(key) or "").strip()
@@ -24,7 +24,6 @@ _ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "tru
 def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
         return None
-    # תומך גם ב־"bearer" קטנות או רווחים כפולים
     parts = authorization.strip().split()
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1].strip()
@@ -32,8 +31,7 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
 
 def require_bearer_token(authorization: Optional[str] = Header(default=None), request: Request = None):
     """
-    תלוי־ראוט: בודק Authorization: Bearer <token>.
-    אם SECURITY_ALLOW_ALL=1 — עוקף (לסביבת פיתוח/סמוק).
+    בודק Authorization: Bearer <token>. אם SECURITY_ALLOW_ALL=1 → עוקף (בדיקות).
     """
     if _ALLOW_ALL:
         return None
