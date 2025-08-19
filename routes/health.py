@@ -24,6 +24,16 @@ def liveness():
         "now_utc": now,
     }
 
+@router.get("/health/strategy-version", operation_id="getStrategyVersion")
+def strategy_version():
+    return {
+        "ok": True,
+        "ALGOGPT_VERSION": os.getenv("ALGOGPT_VERSION"),
+        "STRATEGY_VERSION": os.getenv("STRATEGY_VERSION"),
+        "GIT_COMMIT": os.getenv("GIT_COMMIT"),
+        "REQ_HASH": os.getenv("REQ_HASH"),
+    }
+
 
 
 
