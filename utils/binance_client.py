@@ -18,20 +18,22 @@ _ex_info_cache: Dict[str, Any] | None = None
 _ex_info_ts: float = 0.0
 _EX_TTL = float(os.getenv("EXCHANGEINFO_TTL_SEC", "1800"))  # 30 דקות
 
+# נוודא שאין תווי שורה מיותרים במפתח API
+_api_key = (os.getenv("BINANCE_API_KEY") or "").strip()
+_api_secret = (os.getenv("BINANCE_API_SECRET") or "").strip()
+
 _requests_session = requests.Session()
 _requests_session.headers.update({
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json",
-    "X-MBX-APIKEY": os.getenv("BINANCE_API_KEY", "")
+    "X-MBX-APIKEY": _api_key
 })
 
 def get_client() -> Client:
     global _client
     with _client_lock:
         if _client is None:
-            api = os.getenv("BINANCE_API_KEY") or ""
-            secret = os.getenv("BINANCE_API_SECRET") or ""
-            _client = Client(api, secret)
+            _client = Client(_api_key, _api_secret)
             _client.API_URL = _SPOT_HTTP_BASE
             _client.FUTURES_URL = _FUT_HTTP_BASE
         return _client
