@@ -32,7 +32,6 @@ logger = logging.getLogger("algogpt")
 # -----------------------------------------------------------------------------
 _mark_bus = None
 try:
-    # מצופה אובייקט בשם bus עם מתודות start()/stop() (ראה utils/mark_ws.py)
     from utils.mark_ws import bus as _mark_bus  # type: ignore
     logger.info("mark_ws module available; will attempt to start on startup")
 except Exception as exc:
@@ -46,7 +45,6 @@ from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
-    """נסיון טעינת מודול/אטריבוט עם לוג אזהרה מפורט במקרה כשל."""
     try:
         module = __import__(name, fromlist=[attr])
         obj = getattr(module, attr)
@@ -111,11 +109,7 @@ async def _metrics_middleware(request: Request, call_next):
                 path=request.url.path
             )
         except TypeError:
-            # תאימות לאחור אם חתימת הפונקציה ישנה אצלך
-            metrics_tracker.observe_request(
-                status_code=status_code,
-                duration_ms=dt_ms
-            )
+            metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
 # -----------------------------------------------------------------------------
 # Exception handlers
@@ -197,6 +191,14 @@ async def on_startup():
         class _D: AUTO_RUN = False
         cfg = _D()  # type: ignore
 
+    # AI warmup (non-fatal)
+    try:
+        from utils.ai_client import ai_client  # type: ignore
+        await ai_client.warmup()
+        logger.info("AI warmup: ready=%s", ai_client.ready)
+    except Exception as e:
+        logger.warning("AI warmup failed (ignored): %s", e)
+
     # Auto executor
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
@@ -216,7 +218,6 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
-    # כיבוי מסודר ל־WS bus אם תומך
     try:
         if _mark_bus and hasattr(_mark_bus, "stop"):
             _mark_bus.stop()
@@ -230,6 +231,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
