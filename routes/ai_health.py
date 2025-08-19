@@ -13,12 +13,7 @@ async def ai_health() -> Dict[str, Any]:
         from utils.ai_client import ai_healthcheck  # type: ignore
         res = await ai_healthcheck()
         dt = (time.perf_counter() - t0) * 1000.0
-        return {
-            "ok": bool(res.get("ok", False)),
-            "model": res.get("model"),
-            "latency_ms": dt,
-            "error": res.get("error"),
-        }
+        return {"ok": bool(res.get("ok", False)), "model": res.get("model"), "latency_ms": dt, "error": res.get("error")}
     except Exception as e:
         return {"ok": False, "model": None, "latency_ms": None, "error": str(e)}
 
