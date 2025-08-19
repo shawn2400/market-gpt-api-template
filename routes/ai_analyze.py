@@ -1,183 +1,167 @@
 # routes/ai_analyze.py
 from __future__ import annotations
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
-
-import math
 import os
-
+from typing import Dict, Any, List
+import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query
-from binance import Client
+import httpx
+from fastapi import APIRouter, Depends, Query, HTTPException
 
-from utils.auth import require_bearer_token
+# 🔐 אבטחה (Bearer)
+try:
+    from utils.auth import require_bearer_token  # מחייב את ה-Authorization
+except Exception:
+    def require_bearer_token(*_, **__):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-# ========= Helpers =========
-def _get_client() -> Client:
-    return Client(
-        api_key=os.getenv("BINANCE_API_KEY") or "",
-        api_secret=os.getenv("BINANCE_API_SECRET") or ""
-    )
-
-def _fetch_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    """
-    מנסה Futures klines ואם נכשל – חוזר ל-spot klines.
-    """
-    client = _get_client()
-    data: Optional[List[List[Any]]] = None
-    try:
-        data = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
-    except Exception:
-        data = client.get_klines(symbol=symbol, interval=interval, limit=limit)
-
-    if not data:
-        raise RuntimeError("no klines returned")
-
-    # פורמט Binance:
-    # [ open_time, open, high, low, close, volume, close_time, qav, trades, ... ]
-    df = pd.DataFrame(data, columns=[
-        "open_time","open","high","low","close","volume",
-        "close_time","qav","trades","taker_base","taker_quote","ignore"
-    ])
-    for col in ("open","high","low","close","volume"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    return df[["time","open","high","low","close","volume"]].reset_index(drop=True)
-
-def _compute_indicators(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    מחשב RSI/ADX/ATR + EMA מהירים/איטיים. אם ta אינו מותקן — fallback מינימלי.
-    """
-    try:
-        from ta.momentum import RSIIndicator
-        from ta.trend import ADXIndicator, EMAIndicator
-        from ta.volatility import AverageTrueRange
-
-        rsi = RSIIndicator(close=df["close"], window=14, fillna=True).rsi().iloc[-1]
-        adx = ADXIndicator(
-            high=df["high"], low=df["low"], close=df["close"], window=14, fillna=True
-        ).adx().iloc[-1]
-        atr = AverageTrueRange(
-            high=df["high"], low=df["low"], close=df["close"], window=14, fillna=True
-        ).average_true_range().iloc[-1]
-
-        ema_fast = EMAIndicator(close=df["close"], window=21, fillna=True).ema_indicator().iloc[-1]
-        ema_slow = EMAIndicator(close=df["close"], window=50, fillna=True).ema_indicator().iloc[-1]
-
-        trend = "bull" if ema_fast > ema_slow else ("bear" if ema_fast < ema_slow else "flat")
-        return {"rsi": float(rsi), "adx": float(adx), "atr": float(atr),
-                "ema_fast": float(ema_fast), "ema_slow": float(ema_slow), "trend": trend, "fallback": False}
-    except Exception:
-        # Fallback: חישוב מינימלי בלי ta
-        close = df["close"].values
-        high  = df["high"].values
-        low   = df["low"].values
-
-        # RSI פשטני
-        gains = []
-        losses = []
-        for i in range(1, min(15, len(close))):
-            ch = close[-i] - close[-i-1]
-            gains.append(max(0.0, ch))
-            losses.append(max(0.0, -ch))
-        avg_gain = (sum(gains) / len(gains)) if gains else 0.0
-        avg_loss = (sum(losses) / len(losses)) if losses else 1e-9
-        rs = avg_gain / avg_loss
-        rsi = 100.0 - (100.0 / (1.0 + rs))
-
-        # ATR פשטני
-        trs = []
-        for i in range(1, min(15, len(close))):
-            tr = max(high[-i] - low[-i],
-                     abs(high[-i] - close[-i-1]),
-                     abs(low[-i] - close[-i-1]))
-            trs.append(tr)
-        atr = (sum(trs) / len(trs)) if trs else 0.0
-
-        # EMA פשטני
-        def _ema(series: List[float], window: int) -> float:
-            if not series:
-                return math.nan
-            k = 2/(window+1)
-            ema_val = series[0]
-            for v in series[1:]:
-                ema_val = v*k + ema_val*(1-k)
-            return ema_val
-        ema_fast = _ema(list(close[-50:]), 21)
-        ema_slow = _ema(list(close[-100:]), 50)
-        trend = "bull" if ema_fast > ema_slow else ("bear" if ema_fast < ema_slow else "flat")
-
-        # ADX לא מחושב כאן — נחזיר 20 ניטרלי
-        adx = 20.0
-
-        return {"rsi": float(rsi), "adx": float(adx), "atr": float(atr),
-                "ema_fast": float(ema_fast), "ema_slow": float(ema_slow), "trend": trend, "fallback": True}
-
-def _decision(ind: Dict[str, Any]) -> Dict[str, Any]:
-    rsi = ind["rsi"]; adx = ind["adx"]; trend = ind["trend"]
-    signal = None
-    reason = []
-    if trend == "bull" and rsi >= 55 and adx >= 18:
-        signal = "LONG"; reason.append("bull+RSI>=55+ADX>=18")
-    elif trend == "bear" and rsi <= 45 and adx >= 18:
-        signal = "SHORT"; reason.append("bear+RSI<=45+ADX>=18")
-    else:
-        reason.append("no-setup")
-
-    # ניקוד 0..10
-    score = 0.0
-    if signal:
-        score += min(4.0, max(0.0, (adx-18)/12*4))  # חוזק מגמה
-        score += min(3.0, max(0.0, (abs(rsi-50))/25*3))  # סטייה מ-50
-        score += 3.0 if (trend == "bull" and signal=="LONG") or (trend=="bear" and signal=="SHORT") else 0.0
-    conf = min(1.0, score/10.0)
-
-    return {"signal": signal, "quality_score": round(score, 2),
-            "confidence": round(conf, 2), "reason": "+".join(reason) }
-
-# ========= Router =========
 router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_bearer_token)])
 
-@router.get("/manual-scan", summary="AI Manual Scan for a symbol (RSI/ADX/ATR/EMA)")
-def manual_scan(
-    symbol: str = Query(..., min_length=5, max_length=20),
-    interval: str = Query("15m"),
-    limit: int = Query(200, ge=50, le=1000),
-) -> Dict[str, Any]:
-    """
-    מנתח סימבול יחיד לפי נרות Binance ומחזיר מדדים + אות אפשרי.
-    """
-    try:
-        df = _fetch_klines(symbol=symbol.upper(), interval=interval, limit=limit)
-        ind = _compute_indicators(df)
-        dec = _decision(ind)
+# ------------------- Tech utils (ללא TA) -------------------
+_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
-        last = df.iloc[-1].to_dict()
-        return {
-            "ok": True,
-            "symbol": symbol.upper(),
-            "market": "futures",
-            "interval": interval,
-            "frames": [interval],
-            "trend": ind["trend"],
-            "direction": "UP" if ind["trend"]=="bull" else ("DOWN" if ind["trend"]=="bear" else None),
-            "rsi": ind["rsi"],
-            "adx": ind["adx"],
-            "atr": ind["atr"],
-            "ema_fast": ind["ema_fast"],
-            "ema_slow": ind["ema_slow"],
-            "volume": float(df["volume"].iloc[-1]),
-            "close": float(df["close"].iloc[-1]),
-            "quality_score": dec["quality_score"],
-            "signal": dec["signal"],
-            "confidence": dec["confidence"],
-            "reason": dec["reason"] if not ind.get("fallback") else f"{dec['reason']} (fallback-no-ta)",
-            "ts_utc": datetime.now(timezone.utc).isoformat(),
-        }
+def _ema(arr: np.ndarray, period: int) -> np.ndarray:
+    alpha = 2.0 / (period + 1.0)
+    out = np.empty_like(arr, dtype=float)
+    out[0] = arr[0]
+    for i in range(1, len(arr)):
+        out[i] = alpha * arr[i] + (1 - alpha) * out[i - 1]
+    return out
+
+def _rma(arr: np.ndarray, period: int) -> np.ndarray:
+    out = np.empty_like(arr, dtype=float)
+    out[0] = np.nanmean(arr[:period]) if period <= len(arr) else arr[0]
+    alpha = 1.0 / period
+    for i in range(1, len(arr)):
+        out[i] = (out[i - 1] * (1 - alpha)) + alpha * arr[i]
+    return out
+
+def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    diff = np.diff(close, prepend=close[0])
+    gain = np.where(diff > 0, diff, 0.0)
+    loss = np.where(diff < 0, -diff, 0.0)
+    avg_gain = _rma(gain, period)
+    avg_loss = _rma(loss, period)
+    rs = np.where(avg_loss == 0, np.inf, avg_gain / avg_loss)
+    return 100.0 - (100.0 / (1.0 + rs))
+
+def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+    tr = np.maximum.reduce([
+        high - low,
+        np.abs(high - prev_close),
+        np.abs(low - prev_close),
+    ])
+    return _rma(tr, period)
+
+def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    up_move = high[1:] - high[:-1]
+    down_move = low[:-1] - low[1:]
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+    tr = _atr(high, low, close, period)
+    plus_dm_full = np.concatenate([[0.0], plus_dm])
+    minus_dm_full = np.concatenate([[0.0], minus_dm])
+    plus_dm_rma = _rma(plus_dm_full, period)
+    minus_dm_rma = _rma(minus_dm_full, period)
+
+    plus_di = 100.0 * np.where(tr == 0, 0.0, plus_dm_rma / tr)
+    minus_di = 100.0 * np.where(tr == 0, 0.0, minus_dm_rma / tr)
+    dx = 100.0 * np.where((plus_di + minus_di) == 0, 0.0, np.abs(plus_di - minus_di) / (plus_di + minus_di))
+    return _rma(dx, period)
+
+async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> List[List[Any]]:
+    url = f"{_FAPI}/fapi/v1/klines"
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list):
+            raise RuntimeError("unexpected klines shape")
+        return data
+
+def _frame_to_df(rows: List[List[Any]]) -> pd.DataFrame:
+    cols = ["ts","open","high","low","close","volume","close_ts","qv","trades","taker_base","taker_quote","ignore"]
+    df = pd.DataFrame(rows, columns=cols[:len(rows[0])])
+    for c in ("open","high","low","close","volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df.dropna().reset_index(drop=True)
+
+def _analyze(df: pd.DataFrame, interval: str) -> Dict[str, Any]:
+    close = df["close"].to_numpy(dtype=float)
+    high  = df["high"].to_numpy(dtype=float)
+    low   = df["low"].to_numpy(dtype=float)
+
+    rsi_last = float(_rsi(close, 14)[-1])
+    ema_fast = float(_ema(close, 21)[-1])
+    ema_slow = float(_ema(close, 50)[-1])
+    atr_last = float(_atr(high, low, close, 14)[-1])
+    adx_last = float(_adx(high, low, close, 14)[-1])
+    c_last   = float(close[-1])
+
+    trend = "UP" if ema_fast >= ema_slow else "DOWN"
+    direction, note = None, None
+    if adx_last >= 20:
+        if c_last >= ema_fast >= ema_slow:
+            direction, note = "LONG", "EMA21>=EMA50 & ADX>=20"
+        elif c_last <= ema_fast <= ema_slow:
+            direction, note = "SHORT", "EMA21<=EMA50 & ADX>=20"
+        else:
+            note = "lite (structure mixed)"
+    else:
+        note = "lite (ADX<20)"
+
+    quality = 5.0
+    if direction:
+        quality = 6.5 + min(3.0, max(0.0, (adx_last - 20.0) * 0.1))
+
+    return {
+        "market": "futures",
+        "interval": interval,
+        "frames": [interval],
+        "trend": trend,
+        "direction": direction,
+        "rsi": round(rsi_last, 2),
+        "adx": round(adx_last, 2),
+        "volume": float(df["volume"].iloc[-1]),
+        "quality_score": round(float(quality), 2),
+        "signal": "BUY" if direction == "LONG" else ("SELL" if direction == "SHORT" else "HOLD"),
+        "confidence": int(min(100, max(0, (quality/10.0)*100))),
+        "reason": note,
+        "close": c_last,
+        "atr": round(atr_last, 6),
+    }
+
+@router.get("/manual-scan", operation_id="getAiManualScan")
+async def ai_manual_scan(
+    symbol: str = Query(..., description="e.g. BTCUSDT"),
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=1500),
+) -> Dict[str, Any]:
+    symbol = symbol.upper().strip()
+    try:
+        rows = await _fetch_klines(symbol, interval=interval, limit=limit)
+        df = _frame_to_df(rows)
+        if len(df) < 60:
+            return {"symbol": symbol, "results": {"symbol": symbol, "market": "futures", "interval": interval, "signal": "HOLD", "reason": "lite (not enough data)"}}
+        res = _analyze(df, interval)
+        res["symbol"] = symbol
+        return {"symbol": symbol, "results": res}
     except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"analyze-error: {exc}")
+    except Exception as e:
+        return {
+            "symbol": symbol,
+            "results": {
+                "symbol": symbol, "market": "futures", "interval": interval,
+                "frames": [interval], "trend": None, "direction": None,
+                "rsi": None, "adx": None, "volume": None, "quality_score": None,
+                "signal": None, "confidence": None, "close": None, "atr": None,
+                "reason": f"lite (analyze-fallback: {type(e).__name__})"
+            }
+        }
 
 
 
