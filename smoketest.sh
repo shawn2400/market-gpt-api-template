@@ -1,5 +1,3 @@
-# שמור בקובץ /app/smoketest.sh
-cat > /app/smoketest.sh <<'SH'
 #!/bin/bash
 set -e
 
@@ -9,78 +7,33 @@ TOKEN="rnd_I7f7QQ6JXu55tuqfORcQKBdlxMPK"
 AUTH="Authorization: Bearer ${TOKEN}"
 
 # ====== COLORS ======
-OK='\033[0;32mOK\033[0m'
-FAIL='\033[0;31mFAIL\033[0m'
-HDR='\033[1;36m'
-NC='\033[0m'
+NC='\033[0m'; GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'
 
-check() {
-  local name="$1" url="$2" method="${3:-GET}" use_auth="${4:-no}"
-  local code out
-  if [ "$method" = "POST" ]; then
-    if [ "$use_auth" = "yes" ]; then
-      code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" "$url")
-    else
-      code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$url")
-    fi
-  else
-    if [ "$use_auth" = "yes" ]; then
-      code=$(curl -sS -o /dev/null -w "%{http_code}" -H "$AUTH" "$url")
-    else
-      code=$(curl -sS -o /dev/null -w "%{http_code}" "$url")
-    fi
-  fi
-  if [[ "$code" =~ ^2[0-9]{2}$ ]]; then
-    echo -e "[$name] $OK ($code)"
-  else
-    echo -e "[$name] $FAIL ($code)"
-  fi
-}
+pass() { echo -e "[$1] ${GREEN}OK${NC} (200)"; }
+fail() { echo -e "[$1] ${RED}FAIL${NC} ($2)"; }
 
-preview() {
-  # הדפסה קצרה של גוף תגובה (ללא jq)
-  local title="$1" url="$2" use_auth="${3:-no}"
-  echo -e "${HDR}== $title ==${NC}"
-  if [ "$use_auth" = "yes" ]; then
-    curl -sS -H "$AUTH" "$url" | head -c 800; echo
-  else
-    curl -sS "$url" | head -c 800; echo
-  fi
-  echo
-}
+echo -e "${CYAN}=== AlgoGPT Smoke Test ===${NC}"
 
-echo -e "${HDR}=== AlgoGPT Smoke Test ===${NC}"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$HOST/health");              [[ "$code" == "200" ]] && pass "Health" || fail "Health" "$code"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$HOST/health/live");         [[ "$code" == "200" ]] && pass "Liveness" || fail "Liveness" "$code"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$HOST/health/strategy-version"); [[ "$code" == "200" ]] && pass "Strategy Version" || fail "Strategy Version" "$code"
 
-# בריאות כללית
-check "Health"                  "$HOST/health"
-check "Liveness"                "$HOST/health/live"
-check "Strategy Version"        "$HOST/health/strategy-version"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$HOST/ai/health");           [[ "$code" == "200" ]] && pass "AI Health" || fail "AI Health" "$code"
 
-# AI
-check "AI Health"               "$HOST/ai/health"
-check "AI Manual Scan (BTCUSDT)" "$HOST/ai/manual-scan?symbol=BTCUSDT&interval=15m&limit=200" GET yes
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/ai/manual-scan?symbol=BTCUSDT&interval=15m&limit=200")
+[[ "$code" == "200" ]] && pass "AI Manual Scan (BTCUSDT)" || fail "AI Manual Scan (BTCUSDT)" "$code"
 
-# Grid / Executor
-check "Grid Status"             "$HOST/grid/status" GET yes
-check "Executor Status"         "$HOST/executor/status" GET yes
-check "Executor Start"          "$HOST/executor/start" POST yes
-check "Executor Stop"           "$HOST/executor/stop" POST yes
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/grid/status"); [[ "$code" == "200" ]] && pass "Grid Status" || fail "Grid Status" "$code"
 
-# Scans
-check "Symbols Top-Volume"      "$HOST/symbols/top-volume?market=futures&quote=USDT&limit=5" GET yes
-check "Scan Top-Volume 15m"     "$HOST/scan/top-volume?market=futures&quote=USDT&limit=5&timeframe=15m" GET yes
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/executor/status"); [[ "$code" == "200" ]] && pass "Executor Status" || fail "Executor Status" "$code"
+code=$(curl -sS -X POST -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/executor/start"); [[ "$code" == "200" ]] && pass "Executor Start" || fail "Executor Start" "$code"
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/executor/status"); [[ "$code" == "200" ]] && pass "Executor Status (after start)" || fail "Executor Status (after start)" "$code"
+code=$(curl -sS -X POST -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/executor/stop"); [[ "$code" == "200" ]] && pass "Executor Stop" || fail "Executor Stop" "$code"
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/executor/status"); [[ "$code" == "200" ]] && pass "Executor Status (after stop)" || fail "Executor Status (after stop)" "$code"
 
-# Orderflow (צפוי 404 אם לא ממומש – נציג בתצוגה)
-preview "Orderflow Snapshot (BTCUSDT)" "$HOST/orderflow?symbol=BTCUSDT" no
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/symbols/top-volume?market=futures&quote=USDT&limit=5"); [[ "$code" == "200" ]] && pass "Symbols Top-Volume" || fail "Symbols Top-Volume" "$code"
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/scan/top-volume?market=futures&quote=USDT&limit=5&timeframe=15m"); [[ "$code" == "200" ]] && pass "Scan Top-Volume 15m" || fail "Scan Top-Volume 15m" "$code"
 
-# תצוגות קצרות מועילות
-preview "Strategy Version (preview)"   "$HOST/health/strategy-version"
-preview "Scan Top-Volume (preview)"    "$HOST/scan/top-volume?market=futures&quote=USDT&limit=5&timeframe=15m" yes
-preview "Grid Status (preview)"        "$HOST/grid/status" yes
+code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/orderflow/BTCUSDT"); [[ "$code" == "200" ]] && pass "Orderflow (BTCUSDT)" || fail "Orderflow (BTCUSDT)" "$code"
 
-echo -e "${HDR}=== Smoke test done ===${NC}"
-SH
-
-# הרשאות והרצה
-chmod +x /app/smoketest.sh
-/app/smoketest.sh
+echo -e "${CYAN}=== Smoke test done ===${NC}"
