@@ -7,19 +7,14 @@ from dotenv import load_dotenv
 
 from utils.scanner_utils import scan_all             # צפוי להיות async
 from utils.trade_executor import execute_trade_live  # async
-from utils.ws_fallback import get_price_smart        # async, חכם עם WS+REST
-from utils.ai_analysis import predict_optimal_sl_tp  # async: (symbol, direction, entry_price, atr=None)
+from utils.ws_fallback import get_price_smart        # async
+from utils.ai_analysis import predict_optimal_sl_tp  # async
 
 load_dotenv()
 MAX_OPEN_TRADES = 4
-TRENDING_SOURCE = os.getenv("TRENDING_SOURCE", "coingecko")
 
 async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_budget=100.0, market_type="futures"):
     while True:
-        # כאן רצוי להחליף ל-API/פונקציה שמודדת כמה טריידים פתוחים באמת
-        # get_open_trades_count() לא בטוח קיים בכל התקנות
-        # if get_open_trades_count() >= MAX_OPEN_TRADES: ...
-
         trades = await scan_all(
             symbols=[],
             market_type=market_type,
@@ -41,7 +36,6 @@ async def run_executor(debug=False, once=False, delay=60, min_quality=6, max_bud
                     entry_price=float(price),
                     atr=None
                 )
-
                 if not debug:
                     resp = await execute_trade_live(
                         symbol=trade["symbol"],
@@ -81,6 +75,7 @@ if __name__ == "__main__":
         max_budget=args.budget,
         market_type=args.market_type
     ))
+
 
 
 
