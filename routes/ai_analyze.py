@@ -3,15 +3,12 @@ from __future__ import annotations
 import os
 from typing import Dict, Any, List
 from fastapi import APIRouter, Query
-import httpx
-import pandas as pd
-
+import httpx, pandas as pd
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.volatility import AverageTrueRange
 
 router = APIRouter(tags=["AI"])
-
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
 async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> List[List[Any]]:
@@ -45,9 +42,9 @@ def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
     note = None
     if adx >= 20:
         if close >= ema_fast >= ema_slow:
-            direction = "LONG"; note = "EMA21>=EMA50 & ADX>=20"
+            direction, note = "LONG", "EMA21>=EMA50 & ADX>=20"
         elif close <= ema_fast <= ema_slow:
-            direction = "SHORT"; note = "EMA21<=EMA50 & ADX>=20"
+            direction, note = "SHORT", "EMA21<=EMA50 & ADX>=20"
     else:
         note = "lite (ADX<20) – no strong trend"
 
@@ -94,6 +91,7 @@ async def ai_manual_scan(symbol: str = Query(..., description="e.g. BTCUSDT"),
                 "confidence": None, "close": None, "atr": None,
             }
         }
+
 
 
 
