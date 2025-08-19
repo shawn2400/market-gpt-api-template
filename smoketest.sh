@@ -27,3 +27,4 @@ code=$(curl -sS -H "$AUTH" -o /dev/null -w "%{http_code}" "$HOST/executor/status
 echo -e "${CYAN}=== Smoke test done ===${NC}"
 
 
+
