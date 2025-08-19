@@ -18,9 +18,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.gzip import GZipMiddleware  # ← דחיסה
 
 from utils.metrics import metrics_tracker
-from utils.auth import require_bearer_token  # ✅ Token check added
+from utils.auth import require_bearer_token
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -62,12 +63,11 @@ try:
 except Exception as exc:
     logger.warning("auto_executor not available: %s", exc)
 
-# FastAPI app
+# FastAPI app (ללא תלות גלובלית על require_bearer_token כדי להשאיר /health ציבוריים)
 app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — Binance Futures LIVE (Scan/AI/Trades/Backtest/News/Grid/Risk).",
     version=APP_VERSION,
-    dependencies=[Depends(require_bearer_token)]  # ✅ Global token check
 )
 
 # CORS
@@ -80,6 +80,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZIP compression (מפחית payload גדול)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Static (optional)
 if os.path.isdir(".well-known"):
@@ -117,7 +120,7 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-# Basics
+# Basics (ציבורי)
 @app.get("/", operation_id="getRootStatus", tags=["Config"])
 def root():
     return {"status": "ok", "version": app.version}
@@ -138,31 +141,40 @@ def list_routes():
             pass
     return {"count": len(out), "routes": out}
 
-# Register routers (order matters)
-app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
-app.include_router(trade_router, prefix="/trade", tags=["Trades"])
+# Register routers
+# ציבורי
+health_router = _try_import("routes.health", "router")
+if health_router:
+    app.include_router(health_router)
+
+# מוגן ב־Token
+app.include_router(ai_router,    prefix="/ai",    tags=["AI"],    dependencies=[Depends(require_bearer_token)])
+app.include_router(trade_router, prefix="/trade", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
     "routes.dashboard", "routes.routes_indicators", "routes.price",
-    "routes.multi_scan", "routes.health", "routes.risk", "routes.snapshot",
+    "routes.multi_scan", "routes.risk", "routes.snapshot",
     "routes.analytics", "routes.ai_health", "routes.executor",
     "routes.orderflow",
 ]:
     r = _try_import(mod, "router")
     if r:
-        app.include_router(r)
+        # כבר יש מודולים שמגדירים תלות בפנים; התלות כאן מבטיחה הגנה גם אם שכחו בפנים.
+        app.include_router(r, dependencies=[Depends(require_bearer_token)])
 
+# Special-case: scan routers (two routers in same module)
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
-    app.include_router(_scan_router)
+    app.include_router(_scan_router, dependencies=[Depends(require_bearer_token)])
 _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
-    app.include_router(_scan_sym_router)
+    app.include_router(_scan_sym_router, dependencies=[Depends(require_bearer_token)])
 
+# analytics compat (/macro)
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
-    app.include_router(_analytics_compat)
+    app.include_router(_analytics_compat, dependencies=[Depends(require_bearer_token)])
 
 # Lifecycle
 @app.on_event("startup")
@@ -175,6 +187,7 @@ async def on_startup():
         class _D: AUTO_RUN = False
         cfg = _D()  # type: ignore
 
+    # AI warmup (non-fatal)
     try:
         from utils.ai_client import ai_client  # type: ignore
         await ai_client.warmup()
@@ -182,6 +195,7 @@ async def on_startup():
     except Exception as e:
         logger.warning("AI warmup failed (ignored): %s", e)
 
+    # Auto executor
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
@@ -189,6 +203,7 @@ async def on_startup():
         except Exception as e:
             logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
 
+    # Mark Price WS bus (optional)
     try:
         if _mark_bus and hasattr(_mark_bus, "start"):
             _mark_bus.start()
@@ -209,6 +224,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
