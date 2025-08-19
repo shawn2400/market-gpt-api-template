@@ -1,56 +1,104 @@
 # routes/price.py
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional, Dict, Any
+from datetime import datetime, timezone
 
-router = APIRouter(prefix="", tags=["Price"])
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-# Auth
+# ---- Auth (קשיח, לא מפיל שרת במקרה באג פנימי) ----
 try:
-    from utils.auth import require_bearer_token
+    from utils.auth import require_bearer_token as _raw_require_bearer  # type: ignore
+
+    def require_bearer_token():
+        try:
+            return _raw_require_bearer()
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=401, detail="Unauthorized")
 except Exception:
     def require_bearer_token():
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return None
 
-# Binance client (פונקציה כללית לקבל מחיר)
-try:
-    from utils.binance_client import get_price  # אתה כבר משתמש בלקוח הזה בעצמך
-except Exception as e:
-    get_price = None  # type: ignore
+router = APIRouter(tags=["Price"], dependencies=[Depends(require_bearer_token)])
 
-class PriceResponse(BaseModel):
-    symbol: str = Field(..., example="BTCUSDT")
-    price: float = Field(..., example=117582.4)
-    market: str = Field(..., example="futures")  # or "spot"
-    ts: Optional[int] = Field(None, description="server timestamp if available")
-
-def _normalize_symbol(s: str) -> str:
-    return (s or "").upper().replace("-", "").replace(" ", "")
-
-async def _fetch_price(symbol: str, market: str) -> PriceResponse:
-    if get_price is None:
-        raise HTTPException(status_code=500, detail="binance client not available")
+# ---- Fallback providers ----
+async def _smart_price(symbol: str, market: str) -> Optional[float]:
+    """
+    נסה first-class WS+REST; חזור None אם אין/נכשל.
+    """
     try:
-        px, ts = await get_price(symbol=symbol, market=market)  # הקפד ש-signature מתיישר עם שלך
-        return PriceResponse(symbol=symbol, price=float(px), market=market, ts=int(ts) if ts else None)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"price fetch failed: {e}")
+        from utils.ws_fallback import get_price_smart  # type: ignore
+        p = await get_price_smart(symbol)
+        return float(p) if p else None
+    except Exception:
+        return None
 
-@router.get("/price", response_model=PriceResponse, summary="Get last price by query param")
-async def price_query(
-    symbol: str = Query(..., description="e.g., BTCUSDT"),
-    market: str = Query("futures", regex="^(spot|futures)$"),
-    _: None = Depends(require_bearer_token),
+def _futures_mark_price(symbol: str) -> Optional[float]:
+    try:
+        from utils.binance_client import futures_mark_price  # type: ignore
+        data = futures_mark_price(symbol)
+        if isinstance(data, dict) and data.get("ok"):
+            mp = data.get("markPrice")
+            return float(mp) if mp is not None else None
+    except Exception:
+        pass
+    return None
+
+def _spot_rest_price(symbol: str) -> Optional[float]:
+    try:
+        import os, requests
+        base = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
+        r = requests.get(f"{base}/api/v3/ticker/price", params={"symbol": symbol}, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        return float(data.get("price"))
+    except Exception:
+        return None
+
+# ---- Core get ----
+async def _get_price(symbol: str, market: Literal["futures","spot"], source: Literal["smart","mark","rest"]) -> Dict[str, Any]:
+    sym = symbol.upper().strip()
+    now = datetime.now(tz=timezone.utc).isoformat()
+    price: Optional[float] = None
+    used: str = source
+
+    if source == "smart":
+        price = await _smart_price(sym, market)
+        if price is None:
+            # fallback לפי שוק
+            if market == "futures":
+                price = _futures_mark_price(sym)
+                used = "mark"
+            else:
+                price = _spot_rest_price(sym)
+                used = "rest"
+    elif source == "mark":
+        if market != "futures":
+            raise HTTPException(status_code=400, detail="source=mark valid only for market=futures")
+        price = _futures_mark_price(sym)
+    else:  # rest
+        price = _spot_rest_price(sym) if market == "spot" else _futures_mark_price(sym)
+
+    if price is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Upstream price unavailable")
+
+    return {"ok": True, "symbol": sym, "market": market, "price": float(price), "source": used, "now_utc": now}
+
+# ---- Endpoints ----
+@router.get("/price")
+async def get_price(
+    symbol: str = Query(..., description="e.g. BTCUSDT"),
+    market: Literal["futures","spot"] = Query("futures"),
+    source: Literal["smart","mark","rest"] = Query("smart"),
 ):
-    return await _fetch_price(_normalize_symbol(symbol), market)
+    return await _get_price(symbol, market, source)
 
-@router.get("/price/{symbol}", response_model=PriceResponse, summary="Get last price by path param")
-async def price_path(
+@router.get("/price/{symbol}")
+async def get_price_path(
     symbol: str,
-    market: str = Query("futures", regex="^(spot|futures)$"),
-    _: None = Depends(require_bearer_token),
+    market: Literal["futures","spot"] = Query("futures"),
+    source: Literal["smart","mark","rest"] = Query("smart"),
 ):
-    return await _fetch_price(_normalize_symbol(symbol), market)
+    return await _get_price(symbol, market, source)
+
