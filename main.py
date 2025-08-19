@@ -12,42 +12,30 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-# מטריקות פנימיות
-from utils.metrics import metrics_tracker  # חייב להיות קיים
+from utils.metrics import metrics_tracker
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 
-# -----------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("algogpt")
 
-# -----------------------------------------------------------------------------
-# Optional: WS Mark Price bus (will start on startup if available)
-# -----------------------------------------------------------------------------
 _mark_bus = None
 try:
-    # מצופה אובייקט בשם bus עם מתודות start()/stop() (ראה utils/mark_ws.py)
     from utils.mark_ws import bus as _mark_bus  # type: ignore
     logger.info("mark_ws module available; will attempt to start on startup")
 except Exception as exc:
     _mark_bus = None
     logger.warning("mark_ws not available: %s", exc)
 
-# -----------------------------------------------------------------------------
-# Core routers (חובה)
-# -----------------------------------------------------------------------------
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
-    """נסיון טעינת מודול/אטריבוט עם לוג אזהרה מפורט במקרה כשל."""
     try:
         module = __import__(name, fromlist=[attr])
         obj = getattr(module, attr)
@@ -57,7 +45,6 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         logger.warning("failed to load %s.%s: %s", name, attr, exc)
         return None
 
-# auto-executor (טעינה בטוחה)
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
@@ -65,16 +52,12 @@ try:
 except Exception as exc:
     logger.warning("auto_executor not available: %s", exc)
 
-# -----------------------------------------------------------------------------
-# FastAPI app
-# -----------------------------------------------------------------------------
 app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — Binance Futures LIVE (Scan/AI/Trades/Backtest/News/Grid/Risk).",
     version=APP_VERSION,
 )
 
-# CORS
 allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [
     o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()
 ]
@@ -85,15 +68,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static (optional)
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# -----------------------------------------------------------------------------
-# Metrics middleware
-# -----------------------------------------------------------------------------
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
@@ -106,18 +85,12 @@ async def _metrics_middleware(request: Request, call_next):
         dt_ms = (time.perf_counter() - t0) * 1000.0
         try:
             metrics_tracker.observe_request(
-                status_code=status_code,
-                duration_ms=dt_ms,
-                method=request.method,
-                path=request.url.path
+                status_code=status_code, duration_ms=dt_ms,
+                method=request.method, path=request.url.path
             )
         except TypeError:
-            # תאימות לאחור אם חתימת הפונקציה ישנה אצלך
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
-# -----------------------------------------------------------------------------
-# Exception handlers
-# -----------------------------------------------------------------------------
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
@@ -128,9 +101,6 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-# -----------------------------------------------------------------------------
-# Basic endpoints
-# -----------------------------------------------------------------------------
 @app.get("/", operation_id="getRootStatus", tags=["Config"])
 def root():
     return {"status": "ok", "version": app.version}
@@ -151,38 +121,22 @@ def list_routes():
             pass
     return {"count": len(out), "routes": out}
 
-# -----------------------------------------------------------------------------
-# Register routers
-# -----------------------------------------------------------------------------
+# Routers
 app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
-# Optional routers (loaded if present)
+# Optional
 for mod in [
-    # חשוב: מכיל /health ו-/health/live
-    "routes.health",
-    # AI בריאות (פותר 404 על /ai/health)
-    "routes.ai_health",
-    # גריד – ידרוש Bearer אם auth מופעל
-    "routes.grid",
-    # שאר יכולות (נטענים אם קיימים)
-    "routes.backtest",
-    "routes.ai_analyze",
-    "routes.news",
-    "routes.dashboard",
-    "routes.routes_indicators",
-    "routes.price",
-    "routes.multi_scan",
-    "routes.risk",
-    "routes.snapshot",
-    "routes.analytics",
+    "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
+    "routes.dashboard", "routes.routes_indicators", "routes.price",
+    "routes.multi_scan", "routes.health", "routes.risk", "routes.snapshot",
+    "routes.analytics", "routes.ai_health", "routes.executor"
 ]:
     r = _try_import(mod, "router")
     if r:
         app.include_router(r)
 
-# Special-case: scan routers (two routers in same module)
-# router (מוגן) + router_symbols (פתוח) מאותו קובץ
+# scan (שני ראוטרים באותו מודול)
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
     app.include_router(_scan_router)
@@ -195,22 +149,16 @@ _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat)
 
-# -----------------------------------------------------------------------------
-# Lifecycle
-# -----------------------------------------------------------------------------
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
-
-    # קונפיג — הדלקת האוטו־אקסקיוטר אם מוגדר
     try:
         from utils import config as cfg  # type: ignore
     except Exception:
-        class _D:
-            AUTO_RUN = False
+        class _D: AUTO_RUN = False
         cfg = _D()  # type: ignore
 
-    # AI warmup (non-fatal)
+    # AI warmup (לא קריטי)
     try:
         from utils.ai_client import ai_client  # type: ignore
         await ai_client.warmup()
@@ -218,7 +166,6 @@ async def on_startup():
     except Exception as e:
         logger.warning("AI warmup failed (ignored): %s", e)
 
-    # Auto executor – מופעל רק אם AUTO_RUN=true בקובץ env/סביבה
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
@@ -226,7 +173,6 @@ async def on_startup():
         except Exception as e:
             logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
 
-    # Mark Price WS bus (optional)
     try:
         if _mark_bus and hasattr(_mark_bus, "start"):
             _mark_bus.start()
@@ -237,7 +183,6 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
-    # כיבוי מסודר ל־WS bus אם תומך
     try:
         if _mark_bus and hasattr(_mark_bus, "stop"):
             _mark_bus.stop()
@@ -245,17 +190,10 @@ async def on_shutdown():
     except Exception as e:
         logger.warning("Failed to stop Mark WS bus: %s", e)
 
-# -----------------------------------------------------------------------------
-# Dev entrypoint
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "10000")),
-        log_level=LOG_LEVEL.lower()
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
