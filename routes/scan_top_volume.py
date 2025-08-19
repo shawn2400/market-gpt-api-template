@@ -32,9 +32,6 @@ async def scan_top_volume(
     trending_only: bool = Query(False),
     concurrency: int = Query(16, ge=2, le=64),
 ) -> Dict[str, Any]:
-    """
-    Extended signals when scanner is available, otherwise 'lite' items for stability.
-    """
     from utils.top_volume import get_top_volume_symbols
     ok, syms = get_top_volume_symbols(market=market, quote=quote, limit=limit, min_quote_volume=0.0)
 
@@ -42,7 +39,6 @@ async def scan_top_volume(
     note_fallback: Optional[str] = None
 
     try:
-        # Try full scanner if available
         from utils.multi_tf_scanner import multi_tf_scan_with_ai  # type: ignore
         items = await multi_tf_scan_with_ai(
             timeframes=(timeframe, "1h"),
@@ -64,12 +60,12 @@ async def scan_top_volume(
                 "details": it.get("details") or None,
             })
     except Exception as e:
-        # Fallback: lite rows (never 500)
         note_fallback = f"lite (scanner-fallback: {type(e).__name__})"
         for s in syms:
             signals.append({"symbol": s, "timeframe": timeframe, "side": None, "score": 0.0, "note": "lite", "details": None})
 
     return {"ok": True, "count": len(signals), "signals": signals, "fallback": note_fallback}
+
 
 
 
