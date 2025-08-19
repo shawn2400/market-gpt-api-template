@@ -2,42 +2,43 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 import os, platform
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
 from fastapi import APIRouter
 
 router = APIRouter(tags=["Health"])
 _BOOT_TS = int(datetime.now(tz=timezone.utc).timestamp())
 
+def _get_pkg_ver(name: str):
+    try:
+        return _pkg_version(name)
+    except PackageNotFoundError:
+        return None
+
 def _libs_meta():
     meta = {"python": platform.python_version()}
     try:
-        import fastapi, starlette, uvicorn, gunicorn, httpx, requests, aiohttp
+        import fastapi, starlette, uvicorn, gunicorn, httpx, requests, aiohttp  # noqa
         meta.update({
-            "fastapi": getattr(fastapi, "__version__", None),
-            "starlette": getattr(starlette, "__version__", None),
-            "uvicorn": getattr(uvicorn, "__version__", None),
-            "gunicorn": getattr(gunicorn, "__version__", None),
-            "httpx": getattr(httpx, "__version__", None),
-            "requests": getattr(requests, "__version__", None),
-            "aiohttp": getattr(aiohttp, "__version__", None),
+            "fastapi": _get_pkg_ver("fastapi"),
+            "starlette": _get_pkg_ver("starlette"),
+            "uvicorn": _get_pkg_ver("uvicorn"),
+            "gunicorn": _get_pkg_ver("gunicorn"),
+            "httpx": _get_pkg_ver("httpx"),
+            "requests": _get_pkg_ver("requests"),
+            "aiohttp": _get_pkg_ver("aiohttp"),
         })
     except Exception:
         pass
-    try:
-        import pandas, numpy, PIL, matplotlib, openai
-        meta.update({
-            "pandas": getattr(pandas, "__version__", None),
-            "numpy": getattr(numpy, "__version__", None),
-            "Pillow": getattr(PIL, "__version__", None),
-            "matplotlib": getattr(matplotlib, "__version__", None),
-            "openai": getattr(openai, "__version__", None),
-        })
-    except Exception:
-        pass
-    try:
-        import ta
-        meta["ta"] = getattr(ta, "__version__", None)
-    except Exception:
-        meta["ta"] = None
+    # Data / AI
+    meta.update({
+        "pandas": _get_pkg_ver("pandas"),
+        "numpy": _get_pkg_ver("numpy"),
+        "Pillow": _get_pkg_ver("Pillow"),
+        "matplotlib": _get_pkg_ver("matplotlib"),
+        "openai": _get_pkg_ver("openai"),
+        "ta": _get_pkg_ver("ta"),
+        "pandas_ta": _get_pkg_ver("pandas-ta"),
+    })
     return meta
 
 @router.get("/health", operation_id="getBasicHealth")
