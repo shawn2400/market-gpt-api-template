@@ -133,15 +133,20 @@ async def ai_manual_scan(
     symbol: str = Query(..., description="e.g. BTCUSDT"),
     interval: str = Query("15m"),
     limit: int = Query(200, ge=50, le=1500),
+    compact: bool = Query(True, description="return a compact result to reduce payload size"),
 ) -> Dict[str, Any]:
     symbol = symbol.upper().strip()
     try:
         rows = await _fetch_klines(symbol, interval=interval, limit=limit)
         df = _frame_to_df(rows)
         if len(df) < 60:
-            return {"symbol": symbol, "results": {"symbol": symbol, "market": "futures", "interval": interval, "signal": "HOLD", "reason": "lite (not enough data)"}}
+            base = {"symbol": symbol, "market": "futures", "interval": interval, "signal": "HOLD", "reason": "lite (not enough data)"}
+            return {"symbol": symbol, "results": base}
         res = _analyze(df, interval)
         res["symbol"] = symbol
+        if compact:
+            keep = ("symbol","market","interval","trend","direction","rsi","adx","quality_score","signal","confidence","reason","close","atr")
+            res = {k: v for k, v in res.items() if k in keep}
         return {"symbol": symbol, "results": res}
     except Exception as e:
         return {
@@ -155,6 +160,7 @@ async def ai_manual_scan(
                 "reason": f"lite (analyze-fallback: {type(e).__name__})"
             }
         }
+
 
 
 
