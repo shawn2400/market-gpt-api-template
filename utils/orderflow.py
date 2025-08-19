@@ -1,44 +1,101 @@
-# routes/orderflow.py
+# utils/orderflow.py
 from __future__ import annotations
-import asyncio
-from typing import Dict, Any
+import os
+import math
+from typing import Dict, Any, List, Tuple
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Path, Query, HTTPException
+from binance import Client
 
-try:
-    from utils.auth import require_bearer_token
-except Exception:
-    def require_bearer_token():
-        raise HTTPException(status_code=401, detail="Unauthorized")
+_BKEY = os.getenv("BINANCE_API_KEY") or ""
+_BSEC = os.getenv("BINANCE_API_SECRET") or ""
 
-from utils.orderflow import get_orderflow_snapshot
+def _get_client() -> Client:
+    # Spot client מספיק ל-aggTrades/order_book גם בסביבת futures-public
+    # אם ברצונך להשתמש ב-Futures HTTP מפורש – אפשר להגדיר Client.futures_...
+    return Client(api_key=_BKEY, api_secret=_BSEC)
 
-router = APIRouter(tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
-
-@router.get(
-    "/orderflow/{symbol}",
-    summary="Orderflow snapshot (CVD / Depth / Icebergs)",
-    operation_id="getOrderflowSnapshot",
-)
-async def get_orderflow(
-    symbol: str = Path(..., description="e.g. BTCUSDT"),
-    trades_limit: int = Query(800, ge=1, le=1000, description="aggTrades to pull (<=1000)"),
-    depth_limit: int = Query(500, ge=5, le=1000, description="order book levels (5..1000)"),
-    cvd_window: int = Query(300, ge=1, le=1000, description="trades window for CVD"),
-) -> Dict[str, Any]:
+def _cvd_from_trades(trades: List[dict], window: int) -> Tuple[float, float, float]:
     """
-    מחזיר תצלום Order Flow מיידי:
-    - CVD + יחסי קניה/מכירה
-    - דאפית׳: אימבלאנס, bid/ask volumes, best bid/ask
-    - אזכור Icebergs (היוריסטי)
+    מחושב CVD פשוט: סכום (qty * side), כאשר side נגזר price לעומת agg.
+    כאן משתמשים ב-isBuyerMaker: כאשר True → מכירה פאסיבית, לכן נחשב כ-flow של מוכרים.
     """
-    result = await asyncio.to_thread(
-        get_orderflow_snapshot,
-        symbol,
-        trades_limit=trades_limit,
-        depth_limit=depth_limit,
-        cvd_window=cvd_window,
-    )
-    return result
+    cvd = 0.0
+    buys = 0.0
+    sells = 0.0
+    for t in trades[-window:]:
+        qty = float(t.get("q") or t.get("quantity") or 0.0)
+        is_bm = bool(t.get("m") or t.get("isBuyerMaker"))
+        if is_bm:
+            # קונה היה maker? ב-aggTrades m=True -> הקונה הוא maker (בדרך כלל "sell pressure")
+            sells += qty
+            cvd -= qty
+        else:
+            buys += qty
+            cvd += qty
+    return cvd, buys, sells
+
+def _depth_imbalance(depth: dict, levels: int) -> Dict[str, Any]:
+    bids = depth.get("bids", [])[:levels]
+    asks = depth.get("asks", [])[:levels]
+    bid_vol = sum(float(b[1]) for b in bids)
+    ask_vol = sum(float(a[1]) for a in asks)
+    total = bid_vol + ask_vol
+    imb = ((bid_vol - ask_vol) / total) * 100.0 if total > 0 else 0.0
+    best_bid = float(bids[0][0]) if bids else None
+    best_ask = float(asks[0][0]) if asks else None
+    spread = (best_ask - best_bid) if (best_ask and best_bid) else None
+    return {
+        "bid_vol": bid_vol,
+        "ask_vol": ask_vol,
+        "imbalance_pct": imb,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "spread": spread,
+    }
+
+def _iceberg_heuristics(trades: List[dict], depth: dict) -> Dict[str, Any]:
+    """
+    היוריסטיקה פשוטה – מזהה רצפים קצרים של עסקאות בגודל דומה.
+    """
+    tag = None
+    cluster = 0
+    last_qty = None
+    for t in trades[-50:]:
+        qty = float(t.get("q") or t.get("quantity") or 0.0)
+        if last_qty is not None and abs(qty - last_qty) / (last_qty + 1e-9) < 0.05:
+            cluster += 1
+        else:
+            cluster = 1
+        last_qty = qty
+    if cluster >= 5:
+        tag = "possible-iceberg"
+    return {"iceberg_hint": tag, "cluster_len": cluster}
+
+def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_limit: int = 500, cvd_window: int = 300) -> Dict[str, Any]:
+    client = _get_client()
+    # aggTrades (spot) – עבור futures אפשר גם להשתמש ב-futures aggTrades public אם תרצה
+    trades = client.get_aggregate_trades(symbol=symbol, limit=min(trades_limit, 1000))
+    depth = client.get_order_book(symbol=symbol, limit=max(5, min(depth_limit, 1000)))
+
+    cvd, buys, sells = _cvd_from_trades(trades, window=min(cvd_window, len(trades)))
+    depth_stats = _depth_imbalance(depth, levels=min(100, len(depth.get("bids", []))))
+
+    ice = _iceberg_heuristics(trades, depth)
+
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "ts": now,
+        "cvd": cvd,
+        "buys": buys,
+        "sells": sells,
+        "depth": depth_stats,
+        "icebergs": ice,
+        "trades_sample": len(trades),
+        "depth_levels": {
+            "bids": len(depth.get("bids", [])),
+            "asks": len(depth.get("asks", [])),
+        },
+    }
 
 
