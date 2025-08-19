@@ -1,7 +1,7 @@
 # routes/executor.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends
 from typing import Any, Dict
+from fastapi import APIRouter, Depends
 
 try:
     from utils.auth import require_bearer_token  # type: ignore
@@ -37,5 +37,6 @@ async def executor_stop():
         return {"ok": True, "status": "stopped"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 
