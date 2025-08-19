@@ -5,18 +5,12 @@ from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
 import httpx
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query
 
-# 🔐 אבטחה (Bearer)
-try:
-    from utils.auth import require_bearer_token  # מחייב את ה-Authorization
-except Exception:
-    def require_bearer_token(*_, **__):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+from utils.auth import require_bearer_token  # ← בלי try/except
 
 router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_bearer_token)])
 
-# ------------------- Tech utils (ללא TA) -------------------
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
@@ -59,13 +53,11 @@ def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14)
     down_move = low[:-1] - low[1:]
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
     minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-
     tr = _atr(high, low, close, period)
     plus_dm_full = np.concatenate([[0.0], plus_dm])
     minus_dm_full = np.concatenate([[0.0], minus_dm])
     plus_dm_rma = _rma(plus_dm_full, period)
     minus_dm_rma = _rma(minus_dm_full, period)
-
     plus_di = 100.0 * np.where(tr == 0, 0.0, plus_dm_rma / tr)
     minus_di = 100.0 * np.where(tr == 0, 0.0, minus_dm_rma / tr)
     dx = 100.0 * np.where((plus_di + minus_di) == 0, 0.0, np.abs(plus_di - minus_di) / (plus_di + minus_di))
@@ -141,27 +133,14 @@ async def ai_manual_scan(
     limit: int = Query(200, ge=50, le=1500),
 ) -> Dict[str, Any]:
     symbol = symbol.upper().strip()
-    try:
-        rows = await _fetch_klines(symbol, interval=interval, limit=limit)
-        df = _frame_to_df(rows)
-        if len(df) < 60:
-            return {"symbol": symbol, "results": {"symbol": symbol, "market": "futures", "interval": interval, "signal": "HOLD", "reason": "lite (not enough data)"}}
-        res = _analyze(df, interval)
-        res["symbol"] = symbol
-        return {"symbol": symbol, "results": res}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {
-            "symbol": symbol,
-            "results": {
-                "symbol": symbol, "market": "futures", "interval": interval,
-                "frames": [interval], "trend": None, "direction": None,
-                "rsi": None, "adx": None, "volume": None, "quality_score": None,
-                "signal": None, "confidence": None, "close": None, "atr": None,
-                "reason": f"lite (analyze-fallback: {type(e).__name__})"
-            }
-        }
+    rows = await _fetch_klines(symbol, interval=interval, limit=limit)
+    df = _frame_to_df(rows)
+    if len(df) < 60:
+        return {"symbol": symbol, "results": {"symbol": symbol, "market": "futures", "interval": interval, "signal": "HOLD", "reason": "lite (not enough data)"}}
+    res = _analyze(df, interval)
+    res["symbol"] = symbol
+    return {"symbol": symbol, "results": res}
+
 
 
 
