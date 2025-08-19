@@ -1,13 +1,11 @@
 # routes/ai_analyze.py
 from __future__ import annotations
 import os
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from fastapi import APIRouter, Query
-import asyncio
 import httpx
 import pandas as pd
 
-# אינדיקטורים
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.volatility import AverageTrueRange
@@ -28,7 +26,6 @@ async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) ->
         return data
 
 def _frame_to_df(rows: List[List[Any]]) -> pd.DataFrame:
-    # Binance klines: [open_time, open, high, low, close, volume, ...]
     cols = ["ts","open","high","low","close","volume","close_ts","qv","trades","taker_base","taker_quote","ignore"]
     df = pd.DataFrame(rows, columns=cols[:len(rows[0])])
     for c in ("open","high","low","close","volume"):
@@ -36,7 +33,6 @@ def _frame_to_df(rows: List[List[Any]]) -> pd.DataFrame:
     return df.dropna().reset_index(drop=True)
 
 def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
-    # אינדיקטורים בסיסיים
     rsi = RSIIndicator(close=df["close"], window=14).rsi().iloc[-1]
     adx = ADXIndicator(high=df["high"], low=df["low"], close=df["close"], window=14).adx().iloc[-1]
     ema_fast = EMAIndicator(close=df["close"], window=21).ema_indicator().iloc[-1]
@@ -47,18 +43,14 @@ def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
     trend = "UP" if ema_fast >= ema_slow else "DOWN"
     direction = None
     note = None
-    # סיגנל פשוט: ADX>20 + מיקום המחיר מול EMA
     if adx >= 20:
         if close >= ema_fast >= ema_slow:
-            direction = "LONG"
-            note = "EMA21>=EMA50 & ADX>=20"
+            direction = "LONG"; note = "EMA21>=EMA50 & ADX>=20"
         elif close <= ema_fast <= ema_slow:
-            direction = "SHORT"
-            note = "EMA21<=EMA50 & ADX>=20"
+            direction = "SHORT"; note = "EMA21<=EMA50 & ADX>=20"
     else:
         note = "lite (ADX<20) – no strong trend"
 
-    # ציון איכות גולמי (מאוד סולידי; סף בהמשך)
     quality = 5.0
     if direction:
         quality = 6.5 + min(3.0, max(0.0, (adx - 20.0) * 0.1))
@@ -72,7 +64,7 @@ def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
         "volume": float(df["volume"].iloc[-1]),
         "quality_score": round(float(quality), 2),
         "signal": "BUY" if direction == "LONG" else ("SELL" if direction == "SHORT" else "HOLD"),
-        "confidence": int( min(100, max(0, (quality/10.0)*100)) ),
+        "confidence": int(min(100, max(0, (quality/10.0)*100))),
         "reason": note,
         "close": close,
         "atr": float(atr),
@@ -82,20 +74,15 @@ def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
 async def ai_manual_scan(symbol: str = Query(..., description="e.g. BTCUSDT"),
                          interval: str = Query("15m"),
                          limit: int = Query(200, ge=50, le=1500)) -> Dict[str, Any]:
-    """
-    סריקת סימבול בודד – ללא תלות ב-SDK הישן של OpenAI.
-    מחזיר תוצאה בטוחה גם אם אינדיקטורים כושלים (fallback ל-lite).
-    """
     symbol = symbol.upper().strip()
     try:
         rows = await _fetch_klines(symbol, interval=interval, limit=limit)
         df = _frame_to_df(rows)
         if len(df) < 60:
-            return {"symbol": symbol, "results": {"signal": "HOLD", "reason": "lite (not enough data)"}}  # 200 תקני
+            return {"symbol": symbol, "results": {"signal": "HOLD", "reason": "lite (not enough data)"}}
         res = _analyze(df)
         return {"symbol": symbol, "results": res}
     except Exception as e:
-        # אל תיתן 500 – תחזיר “lite”
         return {
             "symbol": symbol,
             "results": {
@@ -107,5 +94,6 @@ async def ai_manual_scan(symbol: str = Query(..., description="e.g. BTCUSDT"),
                 "confidence": None, "close": None, "atr": None,
             }
         }
+
 
 
