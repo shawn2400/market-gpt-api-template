@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger("algogpt.scan")
 
-# --- Auth (אם יש utils.auth – יאכוף Bearer; אחרת פתוח) ---
+# --- Auth (אם קיים utils.auth → יאכוף Bearer; אחרת פתוח) ---
 try:
     from utils.auth import require_bearer_token as _raw_require_bearer  # type: ignore
     def require_bearer_token():
@@ -68,6 +68,7 @@ async def _scan_symbol_auto(
     ema_slow: int,
     adx_len: int,
 ) -> ScanSignal:
+    # מנסה סריקה “כבדה”; אם חסר מודול/כשל → fallback ללייט
     try:
         from utils.multi_tf_scanner import analyze_symbol  # type: ignore
         r = await analyze_symbol(symbol=symbol, interval=timeframe, market_type="futures", bars=bars)
@@ -153,6 +154,7 @@ async def scan_top_volume_api(
         except Exception as e:
             logger.warning("scan task failed (ignored): %s", e)
     return ScanTopVolumeResponse(ok=True, count=len(signals), signals=signals)
+
 
 
 
