@@ -15,7 +15,6 @@ class ResponseSizeLimiter(BaseHTTPMiddleware):
             cl = response.headers.get("content-length")
             size: Optional[int] = int(cl) if cl and cl.isdigit() else None
 
-            # אם אין Content-Length, ננסה לקרוא מגודל גוף שנבנה מראש (ל-JSONResponse)
             if size is None:
                 body = getattr(response, "body", None)
                 if isinstance(body, (bytes, bytearray)):
@@ -27,7 +26,7 @@ class ResponseSizeLimiter(BaseHTTPMiddleware):
                         "detail": "Response too large",
                         "max_bytes": self.max_bytes,
                         "size": size,
-                        "hint": "Use compact=1 and/or fields=... or reduce limit"
+                        "hint": "Use compact=1 and/or fields=... or reduce limit",
                     },
                     status_code=413,
                 )
@@ -36,6 +35,6 @@ class ResponseSizeLimiter(BaseHTTPMiddleware):
             if size is not None:
                 response.headers["X-Response-Size"] = str(size)
         except Exception:
-            # לא להפיל בקשה אם חישוב גודל נכשל
             pass
         return response
+
