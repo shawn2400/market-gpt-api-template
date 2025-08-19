@@ -1,7 +1,7 @@
 # utils/orderflow.py
 from __future__ import annotations
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 import httpx
 
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
@@ -12,8 +12,8 @@ async def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_lim
         depth = await client.get(f"{_FAPI}/fapi/v1/depth", params={"symbol": sym, "limit": depth_limit})
         depth.raise_for_status()
         d = depth.json()
-        bids = [(float(p), float(q)) for p, q in d.get("bids", [])]
-        asks = [(float(p), float(q)) for p, q in d.get("asks", [])]
+        bids: List[Tuple[float,float]] = [(float(p), float(q)) for p, q in d.get("bids", [])]
+        asks: List[Tuple[float,float]] = [(float(p), float(q)) for p, q in d.get("asks", [])]
         best_bid = bids[0][0] if bids else None
         best_ask = asks[0][0] if asks else None
         bid_vol = sum(q for _, q in bids)
