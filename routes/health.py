@@ -15,7 +15,11 @@ def health():
 @router.get("/health/live", operation_id="getLiveness")
 def liveness():
     now = datetime.now(tz=timezone.utc).isoformat()
-    return {"status": "live", "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - BOOT_TS, "now_utc": now}
+    return {
+        "status": "live",
+        "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - BOOT_TS,
+        "now_utc": now,
+    }
 
 @router.get("/health/strategy-version", operation_id="getStrategyVersion")
 def strategy_version():
