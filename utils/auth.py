@@ -9,7 +9,14 @@ def _split_tokens(val: str) -> Set[str]:
     return {p for p in parts if p}
 
 _TOKENS: Set[str] = set()
-for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER", "API_BEARER_TOKEN"):
+for key in (
+    "ALGOGPT_TOKENS",
+    "ALGOGPT_TOKEN",
+    "ALGOGPT_API_TOKEN",
+    "API_BEARER",
+    "API_BEARER_TOKEN",
+    "AUTH_TOKEN",              # ← הוספנו
+):
     v = (os.getenv(key) or "").strip()
     if not v:
         continue
@@ -21,8 +28,14 @@ for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER"
 _ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
 
 def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
-    if not authorization:
+    if authorization is None:
         return None
+    # לפעמים יעבור טיפוס לא־מחרוזתי אם קוראים לפונקציה לא דרך DI של FastAPI
+    if not isinstance(authorization, str):
+        try:
+            authorization = str(authorization)
+        except Exception:
+            return None
     parts = authorization.strip().split()
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1].strip()
@@ -32,14 +45,17 @@ def require_bearer_token(
     authorization: Optional[str] = Header(default=None),
     token: Optional[str] = Query(default=None),
 ):
-    """מאשר גם Authorization: Bearer ... וגם ?token=..."""
+    """
+    מאשר גם Authorization: Bearer ... וגם ?token=...
+    """
     if _ALLOW_ALL:
         return None
-    b = _extract_bearer(authorization)
-    candidate = (b or (token or "")).strip()
+    bearer = _extract_bearer(authorization)
+    candidate = (bearer or (token or "")).strip()
     if candidate and candidate in _TOKENS:
         return None
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
 
 
 
