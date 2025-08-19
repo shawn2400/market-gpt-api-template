@@ -79,7 +79,7 @@ def _frame_to_df(rows: List[List[Any]]) -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.dropna().reset_index(drop=True)
 
-def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
+def _analyze(df: pd.DataFrame, interval: str) -> Dict[str, Any]:
     close = df["close"].to_numpy(dtype=float)
     high  = df["high"].to_numpy(dtype=float)
     low   = df["low"].to_numpy(dtype=float)
@@ -110,7 +110,10 @@ def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
         quality = 6.5 + min(3.0, max(0.0, (adx_last - 20.0) * 0.1))
 
     return {
-        "frames": ["15m"],
+        "symbol": None,  # יתושלם בחזרה
+        "market": "futures",
+        "interval": interval,
+        "frames": [interval],
         "trend": trend,
         "direction": direction,
         "rsi": round(rsi_last, 2),
@@ -135,11 +138,10 @@ async def ai_manual_scan(
         rows = await _fetch_klines(symbol, interval=interval, limit=limit)
         df = _frame_to_df(rows)
         if len(df) < 60:
-            return {"symbol": symbol, "results": {"signal": "HOLD", "reason": "lite (not enough data)"}}
-        res = _analyze(df)
-        res_out = dict(res)
-        res_out.update({"symbol": symbol, "market": "futures", "interval": interval})
-        return {"symbol": symbol, "results": res_out}
+            return {"symbol": symbol, "results": {"symbol": symbol, "market": "futures", "interval": interval, "signal": "HOLD", "reason": "lite (not enough data)"}}
+        res = _analyze(df, interval)
+        res["symbol"] = symbol
+        return {"symbol": symbol, "results": res}
     except Exception as e:
         return {
             "symbol": symbol,
