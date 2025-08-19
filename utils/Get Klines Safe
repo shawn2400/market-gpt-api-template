@@ -1,0 +1,45 @@
+import httpx
+import pandas as pd
+from typing import Optional, List, Any
+from utils.symbols import normalize_symbol, SymbolsCache
+
+BINANCE_FAPI = "https://fapi.binance.com"
+BINANCE_SPOT = "https://api.binance.com"
+
+_symbols_cache_fut = SymbolsCache(market="futures")
+_symbols_cache_spot = SymbolsCache(market="spot")
+
+def _endpoint_for(market_type: str) -> str:
+    return f"{BINANCE_SPOT}/api/v3/klines" if market_type == "spot" else f"{BINANCE_FAPI}/fapi/v1/klines"
+
+def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
+    cols = ["open_time", "open", "high", "low", "close", "volume", "close_time", "qv", "nTrades", "taker_base", "taker_quote", "x"]
+    df = pd.DataFrame(kl, columns=cols[:len(kl[0])])
+    for c in ("open", "high", "low", "close", "volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["timestamp"] = pd.to_datetime(df["close_time"], unit='ms', utc=True)
+    return df
+
+def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
+    try:
+        cache = _symbols_cache_spot if market_type == "spot" else _symbols_cache_fut
+        norm = normalize_symbol(symbol, market=market_type, cache=cache)
+        url = _endpoint_for(market_type)
+        params = {"symbol": norm, "interval": interval, "limit": limit}
+        with httpx.Client(timeout=6.0) as x:
+            r = x.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+            if not isinstance(data, list) or len(data) == 0:
+                return None
+            df = _to_dataframe(data)
+            if len(df) < 10:
+                return None
+            return df
+    except Exception as e:
+        print(f"[get_klines] error for {symbol}@{interval}: {e}")
+        return None
+
+async def aget_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
+    import asyncio
+    return await asyncio.to_thread(get_klines, symbol, interval, limit, market_type)
