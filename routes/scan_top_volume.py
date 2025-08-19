@@ -4,7 +4,7 @@ import asyncio
 from typing import List, Dict, Any, Literal
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 
-# Auth (Bearer) — אם utils.auth לא קיים, לא נחסום פיתוח
+# Auth (Bearer) — אם utils.auth לא קיים, לא נחסום בפיתוח
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
@@ -106,6 +106,7 @@ def get_top_volume_symbols_endpoint(
         market=market, quote=quote, limit=limit, min_quote_volume=min_quote_volume
     )
     return {"ok": ok, "market": market, "quote": quote, "limit": limit, "symbols": symbols}
+
 
 
 
