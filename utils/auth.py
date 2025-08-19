@@ -8,15 +8,8 @@ def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
-# Support multiple env keys + multiple tokens
 _TOKENS: Set[str] = set()
-for key in (
-    "ALGOGPT_TOKENS",
-    "ALGOGPT_TOKEN",
-    "ALGOGPT_API_TOKEN",
-    "API_BEARER",
-    "API_BEARER_TOKEN",     # ← חדש, תואם .env שלך
-):
+for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER", "API_BEARER_TOKEN"):
     v = (os.getenv(key) or "").strip()
     if not v:
         continue
@@ -36,16 +29,13 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     return None
 
 def require_bearer_token(authorization: Optional[str] = Header(default=None)):
-    """
-    Enforces Authorization: Bearer <token>.
-    SECURITY_ALLOW_ALL=1 → bypass (dev).
-    """
     if _ALLOW_ALL:
         return None
     token = _extract_bearer(authorization)
     if token and token in _TOKENS:
         return None
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
 
 
 
