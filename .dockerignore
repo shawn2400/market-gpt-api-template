@@ -1,6 +1,5 @@
 # === Environment / secrets ===
-.env
-*.env
+!/.env              # ← מאפשר רק את .env הראשי
 *.key
 *.pem
 
@@ -63,5 +62,6 @@ build/
 # === Node / frontend ===
 node_modules/
 *.map
+
 
 
