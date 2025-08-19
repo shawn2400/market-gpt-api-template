@@ -1,7 +1,7 @@
 # routes/health.py
 from __future__ import annotations
 from datetime import datetime, timezone
-import os, sys, platform
+import os, platform
 from fastapi import APIRouter
 
 router = APIRouter(tags=["Health"])
@@ -33,8 +33,6 @@ def _libs_meta():
         })
     except Exception:
         pass
-    # אין תלות ב-ta כעת, אז אין בעיית Import
-    meta["python-binance"] = "1.0.19"
     return meta
 
 @router.get("/health", operation_id="getBasicHealth")
@@ -64,6 +62,7 @@ def strategy_version():
         "uptime_sec": int(datetime.now(tz=timezone.utc).timestamp()) - _BOOT_TS,
         "now_utc": datetime.now(tz=timezone.utc).isoformat(),
     }
+
 
 
 
