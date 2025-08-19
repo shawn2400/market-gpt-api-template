@@ -1,20 +1,16 @@
 # routes/health.py
 from __future__ import annotations
 from datetime import datetime, timezone
-import os
-import sys
-import platform
+import os, sys, platform
 from fastapi import APIRouter
 
 router = APIRouter(tags=["Health"])
-
 _BOOT_TS = int(datetime.now(tz=timezone.utc).timestamp())
 
 def _libs_meta():
     try:
         import fastapi, starlette, uvicorn, gunicorn, httpx, requests, aiohttp
-        import pandas, numpy, ta, PIL, matplotlib
-        import openai as openai_sdk
+        import pandas, numpy, ta, PIL, matplotlib, openai as openai_sdk
         return {
             "python": platform.python_version(),
             "fastapi": getattr(fastapi, "__version__", None),
@@ -29,7 +25,6 @@ def _libs_meta():
             "ta": getattr(ta, "__version__", None),
             "python-binance": "1.0.19",
             "openai": getattr(openai_sdk, "__version__", None),
-            "fpdf2": "2.7.9",
             "Pillow": getattr(PIL, "__version__", None),
             "matplotlib": getattr(matplotlib, "__version__", None),
         }
@@ -60,7 +55,7 @@ def strategy_version():
         "python_version": platform.python_version(),
         "libs": _libs_meta(),
         "env_flags": {
-            "execute_trades": os.getenv("EXECUTE_TRADES", "false").lower() in ("1","true","yes"),
+            "execute_trades": os.getenv("EXECUTE_TRADES","false").lower() in ("1","true","yes"),
             "skip_mutations": os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS","false").lower() in ("1","true","yes"),
         },
         "boot_ts": _BOOT_TS,
