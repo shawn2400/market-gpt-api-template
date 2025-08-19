@@ -1,8 +1,7 @@
 # routes/scan_top_volume.py
 from __future__ import annotations
 import os
-import math
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterable
 from fastapi import APIRouter, Query, Depends
 import httpx
 import numpy as np
@@ -13,8 +12,9 @@ router = APIRouter(tags=["Scanner"], dependencies=[Depends(require_bearer_token)
 router_symbols = APIRouter(tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+_SCAN_MAX_LIMIT = int(os.getenv("SCAN_MAX_LIMIT", "20"))
 
-# ---- small indicators (NumPy only) ----
+# ---- indicators (NumPy only) ----
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
     alpha = 2.0 / (period + 1.0)
     out = np.empty_like(arr, dtype=float)
@@ -41,8 +41,7 @@ def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     return 100.0 - (100.0 / (1.0 + rs))
 
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    prev_close = np.roll(close, 1)
-    prev_close[0] = close[0]
+    prev_close = np.roll(close, 1); prev_close[0] = close[0]
     tr = np.maximum.reduce([high - low, np.abs(high - prev_close), np.abs(low - prev_close)])
     return _rma(tr, period)
 
@@ -72,12 +71,10 @@ async def _fetch_24h() -> List[Dict[str, Any]]:
 
 def _top_symbols_24h(tickers: List[Dict[str, Any]], quote: str, limit: int) -> List[str]:
     q = quote.upper()
-    # בוחרים סימבולים שמסתיימים ב-quote (USDT לרוב)
     rows = [t for t in tickers if isinstance(t, dict) and str(t.get("symbol","")).endswith(q)]
-    # ממיינים לפי quoteVolume (מספרי)
     def _qv(v: Any) -> float:
         try:
-            return float(v.get("quoteVolume", 0.0))
+            return float(v.get("quoteVolume", 0.0))  # type: ignore[attr-defined]
         except Exception:
             return 0.0
     rows.sort(key=_qv, reverse=True)
@@ -93,9 +90,7 @@ async def _klines(symbol: str, interval: str, limit: int) -> Optional[List[List[
         return data if isinstance(data, list) else None
 
 def _analyze_rows(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
-    cols = ("open","high","low","close","volume")
     idx_open, idx_high, idx_low, idx_close, idx_vol = 1, 2, 3, 4, 5
-
     close = np.array([float(r[idx_close]) for r in rows], dtype=float)
     high  = np.array([float(r[idx_high])  for r in rows], dtype=float)
     low   = np.array([float(r[idx_low])   for r in rows], dtype=float)
@@ -119,7 +114,6 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
     else:
         note = "ADX<20"
 
-    # ציון איכות פשוט
     quality = 5.0
     if direction:
         quality = 6.5 + min(3.0, max(0.0, (adx14 - 20.0) * 0.1))
@@ -135,6 +129,22 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
             "close": round(float(close[-1]), 6), "volume": vol
         }
     }
+
+# ---- helpers for compact/fields ----
+def _clamp_limit(n: int) -> int:
+    return max(1, min(_SCAN_MAX_LIMIT, n))
+
+def _parse_fields(fields: Optional[str]) -> Optional[List[str]]:
+    if not fields:
+        return None
+    return [f.strip() for f in fields.split(",") if f.strip()]
+
+def _select_fields(item: Dict[str, Any], fields: Optional[Iterable[str]], compact: bool) -> Dict[str, Any]:
+    if compact and not fields:
+        fields = ("symbol", "timeframe", "side", "score", "note")
+    if fields:
+        return {k: item.get(k) for k in fields if k in item}
+    return item
 
 @router_symbols.get("/symbols/top-volume", operation_id="getSymbolsTopVolume")
 async def get_symbols_top_volume(
@@ -153,13 +163,21 @@ async def get_symbols_top_volume(
 async def scan_top_volume(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
-    limit: int = Query(5, ge=1, le=20),
+    limit: int = Query(5, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
+    symbol: Optional[str] = Query(None, description="Filter for a single symbol"),
+    fields: Optional[str] = Query(None, description="CSV fields to return (e.g. symbol,score,note)"),
+    compact: bool = Query(True, description="Return minimal fields by default"),
 ) -> Dict[str, Any]:
     try:
+        limit = _clamp_limit(limit)
         tickers = await _fetch_24h()
         symbols = _top_symbols_24h(tickers, quote=quote, limit=limit)
+        if symbol:
+            s = symbol.upper().strip()
+            symbols = [x for x in symbols if x.upper() == s] or [s]
+
         results: List[Dict[str, Any]] = []
         for sym in symbols:
             try:
@@ -171,9 +189,28 @@ async def scan_top_volume(
                 results.append({"symbol": sym, **res})
             except Exception as e:
                 results.append({"symbol": sym, "timeframe": timeframe, "side": None, "score": 0.0, "note": f"lite (analyze-fallback: {type(e).__name__})", "details": None})
-        return {"ok": True, "count": len(results), "signals": results}
+
+        wanted = _parse_fields(fields)
+        results = [_select_fields(r, wanted, compact) for r in results]
+
+        out: Dict[str, Any] = {"ok": True, "count": len(results), "signals": results}
+        if compact:
+            out["mode"] = "compact"
+        return out
     except Exception as e:
         return {"ok": False, "count": 0, "signals": [], "fallback": f"lite ({type(e).__name__})"}
+
+# convenience for one symbol
+@router.get("/scan", operation_id="scanSingle")
+async def scan_single(
+    symbol: str = Query(...),
+    timeframe: str = Query("15m"),
+    market: str = Query("futures"),
+    fields: Optional[str] = Query(None),
+    compact: bool = Query(True),
+) -> Dict[str, Any]:
+    return await scan_top_volume(market=market, quote="USDT", limit=5, timeframe=timeframe,
+                                 kline_limit=200, symbol=symbol, fields=fields, compact=compact)
 
 
 
