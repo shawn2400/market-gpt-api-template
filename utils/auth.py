@@ -37,19 +37,12 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     return None
 
 def require_bearer_token(authorization: Optional[str] = Header(default=None)):
-    """
-    בודק Authorization: Bearer <token>. קורא טוקנים מה-ENV בכל קריאה.
-    SECURITY_ALLOW_ALL=1 → עוקף (לבדיקות בלבד).
-    """
     if (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1","true","yes")):
         return None
-
     token = _extract_bearer(authorization)
     tokens = _load_tokens_from_env()
-
     if token and token in tokens:
         return None
-
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
