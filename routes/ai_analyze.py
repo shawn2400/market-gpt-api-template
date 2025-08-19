@@ -3,14 +3,77 @@ from __future__ import annotations
 import os
 from typing import Dict, Any, List
 from fastapi import APIRouter, Query
-import httpx, pandas as pd
-from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator, ADXIndicator
-from ta.volatility import AverageTrueRange
+import httpx
+import pandas as pd
+import numpy as np
 
 router = APIRouter(tags=["AI"])
+
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
+# ---------- math helpers (Wilder/EMA/RSI/ATR/ADX) ----------
+def _ema(arr: np.ndarray, period: int) -> np.ndarray:
+    alpha = 2.0 / (period + 1.0)
+    out = np.empty_like(arr, dtype=float)
+    out[0] = arr[0]
+    for i in range(1, len(arr)):
+        out[i] = alpha * arr[i] + (1 - alpha) * out[i-1]
+    return out
+
+def _rma(arr: np.ndarray, period: int) -> np.ndarray:
+    # Wilder's smoothing (RMA)
+    out = np.empty_like(arr, dtype=float)
+    out[0] = arr[:period].mean()
+    alpha = 1.0 / period
+    for i in range(1, len(arr)):
+        out[i] = (out[i-1] * (1 - alpha)) + alpha * arr[i]
+    return out
+
+def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    diff = np.diff(close, prepend=close[0])
+    gain = np.where(diff > 0, diff, 0.0)
+    loss = np.where(diff < 0, -diff, 0.0)
+    avg_gain = _rma(gain, period)
+    avg_loss = _rma(loss, period)
+    rs = np.where(avg_loss == 0, np.inf, avg_gain / avg_loss)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return rsi
+
+def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+    tr = np.maximum.reduce([
+        high - low,
+        np.abs(high - prev_close),
+        np.abs(low - prev_close)
+    ])
+    return _rma(tr, period)
+
+def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    up_move = high[1:] - high[:-1]
+    down_move = low[:-1] - low[1:]
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+    tr = _atr(high, low, close, period)  # this is already Wilder-smoothed TR
+    # כדי ליישר אורכי מערכים:
+    # נעשה ריפוד בתחילת הסדרות ב־0 עבור +DM/-DM כדי להתאים לאורך TR
+    plus_dm_full = np.concatenate([[0.0], plus_dm])
+    minus_dm_full = np.concatenate([[0.0], minus_dm])
+
+    plus_dm_rma = _rma(plus_dm_full, period)
+    minus_dm_rma = _rma(minus_dm_full, period)
+
+    plus_di = 100.0 * np.where(tr == 0, 0.0, plus_dm_rma / tr)
+    minus_di = 100.0 * np.where(tr == 0, 0.0, minus_dm_rma / tr)
+
+    dx = 100.0 * np.where(
+        (plus_di + minus_di) == 0, 0.0, np.abs(plus_di - minus_di) / (plus_di + minus_di)
+    )
+    adx = _rma(dx, period)
+    return adx
+
+# ---------- data fetch ----------
 async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> List[List[Any]]:
     url = f"{_FAPI}/fapi/v1/klines"
     params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
@@ -30,41 +93,48 @@ def _frame_to_df(rows: List[List[Any]]) -> pd.DataFrame:
     return df.dropna().reset_index(drop=True)
 
 def _analyze(df: pd.DataFrame) -> Dict[str, Any]:
-    rsi = RSIIndicator(close=df["close"], window=14).rsi().iloc[-1]
-    adx = ADXIndicator(high=df["high"], low=df["low"], close=df["close"], window=14).adx().iloc[-1]
-    ema_fast = EMAIndicator(close=df["close"], window=21).ema_indicator().iloc[-1]
-    ema_slow = EMAIndicator(close=df["close"], window=50).ema_indicator().iloc[-1]
-    atr = AverageTrueRange(high=df["high"], low=df["low"], close=df["close"], window=14).average_true_range().iloc[-1]
-    close = float(df["close"].iloc[-1])
+    close = df["close"].to_numpy(dtype=float)
+    high  = df["high"].to_numpy(dtype=float)
+    low   = df["low"].to_numpy(dtype=float)
+
+    rsi_last = float(_rsi(close, 14)[-1])
+    ema_fast = float(_ema(close, 21)[-1])
+    ema_slow = float(_ema(close, 50)[-1])
+    atr_last = float(_atr(high, low, close, 14)[-1])
+    adx_last = float(_adx(high, low, close, 14)[-1])
+    c_last   = float(close[-1])
 
     trend = "UP" if ema_fast >= ema_slow else "DOWN"
+
     direction = None
     note = None
-    if adx >= 20:
-        if close >= ema_fast >= ema_slow:
+    if adx_last >= 20:
+        if c_last >= ema_fast >= ema_slow:
             direction, note = "LONG", "EMA21>=EMA50 & ADX>=20"
-        elif close <= ema_fast <= ema_slow:
+        elif c_last <= ema_fast <= ema_slow:
             direction, note = "SHORT", "EMA21<=EMA50 & ADX>=20"
+        else:
+            note = "lite (structure mixed)"
     else:
-        note = "lite (ADX<20) – no strong trend"
+        note = "lite (ADX<20)"
 
     quality = 5.0
     if direction:
-        quality = 6.5 + min(3.0, max(0.0, (adx - 20.0) * 0.1))
+        quality = 6.5 + min(3.0, max(0.0, (adx_last - 20.0) * 0.1))
 
     return {
         "frames": ["15m"],
         "trend": trend,
         "direction": direction,
-        "rsi": float(rsi),
-        "adx": float(adx),
+        "rsi": round(rsi_last, 2),
+        "adx": round(adx_last, 2),
         "volume": float(df["volume"].iloc[-1]),
         "quality_score": round(float(quality), 2),
         "signal": "BUY" if direction == "LONG" else ("SELL" if direction == "SHORT" else "HOLD"),
         "confidence": int(min(100, max(0, (quality/10.0)*100))),
         "reason": note,
-        "close": close,
-        "atr": float(atr),
+        "close": c_last,
+        "atr": round(atr_last, 6),
     }
 
 @router.get("/ai/manual-scan", operation_id="getAiManualScan")
@@ -78,19 +148,23 @@ async def ai_manual_scan(symbol: str = Query(..., description="e.g. BTCUSDT"),
         if len(df) < 60:
             return {"symbol": symbol, "results": {"signal": "HOLD", "reason": "lite (not enough data)"}}
         res = _analyze(df)
-        return {"symbol": symbol, "results": res}
+        # שימור שדות נוחים לתצוגה
+        res_out = dict(res)
+        res_out.update({"symbol": symbol, "market": "futures", "interval": interval})
+        return {"symbol": symbol, "results": res_out}
     except Exception as e:
         return {
             "symbol": symbol,
             "results": {
-                "signal": "HOLD",
-                "reason": f"lite (analyze-fallback: {type(e).__name__})",
+                "symbol": symbol, "market": "futures", "interval": interval,
                 "frames": [interval],
                 "trend": None, "direction": None,
                 "rsi": None, "adx": None, "volume": None, "quality_score": None,
-                "confidence": None, "close": None, "atr": None,
+                "signal": None, "confidence": None, "close": None, "atr": None,
+                "reason": f"lite (analyze-fallback: {type(e).__name__})"
             }
         }
+
 
 
 
