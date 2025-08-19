@@ -1,4 +1,3 @@
-# utils/orderflow.py
 from __future__ import annotations
 import os
 from typing import Dict, Any, List, Tuple
@@ -30,37 +29,18 @@ async def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_lim
         trades.raise_for_status()
         tjs = trades.json()
 
-        cvd = 0.0
-        buy_count = sell_count = 0
+        cvd = 0.0; buy = sell = 0
         for t in tjs[-cvd_window:]:
             q = float(t.get("q", 0.0))
-            is_buyer_maker = bool(t.get("m", False))
-            if is_buyer_maker:
-                cvd -= q; sell_count += 1
-            else:
-                cvd += q; buy_count += 1
+            if bool(t.get("m", False)): cvd -= q; sell += 1
+            else:                         cvd += q; buy  += 1
 
         return {
-            "ok": True,
-            "symbol": sym,
-            "best_bid": best_bid,
-            "best_ask": best_ask,
-            "orderbook": {
-                "bid_volume": bid_vol,
-                "ask_volume": ask_vol,
-                "imbalance": imbalance,
-                "levels": {"bids": len(bids), "asks": len(asks)},
-            },
-            "trades": {
-                "taker_buy_count": buy_count,
-                "taker_sell_count": sell_count,
-                "cvd_window": min(cvd_window, len(tjs)),
-                "cvd": cvd,
-            },
-            "stats_24h": {
-                "taker_buy_base_volume": taker_buy,
-                "volume_base": volume,
-            },
+            "ok": True, "symbol": sym,
+            "best_bid": best_bid, "best_ask": best_ask,
+            "orderbook": {"bid_volume": bid_vol, "ask_volume": ask_vol, "imbalance": imbalance, "levels": {"bids": len(bids), "asks": len(asks)}},
+            "trades": {"taker_buy_count": buy, "taker_sell_count": sell, "cvd_window": min(cvd_window, len(tjs)), "cvd": cvd},
+            "stats_24h": {"taker_buy_base_volume": taker_buy, "volume_base": volume},
         }
 
 
