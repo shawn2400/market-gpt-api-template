@@ -2,12 +2,13 @@
 from __future__ import annotations
 import os
 from typing import Set, Optional
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, status, Request
 
 def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
+# collect tokens from multiple env keys
 _TOKENS: Set[str] = set()
 for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER", "API_BEARER_TOKEN"):
     v = (os.getenv(key) or "").strip()
@@ -28,12 +29,26 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
         return parts[1].strip()
     return None
 
-def require_bearer_token(authorization: Optional[str] = Header(default=None)):
+def require_bearer_token(
+    authorization: Optional[str] = Header(default=None),
+    request: Request = None
+):
+    """
+    Accept:
+      - Authorization: Bearer <token>
+      - OR ?token=<token> (helpful for quick curl/browser tests)
+    SECURITY_ALLOW_ALL=1 -> bypass (dev only)
+    """
     if _ALLOW_ALL:
         return None
+
     token = _extract_bearer(authorization)
+    if not token and request is not None:
+        token = request.query_params.get("token")
+
     if token and token in _TOKENS:
         return None
+
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
