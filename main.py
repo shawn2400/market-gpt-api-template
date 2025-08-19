@@ -1,6 +1,5 @@
 # main.py
 from __future__ import annotations
-
 import os
 import logging
 import time
@@ -13,7 +12,8 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from utils.metrics import metrics_tracker  # type: ignore
+# מטריקות פנימיות
+from utils.metrics import metrics_tracker  # חייב להיות קיים
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -29,10 +29,11 @@ logging.basicConfig(
 logger = logging.getLogger("algogpt")
 
 # -----------------------------------------------------------------------------
-# Optional: WS Mark Price bus
+# Optional: WS Mark Price bus (will start on startup if available)
 # -----------------------------------------------------------------------------
 _mark_bus = None
 try:
+    # מצופה אובייקט בשם bus עם מתודות start()/stop() (ראה utils/mark_ws.py)
     from utils.mark_ws import bus as _mark_bus  # type: ignore
     logger.info("mark_ws module available; will attempt to start on startup")
 except Exception as exc:
@@ -40,23 +41,23 @@ except Exception as exc:
     logger.warning("mark_ws not available: %s", exc)
 
 # -----------------------------------------------------------------------------
-# Core routers (must exist)
+# Core routers (חובה)
 # -----------------------------------------------------------------------------
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
-def _try_import(mod_name: str, attr: str = "router") -> Optional[object]:
-    """Lazy import for optional routers; logs warning on failure."""
+def _try_import(name: str, attr: str = "router") -> Optional[object]:
+    """נסיון טעינת מודול/אטריבוט עם לוג אזהרה מפורט במקרה כשל."""
     try:
-        module = __import__(mod_name, fromlist=[attr])
+        module = __import__(name, fromlist=[attr])
         obj = getattr(module, attr)
-        logger.info("loaded router: %s.%s", mod_name, attr)
+        logger.info("loaded router: %s.%s", name, attr)
         return obj
     except Exception as exc:
-        logger.warning("failed to load %s.%s: %s", mod_name, attr, exc)
+        logger.warning("failed to load %s.%s: %s", name, attr, exc)
         return None
 
-# Optional auto-executor
+# auto-executor (טעינה בטוחה)
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
@@ -108,12 +109,11 @@ async def _metrics_middleware(request: Request, call_next):
                 status_code=status_code,
                 duration_ms=dt_ms,
                 method=request.method,
-                path=request.url.path,
+                path=request.url.path
             )
         except TypeError:
+            # תאימות לאחור אם חתימת הפונקציה ישנה אצלך
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
-        except Exception as e:
-            logger.debug("metrics observe_request failed: %s", e)
 
 # -----------------------------------------------------------------------------
 # Exception handlers
@@ -125,10 +125,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 @app.exception_handler(Exception)
 async def _unhandled_exc_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error")
-    try:
-        metrics_tracker.inc_err()
-    except Exception:
-        pass
+    metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 # -----------------------------------------------------------------------------
@@ -160,18 +157,22 @@ def list_routes():
 app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
-# Optional routers (load if present)
+# Optional routers (loaded if present)
 for mod in [
+    # חשוב: מכיל /health ו-/health/live
+    "routes.health",
+    # AI בריאות (פותר 404 על /ai/health)
+    "routes.ai_health",
+    # גריד – ידרוש Bearer אם auth מופעל
+    "routes.grid",
+    # שאר יכולות (נטענים אם קיימים)
     "routes.backtest",
     "routes.ai_analyze",
-    "routes.ai_health",       # /ai/health (ציבורי; לא נופל)
     "routes.news",
-    "routes.grid",
     "routes.dashboard",
     "routes.routes_indicators",
     "routes.price",
     "routes.multi_scan",
-    "routes.health",          # /health, /health/live, /health/strategy-version
     "routes.risk",
     "routes.snapshot",
     "routes.analytics",
@@ -181,6 +182,7 @@ for mod in [
         app.include_router(r)
 
 # Special-case: scan routers (two routers in same module)
+# router (מוגן) + router_symbols (פתוח) מאותו קובץ
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
     app.include_router(_scan_router)
@@ -188,7 +190,7 @@ _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
     app.include_router(_scan_sym_router)
 
-# analytics compat (/macro alias)
+# analytics compat (/macro)
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat)
@@ -200,11 +202,12 @@ if _analytics_compat:
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
 
-    # Config flags
+    # קונפיג — הדלקת האוטו־אקסקיוטר אם מוגדר
     try:
         from utils import config as cfg  # type: ignore
     except Exception:
-        class _D: AUTO_RUN = False
+        class _D:
+            AUTO_RUN = False
         cfg = _D()  # type: ignore
 
     # AI warmup (non-fatal)
@@ -215,7 +218,7 @@ async def on_startup():
     except Exception as e:
         logger.warning("AI warmup failed (ignored): %s", e)
 
-    # Auto executor
+    # Auto executor – מופעל רק אם AUTO_RUN=true בקובץ env/סביבה
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
@@ -234,6 +237,7 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
+    # כיבוי מסודר ל־WS bus אם תומך
     try:
         if _mark_bus and hasattr(_mark_bus, "stop"):
             _mark_bus.stop()
@@ -250,8 +254,9 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", "10000")),
-        log_level=LOG_LEVEL.lower(),
+        log_level=LOG_LEVEL.lower()
     )
+
 
 
 
