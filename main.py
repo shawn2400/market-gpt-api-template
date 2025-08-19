@@ -5,14 +5,14 @@ import logging
 import time
 from typing import List, Optional
 
-# --- NEW: load .env early so all modules see the env vars ---
+# --- Load .env early ---
 try:
-    from dotenv import load_dotenv  # requires python-dotenv
+    from dotenv import load_dotenv
     load_dotenv(override=False)
 except Exception:
     pass
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -20,6 +20,7 @@ from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from utils.metrics import metrics_tracker
+from utils.auth import require_bearer_token  # ✅ Token check added
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -66,6 +67,7 @@ app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — Binance Futures LIVE (Scan/AI/Trades/Backtest/News/Grid/Risk).",
     version=APP_VERSION,
+    dependencies=[Depends(require_bearer_token)]  # ✅ Global token check
 )
 
 # CORS
@@ -145,13 +147,12 @@ for mod in [
     "routes.dashboard", "routes.routes_indicators", "routes.price",
     "routes.multi_scan", "routes.health", "routes.risk", "routes.snapshot",
     "routes.analytics", "routes.ai_health", "routes.executor",
-    "routes.orderflow",  # NEW: Orderflow router
+    "routes.orderflow",
 ]:
     r = _try_import(mod, "router")
     if r:
         app.include_router(r)
 
-# Special-case: scan routers
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
     app.include_router(_scan_router)
@@ -159,7 +160,6 @@ _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
     app.include_router(_scan_sym_router)
 
-# analytics compat (/macro)
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat)
@@ -175,7 +175,6 @@ async def on_startup():
         class _D: AUTO_RUN = False
         cfg = _D()  # type: ignore
 
-    # AI warmup (non-fatal)
     try:
         from utils.ai_client import ai_client  # type: ignore
         await ai_client.warmup()
@@ -183,7 +182,6 @@ async def on_startup():
     except Exception as e:
         logger.warning("AI warmup failed (ignored): %s", e)
 
-    # Auto executor
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
@@ -191,7 +189,6 @@ async def on_startup():
         except Exception as e:
             logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
 
-    # Mark Price WS bus (optional)
     try:
         if _mark_bus and hasattr(_mark_bus, "start"):
             _mark_bus.start()
@@ -212,6 +209,7 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
