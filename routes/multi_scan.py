@@ -3,14 +3,23 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional, Literal, Iterable
 from datetime import datetime, timezone
 import asyncio
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Header
 
+# ---- Auth ----
 try:
     from utils.auth import require_bearer_token as _raw_require_bearer  # type: ignore
-    def require_bearer_token():
-        return _raw_require_bearer()
+
+    # חשוב: לקבל את אותם פרמטרים ולהעביר אותם הלאה
+    def require_bearer_token(
+        authorization: Optional[str] = Header(default=None),
+        token: Optional[str] = Query(default=None),
+    ):
+        return _raw_require_bearer(authorization=authorization, token=token)
 except Exception:
-    def require_bearer_token():
+    def require_bearer_token(
+        authorization: Optional[str] = Header(default=None),
+        token: Optional[str] = Query(default=None),
+    ):
         return None
 
 router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
@@ -97,7 +106,6 @@ async def get_scan(
     errors: List[str] = []
 
     # explicit symbols path
-    symbols_list: List[str] = []
     if symbols:
         symbols_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         sem = asyncio.Semaphore(concurrency)
@@ -167,6 +175,7 @@ async def get_scan(
     except Exception as e:
         errors.append(f"fallback-failed: {type(e).__name__}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"ok": False, "errors": errors})
+
 
 
 
