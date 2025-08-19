@@ -2,17 +2,20 @@
 from __future__ import annotations
 import os
 from typing import Set, Optional
-from fastapi import Header, HTTPException, status, Request
+from fastapi import Header, HTTPException, status
 
 def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
-# מרכיב סט טוקנים מכל שמות ה-ENV הנפוצים
+# Support multiple env keys + multiple tokens
 _TOKENS: Set[str] = set()
 for key in (
-    "ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN",
-    "API_BEARER", "API_BEARER_TOKEN", "API_TOKEN"
+    "ALGOGPT_TOKENS",
+    "ALGOGPT_TOKEN",
+    "ALGOGPT_API_TOKEN",
+    "API_BEARER",
+    "API_BEARER_TOKEN",     # ← חדש, תואם .env שלך
 ):
     v = (os.getenv(key) or "").strip()
     if not v:
@@ -22,7 +25,7 @@ for key in (
     else:
         _TOKENS.add(v)
 
-_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1","true","yes"))
+_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
 
 def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
@@ -32,33 +35,18 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
         return parts[1].strip()
     return None
 
-def require_bearer_token(
-    authorization: Optional[str] = Header(default=None),
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-    request: Request = None
-):
+def require_bearer_token(authorization: Optional[str] = Header(default=None)):
     """
-    מקבל:
-      - Authorization: Bearer <token>
-      - X-API-Key: <token>
-      - ?token=<token>
-    SECURITY_ALLOW_ALL=1 → מעקף (פיתוח בלבד).
+    Enforces Authorization: Bearer <token>.
+    SECURITY_ALLOW_ALL=1 → bypass (dev).
     """
     if _ALLOW_ALL:
         return None
-
     token = _extract_bearer(authorization)
-    if not token and x_api_key:
-        token = x_api_key.strip()
-    if not token and request is not None:
-        qp = request.query_params.get("token")
-        if qp:
-            token = qp.strip()
-
     if token and token in _TOKENS:
         return None
-
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
 
 
 
