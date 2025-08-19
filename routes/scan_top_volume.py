@@ -72,7 +72,7 @@ async def _fetch_24h() -> List[Dict[str, Any]]:
 def _top_symbols_24h(tickers: List[Dict[str, Any]], quote: str, limit: int) -> List[str]:
     q = quote.upper()
     rows = [t for t in tickers if isinstance(t, dict) and str(t.get("symbol","")).endswith(q)]
-    def _qv(v: Any) -> float:
+    def _qv(v: Any) -> float:  # type: ignore[name-defined]
         try:
             return float(v.get("quoteVolume", 0.0))  # type: ignore[attr-defined]
         except Exception:
@@ -116,7 +116,7 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
 
     quality = 5.0
     if direction:
-        quality = 6.5 + min(3.0, max(0.0, (adx14 - 20.0) * 0.1))
+        quality = 6.5 + min(3.0, max(0.0), (adx14 - 20.0) * 0.1)
 
     return {
         "timeframe": interval,
@@ -130,7 +130,7 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
         }
     }
 
-# ---- helpers for compact/fields ----
+# ---- helpers ----
 def _clamp_limit(n: int) -> int:
     return max(1, min(_SCAN_MAX_LIMIT, n))
 
@@ -200,7 +200,6 @@ async def scan_top_volume(
     except Exception as e:
         return {"ok": False, "count": 0, "signals": [], "fallback": f"lite ({type(e).__name__})"}
 
-# convenience for one symbol
 @router.get("/scan", operation_id="scanSingle")
 async def scan_single(
     symbol: str = Query(...),
