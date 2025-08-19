@@ -35,11 +35,12 @@ def require_bearer_token(
     """מאשר גם Authorization: Bearer ... וגם ?token=..."""
     if _ALLOW_ALL:
         return None
-    bearer = _extract_bearer(authorization)
-    candidate = (bearer or (token or "")).strip()
+    b = _extract_bearer(authorization)
+    candidate = (b or (token or "")).strip()
     if candidate and candidate in _TOKENS:
         return None
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
 
 
 
