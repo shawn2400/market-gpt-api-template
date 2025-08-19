@@ -6,8 +6,7 @@ import numpy as np
 import pandas as pd
 import httpx
 from fastapi import APIRouter, Depends, Query
-
-from utils.auth import require_bearer_token  # ← בלי try/except
+from utils.auth import require_bearer_token
 
 router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_bearer_token)])
 
@@ -140,6 +139,7 @@ async def ai_manual_scan(
     res = _analyze(df, interval)
     res["symbol"] = symbol
     return {"symbol": symbol, "results": res}
+
 
 
 
