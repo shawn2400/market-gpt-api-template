@@ -1,37 +1,60 @@
 # routes/scan_top_volume.py
 from __future__ import annotations
-
+import asyncio
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Depends, Query
 
-# אימות לנתיבים המורחבים; את /symbols/top-volume נשאיר פתוח
+# הרשאה: מוגן רק לנתיב הסריקה המורחב
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
     def require_bearer_token():
         return None
 
-router = APIRouter(tags=["Scan"], dependencies=[Depends(require_bearer_token)])
-router_symbols = APIRouter(tags=["Analytics"])  # פתוח לקריאה
+# רשימת סמלים לפי נפח (פתוח לכולם)
+from utils.top_volume import get_top_volume_symbols
 
-# --- lite source (תמיד זמין) ---
-def _top_symbols(market: str, quote: str, limit: int, min_qv: float) -> List[str]:
-    try:
-        from utils.top_volume import get_top_volume_symbols  # type: ignore
-        ok, syms = get_top_volume_symbols(market=market, quote=quote, limit=limit, min_quote_volume=min_qv)
-        return syms if ok else []
-    except Exception:
-        return []
+# שימוש בפונקציות האנליזה שכתבנו ב-ai_analyze
+from .ai_analyze import _fetch_klines, _frame_to_df, _analyze
+
+router_symbols = APIRouter(tags=["Analytics"])            # /symbols/top-volume – פתוח
+router = APIRouter(tags=["Scan"], dependencies=[Depends(require_bearer_token)])  # /scan/top-volume – מוגן
 
 @router_symbols.get("/symbols/top-volume", operation_id="getTopVolumeSymbols")
-def get_top_volume_symbols_endpoint(
+async def symbols_top_volume(
     market: str = Query("futures", pattern="^(futures|spot)$"),
     quote: str = Query("USDT"),
     limit: int = Query(50, ge=1, le=200),
-    min_quote_volume: float = Query(0.0, ge=0.0),
+    min_quote_volume: float = Query(0.0)
 ):
-    syms = _top_symbols(market, quote, limit, min_quote_volume)
-    return {"ok": True, "market": market, "quote": quote, "limit": limit, "symbols": syms}
+    ok, symbols = get_top_volume_symbols(market=market, quote=quote, limit=limit, min_quote_volume=min_quote_volume)
+    return {"ok": ok, "market": market, "quote": quote, "limit": limit, "symbols": symbols}
+
+async def _scan_symbol(symbol: str, timeframe: str, bars: int) -> Dict[str, Any]:
+    try:
+        rows = await _fetch_klines(symbol, interval=timeframe, limit=bars)
+        df = _frame_to_df(rows)
+        if len(df) < 60:
+            return {"symbol": symbol, "timeframe": timeframe, "side": None, "score": 0.0, "note": "lite (not enough data)", "details": None}
+        res = _analyze(df)
+        side = {"BUY":"LONG", "SELL":"SHORT", "HOLD":None}.get(res["signal"])
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "side": side,
+            "score": float(res["quality_score"] or 0.0) if res.get("quality_score") is not None else 0.0,
+            "note": res.get("reason"),
+            "details": {
+                "rsi": res.get("rsi"),
+                "adx": res.get("adx"),
+                "atr": res.get("atr"),
+                "trend": res.get("trend"),
+                "close": res.get("close"),
+            }
+        }
+    except Exception as e:
+        # אל תיתן 500 – החזר lite
+        return {"symbol": symbol, "timeframe": timeframe, "side": None, "score": 0.0, "note": f"lite ({type(e).__name__})", "details": None}
 
 @router.get("/scan/top-volume", operation_id="getScanTopVolume")
 async def scan_top_volume(
@@ -39,48 +62,35 @@ async def scan_top_volume(
     quote: str = Query("USDT"),
     limit: int = Query(50, ge=1, le=200),
     timeframe: str = Query("15m"),
+    bars: int = Query(200, ge=50, le=1500),
     trending_only: bool = Query(False),
-    mode: str = Query("lite", pattern="^(lite|auto)$"),
+    concurrency: int = Query(12, ge=2, le=64),
+    mode: str = Query("lite", description="lite|auto – lite לעולם לא נכשל; auto מנסה ניתוח מלא")
 ):
-    """
-    mode=lite → רק רשימת סמלים לפי נפח (מהיר, תמיד 200).
-    mode=auto → ניסיון לסריקה מלאה (עם נפילות-חסינות → fallback ל-lite).
-    """
-    symbols = _top_symbols(market, quote, limit, 0.0)
-    if not symbols:
-        return {"ok": True, "count": 0, "signals": [], "note": "no symbols (top-volume empty)"}
+    ok, symbols = get_top_volume_symbols(market=market, quote=quote, limit=limit)
+    if not ok or not symbols:
+        return {"ok": False, "count": 0, "signals": []}
 
-    if mode == "lite":
-        # מחזיר “סיגנלים ריקים” — רק תעלות בדיקות/תזמונים
-        sigs = [{"symbol": s, "timeframe": timeframe, "side": None, "score": None, "note": "lite"} for s in symbols]
-        return {"ok": True, "count": len(sigs), "signals": sigs}
+    # סינון trending_only פשוט: השאר – למינימום שינוי התנהגות
+    use_symbols = symbols
+    if trending_only:
+        use_symbols = [s for i, s in enumerate(symbols) if i < max(5, limit // 2)]
 
-    # mode=auto → ננסה סריקה מלאה — ואם נכשל, ניפול ללייט
-    try:
-        from utils.multi_tf_scanner import multi_tf_scan_with_ai  # type: ignore
-        results: List[Dict[str, Any]] = await multi_tf_scan_with_ai(
-            timeframes=(timeframe, "1h"),
-            markets=(market,),
-            min_quality=6.0,
-            top=min(30, limit),
-            trending_only=trending_only,
-            trending_source="binance24h",
-        )
-        signals = []
-        for r in results or []:
-            signals.append({
-                "symbol": r.get("symbol"),
-                "timeframe": timeframe,
-                "side": r.get("signal"),
-                "score": r.get("quality_score"),
-                "note": r.get("reason"),
-                "details": r.get("details"),
-            })
-        return {"ok": True, "count": len(signals), "signals": signals}
-    except Exception as e:
-        # fallback → lite
-        sigs = [{"symbol": s, "timeframe": timeframe, "side": None, "score": None, "note": f"fallback-lite: {type(e).__name__}"} for s in symbols]
-        return {"ok": True, "count": len(sigs), "signals": sigs, "fallback": True}
+    sem = asyncio.Semaphore(concurrency)
+    async def _task(sym: str):
+        async with sem:
+            return await _scan_symbol(sym, timeframe, bars)
+
+    # ב-mode=lite אנחנו עדיין משתמשים באותו מנוע, אך אם משהו יכשל – התוצאה “lite” ולא 500
+    tasks = [_task(s) for s in use_symbols]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
+    return {
+        "ok": True,
+        "count": len(results),
+        "signals": results,
+    }
+
 
 
 
