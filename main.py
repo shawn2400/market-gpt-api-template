@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger("algogpt")
 
 # -----------------------------------------------------------------------------
-# Optional: WS Mark Price bus (will start on startup if available)
+# Optional: WS Mark Price bus
 # -----------------------------------------------------------------------------
 _mark_bus = None
 try:
@@ -45,7 +45,7 @@ from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
-    """Attempt to import a module/attribute; log warning if fails."""
+    """Attempt to import module.attr; return None if missing."""
     try:
         module = __import__(name, fromlist=[attr])
         obj = getattr(module, attr)
@@ -55,7 +55,6 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         logger.warning("failed to load %s.%s: %s", name, attr, exc)
         return None
 
-# auto-executor (safe import)
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
@@ -64,7 +63,7 @@ except Exception as exc:
     logger.warning("auto_executor not available: %s", exc)
 
 # -----------------------------------------------------------------------------
-# FastAPI app
+# FastAPI
 # -----------------------------------------------------------------------------
 app = FastAPI(
     title="AlgoGPT API",
@@ -72,7 +71,6 @@ app = FastAPI(
     version=APP_VERSION,
 )
 
-# CORS
 allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [
     o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()
 ]
@@ -83,14 +81,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static (optional)
 if os.path.isdir(".well-known"):
     app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static-plugin")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # -----------------------------------------------------------------------------
-# Metrics middleware
+# Metrics
 # -----------------------------------------------------------------------------
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
@@ -110,11 +107,10 @@ async def _metrics_middleware(request: Request, call_next):
                 path=request.url.path
             )
         except TypeError:
-            # backward compat
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
 # -----------------------------------------------------------------------------
-# Exception handlers
+# Exceptions
 # -----------------------------------------------------------------------------
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -127,7 +123,7 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 # -----------------------------------------------------------------------------
-# Basic endpoints
+# Basics
 # -----------------------------------------------------------------------------
 @app.get("/", operation_id="getRootStatus", tags=["Config"])
 def root():
@@ -155,7 +151,6 @@ def list_routes():
 app.include_router(ai_router,    prefix="/ai",    tags=["AI"])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"])
 
-# Optional routers (loaded if present)
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
     "routes.dashboard", "routes.routes_indicators", "routes.price",
@@ -166,7 +161,6 @@ for mod in [
     if r:
         app.include_router(r)
 
-# Special-case: scan routers (two routers in same module)
 _scan_router = _try_import("routes.scan_top_volume", "router")
 if _scan_router:
     app.include_router(_scan_router)
@@ -174,7 +168,6 @@ _scan_sym_router = _try_import("routes.scan_top_volume", "router_symbols")
 if _scan_sym_router:
     app.include_router(_scan_sym_router)
 
-# analytics compat (/macro)
 _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat)
@@ -185,15 +178,12 @@ if _analytics_compat:
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
-
-    # Config
     try:
         from utils import config as cfg  # type: ignore
     except Exception:
         class _D: AUTO_RUN = False
         cfg = _D()  # type: ignore
 
-    # AI warmup (non-fatal)
     try:
         from utils.ai_client import ai_client  # type: ignore
         await ai_client.warmup()
@@ -201,7 +191,6 @@ async def on_startup():
     except Exception as e:
         logger.warning("AI warmup failed (ignored): %s", e)
 
-    # Auto executor
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
@@ -209,7 +198,6 @@ async def on_startup():
         except Exception as e:
             logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
 
-    # Mark Price WS bus (optional)
     try:
         if _mark_bus and hasattr(_mark_bus, "start"):
             _mark_bus.start()
@@ -220,7 +208,6 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("AlgoGPT API shutting down")
-    # graceful stop for WS bus
     try:
         if _mark_bus and hasattr(_mark_bus, "stop"):
             _mark_bus.stop()
@@ -229,11 +216,10 @@ async def on_shutdown():
         logger.warning("Failed to stop Mark WS bus: %s", e)
 
 # -----------------------------------------------------------------------------
-# Dev entrypoint
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower())
+
 
 
 
