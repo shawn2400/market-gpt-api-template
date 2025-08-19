@@ -1,16 +1,23 @@
 from __future__ import annotations
-import os, time, platform
+import os
+import time
+import platform
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+# ראוטר ברירת מחדל ל"בריאות" המערכת
 router = APIRouter(tags=["Health"])
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.0")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", APP_VERSION)
 BOOT_TS = int(time.time())
+
+# ------------------------------------------------------------
+# Pydantic models
+# ------------------------------------------------------------
 
 class StrategyVersionEnvFlags(BaseModel):
     execute_trades: bool
@@ -18,8 +25,8 @@ class StrategyVersionEnvFlags(BaseModel):
 
 class StrategyVersionResponse(BaseModel):
     status: str = Field(example="ok")
-    app_version: str = Field(example="2.14.0")
-    strategy_version: str = Field(example="2.14.0")
+    app_version: str = Field(example="2.14.3")
+    strategy_version: str = Field(example="2.14.3")
     git_commit: Optional[str] = None
     req_hash: Optional[str] = None
     python_version: str
@@ -37,6 +44,18 @@ class LiveResponse(BaseModel):
     status: str = "live"
     uptime_sec: int
     now_utc: str
+
+class FullHealthResponse(BaseModel):
+    ok: bool
+    binance: Dict[str, Any]
+    ai: Dict[str, Any]
+    env: Dict[str, Any]
+    files: Dict[str, Any]
+    version: Optional[str] = None
+
+# ------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------
 
 def _get_lib_versions() -> Dict[str, Optional[str]]:
     def _v(modname: str) -> Optional[str]:
@@ -65,7 +84,7 @@ def _get_lib_versions() -> Dict[str, Optional[str]]:
     }
     if libs["Pillow"] is None:
         try:
-            from PIL import Image
+            from PIL import Image  # type: ignore
             libs["Pillow"] = getattr(Image, "__version__", None)
         except Exception:
             pass
@@ -74,11 +93,26 @@ def _get_lib_versions() -> Dict[str, Optional[str]]:
 def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-@router.get("/health", tags=["Config"], summary="Basic health", operation_id="getBasicHealth", response_model=BasicHealthResponse)
+# ------------------------------------------------------------
+# Endpoints
+# ------------------------------------------------------------
+
+@router.get(
+    "/health",
+    tags=["Config"],
+    summary="Basic health",
+    operation_id="getBasicHealth",
+    response_model=BasicHealthResponse,
+)
 async def basic_health():
     return BasicHealthResponse(status="ok", version=APP_VERSION)
 
-@router.get("/health/strategy-version", summary="Strategy metadata & dependency versions", operation_id="getStrategyVersion", response_model=StrategyVersionResponse)
+@router.get(
+    "/health/strategy-version",
+    summary="Strategy metadata & dependency versions",
+    operation_id="getStrategyVersion",
+    response_model=StrategyVersionResponse,
+)
 async def strategy_version():
     uptime = int(time.time()) - BOOT_TS
     libs = _get_lib_versions()
@@ -91,8 +125,8 @@ async def strategy_version():
         status="ok",
         app_version=APP_VERSION,
         strategy_version=STRATEGY_VERSION,
-        git_commit=os.getenv("GIT_COMMIT") or None,
-        req_hash=os.getenv("REQ_HASH") or None,
+        git_commit=(os.getenv("GIT_COMMIT") or None),
+        req_hash=(os.getenv("REQ_HASH") or None),
         python_version=pyver,
         libs=libs,
         env_flags=flags,
@@ -101,10 +135,40 @@ async def strategy_version():
         now_utc=_now_iso_utc(),
     )
 
-@router.get("/health/live", summary="Liveness probe", operation_id="getLiveness", response_model=LiveResponse)
+@router.get(
+    "/health/live",
+    summary="Liveness probe",
+    operation_id="getLiveness",
+    response_model=LiveResponse,
+)
 async def liveness():
     uptime = int(time.time()) - BOOT_TS
     return LiveResponse(status="live", uptime_sec=uptime, now_utc=_now_iso_utc())
+
+# ------------------------------------------------------------
+# Full health (aggregated) — delegates to utils.health_full
+# ------------------------------------------------------------
+
+@router.get(
+    "/health/full",
+    summary="Full system health (Binance/AI/env/files)",
+    operation_id="getFullHealth",
+    response_model=FullHealthResponse,
+)
+async def health_full():
+    """
+    מאגד סטטוס מלא מהמערכת:
+    - Binance public/private (כולל רוטציית דומיינים)
+    - AI health
+    - קבצי JSON קריטיים
+    - ENV דרושים
+    """
+    # נמנע מתלות הדדית בזמן import של FastAPI ע"י import כאן
+    from utils.health_full import health_full_status  # type: ignore
+    data = await health_full_status()
+    # Pydantic יאמת ויהפוך ל-JSON
+    return FullHealthResponse(**data)
+
 
 
 
