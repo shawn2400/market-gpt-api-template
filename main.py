@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.ws_fallback import price_monitor_loop
+from utils.redis_client import redis_client
 
 # --- Env ---
 load_dotenv(override=True)
@@ -95,6 +96,8 @@ app.include_router(utils_router, tags=["Utils"])
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(price_monitor_loop())
+    if redis_client:
+        logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
     logger.info({"event": "startup", "msg": "✅ Price monitor loop started"})
 
 # --- Root / Status ---
@@ -121,6 +124,7 @@ async def health_live():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
