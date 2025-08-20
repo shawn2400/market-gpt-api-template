@@ -41,24 +41,16 @@ RUN mkdir -p /app/static/reports /app/static/img /tmp/matplotlib \
 
 # --- Healthcheck ---
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
-  CMD curl -fsS "http://127.0.0.1:${PORT}/" || exit 1
+  CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
 # --- Switch user ---
 USER appuser
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-CMD ["bash", "-lc", "exec gunicorn main:app \
-  -k uvicorn.workers.UvicornWorker \
-  --workers ${WORKERS:-2} \
-  --bind 0.0.0.0:${PORT} \
-  --timeout 120 \
-  --graceful-timeout 30 \
-  --keep-alive 5 \
-  --max-requests 2000 \
-  --max-requests-jitter 200 \
-  --worker-tmp-dir /dev/shm \
-  --log-level info"]
+# ניהול שרת דרך gunicorn (הגדרות ב־gunicorn_conf.py)
+CMD ["gunicorn", "main:app"]
+
 
 
 
