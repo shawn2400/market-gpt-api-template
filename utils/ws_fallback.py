@@ -17,9 +17,9 @@ FRESHNESS_SEC = 10
 async def price_monitor_loop():
     """
     לופ שרץ ברקע ושומר מחירים מה־WS או מ־REST
+    (בינתיים placeholder)
     """
     while True:
-        # כרגע placeholder - אפשר להרחיב לחיבור WS
         await asyncio.sleep(5)
 
 
@@ -67,6 +67,7 @@ def is_price_fresh(symbol: str) -> bool:
         return False
     age = time.time() - data["ts"]
     return age <= FRESHNESS_SEC
+
 
 
 
