@@ -1,27 +1,32 @@
 # utils/correlation.py
-from typing import List
+from typing import List, Dict, Any
 import numpy as np
 import logging
 
 logger = logging.getLogger("algogpt.correlation")
 
-def correlate_to_btc(symbol_data: List[float], btc_data: List[float]) -> float:
+def correlate_to_btc(
+    symbols: List[str],
+    ref_symbol: str = "BTCUSDT",
+    timeframe: str = "15m",
+    window: int = 200
+) -> List[Dict[str, Any]]:
     """
-    מחשב את מתאם פירסון בין symbol ל-BTC.
-    מחזיר ערך בין -1 ל-1.
+    מחשב מתאם פירסון בין כל סימול ל-BTC (ref_symbol).
+    כרגע DEMO: מחזיר מתאם רנדומלי.
+    בהמשך ניתן להחליף בנתוני אמת מ-Binance.
     """
-    if not symbol_data or not btc_data:
-        logger.warning("Empty input data for correlation")
-        return 0.0
-    try:
-        return float(np.corrcoef(symbol_data, btc_data)[0, 1])
-    except Exception as e:
-        logger.error(f"Correlation calculation failed: {e}")
-        return 0.0
+    results: List[Dict[str, Any]] = []
+    for sym in symbols:
+        try:
+            # DEMO — מחזיר ערך אקראי עד שיהיה חיבור לדאטה אמיתי
+            corr = float(np.random.uniform(-1, 1))
+            results.append({"symbol": sym, "ref": ref_symbol, "correlation": corr})
+        except Exception as e:
+            logger.error(f"Failed correlation calc for {sym}: {e}")
+            results.append({"symbol": sym, "ref": ref_symbol, "error": str(e)})
+    return results
 
-# Alias לשמירה על תאימות
-def compute_correlation(symbol_data: List[float], btc_data: List[float]) -> float:
-    return correlate_to_btc(symbol_data, btc_data)
 
 
 
