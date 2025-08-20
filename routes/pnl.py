@@ -1,5 +1,6 @@
 # routes/pnl.py
 from __future__ import annotations
+import os
 from typing import Dict, Any
 from fastapi import APIRouter, Body, HTTPException
 
@@ -57,3 +58,4 @@ async def get_pnl_report(limit_days: int = 7) -> Dict[str, Any]:
         return {"ok": True, "file_path": pdf_path, "url": url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"pnl pdf error: {e}")
+
