@@ -13,19 +13,18 @@ def correlate_to_btc(
 ) -> List[Dict[str, Any]]:
     """
     מחשב מתאם פירסון בין כל סימול ל-BTC (ref_symbol).
-    כרגע DEMO: מחזיר מתאם רנדומלי.
-    בהמשך ניתן להחליף בנתוני אמת מ-Binance.
+    כרגע DEMO בלבד – מחזיר מתאם רנדומלי.
     """
     results: List[Dict[str, Any]] = []
     for sym in symbols:
         try:
-            # DEMO — מחזיר ערך אקראי עד שיהיה חיבור לדאטה אמיתי
             corr = float(np.random.uniform(-1, 1))
             results.append({"symbol": sym, "ref": ref_symbol, "correlation": corr})
         except Exception as e:
             logger.error(f"Failed correlation calc for {sym}: {e}")
             results.append({"symbol": sym, "ref": ref_symbol, "error": str(e)})
     return results
+
 
 
 
