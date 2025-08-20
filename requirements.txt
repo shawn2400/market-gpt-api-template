@@ -45,6 +45,9 @@ matplotlib==3.8.4
 # 📦 Misc
 python-multipart==0.0.9
 
+# 🗄 Redis (חיבור ל־Render Key-Value / Valkey)
+redis==5.0.4
+
 
 
 
