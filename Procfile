@@ -1,4 +1,5 @@
-web: gunicorn main:app -c gunicorn_conf.py
+web: gunicorn main:app -k uvicorn.workers.UvicornWorker -c gunicorn_conf.py
+
 
 
 
