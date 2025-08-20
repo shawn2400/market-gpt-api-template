@@ -1,42 +1,63 @@
 # routes/trade.py
 from __future__ import annotations
 from fastapi import APIRouter, Body
-from typing import Dict, Any, Literal
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+import logging
 
-router = APIRouter(tags=["Trade"])
+from utils import config as cfg
+from utils.binance_client import binance_client
 
-# ✅ LIVE trade execute (לא demo)
-@router.post("/execute", summary="Execute Trade (with dry_run option)")
-async def trade_execute(
-    symbol: str = Body(..., description="Trading pair e.g. BTCUSDT"),
-    side: Literal["LONG", "SHORT"] = Body(..., description="Position side: LONG or SHORT"),
-    type: Literal["LIMIT", "STOP_LIMIT"] = Body(..., description="Order type"),
-    price: float = Body(..., gt=0),
-    quantity: float = Body(..., gt=0),
-    entry: float | None = Body(None, description="Required for SL/TP auto-calc"),
-    sl: float | None = Body(None, description="Stop Loss"),
-    tp: float | None = Body(None, description="Take Profit"),
-    dry_run: bool = Body(True, description="If true, no real order is placed"),
-) -> Dict[str, Any]:
-    # אם אין entry והמשתמש רוצה SL/TP → נחזיר 400
-    if (sl or tp) and not entry:
-        return {"ok": False, "error": "entry is required when auto-calculating SL/TP"}
+router = APIRouter(prefix="/trade", tags=["Trade"])
+logger = logging.getLogger("algogpt.trade")
 
-    # פה נכנסת הלוגיקה למסחר אמיתי ב־Binance
-    order = {
-        "symbol": symbol,
-        "side": side,
-        "type": type,
-        "price": price,
-        "quantity": quantity,
-        "dry_run": dry_run,
-        "sl": sl,
-        "tp": tp,
-        "entry": entry,
-    }
+class TradeRequest(BaseModel):
+    symbol: str = Field(..., description="Trading pair, e.g. BTCUSDT")
+    side: Literal["LONG", "SHORT"]
+    type: Literal["LIMIT", "STOP", "MARKET"] = "LIMIT"
+    price: Optional[float] = None
+    quantity: float
+    entry: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    dry_run: bool = False
 
-    # ⚡ כרגע רק מחזיר JSON (אפשר להוסיף חיבור ל־Binance API בהמשך)
-    return {"ok": True, "executed": order}
+@router.post("/execute")
+async def execute_trade(req: TradeRequest):
+    try:
+        # אם המשתמש ביקש dry_run → לא נשלח ל־Binance
+        if req.dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "symbol": req.symbol,
+                "side": req.side,
+                "type": req.type,
+                "price": req.price,
+                "quantity": req.quantity,
+                "sl": req.stop_loss,
+                "tp": req.take_profit,
+            }
+
+        # תרגום LONG/SHORT ל־BUY/SELL מול Binance
+        binance_side = "BUY" if req.side == "LONG" else "SELL"
+
+        params = {
+            "symbol": req.symbol,
+            "side": binance_side,
+            "type": req.type,
+            "quantity": req.quantity,
+        }
+        if req.type == "LIMIT" and req.price:
+            params["price"] = req.price
+            params["timeInForce"] = "GTC"
+
+        order = binance_client.new_order(**params)
+
+        return {"ok": True, "order": order}
+    except Exception as e:
+        logger.exception("Trade execution failed")
+        return {"ok": False, "error": str(e)}
 
 
 
