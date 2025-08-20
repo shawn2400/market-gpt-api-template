@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from utils.response_limits import ResponseSizeLimiter
 
@@ -35,6 +36,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Static ---
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # --- Routers ---
 from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
@@ -52,7 +56,7 @@ from routes.analytics import router as analytics_router
 from routes.risk import router as risk_router
 from routes.snapshot import router as snapshot_router
 from routes.dashboard import router as dashboard_router
-from routes.orders import router as orders_router   # ✅ נוסף לניהול פקודות
+from routes.orders import router as orders_router
 
 # ✅ Include routers
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
@@ -71,7 +75,7 @@ app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
 app.include_router(risk_router, prefix="/risk", tags=["Risk"])
 app.include_router(snapshot_router, prefix="/snapshot", tags=["Snapshots"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard"])
-app.include_router(orders_router, prefix="/orders", tags=["Orders"])  # ✅ חדש
+app.include_router(orders_router, prefix="/orders", tags=["Orders"])
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
@@ -93,11 +97,11 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-
 # --- Entrypoint ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
