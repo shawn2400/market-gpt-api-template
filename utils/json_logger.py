@@ -1,36 +1,33 @@
 # utils/json_logger.py
-import logging
-import json
-import sys
-import datetime
-import os
+import logging, json, sys, uuid
 
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
         log_record = {
-            "ts": datetime.datetime.utcnow().isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
-        # אם העברת dict ב־logger.info({...})
-        if isinstance(record.msg, dict):
-            log_record.update(record.msg)
-
-        if record.exc_info:
-            log_record["exc_info"] = self.formatException(record.exc_info)
-
+        if hasattr(record, "trace_id"):
+            log_record["trace_id"] = record.trace_id
         return json.dumps(log_record, ensure_ascii=False)
 
+class TraceLoggerAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        if isinstance(msg, dict):
+            msg["trace_id"] = self.extra.get("trace_id", None)
+            return json.dumps(msg, ensure_ascii=False), kwargs
+        return msg, kwargs
+
 def setup_json_logging():
-    level = os.getenv("LOG_LEVEL", "INFO").upper()
-
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
-
+    handler.setFormatter(JSONFormatter())
     root = logging.getLogger()
-    root.setLevel(level)
-    root.handlers = [handler]
-
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
     return logging.getLogger("algogpt")
+
+def get_trace_logger(trace_id: str | None = None):
+    return TraceLoggerAdapter(logging.getLogger("algogpt"), {"trace_id": trace_id or str(uuid.uuid4())})
+
 
