@@ -9,7 +9,6 @@ import httpx
 from random import random
 
 # ------------------------ ENV / CONFIG ------------------------
-# --- OpenAI (standard) ---
 OPENAI_BASE: str = (os.getenv("OPENAI_BASE_URL") or "").strip() or "https://api.openai.com/v1"
 OPENAI_KEY: str = (os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_MODEL: str = (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
@@ -17,9 +16,9 @@ OPENAI_ORG: Optional[str] = (os.getenv("OPENAI_ORG") or "").strip() or None
 OPENAI_PROJECT: Optional[str] = (os.getenv("OPENAI_PROJECT") or "").strip() or None
 
 # --- Azure OpenAI (optional) ---
-AZURE_ENDPOINT: str = (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip()  # e.g. https://myres.openai.azure.com
+AZURE_ENDPOINT: str = (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip()
 AZURE_KEY: str = (os.getenv("AZURE_OPENAI_KEY") or "").strip()
-AZURE_DEPLOYMENT: str = (os.getenv("AZURE_OPENAI_DEPLOYMENT") or "").strip()  # deployment name
+AZURE_DEPLOYMENT: str = (os.getenv("AZURE_OPENAI_DEPLOYMENT") or "").strip()
 AZURE_API_VERSION: str = (os.getenv("AZURE_OPENAI_API_VERSION") or "2024-02-15-preview").strip()
 
 # Shared knobs
@@ -33,12 +32,7 @@ BACKOFF_BASE: float = float(os.getenv("OPENAI_BACKOFF_BASE", "0.6"))
 BACKOFF_CAP: float = float(os.getenv("OPENAI_BACKOFF_CAP", "10.0"))
 
 # ------------------------ MODE DETECTION ------------------------
-# Heuristics:
-# 1) אם יש AZURE_* מלאים → מצב Azure
-# 2) אם OPENAI_BASE_URL מכיל azure.com או /openai/deployments → מצב Azure
-# אחרת → OpenAI רגיל
 def _detect_mode() -> Tuple[str, str]:
-    # returns: ("azure"|"openai", base_url)
     base_lower = (OPENAI_BASE or "").lower()
     if (AZURE_ENDPOINT and AZURE_KEY and AZURE_DEPLOYMENT) or ("azure.com" in base_lower) or ("/openai/deployments" in base_lower):
         base = AZURE_ENDPOINT or OPENAI_BASE
@@ -57,17 +51,10 @@ def _headers() -> Dict[str, str]:
         key = AZURE_KEY or OPENAI_KEY
         if not key:
             raise RuntimeError("AZURE_OPENAI_KEY or OPENAI_API_KEY missing for Azure mode")
-        return {
-            "api-key": key,
-            "Content-Type": "application/json",
-        }
-    # openai standard
+        return {"api-key": key, "Content-Type": "application/json"}
     if not OPENAI_KEY:
         raise RuntimeError("OPENAI_API_KEY missing")
-    hdrs = {
-        "Authorization": f"Bearer {OPENAI_KEY}",
-        "Content-Type": "application/json",
-    }
+    hdrs = {"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}
     if OPENAI_ORG:
         hdrs["OpenAI-Organization"] = OPENAI_ORG
     if OPENAI_PROJECT:
@@ -128,20 +115,11 @@ def _backoff(attempt: int) -> float:
 
 # ------------------------ URL ROUTING ------------------------
 def _chat_endpoint_path() -> str:
-    """
-    החזרת הנתיב היחסי לקריאת chat completions לפי המצב.
-    """
     if _MODE == "azure":
-        # base = https://{endpoint}
-        # path = /openai/deployments/{deployment}/chat/completions?api-version=...
         if not AZURE_DEPLOYMENT:
-            # ייתכנו מתקפות שבהן OPENAI_BASE הוא azure; ננסה לחלץ deployment מה-BASE אם קיים
-            # אך אם אין — נטיל חריגה כדי לא לירות לעצמנו ברגל.
             raise RuntimeError("AZURE_OPENAI_DEPLOYMENT missing for Azure mode")
         return f"/openai/deployments/{AZURE_DEPLOYMENT}/chat/completions"
-    else:
-        # base = https://api.openai.com/v1
-        return "/chat/completions"
+    return "/chat/completions"
 
 def _chat_query_params() -> Dict[str, str]:
     if _MODE == "azure":
@@ -150,9 +128,6 @@ def _chat_query_params() -> Dict[str, str]:
 
 # ------------------------ LOW-LEVEL CALL ------------------------
 async def _post_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    POST אל Chat Completions עם ריטריי מודע ל-429/5xx ו-Retry-After, מותאם ל-Azure/OpenAI.
-    """
     client = await _get_client()
     last_err: Optional[str] = None
     url = _chat_endpoint_path()
@@ -179,9 +154,7 @@ async def _post_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
                         logging.warning(f"[ai_client] 429/5xx (attempt {attempt+1}) → backoff {bo:.2f}s")
                         await asyncio.sleep(bo)
                     continue
-
                 break
-
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
                 last_err = f"net={type(e).__name__}: {e}"
                 bo = _backoff(attempt)
@@ -194,7 +167,6 @@ async def _post_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
                 logging.warning(f"[ai_client] unexpected (attempt {attempt+1}) → backoff {bo:.2f}s: {e}")
                 await asyncio.sleep(bo)
                 continue
-
     raise RuntimeError(f"OpenAI request failed: {last_err}")
 
 # ------------------------ PUBLIC API ------------------------
@@ -206,14 +178,7 @@ async def chat(
     max_tokens: int = 256,
     **kwargs: Any,
 ) -> str:
-    """
-    מחזיר את ה-content של ההודעה הראשונה. במקרה של ריק/כשל יוחזר מחרוזת ריקה
-    כדי שהשכבות העליונות יוכלו לבצע פולבק (ולא ייזרק חריג).
-    """
-    # Azure מתייחס ל-"model" כאל deployment-params שונים. המסר נשלח בפורמט זהה.
     payload: Dict[str, Any] = {
-        # ב-Azure השדה "model" מתעלם/מיותר (deployment מכתיב את המודל בפועל),
-        # אבל לא מזיק להשאירו לשקיפות; חלק מהגרסאות דורשות אותו.
         "model": model,
         "messages": [
             {"role": "system", "content": system},
@@ -226,25 +191,20 @@ async def chat(
 
     try:
         data = await _post_chat(payload)
-        # שני המסלולים מחזירים מבנה choices אחיד
         choices = data.get("choices") or []
         if not choices:
             logging.warning(f"[ai_client] empty choices: {str(data)[:300]}")
             return ""
         msg = (choices[0].get("message") or {})
-        content = msg.get("content") or ""
-        return content
+        return msg.get("content") or ""
     except Exception as e:
         logging.warning(f"[ai_client.chat] {e}")
         return ""
 
 async def ai_healthcheck() -> Dict[str, Any]:
-    """
-    בדיקת חיבור: שולח 'ping' ובודק שמתקבל 'pong' או כל תשובה לא ריקה.
-    """
     try:
         txt = await chat("ping", system="Reply with 'pong'.", max_tokens=4, temperature=0.0)
-        ok = ("pong" in (txt or "").lower()) or (len((txt or "").strip()) > 0)
+        ok = len((txt or "").strip()) > 0
         return {
             "ok": ok,
             "reply": txt,
@@ -259,36 +219,15 @@ async def ai_healthcheck() -> Dict[str, Any]:
         }
     except Exception as e:
         logging.warning(f"[ai_health] {e}")
-        return {
-            "ok": False,
-            "error": str(e),
-            "mode": _MODE,
-            "model": OPENAI_MODEL,
-            "http2": HTTP2,
-            "base": _BASE,
-            "org": OPENAI_ORG if _MODE == "openai" else None,
-            "project": OPENAI_PROJECT if _MODE == "openai" else None,
-            "azure_deployment": AZURE_DEPLOYMENT if _MODE == "azure" else None,
-            "azure_api_version": AZURE_API_VERSION if _MODE == "azure" else None,
-        }
+        return {"ok": False, "error": str(e), "model": OPENAI_MODEL, "mode": _MODE}
 
-# ------------------------ CLASS (לשילוב עם main.py) ------------------------
+# ------------------------ CLASS ------------------------
 class _AIClient:
-    """
-    עטיפה עם warmup() לשימוש ב-main.py:
-        from utils.ai_client import ai_client
-        await ai_client.warmup()
-        await ai_client.chat(...)
-    """
     def __init__(self) -> None:
         self._ready = False
 
     async def warmup(self) -> None:
-        """
-        בודק מפתחות, מרים AsyncClient, מבצע פינג קצר (ללא כישלון גורלי).
-        """
         try:
-            # בדיקת מפתח לפי מצב
             if _MODE == "azure":
                 if not (AZURE_KEY or OPENAI_KEY):
                     raise RuntimeError("AZURE_OPENAI_KEY (or OPENAI_API_KEY) missing for Azure mode")
@@ -297,7 +236,6 @@ class _AIClient:
             else:
                 if not OPENAI_KEY:
                     raise RuntimeError("OPENAI_API_KEY missing")
-
             await _get_client()
             try:
                 res = await ai_healthcheck()
@@ -318,8 +256,8 @@ class _AIClient:
     async def close(self) -> None:
         await _close_client()
 
-# מופע יחיד לייבוא ע"י main.py
 ai_client = _AIClient()
+
 
 
 
