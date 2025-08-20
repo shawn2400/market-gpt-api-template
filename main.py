@@ -1,6 +1,6 @@
 # main.py
 from __future__ import annotations
-import os, logging
+import os, logging, asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +9,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from utils.response_limits import ResponseSizeLimiter
+from utils.ws_fallback import price_monitor_loop
 
 # --- Load env ---
 load_dotenv(override=True)
@@ -23,7 +24,7 @@ app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
     description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance "
-                "(Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk/Orders/Debug/WS).",
+                "(Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk/Orders/Debug).",
 )
 
 # --- Middlewares ---
@@ -66,7 +67,6 @@ from routes.price import router as price_router
 from routes.market import router as market_router
 from routes.scan import router as scan_utils_router
 from routes.utils import router as utils_router
-from routes.ws_health import router as ws_health_router  # ✅ חדש
 
 # ✅ Include routers
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
@@ -95,10 +95,15 @@ app.include_router(price_router, tags=["Price"])
 app.include_router(market_router, tags=["Market"])
 app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
 app.include_router(utils_router, tags=["Utils"])
-app.include_router(ws_health_router, tags=["WS Health"])  # ✅ חדש
+
+# --- Startup: Background tasks ---
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(price_monitor_loop())  # 🔄 ניטור מחירים
+    logger.info("✅ Price monitor loop started")
 
 # --- Root / Status ---
-@app.get("/", tags=["Config"])
+@app.get("/", tags=["Config"], operation_id="getRootStatus")
 async def root_status():
     return {"status": "ok", "version": APP_VERSION}
 
@@ -109,11 +114,11 @@ async def handle_exception(request: Request, exc: Exception):
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 # --- Health ---
-@app.get("/health", tags=["Health"])
+@app.get("/health", tags=["Health"], operation_id="getHealth")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
 
-@app.get("/health/live", tags=["Health"])
+@app.get("/health/live", tags=["Health"], operation_id="getHealthLive")
 async def health_live():
     return {"status": "live"}
 
@@ -121,6 +126,7 @@ async def health_live():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
