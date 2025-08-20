@@ -36,6 +36,7 @@ from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes import debug
 from routes import ai_manual_scan
+from routes.health import router as health_router   # ✅ חדש
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
     try:
@@ -116,7 +117,8 @@ async def get_metrics():
 app.include_router(ai_router, prefix="/ai", dependencies=[Depends(require_bearer_token)])
 app.include_router(trade_router, prefix="/trade", dependencies=[Depends(require_bearer_token)])
 app.include_router(debug.router, prefix="/debug")
-app.include_router(ai_manual_scan.router, dependencies=[Depends(require_bearer_token)])  # manual scan
+app.include_router(ai_manual_scan.router, dependencies=[Depends(require_bearer_token)])
+app.include_router(health_router)   # ✅ מחובר
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
@@ -148,6 +150,7 @@ async def on_startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
