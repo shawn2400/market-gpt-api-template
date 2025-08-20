@@ -36,7 +36,7 @@ def get_client() -> Client:
 
 
 # =====================================================
-# Retry helper (used by trader/backtester)
+# Retry helper
 # =====================================================
 def retry_call(fn: Callable[[], Any], label: str, retries: int = 3, delay: float = 0.5) -> Any:
     for i in range(retries):
@@ -91,6 +91,36 @@ def futures_position(symbol: str) -> dict[str, Any] | None:
     positions = retry_call(lambda: client.futures_position_information(symbol=symbol.upper()),
                            f"futures_position({symbol})")
     return positions[0] if positions else None
+
+
+# =====================================================
+# 🔹 EXTRA FUNCTIONS (fix missing imports)
+# =====================================================
+def ping_and_info() -> bool:
+    """בדיקת חיבור ל-Binance (Ping + Exchange Info)"""
+    client = get_client()
+    try:
+        retry_call(lambda: client.ping(), "ping")
+        retry_call(lambda: client.futures_exchange_info(), "exchange_info")
+        return True
+    except Exception as e:
+        logger.error(f"[Binance] ping_and_info failed: {e}")
+        return False
+
+
+def futures_mark_price(symbol: str) -> float:
+    """מחזיר Mark Price עבור סימבול"""
+    client = get_client()
+    data = retry_call(lambda: client.futures_mark_price(symbol=symbol.upper()), f"futures_mark_price({symbol})")
+    return float(data.get("markPrice", 0))
+
+
+def sync_server_time() -> None:
+    """מסנכרן שעון מקומי עם Binance (log בלבד)"""
+    client = get_client()
+    server_time = retry_call(lambda: client.get_server_time(), "get_server_time")
+    logger.info(f"[Binance] server_time = {server_time}")
+
 
 
 
