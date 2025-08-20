@@ -3,12 +3,14 @@ from __future__ import annotations
 from typing import List, Dict, Any, Union
 from fastapi import APIRouter, Depends, Query, Body, HTTPException
 
+# --- Auth ---
 try:
     from utils.auth import require_bearer_token
 except Exception:
     async def require_bearer_token(*_a, **_k):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+# --- Utils Imports ---
 try:
     from utils.correlation import compute_correlation as correlate_to_btc
     from utils.macro import macro_snapshot
