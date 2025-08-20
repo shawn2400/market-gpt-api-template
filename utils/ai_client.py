@@ -195,8 +195,14 @@ async def chat(
         if not choices:
             logging.warning(f"[ai_client] empty choices: {str(data)[:300]}")
             return ""
-        msg = (choices[0].get("message") or {})
-        return msg.get("content") or ""
+
+        choice0 = choices[0]
+        # ✅ תומך גם ב-message וגם ב-text (לפי סוג המודל)
+        if "message" in choice0:
+            return (choice0.get("message") or {}).get("content") or ""
+        if "text" in choice0:
+            return choice0.get("text") or ""
+        return ""
     except Exception as e:
         logging.warning(f"[ai_client.chat] {e}")
         return ""
@@ -257,6 +263,7 @@ class _AIClient:
         await _close_client()
 
 ai_client = _AIClient()
+
 
 
 
