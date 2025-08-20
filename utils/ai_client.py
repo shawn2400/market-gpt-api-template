@@ -10,7 +10,10 @@ from random import random
 # ---------- ENV / CONFIG ----------
 OPENAI_BASE: str = (os.getenv("OPENAI_BASE_URL") or "").strip() or "https://api.openai.com/v1"
 OPENAI_KEY: str = (os.getenv("OPENAI_API_KEY") or "").strip()
-OPENAI_MODEL: str = (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
+if not OPENAI_KEY:
+    logging.warning("[ai_client] OPENAI_API_KEY not found in ENV (Render must inject it)")
+
+OPENAI_MODEL: str = (os.getenv("OPENAI_MODEL") or "gpt-4o").strip()
 OPENAI_ORG: Optional[str] = (os.getenv("OPENAI_ORG") or "").strip() or None
 OPENAI_PROJECT: Optional[str] = (os.getenv("OPENAI_PROJECT") or "").strip() or None
 
@@ -138,33 +141,19 @@ async def _post_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
                 r = await client.post(url, json=payload, params=params)
                 if r.status_code == 200:
                     return r.json()
-
                 body_snip = (r.text or "")[:400]
                 last_err = f"http={r.status_code} body={body_snip}"
-
                 if _should_retry(r.status_code):
                     retry_after = _retry_after_seconds(r)
                     if retry_after is not None:
-                        sleep_for = min(retry_after, BACKOFF_CAP) * (0.9 + 0.2 * random())
-                        logging.warning(f"[ai_client] 429/5xx (attempt {attempt+1}) → sleep {sleep_for:.2f}s (Retry-After)")
-                        await asyncio.sleep(sleep_for)
+                        await asyncio.sleep(min(retry_after, BACKOFF_CAP))
                     else:
-                        bo = _backoff(attempt)
-                        logging.warning(f"[ai_client] 429/5xx (attempt {attempt+1}) → backoff {bo:.2f}s")
-                        await asyncio.sleep(bo)
+                        await asyncio.sleep(_backoff(attempt))
                     continue
                 break
-            except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
-                last_err = f"net={type(e).__name__}: {e}"
-                bo = _backoff(attempt)
-                logging.warning(f"[ai_client] network error (attempt {attempt+1}) → backoff {bo:.2f}s: {e}")
-                await asyncio.sleep(bo)
-                continue
             except Exception as e:
-                last_err = f"unexpected={type(e).__name__}: {e}"
-                bo = _backoff(attempt)
-                logging.warning(f"[ai_client] unexpected (attempt {attempt+1}) → backoff {bo:.2f}s: {e}")
-                await asyncio.sleep(bo)
+                last_err = str(e)
+                await asyncio.sleep(_backoff(attempt))
                 continue
     raise RuntimeError(f"OpenAI request failed: {last_err}")
 
@@ -192,11 +181,8 @@ async def chat(
         data = await _post_chat(payload)
         choices = data.get("choices") or []
         if not choices:
-            logging.warning(f"[ai_client] empty choices: {str(data)[:300]}")
             return ""
-
         choice0 = choices[0]
-        # ✅ תמיכה גם ב-message וגם ב-text
         if "message" in choice0 and choice0["message"]:
             return (choice0["message"].get("content") or "").strip()
         if "text" in choice0:
@@ -211,20 +197,8 @@ async def ai_healthcheck() -> Dict[str, Any]:
         txt = await chat("ping", system="Reply with 'pong'.", max_tokens=8, temperature=0.0)
         reply = (txt or "").strip()
         ok = "pong" in reply.lower() or len(reply) > 0
-        return {
-            "ok": ok,
-            "reply": reply,
-            "mode": _MODE,
-            "model": OPENAI_MODEL,
-            "http2": HTTP2,
-            "base": _BASE,
-            "org": OPENAI_ORG if _MODE == "openai" else None,
-            "project": OPENAI_PROJECT if _MODE == "openai" else None,
-            "azure_deployment": AZURE_DEPLOYMENT if _MODE == "azure" else None,
-            "azure_api_version": AZURE_API_VERSION if _MODE == "azure" else None,
-        }
+        return {"ok": ok, "reply": reply, "mode": _MODE, "model": OPENAI_MODEL}
     except Exception as e:
-        logging.warning(f"[ai_health] {e}")
         return {"ok": False, "error": str(e), "model": OPENAI_MODEL, "mode": _MODE}
 
 # ---------- Class ----------
@@ -234,20 +208,11 @@ class _AIClient:
 
     async def warmup(self) -> None:
         try:
-            if _MODE == "azure":
-                if not (AZURE_KEY or OPENAI_KEY):
-                    raise RuntimeError("AZURE_OPENAI_KEY (or OPENAI_API_KEY) missing for Azure mode")
-                if not AZURE_DEPLOYMENT:
-                    raise RuntimeError("AZURE_OPENAI_DEPLOYMENT missing")
-            else:
-                if not OPENAI_KEY:
-                    raise RuntimeError("OPENAI_API_KEY missing")
+            if not OPENAI_KEY and _MODE != "azure":
+                raise RuntimeError("OPENAI_API_KEY missing")
             await _get_client()
-            try:
-                res = await ai_healthcheck()
-                self._ready = bool(res.get("ok", False))
-            except Exception:
-                self._ready = False
+            res = await ai_healthcheck()
+            self._ready = bool(res.get("ok", False))
         except Exception as e:
             logging.warning(f"[ai_client.warmup] {e}")
             self._ready = False
@@ -263,6 +228,7 @@ class _AIClient:
         await _close_client()
 
 ai_client = _AIClient()
+
 
 
 
