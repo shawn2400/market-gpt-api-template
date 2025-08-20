@@ -31,7 +31,8 @@ async def get_correlation(
 ) -> Dict[str, Any]:
     syms = symbols if isinstance(symbols, list) else [s for s in (symbols or "").replace(" ", "").split(",") if s]
     try:
-        items = correlate_to_btc(syms, ref_symbol=ref_symbol, timeframe=timeframe, window=window)
+        # 🟢 צריך await כי הפונקציה async
+        items = await correlate_to_btc(syms, ref_symbol=ref_symbol, timeframe=timeframe, window=window)
         return {"ok": True, "items": items}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -65,6 +66,7 @@ async def post_eta(req: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         )}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 
 
