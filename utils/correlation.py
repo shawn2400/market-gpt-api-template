@@ -111,3 +111,8 @@ def compute_correlation(
     return out
 
 
+# ✅ שמירה על תאימות לאחור
+correlate_to_btc = compute_correlation
+
+
+
