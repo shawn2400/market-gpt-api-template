@@ -1,3 +1,4 @@
+# utils/risk.py
 from __future__ import annotations
 from typing import Any, Dict, Optional
 import math
@@ -12,10 +13,16 @@ except Exception:
     config = _C()
 
 def suggest_risk(
-    symbol: str, side: str, entry: float, sl: float,
-    tp: Optional[float] = None, atr: Optional[float] = None,
-    equity_usdt: Optional[float] = None, confidence: Optional[float] = None,
-    max_budget_usdt: Optional[float] = None, max_leverage: Optional[int] = None,
+    symbol: str,
+    side: str,
+    entry: float,
+    sl: float,
+    tp: Optional[float] = None,
+    atr: Optional[float] = None,
+    equity_usdt: Optional[float] = None,
+    confidence: Optional[float] = None,
+    max_budget_usdt: Optional[float] = None,
+    max_leverage: Optional[int] = None,
 ) -> Dict[str, Any]:
     if entry <= 0 or sl <= 0:
         raise ValueError("entry/sl must be > 0")
@@ -48,20 +55,30 @@ def suggest_risk(
         rr = reward / max(risk_usd, 1e-9)
 
     suggested = {
-        "symbol": symbol, "side": side.upper(),
-        "entry": entry, "sl": sl, "tp": tp,
-        "leverage": lev, "budget_usdt": round(notion, 2),
-        "qty": float(qty), "risk_usd": round(risk_usd, 2), "rr": rr,
+        "symbol": symbol,
+        "side": side.upper(),
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+        "leverage": lev,
+        "budget_usdt": round(notion, 2),
+        "qty": float(qty),
+        "risk_usd": round(risk_usd, 2),
+        "rr": rr,
     }
     return {
         "ok": True,
         "suggested": suggested,
         "inputs": {
-            "equity_usdt": equity_usdt, "risk_pct": risk_pct,
-            "max_budget_usdt": budget_cap, "max_leverage": max_lev,
-            "confidence": confidence, "atr": atr,
-        }
+            "equity_usdt": equity_usdt,
+            "risk_pct": risk_pct,
+            "max_budget_usdt": budget_cap,
+            "max_leverage": max_lev,
+            "confidence": confidence,
+            "atr": atr,
+        },
     }
+
 
 
 
