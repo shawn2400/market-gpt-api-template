@@ -5,11 +5,12 @@ import threading
 from collections import deque
 from typing import Dict, Any
 
+
 class _Metrics:
     """
     מטריקות פרודקשן קלילות ללא תלות חיצונית:
     - uptime, סה״כ בקשות/שגיאות
-    - חלוקה לפי קודי סטטוס
+    - חלוקה לפי קודי סטטוס / method / path
     - RPS אחרונה (5s/60s)
     - זמני תגובה: ממוצע/מינ/מקס/חציון/95%
     """
@@ -21,6 +22,8 @@ class _Metrics:
         self.total_requests = 0
         self.total_errors = 0
         self.by_status: Dict[int, int] = {}
+        self.by_method: Dict[str, int] = {}
+        self.by_path: Dict[str, int] = {}
 
         # Latency samples (ms)
         self.latencies = deque(maxlen=window_size)
@@ -49,12 +52,19 @@ class _Metrics:
         return float((s[mid-1] + s[mid]) / 2.0)
 
     # --- Public API used by middleware ---
-    def observe_request(self, status_code: int, duration_ms: float) -> None:
+    def observe_request(self, status_code: int, duration_ms: float,
+                        method: str | None = None, path: str | None = None) -> None:
         with self._lock:
             self.total_requests += 1
             self.by_status[status_code] = self.by_status.get(status_code, 0) + 1
             self.latencies.append(float(duration_ms))
             self.recent_ts.append(time.time())
+
+            if method:
+                self.by_method[method] = self.by_method.get(method, 0) + 1
+            if path:
+                self.by_path[path] = self.by_path.get(path, 0) + 1
+
             if status_code >= 500:
                 self.total_errors += 1
 
@@ -88,6 +98,9 @@ class _Metrics:
                     "total": self.total_requests,
                     "errors_total": self.total_errors,
                     "by_status": dict(sorted(self.by_status.items())),
+                    "by_method": dict(sorted(self.by_method.items())),
+                    "top_paths": dict(sorted(self.by_path.items(),
+                                             key=lambda kv: kv[1], reverse=True)[:20]),
                     "rps_5s": round(r5, 3),
                     "rps_60s": round(r60, 3),
                 },
@@ -101,6 +114,8 @@ class _Metrics:
                 },
             }
 
+
 metrics_tracker = _Metrics()
+
 
 
