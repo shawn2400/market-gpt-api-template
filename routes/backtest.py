@@ -1,58 +1,79 @@
 # routes/backtest.py
 from __future__ import annotations
+from typing import Optional, List
+from fastapi import APIRouter, Depends, Header
+from pydantic import BaseModel
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from typing import List, Literal
-
-# --- Auth (עם fallback אם ה-import נכשל) ---
+# --- Auth wrapper ---
 try:
-    from utils.auth import require_bearer_token  # type: ignore
+    from utils.auth import require_bearer_token as _raw_require_bearer
+    def require_bearer_token(authorization: Optional[str] = Header(default=None)):
+        return _raw_require_bearer(authorization=authorization)
 except Exception:
-    async def require_bearer_token(*args, **kwargs):
+    def require_bearer_token(authorization: Optional[str] = Header(default=None)):
         return None
 
-router = APIRouter(dependencies=[Depends(require_bearer_token)])
+router = APIRouter(prefix="/backtest", tags=["Backtest"], dependencies=[Depends(require_bearer_token)])
 
-Side = Literal["LONG", "SHORT"]
 
-class BacktestTrade(BaseModel):
-    timestamp: int
-    price: float
-    side: Side
-    pnl: float
+# --- Models ---
+class BacktestRequest(BaseModel):
+    symbol: str
+    side: str
+    interval: str = "15m"
+    lookback_days: int = 30
+    leverage: Optional[int] = 5
+
 
 class BacktestResult(BaseModel):
     symbol: str
-    timeframe: str
-    trades: List[BacktestTrade]
+    side: str
+    interval: str
+    lookback_days: int
+    trades: int
     win_rate: float
+    avg_pnl: float
     total_pnl: float
-    count: int
 
-class BacktestRequest(BaseModel):
-    symbol: str = Field(..., example="BTCUSDT")
-    timeframe: str = Field("15m", pattern="^(5m|15m|1h|4h)$")
-    limit: int = 200
-    slippage_pct: float = 0.1
 
-@router.post("/backtest", operation_id="postBacktestRun", response_model=BacktestResult)
-async def run_backtest(payload: BacktestRequest):
-    # דמו מינימלי; חבר למנוע הבק־טסט האמיתי שלך אם/כש יתאים
-    trades = [
-        BacktestTrade(timestamp=1723800000, price=65000, side="LONG", pnl=12.5),
-        BacktestTrade(timestamp=1723800900, price=65120, side="SHORT", pnl=-4.1),
-    ]
-    wins = sum(1 for t in trades if t.pnl > 0)
-    total = sum(t.pnl for t in trades)
-    return BacktestResult(
-        symbol=payload.symbol.upper(),
-        timeframe=payload.timeframe,
-        trades=trades,
-        win_rate=(wins / len(trades) * 100.0),
-        total_pnl=total,
-        count=len(trades),
+class BacktestResponse(BaseModel):
+    ok: bool
+    results: List[BacktestResult]
+
+
+# --- Endpoints ---
+@router.post("/", response_model=BacktestResponse, summary="Run backtest", operation_id="postRunBacktest")
+async def run_backtest(req: BacktestRequest):
+    """
+    מבצע סימולציית Backtest על נתוני העבר.
+    """
+    # דמה בלבד – במציאות יחושב לפי נתוני היסטוריית שוק
+    result = BacktestResult(
+        symbol=req.symbol.upper(),
+        side=req.side.upper(),
+        interval=req.interval,
+        lookback_days=req.lookback_days,
+        trades=42,
+        win_rate=61.9,
+        avg_pnl=2.5,
+        total_pnl=105.0,
     )
+    return BacktestResponse(ok=True, results=[result])
+
+
+@router.get("/status/{symbol}", summary="Get last backtest status", operation_id="getBacktestStatus")
+async def get_backtest_status(symbol: str):
+    """
+    מחזיר סטטוס אחרון של Backtest עבור סמל נתון.
+    """
+    return {
+        "ok": True,
+        "symbol": symbol.upper(),
+        "last_run": "2025-08-20T10:00:00Z",
+        "trades": 42,
+        "win_rate": 61.9,
+        "total_pnl": 105.0,
+    }
 
 
 
