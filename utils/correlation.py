@@ -1,7 +1,7 @@
 # utils/correlation.py
 from __future__ import annotations
 import os, math
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
 import requests
@@ -24,7 +24,8 @@ def _klines(symbol: str, interval: str, limit: int = 500) -> Optional[pd.Series]
             return None
         arr = r.json()
         df = pd.DataFrame(arr, columns=[
-            "openTime","open","high","low","close","volume","closeTime","qv","nTrades","takerBase","takerQuote","x"
+            "openTime","open","high","low","close","volume","closeTime",
+            "qv","nTrades","takerBase","takerQuote","x"
         ])
         df["close"] = pd.to_numeric(df["close"], errors="coerce")
         s = df["close"].astype(float)
@@ -38,10 +39,6 @@ def _safe_pct_change(s: pd.Series) -> pd.Series:
     return s.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
 
 def _lead_lag(a: pd.Series, b: pd.Series, max_lag: int = 10) -> int:
-    """
-    מוצא היסט מוביל/מפגר (lag) במס׳ ברים ע״י cross-correlation על תשואות.
-    ערך חיובי → הסימבול מפגר אחרי BTC (BTC מוביל).
-    """
     best_lag, best_corr = 0, -2.0
     a = (a - a.mean()) / (a.std(ddof=0) or 1.0)
     b = (b - b.mean()) / (b.std(ddof=0) or 1.0)
@@ -83,17 +80,20 @@ def compute_correlation(
             continue
         s = _klines(sym, timeframe, limit=max(300, window+20))
         if s is None or s.empty:
-            out.append({"symbol": sym, "ref_symbol": ref_symbol, "window": window,
-                        "corr_close": None, "beta": None, "lead_lag_bars": None,
-                        "note": "no data"})
+            out.append({
+                "symbol": sym, "ref_symbol": ref_symbol, "window": window,
+                "corr_close": None, "beta": None, "lead_lag_bars": None,
+                "note": "no data"
+            })
             continue
         ret = _safe_pct_change(s)
-        # יישור טמפורלי
         df = pd.concat({"alt": ret, "btc": ref_ret}, axis=1).dropna()
         if df.empty:
-            out.append({"symbol": sym, "ref_symbol": ref_symbol, "window": window,
-                        "corr_close": None, "beta": None, "lead_lag_bars": None,
-                        "note": "no overlap"})
+            out.append({
+                "symbol": sym, "ref_symbol": ref_symbol, "window": window,
+                "corr_close": None, "beta": None, "lead_lag_bars": None,
+                "note": "no overlap"
+            })
             continue
         df = df.tail(window)
         corr = float(df["alt"].corr(df["btc"])) if len(df) >= 5 else None
@@ -110,8 +110,7 @@ def compute_correlation(
         })
     return out
 
-
-# ✅ שמירה על תאימות לאחור
+# ✅ Alias לשם הישן (routes/analytics.py)
 correlate_to_btc = compute_correlation
 
 
