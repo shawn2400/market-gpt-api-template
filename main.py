@@ -16,7 +16,7 @@ load_dotenv(override=True)
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 
 # --- Logging ---
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("algogpt")
 
 # --- FastAPI ---
@@ -58,6 +58,7 @@ from routes.risk import router as risk_router
 from routes.snapshot import router as snapshot_router
 from routes.dashboard import router as dashboard_router
 from routes.orders import router as orders_router
+from routes.ws import router as ws_router
 
 # --- Debug / System Routers ---
 from routes.debug import router as debug_router
@@ -86,6 +87,7 @@ app.include_router(risk_router, prefix="/risk", tags=["Risk"])
 app.include_router(snapshot_router, prefix="/snapshot", tags=["Snapshots"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(orders_router, prefix="/orders", tags=["Orders"])
+app.include_router(ws_router, prefix="/ws", tags=["Websocket"])
 
 # Debug / System
 app.include_router(debug_router, prefix="/debug", tags=["Debug"])
@@ -99,7 +101,7 @@ app.include_router(utils_router, tags=["Utils"])
 # --- Startup: Background tasks ---
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(price_monitor_loop())  # 🔄 ניטור מחירים
+    asyncio.create_task(price_monitor_loop())  # 🔄 ניטור מחירים בלולאת רקע
     logger.info("✅ Price monitor loop started")
 
 # --- Root / Status ---
@@ -126,6 +128,7 @@ async def health_live():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
