@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 from typing import Dict, Optional
-from utils.redis_client import set_value, get_value
+from utils.redis_client import set_value, get_value, REDIS_URL
 
 logger = logging.getLogger("algogpt.ws_fallback")
 
@@ -12,6 +12,9 @@ LAST_PRICE_CACHE: Dict[str, Dict[str, float]] = {}
 
 # כמה זמן נחשב מחיר "טרי"
 FRESHNESS_SEC = 10
+
+# ✅ לוג חיבור Redis
+logger.info(f"[WS] Redis cache ready at {REDIS_URL}")
 
 
 async def price_monitor_loop():
@@ -67,6 +70,7 @@ def is_price_fresh(symbol: str) -> bool:
         return False
     age = time.time() - data["ts"]
     return age <= FRESHNESS_SEC
+
 
 
 
