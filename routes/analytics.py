@@ -10,14 +10,13 @@ except Exception:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 try:
-    from utils.correlation import correlate_to_btc
+    from utils.correlation import compute_correlation as correlate_to_btc
     from utils.macro import macro_snapshot
-    from utils.sentiment import sentiment_summary
-    from utils.time_to_target import eta_to_target
+    from utils.sentiment import summarize_sentiment as sentiment_summary
+    from utils.time_to_target import eta_by_atr as eta_to_target
 except ImportError as e:
     raise RuntimeError(f"Missing utils module for analytics: {e}")
 
-# ✅ בלי prefix כאן (main.py כבר שם /analytics)
 router = APIRouter(tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
 
 
@@ -28,11 +27,7 @@ async def get_correlation(
     timeframe: str = Query("15m"),
     window: int = Query(200, ge=50, le=2000),
 ) -> Dict[str, Any]:
-    if isinstance(symbols, list):
-        syms = symbols
-    else:
-        syms = [s for s in (symbols or "").replace(" ", "").split(",") if s]
-
+    syms = symbols if isinstance(symbols, list) else [s for s in (symbols or "").replace(" ", "").split(",") if s]
     try:
         items = correlate_to_btc(syms, ref_symbol=ref_symbol, timeframe=timeframe, window=window)
         return {"ok": True, "items": items}
@@ -68,6 +63,7 @@ async def post_eta(req: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         )}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 
 
