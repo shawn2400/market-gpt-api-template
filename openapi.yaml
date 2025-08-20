@@ -27,6 +27,8 @@ tags:
   - name: Dashboard
   - name: Risk
   - name: Snapshots
+  - name: PnL
+  - name: Strategy
 
 security:
   - HTTPBearer: []
@@ -71,9 +73,16 @@ components:
       type: object
       properties:
         ok: { type: boolean }
-        running: { type: boolean }
-        workers: { type: integer }
-        queue_size: { type: integer }
+        active: { type: boolean }
+        symbol: { type: string }
+        orders:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        params:
+          type: object
+          additionalProperties: true
 
     ScanInfo:
       type: object
@@ -164,35 +173,22 @@ components:
         budget: { type: number }
         status: { type: string }
 
-    BacktestRequest:
+    PnlUpdate:
       type: object
-      required: [symbol, side]
+      required: [symbol, direction, entry, exit_price, leverage, qty]
       properties:
         symbol: { type: string }
-        side: { type: string }
-        interval: { type: string, example: 15m }
-        lookback_days: { type: integer, example: 30 }
-        leverage: { type: integer, example: 5 }
+        direction: { type: string }
+        entry: { type: number }
+        exit_price: { type: number }
+        leverage: { type: number }
+        qty: { type: number }
 
-    BacktestResult:
+    GenericResponse:
       type: object
-      properties:
-        symbol: { type: string }
-        side: { type: string }
-        interval: { type: string }
-        lookback_days: { type: integer }
-        trades: { type: integer }
-        win_rate: { type: number }
-        avg_pnl: { type: number }
-        total_pnl: { type: number }
-
-    BacktestResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        results:
-          type: array
-          items: { $ref: "#/components/schemas/BacktestResult" }
+      description: "Generic dynamic response (fallback)"
+      properties: {}
+      additionalProperties: true
 
 paths:
   /:
@@ -208,31 +204,34 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/BasicStatus" }
 
-  /metrics:
+  /health:
     get:
-      tags: [Config]
-      summary: Basic metrics
-      operationId: getMetrics
+      tags: [Health]
+      summary: Health check
+      operationId: getHealth
       security: []
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/MetricsResponse" }
+              schema: { $ref: "#/components/schemas/BasicStatus" }
 
-  /__routes:
+  /health/live:
     get:
-      tags: [Debug]
-      summary: Registered routes
-      operationId: getRoutesList
+      tags: [Health]
+      summary: Live health check
+      operationId: getHealthLive
       security: []
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/RoutesList" }
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: live }
 
   /grid/status:
     get:
@@ -246,59 +245,29 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GridStatus" }
 
-  /scan/info:
-    get:
-      tags: [Scan]
-      summary: Scanner status
-      operationId: getScanInfo
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ScanInfo" }
-
-  /scan:
-    get:
-      tags: [Scan]
-      summary: Multi-symbol or auto scan
-      operationId: getScan
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ScanResponse" }
-
-  /ai/health:
-    get:
-      tags: [AI]
-      summary: AI health check
-      operationId: getAiHealth
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AiHealthResponse" }
-
-  /ai/quality:
+  /grid/start:
     post:
-      tags: [AI]
-      summary: Compute trade quality
-      operationId: postAiQuality
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AiQualityRequest" }
+      tags: [Grid]
+      summary: Start grid trading
+      operationId: postGridStart
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /grid/stop:
+    post:
+      tags: [Grid]
+      summary: Stop grid trading
+      operationId: postGridStop
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
 
   /trade:
     post:
@@ -317,85 +286,58 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TradeResponse" }
 
-  /trade/{trade_id}:
-    get:
-      tags: [Trades]
-      summary: Get trade status
-      operationId: getTradeStatus
-      parameters:
-        - name: trade_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TradeResponse" }
-
-    delete:
-      tags: [Trades]
-      summary: Close trade
-      operationId: deleteTrade
-      parameters:
-        - name: trade_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  trade_id: { type: string }
-                  status: { type: string }
-
-  /backtest:
+  /pnl/update:
     post:
-      tags: [Backtest]
-      summary: Run backtest
-      operationId: postRunBacktest
+      tags: [PnL]
+      summary: Update PnL from a trade
+      operationId: postPnlUpdate
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/BacktestRequest" }
+            schema: { $ref: "#/components/schemas/PnlUpdate" }
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/BacktestResponse" }
+              schema: { $ref: "#/components/schemas/GenericResponse" }
 
-  /backtest/status/{symbol}:
+  /pnl/daily:
     get:
-      tags: [Backtest]
-      summary: Get last backtest status
-      operationId: getBacktestStatus
-      parameters:
-        - name: symbol
-          in: path
-          required: true
-          schema: { type: string }
+      tags: [PnL]
+      summary: Get daily PnL summary
+      operationId: getPnlDaily
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  symbol: { type: string }
-                  last_run: { type: string }
-                  trades: { type: integer }
-                  win_rate: { type: number }
-                  total_pnl: { type: number }
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /pnl/report:
+    get:
+      tags: [PnL]
+      summary: Generate PnL PDF report
+      operationId: getPnlReport
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /strategy/version:
+    get:
+      tags: [Strategy]
+      summary: Get strategy version
+      operationId: getStrategyVersion
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
 
 
 
