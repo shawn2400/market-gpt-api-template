@@ -1,73 +1,69 @@
 # gunicorn_conf.py
-import multiprocessing
-import os
-import logging
-import time
-from utils.json_logger import JsonFormatter
+import multiprocessing, os, json, sys, logging
 
-# --- Workers ---
+#
+# Workers & Performance
+#
 workers = int(os.getenv("WORKERS", multiprocessing.cpu_count() * 2 + 1))
 worker_class = "uvicorn.workers.UvicornWorker"
-
-# --- Binding ---
 bind = f"0.0.0.0:{os.getenv('PORT', '10000')}"
 
-# --- Timeouts ---
 timeout = 120
 graceful_timeout = 30
 keepalive = 5
 
-# --- Worker recycling ---
 max_requests = 2000
 max_requests_jitter = 200
 worker_tmp_dir = "/dev/shm"
 
-# --- Logging ---
-loglevel = "info"
-accesslog = "-"  # STDOUT
-errorlog = "-"   # STDERR
+#
+# JSON Structured Logging
+#
+class JSONGunicornLogger(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        if isinstance(msg, dict):
+            return json.dumps(msg, ensure_ascii=False), kwargs
+        return msg, kwargs
 
-# --- JSON Log setup ---
-def post_fork(server, worker):
-    """הגדרה אחידה ל־JSON logs גם ל־Gunicorn וגם ל־Uvicorn"""
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
+class JSONGunicornHandler(logging.StreamHandler):
+    def emit(self, record):
+        try:
+            log_record = {
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
+            if hasattr(record, "trace_id"):
+                log_record["trace_id"] = record.trace_id
+            self.stream.write(json.dumps(log_record, ensure_ascii=False) + "\n")
+            self.flush()
+        except Exception:
+            self.handleError(record)
 
+def post_worker_init(worker):
+    """
+    Hook: configure JSON logging inside Gunicorn workers
+    """
     root = logging.getLogger()
-    root.handlers = [handler]
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+    handler = JSONGunicornHandler(sys.stdout)
+    root.addHandler(handler)
     root.setLevel(logging.INFO)
 
-    server.log.info({"event": "worker_start", "msg": "✅ Gunicorn worker started with JSON logging"})
+#
+# Gunicorn log settings
+#
+loglevel = "info"
+accesslog = "-"
+errorlog = "-"
 
+# Custom access log format → JSON
+access_log_format = (
+    '{"event":"access","client":"%(h)s","request":"%(r)s","status":"%(s)s",'
+    '"size":"%(b)s","referer":"%(f)s","agent":"%(a)s","duration":"%(L)s"}'
+)
 
-# --- Custom JSON access log ---
-def accesslog_environ(req):
-    """עיבוד request dict ל־log אחיד"""
-    return {
-        "method": req["METHOD"],
-        "path": req["RAW_URI"],
-        "client_ip": req.get("REMOTE_ADDR"),
-        "user_agent": req.get("HTTP_USER_AGENT"),
-    }
-
-def accesslog_format(server, req, environ, resp):
-    """
-    מחזיר JSON string לכל בקשה (במקום טקסט רגיל של Gunicorn)
-    """
-    start_time = req.start_time if hasattr(req, "start_time") else time.time()
-    latency = (time.time() - start_time) * 1000  # ms
-
-    log_data = {
-        "event": "http_request",
-        "method": req.method,
-        "path": req.path,
-        "status_code": resp.status,
-        "latency_ms": round(latency, 2),
-        "client_ip": req.access_log.get("client"),
-        "user_agent": req.headers.get("user-agent"),
-    }
-    import json
-    return json.dumps(log_data)
 
 
 
