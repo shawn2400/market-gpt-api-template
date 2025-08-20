@@ -1,27 +1,46 @@
 # utils/quality.py
 from __future__ import annotations
-import os
-from typing import Optional, Literal, Dict, Any
+"""
+מודול quality – מחשב ציון איכות (Quality Score) לטרייד.
+משמש ב־routes/trade ו־routes/risk.
+"""
+import os, math, json
+from typing import Optional, Dict, Any, Literal
+from utils.anchor import AnchorDecision
 
 Side = Literal["LONG", "SHORT"]
 
-def _clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
-
-def _env_int(key: str, default: int) -> int:
+def _safe_load_history(path: str) -> list[dict]:
     try:
-        return int((os.getenv(key, "") or "").strip() or default)
+        if not os.path.isfile(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
     except Exception:
-        return default
+        return []
 
-def _env_float(key: str, default: float) -> float:
-    try:
-        return float((os.getenv(key, "") or "").strip() or default)
-    except Exception:
-        return default
+def _empirical_win_rate(history: list[dict], symbol: str, side: Side, limit: int = 200) -> Optional[float]:
+    if not history:
+        return None
+    rows = [r for r in history if str(r.get("symbol","")).upper()==symbol.upper() and r.get("side")==side]
+    rows = rows[-limit:] if len(rows) > limit else rows
+    if not rows:
+        return None
+    wins, total = 0, 0
+    for r in rows:
+        status = (r.get("status") or r.get("result",{}).get("status") or "").lower()
+        pnl = r.get("pnl") or r.get("result",{}).get("pnl")
+        if status:
+            total += 1
+            if status in {"win","success","closed_tp","tp"} or (isinstance(pnl,(int,float)) and pnl>0):
+                wins += 1
+    if total == 0:
+        return None
+    return wins/total
 
-def _safe_div(a: float, b: float) -> float:
-    return a / b if (b is not None and b != 0) else 0.0
+def _sigmoid(x: float) -> float:
+    return 1.0/(1.0+math.exp(-x))
 
 def compute_quality(
     *,
@@ -32,96 +51,73 @@ def compute_quality(
     tp: Optional[float],
     leverage: int,
     budget: float,
-    anchor,
+    anchor: AnchorDecision,
     atr: Optional[float] = None,
+    trades_log_path: str = None,
 ) -> Dict[str, Any]:
-    max_leverage = _env_int("MAX_LEVERAGE", 35)
-    max_budget   = _env_float("MAX_TRADE_BUDGET", 100.0)
+    components: Dict[str, Any] = {}
+    score = 5.0
 
-    if entry is None or sl is None or tp is None:
-        return {
-            "quality_score": 5.0,
-            "success_pct": 50.0,
-            "components": {
-                "note": "missing pricing inputs; returned neutral scores",
-                "symbol": symbol, "side": side, "entry": entry, "sl": sl, "tp": tp,
-            },
-        }
+    rr = None
+    if entry and sl and tp:
+        risk = abs(entry - sl)
+        reward = abs(tp - entry)
+        rr = (reward / risk) if risk > 0 else None
+        if rr is not None:
+            if rr >= 2.0: score += 2.0
+            elif rr >= 1.5: score += 1.0
+            elif rr < 1.0: score -= 1.0
+    components["rr"] = rr
 
-    if side == "LONG":
-        risk, reward = max(0.0, entry - sl), max(0.0, tp - entry)
-    else:
-        risk, reward = max(0.0, sl - entry), max(0.0, entry - tp)
-    rr = _safe_div(reward, risk) if risk > 0 else 0.0
-    rr_score_100 = _clamp((rr / 2.0) * 100.0, 0.0, 100.0)
+    if leverage <= 10: score += 0.5
+    elif leverage >= 30: score -= 0.8
+    components["leverage"] = leverage
 
-    lev_ref = max(5, min(max_leverage, 125))
-    lev_norm = _clamp((leverage - 5) / max(1, (lev_ref - 5)), 0.0, 1.0)
-    leverage_penalty_100 = 30.0 * lev_norm
+    if atr and entry and sl:
+        stop_dist = abs(entry - sl)
+        atr_mult = (stop_dist / atr) if atr > 0 else None
+        components["atr_mult"] = atr_mult
+        if atr_mult is not None:
+            if atr_mult < 1.0: score -= 0.7
+            elif atr_mult >= 1.5: score += 0.3
 
-    atr_score_100, atr_mult = 50.0, None
-    if atr and atr > 0:
-        sl_dist = abs(entry - sl)
-        atr_mult = _safe_div(sl_dist, atr)
-        if atr_mult <= 0:
-            atr_score_100 = 10.0
+    if anchor.bias != "neutral":
+        aligned = (side=="LONG" and anchor.bias=="bull") or (side=="SHORT" and anchor.bias=="bear")
+        if aligned:
+            bonus = min(1.2, max(0.2, anchor.score/100.0*1.2))
+            score += bonus
+            components["anchor_alignment"] = f"aligned(+{bonus:.2f})"
         else:
-            atr_score_100 = 100.0 - _clamp(abs(atr_mult - 1.5) / 1.5 * 40.0, 0.0, 40.0)
-    atr_score_100 = _clamp(atr_score_100, 0.0, 100.0)
+            penalty = min(1.8, max(0.4, anchor.score/100.0*1.8))
+            score -= penalty
+            components["anchor_alignment"] = f"conflict(-{penalty:.2f})"
+    components["anchor"] = {"bias": anchor.bias, "score": anchor.score, "mode": anchor.mode_applied}
 
-    anchor_adj_100 = 0.0
-    anchor_bias = getattr(anchor, "bias", None)
-    anchor_score = float(getattr(anchor, "score", 0.0) or 0.0)
-    anchor_severity = getattr(anchor, "severity", "none")
+    score = max(0.0, min(10.0, score))
+    components["raw_score"] = score
 
-    if anchor_bias:
-        align = ((side == "LONG" and anchor_bias == "bull") or
-                 (side == "SHORT" and anchor_bias == "bear"))
-        conflict = ((side == "LONG" and anchor_bias == "bear") or
-                    (side == "SHORT" and anchor_bias == "bull"))
-        if align:
-            anchor_adj_100 = _clamp(anchor_score * 0.20, 0.0, 20.0)
-        elif conflict and anchor_severity in ("weak",):
-            anchor_adj_100 = -_clamp(anchor_score * 0.25, 0.0, 25.0)
+    x = (score - 5.0) / 1.6
+    p_model = _sigmoid(x)
+    success_pct_model = p_model * 100.0
 
-    budget_adj_100 = 0.0
-    if budget > max_budget:
-        over = (budget - max_budget) / max_budget
-        budget_adj_100 = -_clamp(over * 10.0, 0.0, 10.0)
+    if trades_log_path is None:
+        trades_log_path = os.getenv("TRADES_LOG_PATH", "data/trades_log.json")
+    hist = _safe_load_history(trades_log_path)
+    wr = _empirical_win_rate(hist, symbol, side, limit=200)
+    components["emp_win_rate"] = wr
 
-    base_100 = 0.45 * rr_score_100 + 0.20 * atr_score_100
-    combined_100 = _clamp(base_100 + anchor_adj_100 + budget_adj_100 - leverage_penalty_100, 0.0, 100.0)
-    quality_score = round(combined_100 / 10.0, 2)
-
-    anchor_dir = 0.0
-    if anchor_bias:
-        if (side == "LONG" and anchor_bias == "bull") or (side == "SHORT" and anchor_bias == "bear"):
-            anchor_dir = 1.0
-        elif (side == "LONG" and anchor_bias == "bear") or (side == "SHORT" and anchor_bias == "bull"):
-            anchor_dir = -1.0
-
-    success_p = 0.35 + 0.40 * (combined_100 / 100.0) \
-                + 0.15 * anchor_dir * (_clamp(anchor_score, 0.0, 100.0) / 100.0) \
-                - 0.10 * lev_norm
-    success_pct = round(_clamp(success_p, 0.05, 0.95) * 100.0, 2)
+    if wr is not None:
+        success_pct = 100.0 * (0.6*wr + 0.4*(success_pct_model/100.0))
+        score += (wr - 0.5) * 2.0
+        score = max(0.0, min(10.0, score))
+        components["blend"] = "empirical(0.6)+model(0.4)"
+    else:
+        success_pct = success_pct_model
+        components["blend"] = "model_only"
 
     return {
-        "quality_score": quality_score,
-        "success_pct": success_pct,
-        "components": {
-            "symbol": symbol, "side": side, "entry": entry, "sl": sl, "tp": tp,
-            "risk": risk, "reward": reward, "rr": rr, "rr_score_100": round(rr_score_100, 2),
-            "leverage": leverage, "max_leverage": max_leverage,
-            "leverage_penalty_100": round(leverage_penalty_100, 2),
-            "atr": atr, "sl_atr_multiple": atr_mult, "atr_score_100": round(atr_score_100, 2),
-            "anchor_bias": anchor_bias,
-            "anchor_score": anchor_score,
-            "anchor_severity": anchor_severity,
-            "anchor_adj_100": round(anchor_adj_100, 2),
-            "budget": budget, "max_budget": max_budget, "budget_adj_100": round(budget_adj_100, 2),
-            "combined_100": round(combined_100, 2),
-            "quality_scale": "0-10",
-            "success_pct_note": "heuristic; replace with historical win-rate when available",
-        },
+        "quality_score": round(score, 2),
+        "success_pct": round(success_pct, 1),
+        "components": components,
     }
 
