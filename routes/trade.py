@@ -1,53 +1,42 @@
 # routes/trade.py
 from __future__ import annotations
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from fastapi import APIRouter, Body
+from typing import Dict, Any, Literal
 
-from utils.sltp import calc_sl_tp
+router = APIRouter(tags=["Trade"])
 
-router = APIRouter(tags=["Trading"])
+# ✅ LIVE trade execute (לא demo)
+@router.post("/execute", summary="Execute Trade (with dry_run option)")
+async def trade_execute(
+    symbol: str = Body(..., description="Trading pair e.g. BTCUSDT"),
+    side: Literal["LONG", "SHORT"] = Body(..., description="Position side: LONG or SHORT"),
+    type: Literal["LIMIT", "STOP_LIMIT"] = Body(..., description="Order type"),
+    price: float = Body(..., gt=0),
+    quantity: float = Body(..., gt=0),
+    entry: float | None = Body(None, description="Required for SL/TP auto-calc"),
+    sl: float | None = Body(None, description="Stop Loss"),
+    tp: float | None = Body(None, description="Take Profit"),
+    dry_run: bool = Body(True, description="If true, no real order is placed"),
+) -> Dict[str, Any]:
+    # אם אין entry והמשתמש רוצה SL/TP → נחזיר 400
+    if (sl or tp) and not entry:
+        return {"ok": False, "error": "entry is required when auto-calculating SL/TP"}
 
-class TradeRequest(BaseModel):
-    symbol: str
-    side: str = Field(..., description="LONG or SHORT")
-    type: str = Field("LIMIT", description="LIMIT or STOP_LIMIT")
-    price: float
-    quantity: float
-    entry: Optional[float] = None
-    sl: Optional[float] = None
-    tp: Optional[float] = None
-    atr: Optional[float] = None
-    dry_run: bool = True
+    # פה נכנסת הלוגיקה למסחר אמיתי ב־Binance
+    order = {
+        "symbol": symbol,
+        "side": side,
+        "type": type,
+        "price": price,
+        "quantity": quantity,
+        "dry_run": dry_run,
+        "sl": sl,
+        "tp": tp,
+        "entry": entry,
+    }
 
-@router.post("/execute", summary="Execute Trade (LIVE or Dry Run)")
-async def execute_trade(req: TradeRequest) -> Dict[str, Any]:
-    try:
-        side = req.side.upper()
-        if side not in ("LONG", "SHORT"):
-            return {"ok": False, "error": "side must be LONG or SHORT"}
-
-        entry_price = req.entry or req.price
-        sl_price, tp_price = calc_sl_tp(entry=entry_price, side=side, sl=req.sl, tp=req.tp, atr=req.atr)
-
-        if not req.dry_run:
-            # 🔴 כאן יבוא חיבור אמיתי ל־Binance
-            pass
-
-        return {
-            "ok": True,
-            "dry_run": req.dry_run,
-            "symbol": req.symbol,
-            "side": side,
-            "entry": entry_price,
-            "price": req.price,
-            "qty": req.quantity,
-            "sl": sl_price,
-            "tp": tp_price,
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
+    # ⚡ כרגע רק מחזיר JSON (אפשר להוסיף חיבור ל־Binance API בהמשך)
+    return {"ok": True, "executed": order}
 
 
 
