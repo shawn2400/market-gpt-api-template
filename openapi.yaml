@@ -138,6 +138,62 @@ components:
         anchor: { type: object }
         components: { type: object }
 
+    TradeRequest:
+      type: object
+      required: [symbol, side, entry]
+      properties:
+        symbol: { type: string }
+        side: { type: string, enum: [LONG, SHORT] }
+        entry: { type: number }
+        sl: { type: number }
+        tp: { type: number }
+        leverage: { type: integer }
+        budget: { type: number }
+
+    TradeResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        trade_id: { type: string }
+        symbol: { type: string }
+        side: { type: string }
+        entry: { type: number }
+        sl: { type: number }
+        tp: { type: number }
+        leverage: { type: integer }
+        budget: { type: number }
+        status: { type: string }
+
+    BacktestRequest:
+      type: object
+      required: [symbol, side]
+      properties:
+        symbol: { type: string }
+        side: { type: string }
+        interval: { type: string, example: 15m }
+        lookback_days: { type: integer, example: 30 }
+        leverage: { type: integer, example: 5 }
+
+    BacktestResult:
+      type: object
+      properties:
+        symbol: { type: string }
+        side: { type: string }
+        interval: { type: string }
+        lookback_days: { type: integer }
+        trades: { type: integer }
+        win_rate: { type: number }
+        avg_pnl: { type: number }
+        total_pnl: { type: number }
+
+    BacktestResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/BacktestResult" }
+
 paths:
   /:
     get:
@@ -189,8 +245,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GridStatus" }
-        "401":
-          description: unauthorized
 
   /scan/info:
     get:
@@ -245,8 +299,103 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AiAnalyzeResponse" }
-        "401":
-          description: unauthorized
+
+  /trade:
+    post:
+      tags: [Trades]
+      summary: Open new trade
+      operationId: postOpenTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TradeRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TradeResponse" }
+
+  /trade/{trade_id}:
+    get:
+      tags: [Trades]
+      summary: Get trade status
+      operationId: getTradeStatus
+      parameters:
+        - name: trade_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TradeResponse" }
+
+    delete:
+      tags: [Trades]
+      summary: Close trade
+      operationId: deleteTrade
+      parameters:
+        - name: trade_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  trade_id: { type: string }
+                  status: { type: string }
+
+  /backtest:
+    post:
+      tags: [Backtest]
+      summary: Run backtest
+      operationId: postRunBacktest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BacktestRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BacktestResponse" }
+
+  /backtest/status/{symbol}:
+    get:
+      tags: [Backtest]
+      summary: Get last backtest status
+      operationId: getBacktestStatus
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  symbol: { type: string }
+                  last_run: { type: string }
+                  trades: { type: integer }
+                  win_rate: { type: number }
+                  total_pnl: { type: number }
 
 
 
