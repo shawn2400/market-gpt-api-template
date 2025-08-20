@@ -1,35 +1,48 @@
 # utils/indicators.py
-from __future__ import annotations
 import pandas as pd
-from ta.volatility import AverageTrueRange
+import numpy as np
+
+def ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False).mean()
+
+def rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    roll_up = pd.Series(gain).rolling(period).mean()
+    roll_down = pd.Series(loss).rolling(period).mean()
+    rs = roll_up / roll_down
+    return 100.0 - (100.0 / (1.0 + rs))
+
+def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high_low = df["high"] - df["low"]
+    high_close = (df["high"] - df["close"].shift()).abs()
+    low_close = (df["low"] - df["close"].shift()).abs()
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    return true_range.rolling(period).mean()
+
+def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    plus_dm = df["high"].diff()
+    minus_dm = df["low"].diff().abs()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm < 0] = 0
+    tr = atr(df, period)
+    plus_di = 100 * (plus_dm.rolling(period).sum() / tr)
+    minus_di = 100 * (minus_dm.rolling(period).sum() / tr)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    return dx.rolling(period).mean()
 
 def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    מנרמל את דפ ה־OHLCV ודואג לשדות חיוניים; מוסיף ATR בסיסי.
-    מצופה לקבל עמודות: open, high, low, close, volume, timestamp
-    """
-    need = ["open", "high", "low", "close", "volume"]
-    base = df.copy()
-    for c in need:
-        if c not in base.columns:
-            raise ValueError(f"missing column: {c}")
-    if "timestamp" not in base.columns:
-        if "close_time" in base.columns:
-            base["timestamp"] = pd.to_datetime(base["close_time"], utc=True)
-        elif "open_time" in base.columns:
-            base["timestamp"] = pd.to_datetime(base["open_time"], utc=True)
-        else:
-            base["timestamp"] = pd.RangeIndex(start=0, stop=len(base), step=1)
-
-    base = base.sort_values("timestamp").reset_index(drop=True)
-
-    try:
-        atr = AverageTrueRange(high=base["high"], low=base["low"], close=base["close"], window=14)
-        base["atr"] = atr.average_true_range()
-    except Exception:
-        base["atr"] = 0.0
-
-    return base
+    if df.empty:
+        return df
+    df = df.copy()
+    df["ema21"] = ema(df["close"], 21)
+    df["ema50"] = ema(df["close"], 50)
+    df["rsi"] = rsi(df["close"], 14)
+    df["atr"] = atr(df)
+    df["adx"] = adx(df)
+    return df
 
 
 
