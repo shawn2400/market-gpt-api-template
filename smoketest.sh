@@ -28,18 +28,25 @@ check() {
 
 echo "=== AlgoGPT Smoke Test ==="
 
-# בריאות
+# --- Health ---
 check "Root Status" "$HOST/"
 check "Health" "$HOST/health"
 check "Live" "$HOST/health/live"
 
-# AI
+# --- AI ---
 check "AI Health" "$HOST/ai/health"
 
-# 🔹 PnL
+# --- PnL ---
 check "PnL Update" "$HOST/pnl/update" "POST" '{"symbol":"BTCUSDT","direction":"LONG","entry":64000,"exit_price":65000,"leverage":5,"qty":0.01}'
 check "PnL Daily" "$HOST/pnl/daily"
 check "PnL Report" "$HOST/pnl/report"
+
+# --- Risk ---
+check "Risk Suggest" "$HOST/risk/suggest" "POST" '{"symbol":"BTCUSDT","budget":100,"leverage":10,"entry":64000,"sl":63000,"tp":66000}'
+
+# --- Indicators ---
+check "Indicators Sample" "$HOST/indicators"
+check "Indicators Symbol" "$HOST/indicators/BTCUSDT?timeframe=1h&limit=180"
 
 echo "=== Done ==="
 
