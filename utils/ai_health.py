@@ -3,31 +3,38 @@ import time
 import logging
 from typing import Dict, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
+
 from utils.ai_client import ai_healthcheck
 
-router = APIRouter(tags=["AI"])
+# יצירת router
+router = APIRouter()
 
-@router.get("/ai/health", operation_id="getAiHealth")
+@router.get("/ai/health")
 async def ai_health() -> Dict[str, Any]:
     """
-    API Health Endpoint: מבצע פינג ל-AI ומחזיר סטטוס מלא.
+    Health check ל־OpenAI/Azure.
+    שולח ping → מצפה ל־pong/תשובה כלשהי.
+    מחזיר מבנה JSON עם ok, reply, latency, model, ועוד מידע דיבאג.
     """
-    t0 = time.perf_counter()
+    t0 = time.time()
     try:
-        res = await ai_healthcheck()
-        dt = (time.perf_counter() - t0) * 1000.0
-        return {
-            "ok": bool(res.get("ok", False)),
-            "model": res.get("model"),
-            "latency_ms": round(dt, 2),
-            "reply": res.get("reply"),
-            "error": res.get("error"),
-        }
+        result = await ai_healthcheck()
+        latency_ms = round((time.time() - t0) * 1000)
+
+        # דואגים שתמיד יוחזר latency_ms גם אם כבר קיים בפנים
+        result["latency_ms"] = latency_ms
+
+        return JSONResponse(content=result, status_code=200)
     except Exception as e:
-        dt = (time.perf_counter() - t0) * 1000.0
-        logging.warning("[ai_health] endpoint failed after %.2f ms: %s", dt, e)
-        return {"ok": False, "model": None, "latency_ms": round(dt, 2), "reply": None, "error": str(e)}
+        dt = round((time.time() - t0) * 1000)
+        logging.warning(f"[ai_health] failed after {dt} ms: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"ok": False, "error": str(e), "latency_ms": dt},
+        )
+
 
 
 
