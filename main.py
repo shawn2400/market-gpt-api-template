@@ -7,8 +7,7 @@ from typing import List, Optional
 
 # ✅ Load .env early
 from dotenv import load_dotenv
-load_dotenv(dotenv_path="/app/.env", override=True)
-print("🔐 DEBUG: Loaded ALGOGPT_TOKENS =", os.getenv("ALGOGPT_TOKENS"))
+load_dotenv(override=True)
 
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +22,7 @@ from utils.auth import require_bearer_token
 from utils.response_limits import ResponseSizeLimiter
 from utils import config as cfg
 
+# --- Config ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -33,14 +33,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
+# --- Optional: mark_ws bus ---
 _mark_bus = None
 try:
     from utils.mark_ws import bus as _mark_bus  # type: ignore
     logger.info("mark_ws module available; will attempt to start on startup")
 except Exception as exc:
-    _mark_bus = None
     logger.warning("mark_ws not available: %s", exc)
 
+# --- Routers ---
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes import debug  # ✅ debug router
@@ -52,9 +53,10 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
         logger.info("loaded router: %s.%s", name, attr)
         return obj
     except Exception as exc:
-        logger.warning("failed to load %s.%s: %s", name, attr, exc)
+        logger.debug("failed to load %s.%s: %s", name, attr, exc)
         return None
 
+# --- Auto executor ---
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start  # type: ignore
@@ -62,6 +64,7 @@ try:
 except Exception as exc:
     logger.warning("auto_executor not available: %s", exc)
 
+# --- App ---
 app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — Binance Futures LIVE (Scan/AI/Trades/Backtest/News/Grid/Risk).",
@@ -86,7 +89,7 @@ if os.path.isdir(".well-known"):
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Middleware: metrics ---
+# --- Metrics middleware ---
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
@@ -102,7 +105,7 @@ async def _metrics_middleware(request: Request, call_next):
                 status_code=status_code, duration_ms=dt_ms,
                 method=request.method, path=request.url.path
             )
-        except TypeError:
+        except Exception:
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
 # --- Exception handlers ---
@@ -144,7 +147,7 @@ if health_router:
 
 app.include_router(ai_router, prefix="/ai", tags=["AI"], dependencies=[Depends(require_bearer_token)])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
-app.include_router(debug.router, prefix="/debug", tags=["Debug"])  # ✅ DEBUG ROUTER
+app.include_router(debug.router, prefix="/debug", tags=["Debug"])
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
@@ -169,20 +172,19 @@ if _analytics_compat:
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
-
     try:
         from utils.ai_client import ai_client  # type: ignore
         await ai_client.warmup()
         logger.info("AI warmup: ready=%s", ai_client.ready)
     except Exception as e:
-        logger.warning("AI warmup failed (ignored): %s", e)
+        logger.warning("AI warmup failed: %s", e)
 
     if getattr(cfg, "AUTO_RUN", False) and _auto_exec_start:
         try:
             _auto_exec_start()
             logger.info("AUTO_RUN=true → auto executor started")
         except Exception as e:
-            logger.warning("AUTO_RUN requested but failed to start executor: %s", e)
+            logger.warning("AUTO_RUN requested but failed: %s", e)
 
     try:
         if _mark_bus and hasattr(_mark_bus, "start"):
@@ -201,11 +203,15 @@ async def on_shutdown():
     except Exception as e:
         logger.warning("Failed to stop Mark WS bus: %s", e)
 
+# --- Entry point ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0",
-                port=int(os.getenv("PORT", "10000")),
-                log_level=LOG_LEVEL.lower())
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "10000")),
+        log_level=LOG_LEVEL.lower()
+    )
 
 
 
