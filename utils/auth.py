@@ -73,6 +73,20 @@ def require_bearer_token(
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
+# -------------------------------------------------
+# פונקציית אימות לנתיבים פנימיים
+# -------------------------------------------------
+def require_internal_token(
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-KEY"),
+    token: Optional[str] = Query(default=None),
+):
+    """
+    🔓 Internal = משתמש באותה לוגיקה של require_bearer_token
+    """
+    return require_bearer_token(authorization=authorization, x_api_key=x_api_key, token=token)
+
+
 
 
 
