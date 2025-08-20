@@ -1,10 +1,11 @@
+# main.py
 from __future__ import annotations
 import os
 import logging
 import time
 from typing import List, Optional
 
-# ✅ Load .env early and force load from specific path
+# ✅ Load .env early
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="/app/.env", override=True)
 print("🔐 DEBUG: Loaded ALGOGPT_TOKENS =", os.getenv("ALGOGPT_TOKENS"))
@@ -42,6 +43,7 @@ except Exception as exc:
 
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
+from routes import debug  # ✅ debug router
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
     try:
@@ -66,6 +68,7 @@ app = FastAPI(
     version=APP_VERSION,
 )
 
+# --- Middleware ---
 allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [
     o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()
 ]
@@ -75,7 +78,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(ResponseSizeLimiter, max_bytes=cfg.RESPONSE_MAX_BYTES)
 
@@ -84,6 +86,7 @@ if os.path.isdir(".well-known"):
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# --- Middleware: metrics ---
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
@@ -102,6 +105,7 @@ async def _metrics_middleware(request: Request, call_next):
         except TypeError:
             metrics_tracker.observe_request(status_code=status_code, duration_ms=dt_ms)
 
+# --- Exception handlers ---
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
@@ -112,6 +116,7 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
+# --- Core routes ---
 @app.get("/", operation_id="getRootStatus", tags=["Config"])
 def root():
     return {"status": "ok", "version": app.version}
@@ -132,12 +137,14 @@ def list_routes():
             pass
     return {"count": len(out), "routes": out}
 
+# --- Routers ---
 health_router = _try_import("routes.health", "router")
 if health_router:
     app.include_router(health_router)
 
 app.include_router(ai_router, prefix="/ai", tags=["AI"], dependencies=[Depends(require_bearer_token)])
 app.include_router(trade_router, prefix="/trade", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
+app.include_router(debug.router, prefix="/debug", tags=["Debug"])  # ✅ DEBUG ROUTER
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
@@ -158,6 +165,7 @@ _analytics_compat = _try_import("routes.analytics", "router_compat")
 if _analytics_compat:
     app.include_router(_analytics_compat, dependencies=[Depends(require_bearer_token)])
 
+# --- Startup / Shutdown ---
 @app.on_event("startup")
 async def on_startup():
     logger.info("AlgoGPT API started (v%s)", APP_VERSION)
@@ -198,6 +206,7 @@ if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0",
                 port=int(os.getenv("PORT", "10000")),
                 log_level=LOG_LEVEL.lower())
+
 
 
 
