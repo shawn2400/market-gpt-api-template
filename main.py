@@ -1,6 +1,6 @@
 # main.py
 from __future__ import annotations
-import os, logging, asyncio
+import os, asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,15 +9,15 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from utils.response_limits import ResponseSizeLimiter
+from utils.json_logger import setup_json_logging
 from utils.ws_fallback import price_monitor_loop
 
-# --- Load env ---
+# --- Env ---
 load_dotenv(override=True)
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logger = logging.getLogger("algogpt")
+# --- Logging (JSON structured) ---
+logger = setup_json_logging()
 
 # --- FastAPI ---
 app = FastAPI(
@@ -40,7 +40,7 @@ app.add_middleware(
 # --- Static ---
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Core Routers ---
+# --- Routers ---
 from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
@@ -49,8 +49,6 @@ from routes.grid import router as grid_router
 from routes.orderflow import router as orderflow_router
 from routes.scan_top_volume import router as scan_top_volume_router
 from routes.strategy import router as strategy_router
-
-# --- Extra Routers ---
 from routes.news import router as news_router
 from routes.indicators import router as indicators_router
 from routes.analytics import router as analytics_router
@@ -59,8 +57,6 @@ from routes.snapshot import router as snapshot_router
 from routes.dashboard import router as dashboard_router
 from routes.orders import router as orders_router
 from routes.ws import router as ws_router
-
-# --- Debug / System Routers ---
 from routes.debug import router as debug_router
 from routes.debug_binance import router as debug_binance_router
 from routes.executor import router as executor_router
@@ -78,8 +74,6 @@ app.include_router(grid_router, prefix="/grid", tags=["Grid"])
 app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])
 app.include_router(scan_top_volume_router, prefix="/scan", tags=["Scan"])
 app.include_router(strategy_router, prefix="/strategy", tags=["Strategy"])
-
-# Extra
 app.include_router(news_router, prefix="/news", tags=["News"])
 app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
 app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
@@ -88,8 +82,6 @@ app.include_router(snapshot_router, prefix="/snapshot", tags=["Snapshots"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(orders_router, prefix="/orders", tags=["Orders"])
 app.include_router(ws_router, prefix="/ws", tags=["Websocket"])
-
-# Debug / System
 app.include_router(debug_router, prefix="/debug", tags=["Debug"])
 app.include_router(debug_binance_router, tags=["Debug"])
 app.include_router(executor_router, tags=["Executor"])
@@ -101,8 +93,8 @@ app.include_router(utils_router, tags=["Utils"])
 # --- Startup: Background tasks ---
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(price_monitor_loop())  # 🔄 ניטור מחירים בלולאת רקע
-    logger.info("✅ Price monitor loop started")
+    asyncio.create_task(price_monitor_loop())
+    logger.info({"event": "startup", "msg": "✅ Price monitor loop started"})
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"], operation_id="getRootStatus")
@@ -112,7 +104,7 @@ async def root_status():
 # --- Error handler ---
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
-    logger.error("❌ Exception: %s", exc)
+    logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 # --- Health ---
@@ -124,10 +116,11 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-# --- Entrypoint ---
+# --- Entrypoint (local run) ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
