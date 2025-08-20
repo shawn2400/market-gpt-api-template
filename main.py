@@ -6,8 +6,6 @@ import time
 from typing import List, Optional
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
-
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +20,7 @@ from utils.response_limits import ResponseSizeLimiter
 from utils import config as cfg
 
 # ---------- Metadata ----------
+load_dotenv(override=True)
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -32,18 +31,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt")
 
-# optional mark_ws
-_mark_bus = None
-try:
-    from utils.mark_ws import bus as _mark_bus  # type: ignore
-except Exception:
-    pass
-
 # ---------- Routers ----------
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes import debug
-from routes import ai_manual_scan   # ✅ חדש
+from routes import ai_manual_scan
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
     try:
@@ -52,7 +44,7 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
     except Exception:
         return None
 
-# ---------- Optional auto executor ----------
+# ---------- Auto Executor (optional) ----------
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start
@@ -124,7 +116,7 @@ async def get_metrics():
 app.include_router(ai_router, prefix="/ai", dependencies=[Depends(require_bearer_token)])
 app.include_router(trade_router, prefix="/trade", dependencies=[Depends(require_bearer_token)])
 app.include_router(debug.router, prefix="/debug")
-app.include_router(ai_manual_scan.router, dependencies=[Depends(require_bearer_token)])  # ✅ manual-scan
+app.include_router(ai_manual_scan.router, dependencies=[Depends(require_bearer_token)])  # manual scan
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
@@ -156,6 +148,7 @@ async def on_startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
