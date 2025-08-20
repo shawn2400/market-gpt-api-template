@@ -9,19 +9,16 @@ from pydantic import BaseModel, Field
 try:
     from utils.auth import require_bearer_token as _raw_require_bearer  # type: ignore
 
-    def require_bearer_token(
-        authorization: Optional[str] = None,
-        token: Optional[str] = None,
-    ):
+    def require_bearer_token():
         try:
-            return _raw_require_bearer(authorization=authorization, token=token)
+            return _raw_require_bearer()
         except HTTPException:
             raise
         except Exception:
             raise HTTPException(status_code=401, detail="Unauthorized")
 except Exception:
     # מצב פיתוח ללא אימות
-    def require_bearer_token(*args, **kwargs):
+    def require_bearer_token():
         return None
 
 # --- Anchor (shim→fallback) ---
@@ -36,7 +33,7 @@ try:
 except Exception:
     from utils.quantity_utils import compute_quality  # type: ignore
 
-router = APIRouter(tags=["AI"])
+router = APIRouter(tags=["AI"])  # בלי Depends גלובלי
 
 Side = Literal["LONG", "SHORT"]
 
@@ -53,13 +50,11 @@ class QualityRequest(BaseModel):
     budget: float = Field(100.0, gt=0)
     atr: Optional[float] = Field(None, gt=0)
 
-
 class QualityResponse(BaseModel):
     quality_score: float
     success_pct: float
     anchor: Dict[str, Any]
     components: Dict[str, Any]
-
 
 class AiManualScanItem(BaseModel):
     symbol: str
@@ -78,11 +73,9 @@ class AiManualScanItem(BaseModel):
     close: Optional[float] = None
     atr: Optional[float] = None
 
-
 class AiManualScanResponse(BaseModel):
     symbol: str
     results: AiManualScanItem
-
 
 # =========================
 # Helpers
@@ -97,37 +90,24 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
-
-async def _maybe_predict_sltp(
-    symbol: str, side: Side, entry: Optional[float], atr: Optional[float]
-) -> Dict[str, float] | None:
-    """
-    מנסה לחשב SL/TP ממספר מקורות. לא זורק חריגות.
-    """
+async def _maybe_predict_sltp(symbol: str, side: Side, entry: Optional[float], atr: Optional[float]) -> Dict[str, float] | None:
     if not entry:
         return None
-    # 1) utils.ai_analysis.predict_optimal_sl_tp (תומך בחתימות שונות)
     try:
         from utils.ai_analysis import predict_optimal_sl_tp  # type: ignore
-
         try:
             sl, tp = await predict_optimal_sl_tp(symbol, side, entry)  # חתימה ישנה
         except TypeError:
-            sl, tp = await predict_optimal_sl_tp(
-                symbol, side, entry_price=entry, atr=atr
-            )  # חתימה חדשה
+            sl, tp = await predict_optimal_sl_tp(symbol, side, entry_price=entry, atr=atr)  # חתימה חדשה
         return {"sl": float(sl), "tp": float(tp)}
     except Exception:
         pass
-    # 2) utils.sl_tp_utils.suggest_sltp (אם זמין)
     try:
         from utils.sl_tp_utils import suggest_sltp  # type: ignore
-
         res = suggest_sltp(symbol=symbol, direction=side, entry=float(entry), atr=atr)
         return {"sl": float(res["sl"]), "tp": float(res["tp"])}
     except Exception:
         pass
-    # 3) פולבק שמרני
     try:
         if side == "LONG":
             return {"sl": round(entry * 0.997, 6), "tp": round(entry * 1.004, 6)}
@@ -135,7 +115,6 @@ async def _maybe_predict_sltp(
             return {"sl": round(entry * 1.003, 6), "tp": round(entry * 0.996, 6)}
     except Exception:
         return None
-
 
 # =========================
 # Endpoints
@@ -147,19 +126,13 @@ async def _maybe_predict_sltp(
 )
 async def post_ai_quality(
     payload: QualityRequest = Body(...),
-    _auth=Depends(require_bearer_token),
+    _auth=Depends(require_bearer_token),   # ✅ auth כאן
 ) -> QualityResponse:
-    """
-    מחשב ציון איכות לטרייד בהתחשב ב-anchor, SL/TP (כולל השלמה אוטומטית אם חסר), ועוד.
-    """
     anchor = evaluate_anchor(payload.side)
 
-    # השלמת SL/TP אם אפשר (על בסיס entry)
     sl, tp = payload.sl, payload.tp
     if (sl is None or tp is None) and payload.entry:
-        s = await _maybe_predict_sltp(
-            payload.symbol, payload.side, payload.entry, payload.atr
-        )
+        s = await _maybe_predict_sltp(payload.symbol, payload.side, payload.entry, payload.atr)
         if s:
             sl = sl if sl is not None else s["sl"]
             tp = tp if tp is not None else s["tp"]
@@ -183,7 +156,6 @@ async def post_ai_quality(
         anchor=_mk_anchor_dict(anchor),
     )
 
-
 @router.get(
     "/manual-scan",
     response_model=AiManualScanResponse,
@@ -194,18 +166,12 @@ async def get_ai_manual_scan(
     market: str = Query("futures"),
     interval: str = Query("15m"),
     bars: int = Query(200, ge=50, le=1500),
-    _auth=Depends(require_bearer_token),
+    _auth=Depends(require_bearer_token),   # ✅ auth כאן
 ) -> AiManualScanResponse:
-    """
-    ניתוח סימבול בודד. אם מודול הסורק לא קיים/נכשל — מוחזר אובייקט ניטרלי עם reason.
-    """
     sym = symbol.upper().strip()
     try:
         from utils.multi_tf_scanner import analyze_symbol  # type: ignore
-
-        res = await analyze_symbol(
-            symbol=sym, interval=interval, market_type=market, bars=bars
-        )
+        res = await analyze_symbol(symbol=sym, interval=interval, market_type=market, bars=bars)
         r = res or {}
         item = AiManualScanItem(
             symbol=sym,
@@ -226,7 +192,6 @@ async def get_ai_manual_scan(
         )
         return AiManualScanResponse(symbol=sym, results=item)
     except Exception as e:
-        # פולבק ניטרלי — לא 500
         item = AiManualScanItem(
             symbol=sym,
             market=market,
@@ -245,6 +210,7 @@ async def get_ai_manual_scan(
             atr=None,
         )
         return AiManualScanResponse(symbol=sym, results=item)
+
 
 
 
