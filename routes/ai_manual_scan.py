@@ -1,36 +1,36 @@
 # routes/ai_manual_scan.py
-from fastapi import APIRouter, Query, HTTPException, status
-from fastapi.responses import JSONResponse
+import logging
+from fastapi import APIRouter, Query, HTTPException
 from utils.ai_client import ai_client
 
 router = APIRouter()
 
 @router.get("/ai/manual-scan")
-async def ai_manual_scan(symbol: str = Query(None, description="Crypto symbol, e.g. BTCUSDT")):
+async def manual_scan(
+    symbol: str = Query(..., description="Symbol to scan, e.g. BTCUSDT"),
+    interval: str = Query("15m", description="Interval (e.g. 1m, 5m, 15m, 1h)"),
+):
     """
-    סריקה ידנית עם AI.
-    חובה לשלוח ?symbol=BTCUSDT אחרת מחזיר שגיאה ברורה.
+    הרצה ידנית של סריקה עם AI למטבע מסוים.
+    מחזיר טקסט ניתוח מהמודל + סטטוס.
     """
-    if not symbol:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"ok": False, "error": "Missing required parameter: symbol (?symbol=BTCUSDT)"}
-        )
-
     try:
-        prompt = f"Analyze trading opportunities for {symbol} in crypto futures."
-        reply = await ai_client.chat(prompt, system="Be concise, structured, and technical.", max_tokens=300)
+        prompt = f"Analyze {symbol} on {interval} interval. Provide key technical signals and trading insight."
+        result = await ai_client.chat(
+            prompt,
+            system="Be concise. Focus only on technical signals, trend, and possible entry/exit.",
+            max_tokens=300,
+        )
 
-        return JSONResponse(
-            content={
-                "ok": True,
-                "symbol": symbol,
-                "analysis": reply.strip()
-            },
-            status_code=200
-        )
+        if not result:
+            raise HTTPException(status_code=503, detail="AI returned empty response")
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "interval": interval,
+            "analysis": result.strip(),
+        }
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"ok": False, "error": str(e)}
-        )
+        logging.exception("manual_scan failed")
+        raise HTTPException(status_code=500, detail=str(e))
