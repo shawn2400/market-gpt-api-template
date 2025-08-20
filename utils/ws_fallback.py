@@ -1,77 +1,76 @@
 # utils/ws_fallback.py
+import asyncio
 import time
 import logging
-import asyncio
+import random
+from utils.redis_client import set_value, get_value
 
-_prices: dict[str, tuple[float, float]] = {}  # {symbol: (price, timestamp)}
-logger = logging.getLogger("algogpt.ws")
+logger = logging.getLogger("algogpt.ws_fallback")
 
-def update_price(symbol: str, price: float):
-    """עדכון מחיר פנימי בזיכרון"""
-    _prices[symbol] = (price, time.time())
-    logger.info({
-        "event": "price_update",
-        "symbol": symbol,
-        "price": price,
-        "timestamp": _prices[symbol][1]
-    })
+# In-memory cache
+price_cache: dict[str, tuple[float, float]] = {}  # symbol → (price, timestamp)
+
+
+async def update_price(symbol: str, price: float) -> None:
+    """
+    עדכון מחיר במטמון מקומי וב־Redis
+    """
+    now = time.time()
+    price_cache[symbol] = (price, now)
+
+    # שמירה גם ב־Redis (עם TTL = 30 שניות)
+    try:
+        set_value(f"price:{symbol}", str(price), expire=30)
+    except Exception as e:
+        logger.error(f"[ws_fallback] Failed to cache {symbol} in Redis: {e}")
+
 
 def get_price(symbol: str) -> float | None:
-    """מחזיר מחיר עדכני אם קיים"""
-    return _prices.get(symbol, (None, None))[0]
+    """
+    מחזיר מחיר עדכני – קודם מה־Redis אם זמין, אחרת מה־cache
+    """
+    try:
+        redis_val = get_value(f"price:{symbol}")
+        if redis_val:
+            return float(redis_val)
+    except Exception:
+        pass
+
+    if symbol in price_cache:
+        return price_cache[symbol][0]
+    return None
+
 
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
-    """בודק אם המחיר עדכני לפי הזמן האחרון שהתקבל"""
-    price, ts = _prices.get(symbol, (None, None))
-    if ts is None:
-        logger.warning({
-            "event": "price_check",
-            "symbol": symbol,
-            "status": "missing",
-            "msg": "No price data yet"
-        })
-        return False
-
-    age = time.time() - ts
-    if age > max_age_sec:
-        logger.error({
-            "event": "price_check",
-            "symbol": symbol,
-            "status": "stale",
-            "age_sec": round(age, 1),
-            "threshold_sec": max_age_sec,
-            "price": price
-        })
-        return False
-
-    logger.debug({
-        "event": "price_check",
-        "symbol": symbol,
-        "status": "fresh",
-        "age_sec": round(age, 1),
-        "price": price
-    })
-    return True
-
-async def price_monitor_loop(interval_sec: int = 5, max_age_sec: int = 10):
     """
-    🔄 לולאת בדיקה ברקע שמנטרת מחירים ישנים מדי.
-    כותבת שגיאה ללוג אם המחיר התיישן.
+    בודק אם מחיר עדכני (מתוך cache / Redis)
     """
+    try:
+        redis_val = get_value(f"price:{symbol}")
+        if redis_val:
+            return True
+    except Exception:
+        pass
+
+    if symbol in price_cache:
+        _, ts = price_cache[symbol]
+        return (time.time() - ts) <= max_age_sec
+    return False
+
+
+async def price_monitor_loop():
+    """
+    לולאת דמו שמעדכנת מחירים רנדומליים כל 5 שניות
+    בפועל כאן יתחבר WebSocket ל־Binance
+    """
+    symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
     while True:
-        now = time.time()
-        for symbol, (price, ts) in list(_prices.items()):
-            age = now - ts
-            if age > max_age_sec:
-                logger.error({
-                    "event": "price_monitor",
-                    "symbol": symbol,
-                    "status": "stale",
-                    "age_sec": round(age, 1),
-                    "threshold_sec": max_age_sec,
-                    "price": price
-                })
-        await asyncio.sleep(interval_sec)
+        for sym in symbols:
+            price = random.uniform(10000, 70000)  # דמו
+            await update_price(sym, price)
+            logger.info({"event": "price_update", "symbol": sym, "price": price})
+        await asyncio.sleep(5)
+
 
 
 
