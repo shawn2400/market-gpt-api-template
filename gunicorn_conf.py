@@ -2,6 +2,7 @@
 import multiprocessing
 import os
 import logging
+import time
 from utils.json_logger import JsonFormatter
 
 # --- Workers ---
@@ -36,7 +37,38 @@ def post_fork(server, worker):
     root.handlers = [handler]
     root.setLevel(logging.INFO)
 
-    server.log.info("✅ Gunicorn worker started with JSON logging")
+    server.log.info({"event": "worker_start", "msg": "✅ Gunicorn worker started with JSON logging"})
+
+
+# --- Custom JSON access log ---
+def accesslog_environ(req):
+    """עיבוד request dict ל־log אחיד"""
+    return {
+        "method": req["METHOD"],
+        "path": req["RAW_URI"],
+        "client_ip": req.get("REMOTE_ADDR"),
+        "user_agent": req.get("HTTP_USER_AGENT"),
+    }
+
+def accesslog_format(server, req, environ, resp):
+    """
+    מחזיר JSON string לכל בקשה (במקום טקסט רגיל של Gunicorn)
+    """
+    start_time = req.start_time if hasattr(req, "start_time") else time.time()
+    latency = (time.time() - start_time) * 1000  # ms
+
+    log_data = {
+        "event": "http_request",
+        "method": req.method,
+        "path": req.path,
+        "status_code": resp.status,
+        "latency_ms": round(latency, 2),
+        "client_ip": req.access_log.get("client"),
+        "user_agent": req.headers.get("user-agent"),
+    }
+    import json
+    return json.dumps(log_data)
+
 
 
 
