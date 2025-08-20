@@ -1,4 +1,5 @@
-web: gunicorn main:app -k uvicorn.workers.UvicornWorker -w ${WORKERS:-1} -b 0.0.0.0:${PORT:-10000} --timeout 120 --graceful-timeout 30 --keep-alive 5 --max-requests 2000 --max-requests-jitter 200 --worker-tmp-dir /dev/shm --log-level info
+web: gunicorn main:app -c gunicorn_conf.py
+
 
 
 
