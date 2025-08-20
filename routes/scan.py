@@ -2,10 +2,12 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-router = APIRouter(tags=["Scan"])
+from utils.auth import require_bearer_token  # ✅ נוסיף כאן
+
+router = APIRouter(tags=["Scan"], dependencies=[Depends(require_bearer_token)])  # ✅ נוסיף token check
 
 class ScanInfo(BaseModel):
     ok: bool = True
