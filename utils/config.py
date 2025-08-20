@@ -13,7 +13,7 @@ def _as_int(v: str | None, default: int) -> int:
     except Exception:
         return default
 
-def _as_float(v: str | None, default: float) -> float:
+def _as_float(v: str | None, default: float = 0.0) -> float:
     try:
         return float(str(v).strip())
     except Exception:
@@ -25,7 +25,7 @@ STRATEGY_VERSION  = os.getenv("STRATEGY_VERSION", ALGOGPT_VERSION)
 
 # ---------- Limits / stability ----------
 RESPONSE_MAX_BYTES = _as_int(os.getenv("RESPONSE_MAX_BYTES"), 1_048_576)  # 1MB
-SCAN_MAX_LIMIT     = _as_int(os.getenv("SCAN_MAX_LIMIT"), 20)
+SCAN_MAX_LIMIT     = _as_int(os.getenv("SCAN_MAX_LIMIT"), 10)  # ✅ הורדנו ברירת מחדל ל־10
 EXPOSE_LIMITS      = _as_bool(os.getenv("EXPOSE_LIMITS"), True)
 
 # ---------- Trading execution / safety ----------
@@ -38,12 +38,12 @@ MAX_TRADE_BUDGET                 = _as_float(os.getenv("MAX_TRADE_BUDGET"), 100.
 # ---------- Auto Executor / Scanner ----------
 AUTO_RUN             = _as_bool(os.getenv("AUTO_RUN"), False)
 ENABLE_AUTO_TRADING  = _as_bool(os.getenv("ENABLE_AUTO_TRADING"), False)
-SCAN_INTERVAL        = _as_int(os.getenv("SCAN_INTERVAL"), 60)                 # שניות
+SCAN_INTERVAL        = _as_int(os.getenv("SCAN_INTERVAL"), 60)
 MIN_QUALITY_SCORE    = _as_float(os.getenv("MIN_QUALITY_SCORE"), 6.0)
-TRENDING_ONLY        = _as_bool(os.getenv("TRENDING_ONLY"), False)             # ← יותר מועמדים? קבע False
+TRENDING_ONLY        = _as_bool(os.getenv("TRENDING_ONLY"), False)
 DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL", "15m")
 
-# ---------- SL/TP bounds (אחוזים) ----------
+# ---------- SL/TP bounds ----------
 SL_MIN_PCT = _as_float(os.getenv("SL_MIN_PCT"), 0.20)
 SL_MAX_PCT = _as_float(os.getenv("SL_MAX_PCT"), 5.00)
 TP_MIN_PCT = _as_float(os.getenv("TP_MIN_PCT"), 0.30)
@@ -52,6 +52,7 @@ TP_MAX_PCT = _as_float(os.getenv("TP_MAX_PCT"), 8.00)
 # ---------- Cooldown / placement control ----------
 SYMBOL_COOLDOWN_SEC  = _as_int(os.getenv("SYMBOL_COOLDOWN_SEC"), 600)
 MAX_TRADES_PER_TICK  = _as_int(os.getenv("MAX_TRADES_PER_TICK"), 3)
+
 
 
 
