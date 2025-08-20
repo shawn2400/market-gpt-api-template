@@ -1,78 +1,62 @@
 # routes/grid.py
 from __future__ import annotations
 from fastapi import APIRouter, Query
-from typing import Dict, Any, List
+from typing import Dict, Any
 import logging
 
-from utils.binance_client import grid_orders, futures_new_order
+from utils.grid_utils import execute_grid_trade
+from utils.grid_tracker import add_grid, get_open_grids, remove_grid
 
-router = APIRouter(prefix="/grid", tags=["Grid Trading"])
+router = APIRouter(prefix="/grid", tags=["Grid"])
 logger = logging.getLogger("algogpt.grid")
 
-# סטטוס פנימי לניהול גריד
-_GRID_STATUS: Dict[str, Any] = {
-    "active": False,
-    "symbol": None,
-    "orders": [],
-    "params": {},
-}
-
+# --- Status ---
 @router.get("/status", summary="Get Grid Status")
 async def grid_status() -> Dict[str, Any]:
-    return {"ok": True, "status": _GRID_STATUS}
+    grids = get_open_grids()
+    return {"ok": True, "count": len(grids), "grids": grids}
 
-@router.post("/start", summary="Start Grid")
+# --- Start Grid ---
+@router.post("/start", summary="Start Grid Trading")
 async def grid_start(
-    symbol: str = Query(..., description="e.g. BTCUSDT"),
-    side: str = Query(..., description="BUY or SELL"),
-    start_price: float = Query(..., description="Start price for grid"),
-    end_price: float = Query(..., description="End price for grid"),
-    steps: int = Query(..., ge=2, le=50, description="Number of grid steps"),
-    qty: float = Query(..., description="Quantity per order"),
-    dry_run: bool = Query(True, description="If true, don’t send real orders")
+    symbol: str = Query(..., description="Trading pair, e.g. BTCUSDT"),
+    budget_usd: float = Query(..., gt=0, description="Total budget in USD"),
+    grid_count: int = Query(6, ge=2, le=50, description="Number of grid levels"),
+    grid_pct: float = Query(0.4, gt=0, description="Step size between levels (%)"),
+    leverage: int = Query(20, gt=0, description="Leverage (futures only)"),
+    futures: bool = Query(True, description="Use Futures if true, Spot if false"),
+    tp_pct: float = Query(1.5, gt=0, description="TP per level (%)"),
+    sl_pct: float = Query(1.0, gt=0, description="SL per level (%)"),
 ) -> Dict[str, Any]:
     try:
-        orders = grid_orders(symbol, side, start_price, end_price, steps, qty)
-        _GRID_STATUS.update({
-            "active": True,
-            "symbol": symbol,
-            "params": {
-                "side": side,
-                "start_price": start_price,
-                "end_price": end_price,
-                "steps": steps,
-                "qty": qty,
-                "dry_run": dry_run,
-            },
-            "orders": orders,
-        })
+        result = await execute_grid_trade(
+            symbol=symbol,
+            budget_usd=budget_usd,
+            grid_count=grid_count,
+            grid_pct=grid_pct,
+            leverage=leverage,
+            futures=futures,
+            tp_pct=tp_pct,
+            sl_pct=sl_pct,
+        )
 
-        if not dry_run:
-            executed: List[Dict[str, Any]] = []
-            for o in orders:
-                try:
-                    order = futures_new_order(
-                        symbol=o["symbol"],
-                        side=o["side"],
-                        type=o["type"],
-                        quantity=o["quantity"],
-                        price=o["price"],
-                        timeInForce=o["timeInForce"],
-                    )
-                    executed.append(order)
-                except Exception as ex:
-                    logger.warning(f"Failed to place grid order {o}: {ex}")
-            return {"ok": True, "executed": executed, "status": _GRID_STATUS}
+        if result.get("status") in ("success", "dry_run"):
+            add_grid(result["plan"])
 
-        return {"ok": True, "orders": orders, "status": _GRID_STATUS}
+        return result
     except Exception as e:
-        logger.exception("Grid start failed")
-        return {"ok": False, "error": str(e)}
+        logger.exception("❌ Grid start failed")
+        return {"status": "error", "error": str(e)}
 
-@router.post("/stop", summary="Stop Grid")
-async def grid_stop() -> Dict[str, Any]:
-    _GRID_STATUS.update({"active": False})
-    return {"ok": True, "status": _GRID_STATUS}
+# --- Stop Grid ---
+@router.post("/stop", summary="Stop Grid for Symbol")
+async def grid_stop(symbol: str = Query(..., description="Symbol to stop")) -> Dict[str, Any]:
+    try:
+        remove_grid(symbol)
+        return {"ok": True, "removed_symbol": symbol}
+    except Exception as e:
+        logger.exception("❌ Grid stop failed")
+        return {"ok": False, "error": str(e)}
 
 
 
