@@ -20,7 +20,7 @@ logger = logging.getLogger("algogpt")
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance (Futures/Spot/Grid/AI/Backtest/Analytics).",
+    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance (Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk).",
 )
 
 # --- Middlewares ---
@@ -43,15 +43,31 @@ from routes.orderflow import router as orderflow_router
 from routes.scan_top_volume import router as scan_top_volume_router
 from routes.strategy import router as strategy_router
 
+# --- Extra Routers (להשלים בהתאם לקבצים שלך) ---
+from routes.news import router as news_router
+from routes.indicators import router as indicators_router
+from routes.analytics import router as analytics_router
+from routes.risk import router as risk_router
+from routes.snapshots import router as snapshots_router
+from routes.dashboard import router as dashboard_router
+
 # ✅ Include routers
-app.include_router(ai_router, prefix="/ai")
-app.include_router(scan_router)  # כבר עם prefix="/scan"
-app.include_router(trade_router, prefix="/trade")
-app.include_router(backtest_router, prefix="/backtest")
-app.include_router(grid_router, prefix="/grid")
-app.include_router(orderflow_router)              # /orderflow/{symbol}
-app.include_router(scan_top_volume_router)        # /scan/top-volume
-app.include_router(strategy_router, prefix="/strategy")  # /strategy/version
+app.include_router(ai_router, prefix="/ai", tags=["AI"])
+app.include_router(scan_router, tags=["Scan"])                  # /scan
+app.include_router(trade_router, prefix="/trade", tags=["Trade"])
+app.include_router(backtest_router, prefix="/backtest", tags=["Backtest"])
+app.include_router(grid_router, prefix="/grid", tags=["Grid"])
+app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])    # /orderflow/{symbol}
+app.include_router(scan_top_volume_router, prefix="/scan", tags=["Scan"])        # /scan/top-volume
+app.include_router(strategy_router, prefix="/strategy", tags=["Strategy"])       # /strategy/version
+
+# Extra
+app.include_router(news_router, prefix="/news", tags=["News"])
+app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
+app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
+app.include_router(risk_router, prefix="/risk", tags=["Risk"])
+app.include_router(snapshots_router, prefix="/snapshots", tags=["Snapshots"])
+app.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard"])
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
