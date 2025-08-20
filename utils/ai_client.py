@@ -4,18 +4,17 @@ import asyncio
 import logging
 import atexit
 from typing import Any, Dict, Optional, Tuple
-
 import httpx
 from random import random
 
-# ------------------------ ENV / CONFIG ------------------------
+# ---------- ENV / CONFIG ----------
 OPENAI_BASE: str = (os.getenv("OPENAI_BASE_URL") or "").strip() or "https://api.openai.com/v1"
 OPENAI_KEY: str = (os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_MODEL: str = (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
 OPENAI_ORG: Optional[str] = (os.getenv("OPENAI_ORG") or "").strip() or None
 OPENAI_PROJECT: Optional[str] = (os.getenv("OPENAI_PROJECT") or "").strip() or None
 
-# --- Azure OpenAI (optional) ---
+# Azure (optional)
 AZURE_ENDPOINT: str = (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip()
 AZURE_KEY: str = (os.getenv("AZURE_OPENAI_KEY") or "").strip()
 AZURE_DEPLOYMENT: str = (os.getenv("AZURE_OPENAI_DEPLOYMENT") or "").strip()
@@ -24,14 +23,14 @@ AZURE_API_VERSION: str = (os.getenv("AZURE_OPENAI_API_VERSION") or "2024-02-15-p
 # Shared knobs
 TIMEOUT_SECONDS: float = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
 MAX_CONCURRENCY: int = int(os.getenv("OPENAI_MAX_CONCURRENCY", "4"))
-HTTP2: bool = (os.getenv("OPENAI_HTTP2", "false").strip().lower() in ("1", "true", "yes"))
+HTTP2: bool = (os.getenv("OPENAI_HTTP2", "false").lower() in ("1", "true", "yes"))
 
 # Retries / backoff
 MAX_RETRIES: int = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
 BACKOFF_BASE: float = float(os.getenv("OPENAI_BACKOFF_BASE", "0.6"))
 BACKOFF_CAP: float = float(os.getenv("OPENAI_BACKOFF_CAP", "10.0"))
 
-# ------------------------ MODE DETECTION ------------------------
+# ---------- Mode Detection ----------
 def _detect_mode() -> Tuple[str, str]:
     base_lower = (OPENAI_BASE or "").lower()
     if (AZURE_ENDPOINT and AZURE_KEY and AZURE_DEPLOYMENT) or ("azure.com" in base_lower) or ("/openai/deployments" in base_lower):
@@ -41,7 +40,7 @@ def _detect_mode() -> Tuple[str, str]:
 
 _MODE, _BASE = _detect_mode()
 
-# ------------------------ SHARED STATE ------------------------
+# ---------- Shared State ----------
 _client: Optional[httpx.AsyncClient] = None
 _client_lock = asyncio.Lock()
 _sem = asyncio.Semaphore(max(1, MAX_CONCURRENCY))
@@ -113,7 +112,7 @@ def _backoff(attempt: int) -> float:
     d = min(BACKOFF_CAP, BACKOFF_BASE * (2 ** attempt))
     return d * (0.7 + 0.6 * random())
 
-# ------------------------ URL ROUTING ------------------------
+# ---------- URL Routing ----------
 def _chat_endpoint_path() -> str:
     if _MODE == "azure":
         if not AZURE_DEPLOYMENT:
@@ -126,7 +125,7 @@ def _chat_query_params() -> Dict[str, str]:
         return {"api-version": AZURE_API_VERSION}
     return {}
 
-# ------------------------ LOW-LEVEL CALL ------------------------
+# ---------- Low-Level Call ----------
 async def _post_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
     client = await _get_client()
     last_err: Optional[str] = None
@@ -169,7 +168,7 @@ async def _post_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
                 continue
     raise RuntimeError(f"OpenAI request failed: {last_err}")
 
-# ------------------------ PUBLIC API ------------------------
+# ---------- Public API ----------
 async def chat(
     prompt: str,
     system: str = "Be concise.",
@@ -198,10 +197,10 @@ async def chat(
 
         choice0 = choices[0]
         # ✅ תמיכה גם ב-message וגם ב-text
-        if "message" in choice0:
-            return (choice0.get("message") or {}).get("content") or ""
+        if "message" in choice0 and choice0["message"]:
+            return (choice0["message"].get("content") or "").strip()
         if "text" in choice0:
-            return choice0.get("text") or ""
+            return (choice0.get("text") or "").strip()
         return ""
     except Exception as e:
         logging.warning(f"[ai_client.chat] {e}")
@@ -228,7 +227,7 @@ async def ai_healthcheck() -> Dict[str, Any]:
         logging.warning(f"[ai_health] {e}")
         return {"ok": False, "error": str(e), "model": OPENAI_MODEL, "mode": _MODE}
 
-# ------------------------ CLASS ------------------------
+# ---------- Class ----------
 class _AIClient:
     def __init__(self) -> None:
         self._ready = False
@@ -264,6 +263,7 @@ class _AIClient:
         await _close_client()
 
 ai_client = _AIClient()
+
 
 
 
