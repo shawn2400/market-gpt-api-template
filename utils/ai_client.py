@@ -197,6 +197,7 @@ async def chat(
             return ""
 
         choice0 = choices[0]
+        # ✅ תמיכה גם ב-message וגם ב-text
         if "message" in choice0:
             return (choice0.get("message") or {}).get("content") or ""
         if "text" in choice0:
@@ -208,11 +209,12 @@ async def chat(
 
 async def ai_healthcheck() -> Dict[str, Any]:
     try:
-        txt = await chat("ping", system="Reply with 'pong'.", max_tokens=5, temperature=0.0)
-        ok = ("pong" in (txt or "").lower()) or (len((txt or "").strip()) > 0)
+        txt = await chat("ping", system="Reply with 'pong'.", max_tokens=8, temperature=0.0)
+        reply = (txt or "").strip()
+        ok = "pong" in reply.lower() or len(reply) > 0
         return {
             "ok": ok,
-            "reply": (txt or "").strip(),
+            "reply": reply,
             "mode": _MODE,
             "model": OPENAI_MODEL,
             "http2": HTTP2,
@@ -262,6 +264,7 @@ class _AIClient:
         await _close_client()
 
 ai_client = _AIClient()
+
 
 
 
