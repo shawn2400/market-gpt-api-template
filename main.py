@@ -49,9 +49,9 @@ app.include_router(scan_router)  # כבר עם prefix="/scan"
 app.include_router(trade_router, prefix="/trade")
 app.include_router(backtest_router, prefix="/backtest")
 app.include_router(grid_router, prefix="/grid")
-app.include_router(orderflow_router)  # כולל /orderflow/{symbol}
-app.include_router(scan_top_volume_router)  # כולל /scan/top-volume
-app.include_router(strategy_router, prefix="/strategy")
+app.include_router(orderflow_router)              # /orderflow/{symbol}
+app.include_router(scan_top_volume_router)        # /scan/top-volume
+app.include_router(strategy_router, prefix="/strategy")  # /strategy/version
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
@@ -72,6 +72,7 @@ async def health():
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"status": "live"}
+
 
 
 
