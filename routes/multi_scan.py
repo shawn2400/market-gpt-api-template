@@ -1,9 +1,8 @@
-# routes/multi_scan.py
 from __future__ import annotations
-from typing import List, Dict, Any, Optional, Literal, Iterable
+from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime, timezone
-import asyncio
-from fastapi import APIRouter, Depends, Query, HTTPException, status, Header
+import asyncio, os
+from fastapi import APIRouter, Depends, Query, Header
 
 # ---- Auth ----
 try:
@@ -15,20 +14,7 @@ except Exception:
         return None
 
 router = APIRouter(prefix="/scan", tags=["Scan"], dependencies=[Depends(require_bearer_token)])
-
-def _cfg(name: str, default: Any) -> Any:
-    try:
-        from utils import config
-        return getattr(config, name, default)
-    except Exception:
-        return default
-
-def _is_executor_running() -> bool:
-    try:
-        from utils.auto_executor import is_executor_running
-        return bool(is_executor_running())
-    except Exception:
-        return False
+MAX_ITEMS = int(os.getenv("SCAN_MAX_LIMIT", "10"))
 
 async def _analyze_one(symbol: str, interval: str, market: str, bars: int = 200) -> Dict[str, Any]:
     sym = symbol.upper().strip()
@@ -41,12 +27,7 @@ async def _analyze_one(symbol: str, interval: str, market: str, bars: int = 200)
 @router.get("/info")
 def get_scan_info():
     now = datetime.now(tz=timezone.utc).isoformat()
-    cfg = {
-        "AUTO_RUN": bool(_cfg("AUTO_RUN", False)),
-        "SCAN_INTERVAL": int(_cfg("SCAN_INTERVAL", 60)),
-        "MIN_QUALITY_SCORE": float(_cfg("MIN_QUALITY_SCORE", 6)),
-    }
-    return {"ok": True, "now_utc": now, "executor_running": _is_executor_running(), "config": cfg}
+    return {"ok": True, "now_utc": now}
 
 @router.get("")
 async def get_scan(
@@ -55,10 +36,11 @@ async def get_scan(
     interval: str = "15m",
     top: int = 10,
 ):
+    if top > MAX_ITEMS:
+        top = MAX_ITEMS
     from utils.multi_tf_scanner import multi_tf_scan_with_ai
-    items: List[Dict[str, Any]] = []
     if symbols:
-        syms = [s.strip().upper() for s in symbols.split(",")]
+        syms = [s.strip().upper() for s in symbols.split(",")][:MAX_ITEMS]
         sem = asyncio.Semaphore(16)
         async def _work(sym: str):
             async with sem:
@@ -67,6 +49,7 @@ async def get_scan(
         return {"ok": True, "count": len(results), "items": results}
     res = await multi_tf_scan_with_ai(timeframes=(interval, "1h"), markets=(market_type,), min_quality=6, top=top)
     return {"ok": True, "count": len(res or []), "items": res}
+
 
 
 
