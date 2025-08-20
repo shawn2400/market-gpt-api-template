@@ -1,4 +1,4 @@
-# utils/ai_health.py
+# routes/ai_health.py
 import time
 import logging
 from typing import Dict, Any
@@ -15,7 +15,7 @@ async def ai_health() -> Dict[str, Any]:
     """
     Health check ל־OpenAI/Azure.
     שולח ping → מצפה ל־pong/תשובה כלשהי.
-    מחזיר מבנה JSON עם ok, reply, latency, model, ועוד מידע דיבאג.
+    מחזיר JSON עם ok, reply, latency, model, ועוד מידע.
     """
     t0 = time.time()
     try:
