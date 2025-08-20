@@ -2,11 +2,12 @@
 from __future__ import annotations
 import os
 from typing import Dict, Any
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Depends
 
 from utils import pnl_tracker
+from utils.auth import require_bearer_token
 
-router = APIRouter(prefix="/pnl", tags=["PnL"])
+router = APIRouter(prefix="/pnl", tags=["PnL"], dependencies=[Depends(require_bearer_token)])
 
 @router.post("/update", summary="Update PnL from a trade", operation_id="postPnlUpdate")
 async def post_pnl_update(
@@ -58,4 +59,5 @@ async def get_pnl_report(limit_days: int = 7) -> Dict[str, Any]:
         return {"ok": True, "file_path": pdf_path, "url": url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"pnl pdf error: {e}")
+
 
