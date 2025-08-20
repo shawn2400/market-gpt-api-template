@@ -4,31 +4,29 @@ import logging
 import redis
 from dotenv import load_dotenv
 
-# Load .env if exists (local dev)
+# Load env vars (useful for local dev)
 load_dotenv()
 
 logger = logging.getLogger("algogpt.redis")
 
-# Redis URL from environment
+# Redis URL (Render Key-Value → REDIS_URL)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 try:
     redis_client = redis.Redis.from_url(
         REDIS_URL,
-        decode_responses=True,  # return strings instead of bytes
-        socket_connect_timeout=5,  # fail fast if unreachable
+        decode_responses=True,
+        socket_connect_timeout=5,
         health_check_interval=30,
     )
-    # Quick test connection
     redis_client.ping()
     logger.info(f"[Redis] Connected to {REDIS_URL}")
 except Exception as e:
     redis_client = None
-    logger.error(f"[Redis] Failed to connect to {REDIS_URL}: {e}")
+    logger.error(f"[Redis] Connection failed: {e}")
 
 
 def set_value(key: str, value: str, expire: int | None = None) -> bool:
-    """שומר ערך ב־Redis עם מפתח"""
     if not redis_client:
         return False
     try:
@@ -40,7 +38,6 @@ def set_value(key: str, value: str, expire: int | None = None) -> bool:
 
 
 def get_value(key: str) -> str | None:
-    """מחזיר ערך מ־Redis לפי מפתח"""
     if not redis_client:
         return None
     try:
@@ -51,7 +48,6 @@ def get_value(key: str) -> str | None:
 
 
 def delete_value(key: str) -> bool:
-    """מוחק ערך לפי מפתח"""
     if not redis_client:
         return False
     try:
