@@ -22,8 +22,8 @@ PyYAML>=6.0.1,<7.0.0
 orjson==3.10.5
 
 # 📊 Data science
-pandas==2.2.2
 numpy==1.26.4
+pandas==2.2.2
 scipy==1.13.1
 scikit-learn==1.5.1
 numba==0.59.1
