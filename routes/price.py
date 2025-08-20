@@ -4,7 +4,7 @@ from fastapi import APIRouter, Path
 from pydantic import BaseModel, Field
 from typing import Optional, Any, Dict
 
-router = APIRouter(tags=["Price"])  # ציבורי (לפי __routes אצלך)
+router = APIRouter(tags=["Price"])  # ציבורי
 
 class PriceResponse(BaseModel):
     ok: bool
@@ -36,5 +36,6 @@ def get_price_symbol(
         )
     except Exception as e:
         return PriceResponse(ok=False, symbol=symbol.upper(), error=str(e))
+
 
 
