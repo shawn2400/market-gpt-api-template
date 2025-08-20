@@ -23,7 +23,7 @@ app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
     description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance "
-                "(Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk/Orders/Debug).",
+                "(Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk/Orders/Debug/WS).",
 )
 
 # --- Middlewares ---
@@ -66,6 +66,7 @@ from routes.price import router as price_router
 from routes.market import router as market_router
 from routes.scan import router as scan_utils_router
 from routes.utils import router as utils_router
+from routes.ws_health import router as ws_health_router  # ✅ חדש
 
 # ✅ Include routers
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
@@ -94,6 +95,7 @@ app.include_router(price_router, tags=["Price"])
 app.include_router(market_router, tags=["Market"])
 app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
 app.include_router(utils_router, tags=["Utils"])
+app.include_router(ws_health_router, tags=["WS Health"])  # ✅ חדש
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
@@ -119,6 +121,7 @@ async def health_live():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
