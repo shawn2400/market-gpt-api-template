@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 import os
 import logging
@@ -20,6 +21,7 @@ from utils.auth import require_bearer_token
 from utils.response_limits import ResponseSizeLimiter
 from utils import config as cfg
 
+# ---------- Metadata ----------
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.3")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -37,10 +39,11 @@ try:
 except Exception:
     pass
 
+# ---------- Routers ----------
 from routes.ai import router as ai_router
 from routes.trade import router as trade_router
 from routes import debug
-
+from routes import ai_manual_scan   # ✅ חדש
 
 def _try_import(name: str, attr: str = "router") -> Optional[object]:
     try:
@@ -49,20 +52,21 @@ def _try_import(name: str, attr: str = "router") -> Optional[object]:
     except Exception:
         return None
 
-
+# ---------- Optional auto executor ----------
 _auto_exec_start = None
 try:
     from utils.auto_executor import start_executor as _auto_exec_start
 except Exception:
     pass
 
+# ---------- FastAPI App ----------
 app = FastAPI(
     title="AlgoGPT API",
     description="AlgoGPT — Binance Futures LIVE",
     version=APP_VERSION,
 )
 
-# Middleware
+# ---------- Middleware ----------
 allow_origins: List[str] = ["*"] if CORS_ALLOW_ORIGINS == "*" else [
     o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()
 ]
@@ -78,7 +82,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=cfg.RESPONSE_MAX_BYTES)
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
+# ---------- Middleware for metrics ----------
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
     t0 = time.perf_counter()
@@ -96,11 +100,10 @@ async def _metrics_middleware(request: Request, call_next):
         except Exception as e:
             logger.warning("metrics_tracker failed: %s", e)
 
-
+# ---------- Exception Handlers ----------
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-
 
 @app.exception_handler(Exception)
 async def _unhandled_exc_handler(request: Request, exc: Exception):
@@ -108,21 +111,20 @@ async def _unhandled_exc_handler(request: Request, exc: Exception):
     metrics_tracker.inc_err()
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-
+# ---------- Base Routes ----------
 @app.get("/")
 def root():
     return {"status": "ok", "version": app.version}
-
 
 @app.get("/metrics")
 async def get_metrics():
     return metrics_tracker.get_metrics()
 
-
-# Routers
+# ---------- Routers ----------
 app.include_router(ai_router, prefix="/ai", dependencies=[Depends(require_bearer_token)])
 app.include_router(trade_router, prefix="/trade", dependencies=[Depends(require_bearer_token)])
 app.include_router(debug.router, prefix="/debug")
+app.include_router(ai_manual_scan.router, dependencies=[Depends(require_bearer_token)])  # ✅ manual-scan
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
@@ -135,7 +137,7 @@ for mod in [
     if r:
         app.include_router(r, dependencies=[Depends(require_bearer_token)])
 
-
+# ---------- Startup ----------
 @app.on_event("startup")
 async def on_startup():
     try:
@@ -150,10 +152,11 @@ async def on_startup():
         except Exception:
             pass
 
-
+# ---------- Entrypoint ----------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
