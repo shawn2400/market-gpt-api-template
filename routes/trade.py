@@ -1,63 +1,93 @@
 # routes/trade.py
 from __future__ import annotations
-from fastapi import APIRouter, Body
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
-import logging
+from typing import Optional
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel
 
-from utils import config as cfg
-from utils.binance_client import binance_client
+# --- Auth wrapper ---
+try:
+    from utils.auth import require_bearer_token as _raw_require_bearer
+    def require_bearer_token(authorization: Optional[str] = Header(default=None)):
+        return _raw_require_bearer(authorization=authorization)
+except Exception:
+    def require_bearer_token(authorization: Optional[str] = Header(default=None)):
+        return None
 
-router = APIRouter(prefix="/trade", tags=["Trade"])
-logger = logging.getLogger("algogpt.trade")
+router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_bearer_token)])
 
+
+# --- Models ---
 class TradeRequest(BaseModel):
-    symbol: str = Field(..., description="Trading pair, e.g. BTCUSDT")
-    side: Literal["LONG", "SHORT"]
-    type: Literal["LIMIT", "STOP", "MARKET"] = "LIMIT"
-    price: Optional[float] = None
-    quantity: float
-    entry: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
-    dry_run: bool = False
+    symbol: str
+    side: str  # LONG / SHORT
+    entry: float
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    leverage: Optional[int] = 5
+    budget: Optional[float] = 50
 
-@router.post("/execute")
-async def execute_trade(req: TradeRequest):
-    try:
-        # אם המשתמש ביקש dry_run → לא נשלח ל־Binance
-        if req.dry_run:
-            return {
-                "ok": True,
-                "dry_run": True,
-                "symbol": req.symbol,
-                "side": req.side,
-                "type": req.type,
-                "price": req.price,
-                "quantity": req.quantity,
-                "sl": req.stop_loss,
-                "tp": req.take_profit,
-            }
 
-        # תרגום LONG/SHORT ל־BUY/SELL מול Binance
-        binance_side = "BUY" if req.side == "LONG" else "SELL"
+class TradeResponse(BaseModel):
+    ok: bool
+    trade_id: str
+    symbol: str
+    side: str
+    entry: float
+    sl: Optional[float]
+    tp: Optional[float]
+    leverage: int
+    budget: float
+    status: str
 
-        params = {
-            "symbol": req.symbol,
-            "side": binance_side,
-            "type": req.type,
-            "quantity": req.quantity,
-        }
-        if req.type == "LIMIT" and req.price:
-            params["price"] = req.price
-            params["timeInForce"] = "GTC"
 
-        order = binance_client.new_order(**params)
+# --- Endpoints ---
+@router.post("/", response_model=TradeResponse, summary="Open new trade", operation_id="postOpenTrade")
+async def open_trade(req: TradeRequest):
+    """
+    פותח טרייד חדש ב־AlgoGPT.
+    """
+    # כאן נכנס הלוגיקה האמיתית מול Binance / DB
+    trade_id = f"TRD-{req.symbol}-{req.side}-001"
+    return TradeResponse(
+        ok=True,
+        trade_id=trade_id,
+        symbol=req.symbol.upper(),
+        side=req.side.upper(),
+        entry=req.entry,
+        sl=req.sl,
+        tp=req.tp,
+        leverage=req.leverage or 5,
+        budget=req.budget or 50,
+        status="OPEN",
+    )
 
-        return {"ok": True, "order": order}
-    except Exception as e:
-        logger.exception("Trade execution failed")
-        return {"ok": False, "error": str(e)}
+
+@router.get("/{trade_id}", response_model=TradeResponse, summary="Get trade status", operation_id="getTradeStatus")
+async def get_trade(trade_id: str):
+    """
+    מחזיר מצב נוכחי של טרייד לפי מזהה.
+    """
+    # דמה בלבד – במציאות יגיע מ־DB
+    return TradeResponse(
+        ok=True,
+        trade_id=trade_id,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry=42000,
+        sl=41500,
+        tp=44000,
+        leverage=10,
+        budget=100,
+        status="OPEN",
+    )
+
+
+@router.delete("/{trade_id}", summary="Close trade", operation_id="deleteTrade")
+async def close_trade(trade_id: str):
+    """
+    סוגר טרייד קיים.
+    """
+    return {"ok": True, "trade_id": trade_id, "status": "CLOSED"}
 
 
 
