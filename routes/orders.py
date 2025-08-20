@@ -1,105 +1,104 @@
 # routes/orders.py
 from __future__ import annotations
-from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, Depends, Query, Body, HTTPException
+from fastapi import APIRouter, HTTPException
+from typing import Dict, Any, Optional
 
-try:
-    from utils.auth import require_bearer_token
-except Exception:
-    async def require_bearer_token(*_a, **_k):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+from utils import binance_client
 
-from utils import order_manager
+router = APIRouter()
 
-router = APIRouter(
-    prefix="/orders",
-    tags=["Orders"],
-    dependencies=[Depends(require_bearer_token)]
-)
-
-# ============================
-#        Place Order
-# ============================
-@router.post("/place", summary="Place a new order")
-async def place_order(
-    req: Dict[str, Any] = Body(...)
+# ------------------------------
+#        Spot Orders
+# ------------------------------
+@router.post("/spot/new")
+async def spot_new_order(
+    symbol: str,
+    side: str,
+    type: str,
+    quantity: float,
+    price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    Create a new order (spot or futures).
-    Required fields: symbol, side, type, quantity
+    פתיחת פקודת SPOT ב-Binance.
+    side: BUY / SELL
+    type: LIMIT / MARKET
     """
     try:
-        resp = order_manager.place_order(
-            symbol=req["symbol"],
-            market_type=req.get("market_type", "futures"),
-            side=req["side"],
-            order_type=req.get("type", "LIMIT"),
-            quantity=float(req["quantity"]),
-            price=float(req["price"]) if req.get("price") else None,
-            time_in_force=req.get("timeInForce", "GTC"),
+        return binance_client.spot_new_order(
+            symbol=symbol, side=side.upper(), type=type.upper(), quantity=quantity, price=price
         )
-        return {"ok": True, "order": resp}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Spot order failed: {e}")
 
 
-# ============================
-#        Cancel Order
-# ============================
-@router.post("/cancel", summary="Cancel an order by ID")
-async def cancel_order(
-    symbol: str = Query(...),
-    order_id: str = Query(...),
-    market_type: str = Query("futures"),
+@router.get("/spot/balance/{asset}")
+async def spot_balance(asset: str = "USDT") -> Dict[str, Any]:
+    """החזרת יתרת SPOT לנכס מסוים"""
+    bal = binance_client.spot_balance(asset)
+    return {"asset": asset, "balance": bal}
+
+
+# ------------------------------
+#        Futures Orders
+# ------------------------------
+@router.post("/futures/new")
+async def futures_new_order(
+    symbol: str,
+    side: str,
+    type: str,
+    quantity: float,
+    price: Optional[float] = None,
 ) -> Dict[str, Any]:
+    """
+    פתיחת פקודת FUTURES ב-Binance.
+    side: BUY / SELL
+    type: LIMIT / MARKET / STOP
+    """
     try:
-        ok = order_manager.cancel_order(symbol, order_id, market_type)
-        return {"ok": ok}
+        return binance_client.futures_new_order(
+            symbol=symbol, side=side.upper(), type=type.upper(), quantity=quantity, price=price
+        )
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Futures order failed: {e}")
 
 
-# ============================
-#     Get Open Orders
-# ============================
-@router.get("/open", summary="List open orders")
-async def get_open_orders(
-    symbol: str = Query(...),
-    market_type: str = Query("futures"),
+@router.get("/futures/balance/{asset}")
+async def futures_balance(asset: str = "USDT") -> Dict[str, Any]:
+    """החזרת יתרת FUTURES לנכס מסוים"""
+    bal = binance_client.futures_balance(asset)
+    return {"asset": asset, "balance": bal}
+
+
+@router.get("/futures/position/{symbol}")
+async def futures_position(symbol: str) -> Dict[str, Any]:
+    """מצב פוזיציה FUTURES"""
+    pos = binance_client.futures_position(symbol)
+    if not pos:
+        return {"symbol": symbol, "position": None}
+    return pos
+
+
+# ------------------------------
+#        Grid Orders
+# ------------------------------
+@router.post("/grid")
+async def grid_orders(
+    symbol: str,
+    side: str,
+    start_price: float,
+    end_price: float,
+    steps: int,
+    quantity: float,
 ) -> Dict[str, Any]:
+    """
+    מייצר פקודות גריד (Limit Orders) בין start_price ל-end_price.
+    side: BUY / SELL
+    """
     try:
-        orders = order_manager.get_open_orders(symbol, market_type)
-        return {"ok": True, "orders": orders}
+        orders = binance_client.grid_orders(
+            symbol=symbol, side=side.upper(), start_price=start_price, end_price=end_price, steps=steps, quantity=quantity
+        )
+        return {"symbol": symbol, "grid_orders": orders, "steps": steps}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Grid orders failed: {e}")
 
-
-# ============================
-#     Order Status
-# ============================
-@router.get("/status", summary="Get order status")
-async def order_status(
-    symbol: str = Query(...),
-    order_id: str = Query(...),
-    market_type: str = Query("futures"),
-) -> Dict[str, Any]:
-    try:
-        status = order_manager.order_status(symbol, order_id, market_type)
-        return {"ok": True, "status": status}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-# ============================
-#     Cancel All Orders
-# ============================
-@router.post("/cancel_all", summary="Cancel all open orders for symbol")
-async def cancel_all_orders(
-    symbol: str = Query(...),
-    market_type: str = Query("futures"),
-) -> Dict[str, Any]:
-    try:
-        count = order_manager.cancel_all(symbol, market_type)
-        return {"ok": True, "cancelled": count}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
