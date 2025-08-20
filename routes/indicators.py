@@ -1,4 +1,4 @@
-# routes/routes_indicators.py
+# routes/indicators.py
 from __future__ import annotations
 from typing import Dict, Any
 import os
