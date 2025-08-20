@@ -2,16 +2,11 @@
 import os
 from fastapi import Header, HTTPException, status
 
-# ✅ Token קבוע מה־ENV
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
 
 async def require_bearer_token(
     authorization: str = Header(..., description="Bearer <token>")
 ):
-    """
-    Middleware / Dependency:
-    בודק אם ההרשאה נכונה לפי Bearer Token שנמצא ב־ENV.
-    """
     if not API_BEARER_TOKEN:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -32,6 +27,7 @@ async def require_bearer_token(
         )
 
     return True
+
 
 
 
