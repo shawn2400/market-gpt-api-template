@@ -20,3 +20,4 @@ def setup_json_logging():
     root.setLevel(logging.INFO)
     root.handlers = [handler]
     return root
+
