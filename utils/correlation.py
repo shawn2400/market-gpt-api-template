@@ -5,7 +5,7 @@ import logging
 
 logger = logging.getLogger("algogpt.correlation")
 
-def correlate_to_btc(
+def compute_correlation(
     symbols: List[str],
     ref_symbol: str = "BTCUSDT",
     timeframe: str = "15m",
@@ -14,16 +14,26 @@ def correlate_to_btc(
     """
     מחשב מתאם פירסון בין כל סימול ל-BTC (ref_symbol).
     כרגע DEMO בלבד – מחזיר מתאם רנדומלי.
+    בעתיד אפשר לחבר לנתוני Binance (candlesticks).
     """
     results: List[Dict[str, Any]] = []
     for sym in symbols:
         try:
-            corr = float(np.random.uniform(-1, 1))
-            results.append({"symbol": sym, "ref": ref_symbol, "correlation": corr})
+            corr = float(np.random.uniform(-1, 1))  # DEMO
+            results.append({
+                "symbol": sym,
+                "ref": ref_symbol,
+                "correlation": corr
+            })
         except Exception as e:
             logger.error(f"Failed correlation calc for {sym}: {e}")
-            results.append({"symbol": sym, "ref": ref_symbol, "error": str(e)})
+            results.append({
+                "symbol": sym,
+                "ref": ref_symbol,
+                "error": str(e)
+            })
     return results
+
 
 
 
