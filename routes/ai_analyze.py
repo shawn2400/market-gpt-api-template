@@ -16,7 +16,7 @@ router = APIRouter(tags=["AI"], dependencies=[Depends(require_bearer_token)])
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
 # -------------------------------------------------
-# Indicators (NumPy implementation, no pandas-ta dependency)
+# Indicators (NumPy only)
 # -------------------------------------------------
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
     alpha = 2.0 / (period + 1.0)
@@ -46,7 +46,11 @@ def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
     prev_close = np.roll(close, 1)
     prev_close[0] = close[0]
-    tr = np.maximum.reduce([high - low, np.abs(high - prev_close), np.abs(low - prev_close)])
+    tr = np.maximum.reduce([
+        high - low,
+        np.abs(high - prev_close),
+        np.abs(low - prev_close),
+    ])
     return _rma(tr, period)
 
 def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -61,7 +65,11 @@ def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14)
     minus_dm_rma = _rma(minus_dm_full, period)
     plus_di = 100.0 * np.where(tr == 0, 0.0, plus_dm_rma / tr)
     minus_di = 100.0 * np.where(tr == 0, 0.0, minus_dm_rma / tr)
-    dx = 100.0 * np.where((plus_di + minus_di) == 0, 0.0, np.abs(plus_di - minus_di) / (plus_di + minus_di))
+    dx = 100.0 * np.where(
+        (plus_di + minus_di) == 0,
+        0.0,
+        np.abs(plus_di - minus_di) / (plus_di + minus_di),
+    )
     return _rma(dx, period)
 
 # -------------------------------------------------
@@ -79,13 +87,13 @@ async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) ->
         return data
 
 # -------------------------------------------------
-# Analyzer (NumPy only, no pandas required)
+# Analyzer (NumPy only)
 # -------------------------------------------------
 def _analyze_numpy(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
     idx_open, idx_high, idx_low, idx_close, idx_vol = 1, 2, 3, 4, 5
     close = np.array([float(r[idx_close]) for r in rows], dtype=float)
-    high  = np.array([float(r[idx_high])  for r in rows], dtype=float)
-    low   = np.array([float(r[idx_low])   for r in rows], dtype=float)
+    high  = np.array([float(r[idx_high]) for r in rows], dtype=float)
+    low   = np.array([float(r[idx_low]) for r in rows], dtype=float)
     vol   = float(rows[-1][idx_vol])
 
     rsi_last = float(_rsi(close, 14)[-1])
@@ -159,8 +167,13 @@ async def ai_manual_scan(
     try:
         rows = await _fetch_klines(symbol, interval=interval, limit=limit)
         if not rows or len(rows) < 60:
-            base = {"symbol": symbol, "market": "futures", "interval": interval,
-                    "signal": "HOLD", "reason": "lite (not enough data)"}
+            base = {
+                "symbol": symbol,
+                "market": "futures",
+                "interval": interval,
+                "signal": "HOLD",
+                "reason": "lite (not enough data)"
+            }
             return {"symbol": symbol, "results": _select_fields(base, _parse_fields(fields), compact)}
 
         res = _analyze_numpy(rows, interval)
