@@ -12,7 +12,8 @@ router = APIRouter(tags=["Scanner"], dependencies=[Depends(require_bearer_token)
 router_symbols = APIRouter(tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-_SCAN_MAX_LIMIT = int(os.getenv("SCAN_MAX_LIMIT", "20"))
+# ✅ נועלים מקסימום ל־10 (גם אם מישהו שינה ENV)
+_SCAN_MAX_LIMIT = min(int(os.getenv("SCAN_MAX_LIMIT", "10")), 10)
 
 # ---- indicators (NumPy only) ----
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
@@ -72,9 +73,9 @@ async def _fetch_24h() -> List[Dict[str, Any]]:
 def _top_symbols_24h(tickers: List[Dict[str, Any]], quote: str, limit: int) -> List[str]:
     q = quote.upper()
     rows = [t for t in tickers if isinstance(t, dict) and str(t.get("symbol","")).endswith(q)]
-    def _qv(v: Any) -> float:  # type: ignore[name-defined]
+    def _qv(v: Any) -> float:  
         try:
-            return float(v.get("quoteVolume", 0.0))  # type: ignore[attr-defined]
+            return float(v.get("quoteVolume", 0.0))
         except Exception:
             return 0.0
     rows.sort(key=_qv, reverse=True)
@@ -132,6 +133,7 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
 
 # ---- helpers ----
 def _clamp_limit(n: int) -> int:
+    # ✅ נועל ל־10 מקסימום תמיד
     return max(1, min(_SCAN_MAX_LIMIT, n))
 
 def _parse_fields(fields: Optional[str]) -> Optional[List[str]]:
@@ -146,6 +148,7 @@ def _select_fields(item: Dict[str, Any], fields: Optional[Iterable[str]], compac
         return {k: item.get(k) for k in fields if k in item}
     return item
 
+# ---- routes ----
 @router_symbols.get("/symbols/top-volume", operation_id="getSymbolsTopVolume")
 async def get_symbols_top_volume(
     market: str = Query("futures"),
@@ -154,8 +157,8 @@ async def get_symbols_top_volume(
 ) -> Dict[str, Any]:
     try:
         tickers = await _fetch_24h()
-        symbols = _top_symbols_24h(tickers, quote=quote, limit=limit)
-        return {"ok": True, "market": market, "quote": quote, "limit": limit, "symbols": symbols}
+        symbols = _top_symbols_24h(tickers, quote=quote, limit=_clamp_limit(limit))
+        return {"ok": True, "market": market, "quote": quote, "limit": len(symbols), "symbols": symbols}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -183,12 +186,14 @@ async def scan_top_volume(
             try:
                 rows = await _klines(sym, timeframe, kline_limit)
                 if not rows or len(rows) < 60:
-                    results.append({"symbol": sym, "timeframe": timeframe, "side": None, "score": 0.0, "note": "lite (not enough data)", "details": None})
+                    results.append({"symbol": sym, "timeframe": timeframe, "side": None, "score": 0.0,
+                                    "note": "lite (not enough data)", "details": None})
                     continue
                 res = _analyze_rows(rows, timeframe)
                 results.append({"symbol": sym, **res})
             except Exception as e:
-                results.append({"symbol": sym, "timeframe": timeframe, "side": None, "score": 0.0, "note": f"lite (analyze-fallback: {type(e).__name__})", "details": None})
+                results.append({"symbol": sym, "timeframe": timeframe, "side": None, "score": 0.0,
+                                "note": f"lite (analyze-fallback: {type(e).__name__})", "details": None})
 
         wanted = _parse_fields(fields)
         results = [_select_fields(r, wanted, compact) for r in results]
@@ -210,6 +215,7 @@ async def scan_single(
 ) -> Dict[str, Any]:
     return await scan_top_volume(market=market, quote="USDT", limit=5, timeframe=timeframe,
                                  kline_limit=200, symbol=symbol, fields=fields, compact=compact)
+
 
 
 
