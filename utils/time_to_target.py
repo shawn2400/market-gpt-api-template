@@ -36,4 +36,7 @@ def eta_by_atr(
         "speed_note": note,
     }
 
+# ✅ alias לשם שה־routes מצפה לו
+eta_to_target = eta_by_atr
+
 
