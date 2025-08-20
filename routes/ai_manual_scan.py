@@ -17,3 +17,4 @@ async def manual_scan(symbol: str = Query(..., description="Symbol, e.g. BTCUSDT
         return {"symbol": symbol, "results": {"error": str(e)}}
 
 
+
