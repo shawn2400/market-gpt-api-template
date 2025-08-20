@@ -38,11 +38,13 @@ from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
 from routes.backtest import router as backtest_router
+from routes.grid import router as grid_router   # ✅ חדש
 
 app.include_router(ai_router, prefix="/ai")
 app.include_router(scan_router)  # כבר עם prefix="/scan"
 app.include_router(trade_router, prefix="/trade")
 app.include_router(backtest_router, prefix="/backtest")
+app.include_router(grid_router, prefix="/grid")  # ✅ חדש
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
@@ -63,6 +65,7 @@ async def health():
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"status": "live"}
+
 
 
 
