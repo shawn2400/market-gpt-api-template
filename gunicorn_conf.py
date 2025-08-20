@@ -19,12 +19,6 @@ worker_tmp_dir = "/dev/shm"
 #
 # JSON Structured Logging
 #
-class JSONGunicornLogger(logging.LoggerAdapter):
-    def process(self, msg, kwargs):
-        if isinstance(msg, dict):
-            return json.dumps(msg, ensure_ascii=False), kwargs
-        return msg, kwargs
-
 class JSONGunicornHandler(logging.StreamHandler):
     def emit(self, record):
         try:
@@ -40,6 +34,7 @@ class JSONGunicornHandler(logging.StreamHandler):
         except Exception:
             self.handleError(record)
 
+
 def post_worker_init(worker):
     """
     Hook: configure JSON logging inside Gunicorn workers
@@ -50,6 +45,7 @@ def post_worker_init(worker):
     handler = JSONGunicornHandler(sys.stdout)
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+
 
 #
 # Gunicorn log settings
