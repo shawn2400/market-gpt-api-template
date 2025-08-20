@@ -1,23 +1,36 @@
-import logging, json, sys
-from datetime import datetime
+# utils/json_logger.py
+import logging
+import json
+import sys
+import datetime
+import os
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        log_obj = {
-            "time": datetime.utcnow().isoformat() + "Z",
+        log_record = {
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
+        # אם העברת dict ב־logger.info({...})
+        if isinstance(record.msg, dict):
+            log_record.update(record.msg)
+
         if record.exc_info:
-            log_obj["exception"] = self.formatException(record.exc_info)
-        return json.dumps(log_obj, ensure_ascii=False)
+            log_record["exc_info"] = self.formatException(record.exc_info)
+
+        return json.dumps(log_record, ensure_ascii=False)
 
 def setup_json_logging():
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
+
     root = logging.getLogger()
-    root.setLevel(logging.INFO)
+    root.setLevel(level)
     root.handlers = [handler]
-    return root
+
+    return logging.getLogger("algogpt")
 
