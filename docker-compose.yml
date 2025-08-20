@@ -10,7 +10,8 @@ services:
       - .env
     ports:
       - "${PORT:-10000}:10000"
-    restart: always
+    restart: unless-stopped
+    init: true
     volumes:
       - ./logs:/app/logs
       - ./static/reports:/app/static/reports
@@ -21,12 +22,8 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 2G
-        reservations:
-          cpus: "1.0"
-          memory: 1G
+    # מגבלות משאבים (Compose רגיל, לא Swarm)
+    mem_limit: 2g
+    cpus: 2.0
+
 
