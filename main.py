@@ -9,7 +9,7 @@ load_dotenv(override=True)
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
@@ -118,9 +118,15 @@ async def get_metrics():
     return metrics_tracker.get_metrics()
 
 
+@app.get("/metrics/prometheus")
+async def get_metrics_prometheus():
+    return PlainTextResponse(metrics_tracker.render_prometheus())
+
+
+# Routers
 app.include_router(ai_router, prefix="/ai", dependencies=[Depends(require_bearer_token)])
 app.include_router(trade_router, prefix="/trade", dependencies=[Depends(require_bearer_token)])
-app.include_router(debug.router, prefix="/debug"))
+app.include_router(debug.router, prefix="/debug")
 
 for mod in [
     "routes.backtest", "routes.ai_analyze", "routes.news", "routes.grid",
@@ -152,6 +158,7 @@ async def on_startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
