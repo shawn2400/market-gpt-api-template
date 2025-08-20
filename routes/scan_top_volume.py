@@ -79,7 +79,8 @@ def _top_symbols_24h(tickers: List[Dict[str, Any]], quote: str, limit: int) -> L
         except Exception:
             return 0.0
     rows.sort(key=_qv, reverse=True)
-    return [r["symbol"] for r in rows[:max(1, int(limit))]]
+    # ✅ תמיד חותכים לפי _clamp_limit
+    return [r["symbol"] for r in rows[:_clamp_limit(limit)]]
 
 async def _klines(symbol: str, interval: str, limit: int) -> Optional[List[List[Any]]]:
     url = f"{_FAPI}/fapi/v1/klines"
@@ -156,7 +157,7 @@ async def get_symbols_top_volume(
 ) -> Dict[str, Any]:
     try:
         tickers = await _fetch_24h()
-        symbols = _top_symbols_24h(tickers, quote=quote, limit=_clamp_limit(limit))
+        symbols = _top_symbols_24h(tickers, quote=quote, limit=limit)
         return {"ok": True, "market": market, "quote": quote, "limit": len(symbols), "symbols": symbols}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -175,7 +176,7 @@ async def scan_top_volume(
     try:
         limit = _clamp_limit(limit)
         tickers = await _fetch_24h()
-        symbols = _top_symbols_24h(tickers, quote=quote, limit=limit)[:limit]
+        symbols = _top_symbols_24h(tickers, quote=quote, limit=limit)
         if symbol:
             s = symbol.upper().strip()
             symbols = [x for x in symbols if x.upper() == s] or [s]
@@ -217,6 +218,7 @@ async def scan_single(
 ) -> Dict[str, Any]:
     return await scan_top_volume(market=market, quote="USDT", limit=5, timeframe=timeframe,
                                  kline_limit=200, symbol=symbol, fields=fields, compact=compact)
+
 
 
 
