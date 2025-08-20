@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 from typing import Optional, Literal, Dict, Any, List
-from fastapi import APIRouter, Depends, Body, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Body, Query
 from pydantic import BaseModel, Field
-
-# --- Auth ---
 from utils.auth import require_bearer_token
 
 # --- Anchor (shim→fallback) ---
@@ -20,7 +18,10 @@ try:
 except Exception:
     from utils.quantity_utils import compute_quality  # type: ignore
 
-router = APIRouter(tags=["AI"], dependencies=[Depends(require_bearer_token)])
+router = APIRouter(
+    tags=["AI"],
+    dependencies=[Depends(require_bearer_token)]
+)
 
 Side = Literal["LONG", "SHORT"]
 
@@ -83,7 +84,10 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
 
 
 async def _maybe_predict_sltp(
-    symbol: str, side: Side, entry: Optional[float], atr: Optional[float]
+    symbol: str,
+    side: Side,
+    entry: Optional[float],
+    atr: Optional[float]
 ) -> Dict[str, float] | None:
     """
     מנסה לחשב SL/TP ממספר מקורות. לא זורק חריגות.
@@ -93,7 +97,6 @@ async def _maybe_predict_sltp(
     # 1) utils.ai_analysis.predict_optimal_sl_tp
     try:
         from utils.ai_analysis import predict_optimal_sl_tp  # type: ignore
-
         try:
             sl, tp = await predict_optimal_sl_tp(symbol, side, entry)  # חתימה ישנה
         except TypeError:
@@ -106,8 +109,9 @@ async def _maybe_predict_sltp(
     # 2) utils.sl_tp_utils.suggest_sltp
     try:
         from utils.sl_tp_utils import suggest_sltp  # type: ignore
-
-        res = suggest_sltp(symbol=symbol, direction=side, entry=float(entry), atr=atr)
+        res = suggest_sltp(
+            symbol=symbol, direction=side, entry=float(entry), atr=atr
+        )
         return {"sl": float(res["sl"]), "tp": float(res["tp"])}
     except Exception:
         pass
@@ -135,7 +139,7 @@ async def post_ai_quality(payload: QualityRequest = Body(...)) -> QualityRespons
     """
     anchor = evaluate_anchor(payload.side)
 
-    # השלמת SL/TP אם אפשר (על בסיס entry)
+    # השלמת SL/TP אם אפשר
     sl, tp = payload.sl, payload.tp
     if (sl is None or tp is None) and payload.entry:
         s = await _maybe_predict_sltp(
@@ -182,7 +186,6 @@ async def get_ai_manual_scan(
     sym = symbol.upper().strip()
     try:
         from utils.multi_tf_scanner import analyze_symbol  # type: ignore
-
         res = await analyze_symbol(
             symbol=sym, interval=interval, market_type=market, bars=bars
         )
@@ -206,7 +209,7 @@ async def get_ai_manual_scan(
         )
         return AiManualScanResponse(symbol=sym, results=item)
     except Exception as e:
-        # פולבק ניטרלי — לא 500
+        # פולבק ניטרלי
         item = AiManualScanItem(
             symbol=sym,
             market=market,
