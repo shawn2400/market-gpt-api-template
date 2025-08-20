@@ -2,144 +2,96 @@
 from __future__ import annotations
 import os
 import logging
+import time
+from typing import Any, Callable
 from binance.client import Client
+from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# --- קונפיגורציה מתוך ENV ---
+logger = logging.getLogger("algogpt.binance")
+
+# --- ENV config ---
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
 
-logger = logging.getLogger("algogpt.binance")
-
-if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-    raise RuntimeError("Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment")
-
-# --- יצירת Binance Client ---
-binance_client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
-
-# מעבר ל־Testnet אם צריך
-if USE_TESTNET:
-    logger.warning("⚠️ Using Binance TESTNET endpoints")
-    binance_client.API_URL = "https://testnet.binance.vision/api"
-    binance_client.FUTURES_URL = "https://testnet.binancefuture.com/fapi"
-else:
-    binance_client.API_URL = "https://api.binance.com/api"
-    binance_client.FUTURES_URL = "https://fapi.binance.com/fapi"
 
 # =====================================================
-#                SPOT FUNCTIONS
+# Client factory
 # =====================================================
-def spot_new_order(symbol: str, side: str, type: str, quantity: float, price: float = None, timeInForce: str = "GTC"):
-    """
-    שולח פקודת SPOT ל־Binance.
-    side: BUY / SELL
-    type: LIMIT / MARKET
-    """
-    try:
-        params = {
-            "symbol": symbol,
-            "side": side,
-            "type": type,
-            "quantity": quantity,
-        }
-        if type == "LIMIT" and price:
-            params["price"] = price
-            params["timeInForce"] = timeInForce
+def get_client() -> Client:
+    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+        raise RuntimeError("Missing BINANCE_API_KEY or BINANCE_API_SECRET in environment")
 
-        order = binance_client.create_order(**params)
-        return order
-    except Exception as e:
-        logger.exception(f"Binance spot_new_order failed: {e}")
-        raise
+    client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
-def spot_balance(asset: str = "USDT"):
-    try:
-        balances = binance_client.get_asset_balance(asset=asset)
-        if balances:
-            return float(balances.get("free", 0))
-        return 0.0
-    except Exception as e:
-        logger.exception(f"Binance spot_balance failed: {e}")
-        return 0.0
+    if USE_TESTNET:
+        logger.warning("⚠️ Using Binance TESTNET endpoints")
+        client.API_URL = "https://testnet.binance.vision/api"
+        client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
+    else:
+        client.API_URL = "https://api.binance.com/api"
+        client.FUTURES_URL = "https://fapi.binance.com/fapi/v1"
+
+    return client
+
 
 # =====================================================
-#                FUTURES FUNCTIONS
+# Retry helper (used by trader/backtester)
 # =====================================================
-def futures_new_order(symbol: str, side: str, type: str, quantity: float, price: float = None, timeInForce: str = "GTC"):
-    """
-    שולח פקודת FUTURES ל־Binance.
-    side: BUY / SELL
-    type: LIMIT / MARKET / STOP
-    """
-    try:
-        params = {
-            "symbol": symbol,
-            "side": side,
-            "type": type,
-            "quantity": quantity,
-        }
-        if type == "LIMIT" and price:
-            params["price"] = price
-            params["timeInForce"] = timeInForce
+def retry_call(fn: Callable[[], Any], label: str, retries: int = 3, delay: float = 0.5) -> Any:
+    for i in range(retries):
+        try:
+            return fn()
+        except (BinanceAPIException, BinanceRequestException) as e:
+            logger.warning(f"[Binance] {label} failed ({i+1}/{retries}): {e}")
+            time.sleep(delay)
+        except Exception as e:
+            logger.error(f"[Binance] {label} unexpected error: {e}")
+            time.sleep(delay)
+    raise RuntimeError(f"[Binance] {label} failed after {retries} retries")
 
-        order = binance_client.futures_create_order(**params)
-        return order
-    except Exception as e:
-        logger.exception(f"Binance futures_new_order failed: {e}")
-        raise
-
-def futures_balance(asset: str = "USDT"):
-    try:
-        balances = binance_client.futures_account_balance()
-        for b in balances:
-            if b["asset"] == asset:
-                return float(b["balance"])
-        return 0.0
-    except Exception as e:
-        logger.exception(f"Binance futures_balance failed: {e}")
-        return 0.0
-
-def futures_position(symbol: str):
-    try:
-        positions = binance_client.futures_position_information(symbol=symbol)
-        if positions:
-            return positions[0]
-        return None
-    except Exception as e:
-        logger.exception(f"Binance futures_position failed: {e}")
-        return None
 
 # =====================================================
-#                GRID TRADING HELPERS
+# Futures Exchange Info cache
 # =====================================================
-def grid_orders(symbol: str, side: str, start_price: float, end_price: float, steps: int, quantity: float):
-    """
-    מייצר פקודות גריד בין start_price ל־end_price.
-    side: BUY / SELL
-    """
-    try:
-        if steps < 2:
-            raise ValueError("steps must be >= 2")
+_futures_exchange_info_cache: dict[str, Any] | None = None
 
-        price_step = (end_price - start_price) / (steps - 1)
-        orders = []
+def futures_exchange_info_safe() -> dict[str, Any]:
+    global _futures_exchange_info_cache
+    if _futures_exchange_info_cache is not None:
+        return _futures_exchange_info_cache
 
-        for i in range(steps):
-            price = round(start_price + i * price_step, 2)
-            order = {
-                "symbol": symbol,
-                "side": side,
-                "type": "LIMIT",
-                "quantity": quantity,
-                "price": price,
-                "timeInForce": "GTC",
-            }
-            orders.append(order)
+    client = get_client()
+    info = retry_call(lambda: client.futures_exchange_info(), "futures_exchange_info")
+    if isinstance(info, dict):
+        _futures_exchange_info_cache = info
+    return info
 
-        return orders
-    except Exception as e:
-        logger.exception(f"Binance grid_orders failed: {e}")
-        return []
+
+# =====================================================
+# Simple Spot / Futures wrappers
+# =====================================================
+def spot_balance(asset: str = "USDT") -> float:
+    client = get_client()
+    balances = retry_call(lambda: client.get_asset_balance(asset=asset), f"spot_balance({asset})")
+    return float(balances.get("free", 0) or 0.0)
+
+
+def futures_balance(asset: str = "USDT") -> float:
+    client = get_client()
+    balances = retry_call(lambda: client.futures_account_balance(), "futures_account_balance")
+    for b in balances:
+        if b.get("asset") == asset:
+            return float(b.get("balance", 0))
+    return 0.0
+
+
+def futures_position(symbol: str) -> dict[str, Any] | None:
+    client = get_client()
+    positions = retry_call(lambda: client.futures_position_information(symbol=symbol.upper()),
+                           f"futures_position({symbol})")
+    return positions[0] if positions else None
+
 
 
 
