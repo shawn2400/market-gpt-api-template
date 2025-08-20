@@ -12,25 +12,46 @@ async def manual_scan(
 ):
     """
     הרצה ידנית של סריקה עם AI למטבע מסוים.
-    מחזיר טקסט ניתוח מהמודל + סטטוס.
+    מחזיר ניתוח, ציון איכות והמלצה (Buy/Sell/Neutral).
     """
     try:
-        prompt = f"Analyze {symbol} on {interval} interval. Provide key technical signals and trading insight."
+        prompt = f"""
+        Analyze {symbol} on {interval} interval.
+        1. Provide short technical analysis (trend, momentum, key signals).
+        2. Suggest one of: Buy, Sell, or Neutral.
+        3. Give a Quality Score between 0 and 10 for confidence level.
+        
+        Respond in JSON only, with keys:
+        - analysis: string
+        - recommendation: string (Buy/Sell/Neutral)
+        - quality: number (0–10)
+        """
+
         result = await ai_client.chat(
             prompt,
-            system="Be concise. Focus only on technical signals, trend, and possible entry/exit.",
-            max_tokens=300,
+            system="You are a trading assistant. Output strictly valid JSON.",
+            max_tokens=400,
         )
 
         if not result:
             raise HTTPException(status_code=503, detail="AI returned empty response")
 
+        # ננסה לפרסר ל־JSON
+        import json
+        try:
+            parsed = json.loads(result)
+        except Exception:
+            logging.warning("AI response was not valid JSON → returning raw text")
+            parsed = {"analysis": result.strip(), "recommendation": "Neutral", "quality": 5}
+
         return {
             "ok": True,
             "symbol": symbol,
             "interval": interval,
-            "analysis": result.strip(),
+            **parsed,
         }
+
     except Exception as e:
         logging.exception("manual_scan failed")
         raise HTTPException(status_code=500, detail=str(e))
+
