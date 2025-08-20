@@ -1,75 +1,50 @@
-# utils/ws_fallback.py
+# routes/debug_binance.py
+from fastapi import APIRouter, Depends, HTTPException
 import asyncio
-import logging
-import time
-from typing import Dict, Optional
-from utils.redis_client import set_value, get_value, REDIS_URL
 
-logger = logging.getLogger("algogpt.ws_fallback")
+from utils.auth import require_bearer_token
+from utils.binance_client import (
+    get_client, ping_and_info, futures_mark_price, futures_exchange_info_safe, sync_server_time
+)
 
-# fallback בזיכרון
-LAST_PRICE_CACHE: Dict[str, Dict[str, float]] = {}
+router = APIRouter(prefix="/debug", tags=["Debug"], dependencies=[Depends(require_bearer_token)])
 
-# כמה זמן נחשב מחיר "טרי"
-FRESHNESS_SEC = 10
+@router.get("/binance-futures")
+async def debug_binance_futures(symbol: str = "BTCUSDT"):
+    ok = ping_and_info()
+    try:
+        sync_server_time()
+    except Exception:
+        pass
 
-# ✅ לוג חיבור Redis
-logger.info(f"[WS] Redis cache ready at {REDIS_URL}")
+    prem = futures_mark_price(symbol)
+    ex_info = await asyncio.to_thread(futures_exchange_info_safe)
+    sym_count = (ex_info.get("symbols") and len(ex_info["symbols"])) if isinstance(ex_info, dict) else None
 
+    client = get_client()
+    test_order_resp = None
+    test_err = None
+    try:
+        test_order_resp = await asyncio.to_thread(
+            client.futures_create_test_order,
+            symbol=symbol,
+            side="BUY",
+            type="LIMIT",
+            timeInForce="GTC",
+            quantity="0.001",
+            price="1000",
+        )
+    except Exception as e:
+        test_err = str(e)
 
-async def price_monitor_loop():
-    """
-    לופ שרץ ברקע ושומר מחירים מה־WS או מ־REST
-    (בינתיים placeholder)
-    """
-    while True:
-        await asyncio.sleep(5)
+    return {
+        "ping_ok": ok,
+        "mark_price": prem,
+        "symbols_count": sym_count,
+        "test_order_ok": test_order_resp is None and test_err is None,
+        "test_order_error": test_err,
+    }
 
-
-def update_price(symbol: str, price: float):
-    """
-    עדכון מחיר גם בזיכרון וגם ב־Redis
-    """
-    ts = time.time()
-    LAST_PRICE_CACHE[symbol.upper()] = {"price": price, "ts": ts}
-
-    # שמירה ב־Redis
-    set_value(f"price:{symbol.upper()}", str(price), expire=60)
-    logger.debug(f"[WS] Updated {symbol}={price}")
-
-
-def get_price(symbol: str) -> Optional[float]:
-    """
-    החזרת מחיר מה־cache (Redis > Memory)
-    """
-    symbol = symbol.upper()
-
-    # קודם Redis
-    val = get_value(f"price:{symbol}")
-    if val:
-        try:
-            return float(val)
-        except Exception:
-            pass
-
-    # fallback לזיכרון
-    data = LAST_PRICE_CACHE.get(symbol)
-    if data:
-        return data["price"]
-
-    return None
-
-
-def is_price_fresh(symbol: str) -> bool:
-    """
-    בדיקה אם המחיר בזיכרון עדיין טרי (<= FRESHNESS_SEC)
-    """
-    symbol = symbol.upper()
-    data = LAST_PRICE_CACHE.get(symbol)
-    if not data:
-        return False
-    age = time.time() - data["ts"]
-    return age <= FRESHNESS_SEC
 
 
 
