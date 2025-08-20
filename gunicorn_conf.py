@@ -1,9 +1,8 @@
 # gunicorn_conf.py
 import multiprocessing
 import os
-import json
-import sys
-import datetime
+import logging
+from utils.json_logger import JsonFormatter
 
 # --- Workers ---
 workers = int(os.getenv("WORKERS", multiprocessing.cpu_count() * 2 + 1))
@@ -23,28 +22,21 @@ max_requests_jitter = 200
 worker_tmp_dir = "/dev/shm"
 
 # --- Logging ---
-loglevel = os.getenv("LOG_LEVEL", "info").lower()
-accesslog = "-"   # STDOUT
-errorlog = "-"    # STDERR
+loglevel = "info"
+accesslog = "-"  # STDOUT
+errorlog = "-"   # STDERR
 
-# --- JSON Logger ---
-class JSONLogger:
-    def write(self, msg: str):
-        msg = msg.strip()
-        if not msg:
-            return
-        record = {
-            "ts": datetime.datetime.utcnow().isoformat() + "Z",
-            "stream": "gunicorn",
-            "message": msg,
-        }
-        print(json.dumps(record), file=sys.stdout)
+# --- JSON Log setup ---
+def post_fork(server, worker):
+    """הגדרה אחידה ל־JSON logs גם ל־Gunicorn וגם ל־Uvicorn"""
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonFormatter())
 
-    def flush(self):
-        sys.stdout.flush()
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
 
-# הפעלת structured logging
-sys.stdout = JSONLogger()
-sys.stderr = JSONLogger()
+    server.log.info("✅ Gunicorn worker started with JSON logging")
+
 
 
