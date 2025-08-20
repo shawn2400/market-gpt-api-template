@@ -2,20 +2,38 @@
 from __future__ import annotations
 
 from typing import Optional, Literal, Dict, Any, List
-from fastapi import APIRouter, Depends, Body, HTTPException, Query
+from fastapi import APIRouter, Depends, Body, HTTPException, Query, Header
 from pydantic import BaseModel, Field
 
-# --- Auth (קשיח: מחזיר 401 במקום להפיל שרת) ---
+# --- Auth ---
 try:
     from utils.auth import require_bearer_token as _raw_require_bearer  # type: ignore
 
-    def require_bearer_token():
+    def require_bearer_token(
+        authorization: Optional[str] = Header(default=None, convert_underscores=False),
+        x_api_key: Optional[str] = Header(default=None, alias="X-API-KEY"),
+        token: Optional[str] = Query(default=None),
+    ):
+        """
+        ✅ אימות משולב:
+        - Authorization: Bearer ...
+        - X-API-KEY: ...
+        - ?token=...
+        """
         try:
-            return _raw_require_bearer()
+            # אם יש X-API-KEY נשתמש בו כ־Bearer
+            if x_api_key:
+                return _raw_require_bearer(authorization=f"Bearer {x_api_key}")
+            if authorization:
+                return _raw_require_bearer(authorization=authorization)
+            if token:
+                return _raw_require_bearer(token=token)
+            raise HTTPException(status_code=401, detail="Unauthorized")
         except HTTPException:
             raise
         except Exception:
             raise HTTPException(status_code=401, detail="Unauthorized")
+
 except Exception:
     # מצב פיתוח ללא אימות
     def require_bearer_token():
@@ -33,7 +51,7 @@ try:
 except Exception:
     from utils.quantity_utils import compute_quality  # type: ignore
 
-router = APIRouter(tags=["AI"])  # בלי Depends גלובלי
+router = APIRouter(tags=["AI"])
 
 Side = Literal["LONG", "SHORT"]
 
@@ -126,7 +144,7 @@ async def _maybe_predict_sltp(symbol: str, side: Side, entry: Optional[float], a
 )
 async def post_ai_quality(
     payload: QualityRequest = Body(...),
-    _auth=Depends(require_bearer_token),   # ✅ auth כאן
+    _auth=Depends(require_bearer_token),
 ) -> QualityResponse:
     anchor = evaluate_anchor(payload.side)
 
@@ -166,7 +184,7 @@ async def get_ai_manual_scan(
     market: str = Query("futures"),
     interval: str = Query("15m"),
     bars: int = Query(200, ge=50, le=1500),
-    _auth=Depends(require_bearer_token),   # ✅ auth כאן
+    _auth=Depends(require_bearer_token),
 ) -> AiManualScanResponse:
     sym = symbol.upper().strip()
     try:
