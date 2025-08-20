@@ -23,7 +23,7 @@ app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
     description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance "
-                "(Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk/Orders).",
+                "(Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk/Orders/Debug).",
 )
 
 # --- Middlewares ---
@@ -39,7 +39,7 @@ app.add_middleware(
 # --- Static ---
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Routers ---
+# --- Core Routers ---
 from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
@@ -57,6 +57,15 @@ from routes.risk import router as risk_router
 from routes.snapshot import router as snapshot_router
 from routes.dashboard import router as dashboard_router
 from routes.orders import router as orders_router
+
+# --- Debug / System Routers ---
+from routes.debug import router as debug_router
+from routes.debug_binance import router as debug_binance_router
+from routes.executor import router as executor_router
+from routes.price import router as price_router
+from routes.market import router as market_router
+from routes.scan import router as scan_utils_router
+from routes.utils import router as utils_router
 
 # ✅ Include routers
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
@@ -76,6 +85,15 @@ app.include_router(risk_router, prefix="/risk", tags=["Risk"])
 app.include_router(snapshot_router, prefix="/snapshot", tags=["Snapshots"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(orders_router, prefix="/orders", tags=["Orders"])
+
+# Debug / System
+app.include_router(debug_router, prefix="/debug", tags=["Debug"])
+app.include_router(debug_binance_router, tags=["Debug"])
+app.include_router(executor_router, tags=["Executor"])
+app.include_router(price_router, tags=["Price"])
+app.include_router(market_router, tags=["Market"])
+app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
+app.include_router(utils_router, tags=["Utils"])
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
@@ -101,6 +119,7 @@ async def health_live():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
