@@ -1,51 +1,33 @@
-# utils/ai_health.py
-import os
+# routes/ai_health.py
 import time
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-try:
-    from utils.ai_client import chat
-except Exception as e:
-    chat = None  # type: ignore
-    logging.warning("[ai_health] ai_client.chat not available: %s", e)
+from fastapi import APIRouter
+from utils.ai_client import ai_healthcheck
 
-# מודל ברירת-מחדל: קודם env, אח"כ דיפולט יציב
-DEFAULT_MODEL: str = (
-    os.getenv("OPENAI_MODEL")
-    or os.getenv("OPENAI_CHAT_MODEL")
-    or "gpt-4o-mini"
-)
+router = APIRouter(tags=["AI"])
 
-async def ping_openai() -> Dict[str, Any]:
+@router.get("/ai/health", operation_id="getAiHealth")
+async def ai_health() -> Dict[str, Any]:
     """
-    פינג קצר ל-OpenAI/Azure OpenAI לבדיקת קישוריות וזמן תגובה.
-    תלוי ב-utils.ai_client.chat שמחזיר טקסט קצר.
-    מחזיר מבנה: { ok, latency_ms, model, reply?, error? }
+    API Health Endpoint: מבצע פינג ל-AI ומחזיר סטטוס מלא.
     """
-    if chat is None:
-        return {"ok": False, "error": "ai_client.chat not available"}
-
-    t0 = time.time()
+    t0 = time.perf_counter()
     try:
-        txt: Optional[str] = await chat(
-            "ping",
-            system="health-check",
-            model=DEFAULT_MODEL,  # לא להשאיר None
-            temperature=0.0,
-            max_tokens=4,
-        )
-        dt = round((time.time() - t0) * 1000)
+        res = await ai_healthcheck()
+        dt = (time.perf_counter() - t0) * 1000.0
         return {
-            "ok": True,
-            "latency_ms": dt,
-            "model": DEFAULT_MODEL,
-            "reply": (txt or "").strip()[:32],
+            "ok": bool(res.get("ok", False)),
+            "model": res.get("model"),
+            "latency_ms": round(dt, 2),
+            "reply": res.get("reply"),
+            "error": res.get("error"),
         }
     except Exception as e:
-        dt = round((time.time() - t0) * 1000)
-        logging.warning("[ai_health] ping failed after %d ms: %s", dt, e)
-        return {"ok": False, "latency_ms": dt, "model": DEFAULT_MODEL, "error": str(e)}
+        dt = (time.perf_counter() - t0) * 1000.0
+        logging.warning("[ai_health] endpoint failed after %.2f ms: %s", dt, e)
+        return {"ok": False, "model": None, "latency_ms": round(dt, 2), "reply": None, "error": str(e)}
 
 
 
