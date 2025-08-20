@@ -2,13 +2,12 @@
 import os
 import logging
 from binance.client import Client
-from binance.enums import *
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 
 if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-    logging.warning("⚠️ Missing Binance API credentials — trading will fail!")
+    logging.warning("⚠️ Missing Binance API credentials — live trading will fail!")
 
 class BinanceClient:
     def __init__(self):
@@ -31,8 +30,9 @@ class BinanceClient:
     def futures_get_position(self, symbol="BTCUSDT"):
         return self.client.futures_position_information(symbol=symbol)
 
-# ✅ יצוא instance מוכן
+# ✅ instance מוכן לייבוא
 binance_client = BinanceClient()
+
 
 
 
