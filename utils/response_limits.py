@@ -5,7 +5,7 @@ from starlette.responses import JSONResponse
 from typing import Optional
 
 class ResponseSizeLimiter(BaseHTTPMiddleware):
-    def __init__(self, app, max_bytes: int = 1_048_576):
+    def __init__(self, app, max_bytes: int = 2_097_152):  # 2MB במקום 1MB
         super().__init__(app)
         self.max_bytes = int(max_bytes)
 
@@ -14,28 +14,19 @@ class ResponseSizeLimiter(BaseHTTPMiddleware):
         try:
             cl = response.headers.get("content-length")
             size: Optional[int] = int(cl) if cl and cl.isdigit() else None
-
-            if size is None:
-                body = getattr(response, "body", None)
-                if isinstance(body, (bytes, bytearray)):
-                    size = len(body)
-
-            if size is not None and size > self.max_bytes:
+            if size and size > self.max_bytes:
                 return JSONResponse(
-                    {
-                        "detail": "Response too large",
-                        "max_bytes": self.max_bytes,
-                        "size": size,
-                        "hint": "Use compact=1 and/or fields=... or reduce limit",
-                    },
+                    {"detail": "Response too large",
+                     "max_bytes": self.max_bytes,
+                     "size": size,
+                     "hint": "Use compact=1&fields=..."},
                     status_code=413,
                 )
-
             response.headers["X-Response-Limit"] = str(self.max_bytes)
-            if size is not None:
-                response.headers["X-Response-Size"] = str(size)
+            if size: response.headers["X-Response-Size"] = str(size)
         except Exception:
             pass
         return response
+
 
 
