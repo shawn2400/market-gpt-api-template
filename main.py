@@ -20,7 +20,7 @@ logger = logging.getLogger("algogpt")
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance (Futures/Spot/Grid/AI/Backtest).",
+    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance (Futures/Spot/Grid/AI/Backtest/Analytics).",
 )
 
 # --- Middlewares ---
@@ -38,13 +38,20 @@ from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
 from routes.backtest import router as backtest_router
-from routes.grid import router as grid_router   # ✅ חדש
+from routes.grid import router as grid_router
+from routes.orderflow import router as orderflow_router
+from routes.scan_top_volume import router as scan_top_volume_router
+from routes.strategy import router as strategy_router
 
+# ✅ Include routers
 app.include_router(ai_router, prefix="/ai")
 app.include_router(scan_router)  # כבר עם prefix="/scan"
 app.include_router(trade_router, prefix="/trade")
 app.include_router(backtest_router, prefix="/backtest")
-app.include_router(grid_router, prefix="/grid")  # ✅ חדש
+app.include_router(grid_router, prefix="/grid")
+app.include_router(orderflow_router)  # כולל /orderflow/{symbol}
+app.include_router(scan_top_volume_router)  # כולל /scan/top-volume
+app.include_router(strategy_router, prefix="/strategy")
 
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
@@ -65,6 +72,7 @@ async def health():
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"status": "live"}
+
 
 
 
