@@ -28,16 +28,20 @@ check() {
 
   if [[ "$code" == 200 ]]; then
     echo -e "[$name] ${G}OK${NC} ($code)"
+    status="OK"
   else
     echo -e "[$name] ${R}FAIL${NC} ($code)"
+    status="FAIL"
   fi
 
-  # עדכון JSON עם jq (אם קיים) או echo פשוט
+  # שמירת תוצאה לתוך JSON
   if command -v jq &>/dev/null; then
     tmp=$(mktemp)
-    jq --arg key "$key" --argjson body "$body" '. + {($key): $body}' "$RESULT_FILE" > "$tmp" && mv "$tmp" "$RESULT_FILE"
+    echo "$body" | jq -R 'try fromjson catch . as $raw | {"status":"'"$status"'","http_code":"'"$code"'","body":$raw}' \
+      | jq --arg key "$key" '. as $val | input | . + {($key): $val}' "$RESULT_FILE" > "$tmp" \
+      && mv "$tmp" "$RESULT_FILE"
   else
-    echo "\"$key\": $body" >> "$RESULT_FILE"
+    echo "\"$key\": {\"status\":\"$status\",\"http_code\":$code,\"body\":\"$body\"}" >> "$RESULT_FILE"
   fi
 }
 
@@ -65,6 +69,7 @@ check "Indicators Symbol" "$HOST/indicators/BTCUSDT?timeframe=1h&limit=180"
 
 echo "=== Done ==="
 echo "📦 JSON saved to $RESULT_FILE"
+
 
 
 
