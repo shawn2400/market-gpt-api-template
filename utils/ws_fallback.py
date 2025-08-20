@@ -1,73 +1,35 @@
 # utils/ws_fallback.py
-import time
-import logging
-import asyncio
+import time, logging, asyncio
+from utils.json_logger import get_trace_logger
 
 _prices: dict[str, tuple[float, float]] = {}  # {symbol: (price, timestamp)}
-logger = logging.getLogger("algogpt.ws")
+logger = logging.getLogger("algogpt")
 
 def update_price(symbol: str, price: float):
     _prices[symbol] = (price, time.time())
-    logger.info({
-        "event": "price_update",
-        "symbol": symbol,
-        "price": price,
-        "timestamp": _prices[symbol][1]
-    })
 
 def get_price(symbol: str) -> float | None:
     return _prices.get(symbol, (None, None))[0]
 
-def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
-    price, ts = _prices.get(symbol, (None, None))
+def is_price_fresh(symbol: str, max_age_sec: int = 10, trace_id: str | None = None) -> bool:
+    _, ts = _prices.get(symbol, (None, None))
+    trace_logger = get_trace_logger(trace_id)
     if ts is None:
-        logger.warning({
-            "event": "price_check",
-            "symbol": symbol,
-            "status": "missing",
-            "msg": "No price data yet"
-        })
+        trace_logger.warning({"event": "price_check", "symbol": symbol, "status": "missing"})
         return False
-
     age = time.time() - ts
     if age > max_age_sec:
-        logger.error({
-            "event": "price_check",
-            "symbol": symbol,
-            "status": "stale",
-            "age_sec": round(age, 1),
-            "threshold_sec": max_age_sec,
-            "price": price
-        })
+        trace_logger.error({"event": "price_check", "symbol": symbol, "status": "stale", "age_sec": round(age,1)})
         return False
-
-    logger.debug({
-        "event": "price_check",
-        "symbol": symbol,
-        "status": "fresh",
-        "age_sec": round(age, 1),
-        "price": price
-    })
     return True
 
 async def price_monitor_loop(interval_sec: int = 5, max_age_sec: int = 10):
-    """
-    🔄 לולאת בדיקה שרצה ברקע ובודקת אם יש מחירים ישנים מדי.
-    נרשם ל־logs בפורמט JSON אם מחיר לא מתעדכן.
-    """
     while True:
-        now = time.time()
-        for symbol, (price, ts) in list(_prices.items()):
-            age = now - ts
+        for symbol, (_, ts) in list(_prices.items()):
+            age = time.time() - ts
             if age > max_age_sec:
-                logger.error({
-                    "event": "price_monitor",
-                    "symbol": symbol,
-                    "status": "stale",
-                    "age_sec": round(age, 1),
-                    "threshold_sec": max_age_sec,
-                    "price": price
-                })
+                trace_logger = get_trace_logger()
+                trace_logger.error({"event": "price_monitor", "symbol": symbol, "status": "stale", "age_sec": round(age,1)})
         await asyncio.sleep(interval_sec)
 
 
