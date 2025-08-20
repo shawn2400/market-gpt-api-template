@@ -47,20 +47,20 @@ from routes.strategy import router as strategy_router
 
 # --- Extra Routers ---
 from routes.news import router as news_router
-from routes.indicators import router as indicators_router   # ✅ שם מתוקן
+from routes.indicators import router as indicators_router
 from routes.analytics import router as analytics_router
 from routes.risk import router as risk_router
-from routes.snapshot import router as snapshot_router       # ✅ השם הנכון הוא snapshot.py
+from routes.snapshot import router as snapshot_router
 from routes.dashboard import router as dashboard_router
 
 # ✅ Include routers
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
-app.include_router(scan_router, tags=["Scan"])                  
+app.include_router(scan_router, tags=["Scan"])
 app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(backtest_router, prefix="/backtest", tags=["Backtest"])
 app.include_router(grid_router, prefix="/grid", tags=["Grid"])
-app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])    
-app.include_router(scan_top_volume_router, prefix="/scan", tags=["Scan"])        
+app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])
+app.include_router(scan_top_volume_router, prefix="/scan", tags=["Scan"])
 app.include_router(strategy_router, prefix="/strategy", tags=["Strategy"])
 
 # Extra
@@ -90,6 +90,7 @@ async def health():
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"status": "live"}
+
 
 
 
