@@ -1,3 +1,4 @@
+# utils/binance_client.py
 from __future__ import annotations
 
 import os, time, logging
@@ -209,6 +210,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
