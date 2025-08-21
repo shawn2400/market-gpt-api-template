@@ -35,6 +35,9 @@ SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "60"))
 MIN_VOLUME = float(os.getenv("MIN_VOLUME", "1000000"))
 TRENDING_ONLY = os.getenv("TRENDING_ONLY", "false").lower() in ("1", "true", "yes")
 
+# ---------- Watchlist ----------
+WATCHLIST = os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT").replace(" ", "").split(",")
+
 # ---------- Indicators ----------
 INDICATOR_INTERVALS = os.getenv("INDICATOR_INTERVALS", "15m,1h").split(",")
 DEFAULT_INTERVAL = INDICATOR_INTERVALS[0] if INDICATOR_INTERVALS else "15m"
@@ -76,6 +79,12 @@ def check_config() -> None:
             logging.warning(msg)
         else:
             raise RuntimeError(msg)
+
+    if EXECUTE_TRADES and BINANCE_SKIP_ACCOUNT_MUTATIONS:
+        raise RuntimeError("❌ EXECUTE_TRADES=true but BINANCE_SKIP_ACCOUNT_MUTATIONS=true → No trades will be executed!")
+
+    logging.info(f"[CONFIG] AlgoGPT started in {APP_ENV} | EXECUTE_TRADES={EXECUTE_TRADES} | WATCHLIST={WATCHLIST}")
+
 
 
 
