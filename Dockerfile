@@ -11,7 +11,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     MPLCONFIGDIR=/tmp/matplotlib \
     TZ=UTC \
-    PORT=${PORT:-8000} \
     PATH="/home/appuser/.local/bin:$PATH"
 
 # --- System deps ---
@@ -23,7 +22,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     libjpeg62-turbo zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
-# --- User ---
+# --- User & workdir ---
 RUN useradd -ms /bin/bash appuser
 WORKDIR /app
 
@@ -37,21 +36,24 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 # --- App source ---
 COPY . /app
 
-# --- Static dirs ---
+# --- Static dirs & perms ---
 RUN mkdir -p /app/static/reports /app/static/img /tmp/matplotlib \
  && chown -R appuser:appuser /app /tmp/matplotlib
 
-# --- Healthcheck (optional) ---
+# --- Healthcheck (מומלץ להתאים לנתיב /health) ---
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
 # --- Switch user ---
 USER appuser
 
+# --- Entrypoint & CMD ---
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Gunicorn with Uvicorn workers
-CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "-c", "gunicorn_conf.py"]
+# חשוב: Render יעביר PORT; ה־bind מוגדר בקובץ הגוניקורן
+# הקובץ gunicorn_conf.py נטען כאן
+CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
