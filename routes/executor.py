@@ -1,98 +1,72 @@
-# routes/executor.py
-from __future__ import annotations
-from typing import Optional, List
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+# utils/auto_executor.py
+import asyncio
+import logging
+import requests
+import pandas as pd
 
-try:
-    from utils.auth import require_bearer_token
-except Exception:
-    def require_bearer_token():
-        return None
+from utils import config as cfg
+from utils.binance_client import binance_client
+from utils.indicators import prepare_indicators_for_backtest
 
-from utils.auto_executor import (
-    is_executor_running,
-    start_executor,
-    stop_executor,
-)
-from utils.watchlist_utils import load_watchlist
+logger = logging.getLogger("algogpt.autoexec")
 
+FUTURES_BASE = "https://fapi.binance.com"
 
-router = APIRouter(tags=["Executor"], dependencies=[Depends(require_bearer_token)])
+# 🆕 משתנה גלובלי לשמירת מצב
+EXECUTOR_RUNNING = False
+EXECUTOR_SYMBOLS: list[str] = []
 
 
-# ==============================
-# Models
-# ==============================
-class ExecutorStatus(BaseModel):
-    ok: bool = True
-    running: bool
+def is_executor_running() -> bool:
+    return EXECUTOR_RUNNING
 
 
-class ExecutorActionResponse(BaseModel):
-    ok: bool
-    status: Optional[str] = None
-    error: Optional[str] = None
+# ... (שאר הפונקציות לא משתנות) ...
 
 
-class ExecutorSymbolsResponse(BaseModel):
-    ok: bool = True
-    count: int
-    symbols: List[str]
-
-
-# ==============================
-# Endpoints
-# ==============================
-@router.get("/executor/status", response_model=ExecutorStatus, summary="Check executor status")
-def executor_status() -> ExecutorStatus:
-    """
-    מחזיר אם ה־Auto Executor רץ כרגע.
-    """
-    running = bool(is_executor_running())
-    return ExecutorStatus(ok=True, running=running)
-
-
-@router.post("/executor/start", response_model=ExecutorActionResponse, summary="Start executor loop")
-async def executor_start() -> ExecutorActionResponse:
-    """
-    מפעיל את ה־Auto Executor (אם לא רץ כבר).
-    """
+# ---------------------------------------------------
+# Executor loop
+# ---------------------------------------------------
+async def auto_scan_and_trade():
+    global EXECUTOR_RUNNING, EXECUTOR_SYMBOLS
+    EXECUTOR_RUNNING = True
     try:
-        if is_executor_running():
-            return ExecutorActionResponse(ok=True, status="already_running")
-        start_executor()
-        return ExecutorActionResponse(ok=True, status="started")
-    except Exception as e:
-        return ExecutorActionResponse(ok=False, error=str(e))
+        while EXECUTOR_RUNNING:
+            EXECUTOR_SYMBOLS = [s.upper() for s in cfg.WATCHLIST]
+            if "BTCUSDT" not in EXECUTOR_SYMBOLS:
+                EXECUTOR_SYMBOLS.insert(0, "BTCUSDT")
+
+            for symbol in EXECUTOR_SYMBOLS:
+                await scan_and_trade(symbol)
+
+            await asyncio.sleep(cfg.SCAN_INTERVAL)
+    finally:
+        EXECUTOR_RUNNING = False
+        EXECUTOR_SYMBOLS = []
 
 
-@router.post("/executor/stop", response_model=ExecutorActionResponse, summary="Stop executor loop")
-async def executor_stop() -> ExecutorActionResponse:
-    """
-    עוצר את ה־Auto Executor (אם רץ).
-    """
-    try:
-        if not is_executor_running():
-            return ExecutorActionResponse(ok=True, status="already_stopped")
-        stop_executor()
-        return ExecutorActionResponse(ok=True, status="stopped")
-    except Exception as e:
-        return ExecutorActionResponse(ok=False, error=str(e))
+def start_executor():
+    global EXECUTOR_RUNNING
+    if EXECUTOR_RUNNING:
+        logger.info("⚠️ Auto Executor already running")
+        return
+
+    logger.info("🚀 Starting Auto Executor loop ...")
+    loop = asyncio.get_event_loop()
+    if not loop.is_running():
+        loop.run_until_complete(auto_scan_and_trade())
+    else:
+        loop.create_task(auto_scan_and_trade())
 
 
-@router.get("/executor/symbols", response_model=ExecutorSymbolsResponse, summary="List executor symbols")
-def executor_symbols() -> ExecutorSymbolsResponse:
-    """
-    מחזיר את רשימת הסימבולים שה־Auto Executor עוקב אחריהם כרגע (watchlist + BTCUSDT כעוגן).
-    """
-    watchlist = load_watchlist()
-    symbols = [it["symbol"].upper() for it in watchlist]
+def stop_executor():
+    global EXECUTOR_RUNNING
+    if EXECUTOR_RUNNING:
+        EXECUTOR_RUNNING = False
+        logger.info("🛑 Auto Executor stopping ...")
+    else:
+        logger.info("ℹ️ Auto Executor not running")
 
-    if "BTCUSDT" not in symbols:
-        symbols.insert(0, "BTCUSDT")
-
-    return ExecutorSymbolsResponse(ok=True, count=len(symbols), symbols=symbols)
 
 
 
