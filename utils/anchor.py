@@ -1,81 +1,83 @@
-# routes/anchor.py
-from __future__ import annotations
-import json
-from typing import List, Dict, Any
-from fastapi import APIRouter, Query, HTTPException
-from pydantic import BaseModel, Field
+# utils/anchor.py
+import math
+from dataclasses import dataclass
+from typing import Optional, Literal
 
-from utils.redis_client import redis_client
-from utils.anchor import evaluate_anchor, AnchorDecision
+from utils.indicators import ema, rsi
+from utils.watchlist_utils import load_watchlist
 
-router = APIRouter(tags=["Anchor"])
+AnchorMode = Literal["off", "soft", "hard"]
 
-# =====================
-# Models
-# =====================
-class AnchorSnapshot(BaseModel):
-    ts: int
-    side: str
-    bias: str
+@dataclass
+class AnchorDecision:
+    mode_requested: AnchorMode
+    mode_applied: AnchorMode
+    bias: str              # "BULLISH" / "BEARISH" / "NEUTRAL"
     score: float
     allow: bool
+    severity: str
+    reason: str
 
-
-class AnchorHistoryResponse(BaseModel):
-    ok: bool = True
-    count: int
-    items: List[AnchorSnapshot] = Field(default_factory=list)
-
-
-class AnchorLiveResponse(BaseModel):
-    ok: bool = True
-    side: str
-    decision: Dict[str, Any]
-
-
-# =====================
-# Endpoints
-# =====================
-@router.get("/anchor/history", response_model=AnchorHistoryResponse)
-async def get_anchor_history(limit: int = Query(50, ge=10, le=200)):
+def evaluate_anchor(side: str, mode: AnchorMode = "soft") -> AnchorDecision:
     """
-    מחזיר את ההיסטוריה האחרונה של Anchor שנשמרה ב-Redis
-    (ברירת מחדל 50, מקסימום 200).
+    מעריך Anchor לפי BTCUSDT כבסיס.
+    side: "LONG" או "SHORT"
+    mode: "off" / "soft" / "hard"
     """
-    if not redis_client:
-        raise HTTPException(status_code=500, detail="Redis not available")
+    side = side.upper()
+    if side not in ("LONG", "SHORT"):
+        raise ValueError(f"invalid side: {side}")
 
-    key = "anchor:history"
-    raw_items = redis_client.lrange(key, 0, limit - 1) or []
-    items: List[AnchorSnapshot] = []
+    # ברירת מחדל אם אין Anchor
+    if mode == "off":
+        return AnchorDecision(
+            mode_requested=mode,
+            mode_applied="off",
+            bias="NEUTRAL",
+            score=50.0,
+            allow=True,
+            severity="NONE",
+            reason="Anchor disabled"
+        )
 
-    for raw in raw_items:
-        try:
-            data = json.loads(raw)
-            items.append(AnchorSnapshot(**data))
-        except Exception:
-            continue
+    # 🚩 כאן נכניס לוגיקה פשוטה (אפשר לשפר לפי אינדיקטורים אמתיים)
+    try:
+        watchlist = load_watchlist()
+        btc = next((it for it in watchlist if it["symbol"] == "BTCUSDT"), None)
+        if not btc:
+            raise RuntimeError("BTCUSDT not found in watchlist")
 
-    return AnchorHistoryResponse(count=len(items), items=items)
+        bias = "BULLISH" if btc.get("direction") == "LONG" else "BEARISH"
+        score = float(btc.get("quality_score", 6)) * 10  # מדרג 0–100
+    except Exception:
+        bias, score = "NEUTRAL", 50.0
 
+    # החלטה אם לאפשר
+    allow = True
+    severity = "LOW"
+    reason = "Bias allows trade"
 
-@router.get("/anchor/live", response_model=AnchorLiveResponse)
-async def get_anchor_live(side: str = Query("LONG", regex="^(LONG|SHORT)$")):
-    """
-    מריץ Evaluate Anchor בזמן אמת ומחזיר תוצאה חיה (לא רק היסטורית).
-    """
-    dec: AnchorDecision = evaluate_anchor(side)
-    return AnchorLiveResponse(
-        side=side,
-        decision={
-            "mode_requested": dec.mode_requested,
-            "mode_applied": dec.mode_applied,
-            "bias": dec.bias,
-            "score": dec.score,
-            "allow": dec.allow,
-            "severity": dec.severity,
-            "reason": dec.reason,
-        }
+    if mode == "soft":
+        if side == "LONG" and bias == "BEARISH":
+            allow, severity, reason = False, "MEDIUM", "Soft-block: Bearish bias vs LONG"
+        if side == "SHORT" and bias == "BULLISH":
+            allow, severity, reason = False, "MEDIUM", "Soft-block: Bullish bias vs SHORT"
+    elif mode == "hard":
+        if bias == "NEUTRAL":
+            allow, severity, reason = False, "HIGH", "Hard-block: Neutral bias"
+        elif side == "LONG" and bias == "BEARISH":
+            allow, severity, reason = False, "HIGH", "Hard-block: Bearish bias vs LONG"
+        elif side == "SHORT" and bias == "BULLISH":
+            allow, severity, reason = False, "HIGH", "Hard-block: Bullish bias vs SHORT"
+
+    return AnchorDecision(
+        mode_requested=mode,
+        mode_applied=mode,
+        bias=bias,
+        score=score,
+        allow=allow,
+        severity=severity,
+        reason=reason,
     )
 
 
