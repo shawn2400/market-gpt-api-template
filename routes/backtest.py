@@ -2,9 +2,30 @@
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from utils.backtest_utils import run_backtest   # ✅ שם נכון (utils/backtest_utils.py)
+from utils.backtest_utils import run_backtest
+from utils.indicators import prepare_indicators_for_backtest
+import requests
+import pandas as pd
+import os
 
 router = APIRouter(tags=["Backtest"])
+
+FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+
+
+def fetch_klines(symbol: str, interval: str = "1h", limit: int = 500) -> pd.DataFrame:
+    url = f"{FUTURES_BASE}/fapi/v1/klines"
+    r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": int(limit)}, timeout=10)
+    r.raise_for_status()
+    arr = r.json()
+    cols = [
+        "open_time","open","high","low","close","volume","close_time",
+        "qv","nTrades","taker_base","taker_quote","x"
+    ]
+    df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
+    for c in ("open","high","low","close","volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df[["open","high","low","close","volume"]]
 
 
 # =====================
@@ -38,7 +59,6 @@ class BacktestResult(BaseModel):
     symbol: str
     strategy: str
     summary: BacktestSummary
-    candles: List[BacktestCandle] = Field(default_factory=list)
     stress: Optional[StressMetrics] = None   # ✅ שדות סטטיסטיקה מתקדמים
 
 
@@ -49,26 +69,19 @@ class BacktestResult(BaseModel):
 async def backtest(
     symbol: str,
     strategy: str = "ema_crossover",
-    limit: int = Query(500, ge=50, le=1000),  # ✅ מגבלה קשיחה
-    max_return: int = Query(200, ge=50, le=500, description="מספר מקסימלי של נרות שיוחזרו ללקוח"),
+    interval: str = Query("1h"),
+    limit: int = Query(500, ge=50, le=1000),
     stress: bool = Query(False, description="החזרת נתוני Stress Metrics (max drawdown, risk/reward וכו')")
 ):
     """
-    מריץ Backtest (מוגבל ל־1000 נרות). מחזיר עד `max_return` נרות אחרונים.
-    אם `stress=true` יוחזרו גם נתוני Stress Metrics.
+    מריץ Backtest (מוגבל ל־1000 נרות).
     """
-    raw: Dict[str, Any] = run_backtest(symbol, strategy=strategy, initial_balance=1000.0)
-
-    candles: List[BacktestCandle] = [BacktestCandle(**c) for c in raw.get("candles", [])]
-    total = len(candles)
-
-    # ✅ חותכים להחזרה רק X נרות אחרונים
-    if total > max_return:
-        candles = candles[-max_return:]
+    df = fetch_klines(symbol, interval, limit)
+    raw: Dict[str, Any] = run_backtest(df, strategy=strategy, initial_balance=1000.0)
 
     summary = BacktestSummary(
-        total_candles=total,
-        returned_candles=len(candles),
+        total_candles=len(df),
+        returned_candles=len(df),
         trades=int(raw.get("n_trades", 0)),
         profit_pct=float(raw.get("profit_pct", 0.0)),
         final_balance=float(raw.get("final_balance", 0.0)),
@@ -80,10 +93,9 @@ async def backtest(
 
     return BacktestResult(
         ok=True,
-        symbol=raw.get("symbol", symbol),
-        strategy=raw.get("strategy", strategy),
+        symbol=symbol,
+        strategy=strategy,
         summary=summary,
-        candles=candles,
         stress=stress_out,
     )
 
