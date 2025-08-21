@@ -1,7 +1,7 @@
 # routes/executor.py
 from __future__ import annotations
 from typing import Optional, List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from datetime import datetime, timezone
 
@@ -16,7 +16,8 @@ from utils.auto_executor import (
     start_executor,
     stop_executor,
     EXECUTOR_SYMBOLS,
-    EXECUTOR_LAST_TS,   # ✅ timestamp אחרון
+    EXECUTOR_LAST_TS,
+    EXECUTOR_LOGS,   # ✅ לוגים
 )
 from utils.watchlist_utils import load_watchlist
 
@@ -41,6 +42,12 @@ class ExecutorSymbolsResponse(BaseModel):
     count: int
     symbols: List[str]
     last_ts: Optional[str] = None
+
+
+class ExecutorLogsResponse(BaseModel):
+    ok: bool = True
+    count: int
+    logs: List[dict]
 
 
 @router.get("/executor/status", response_model=ExecutorStatus)
@@ -93,6 +100,15 @@ def executor_symbols() -> ExecutorSymbolsResponse:
     )
 
     return ExecutorSymbolsResponse(ok=True, count=len(symbols), symbols=symbols, last_ts=last_ts)
+
+
+@router.get("/executor/logs", response_model=ExecutorLogsResponse)
+def executor_logs(limit: int = Query(50, ge=1, le=200)) -> ExecutorLogsResponse:
+    """
+    מחזיר את הלוגים האחרונים של ה־Auto Executor (ברירת מחדל 50, מקסימום 200).
+    """
+    logs = list(EXECUTOR_LOGS)[-limit:]
+    return ExecutorLogsResponse(ok=True, count=len(logs), logs=logs)
 
 
 
