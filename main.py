@@ -5,7 +5,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -19,7 +19,8 @@ from utils.watchlist_utils import load_watchlist
 from utils.binance_client import futures_mark_price
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
-from utils import cache_fallback as redis_store   # ✅ abstraction אחיד
+from utils import cache_fallback as redis_store
+from utils.auth import require_api_key   # ✅ API-Key auth
 
 # --- Env ---
 load_dotenv(override=True)
@@ -109,30 +110,37 @@ from routes.market import router as market_router
 from routes.scan import router as scan_utils_router
 from routes.utils import router as utils_router
 
-# ✅ Include routers
-app.include_router(ai_router, prefix="/ai", tags=["AI"])
-app.include_router(scan_router, tags=["Scan"])
-app.include_router(trade_router, prefix="/trade", tags=["Trade"])
-app.include_router(backtest_router, prefix="/backtest", tags=["Backtest"])
-app.include_router(grid_router, prefix="/grid", tags=["Grid"])
-app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])
-app.include_router(scan_top_volume_router, prefix="/scan", tags=["Scan"])
-app.include_router(strategy_router, prefix="/strategy", tags=["Strategy"])
-app.include_router(news_router, prefix="/news", tags=["News"])
-app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
-app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
-app.include_router(risk_router, prefix="/risk", tags=["Risk"])
-app.include_router(snapshot_router, prefix="/snapshot", tags=["Snapshots"])
-app.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard"])
-app.include_router(orders_router, prefix="/orders", tags=["Orders"])
-app.include_router(ws_router, prefix="/ws", tags=["Websocket"])
+# ✅ Protected routers (API-Key required)
+protected_routers = [
+    (ai_router, "/ai", ["AI"]),
+    (scan_router, "", ["Scan"]),
+    (trade_router, "/trade", ["Trade"]),
+    (backtest_router, "/backtest", ["Backtest"]),
+    (grid_router, "/grid", ["Grid"]),
+    (orderflow_router, "/orderflow", ["Orderflow"]),
+    (scan_top_volume_router, "/scan", ["Scan"]),
+    (strategy_router, "/strategy", ["Strategy"]),
+    (news_router, "/news", ["News"]),
+    (indicators_router, "/indicators", ["Indicators"]),
+    (analytics_router, "/analytics", ["Analytics"]),
+    (risk_router, "/risk", ["Risk"]),
+    (snapshot_router, "/snapshot", ["Snapshots"]),
+    (dashboard_router, "/dashboard", ["Dashboard"]),
+    (orders_router, "/orders", ["Orders"]),
+    (ws_router, "/ws", ["Websocket"]),
+    (debug_binance_router, "", ["Debug"]),
+    (executor_router, "", ["Executor"]),
+    (price_router, "", ["Price"]),
+    (market_router, "", ["Market"]),
+    (scan_utils_router, "/scan", ["Scan"]),
+    (utils_router, "", ["Utils"]),
+]
+
+for router, prefix, tags in protected_routers:
+    app.include_router(router, prefix=prefix, tags=tags, dependencies=[Depends(require_api_key)])
+
+# ✅ Debug router נשאר פתוח (לא חייב API-Key)
 app.include_router(debug_router, prefix="/debug", tags=["Debug"])
-app.include_router(debug_binance_router, tags=["Debug"])
-app.include_router(executor_router, tags=["Executor"])
-app.include_router(price_router, tags=["Price"])
-app.include_router(market_router, tags=["Market"])
-app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
-app.include_router(utils_router, tags=["Utils"])
 
 # --- Price Monitor Loop ---
 async def price_monitor_loop(interval: int = 30):
@@ -204,8 +212,6 @@ async def startup_event():
     asyncio.create_task(anchor_snapshot_loop(interval=int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))))
     asyncio.create_task(cache_cleaner(interval=3600, max_files=100, max_age=86400))
 
-    logger.info({"event": "startup", "msg": "✅ Background tasks started"})
-
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
 async def root_status():
@@ -217,7 +223,7 @@ async def handle_exception(request: Request, exc: Exception):
     logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-# --- Health endpoints ---
+# --- Health endpoints (no API-Key needed) ---
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "version": APP_VERSION}
@@ -226,7 +232,7 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-# ✅ Debug logs endpoint
+# ✅ Debug logs endpoint (no API-Key)
 @app.get("/debug/health", tags=["Debug"])
 async def debug_health(limit: int = Query(50), level: str | None = None, logger_name: str | None = None):
     logs = list(LOG_BUFFER)[-limit:]
@@ -240,6 +246,7 @@ async def debug_health(limit: int = Query(50), level: str | None = None, logger_
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
