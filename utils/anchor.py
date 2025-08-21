@@ -1,13 +1,15 @@
 # utils/anchor.py
 from __future__ import annotations
-import os
-import logging
+import os, logging, requests
+import pandas as pd
 from dataclasses import dataclass
 from typing import Literal, Tuple, List
 
 Side = Literal["LONG", "SHORT"]
-
 logger = logging.getLogger("algogpt.anchor")
+
+# --- Config ---
+FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
 @dataclass
 class AnchorDecision:
@@ -38,36 +40,63 @@ def _get_anchor_mode() -> str:
         return "hard" if enforce else "soft"
     return mode if mode in {"off", "soft", "hard"} else "soft"
 
-def _get_anchor_reading() -> Tuple[str, float]:
-    """
-    כאן אפשר להחליף בעתיד למימוש אמיתי שמחשב RSI/EMA על BTCUSDT.
-    כרגע: אם מוגדר BTC_ANCHOR_FORCE → נשתמש בו.
-    """
-    forced = (os.getenv("BTC_ANCHOR_FORCE", "") or "").strip().lower()
-    if forced:
-        try:
-            if ":" in forced:
-                b, s = forced.split(":", 1)
-                bias = b.strip()
-                score = float(s.strip())
-            else:
-                bias = forced
-                score = 0.0
-            if bias not in {"bull", "bear", "neutral"}:
-                bias = "neutral"
-            score = max(0.0, min(100.0, score))
-            return bias, score
-        except Exception:
-            return "neutral", 0.0
-    return "neutral", 0.0
+def _fetch_klines(symbol="BTCUSDT", interval="1h", limit=200) -> pd.DataFrame:
+    try:
+        url = f"{FUTURES_BASE}/fapi/v1/klines"
+        r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=8)
+        r.raise_for_status()
+        arr = r.json()
+        if not arr:
+            return pd.DataFrame()
+        cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
+        df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
+        for c in ("open","high","low","close","volume"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df[["open","high","low","close","volume"]]
+    except Exception as e:
+        logger.error({"event": "anchor_fetch_error", "error": str(e)})
+        return pd.DataFrame()
+
+def _calc_indicators(df: pd.DataFrame) -> Tuple[str, float]:
+    if df.empty or len(df) < 50:
+        return "neutral", 0.0
+
+    close = df["close"]
+
+    # RSI
+    delta = close.diff()
+    up = delta.clip(lower=0).rolling(14).mean()
+    down = -delta.clip(upper=0).rolling(14).mean()
+    rs = up / down.replace(0, 1e-9)
+    rsi = 100 - (100 / (1 + rs))
+    rsi_val = float(rsi.iloc[-1])
+
+    # EMA
+    ema50 = close.ewm(span=50).mean().iloc[-1]
+    ema200 = close.ewm(span=200).mean().iloc[-1]
+
+    # Bias
+    if rsi_val >= 55 and ema50 > ema200:
+        return "bull", min(100.0, rsi_val)
+    elif rsi_val <= 45 and ema50 < ema200:
+        return "bear", min(100.0, 100 - rsi_val)
+    return "neutral", 50.0
 
 def evaluate_anchor(side: Side) -> AnchorDecision:
-    mode_req = _get_anchor_mode()  # off / soft / hard
+    mode_req = _get_anchor_mode()
     frames = _env_list("BTC_ANCHOR_FRAMES", "15m,1h")
     strong_th = _env_float("BTC_ANCHOR_STRONG_TH", 70.0)
     weak_th   = _env_float("BTC_ANCHOR_WEAK_TH",   55.0)
 
-    bias, score = _get_anchor_reading()
+    # --- Fetch BTCUSDT candles
+    bias, score = "neutral", 0.0
+    for tf in frames:
+        df = _fetch_klines("BTCUSDT", interval=tf, limit=200)
+        b, s = _calc_indicators(df)
+        # ניקח הכי "חזק" מבין כל הפריימים
+        if b != "neutral" and s > score:
+            bias, score = b, s
+
     conflict = ((side == "LONG" and bias == "bear") or (side == "SHORT" and bias == "bull"))
 
     if mode_req == "off":
@@ -112,10 +141,10 @@ def evaluate_anchor(side: Side) -> AnchorDecision:
         "severity": decision.severity,
         "reason": decision.reason,
     })
-
     return decision
 
 __all__ = ["AnchorDecision", "evaluate_anchor"]
+
 
 
 
