@@ -7,6 +7,8 @@ services:
     pullRequestPreviewsEnabled: false
     healthCheckPath: /
 
+    startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:10000 main:app
+
     envVars:
       - key: PORT
         value: "10000"
@@ -18,82 +20,13 @@ services:
         value: "*"
       - key: ALGOGPT_VERSION
         value: "2.14.3"
-
-      - key: API_BEARER_TOKEN
-        sync: false
-
-      - key: AUTO_RUN
-        value: "false"
-      - key: ENABLE_AUTO_TRADING
-        value: "false"
-      - key: SCAN_INTERVAL
-        value: "60"
-      - key: DEFAULT_INTERVAL
-        value: "15m"
-
-      - key: MIN_QUALITY_SCORE
-        value: "6"
-      - key: MIN_VOLUME
-        value: "1000000"
-      - key: TOP_SYMBOLS
-        value: "30"
-      - key: TRENDING_ONLY
-        value: "false"
-
-      - key: PRICE_PROTECT_PCT
-        value: "0.25"
-      - key: PRICE_MAX_AGE_SEC
-        value: "10"
-      - key: MAX_TRADE_BUDGET
-        value: "100"
-      - key: MAX_LEVERAGE
-        value: "35"
-
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: OPENAI_MODEL
-        value: "gpt-4o-mini"
-      - key: OPENAI_TIMEOUT_SECONDS
-        value: "30.0"
-      - key: OPENAI_MAX_CONCURRENCY
-        value: "4"
-
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
-      - key: BINANCE_SPOT_HTTP_BASE
-        value: "https://api.binance.com"
-      - key: BINANCE_FUTURES_HTTP_BASE
-        value: "https://fapi.binance.com"
-      - key: BINANCE_FUTURES_WS_BASE
-        value: "wss://fstream.binance.com"
-      - key: BINANCE_WS_STREAM_SUFFIX
-        value: "/stream?streams="
-      - key: BINANCE_BACKOFF_BASE
-        value: "0.7"
-      - key: BINANCE_MAX_RETRIES
-        value: "5"
-      - key: BINANCE_RECV_WINDOW
-        value: "10000"
-      - key: BINANCE_TIME_SYNC_INTERVAL_SEC
-        value: "900"
-      - key: BINANCE_EXCHANGE_INFO_ON_START
-        value: "false"
-      - key: BINANCE_FORCE_HEDGE_MODE
-        value: "false"
-      - key: BINANCE_SKIP_ACCOUNT_MUTATIONS
-        value: "false"
-
-      - key: EGRESS_IP_ENDPOINT
-        value: "https://algogpt-docker.onrender.com/net/ip"
-      - key: BINANCE_ALLOWED_EGRESS_IPS
-        value: ""
+      # ... (שאר המשתנים שלך כמו שהיו) ...
 
     disk:
       name: tmp
       mountPath: /tmp
       sizeGB: 1
+
 
 
 
