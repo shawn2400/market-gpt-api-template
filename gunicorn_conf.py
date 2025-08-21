@@ -6,7 +6,7 @@ import multiprocessing, os, json, sys, logging
 #
 workers = int(os.getenv("WORKERS", multiprocessing.cpu_count() * 2 + 1))
 worker_class = "uvicorn.workers.UvicornWorker"
-bind = f"0.0.0.0:{os.getenv('PORT', '10000')}"
+bind = f"0.0.0.0:{os.getenv('PORT', '8000')}"
 
 timeout = 120
 graceful_timeout = 30
@@ -15,6 +15,8 @@ keepalive = 5
 max_requests = 2000
 max_requests_jitter = 200
 worker_tmp_dir = "/dev/shm"
+worker_connections = 1000  # מתאים ל-WS כבדים
+preload_app = True         # חוסך זמן וזיכרון ב-startup
 
 #
 # JSON Structured Logging
@@ -59,6 +61,8 @@ access_log_format = (
     '{"event":"access","client":"%(h)s","request":"%(r)s","status":"%(s)s",'
     '"size":"%(b)s","referer":"%(f)s","agent":"%(a)s","duration":"%(L)s"}'
 )
+
+
 
 
 
