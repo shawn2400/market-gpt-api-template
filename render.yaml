@@ -1,31 +1,58 @@
 services:
   - type: web
     name: algogpt-docker
-    env: docker
+    runtime: docker
     plan: starter
     autoDeploy: false
     pullRequestPreviewsEnabled: false
-    healthCheckPath: /
 
-    startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:10000 main:app
+    # Render יבצע בדיקת בריאות על הנתיב הזה
+    healthCheckPath: /health
+
+    # הצבעה לקבצי הדוקר
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
 
     envVars:
+      # Render מזריק PORT אוטומטית; השארתי להדגשה/עקביות
       - key: PORT
         value: "10000"
+
       - key: WORKERS
-        value: "1"
+        value: "2"
+
       - key: LOG_LEVEL
         value: "INFO"
+
       - key: CORS_ALLOW_ORIGINS
         value: "*"
+
       - key: ALGOGPT_VERSION
-        value: "2.14.3"
-      # ... (שאר המשתנים שלך כמו שהיו) ...
+        value: "2.14.5"
+
+      # דגלים אופציונליים למערכת שלך (כברירת מחדל אפשר להשאיר כמו שהם)
+      - key: WS_UPDATE_INTERVAL
+        value: "15"
+      - key: PRICE_MONITOR_INTERVAL
+        value: "30"
+      - key: PRICE_WS_FRESH_TTL
+        value: "20"
+      - key: PRICE_MONITOR_DISABLE
+        value: "0"
+
+      # מפתחות — להגדיר ב־Dashboard כ "Synced" (לא בקובץ)
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
 
     disk:
       name: tmp
       mountPath: /tmp
       sizeGB: 1
+
 
 
 
