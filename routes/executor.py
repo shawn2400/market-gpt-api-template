@@ -17,7 +17,8 @@ from utils.auto_executor import (
     stop_executor,
     EXECUTOR_SYMBOLS,
     EXECUTOR_LAST_TS,
-    EXECUTOR_LOGS,   # ✅ לוגים
+    EXECUTOR_LOGS,
+    EXECUTOR_TRADES,   # 🆕 היסטוריית טריידים
 )
 from utils.watchlist_utils import load_watchlist
 
@@ -25,6 +26,9 @@ from utils.watchlist_utils import load_watchlist
 router = APIRouter(tags=["Executor"], dependencies=[Depends(require_bearer_token)])
 
 
+# =====================
+# Models
+# =====================
 class ExecutorStatus(BaseModel):
     ok: bool = True
     running: bool
@@ -50,6 +54,15 @@ class ExecutorLogsResponse(BaseModel):
     logs: List[dict]
 
 
+class ExecutorTradesResponse(BaseModel):
+    ok: bool = True
+    count: int
+    trades: List[dict]
+
+
+# =====================
+# Endpoints
+# =====================
 @router.get("/executor/status", response_model=ExecutorStatus)
 def executor_status() -> ExecutorStatus:
     running = bool(is_executor_running())
@@ -109,6 +122,16 @@ def executor_logs(limit: int = Query(50, ge=1, le=200)) -> ExecutorLogsResponse:
     """
     logs = list(EXECUTOR_LOGS)[-limit:]
     return ExecutorLogsResponse(ok=True, count=len(logs), logs=logs)
+
+
+@router.get("/executor/trades", response_model=ExecutorTradesResponse)
+def executor_trades(limit: int = Query(50, ge=1, le=200)) -> ExecutorTradesResponse:
+    """
+    מחזיר את היסטוריית הטריידים האחרונים (ברירת מחדל 50, מקסימום 200).
+    """
+    trades = list(EXECUTOR_TRADES)[-limit:]
+    return ExecutorTradesResponse(ok=True, count=len(trades), trades=trades)
+
 
 
 
