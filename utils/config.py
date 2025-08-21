@@ -2,6 +2,9 @@ from __future__ import annotations
 import os, re, logging
 from typing import List
 
+# ---------------------------
+# Helpers
+# ---------------------------
 def _as_bool(val: str | None, default: bool = False) -> bool:
     if val is None: return default
     return str(val).strip().lower() in {"1","true","yes","on"}
@@ -51,6 +54,9 @@ def _require_url(name,val,must_start:tuple[str,...])->str:
         raise RuntimeError(f"❌ {name} must start with {must_start}, got {val!r}")
     return val.rstrip("/")
 
+# ---------------------------
+# Env
+# ---------------------------
 APP_ENV=os.getenv("APP_ENV","production").strip().lower()
 IS_PROD=APP_ENV=="production"
 
@@ -105,7 +111,7 @@ if BINANCE_MARGIN_TYPE_DEFAULT not in {"ISOLATED","CROSSED"}:
 
 # OpenAI
 OPENAI_API_KEY=(os.getenv("OPENAI_API_KEY") or "").strip()
-OPENAI_MODEL=(os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
+OPENAI_MODEL=(os.getenv("OPENAI_MODEL") or "gpt-4o").strip()
 ENABLE_AI_ROUTES=_as_bool(os.getenv("ENABLE_AI_ROUTES"),True)
 
 # Limits
@@ -121,6 +127,9 @@ PRICE_MONITOR_DISABLE=_as_bool(os.getenv("PRICE_MONITOR_DISABLE"),False)
 LOG_LEVEL=(os.getenv("LOG_LEVEL") or "INFO").strip().upper()
 if LOG_LEVEL not in {"CRITICAL","ERROR","WARNING","INFO","DEBUG"}: LOG_LEVEL="INFO"
 
+# ---------------------------
+# Validation
+# ---------------------------
 def _validate_urls():
     _require_url("BINANCE_HTTP_BASE",BINANCE_HTTP_BASE,("https://",))
     _require_url("BINANCE_FUTURES_HTTP_BASE",BINANCE_FUTURES_HTTP_BASE,("https://",))
@@ -145,6 +154,20 @@ def check_config():
     if EXECUTE_TRADES and BINANCE_SKIP_ACCOUNT_MUTATIONS:
         raise RuntimeError("❌ EXECUTE_TRADES=true but skip mutations=true")
     logging.info(f"[CONFIG] Started | EXECUTE_TRADES={EXECUTE_TRADES} | WATCHLIST={WATCHLIST}")
+
+def dump_config_sanitized()->dict:
+    return {
+        "env":APP_ENV,
+        "watchlist":WATCHLIST,
+        "intervals":INDICATOR_INTERVALS,
+        "auto_run":AUTO_RUN,
+        "max_leverage":MAX_LEVERAGE,
+        "budget":MAX_TRADE_BUDGET,
+        "exec_trades":EXECUTE_TRADES,
+        "enable_ai":ENABLE_AI_ROUTES,
+        "model":OPENAI_MODEL,
+    }
+
 
 
 
