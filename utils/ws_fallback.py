@@ -2,10 +2,13 @@
 import asyncio
 import time
 import logging
+import os
 from typing import Dict, Any
+from utils.json_logger import setup_json_logging
+
+logger = setup_json_logging()
 
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
-logger = logging.getLogger("algogpt.ws")
 
 def update_price(symbol: str, price: float) -> None:
     LAST_PRICE_CACHE[symbol.upper()] = {
@@ -22,21 +25,33 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
         return False
     return (time.time() - info.get("ts", 0)) <= max_age_sec
 
-# ✅ NEW: לולאה שמעדכנת אוטומטית את כל ה-watchlist
-async def auto_price_updater(symbols: list[str], interval: int = 15):
+# ✅ Auto price updater
+async def auto_price_updater(symbols: list[str]):
     """
-    מושך מחירים מ-Binance כל X שניות ומעדכן ב-cache
+    מושך מחירים מ-Binance כל X שניות (WS_UPDATE_INTERVAL) ומעדכן ב-cache
     """
     from utils.binance_client import futures_mark_price
+    interval = int(os.getenv("WS_UPDATE_INTERVAL", 15))
+
+    logger.info({"event": "ws_updater", "msg": f"🔄 Auto price updater started (interval={interval}s)"})
 
     while True:
         for sym in symbols:
             try:
                 price = futures_mark_price(sym)
                 update_price(sym, price)
-                logger.info(f"[WS] Updated {sym} → {price}")
+                logger.info({
+                    "event": "price_update",
+                    "symbol": sym,
+                    "price": price,
+                    "msg": f"[WS] Updated {sym} → {price}"
+                })
             except Exception as e:
-                logger.error(f"[WS] Failed to update {sym}: {e}")
+                logger.error({
+                    "event": "price_update_failed",
+                    "symbol": sym,
+                    "error": str(e)
+                })
         await asyncio.sleep(interval)
 
 
