@@ -1,99 +1,35 @@
 # routes/orders.py
-from __future__ import annotations
-from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict, Any, Optional
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
+from typing import List
+from utils.orders_manager import get_orders, get_active_orders
 
-from utils import binance_client
-from utils.auth import require_bearer_token
+router = APIRouter()
 
-router = APIRouter(prefix="/orders", tags=["Orders"], dependencies=[Depends(require_bearer_token)])
+class OrderModel(BaseModel):
+    id: str
+    symbol: str
+    side: str
+    qty: float
+    price: float
+    status: str
+    created_at: str
 
-# ------------------------------
-#        Spot Orders
-# ------------------------------
-@router.post("/spot/new")
-async def spot_new_order(
-    symbol: str,
-    side: str,
-    type: str,
-    quantity: float,
-    price: Optional[float] = None,
-) -> Dict[str, Any]:
-    """פתיחת פקודת SPOT ב-Binance."""
-    try:
-        return binance_client.spot_new_order(
-            symbol=symbol, side=side.upper(), type=type.upper(), quantity=quantity, price=price
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Spot order failed: {e}")
+@router.get("/", response_model=List[OrderModel])
+async def list_orders(limit: int = Query(50, ge=1, le=200)):
+    """
+    מחזיר את ההזמנות האחרונות (ברירת מחדל 50, מקסימום 200).
+    """
+    orders = get_orders(limit=limit)
+    return [OrderModel(**o) for o in orders]
 
-@router.get("/spot/balance/{asset}")
-async def spot_balance(asset: str = "USDT") -> Dict[str, Any]:
-    """החזרת יתרת SPOT לנכס מסוים"""
-    try:
-        bal = binance_client.spot_balance(asset)
-        return {"asset": asset, "balance": bal}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Spot balance failed: {e}")
+@router.get("/active", response_model=List[OrderModel])
+async def list_active_orders():
+    """
+    מחזיר את ההזמנות הפתוחות בלבד.
+    """
+    orders = get_active_orders()
+    return [OrderModel(**o) for o in orders]
 
-# ------------------------------
-#        Futures Orders
-# ------------------------------
-@router.post("/futures/new")
-async def futures_new_order(
-    symbol: str,
-    side: str,
-    type: str,
-    quantity: float,
-    price: Optional[float] = None,
-) -> Dict[str, Any]:
-    """פתיחת פקודת FUTURES ב-Binance."""
-    try:
-        return binance_client.futures_new_order(
-            symbol=symbol, side=side.upper(), type=type.upper(), quantity=quantity, price=price
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Futures order failed: {e}")
-
-@router.get("/futures/balance/{asset}")
-async def futures_balance(asset: str = "USDT") -> Dict[str, Any]:
-    """החזרת יתרת FUTURES לנכס מסוים"""
-    try:
-        bal = binance_client.futures_balance(asset)
-        return {"asset": asset, "balance": bal}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Futures balance failed: {e}")
-
-@router.get("/futures/position/{symbol}")
-async def futures_position(symbol: str) -> Dict[str, Any]:
-    """מצב פוזיציה FUTURES"""
-    try:
-        pos = binance_client.futures_position(symbol)
-        if not pos:
-            return {"symbol": symbol, "position": None}
-        return pos
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Futures position failed: {e}")
-
-# ------------------------------
-#        Grid Orders
-# ------------------------------
-@router.post("/grid")
-async def grid_orders(
-    symbol: str,
-    side: str,
-    start_price: float,
-    end_price: float,
-    steps: int,
-    quantity: float,
-) -> Dict[str, Any]:
-    """מייצר פקודות גריד (Limit Orders)."""
-    try:
-        orders = binance_client.grid_orders(
-            symbol=symbol, side=side.upper(), start_price=start_price, end_price=end_price, steps=steps, quantity=quantity
-        )
-        return {"symbol": symbol, "grid_orders": orders, "steps": steps}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Grid orders failed: {e}")
 
 
