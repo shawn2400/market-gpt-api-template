@@ -35,6 +35,11 @@ def _log(event: str, symbol: str | None = None, level: str = "INFO", **kwargs):
         logger.info(record)
 
 
+def is_executor_running() -> bool:
+    """בודק אם ה־Executor פעיל כרגע"""
+    return EXECUTOR_RUNNING
+
+
 async def _save_trade_to_history(trade: dict):
     """שומר טרייד גם בזיכרון וגם ב־Redis"""
     EXECUTOR_TRADES.append(trade)
