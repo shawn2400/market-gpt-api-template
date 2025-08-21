@@ -132,14 +132,17 @@ async def startup_event():
     })
 
 
-# --- Root → Redirect to Dashboard ---
+# --- Root → Dashboard + Logs ---
 @app.get("/", tags=["Dashboard"], operation_id="getDashboardRoot")
-async def root_dashboard():
+async def root_dashboard(limit: int = 50):
     """
-    מחזיר את ה-Dashboard כ־Root (במקום רק סטטוס)
+    מחזיר Dashboard עם הלוגים האחרונים
     """
     from routes.dashboard import dashboard_snapshot
-    return await dashboard_snapshot()
+    dashboard_data = await dashboard_snapshot()
+    logs = list(LOG_BUFFER)[-limit:]
+    dashboard_data["logs"] = logs
+    return dashboard_data
 
 
 # --- Error handler ---
@@ -160,7 +163,7 @@ async def health_live():
     return {"status": "live"}
 
 
-# ✅ Debug logs endpoint
+# ✅ Debug logs endpoint (standalone)
 @app.get("/debug/health", tags=["Debug"], operation_id="getDebugHealth")
 async def debug_health(limit: int = 50):
     logs = list(LOG_BUFFER)[-limit:]
@@ -174,6 +177,7 @@ async def debug_health(limit: int = 50):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
