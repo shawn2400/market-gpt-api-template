@@ -3,14 +3,18 @@ import asyncio
 import logging
 import requests
 import pandas as pd
+from typing import Optional
 
 from utils import config as cfg
 from utils.binance_client import binance_client
 from utils.indicators import prepare_indicators_for_backtest
+from utils.watchlist_utils import load_watchlist
 
 logger = logging.getLogger("algogpt.autoexec")
 
 FUTURES_BASE = "https://fapi.binance.com"
+EXECUTOR_TASK: Optional[asyncio.Task] = None
+
 
 # ---------------------------------------------------
 # Binance Klines fetcher
@@ -20,6 +24,8 @@ def fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.Dat
     r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=10)
     r.raise_for_status()
     arr = r.json()
+    if not arr:
+        return pd.DataFrame()
     cols = [
         "open_time","open","high","low","close","volume","close_time",
         "qv","nTrades","taker_base","taker_quote","x"
@@ -28,6 +34,7 @@ def fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.Dat
     for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
+
 
 # ---------------------------------------------------
 # Auto Executor logic
@@ -46,6 +53,7 @@ def calc_leverage(rsi: float, adx: float) -> int:
 
     lev = 5 + score * 5
     return min(max(5, lev), 35)
+
 
 async def scan_and_trade(symbol: str):
     try:
@@ -85,6 +93,7 @@ async def scan_and_trade(symbol: str):
 
     except Exception as e:
         logger.error(f"[auto] Error for {symbol}: {e}")
+
 
 def place_futures_order(symbol: str, side: str, qty: float, entry: float, sl: float, tp: float, lev: int):
     """
@@ -127,22 +136,46 @@ def place_futures_order(symbol: str, side: str, qty: float, entry: float, sl: fl
         logger.error(f"[auto] Futures order failed for {symbol}: {e}")
         return None
 
+
 # ---------------------------------------------------
-# Executor loop
+# Executor loop + State
 # ---------------------------------------------------
 async def auto_scan_and_trade():
+    watchlist = load_watchlist()
+    symbols = [it["symbol"] for it in watchlist]
+    if "BTCUSDT" not in [s.upper() for s in symbols]:
+        symbols.insert(0, "BTCUSDT")  # ✅ Anchor enforced
+
+    logger.info(f"[auto] Executor loop running on {len(symbols)} symbols: {symbols}")
+
     while True:
-        for symbol in cfg.WATCHLIST:
+        for symbol in symbols:
             await scan_and_trade(symbol)
         await asyncio.sleep(cfg.SCAN_INTERVAL)
 
+
+def is_executor_running() -> bool:
+    global EXECUTOR_TASK
+    return EXECUTOR_TASK is not None and not EXECUTOR_TASK.done()
+
+
 def start_executor():
-    logger.info("🚀 Starting Auto Executor loop ...")
+    global EXECUTOR_TASK
+    if is_executor_running():
+        logger.info("[auto] Executor already running")
+        return
     loop = asyncio.get_event_loop()
-    if not loop.is_running():
-        loop.run_until_complete(auto_scan_and_trade())
-    else:
-        loop.create_task(auto_scan_and_trade())
+    EXECUTOR_TASK = loop.create_task(auto_scan_and_trade())
+    logger.info("🚀 Auto Executor started")
+
+
+def stop_executor():
+    global EXECUTOR_TASK
+    if EXECUTOR_TASK:
+        EXECUTOR_TASK.cancel()
+        EXECUTOR_TASK = None
+        logger.info("🛑 Auto Executor stopped")
+
 
 
 
