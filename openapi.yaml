@@ -3,7 +3,7 @@ jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 
 info:
   title: AlgoGPT API
-  version: 2.14.6
+  version: 2.14.7
   description: |
     AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
     כולל: Scan / AI / Trades / Backtest / News / Grid / Risk / Indicators / Analytics / PnL / Anchor / Executor / WS.
@@ -51,17 +51,26 @@ components:
     Error:
       type: object
       properties:
-        detail: { type: string, example: Unauthorized }
+        detail:
+          type: string
+          example: Unauthorized
 
     BasicStatus:
       type: object
       properties:
         status: { type: string, example: ok }
-        version: { type: string, example: 2.14.6 }
+        version: { type: string, example: 2.14.7 }
 
     GenericResponse:
       type: object
-      properties: {}
+      description: "Generic flexible response schema"
+      properties:
+        ok:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Operation completed successfully"
       additionalProperties: true
 
     GridStatus:
@@ -338,11 +347,35 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
 
-  /anchor:
+  /orders/active:
+    get:
+      tags: [Orders]
+      summary: List active orders
+      operationId: getOrdersActive
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /anchor/history:
     get:
       tags: [Anchor]
-      summary: Anchor snapshot state
-      operationId: getAnchor
+      summary: Anchor snapshot history
+      operationId: getAnchorHistory
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /anchor/live:
+    get:
+      tags: [Anchor]
+      summary: Live anchor evaluation
+      operationId: getAnchorLive
       responses:
         "200":
           description: ok
@@ -414,6 +447,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
+
 
 
 
