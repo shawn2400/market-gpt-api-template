@@ -1,19 +1,46 @@
 # routes/dashboard.py
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, Response
+import time
 
-router = APIRouter(tags=["Dashboard"])
+from utils.ws_fallback import LAST_PRICE_CACHE
+from utils.watchlist_utils import load_watchlist
 
-_HTML = """<!doctype html> ... (התוכן הקיים שלך) ... </html>"""
+router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
-@router.api_route(
-    "/dashboard",
-    methods=["GET", "HEAD"],
-    response_class=HTMLResponse,
-    operation_id="getDashboardHtml_v2",  # <- שינוי השם כדי למנוע duplicate
-)
-async def dashboard_ui():
-    return Response(content=_HTML, media_type="text/html")
+
+@router.get("/", summary="Dashboard snapshot")
+async def dashboard_snapshot():
+    """
+    מחזיר Snapshot כללי לדשבורד:
+    - Watchlist
+    - מחירים אחרונים (WS)
+    """
+    now = time.time()
+
+    # --- Load watchlist
+    watchlist = load_watchlist()
+
+    # --- Last prices snapshot
+    last_prices = []
+    for sym, info in LAST_PRICE_CACHE.items():
+        ts = info.get("ts", 0)
+        age_sec = round(now - ts, 2) if ts else None
+        last_prices.append({
+            "symbol": sym,
+            "price": info.get("price"),
+            "ts": ts,
+            "age_sec": age_sec,
+            "fresh": age_sec is not None and age_sec <= 10
+        })
+
+    return {
+        "ok": True,
+        "watchlist": watchlist,
+        "last_prices": last_prices,
+        "count_symbols": len(last_prices),
+        "ts": now
+    }
+
 
 
 
