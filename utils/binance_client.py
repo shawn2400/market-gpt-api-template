@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os, time, logging
 from typing import Any, Callable, Optional, Dict, List
-
 import httpx
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
@@ -28,7 +27,6 @@ _BINANCE_FAPI_BASES: List[str] = [
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "4.0"))
 _RETRY_STATUSES = {418, 429, 500, 502, 503, 504}
 
-
 # =========================
 # Client factory
 # =========================
@@ -48,7 +46,6 @@ def get_client() -> Client:
 
     return client
 
-
 # =========================
 # Retry helper
 # =========================
@@ -67,7 +64,6 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = 3, delay: float
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
 
-
 # =========================
 # Futures Exchange Info cache
 # =========================
@@ -82,7 +78,6 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     if isinstance(info, dict):
         _futures_exchange_info_cache = info
     return info
-
 
 # =========================
 # Account helpers
@@ -135,9 +130,8 @@ def ping_and_info() -> bool:
         logger.error(f"[Binance] ping_and_info failed: {e}")
         return False
 
-
 # =========================
-# Public Futures Mark Price
+# Public Futures Mark Price (with WS Fallback)
 # =========================
 def _looks_like_json(txt: str) -> bool:
     if not txt:
@@ -148,23 +142,16 @@ def _looks_like_json(txt: str) -> bool:
 def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
     sym = symbol.upper().strip()
 
-    # 🔒 אם REST כבוי - תשתמש רק ב-WS cache
+    # ✅ אם מוגדר PRICE_MONITOR_DISABLE → WS בלבד
     if PRICE_MONITOR_DISABLE:
-        try:
-            from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
-            rec = LAST_PRICE_CACHE.get(sym)
-            if rec and "price" in rec:
-                return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
-            raise RuntimeError(f"[Binance] WS cache miss for {sym}")
-        except Exception as e:
-            raise RuntimeError(f"[Binance] WS fallback failed for {sym}: {e}")
+        from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
+        rec = LAST_PRICE_CACHE.get(sym)
+        if rec and "price" in rec:
+            return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
+        raise RuntimeError(f"[Binance] WS cache miss for {sym}")
 
-    # אחרת - ממשיכים עם REST
     last_err: Optional[str] = None
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "AlgoGPT/2 binance-client",
-    }
+    headers = {"Accept": "application/json", "User-Agent": "AlgoGPT/2 binance-client"}
 
     for attempt in range(1, tries + 1):
         for base in _BINANCE_FAPI_BASES:
@@ -172,23 +159,26 @@ def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
             try:
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True, follow_redirects=False) as client:
                     r = client.get(url, params={"symbol": sym}, headers=headers)
-                if r.status_code != 200:
-                    if (300 <= r.status_code < 400) or (r.status_code in _RETRY_STATUSES):
-                        last_err = f"HTTP {r.status_code} from {base}"
-                        continue
-                    raise RuntimeError(f"HTTP {r.status_code} from {base}: {r.text[:200]}")
-                ct = (r.headers.get("Content-Type") or "")
-                body = r.text or ""
-                if ("application/json" not in ct) or (not _looks_like_json(body)):
-                    last_err = f"Non-JSON from {base}: {ct} / {body[:120]}"
-                    continue
-                data = r.json()
-                if not isinstance(data, dict) or "markPrice" not in data:
-                    raise RuntimeError(f"JSON missing markPrice from {base}: {body[:200]}")
-                return data
+
+                if r.status_code == 200 and "application/json" in (r.headers.get("Content-Type") or ""):
+                    data = r.json()
+                    if isinstance(data, dict) and "markPrice" in data:
+                        return data
+
+                last_err = f"HTTP {r.status_code} from {base} / {r.text[:80]}"
+
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
         time.sleep(0.35 * attempt)
+
+    # fallback ל־WS גם אם REST נכשל
+    try:
+        from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
+        rec = LAST_PRICE_CACHE.get(sym)
+        if rec and "price" in rec:
+            return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
+    except Exception:
+        pass
 
     raise RuntimeError(f"[Binance] futures_mark_price_dict({sym}) failed after {tries} tries: {last_err}")
 
@@ -199,6 +189,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
