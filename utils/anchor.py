@@ -1,11 +1,13 @@
-# utils/btc_anchor.py
+# utils/anchor.py
 from __future__ import annotations
-import os, requests
-import pandas as pd
+import os
+import logging
 from dataclasses import dataclass
-from typing import Literal, List
+from typing import Literal, Tuple, List
 
 Side = Literal["LONG", "SHORT"]
+
+logger = logging.getLogger("algogpt.anchor")
 
 @dataclass
 class AnchorDecision:
@@ -17,92 +19,104 @@ class AnchorDecision:
     severity: str         # none / weak / strong
     reason: str           # הסבר
 
-FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+def _env_float(key: str, default: float) -> float:
+    v = os.getenv(key, "")
+    v = v.strip() if isinstance(v, str) else ""
+    try:
+        return float(v) if v else default
+    except Exception:
+        return default
 
-# --- אינדיקטורים ---
-def rsi(series: pd.Series, period: int = 14) -> float:
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0.0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0.0).rolling(period).mean()
-    rs = gain / (loss + 1e-9)
-    return float(100 - (100 / (1 + rs.iloc[-1])))
+def _env_list(key: str, default: str) -> List[str]:
+    raw = os.getenv(key, default) or default
+    return [x.strip() for x in str(raw).split(",") if str(x).strip()]
 
-def ema(series: pd.Series, span: int) -> float:
-    return float(series.ewm(span=span).mean().iloc[-1])
+def _get_anchor_mode() -> str:
+    mode = (os.getenv("BTC_ANCHOR_MODE", "") or "").strip().lower()
+    if not mode:
+        enforce = (os.getenv("BTC_ANCHOR_ENFORCE", "false") or "").strip().lower() == "true"
+        return "hard" if enforce else "soft"
+    return mode if mode in {"off", "soft", "hard"} else "soft"
 
-def adx(df: pd.DataFrame, period: int = 14) -> float:
-    high, low, close = df["high"], df["low"], df["close"]
-    plus_dm = (high.diff().clip(lower=0)).fillna(0)
-    minus_dm = (-low.diff().clip(upper=0)).fillna(0)
-    tr = (high.combine(close.shift(), max) - low.combine(close.shift(), min)).fillna(0)
-    atr = tr.rolling(period).mean()
-    plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
-    minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
-    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di)).fillna(0)
-    return float(dx.rolling(period).mean().iloc[-1])
-
-# --- Fetch ---
-def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-    url = f"{FUTURES_BASE}/fapi/v1/klines"
-    r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=10)
-    r.raise_for_status()
-    arr = r.json()
-    if not arr:
-        return pd.DataFrame()
-    cols = ["open_time","open","high","low","close","volume","close_time",
-            "qv","nTrades","taker_base","taker_quote","x"]
-    df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
-    for c in ("open","high","low","close"):
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df[["open","high","low","close"]]
-
-# --- Evaluate BTC Anchor ---
-def evaluate_anchor(side: Side) -> AnchorDecision:
-    frames = (os.getenv("BTC_ANCHOR_FRAMES", "15m,1h,4h").split(","))
-    mode_req = (os.getenv("BTC_ANCHOR_MODE", "soft")).lower()
-    strong_th = float(os.getenv("BTC_ANCHOR_STRONG_TH", 70))
-    weak_th   = float(os.getenv("BTC_ANCHOR_WEAK_TH", 55))
-
-    votes = []
-    for tf in frames:
+def _get_anchor_reading() -> Tuple[str, float]:
+    """
+    כאן אפשר להחליף בעתיד למימוש אמיתי שמחשב RSI/EMA על BTCUSDT.
+    כרגע: אם מוגדר BTC_ANCHOR_FORCE → נשתמש בו.
+    """
+    forced = (os.getenv("BTC_ANCHOR_FORCE", "") or "").strip().lower()
+    if forced:
         try:
-            df = fetch_klines("BTCUSDT", tf, limit=200)
-            if df.empty: 
-                continue
-            r = rsi(df["close"])
-            e21 = ema(df["close"], 21)
-            e50 = ema(df["close"], 50)
-            adx_val = adx(df)
-
-            bias = "bull" if (r > 55 and e21 > e50) else "bear" if (r < 45 and e21 < e50) else "neutral"
-            score = 60 if bias != "neutral" else 50
-            if adx_val > 25:
-                score += 15
-            votes.append((bias, score))
+            if ":" in forced:
+                b, s = forced.split(":", 1)
+                bias = b.strip()
+                score = float(s.strip())
+            else:
+                bias = forced
+                score = 0.0
+            if bias not in {"bull", "bear", "neutral"}:
+                bias = "neutral"
+            score = max(0.0, min(100.0, score))
+            return bias, score
         except Exception:
-            continue
+            return "neutral", 0.0
+    return "neutral", 0.0
 
-    if not votes:
-        return AnchorDecision(mode_req, mode_req, "neutral", 0.0, True, "none", "no BTC data")
+def evaluate_anchor(side: Side) -> AnchorDecision:
+    mode_req = _get_anchor_mode()  # off / soft / hard
+    frames = _env_list("BTC_ANCHOR_FRAMES", "15m,1h")
+    strong_th = _env_float("BTC_ANCHOR_STRONG_TH", 70.0)
+    weak_th   = _env_float("BTC_ANCHOR_WEAK_TH",   55.0)
 
-    bull_votes = sum(1 for b, _ in votes if b == "bull")
-    bear_votes = sum(1 for b, _ in votes if b == "bear")
-    bias = "bull" if bull_votes > bear_votes else "bear" if bear_votes > bull_votes else "neutral"
-    score = sum(s for _, s in votes) / len(votes)
-
+    bias, score = _get_anchor_reading()
     conflict = ((side == "LONG" and bias == "bear") or (side == "SHORT" and bias == "bull"))
 
     if mode_req == "off":
-        return AnchorDecision("off", "off", bias, score, True, "none", "Anchor disabled")
+        decision = AnchorDecision("off", "off", bias, score, True, "none", "Anchor disabled")
+    elif bias == "neutral" or score <= weak_th:
+        decision = AnchorDecision(
+            mode_req, mode_req, bias, score, True,
+            "none" if bias == "neutral" else "weak",
+            f"Anchor {bias} ({score:.1f}) on frames {frames}; no strong conflict"
+        )
+    elif conflict:
+        if score >= strong_th:
+            decision = AnchorDecision(
+                mode_req, "hard", bias, score, False, "strong",
+                f"Strong conflict with BTC anchor ({bias} {score:.1f}≥{strong_th}); HARD block"
+            )
+        elif mode_req == "hard":
+            decision = AnchorDecision(
+                "hard", "hard", bias, score, False, "weak",
+                f"Conflict with BTC anchor ({bias} {score:.1f}); HARD mode blocks"
+            )
+        else:
+            decision = AnchorDecision(
+                "soft", "soft", bias, score, True, "weak",
+                f"Conflict with BTC anchor ({bias} {score:.1f}); SOFT mode allows with warning"
+            )
+    else:
+        decision = AnchorDecision(
+            mode_req, mode_req, bias, score, True, "none",
+            f"Aligned with BTC anchor ({bias} {score:.1f})"
+        )
 
-    if conflict and score >= strong_th:
-        return AnchorDecision(mode_req, "hard", bias, score, False, "strong", f"Strong {bias} anchor ({score:.1f}) blocks")
-    if conflict and mode_req == "hard":
-        return AnchorDecision("hard", "hard", bias, score, False, "weak", f"Conflict {bias} anchor ({score:.1f}) - hard block")
-    if conflict:
-        return AnchorDecision("soft", "soft", bias, score, True, "weak", f"Conflict {bias} anchor ({score:.1f}) - soft allow")
+    # ✅ Structured JSON log
+    logger.info({
+        "event": "anchor_decision",
+        "side": side,
+        "mode_requested": decision.mode_requested,
+        "mode_applied": decision.mode_applied,
+        "bias": decision.bias,
+        "score": decision.score,
+        "allow": decision.allow,
+        "severity": decision.severity,
+        "reason": decision.reason,
+    })
 
-    return AnchorDecision(mode_req, mode_req, bias, score, True, "none", f"Aligned BTC anchor {bias} ({score:.1f})")
+    return decision
+
+__all__ = ["AnchorDecision", "evaluate_anchor"]
+
 
 
 
