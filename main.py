@@ -153,9 +153,13 @@ async def startup_event():
     if redis_client:
         logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
 
-    # ✅ Start auto price updater from watchlist
+    # ✅ Start auto price updater from watchlist (BTCUSDT always included)
     watchlist = load_watchlist()
     symbols = [it["symbol"] for it in watchlist]
+    if "BTCUSDT" not in [s.upper() for s in symbols]:
+        symbols.insert(0, "BTCUSDT")
+        logger.info({"event": "watchlist", "msg": "BTCUSDT enforced as anchor"})
+
     updater_interval = int(os.getenv("WS_UPDATE_INTERVAL", 15))
     asyncio.create_task(auto_price_updater(symbols, interval=updater_interval))
     logger.info({
@@ -219,6 +223,7 @@ async def debug_health(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
