@@ -1,32 +1,49 @@
-# utils/response_limits.py
 from __future__ import annotations
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
-from typing import Optional
+import io, json
+from starlette.types import ASGIApp, Scope, Receive, Send
 
-class ResponseSizeLimiter(BaseHTTPMiddleware):
-    def __init__(self, app, max_bytes: int = 2_097_152):  # 2MB במקום 1MB
-        super().__init__(app)
-        self.max_bytes = int(max_bytes)
+class ResponseSizeLimiter:
+    def __init__(self, app: ASGIApp, max_bytes: int = 1_048_576):
+        self.app = app
+        self.max_bytes = max_bytes
 
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        try:
-            cl = response.headers.get("content-length")
-            size: Optional[int] = int(cl) if cl and cl.isdigit() else None
-            if size and size > self.max_bytes:
-                return JSONResponse(
-                    {"detail": "Response too large",
-                     "max_bytes": self.max_bytes,
-                     "size": size,
-                     "hint": "Use compact=1&fields=..."},
-                    status_code=413,
-                )
-            response.headers["X-Response-Limit"] = str(self.max_bytes)
-            if size: response.headers["X-Response-Size"] = str(size)
-        except Exception:
-            pass
-        return response
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        buffer = io.BytesIO()
+        started = {"done": False}
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                return
+            if message["type"] == "http.response.body":
+                chunk = message.get("body", b"") or b""
+                buffer.write(chunk)
+                if message.get("more_body", False):
+                    if buffer.tell() > self.max_bytes:
+                        await _send_413(send, self.max_bytes)
+                        started["done"] = True
+                    return
+                if buffer.tell() > self.max_bytes:
+                    await _send_413(send, self.max_bytes)
+                    started["done"] = True
+                    return
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": buffer.getvalue()})
+                started["done"] = True
+                return
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+async def _send_413(send: Send, max_bytes: int):
+    data = json.dumps({"detail": "Response too large", "max_bytes": max_bytes}).encode()
+    headers = [(b"content-type", b"application/json")]
+    await send({"type": "http.response.start", "status": 413, "headers": headers})
+    await send({"type": "http.response.body", "body": data})
+
 
 
 
