@@ -1,142 +1,89 @@
-# routes/executor.py
-from __future__ import annotations
-from typing import Optional, List
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
-from datetime import datetime, timezone
+# utils/binance_trader.py (with Fail-Safe Cancel + Force Close)
+import os
+import asyncio
+import logging
+from decimal import Decimal, ROUND_DOWN, getcontext
+from typing import Optional, Dict, Any, Tuple, Literal
 
-try:
-    from utils.auth import require_bearer_token
-except Exception:
-    def require_bearer_token():
-        return None
+from utils import config
+from utils.binance_client import get_client, retry_call, futures_exchange_info_safe
 
-from utils.auto_executor import (
-    is_executor_running,
-    start_executor,
-    stop_executor,
-    EXECUTOR_SYMBOLS,
-    EXECUTOR_LAST_TS,
-    EXECUTOR_LOGS,
-    EXECUTOR_TRADES,
-)
-from utils.watchlist_utils import load_watchlist
-from utils.binance_client import futures_open_positions
-from utils.binance_trader import force_close_position
+EXECUTE_TRADES = bool(getattr(config, "EXECUTE_TRADES", False))
+BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV = str(
+    getattr(config, "BINANCE_SKIP_ACCOUNT_MUTATIONS",
+            os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS", "true"))
+).lower() in ("1", "true", "yes", "y", "on")
+SKIP_MUTATIONS = (not EXECUTE_TRADES) or BINANCE_SKIP_ACCOUNT_MUTATIONS_ENV
 
-router = APIRouter(tags=["Executor"], dependencies=[Depends(require_bearer_token)])
+FORCE_HEDGE   = (str(getattr(config, "BINANCE_FORCE_HEDGE_MODE",
+                              os.getenv("BINANCE_FORCE_HEDGE_MODE", "false"))).lower() == "true")
+MAX_LEVERAGE  = int(getattr(config, "MAX_LEVERAGE", os.getenv("MAX_LEVERAGE", "35")))
 
-# =====================
-# Models
-# =====================
-class ExecutorStatus(BaseModel):
-    ok: bool = True
-    running: bool
-    last_ts: Optional[str] = None
+getcontext().prec = 28
+log = logging.getLogger(__name__)
 
-class ExecutorActionResponse(BaseModel):
-    ok: bool
-    status: Optional[str] = None
-    error: Optional[str] = None
+MarginLiteral = Literal["ISOLATED", "CROSSED"]
 
-class ExecutorSymbolsResponse(BaseModel):
-    ok: bool = True
-    count: int
-    symbols: List[str]
-    last_ts: Optional[str] = None
-
-class ExecutorLogsResponse(BaseModel):
-    ok: bool = True
-    count: int
-    logs: List[dict]
-
-class ExecutorTradesResponse(BaseModel):
-    ok: bool = True
-    count: int
-    trades: List[dict]
-
-class ExecutorPositionsResponse(BaseModel):
-    ok: bool = True
-    count: int
-    positions: List[dict]
-    error: Optional[str] = None
-
-# =====================
-# Endpoints
-# =====================
-@router.get("/executor/status", response_model=ExecutorStatus)
-def executor_status() -> ExecutorStatus:
-    running = bool(is_executor_running())
-    last_ts = (
-        datetime.fromtimestamp(EXECUTOR_LAST_TS, tz=timezone.utc).isoformat()
-        if EXECUTOR_LAST_TS
-        else None
-    )
-    return ExecutorStatus(ok=True, running=running, last_ts=last_ts)
-
-@router.post("/executor/start", response_model=ExecutorActionResponse)
-async def executor_start() -> ExecutorActionResponse:
+# ------------------------------------------------------------
+# Safety helper: cancel all orders for a symbol
+# ------------------------------------------------------------
+def _cancel_all_orders(client, symbol: str) -> None:
     try:
-        if is_executor_running():
-            return ExecutorActionResponse(ok=True, status="already_running")
-        start_executor()
-        return ExecutorActionResponse(ok=True, status="started")
+        resp = retry_call(lambda: client.futures_cancel_all_open_orders(symbol=symbol.upper()),
+                          f"cancel_all_orders({symbol})")
+        logging.warning(f"[TRADER] All open orders for {symbol} canceled: {resp}")
     except Exception as e:
-        return ExecutorActionResponse(ok=False, error=str(e))
+        logging.error(f"[TRADER] cancel_all_orders failed for {symbol}: {e}")
 
-@router.post("/executor/stop", response_model=ExecutorActionResponse)
-async def executor_stop() -> ExecutorActionResponse:
-    try:
-        if not is_executor_running():
-            return ExecutorActionResponse(ok=True, status="already_stopped")
-        stop_executor()
-        return ExecutorActionResponse(ok=True, status="stopped")
-    except Exception as e:
-        return ExecutorActionResponse(ok=False, error=str(e))
-
-@router.get("/executor/symbols", response_model=ExecutorSymbolsResponse)
-def executor_symbols() -> ExecutorSymbolsResponse:
-    if EXECUTOR_SYMBOLS:
-        symbols = EXECUTOR_SYMBOLS
-    else:
-        watchlist = load_watchlist()
-        symbols = [it["symbol"].upper() for it in watchlist]
-        if "BTCUSDT" not in symbols:
-            symbols.insert(0, "BTCUSDT")
-
-    last_ts = (
-        datetime.fromtimestamp(EXECUTOR_LAST_TS, tz=timezone.utc).isoformat()
-        if EXECUTOR_LAST_TS
-        else None
-    )
-
-    return ExecutorSymbolsResponse(ok=True, count=len(symbols), symbols=symbols, last_ts=last_ts)
-
-@router.get("/executor/logs", response_model=ExecutorLogsResponse)
-def executor_logs(limit: int = Query(50, ge=1, le=200)) -> ExecutorLogsResponse:
-    logs = list(EXECUTOR_LOGS)[-limit:]
-    return ExecutorLogsResponse(ok=True, count=len(logs), logs=logs)
-
-@router.get("/executor/trades", response_model=ExecutorTradesResponse)
-def executor_trades(limit: int = Query(50, ge=1, le=200)) -> ExecutorTradesResponse:
-    trades = list(EXECUTOR_TRADES)[-limit:]
-    return ExecutorTradesResponse(ok=True, count=len(trades), trades=trades)
-
-@router.get("/executor/open_positions", response_model=ExecutorPositionsResponse)
-def executor_open_positions() -> ExecutorPositionsResponse:
-    try:
-        positions = futures_open_positions()
-        return ExecutorPositionsResponse(ok=True, count=len(positions), positions=positions)
-    except Exception as e:
-        return ExecutorPositionsResponse(ok=False, count=0, positions=[], error=str(e))
-
-# 🔴 NEW: Force Close Endpoint
-@router.post("/executor/force_close", response_model=dict)
-def executor_force_close(symbol: str):
+# ------------------------------------------------------------
+# Force Close Position (Panic Button)
+# ------------------------------------------------------------
+def force_close_position(symbol: str) -> dict:
     """
-    סוגר בכוח פוזיציה פתוחה בסימבול מסוים.
+    סוגר מיידית את כל הפוזיציות הפתוחות על סימבול מסוים (Market Order).
+    שימושי כ-Fail-Safe / Panic Button.
     """
-    return force_close_position(symbol)
+    client = get_client()
+    try:
+        positions = retry_call(
+            lambda: client.futures_position_information(symbol=symbol.upper()),
+            f"pos_info({symbol})"
+        )
+        if not positions or float(positions[0].get("positionAmt", 0)) == 0:
+            return {"ok": True, "msg": f"No open position for {symbol}"}
+
+        pos = positions[0]
+        amt = float(pos["positionAmt"])
+        if amt == 0:
+            return {"ok": True, "msg": f"No open position for {symbol}"}
+
+        side = "SELL" if amt > 0 else "BUY"
+        qty_s = str(abs(amt))
+
+        resp = retry_call(
+            lambda: client.futures_create_order(
+                symbol=symbol.upper(),
+                side=side,
+                type="MARKET",
+                quantity=qty_s,
+                reduceOnly=True,
+                newOrderRespType="RESULT",
+            ),
+            f"force_close({symbol})"
+        )
+
+        logging.warning(f"[FORCE_CLOSE] Closed {amt} {symbol} side={side} resp={resp}")
+        return {"ok": True, "resp": resp}
+
+    except Exception as e:
+        logging.error(f"[FORCE_CLOSE] failed for {symbol}: {e}")
+        return {"ok": False, "error": str(e)}
+
+# ------------------------------------------------------------
+# כאן באות כל פונקציות העזר שלך (_find_symbol_info, _apply_price_tick וכו')
+# וגם הפונקציה הראשית binance_futures_trade (כמו אצלך עם Fail-Safe)
+# ------------------------------------------------------------
+
 
 
 
