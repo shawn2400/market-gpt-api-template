@@ -1,45 +1,66 @@
 # utils/cache_fallback.py
 from __future__ import annotations
-import time
-import asyncio
-from typing import Any, Dict, Tuple
+import logging
+from utils import cache
+from utils.redis_client import redis_client
 
-class InMemoryCache:
-    def __init__(self):
-        self._store: Dict[str, Tuple[float, Any]] = {}
-        self._lock = asyncio.Lock()
+logger = logging.getLogger("algogpt.cache_fallback")
 
-    async def set(self, key: str, value: Any, ttl: int = 60):
-        expire = time.time() + ttl
-        async with self._lock:
-            self._store[key] = (expire, value)
+# --- API אחיד ל־Redis או In-Memory ---
 
-    async def get(self, key: str) -> Any | None:
-        now = time.time()
-        async with self._lock:
-            hit = self._store.get(key)
-            if hit and hit[0] > now:
-                return hit[1]
-            if hit:
-                self._store.pop(key, None)
-        return None
+async def set_value(key: str, value: str, expire: int | None = None) -> bool:
+    if redis_client:
+        try:
+            redis_client.set(key, value, ex=expire)
+            return True
+        except Exception as e:
+            logger.error(f"[CacheFallback] Redis set error: {e}")
+    # fallback
+    await cache.aget_or_set(key, expire or 60, lambda: value)
+    return True
 
-    async def lpush(self, key: str, value: Any):
-        async with self._lock:
-            arr = self._store.get(key, (float("inf"), []))[1]
-            if not isinstance(arr, list):
-                arr = []
-            arr.insert(0, value)
-            self._store[key] = (float("inf"), arr)
 
-    async def ltrim(self, key: str, start: int, end: int):
-        async with self._lock:
-            arr = self._store.get(key, (float("inf"), []))[1]
-            if isinstance(arr, list):
-                self._store[key] = (float("inf"), arr[start:end+1])
+async def get_value(key: str):
+    if redis_client:
+        try:
+            return redis_client.get(key)
+        except Exception as e:
+            logger.error(f"[CacheFallback] Redis get error: {e}")
+    return await cache.aget_or_set(key, 0, lambda: None)
 
-    async def ping(self) -> bool:
-        return True  # תמיד זמין
 
-# ✅ singleton
-in_memory_cache = InMemoryCache()
+async def delete_value(key: str) -> bool:
+    if redis_client:
+        try:
+            redis_client.delete(key)
+            return True
+        except Exception as e:
+            logger.error(f"[CacheFallback] Redis delete error: {e}")
+    return True
+
+
+async def lpush(key: str, value: str):
+    if redis_client:
+        try:
+            redis_client.lpush(key, value)
+            return
+        except Exception as e:
+            logger.error(f"[CacheFallback] Redis lpush error: {e}")
+    existing = await cache.aget_or_set(key, 3600, lambda: [])
+    if isinstance(existing, list):
+        existing.insert(0, value)
+        await cache.aget_or_set(key, 3600, lambda: existing)
+
+
+async def ltrim(key: str, start: int, end: int):
+    if redis_client:
+        try:
+            redis_client.ltrim(key, start, end)
+            return
+        except Exception as e:
+            logger.error(f"[CacheFallback] Redis ltrim error: {e}")
+    existing = await cache.aget_or_set(key, 3600, lambda: [])
+    if isinstance(existing, list):
+        new_list = existing[start:end+1]
+        await cache.aget_or_set(key, 3600, lambda: new_list)
+
