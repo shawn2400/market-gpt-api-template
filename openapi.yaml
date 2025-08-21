@@ -3,10 +3,11 @@ jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 
 info:
   title: AlgoGPT API
-  version: 2.14.3
-  description: >
-    AlgoGPT — מסחר אלגוריתמי בזמן אמת ב-Binance (Futures/Spot).
-    כולל: Scan / AI / Trades / Backtest / News / Grid / Risk / Indicators / Analytics.
+  version: 2.14.6
+  description: |
+    AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
+    כולל: Scan / AI / Trades / Backtest / News / Grid / Risk / Indicators / Analytics / PnL / Anchor.
+    ⚠️ נדרשת הזדהות עם Bearer Token (למעט /health ו־/debug).
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -14,6 +15,7 @@ servers:
 
 tags:
   - name: Config
+  - name: Health
   - name: Debug
   - name: Grid
   - name: Scan
@@ -23,12 +25,15 @@ tags:
   - name: Indicators
   - name: Analytics
   - name: News
-  - name: Health
   - name: Dashboard
   - name: Risk
   - name: Snapshots
   - name: PnL
   - name: Strategy
+  - name: Orders
+  - name: Anchor
+  - name: Price
+  - name: Market
 
 security:
   - HTTPBearer: []
@@ -49,48 +54,27 @@ components:
       type: object
       properties:
         status: { type: string, example: ok }
-        version: { type: string, example: 2.14.3 }
-
-    MetricsResponse:
-      type: object
-      properties:
-        boot_ts: { type: integer }
-        uptime_sec: { type: integer }
-
-    RoutesList:
-      type: object
-      properties:
-        count: { type: integer, example: 25 }
-        routes:
-          type: array
-          items:
-            type: object
-            properties:
-              path: { type: string, example: /grid/status }
-              methods: { type: array, items: { type: string } }
+        version: { type: string, example: 2.14.6 }
 
     GridStatus:
       type: object
       properties:
-        ok: { type: boolean }
-        active: { type: boolean }
+        id: { type: string }
         symbol: { type: string }
-        orders:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        params:
-          type: object
-          additionalProperties: true
+        levels: { type: integer }
+        allocated: { type: number }
+        profit_pct: { type: number }
+        active: { type: boolean }
 
-    ScanInfo:
+    GridListResponse:
       type: object
       properties:
         ok: { type: boolean }
-        now_utc: { type: string }
-        executor_running: { type: boolean }
-        config: { type: object }
+        count_total: { type: integer }
+        returned: { type: integer }
+        grids:
+          type: array
+          items: { $ref: "#/components/schemas/GridStatus" }
 
     ScanSignal:
       type: object
@@ -118,14 +102,6 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/ScanSignal" }
-
-    AiHealthResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        model: { type: string }
-        latency_ms: { type: number }
-        error: { type: string }
 
     AiQualityRequest:
       type: object
@@ -186,7 +162,6 @@ components:
 
     GenericResponse:
       type: object
-      description: "Generic dynamic response (fallback)"
       properties: {}
       additionalProperties: true
 
@@ -233,17 +208,79 @@ paths:
                 properties:
                   status: { type: string, example: live }
 
-  /grid/status:
-    get:
-      tags: [Grid]
-      summary: Grid status
-      operationId: getGridStatus
+  /debug/headers:
+    post:
+      tags: [Debug]
+      summary: Echo request headers/body
+      operationId: postDebugHeaders
+      security: []
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GridStatus" }
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /debug/health:
+    get:
+      tags: [Debug]
+      summary: Get recent logs
+      operationId: getDebugHealth
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: level
+          schema: { type: string }
+        - in: query
+          name: logger_name
+          schema: { type: string }
+      security: []
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /grid/status:
+    get:
+      tags: [Grid]
+      summary: Grid status list
+      operationId: getGridStatus
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, minimum: 10, maximum: 200 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GridListResponse" }
+
+  /grid/active:
+    get:
+      tags: [Grid]
+      summary: Active grids only
+      operationId: getGridActive
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, minimum: 10, maximum: 200 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GridListResponse" }
 
   /grid/start:
     post:
@@ -273,7 +310,7 @@ paths:
     post:
       tags: [Trades]
       summary: Open new trade
-      operationId: postOpenTrade
+      operationId: postTrade
       requestBody:
         required: true
         content:
@@ -318,7 +355,7 @@ paths:
   /pnl/report:
     get:
       tags: [PnL]
-      summary: Generate PnL PDF report
+      summary: Generate PnL PDF report (base64)
       operationId: getPnlReport
       responses:
         "200":
@@ -338,6 +375,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
+
 
 
 
