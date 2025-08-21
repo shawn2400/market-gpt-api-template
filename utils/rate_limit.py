@@ -1,52 +1,54 @@
 # utils/rate_limit.py
 from __future__ import annotations
 import time
-from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from utils.redis_client import redis_client
+from typing import Dict, Tuple
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    Rate-limit לפי IP (ברירת מחדל: 60 בקשות ב־60 שניות).
-    אם יש Redis → משתמש בו (Distributed). אחרת In-Memory Fallback.
+    Middleware שמטיל rate limit גלובלי + פר־endpoint לפי IP.
+    limit = מספר בקשות, window = שניות
     """
 
-    def __init__(self, app, limit: int = 60, window: int = 60):
+    def __init__(self, app, limit: int = 60, window: int = 60,
+                 endpoint_limits: Dict[str, Tuple[int,int]] | None = None):
         super().__init__(app)
         self.limit = limit
         self.window = window
-        self._memory_hits: dict[str, tuple[int, int]] = {}  # ip -> (reset_ts, count)
+        # endpoint_limits = {"/backtest": (10,60), "/health": (300,60)}
+        self.endpoint_limits = endpoint_limits or {}
+        # store: {(ip, path): [timestamps]}
+        self.requests: Dict[Tuple[str,str], list[float]] = {}
 
-    async def dispatch(self, request: Request, call_next):
-        ip = request.client.host
-        now = int(time.time())
+    async def dispatch(self, request, call_next):
+        ip = request.client.host if request.client else "unknown"
+        path = request.url.path
 
-        # --- Redis-based (shared across workers)
-        if redis_client:
-            key = f"ratelimit:{ip}"
-            pipe = redis_client.pipeline()
-            pipe.incr(key, 1)
-            pipe.expire(key, self.window)
-            count, _ = pipe.execute()
-            if int(count) > self.limit:
-                return JSONResponse(
-                    {"detail": "Rate limit exceeded", "ip": ip, "limit": self.limit, "window": self.window},
-                    status_code=429
-                )
-            return await call_next(request)
+        # ✅ בדיקת limit פר־endpoint אם מוגדר
+        limit, window = self.endpoint_limits.get(path, (self.limit, self.window))
 
-        # --- In-memory fallback (single worker)
-        reset, count = self._memory_hits.get(ip, (now + self.window, 0))
-        if now > reset:
-            reset, count = now + self.window, 0
-        count += 1
-        self._memory_hits[ip] = (reset, count)
+        now = time.monotonic()
+        key = (ip, path)
+        hits = self.requests.get(key, [])
 
-        if count > self.limit:
+        # מסננים hits ישנים מחוץ ל־window
+        hits = [t for t in hits if now - t < window]
+
+        if len(hits) >= limit:
             return JSONResponse(
-                {"detail": "Rate limit exceeded", "ip": ip, "limit": self.limit, "window": self.window},
+                {"detail": f"Rate limit exceeded ({limit}/{window}s)", "path": path},
                 status_code=429
             )
 
-        return await call_next(request)
+        # מוסיפים את ה־hit הנוכחי
+        hits.append(now)
+        self.requests[key] = hits
+
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(limit)
+        response.headers["X-RateLimit-Remaining"] = str(max(0, limit - len(hits)))
+        response.headers["X-RateLimit-Window"] = str(window)
+        return response
+
+
