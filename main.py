@@ -114,24 +114,27 @@ app.include_router(market_router, tags=["Market"])
 app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
 app.include_router(utils_router, tags=["Utils"])
 
+
 # --- Price Monitor Loop (LIVE) ---
 async def price_monitor_loop(interval: int = 30):
     """
-    מושך מחירים מ-Binance כל X שניות לכל הסימבולים שנמצאים ב-Cache
+    מושך מחירים מ-Binance כל X שניות לכל הסימבולים שכבר ב-Cache
     """
     while True:
         try:
             now = datetime.now(timezone.utc).isoformat()
             for sym in list(LAST_PRICE_CACHE.keys()):
                 try:
-                    price = futures_mark_price(sym)
-                    update_price(sym, price)
-                    logger.info({
-                        "event": "price_monitor",
-                        "symbol": sym,
-                        "price": price,
-                        "time": now
-                    })
+                    data = futures_mark_price(sym)
+                    price = float(data["markPrice"]) if isinstance(data, dict) and "markPrice" in data else None
+                    if price:
+                        update_price(sym, price)
+                        logger.info({
+                            "event": "price_monitor",
+                            "symbol": sym,
+                            "price": price,
+                            "time": now
+                        })
                 except Exception as e:
                     logger.error({
                         "event": "price_monitor_error",
@@ -143,6 +146,7 @@ async def price_monitor_loop(interval: int = 30):
 
         await asyncio.sleep(interval)
 
+
 # --- Startup tasks ---
 @app.on_event("startup")
 async def startup_event():
@@ -152,16 +156,17 @@ async def startup_event():
     # ✅ Start auto price updater from watchlist
     watchlist = load_watchlist()
     symbols = [it["symbol"] for it in watchlist]
-    interval = int(os.getenv("WS_UPDATE_INTERVAL", 15))
-    asyncio.create_task(auto_price_updater(symbols, interval=interval))
+    updater_interval = int(os.getenv("WS_UPDATE_INTERVAL", 15))
+    asyncio.create_task(auto_price_updater(symbols, interval=updater_interval))
     logger.info({
         "event": "startup",
-        "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {interval}s"
+        "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {updater_interval}s"
     })
 
-    # ✅ Start price monitor loop
-    asyncio.create_task(price_monitor_loop(interval=30))
-    logger.info({"event": "startup", "msg": "✅ Price monitor loop started"})
+    # ✅ Start price monitor loop (interval configurable)
+    monitor_interval = int(os.getenv("PRICE_MONITOR_INTERVAL", 30))
+    asyncio.create_task(price_monitor_loop(interval=monitor_interval))
+    logger.info({"event": "startup", "msg": f"✅ Price monitor loop started (interval={monitor_interval}s)"})
 
 
 # --- Root / Status ---
@@ -214,6 +219,7 @@ async def debug_health(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
