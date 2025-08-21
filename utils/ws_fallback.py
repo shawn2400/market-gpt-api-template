@@ -9,6 +9,9 @@ logger = logging.getLogger("algogpt.ws")
 
 
 def update_price(symbol: str, price: float) -> None:
+    """
+    עדכון מחיר ב־Cache עם timestamp נוכחי
+    """
     LAST_PRICE_CACHE[symbol.upper()] = {
         "price": price,
         "ts": time.time()
@@ -16,20 +19,20 @@ def update_price(symbol: str, price: float) -> None:
 
 
 def get_price(symbol: str) -> float | None:
+    """
+    החזרת מחיר עדכני מה־Cache
+    """
     return LAST_PRICE_CACHE.get(symbol.upper(), {}).get("price")
 
 
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
+    """
+    בדיקה אם מחיר סימבול עדיין טרי (לא ישן יותר מ־max_age_sec)
+    """
     info = LAST_PRICE_CACHE.get(symbol.upper())
     if not info:
         return False
     return (time.time() - info.get("ts", 0)) <= max_age_sec
-
-
-# 🔧 פונקציה בסיסית לשמירה על תאימות
-async def price_monitor_loop():
-    while True:
-        await asyncio.sleep(60)  # כרגע לא עושה כלום, רק משאיר loop פעיל
 
 
 # ✅ WS Auto Updater עם age_sec בלוג
