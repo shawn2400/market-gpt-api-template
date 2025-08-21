@@ -22,7 +22,6 @@ from utils.config import (
 )
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
-from utils.ws_fallback import auto_price_updater, LAST_PRICE_CACHE, update_price
 from utils.watchlist_utils import load_watchlist
 from utils.binance_client import futures_mark_price
 from utils.anchor import evaluate_anchor
@@ -37,7 +36,7 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.6")
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 500))
+LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
 LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
 
 class MemoryLogHandler(logging.Handler):
@@ -51,12 +50,8 @@ class MemoryLogHandler(logging.Handler):
 logger.addHandler(MemoryLogHandler())
 
 # --- Config check ---
-try:
-    check_config()
-    logger.info({"event": "config_snapshot", **dump_config_sanitized()})
-except Exception as e:
-    logger.error({"event": "config_error", "error": str(e)})
-    raise
+check_config()
+logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
 # --- FastAPI ---
 app = FastAPI(
@@ -109,6 +104,41 @@ for r, p, t in protected_routers:
 
 # Debug router פתוח
 app.include_router(debug_router, prefix="/debug", tags=["Debug"])
+
+# --- Self-contained Price Cache ---
+LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
+
+def update_price(symbol: str, price: float) -> None:
+    if not price:
+        return
+    LAST_PRICE_CACHE[symbol.upper()] = {"price": price, "ts": time.time()}
+
+def get_price(symbol: str) -> float | None:
+    return LAST_PRICE_CACHE.get(symbol.upper(), {}).get("price")
+
+def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
+    info = LAST_PRICE_CACHE.get(symbol.upper())
+    return bool(info and (time.time() - info.get("ts", 0)) <= max_age_sec)
+
+async def auto_price_updater(symbols: list[str], interval: int = WS_UPDATE_INTERVAL):
+    while True:
+        now = time.time()
+        for sym in symbols:
+            try:
+                price = futures_mark_price(sym)
+                prev_ts = LAST_PRICE_CACHE.get(sym.upper(), {}).get("ts")
+                age_sec = round(now - prev_ts, 2) if prev_ts else None
+                if price and price > 0:
+                    update_price(sym, price)
+                    logger.info({
+                        "event": "price_update",
+                        "symbol": sym,
+                        "price": price,
+                        "age_sec": age_sec
+                    })
+            except Exception as e:
+                logger.error({"event": "price_update_error", "symbol": sym, "error": str(e)})
+        await asyncio.sleep(interval)
 
 # --- Background tasks ---
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
@@ -177,19 +207,21 @@ async def startup_event():
         symbols = [it["symbol"] for it in watchlist]
         if "BTCUSDT" not in [s.upper() for s in symbols]:
             symbols.insert(0, "BTCUSDT")
+
+        # ✅ רץ מתוך main.py, Self-contained
         asyncio.create_task(auto_price_updater(symbols, interval=WS_UPDATE_INTERVAL))
+
         if not PRICE_MONITOR_DISABLE:
             asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
         asyncio.create_task(anchor_snapshot_loop())
         asyncio.create_task(cache_cleaner())
-        logger.info({"event": "startup_ok", "symbols": symbols})
     except Exception as e:
         logger.error({"event": "startup_error", "error": str(e)})
 
 # --- Health / Status ---
 @app.get("/", tags=["Config"])
 async def root_status():
-    return {"status": "ok", "version": APP_VERSION, "config": dump_config_sanitized()}
+    return {"status": "ok", "version": APP_VERSION}
 
 @app.get("/health", tags=["Health"])
 async def health():
@@ -218,6 +250,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
