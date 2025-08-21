@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional, List
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from datetime import datetime, timezone
 
 try:
     from utils.auth import require_bearer_token
@@ -14,7 +15,8 @@ from utils.auto_executor import (
     is_executor_running,
     start_executor,
     stop_executor,
-    EXECUTOR_SYMBOLS,   # 🆕 מייבא את הרשימה הפעילה
+    EXECUTOR_SYMBOLS,
+    EXECUTOR_LAST_TS,   # ✅ timestamp אחרון
 )
 from utils.watchlist_utils import load_watchlist
 
@@ -25,6 +27,7 @@ router = APIRouter(tags=["Executor"], dependencies=[Depends(require_bearer_token
 class ExecutorStatus(BaseModel):
     ok: bool = True
     running: bool
+    last_ts: Optional[str] = None
 
 
 class ExecutorActionResponse(BaseModel):
@@ -37,12 +40,18 @@ class ExecutorSymbolsResponse(BaseModel):
     ok: bool = True
     count: int
     symbols: List[str]
+    last_ts: Optional[str] = None
 
 
 @router.get("/executor/status", response_model=ExecutorStatus)
 def executor_status() -> ExecutorStatus:
     running = bool(is_executor_running())
-    return ExecutorStatus(ok=True, running=running)
+    last_ts = (
+        datetime.fromtimestamp(EXECUTOR_LAST_TS, tz=timezone.utc).isoformat()
+        if EXECUTOR_LAST_TS
+        else None
+    )
+    return ExecutorStatus(ok=True, running=running, last_ts=last_ts)
 
 
 @router.post("/executor/start", response_model=ExecutorActionResponse)
@@ -69,19 +78,21 @@ async def executor_stop() -> ExecutorActionResponse:
 
 @router.get("/executor/symbols", response_model=ExecutorSymbolsResponse)
 def executor_symbols() -> ExecutorSymbolsResponse:
-    """
-    מחזיר את רשימת הסימבולים שה־Auto Executor באמת סורק כרגע (LIVE).
-    """
     if EXECUTOR_SYMBOLS:
         symbols = EXECUTOR_SYMBOLS
     else:
-        # fallback אם לא רץ
         watchlist = load_watchlist()
         symbols = [it["symbol"].upper() for it in watchlist]
         if "BTCUSDT" not in symbols:
             symbols.insert(0, "BTCUSDT")
 
-    return ExecutorSymbolsResponse(ok=True, count=len(symbols), symbols=symbols)
+    last_ts = (
+        datetime.fromtimestamp(EXECUTOR_LAST_TS, tz=timezone.utc).isoformat()
+        if EXECUTOR_LAST_TS
+        else None
+    )
+
+    return ExecutorSymbolsResponse(ok=True, count=len(symbols), symbols=symbols, last_ts=last_ts)
 
 
 
