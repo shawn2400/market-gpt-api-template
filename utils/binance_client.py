@@ -1,4 +1,3 @@
-# utils/binance_client.py
 from __future__ import annotations
 
 import os, time, logging
@@ -16,6 +15,7 @@ logger = logging.getLogger("algogpt.binance")
 BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
+PRICE_MONITOR_DISABLE = (os.getenv("PRICE_MONITOR_DISABLE", "false").strip().lower() in ("1", "true", "yes"))
 
 # בסיסי FAPI (עם רוטציה)
 _BINANCE_FAPI_BASES: List[str] = [
@@ -27,6 +27,7 @@ _BINANCE_FAPI_BASES: List[str] = [
 
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "4.0"))
 _RETRY_STATUSES = {418, 429, 500, 502, 503, 504}
+
 
 # =========================
 # Client factory
@@ -47,6 +48,7 @@ def get_client() -> Client:
 
     return client
 
+
 # =========================
 # Retry helper
 # =========================
@@ -65,6 +67,7 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = 3, delay: float
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
 
+
 # =========================
 # Futures Exchange Info cache
 # =========================
@@ -79,6 +82,7 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     if isinstance(info, dict):
         _futures_exchange_info_cache = info
     return info
+
 
 # =========================
 # Account helpers
@@ -131,6 +135,7 @@ def ping_and_info() -> bool:
         logger.error(f"[Binance] ping_and_info failed: {e}")
         return False
 
+
 # =========================
 # Public Futures Mark Price
 # =========================
@@ -141,15 +146,21 @@ def _looks_like_json(txt: str) -> bool:
     return t.startswith("{") or t.startswith("[")
 
 def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
-    if USE_TESTNET:
-        client = get_client()
-        data = retry_call(lambda: client.futures_mark_price(symbol=symbol.upper()),
-                          f"futures_mark_price({symbol})/testnet")
-        return data if isinstance(data, dict) else {"symbol": symbol.upper(), "markPrice": str(float(data))}
-
     sym = symbol.upper().strip()
-    last_err: Optional[str] = None
 
+    # 🔒 אם REST כבוי - תשתמש רק ב-WS cache
+    if PRICE_MONITOR_DISABLE:
+        try:
+            from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
+            rec = LAST_PRICE_CACHE.get(sym)
+            if rec and "price" in rec:
+                return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
+            raise RuntimeError(f"[Binance] WS cache miss for {sym}")
+        except Exception as e:
+            raise RuntimeError(f"[Binance] WS fallback failed for {sym}: {e}")
+
+    # אחרת - ממשיכים עם REST
+    last_err: Optional[str] = None
     headers = {
         "Accept": "application/json",
         "User-Agent": "AlgoGPT/2 binance-client",
@@ -178,14 +189,6 @@ def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
         time.sleep(0.35 * attempt)
-
-    try:
-        from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
-        rec = LAST_PRICE_CACHE.get(sym)
-        if rec and "price" in rec:
-            return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
-    except Exception:
-        pass
 
     raise RuntimeError(f"[Binance] futures_mark_price_dict({sym}) failed after {tries} tries: {last_err}")
 
