@@ -11,7 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     MPLCONFIGDIR=/tmp/matplotlib \
     TZ=UTC \
-    PATH="/home/appuser/.local/bin:$PATH"
+    PATH="/home/appuser/.local/bin:$PATH" \
+    PORT=10000
 
 # --- System deps ---
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
@@ -40,7 +41,7 @@ COPY . /app
 RUN mkdir -p /app/static/reports /app/static/img /tmp/matplotlib \
  && chown -R appuser:appuser /app /tmp/matplotlib
 
-# --- Healthcheck (מומלץ להתאים לנתיב /health) ---
+# --- Healthcheck ---
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
@@ -50,8 +51,7 @@ USER appuser
 # --- Entrypoint & CMD ---
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# חשוב: Render יעביר PORT; ה־bind מוגדר בקובץ הגוניקורן
-# הקובץ gunicorn_conf.py נטען כאן
+# Render יכניס PORT → אנחנו רק מאזינים אליו
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
 
 
