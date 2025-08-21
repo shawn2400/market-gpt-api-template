@@ -1,95 +1,222 @@
-# 🔐 Auth
-ALGOGPT_TOKENS=rnd_I7f7QQ6JXu55tuqfORcQKBdlxMPK
-API_BEARER_TOKEN=rnd_I7f7QQ6JXu55tuqfORcQKBdlxMPK
-SECURITY_ALLOW_ALL=0
+# main.py
+from __future__ import annotations
+import os, asyncio, logging, json, time
+from datetime import datetime, timezone
+from pathlib import Path
 
-# 🧩 Versions / Metadata
-ALGOGPT_VERSION=2.14.6
-STRATEGY_VERSION=2.14.6
-GIT_COMMIT=
-REQ_HASH=
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request, Query, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 
-# ⚙️ Live Trading
-EXECUTE_TRADES=true
-BINANCE_SKIP_ACCOUNT_MUTATIONS=false
-ENABLE_AUTO_TRADING=true
-AUTO_RUN=true
-WORKERS=2
+# --- Env ---
+load_dotenv(override=True)
 
-# 🔎 Scanner / Limits
-DEFAULT_INTERVAL=15m
-DEFAULT_MARKET=futures
-TRENDING_ONLY=false
-MIN_QUALITY_SCORE=7.5
-TOP_SYMBOLS=30
-RESPONSE_MAX_BYTES=2097152
-SCAN_MAX_LIMIT=10
-EXPOSE_LIMITS=true
+# --- Config ---
+from utils.config import (
+    check_config,
+    dump_config_sanitized,
+    LOG_LEVEL,
+    WS_UPDATE_INTERVAL,
+    PRICE_MONITOR_INTERVAL,
+    PRICE_WS_FRESH_TTL,
+    PRICE_MONITOR_DISABLE,
+)
 
-# 💵 Risk / Budget
-MAX_LEVERAGE=35
-MAX_TRADE_BUDGET=100
-MAX_TRADES_PER_TICK=3
-PRICE_PROTECT_PCT=0.25
-PRICE_MAX_AGE_SEC=10
-SYMBOL_COOLDOWN_SEC=600
+# Utils
+from utils.response_limits import ResponseSizeLimiter
+from utils.json_logger import setup_json_logging
+from utils.ws_fallback import auto_price_updater, LAST_PRICE_CACHE, update_price
+from utils.watchlist_utils import load_watchlist
+from utils.binance_client import futures_mark_price
+from utils.anchor import evaluate_anchor
+from utils.rate_limit import RateLimitMiddleware
+from utils import cache_fallback as redis_store
+from utils.auth import require_api_key
 
-# 🟡 Binance (Production)
-BINANCE_API_KEY=<PUT_REAL_BINANCE_KEY>
-BINANCE_API_SECRET=<PUT_REAL_BINANCE_SECRET>
-BINANCE_TESTNET=false
+# --- App Version ---
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.6")
 
-# ✅ Base URLs (Hardcoded)
-BINANCE_SPOT_HTTP_BASE=https://api.binance.com
-BINANCE_FUTURES_HTTP_BASE=https://fapi.binance.com
-BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com
-BINANCE_FAPI_BASE=https://fapi.binance.com
+# --- Logging ---
+logger = setup_json_logging()
+logging.getLogger().setLevel(LOG_LEVEL)
 
-# ⏱️ Network / Retries
-BINANCE_HTTP_TIMEOUT=4.0
-BINANCE_BACKOFF_BASE=0.7
-BINANCE_MAX_RETRIES=5
-BINANCE_RECV_WINDOW=10000
-BINANCE_TIME_SYNC_INTERVAL_SEC=900
-BINANCE_EXCHANGE_INFO_ON_START=false
-BINANCE_FORCE_HEDGE_MODE=false
-BINANCE_ALLOWED_EGRESS_IPS=18.156.158.53,18.156.42.200,52.59.103.54
+# ✅ לא מחזיקים deque בזיכרון כדי לחסוך עומס
 
-# 🤖 OpenAI
-OPENAI_API_KEY=<PUT_REAL_OPENAI_KEY>
-OPENAI_MODEL=gpt-4o
-OPENAI_TIMEOUT_SECONDS=30.0
-OPENAI_MAX_CONCURRENCY=4
+# --- Config check ---
+check_config()
+logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
-# 📰 News / Macro (מכובה כרגע)
-CRYPTO_PANIC_API_KEY=
-NEWSAPI_API_KEY=
-COINMARKETCAP_API_KEY=
-COINDESK_API_KEY=
+# --- FastAPI ---
+app = FastAPI(
+    title="AlgoGPT API",
+    version=APP_VERSION,
+    description="AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת"
+)
 
-# 🟢 Redis
-REDIS_URL=redis://redis:6379
+# --- Middlewares ---
+app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 1_048_576)))
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# 🔄 WS / Price updater
-WS_UPDATE_INTERVAL=15
-PRICE_MONITOR_DISABLE=true    # ✅ רק WS פעיל, REST מכובה להורדת עומס
-PRICE_WS_FRESH_TTL=20
-PRICE_MONITOR_INTERVAL=30
+# ✅ Rate-limit
+rate_limits_config = {"default": {"limit": 60, "window": 60}, "endpoints": {}}
+config_file = Path("config/rate_limits.json")
+if config_file.exists():
+    try:
+        rate_limits_config = json.loads(config_file.read_text())
+        logger.info({"event": "rate_limit_config_loaded"})
+    except Exception as e:
+        logger.error({"event": "rate_limit_config_error", "error": str(e)})
 
-# 📊 BTC Anchor Settings
-BTC_ANCHOR_MODE=soft
-BTC_ANCHOR_FRAMES=15m,1h,4h
-BTC_ANCHOR_STRONG_TH=70
-BTC_ANCHOR_WEAK_TH=55
+endpoint_limits = {
+    p: (cfg["limit"], cfg["window"])
+    for p, cfg in rate_limits_config.get("endpoints", {}).items()
+}
 
-# 📝 Logs
-LOG_BUFFER_SIZE=200
-LOG_LEVEL=INFO
+app.add_middleware(
+    RateLimitMiddleware,
+    limit=rate_limits_config["default"]["limit"],
+    window=rate_limits_config["default"]["window"],
+    endpoint_limits=endpoint_limits,
+)
 
-# 🌐 Server / CORS
-CORS_ALLOW_ORIGINS=*
-PORT=10000
-EGRESS_IP_ENDPOINT=https://algogpt-docker.onrender.com/net/ip
+# CORS
+origins_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
+allow_origins = ["*"] if origins_env.strip() == "*" else [o.strip() for o in origins_env.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Static ---
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --- Routers (רק מה שצריך כרגע) ---
+from routes.ai import router as ai_router
+from routes.multi_scan import router as scan_router
+from routes.trade import router as trade_router
+from routes.grid import router as grid_router
+from routes.orderflow import router as orderflow_router
+from routes.indicators import router as indicators_router
+from routes.strategy import router as strategy_router
+from routes.orders import router as orders_router
+from routes.ws import router as ws_router
+from routes.price import router as price_router
+from routes.market import router as market_router
+from routes.utils import router as utils_router
+from routes.anchor import router as anchor_router
+from routes.debug import router as debug_router
+# ⛔ מוקפאים: news, analytics, snapshot, dashboard, backtest, debug_binance
+
+protected_routers = [
+    (ai_router, "/ai", ["AI"]),
+    (scan_router, "", ["Scan"]),
+    (trade_router, "/trade", ["Trade"]),
+    (grid_router, "/grid", ["Grid"]),
+    (orderflow_router, "/orderflow", ["Orderflow"]),
+    (strategy_router, "/strategy", ["Strategy"]),
+    (indicators_router, "/indicators", ["Indicators"]),
+    (orders_router, "/orders", ["Orders"]),
+    (ws_router, "/ws", ["Websocket"]),
+    (price_router, "", ["Price"]),
+    (market_router, "", ["Market"]),
+    (utils_router, "", ["Utils"]),
+    (anchor_router, "", ["Anchor"]),
+]
+for r, p, t in protected_routers:
+    app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
+
+# Debug פתוח
+app.include_router(debug_router, prefix="/debug", tags=["Debug"])
+
+# --- Price monitor ---
+async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
+    while True:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for sym, rec in list(LAST_PRICE_CACHE.items()):
+                try:
+                    ts = float(rec.get("ts") or 0.0)
+                except Exception:
+                    ts = 0.0
+                if (time.time() - ts) < PRICE_WS_FRESH_TTL:
+                    continue
+                try:
+                    price_val = futures_mark_price(sym)
+                    if price_val and price_val > 0:
+                        update_price(sym, float(price_val))
+                        logger.info({"event": "price_monitor", "symbol": sym, "price": float(price_val), "time": now_iso})
+                except Exception as e:
+                    logger.error({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
+        except Exception as e:
+            logger.error({"event": "price_monitor_loop_error", "error": str(e)})
+        await asyncio.sleep(interval)
+
+# --- Anchor snapshot ---
+async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", "30"))):
+    sides = ["LONG", "SHORT"]
+    while True:
+        try:
+            now = int(datetime.now(timezone.utc).timestamp())
+            for side in sides:
+                try:
+                    dec = evaluate_anchor(side)
+                    key = "anchor:history"
+                    item = {"ts": now, "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
+                    await redis_store.lpush(key, json.dumps(item))
+                    await redis_store.ltrim(key, 0, 200)
+                    logger.info({"event": "anchor_snapshot", **item})
+                except Exception as e:
+                    logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
+        except Exception as e:
+            logger.error({"event": "anchor_snapshot_loop_error", "error": str(e)})
+        await asyncio.sleep(interval)
+
+# --- Startup ---
+@app.on_event("startup")
+async def startup_event():
+    try:
+        watchlist = load_watchlist()
+        symbols = [it["symbol"] for it in watchlist]
+        if "BTCUSDT" not in [s.upper() for s in symbols]:
+            symbols.insert(0, "BTCUSDT")
+        asyncio.create_task(auto_price_updater(symbols, interval=WS_UPDATE_INTERVAL))
+        if not PRICE_MONITOR_DISABLE:
+            asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
+        asyncio.create_task(anchor_snapshot_loop())
+        # ⛔ cache_cleaner מוקפא
+    except Exception as e:
+        logger.error({"event": "startup_error", "error": str(e)})
+
+# --- Status / Health ---
+@app.get("/", tags=["Config"])
+async def root_status():
+    return {"status": "ok", "version": APP_VERSION}
+
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "version": APP_VERSION}
+
+@app.get("/health/live", tags=["Health"])
+async def health_live():
+    return {"status": "live"}
+
+# --- Exception handler ---
+@app.exception_handler(Exception)
+async def handle_exception(request: Request, exc: Exception):
+    logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
+    return JSONResponse({"detail": str(exc)}, status_code=500)
+
+# --- Entrypoint ---
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)),
+                reload=os.getenv("APP_ENV", "prod") != "production")
+
 
 
 
