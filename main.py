@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 # Utils
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
-from utils.ws_fallback import price_monitor_loop, auto_price_updater
+from utils.ws_fallback import price_monitor_loop, auto_price_updater, LAST_PRICE_CACHE
 from utils.redis_client import redis_client
 from utils.watchlist_utils import load_watchlist
 
@@ -26,9 +26,9 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.4")
 # --- Logging (JSON structured) ---
 logger = setup_json_logging()
 
-# ✅ In-memory log buffer
-LOG_BUFFER = deque(maxlen=200)
-
+# ✅ In-memory log buffer (size from .env)
+LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
+LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
 
 class MemoryLogHandler(logging.Handler):
     def emit(self, record):
@@ -38,7 +38,6 @@ class MemoryLogHandler(logging.Handler):
             "logger": record.name,
             "message": record.getMessage()
         })
-
 
 logger.addHandler(MemoryLogHandler())
 
@@ -112,7 +111,6 @@ app.include_router(market_router, tags=["Market"])
 app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
 app.include_router(utils_router, tags=["Utils"])
 
-
 # --- Startup tasks ---
 @app.on_event("startup")
 async def startup_event():
@@ -131,19 +129,10 @@ async def startup_event():
         "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {interval}s"
     })
 
-
-# --- Root → Dashboard + Logs ---
-@app.get("/", tags=["Dashboard"], operation_id="getDashboardRoot")
-async def root_dashboard(limit: int = 50):
-    """
-    מחזיר Dashboard עם הלוגים האחרונים
-    """
-    from routes.dashboard import dashboard_snapshot
-    dashboard_data = await dashboard_snapshot()
-    logs = list(LOG_BUFFER)[-limit:]
-    dashboard_data["logs"] = logs
-    return dashboard_data
-
+# --- Root / Status ---
+@app.get("/", tags=["Config"], operation_id="getRootStatus")
+async def root_status():
+    return {"status": "ok", "version": APP_VERSION}
 
 # --- Error handler ---
 @app.exception_handler(Exception)
@@ -151,19 +140,16 @@ async def handle_exception(request: Request, exc: Exception):
     logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-
 # --- Health endpoints ---
 @app.get("/health", tags=["Health"], operation_id="getHealth")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
 
-
 @app.get("/health/live", tags=["Health"], operation_id="getHealthLive")
 async def health_live():
     return {"status": "live"}
 
-
-# ✅ Debug logs endpoint (standalone)
+# ✅ Debug logs endpoint
 @app.get("/debug/health", tags=["Debug"], operation_id="getDebugHealth")
 async def debug_health(limit: int = 50):
     logs = list(LOG_BUFFER)[-limit:]
@@ -172,11 +158,11 @@ async def debug_health(limit: int = 50):
         "logs": logs
     }
 
-
 # --- Entrypoint (local run only) ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
