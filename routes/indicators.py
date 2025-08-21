@@ -1,9 +1,9 @@
 # routes/indicators.py
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List
 import os, requests, pandas as pd
 from fastapi import APIRouter, Query, Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from utils.indicators import prepare_indicators_for_backtest
 
@@ -11,6 +11,9 @@ FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com"
 router = APIRouter(tags=["Indicators"])
 
 
+# =====================
+# Binance helpers
+# =====================
 def _fetch_klines(symbol: str, interval: str = "1h", limit: int = 180) -> pd.DataFrame:
     url = f"{FUTURES_BASE}/fapi/v1/klines"
     r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": int(limit)}, timeout=10)
@@ -31,53 +34,72 @@ def _fetch_klines(symbol: str, interval: str = "1h", limit: int = 180) -> pd.Dat
 # =====================
 # Models
 # =====================
-class IndicatorResponse(BaseModel):
-    ok: bool
-    symbol: Optional[str] = None
-    timeframe: Optional[str] = None
+class IndicatorSet(BaseModel):
     rsi: Optional[float] = None
     ema_21: Optional[float] = None
     adx: Optional[float] = None
     atr: Optional[float] = None
     vwap_trend: Optional[bool] = None
+
+
+class IndicatorSignal(BaseModel):
+    symbol: str
+    timeframe: str
+    indicators: Optional[IndicatorSet] = None
+    ok: bool = True
+    error: Optional[str] = None
+
+
+class IndicatorsResponse(BaseModel):
+    ok: bool = True
+    count_total: int
+    returned: int
+    signals: List[IndicatorSignal] = Field(default_factory=list)
     error: Optional[str] = None
 
 
 # =====================
 # Endpoints
 # =====================
-@router.get("/", response_model=IndicatorResponse, operation_id="getIndicatorsSample")
-async def get_indicators_sample() -> IndicatorResponse:
-    return IndicatorResponse(
-        ok=True,
-        rsi=55.2,
-        ema_21=123.45,
-        adx=18.7,
-        atr=2.3,
-        vwap_trend=True,
+@router.get("/", response_model=IndicatorsResponse, operation_id="getIndicatorsSample")
+async def get_indicators_sample() -> IndicatorsResponse:
+    sample = IndicatorSignal(
+        symbol="BTCUSDT",
+        timeframe="1h",
+        indicators=IndicatorSet(
+            rsi=55.2,
+            ema_21=123.45,
+            adx=18.7,
+            atr=2.3,
+            vwap_trend=True,
+        )
     )
+    return IndicatorsResponse(ok=True, count_total=1, returned=1, signals=[sample])
 
 
-@router.get("/{symbol}", response_model=IndicatorResponse, operation_id="getIndicatorsSymbol")
+@router.get("/{symbol}", response_model=IndicatorsResponse, operation_id="getIndicatorsSymbol")
 async def get_indicators_symbol(
     symbol: str = Path(..., description="e.g. BTCUSDT"),
     timeframe: str = Query("1h"),
-    limit: int = Query(180, ge=50, le=500),  # ✅ מגבלה קשיחה
-) -> IndicatorResponse:
+    limit: int = Query(180, ge=50, le=500),
+) -> IndicatorsResponse:
     try:
         df = _fetch_klines(symbol, timeframe, limit)
         ind = prepare_indicators_for_backtest(df)
         if ind.empty:
-            return IndicatorResponse(ok=False, symbol=symbol, timeframe=timeframe, error="no data")
+            return IndicatorsResponse(ok=False, count_total=1, returned=0, signals=[],
+                                      error="no data")
         row = ind.iloc[-1].to_dict()
-        return IndicatorResponse(
-            ok=True,
+        sig = IndicatorSignal(
             symbol=symbol,
             timeframe=timeframe,
-            **{k: float(v) for k, v in row.items() if isinstance(v, (int, float))}
+            indicators=IndicatorSet(**{k: float(v) for k, v in row.items() if isinstance(v, (int, float))})
         )
+        return IndicatorsResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
-        return IndicatorResponse(ok=False, symbol=symbol, timeframe=timeframe, error=str(e))
+        return IndicatorsResponse(ok=False, count_total=1, returned=0, signals=[],
+                                  error=str(e))
+
 
 
 
