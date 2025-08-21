@@ -1,4 +1,3 @@
-# main.py
 from __future__ import annotations
 import os
 import asyncio
@@ -57,8 +56,20 @@ app = FastAPI(
 # --- Middlewares ---
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(ResponseSizeLimiter, max_bytes=2_097_152)
-# ✅ Rate-limit כללי
-app.add_middleware(RateLimitMiddleware, limit=60, window=60)
+
+# ✅ Rate-limit: כללי 60/דקה, אבל מותאם פר־endpoint
+ENDPOINT_LIMITS = {
+    "/backtest/": (10, 60),     # בקושי – 10 קריאות לדקה
+    "/health": (300, 60),       # בריאות – נדיב
+    "/health/live": (300, 60),
+}
+app.add_middleware(
+    RateLimitMiddleware,
+    limit=60,
+    window=60,
+    endpoint_limits=ENDPOINT_LIMITS
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -151,9 +162,6 @@ async def price_monitor_loop(interval: int = 30):
 
 # --- Anchor Snapshot Loop ---
 async def anchor_snapshot_loop(interval: int = 30):
-    """
-    שומר Snapshot של Anchor (BTC) ל-Redis כל X שניות
-    """
     sides = ["LONG", "SHORT"]
     while True:
         try:
@@ -171,7 +179,7 @@ async def anchor_snapshot_loop(interval: int = 30):
                             "allow": dec.allow,
                         }
                         redis_client.lpush(key, json.dumps(item))
-                        redis_client.ltrim(key, 0, 200)  # רק 200 רשומות נשמרות
+                        redis_client.ltrim(key, 0, 200)
                     logger.info({
                         "event": "anchor_snapshot",
                         "side": side,
@@ -198,7 +206,6 @@ async def startup_event():
     if redis_client:
         logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
 
-    # ✅ Start auto price updater (BTCUSDT always enforced)
     watchlist = load_watchlist()
     symbols = [it["symbol"] for it in watchlist]
     if "BTCUSDT" not in [s.upper() for s in symbols]:
@@ -212,12 +219,10 @@ async def startup_event():
         "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {updater_interval}s"
     })
 
-    # ✅ Price monitor loop
     monitor_interval = int(os.getenv("PRICE_MONITOR_INTERVAL", 30))
     asyncio.create_task(price_monitor_loop(interval=monitor_interval))
     logger.info({"event": "startup", "msg": f"✅ Price monitor loop started ({monitor_interval}s)"})
 
-    # ✅ Anchor snapshot loop
     anchor_interval = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))
     asyncio.create_task(anchor_snapshot_loop(interval=anchor_interval))
     logger.info({"event": "startup", "msg": f"✅ Anchor snapshot loop started ({anchor_interval}s)"})
@@ -270,6 +275,7 @@ async def debug_health(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
