@@ -95,9 +95,13 @@ app.add_middleware(
     endpoint_limits=endpoint_limits
 )
 
+# CORS — תמיכה ברשימת מקורות או "*"
+origins_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
+allow_origins = ["*"] if origins_env.strip() == "*" else [o.strip() for o in origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("CORS_ALLOW_ORIGINS", "*")],
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -184,7 +188,7 @@ async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
                     continue
 
                 try:
-                    price_val = futures_mark_price(sym)  # float יציב (כולל רוטציית דומיינים)
+                    price_val = futures_mark_price(sym)  # Optional[float]
                     if price_val and price_val > 0:
                         update_price(sym, float(price_val))
                         logger.info({"event": "price_monitor", "symbol": sym, "price": float(price_val), "time": now_iso})
@@ -288,12 +292,12 @@ async def debug_health(limit: int = Query(50), level: str | None = None, logger_
 # --- Entrypoint (לוקאלי בלבד; בפרוד רץ דרך Gunicorn) ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=os.getenv("APP_ENV","production")!="production")
-
-
-
-
-
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        reload=os.getenv("APP_ENV", "production") != "production",
+    )
 
 
 
