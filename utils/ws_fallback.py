@@ -26,6 +26,12 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
     return (time.time() - info.get("ts", 0)) <= max_age_sec
 
 
+# 🔧 פונקציה בסיסית לשמירה על תאימות
+async def price_monitor_loop():
+    while True:
+        await asyncio.sleep(60)  # כרגע לא עושה כלום, רק משאיר loop פעיל
+
+
 # ✅ WS Auto Updater עם age_sec בלוג
 async def auto_price_updater(symbols: list[str], interval: int = 15):
     """
