@@ -1,4 +1,4 @@
-# routes/scan.py
+# routes/multi_scan.py
 from __future__ import annotations
 from fastapi import APIRouter, Query
 from typing import Dict, List, Optional
@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from utils.indicators import prepare_indicators_for_backtest
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+
 router = APIRouter(prefix="/scan", tags=["Scan"])
 
 
@@ -97,6 +98,7 @@ async def scan_symbols(
         except Exception as e:
             out[s] = MultiScanItem(ok=False, error=str(e))
     return MultiScanResponse(results=out)
+
 
 
 
