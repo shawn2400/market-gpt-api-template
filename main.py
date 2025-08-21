@@ -109,6 +109,7 @@ from routes.price import router as price_router
 from routes.market import router as market_router
 from routes.scan import router as scan_utils_router
 from routes.utils import router as utils_router
+from routes.anchor import router as anchor_router   # ✅ חדש
 
 # ✅ Protected routers (API-Key required)
 protected_routers = [
@@ -134,6 +135,7 @@ protected_routers = [
     (market_router, "", ["Market"]),
     (scan_utils_router, "/scan", ["Scan"]),
     (utils_router, "", ["Utils"]),
+    (anchor_router, "", ["Anchor"]),   # ✅ Anchor Router
 ]
 
 for router, prefix, tags in protected_routers:
@@ -246,6 +248,7 @@ async def debug_health(limit: int = Query(50), level: str | None = None, logger_
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
