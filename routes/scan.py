@@ -1,7 +1,7 @@
 # routes/scan.py
 from __future__ import annotations
 from fastapi import APIRouter, Query
-from typing import Dict, Any, List, Optional
+from typing import List, Optional
 import os, requests, pandas as pd
 from pydantic import BaseModel, Field
 
@@ -10,6 +10,7 @@ from utils.indicators import prepare_indicators_for_backtest
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
 router = APIRouter(prefix="/scan", tags=["Scan"])
+
 
 # =====================
 # Models
@@ -21,6 +22,7 @@ class IndicatorSet(BaseModel):
     atr: Optional[float] = None
     vwap_trend: Optional[bool] = None
 
+
 class ScanSignal(BaseModel):
     symbol: str
     interval: str
@@ -28,12 +30,14 @@ class ScanSignal(BaseModel):
     ok: bool = True
     error: Optional[str] = None
 
+
 class ScanResponse(BaseModel):
     ok: bool = True
     count_total: int
     returned: int
     signals: List[ScanSignal] = Field(default_factory=list)
     error: Optional[str] = None
+
 
 # =====================
 # Binance helpers
@@ -45,12 +49,15 @@ def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.Da
     arr = r.json()
     if not arr:
         return pd.DataFrame()
-    cols = ["open_time","open","high","low","close","volume","close_time",
-            "qv","nTrades","taker_base","taker_quote","x"]
+    cols = [
+        "open_time","open","high","low","close","volume","close_time",
+        "qv","nTrades","taker_base","taker_quote","x"
+    ]
     df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
     for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
+
 
 # =====================
 # Endpoints
@@ -74,6 +81,7 @@ async def scan_info(
         return ScanResponse(ok=False, count_total=1, returned=0, signals=[],
                             error=str(e))
 
+
 @router.get("/", response_model=ScanResponse, summary="Multi-symbol scan")
 async def scan_symbols(
     symbols: List[str] = Query(..., description="List of symbols e.g. BTCUSDT,ETHUSDT"),
@@ -94,6 +102,7 @@ async def scan_symbols(
             out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
 
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
+
 
 
 
