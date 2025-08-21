@@ -6,6 +6,12 @@ import httpx
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
+# 🚀 Cache מיובא ישירות מתוך main (Self-contained)
+try:
+    from main import LAST_PRICE_CACHE
+except ImportError:
+    LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
+
 logger = logging.getLogger("algogpt.binance")
 
 # =========================
@@ -105,11 +111,10 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
         raise RuntimeError(f"[Binance] Symbol {sym} is not valid in Futures")
 
     if PRICE_MONITOR_DISABLE:
-        from utils.ws_fallback import LAST_PRICE_CACHE
         rec = LAST_PRICE_CACHE.get(sym)
         if rec and "price" in rec:
             return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
-        raise RuntimeError(f"[Binance] WS cache miss for {sym}")
+        raise RuntimeError(f"[Binance] WS/Cache miss for {sym}")
 
     last_err: Optional[str] = None
     headers = {"Accept": "application/json", "User-Agent": "AlgoGPT-binance-client"}
@@ -121,7 +126,6 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True) as client:
                     r = client.get(url, params={"symbol": sym}, headers=headers)
 
-                # ✅ בדיקת JSON אמיתי בלבד
                 if r.status_code == 200:
                     ctype = r.headers.get("Content-Type", "")
                     if ctype.startswith("application/json"):
@@ -130,7 +134,7 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                             return data
                     else:
                         last_err = f"Invalid content-type {ctype}"
-                        logger.warning(f"[Binance] {sym} got HTML or wrong content-type from {base}")
+                        logger.warning(f"[Binance] {sym} got non-JSON from {base}")
                         continue
                 else:
                     last_err = f"{r.status_code} {r.text[:80]}"
@@ -140,8 +144,7 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                 logger.warning(f"[Binance] {sym} exception on {base}: {last_err}")
         time.sleep(0.35 * attempt)
 
-    # ✅ Fallback ל־WS Cache
-    from utils.ws_fallback import LAST_PRICE_CACHE
+    # ✅ Fallback ל־Cache הפנימי של main.py
     rec = LAST_PRICE_CACHE.get(sym)
     if rec and "price" in rec:
         return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
@@ -155,6 +158,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
