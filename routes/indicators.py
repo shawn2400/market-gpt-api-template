@@ -1,6 +1,6 @@
 # routes/indicators.py
 from __future__ import annotations
-from typing import Dict, Any, Optional
+from typing import Optional
 import os, requests, pandas as pd
 from fastapi import APIRouter, Query, Path
 from pydantic import BaseModel
@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from utils.indicators import prepare_indicators_for_backtest
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
-
 router = APIRouter(tags=["Indicators"])
+
 
 def _fetch_klines(symbol: str, interval: str = "1h", limit: int = 180) -> pd.DataFrame:
     url = f"{FUTURES_BASE}/fapi/v1/klines"
@@ -27,6 +27,10 @@ def _fetch_klines(symbol: str, interval: str = "1h", limit: int = 180) -> pd.Dat
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
 
+
+# =====================
+# Models
+# =====================
 class IndicatorResponse(BaseModel):
     ok: bool
     symbol: Optional[str] = None
@@ -38,6 +42,10 @@ class IndicatorResponse(BaseModel):
     vwap_trend: Optional[bool] = None
     error: Optional[str] = None
 
+
+# =====================
+# Endpoints
+# =====================
 @router.get("/", response_model=IndicatorResponse, operation_id="getIndicatorsSample")
 async def get_indicators_sample() -> IndicatorResponse:
     return IndicatorResponse(
@@ -49,11 +57,12 @@ async def get_indicators_sample() -> IndicatorResponse:
         vwap_trend=True,
     )
 
+
 @router.get("/{symbol}", response_model=IndicatorResponse, operation_id="getIndicatorsSymbol")
 async def get_indicators_symbol(
     symbol: str = Path(..., description="e.g. BTCUSDT"),
     timeframe: str = Query("1h"),
-    limit: int = Query(180, ge=50, le=1500),
+    limit: int = Query(180, ge=50, le=500),  # ✅ מגבלה קשיחה
 ) -> IndicatorResponse:
     try:
         df = _fetch_klines(symbol, timeframe, limit)
@@ -69,8 +78,6 @@ async def get_indicators_symbol(
         )
     except Exception as e:
         return IndicatorResponse(ok=False, symbol=symbol, timeframe=timeframe, error=str(e))
-
-
 
 
 
