@@ -24,8 +24,8 @@ _BINANCE_FAPI_BASES: List[str] = [
     "https://fapi3.binance.com",
 ]
 
-_DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "4.0"))
-_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "3"))
+_DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "6.0"))
+_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
 # =========================
 # Client factory
@@ -121,11 +121,17 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True) as client:
                     r = client.get(url, params={"symbol": sym}, headers=headers)
 
-                # ✅ בודק שהתשובה היא JSON אמיתי
-                if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("application/json"):
-                    data = r.json()
-                    if isinstance(data, dict) and "markPrice" in data:
-                        return data
+                # ✅ בדיקת JSON אמיתי בלבד
+                if r.status_code == 200:
+                    ctype = r.headers.get("Content-Type", "")
+                    if ctype.startswith("application/json"):
+                        data = r.json()
+                        if isinstance(data, dict) and "markPrice" in data:
+                            return data
+                    else:
+                        last_err = f"Invalid content-type {ctype}"
+                        logger.warning(f"[Binance] {sym} got HTML or wrong content-type from {base}")
+                        continue
                 else:
                     last_err = f"{r.status_code} {r.text[:80]}"
                     logger.warning(f"[Binance] {sym} invalid response from {base}: {last_err}")
@@ -149,6 +155,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
