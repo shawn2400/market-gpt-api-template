@@ -1,18 +1,16 @@
 # utils/backtest_utils.py
 from __future__ import annotations
-"""
-מודול backtester – אחראי על הרצת backtest אסטרטגיות.
-משמש על ידי routes/backtest.py.
-"""
 import pandas as pd
 from typing import Dict, Any, Optional
 
 from utils.indicators import prepare_indicators_for_backtest
 
+
 def run_backtest(
     df: pd.DataFrame,
     strategy: str = "ema_crossover",
     initial_balance: float = 1000.0,
+    max_trades: int = 200,   # ✅ חיתוך קשיח כדי למנוע תגובות ענק
 ) -> Dict[str, Any]:
     """
     מבצע Backtest על DataFrame נתון עם אסטרטגיה פשוטה.
@@ -43,7 +41,9 @@ def run_backtest(
             elif ema21 < ema50 and position and position["side"] == "LONG":
                 pnl = (close - position["entry"]) / position["entry"]
                 balance *= (1 + pnl)
-                trades.append({"side": "LONG", "entry": position["entry"], "exit": close, "pnl": pnl})
+                trades.append({
+                    "side": "LONG", "entry": position["entry"], "exit": close, "pnl": round(pnl, 4)
+                })
                 position = None
 
         # =========================
@@ -53,15 +53,14 @@ def run_backtest(
             macd_line = float(row.get("macd", 0))
             macd_signal = float(row.get("macd_signal", 0))
 
-            # כניסה ל־LONG כש-MACD חוצה מעלה
             if macd_line > macd_signal and not position:
                 position = {"side": "LONG", "entry": close, "index": i}
-
-            # סגירה של LONG כש-MACD חוצה מטה
             elif macd_line < macd_signal and position and position["side"] == "LONG":
                 pnl = (close - position["entry"]) / position["entry"]
                 balance *= (1 + pnl)
-                trades.append({"side": "LONG", "entry": position["entry"], "exit": close, "pnl": pnl})
+                trades.append({
+                    "side": "LONG", "entry": position["entry"], "exit": close, "pnl": round(pnl, 4)
+                })
                 position = None
 
         # =========================
@@ -71,24 +70,29 @@ def run_backtest(
             bb_lower = float(row.get("bb_lower", 0))
             bb_upper = float(row.get("bb_upper", 0))
 
-            # קנייה בתחתית
             if close < bb_lower and not position:
                 position = {"side": "LONG", "entry": close, "index": i}
-
-            # מכירה בעליון
             elif close > bb_upper and position and position["side"] == "LONG":
                 pnl = (close - position["entry"]) / position["entry"]
                 balance *= (1 + pnl)
-                trades.append({"side": "LONG", "entry": position["entry"], "exit": close, "pnl": pnl})
+                trades.append({
+                    "side": "LONG", "entry": position["entry"], "exit": close, "pnl": round(pnl, 4)
+                })
                 position = None
+
+    # ✅ חיתוך ל־max_trades כדי למנוע ResponseTooLargeError
+    trades_trimmed = trades[-max_trades:] if len(trades) > max_trades else trades
 
     return {
         "ok": True,
         "strategy": strategy,
-        "trades": trades,
-        "final_balance": round(balance, 2),
-        "profit_pct": round(((balance / initial_balance) - 1) * 100, 2),
-        "n_trades": len(trades),
+        "summary": {
+            "n_trades_total": len(trades),
+            "n_trades_returned": len(trades_trimmed),
+            "final_balance": round(balance, 2),
+            "profit_pct": round(((balance / initial_balance) - 1) * 100, 2),
+        },
+        "trades": trades_trimmed,
     }
 
 
