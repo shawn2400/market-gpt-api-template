@@ -1,10 +1,10 @@
 # routes/grid.py
-from fastapi import APIRouter
-from pydantic import BaseModel
-from typing import List
+from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
 from utils.grid_manager import get_grid_status, get_active_grids
 
-router = APIRouter()
+router = APIRouter(tags=["Grid"])
 
 class GridStatus(BaseModel):
     id: str
@@ -14,16 +14,31 @@ class GridStatus(BaseModel):
     profit_pct: float
     active: bool
 
-@router.get("/status", response_model=List[GridStatus])
-async def grid_status():
-    grids = get_grid_status()
-    return [GridStatus(**g) for g in grids]
+class GridListResponse(BaseModel):
+    ok: bool = True
+    count_total: int
+    returned: int
+    grids: List[GridStatus] = Field(default_factory=list)
 
-@router.get("/active", response_model=List[GridStatus])
-async def active_grids():
-    return [GridStatus(**g) for g in get_active_grids()]
+@router.get("/status", response_model=GridListResponse)
+async def grid_status(limit: int = Query(50, ge=10, le=200)):
+    """
+    מחזיר את מצב הגרידים (חותך לפי `limit` כדי למנוע החזרות ענקיות).
+    """
+    grids_raw: List[Dict[str, Any]] = get_grid_status() or []
+    total = len(grids_raw)
+    grids = [GridStatus(**g) for g in grids_raw[:limit]]
+    return GridListResponse(count_total=total, returned=len(grids), grids=grids)
 
-
+@router.get("/active", response_model=GridListResponse)
+async def active_grids(limit: int = Query(50, ge=10, le=200)):
+    """
+    מחזיר את הגרידים הפעילים בלבד.
+    """
+    grids_raw: List[Dict[str, Any]] = get_active_grids() or []
+    total = len(grids_raw)
+    grids = [GridStatus(**g) for g in grids_raw[:limit]]
+    return GridListResponse(count_total=total, returned=len(grids), grids=grids)
 
 
 
