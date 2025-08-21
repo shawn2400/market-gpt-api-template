@@ -94,7 +94,7 @@ def futures_position(symbol: str) -> dict[str, Any] | None:
 
 
 # =====================================================
-# 🔹 EXTRA FUNCTIONS (fix missing imports)
+# 🔹 EXTRA FUNCTIONS
 # =====================================================
 def ping_and_info() -> bool:
     """בדיקת חיבור ל-Binance (Ping + Exchange Info)"""
@@ -120,6 +120,32 @@ def sync_server_time() -> None:
     client = get_client()
     server_time = retry_call(lambda: client.get_server_time(), "get_server_time")
     logger.info(f"[Binance] server_time = {server_time}")
+
+
+# =====================================================
+# Futures Open Positions
+# =====================================================
+def futures_open_positions() -> list[dict[str, Any]]:
+    """
+    מחזיר את כל הפוזיציות הפתוחות בפיוצ׳רס (רק כאלה עם positionAmt != 0).
+    """
+    client = get_client()
+    positions = retry_call(lambda: client.futures_position_information(), "futures_open_positions")
+    open_positions = []
+    for p in positions:
+        amt = float(p.get("positionAmt", 0) or 0.0)
+        if abs(amt) > 0:
+            side = "LONG" if amt > 0 else "SHORT"
+            open_positions.append({
+                "symbol": p.get("symbol"),
+                "side": side,
+                "entryPrice": float(p.get("entryPrice", 0)),
+                "unrealizedPnl": float(p.get("unRealizedProfit", 0)),
+                "positionAmt": amt,
+                "leverage": int(p.get("leverage", 0)),
+                "marginType": p.get("marginType", "").upper(),
+            })
+    return open_positions
 
 
 
