@@ -16,14 +16,29 @@ services:
       - ./logs:/app/logs
       - ./static/reports:/app/static/reports
       - ./static/img:/app/static/img
+    depends_on:
+      - redis
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:10000/ || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:10000/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 20s
-    # מגבלות משאבים (Compose רגיל, לא Swarm)
     mem_limit: 2g
     cpus: 2.0
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: algogpt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+
+volumes:
+  redis_data:
+
 
 
