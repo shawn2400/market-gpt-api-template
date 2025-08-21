@@ -15,9 +15,10 @@ from fastapi.staticfiles import StaticFiles
 # Utils
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
-from utils.ws_fallback import price_monitor_loop, auto_price_updater, LAST_PRICE_CACHE
+from utils.ws_fallback import auto_price_updater, LAST_PRICE_CACHE, update_price
 from utils.redis_client import redis_client
 from utils.watchlist_utils import load_watchlist
+from utils.binance_client import futures_mark_price
 
 # --- Env ---
 load_dotenv(override=True)
@@ -30,6 +31,7 @@ logger = setup_json_logging()
 LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
 LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
 
+
 class MemoryLogHandler(logging.Handler):
     def emit(self, record):
         LOG_BUFFER.append({
@@ -38,6 +40,7 @@ class MemoryLogHandler(logging.Handler):
             "logger": record.name,
             "message": record.getMessage()
         })
+
 
 logger.addHandler(MemoryLogHandler())
 
@@ -111,13 +114,40 @@ app.include_router(market_router, tags=["Market"])
 app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
 app.include_router(utils_router, tags=["Utils"])
 
+# --- Price Monitor Loop (LIVE) ---
+async def price_monitor_loop(interval: int = 30):
+    """
+    מושך מחירים מ-Binance כל X שניות לכל הסימבולים שנמצאים ב-Cache
+    """
+    while True:
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            for sym in list(LAST_PRICE_CACHE.keys()):
+                try:
+                    price = futures_mark_price(sym)
+                    update_price(sym, price)
+                    logger.info({
+                        "event": "price_monitor",
+                        "symbol": sym,
+                        "price": price,
+                        "time": now
+                    })
+                except Exception as e:
+                    logger.error({
+                        "event": "price_monitor_error",
+                        "symbol": sym,
+                        "error": str(e)
+                    })
+        except Exception as e:
+            logger.error({"event": "price_monitor_loop_error", "error": str(e)})
+
+        await asyncio.sleep(interval)
+
 # --- Startup tasks ---
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(price_monitor_loop())
     if redis_client:
         logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
-    logger.info({"event": "startup", "msg": "✅ Price monitor loop started"})
 
     # ✅ Start auto price updater from watchlist
     watchlist = load_watchlist()
@@ -129,10 +159,16 @@ async def startup_event():
         "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {interval}s"
     })
 
+    # ✅ Start price monitor loop
+    asyncio.create_task(price_monitor_loop(interval=30))
+    logger.info({"event": "startup", "msg": "✅ Price monitor loop started"})
+
+
 # --- Root / Status ---
 @app.get("/", tags=["Config"], operation_id="getRootStatus")
 async def root_status():
     return {"status": "ok", "version": APP_VERSION}
+
 
 # --- Error handler ---
 @app.exception_handler(Exception)
@@ -140,14 +176,17 @@ async def handle_exception(request: Request, exc: Exception):
     logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
+
 # --- Health endpoints ---
 @app.get("/health", tags=["Health"], operation_id="getHealth")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
 
+
 @app.get("/health/live", tags=["Health"], operation_id="getHealthLive")
 async def health_live():
     return {"status": "live"}
+
 
 # ✅ Debug logs endpoint (filter by level + logger)
 @app.get("/debug/health", tags=["Debug"], operation_id="getDebugHealth")
@@ -170,10 +209,12 @@ async def debug_health(
         "logs": logs
     }
 
+
 # --- Entrypoint (local run only) ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
