@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 # --- Env ---
 load_dotenv(override=True)
 
-# --- Config (בודק/מנרמל פרמטרים ומספק קבועים) ---
+# --- Config ---
 from utils.config import (
     check_config,
     dump_config_sanitized,
@@ -35,12 +35,12 @@ from utils.binance_client import futures_mark_price
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store
-from utils.auth import require_api_key   # ✅ API-Key auth
+from utils.auth import require_api_key
 
 # --- App Version ---
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.5")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.6")
 
-# --- Logging (JSON + זיכרון) ---
+# --- Logging ---
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
@@ -55,10 +55,9 @@ class MemoryLogHandler(logging.Handler):
             "logger": record.name,
             "message": record.getMessage()
         })
-
 logger.addHandler(MemoryLogHandler())
 
-# בדיקות קונפיג קריטיות (יזרוק RuntimeError בפרוד)
+# --- Config check ---
 check_config()
 logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
@@ -70,35 +69,35 @@ app = FastAPI(
 )
 
 # --- Middlewares ---
+# קודם הגבלת גודל (מודד raw) ואז כיווץ
+app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 1_048_576)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 2_097_152)))
 
-# ✅ Rate-limit config (config/rate_limits.json אם קיים)
+# ✅ Rate-limit
 rate_limits_config = {"default": {"limit": 60, "window": 60}, "endpoints": {}}
 config_file = Path("config/rate_limits.json")
 if config_file.exists():
     try:
         rate_limits_config = json.loads(config_file.read_text())
-        logger.info({"event": "rate_limit_config_loaded", "file": str(config_file)})
+        logger.info({"event": "rate_limit_config_loaded"})
     except Exception as e:
         logger.error({"event": "rate_limit_config_error", "error": str(e)})
 
 endpoint_limits = {
-    pattern: (cfg["limit"], cfg["window"])
-    for pattern, cfg in rate_limits_config.get("endpoints", {}).items()
+    p: (cfg["limit"], cfg["window"])
+    for p, cfg in rate_limits_config.get("endpoints", {}).items()
 }
 
 app.add_middleware(
     RateLimitMiddleware,
     limit=rate_limits_config["default"]["limit"],
     window=rate_limits_config["default"]["window"],
-    endpoint_limits=endpoint_limits
+    endpoint_limits=endpoint_limits,
 )
 
-# CORS — תמיכה ברשימת מקורות או "*"
+# CORS
 origins_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
 allow_origins = ["*"] if origins_env.strip() == "*" else [o.strip() for o in origins_env.split(",") if o.strip()]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -106,7 +105,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Static files ---
+# --- Static ---
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Routers ---
@@ -133,9 +132,8 @@ from routes.price import router as price_router
 from routes.market import router as market_router
 from routes.scan import router as scan_utils_router
 from routes.utils import router as utils_router
-from routes.anchor import router as anchor_router   # ✅ Anchor
+from routes.anchor import router as anchor_router
 
-# ✅ Protected routers (נדרש API-Key)
 protected_routers = [
     (ai_router, "/ai", ["AI"]),
     (scan_router, "", ["Scan"]),
@@ -161,19 +159,14 @@ protected_routers = [
     (utils_router, "", ["Utils"]),
     (anchor_router, "", ["Anchor"]),
 ]
+for r, p, t in protected_routers:
+    app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
 
-for router, prefix, tags in protected_routers:
-    app.include_router(router, prefix=prefix, tags=tags, dependencies=[Depends(require_api_key)])
-
-# ✅ Debug router פתוח (ללא API-Key)
+# Debug router פתוח
 app.include_router(debug_router, prefix="/debug", tags=["Debug"])
 
-# --- Price Monitor Loop (דלג אם WS טרי; ניתן לכיבוי מלא ב-ENV) ---
+# --- Price monitor ---
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
-    """
-    מושך Mark Price ב-REST רק לסימבולים שלא קיבלו עדכון WS טרי ב-TTL.
-    ניתן לכבות לחלוטין עם PRICE_MONITOR_DISABLE=true.
-    """
     while True:
         try:
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -182,13 +175,10 @@ async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
                     ts = float(rec.get("ts") or 0.0)
                 except Exception:
                     ts = 0.0
-
-                # אם היה עדכון WS לאחרונה → דלג על REST
                 if (time.time() - ts) < PRICE_WS_FRESH_TTL:
                     continue
-
                 try:
-                    price_val = futures_mark_price(sym)  # Optional[float]
+                    price_val = futures_mark_price(sym)
                     if price_val and price_val > 0:
                         update_price(sym, float(price_val))
                         logger.info({"event": "price_monitor", "symbol": sym, "price": float(price_val), "time": now_iso})
@@ -198,7 +188,7 @@ async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
             logger.error({"event": "price_monitor_loop_error", "error": str(e)})
         await asyncio.sleep(interval)
 
-# --- Anchor Snapshot Loop ---
+# --- Anchor snapshot ---
 async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", "30"))):
     sides = ["LONG", "SHORT"]
     while True:
@@ -218,14 +208,13 @@ async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_IN
             logger.error({"event": "anchor_snapshot_loop_error", "error": str(e)})
         await asyncio.sleep(interval)
 
-# --- Cache Cleaner ---
+# --- Cache cleaner ---
 CACHE_DIR = Path("static/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
 async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int = 86400):
     while True:
         try:
-            files = sorted(CACHE_DIR.glob("backtest_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            files = sorted(CACHE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
             now = time.time()
             for f in files:
                 if now - f.stat().st_mtime > max_age:
@@ -236,41 +225,24 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
             logger.error({"event": "cache_cleaner_error", "error": str(e)})
         await asyncio.sleep(interval)
 
-# --- Startup tasks ---
+# --- Startup ---
 @app.on_event("startup")
 async def startup_event():
-    # Watchlist + Anchor
     watchlist = load_watchlist()
     symbols = [it["symbol"] for it in watchlist]
     if "BTCUSDT" not in [s.upper() for s in symbols]:
         symbols.insert(0, "BTCUSDT")
-        logger.info({"event": "watchlist", "msg": "BTCUSDT enforced as anchor"})
-
-    # WS updater (מקור עיקרי למחירים)
     asyncio.create_task(auto_price_updater(symbols, interval=WS_UPDATE_INTERVAL))
-
-    # REST polling (גיבוי) — ניתן לכיבוי מלא דרך ENV
     if not PRICE_MONITOR_DISABLE:
         asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
-    else:
-        logger.warning({"event": "price_monitor_disabled"})
+    asyncio.create_task(anchor_snapshot_loop())
+    asyncio.create_task(cache_cleaner())
 
-    # Anchor snapshots + ניקוי קבצים
-    asyncio.create_task(anchor_snapshot_loop(interval=int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", "30"))))
-    asyncio.create_task(cache_cleaner(interval=3600, max_files=100, max_age=86400))
-
-# --- Root / Status ---
+# --- Status / Health ---
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"status": "ok", "version": APP_VERSION}
 
-# --- Error handler ---
-@app.exception_handler(Exception)
-async def handle_exception(request: Request, exc: Exception):
-    logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
-    return JSONResponse({"detail": str(exc)}, status_code=500)
-
-# --- Health endpoints (no API-Key needed) ---
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "version": APP_VERSION}
@@ -279,25 +251,26 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-# ✅ Debug logs endpoint (no API-Key)
 @app.get("/debug/health", tags=["Debug"])
 async def debug_health(limit: int = Query(50), level: str | None = None, logger_name: str | None = None):
     logs = list(LOG_BUFFER)[-limit:]
     if level:
-        logs = [log for log in logs if log["level"] == level.upper()]
+        logs = [l for l in logs if l["level"] == level.upper()]
     if logger_name:
-        logs = [log for log in logs if log["logger"] == logger_name]
+        logs = [l for l in logs if l["logger"] == logger_name]
     return {"count": len(logs), "logs": logs}
 
-# --- Entrypoint (לוקאלי בלבד; בפרוד רץ דרך Gunicorn) ---
+# --- Exception handler ---
+@app.exception_handler(Exception)
+async def handle_exception(request: Request, exc: Exception):
+    logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
+    return JSONResponse({"detail": str(exc)}, status_code=500)
+
+# --- Entrypoint ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        reload=os.getenv("APP_ENV", "production") != "production",
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=os.getenv("APP_ENV", "prod") != "production")
+
 
 
 
