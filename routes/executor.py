@@ -64,6 +64,7 @@ class ExecutorPositionsResponse(BaseModel):
     ok: bool = True
     count: int
     positions: List[dict]
+    error: Optional[str] = None
 
 
 # =====================
@@ -142,7 +143,8 @@ def executor_open_positions() -> ExecutorPositionsResponse:
         positions = futures_open_positions()
         return ExecutorPositionsResponse(ok=True, count=len(positions), positions=positions)
     except Exception as e:
-        return ExecutorPositionsResponse(ok=False, count=0, positions=[])
+        return ExecutorPositionsResponse(ok=False, count=0, positions=[], error=str(e))
+
 
 
 
