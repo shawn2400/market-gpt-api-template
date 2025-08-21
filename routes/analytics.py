@@ -1,21 +1,47 @@
 # routes/analytics.py
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import List
+from datetime import datetime
 
-router = APIRouter()
+router = APIRouter(tags=["Analytics"])
+
 
 class AnalyticsReport(BaseModel):
     report_url: str
     summary: str
+    created_at: str
 
-@router.get("/pnl", response_model=AnalyticsReport)
+
+class AnalyticsListResponse(BaseModel):
+    ok: bool = True
+    count_total: int
+    reports: List[AnalyticsReport] = Field(default_factory=list)
+
+
+@router.get("/pnl", response_model=AnalyticsListResponse)
 async def pnl_report():
     """
-    לא מחזיר base64 ענק, אלא קובץ PDF / PNG בסטטיק.
+    מחזיר רשימת דוחות PNL כקבצים בסטטיק.
+    לא שולח Base64 כבד בתוך JSON.
     """
-    path = "/static/reports/pnl_today.pdf"
-    summary = "PNL report for today available"
-    return AnalyticsReport(report_url=path, summary=summary)
+    reports: List[AnalyticsReport] = []
+
+    # 🔹 דוגמה: דו"ח יומי ב-PDF
+    reports.append(AnalyticsReport(
+        report_url="/static/reports/pnl_today.pdf",
+        summary="PNL report for today",
+        created_at=datetime.utcnow().isoformat()
+    ))
+
+    # 🔹 אפשר להוסיף כאן עוד דוחות (אתמול, שבועי, חודשי)
+    # reports.append(...)
+
+    return AnalyticsListResponse(
+        count_total=len(reports),
+        reports=reports
+    )
+
 
 
 
