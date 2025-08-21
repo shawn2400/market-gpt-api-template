@@ -204,6 +204,8 @@ async def startup_event():
     asyncio.create_task(anchor_snapshot_loop(interval=int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))))
     asyncio.create_task(cache_cleaner(interval=3600, max_files=100, max_age=86400))
 
+    logger.info({"event": "startup", "msg": "✅ Background tasks started"})
+
 # --- Root / Status ---
 @app.get("/", tags=["Config"])
 async def root_status():
