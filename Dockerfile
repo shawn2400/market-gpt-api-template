@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     MPLCONFIGDIR=/tmp/matplotlib \
     TZ=UTC \
-    PORT=10000 \
+    PORT=${PORT:-8000} \
     PATH="/home/appuser/.local/bin:$PATH"
 
 # --- System deps ---
@@ -30,7 +30,9 @@ WORKDIR /app
 # --- Python deps ---
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip setuptools wheel \
- && pip install --no-cache-dir -r requirements.txt
+ && pip install --no-cache-dir -r requirements.txt \
+ && apt-get purge -y --auto-remove build-essential gfortran \
+ && rm -rf /var/lib/apt/lists/*
 
 # --- App source ---
 COPY . /app
@@ -39,7 +41,7 @@ COPY . /app
 RUN mkdir -p /app/static/reports /app/static/img /tmp/matplotlib \
  && chown -R appuser:appuser /app /tmp/matplotlib
 
-# --- Healthcheck ---
+# --- Healthcheck (optional) ---
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
@@ -48,8 +50,8 @@ USER appuser
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# ניהול שרת דרך gunicorn (הגדרות ב־gunicorn_conf.py)
-CMD ["gunicorn", "main:app"]
+# Gunicorn with Uvicorn workers
+CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "-c", "gunicorn_conf.py"]
 
 
 
