@@ -1,136 +1,94 @@
-# utils/backtest_utils.py
-from __future__ import annotations
-"""
-מודול Backtester – אחראי על הרצת backtest לאסטרטגיות.
-משמש על ידי routes/backtest.py.
-"""
-import pandas as pd
-from typing import Dict, Any, Optional, List
+# routes/backtest.py
+from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+from utils.backtest_utils import run_backtest
 
-from utils.indicators import prepare_indicators_for_backtest
+router = APIRouter(tags=["Backtest"])
 
 
-def run_backtest(
-    df: pd.DataFrame,
-    strategy: str = "ema_crossover",
-    initial_balance: float = 1000.0,
-    leverage: int = 1,
-    stress_mode: bool = False,
-) -> Dict[str, Any]:
+# =====================
+# Models
+# =====================
+class BacktestCandle(BaseModel):
+    time: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class StressInfo(BaseModel):
+    max_drawdown_pct: Optional[float] = None
+    max_win_pct: Optional[float] = None
+    risk_reward_ratio: Optional[float] = None
+
+
+class BacktestSummary(BaseModel):
+    total_candles: int
+    returned_candles: int
+    trades: int
+    profit_pct: float
+    leverage: int
+    stress: Optional[StressInfo] = None
+
+
+class BacktestResult(BaseModel):
+    ok: bool = True
+    symbol: str
+    strategy: str
+    summary: BacktestSummary
+    candles: List[BacktestCandle] = Field(default_factory=list)
+
+
+# =====================
+# Endpoint
+# =====================
+@router.get("/", response_model=BacktestResult)
+async def backtest(
+    symbol: str,
+    strategy: str = Query("ema_crossover"),
+    limit: int = Query(500, ge=50, le=1000, description="מספר נרות מקסימלי לטעינה"),
+    max_return: int = Query(200, ge=50, le=500, description="מספר מקסימלי של נרות שיוחזרו ללקוח"),
+    leverage: int = Query(1, ge=1, le=50, description="מינוף לחישוב ה־PnL"),
+    stress: bool = Query(False, description="הפעלת Stress Mode לחישוב Drawdown וכו'"),
+):
     """
-    מבצע Backtest על DataFrame נתון עם אסטרטגיה פשוטה.
-    df חייב להכיל עמודות: [open, high, low, close, volume]
+    מריץ Backtest (מוגבל ל־1000 נרות).  
+    מחזיר עד `max_return` נרות אחרונים + נתוני Stress Mode אם הופעל.
     """
-    if df is None or df.empty:
-        return {"ok": False, "error": "empty dataframe"}
+    raw: Dict[str, Any] = run_backtest(
+        df=None,  # ⚠️ צריך להביא DF מחוץ לפונקציה – כאן נניח ש-run_backtest יודע למשוך
+        strategy=strategy,
+        initial_balance=1000.0,
+        leverage=leverage,
+        stress_mode=stress,
+    )
 
-    df = prepare_indicators_for_backtest(df)
+    candles: List[BacktestCandle] = [BacktestCandle(**c) for c in raw.get("candles", [])]
+    total = len(candles)
 
-    trades: List[Dict[str, Any]] = []
-    balance = initial_balance
-    position: Optional[Dict[str, Any]] = None
-    equity_curve: List[float] = [initial_balance]
+    if total > max_return:
+        candles = candles[-max_return:]
 
-    for i in range(50, len(df)):
-        row = df.iloc[i]
-        close = float(row["close"])
+    summary = BacktestSummary(
+        total_candles=total,
+        returned_candles=len(candles),
+        trades=int(raw.get("n_trades", 0)),
+        profit_pct=float(raw.get("profit_pct", 0.0)),
+        leverage=int(raw.get("leverage", leverage)),
+        stress=StressInfo(**raw["stress"]) if stress and raw.get("stress") else None,
+    )
 
-        # =========================
-        # EMA Crossover Strategy
-        # =========================
-        if strategy == "ema_crossover":
-            ema21 = float(row["ema21"])
-            ema50 = float(row["ema50"])
+    return BacktestResult(
+        ok=True,
+        symbol=raw.get("symbol", symbol),
+        strategy=raw.get("strategy", strategy),
+        summary=summary,
+        candles=candles,
+    )
 
-            if ema21 > ema50 and not position:
-                position = {"side": "LONG", "entry": close, "index": i}
-            elif ema21 < ema50 and position and position["side"] == "LONG":
-                pnl = ((close - position["entry"]) / position["entry"]) * leverage
-                balance *= (1 + pnl)
-                trades.append({
-                    "side": "LONG",
-                    "entry": position["entry"],
-                    "exit": close,
-                    "pnl_pct": round(pnl * 100, 2)
-                })
-                position = None
-
-        # =========================
-        # MACD Crossover Strategy
-        # =========================
-        elif strategy == "macd_crossover":
-            macd_line = float(row.get("macd", 0))
-            macd_signal = float(row.get("macd_signal", 0))
-
-            if macd_line > macd_signal and not position:
-                position = {"side": "LONG", "entry": close, "index": i}
-            elif macd_line < macd_signal and position and position["side"] == "LONG":
-                pnl = ((close - position["entry"]) / position["entry"]) * leverage
-                balance *= (1 + pnl)
-                trades.append({
-                    "side": "LONG",
-                    "entry": position["entry"],
-                    "exit": close,
-                    "pnl_pct": round(pnl * 100, 2)
-                })
-                position = None
-
-        # =========================
-        # Bollinger Bands Strategy
-        # =========================
-        elif strategy == "bollinger":
-            bb_lower = float(row.get("bb_lower", 0))
-            bb_upper = float(row.get("bb_upper", 0))
-
-            if close < bb_lower and not position:
-                position = {"side": "LONG", "entry": close, "index": i}
-            elif close > bb_upper and position and position["side"] == "LONG":
-                pnl = ((close - position["entry"]) / position["entry"]) * leverage
-                balance *= (1 + pnl)
-                trades.append({
-                    "side": "LONG",
-                    "entry": position["entry"],
-                    "exit": close,
-                    "pnl_pct": round(pnl * 100, 2)
-                })
-                position = None
-
-        equity_curve.append(balance)
-
-    # =========================
-    # Stress Mode
-    # =========================
-    stress: Dict[str, Any] = {}
-    if stress_mode and equity_curve:
-        peak = equity_curve[0]
-        max_dd = 0.0
-        max_win = 0.0
-        for eq in equity_curve:
-            if eq > peak:
-                peak = eq
-            dd = (peak - eq) / peak
-            max_dd = max(max_dd, dd)
-            gain = (eq / initial_balance - 1)
-            max_win = max(max_win, gain)
-        risk_reward = (max_win * 100 / max_dd * 100) if max_dd > 0 else None
-        stress = {
-            "max_drawdown_pct": round(max_dd * 100, 2),
-            "max_win_pct": round(max_win * 100, 2),
-            "risk_reward_ratio": round(risk_reward, 2) if risk_reward else None
-        }
-
-    return {
-        "ok": True,
-        "strategy": strategy,
-        "trades": trades,
-        "final_balance": round(balance, 2),
-        "profit_pct": round(((balance / initial_balance) - 1) * 100, 2),
-        "n_trades": len(trades),
-        "leverage": leverage,
-        "stress": stress if stress_mode else None,
-        # ❗ כדי למנוע ResponseTooLarge, לא נחזיר את כל ה־candles כאן.
-        "candles": []  
-    }
 
 
   
