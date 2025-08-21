@@ -2,9 +2,9 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-router = APIRouter()
+router = APIRouter(tags=["Debug"])
 
-@router.post("/headers", tags=["Debug"])
+@router.post("/headers")
 async def debug_headers(request: Request):
     """
     מחזיר את ה־headers + body בדיוק כפי שהתקבלו.
@@ -16,4 +16,5 @@ async def debug_headers(request: Request):
     except Exception:
         body = None
     return JSONResponse(content={"headers": headers, "body": body})
+
 
