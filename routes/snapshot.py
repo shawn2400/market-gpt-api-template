@@ -1,86 +1,81 @@
 # routes/snapshot.py
 from __future__ import annotations
-import os, time, uuid
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from datetime import datetime
+import json
+from typing import List, Dict, Any
+from fastapi import APIRouter, Query, HTTPException
+from pydantic import BaseModel, Field
 
-# נשתמש ב-matplotlib בלי תצוגה GUI
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+from utils.cache_fallback import lpush, ltrim, get_value
+from utils.anchor import evaluate_anchor, AnchorDecision
 
-router = APIRouter(tags=["Snapshots"])
+router = APIRouter(tags=["Anchor"])
 
-
-class SnapshotTradeRequest(BaseModel):
-    symbol: str
-    direction: str  # LONG/SHORT
-    entry: float
-    sl: float
-    tp: float
-    price_now: Optional[float] = None
-    budget: Optional[float] = None
-    leverage: Optional[float] = None
-    quality_score: Optional[float] = None
+# =====================
+# Models
+# =====================
+class AnchorSnapshot(BaseModel):
+    ts: int
+    side: str
+    bias: str
+    score: float
+    allow: bool
 
 
-class SnapshotResponse(BaseModel):
+class AnchorHistoryResponse(BaseModel):
     ok: bool = True
-    url: str
-    file_path: str
-    created_at: str
+    count: int
+    items: List[AnchorSnapshot] = Field(default_factory=list)
 
 
-@router.post("/trade", response_model=SnapshotResponse, operation_id="postTradeSnapshot")
-def post_trade_snapshot(payload: SnapshotTradeRequest) -> Dict[str, Any]:
-    try:
-        # 📂 ודא תיקייה ליצירת הסנאפשוט
-        out_dir = os.path.join("static", "snapshots")
-        os.makedirs(out_dir, exist_ok=True)
+class AnchorLiveResponse(BaseModel):
+    ok: bool = True
+    side: str
+    decision: Dict[str, Any]
 
-        # 🔹 שם ייחודי (uuid4 כדי למנוע התנגשויות)
-        fname = f"trade-{payload.symbol}-{uuid.uuid4().hex}.png".replace("/", "_")
-        fpath = os.path.join(out_dir, fname)
 
-        # 🎨 ציור תמונת סיכום
-        fig = plt.figure(figsize=(6, 3.2), dpi=150)
-        fig.patch.set_alpha(0.0)
-        ax = plt.gca()
-        ax.axis("off")
+# =====================
+# Endpoints
+# =====================
+@router.get("/anchor/history", response_model=AnchorHistoryResponse)
+async def get_anchor_history(limit: int = Query(50, ge=10, le=200)):
+    """
+    מחזיר את ההיסטוריה האחרונה של Anchor (Redis או fallback).
+    """
+    key = "anchor:history"
+    raw_items = await get_value(key) or []
+    if not isinstance(raw_items, list):
+        raw_items = []
 
-        txt = (
-            f"AlgoGPT Trade Snapshot\n"
-            f"Symbol: {payload.symbol} | {payload.direction}\n"
-            f"Entry: {payload.entry}  SL: {payload.sl}  TP: {payload.tp}\n"
-            f"Now: {payload.price_now or '-'}  Budget: {payload.budget or '-'}  Lev: {payload.leverage or '-'}\n"
-            f"Quality: {payload.quality_score or '-'}"
-        )
-        ax.text(0.02, 0.9, txt, transform=ax.transAxes, va="top", ha="left", fontsize=10)
+    items: List[AnchorSnapshot] = []
+    for raw in raw_items[:limit]:
+        try:
+            data = json.loads(raw)
+            items.append(AnchorSnapshot(**data))
+        except Exception:
+            continue
 
-        # 📉 קו פשוט SL → ENTRY → TP
-        ax.plot([0.05, 0.95], [0.35, 0.35], lw=2)
-        ax.text(0.05, 0.33, f"SL {payload.sl}", fontsize=8)
-        ax.text(0.45, 0.33, f"ENTRY {payload.entry}", fontsize=8)
-        ax.text(0.80, 0.33, f"TP {payload.tp}", fontsize=8)
+    return AnchorHistoryResponse(count=len(items), items=items)
 
-        plt.tight_layout()
-        fig.savefig(fpath, bbox_inches="tight")
-        plt.close(fig)
 
-        # 🌍 יצירת URL ציבורי אם יש BASE
-        base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-        url = f"{base}/static/snapshots/{fname}" if base else f"/static/snapshots/{fname}"
+@router.get("/anchor/live", response_model=AnchorLiveResponse)
+async def get_anchor_live(side: str = Query("LONG", regex="^(LONG|SHORT)$")):
+    """
+    מריץ Evaluate Anchor בזמן אמת ומחזיר תוצאה חיה (לא רק היסטורית).
+    """
+    dec: AnchorDecision = evaluate_anchor(side)
+    return AnchorLiveResponse(
+        side=side,
+        decision={
+            "mode_requested": dec.mode_requested,
+            "mode_applied": dec.mode_applied,
+            "bias": dec.bias,
+            "score": dec.score,
+            "allow": dec.allow,
+            "severity": dec.severity,
+            "reason": dec.reason,
+        }
+    )
 
-        return SnapshotResponse(
-            url=url,
-            file_path=fpath,
-            created_at=datetime.utcnow().isoformat()
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"snapshot error: {e}")
 
 
 
