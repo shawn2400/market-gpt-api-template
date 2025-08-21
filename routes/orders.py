@@ -1,4 +1,3 @@
-# routes/orders.py
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from typing import List
@@ -44,6 +43,7 @@ async def list_active_orders():
     total = len(orders)
     clean = [OrderModel(**o) for o in orders]
     return OrdersResponse(count_total=total, returned=len(clean), items=clean)
+
 
 
 
