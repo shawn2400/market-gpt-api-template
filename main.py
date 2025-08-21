@@ -1,19 +1,15 @@
 # main.py
 from __future__ import annotations
-import os
-import asyncio
-import logging
+import os, asyncio, logging, json, time
 from collections import deque
 from datetime import datetime, timezone
-import json
+from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-import time
 
 # Utils
 from utils.response_limits import ResponseSizeLimiter
@@ -31,11 +27,8 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.4")
 
 # --- Logging (JSON structured) ---
 logger = setup_json_logging()
-
-# ✅ In-memory log buffer
 LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
 LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
-
 
 class MemoryLogHandler(logging.Handler):
     def emit(self, record):
@@ -45,7 +38,6 @@ class MemoryLogHandler(logging.Handler):
             "logger": record.name,
             "message": record.getMessage()
         })
-
 
 logger.addHandler(MemoryLogHandler())
 
@@ -60,17 +52,26 @@ app = FastAPI(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(ResponseSizeLimiter, max_bytes=2_097_152)
 
-# ✅ Rate-limit: כללי 60/דקה, מותאם פר־endpoint
-ENDPOINT_LIMITS = {
-    "/backtest/": (10, 60),     # בקושי – 10 קריאות לדקה
-    "/health": (300, 60),       # בריאות – נדיב
-    "/health/live": (300, 60),
+# ✅ Load Rate-Limits from config file
+rate_limits_config = {"default": {"limit": 60, "window": 60}, "endpoints": {}}
+config_file = Path("config/rate_limits.json")
+if config_file.exists():
+    try:
+        rate_limits_config = json.loads(config_file.read_text())
+        logger.info({"event": "rate_limit_config_loaded", "file": str(config_file)})
+    except Exception as e:
+        logger.error({"event": "rate_limit_config_error", "error": str(e)})
+
+endpoint_limits = {
+    pattern: (cfg["limit"], cfg["window"])
+    for pattern, cfg in rate_limits_config.get("endpoints", {}).items()
 }
+
 app.add_middleware(
     RateLimitMiddleware,
-    limit=60,
-    window=60,
-    endpoint_limits=ENDPOINT_LIMITS
+    limit=rate_limits_config["default"]["limit"],
+    window=rate_limits_config["default"]["window"],
+    endpoint_limits=endpoint_limits
 )
 
 app.add_middleware(
@@ -133,8 +134,7 @@ app.include_router(market_router, tags=["Market"])
 app.include_router(scan_utils_router, prefix="/scan", tags=["Scan"])
 app.include_router(utils_router, tags=["Utils"])
 
-
-# --- Price Monitor Loop (LIVE) ---
+# --- Price Monitor Loop ---
 async def price_monitor_loop(interval: int = 30):
     while True:
         try:
@@ -159,9 +159,7 @@ async def price_monitor_loop(interval: int = 30):
                     })
         except Exception as e:
             logger.error({"event": "price_monitor_loop_error", "error": str(e)})
-
         await asyncio.sleep(interval)
-
 
 # --- Anchor Snapshot Loop ---
 async def anchor_snapshot_loop(interval: int = 30):
@@ -174,62 +172,33 @@ async def anchor_snapshot_loop(interval: int = 30):
                     dec = evaluate_anchor(side)
                     if redis_client:
                         key = "anchor:history"
-                        item = {
-                            "ts": now,
-                            "side": side,
-                            "bias": dec.bias,
-                            "score": dec.score,
-                            "allow": dec.allow,
-                        }
+                        item = {"ts": now, "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
                         redis_client.lpush(key, json.dumps(item))
                         redis_client.ltrim(key, 0, 200)
-                    logger.info({
-                        "event": "anchor_snapshot",
-                        "side": side,
-                        "bias": dec.bias,
-                        "score": dec.score,
-                        "allow": dec.allow,
-                        "time": now
-                    })
+                    logger.info({"event": "anchor_snapshot", **item})
                 except Exception as e:
-                    logger.error({
-                        "event": "anchor_snapshot_error",
-                        "side": side,
-                        "error": str(e)
-                    })
+                    logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         except Exception as e:
             logger.error({"event": "anchor_snapshot_loop_error", "error": str(e)})
-
         await asyncio.sleep(interval)
-
 
 # --- Cache Cleaner ---
 CACHE_DIR = Path("static/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int = 86400):
-    """
-    מנקה קבצי cache ישנים:
-    - מוחק קבצים בני יותר מ־24 שעות (max_age)
-    - משאיר רק 100 קבצים אחרונים
-    """
     while True:
         try:
             files = sorted(CACHE_DIR.glob("backtest_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
             now = time.time()
-
             for f in files:
                 if now - f.stat().st_mtime > max_age:
                     f.unlink(missing_ok=True)
-
             for f in files[max_files:]:
                 f.unlink(missing_ok=True)
-
         except Exception as e:
             logger.error({"event": "cache_cleaner_error", "error": str(e)})
-
         await asyncio.sleep(interval)
-
 
 # --- Startup tasks ---
 @app.on_event("startup")
@@ -243,30 +212,15 @@ async def startup_event():
         symbols.insert(0, "BTCUSDT")
         logger.info({"event": "watchlist", "msg": "BTCUSDT enforced as anchor"})
 
-    updater_interval = int(os.getenv("WS_UPDATE_INTERVAL", 15))
-    asyncio.create_task(auto_price_updater(symbols, interval=updater_interval))
-    logger.info({
-        "event": "startup",
-        "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {updater_interval}s"
-    })
-
-    monitor_interval = int(os.getenv("PRICE_MONITOR_INTERVAL", 30))
-    asyncio.create_task(price_monitor_loop(interval=monitor_interval))
-    logger.info({"event": "startup", "msg": f"✅ Price monitor loop started ({monitor_interval}s)"})
-
-    anchor_interval = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))
-    asyncio.create_task(anchor_snapshot_loop(interval=anchor_interval))
-    logger.info({"event": "startup", "msg": f"✅ Anchor snapshot loop started ({anchor_interval}s)"})
-
+    asyncio.create_task(auto_price_updater(symbols, interval=int(os.getenv("WS_UPDATE_INTERVAL", 15))))
+    asyncio.create_task(price_monitor_loop(interval=int(os.getenv("PRICE_MONITOR_INTERVAL", 30))))
+    asyncio.create_task(anchor_snapshot_loop(interval=int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))))
     asyncio.create_task(cache_cleaner(interval=3600, max_files=100, max_age=86400))
-    logger.info({"event": "startup", "msg": "✅ Cache cleaner started"})
-
 
 # --- Root / Status ---
-@app.get("/", tags=["Config"], operation_id="getRootStatus")
+@app.get("/", tags=["Config"])
 async def root_status():
     return {"status": "ok", "version": APP_VERSION}
-
 
 # --- Error handler ---
 @app.exception_handler(Exception)
@@ -274,38 +228,26 @@ async def handle_exception(request: Request, exc: Exception):
     logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-
 # --- Health endpoints ---
-@app.get("/health", tags=["Health"], operation_id="getHealth")
+@app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "version": APP_VERSION}
 
-
-@app.get("/health/live", tags=["Health"], operation_id="getHealthLive")
+@app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"status": "live"}
 
-
 # ✅ Debug logs endpoint
-@app.get("/debug/health", tags=["Debug"], operation_id="getDebugHealth")
-async def debug_health(
-    limit: int = Query(50, description="Number of logs to return"),
-    level: str | None = Query(None, description="Filter by log level"),
-    logger_name: str | None = Query(None, description="Filter by logger name")
-):
+@app.get("/debug/health", tags=["Debug"])
+async def debug_health(limit: int = Query(50), level: str | None = None, logger_name: str | None = None):
     logs = list(LOG_BUFFER)[-limit:]
-
     if level:
-        level = level.upper()
-        logs = [log for log in logs if log["level"] == level]
-
+        logs = [log for log in logs if log["level"] == level.upper()]
     if logger_name:
         logs = [log for log in logs if log["logger"] == logger_name]
-
     return {"count": len(logs), "logs": logs}
 
-
-# --- Entrypoint (local run only) ---
+# --- Entrypoint ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
