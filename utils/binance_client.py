@@ -1,4 +1,3 @@
-# utils/binance_client.py
 from __future__ import annotations
 
 import os, time, logging
@@ -26,7 +25,6 @@ _BINANCE_FAPI_BASES: List[str] = [
 ]
 
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "4.0"))
-_RETRY_STATUSES = {418, 429, 500, 502, 503, 504}
 
 # =========================
 # Client factory
@@ -97,109 +95,45 @@ def is_valid_futures_symbol(symbol: str) -> bool:
     return symbol.upper() in valid_futures_symbols()
 
 # =========================
-# Account helpers
+# Futures Mark Price (SAFE)
 # =========================
-def spot_balance(asset: str = "USDT") -> float:
-    client = get_client()
-    balances = retry_call(lambda: client.get_asset_balance(asset=asset), f"spot_balance({asset})")
-    return float(balances.get("free", 0) or 0.0)
-
-def futures_balance(asset: str = "USDT") -> float:
-    client = get_client()
-    balances = retry_call(lambda: client.futures_account_balance(), "futures_account_balance")
-    for b in balances:
-        if b.get("asset") == asset:
-            return float(b.get("balance", 0) or 0.0)
-    return 0.0
-
-def futures_position(symbol: str) -> Optional[Dict[str, Any]]:
-    client = get_client()
-    positions = retry_call(lambda: client.futures_position_information(symbol=symbol.upper()),
-                           f"futures_position({symbol})")
-    return positions[0] if positions else None
-
-def futures_open_positions() -> List[Dict[str, Any]]:
-    client = get_client()
-    positions = retry_call(lambda: client.futures_position_information(), "futures_open_positions")
-    out: List[Dict[str, Any]] = []
-    for p in positions:
-        amt = float(p.get("positionAmt", 0) or 0.0)
-        if abs(amt) > 0:
-            side = "LONG" if amt > 0 else "SHORT"
-            out.append({
-                "symbol": p.get("symbol"),
-                "side": side,
-                "entryPrice": float(p.get("entryPrice", 0) or 0.0),
-                "unrealizedPnl": float(p.get("unRealizedProfit", 0) or 0.0),
-                "positionAmt": amt,
-                "leverage": int(p.get("leverage", 0) or 0),
-                "marginType": (p.get("marginType") or "").upper(),
-            })
-    return out
-
-def ping_and_info() -> bool:
-    client = get_client()
-    try:
-        retry_call(lambda: client.ping(), "ping")
-        retry_call(lambda: client.futures_exchange_info(), "exchange_info")
-        return True
-    except Exception as e:
-        logger.error(f"[Binance] ping_and_info failed: {e}")
-        return False
-
-# =========================
-# Public Futures Mark Price
-# =========================
-def _looks_like_json(txt: str) -> bool:
-    if not txt:
-        return False
-    t = txt.lstrip()
-    return t.startswith("{") or t.startswith("[")
-
 def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
     sym = symbol.upper().strip()
 
-    # ✅ Validate symbol first
     if not is_valid_futures_symbol(sym):
         raise RuntimeError(f"[Binance] Symbol {sym} is not valid in Futures")
 
-    # ✅ WS only mode
     if PRICE_MONITOR_DISABLE:
-        from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
+        from utils.ws_fallback import LAST_PRICE_CACHE
         rec = LAST_PRICE_CACHE.get(sym)
         if rec and "price" in rec:
             return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
         raise RuntimeError(f"[Binance] WS cache miss for {sym}")
 
     last_err: Optional[str] = None
-    headers = {"Accept": "application/json", "User-Agent": "AlgoGPT/2 binance-client"}
+    headers = {"Accept": "application/json", "User-Agent": "AlgoGPT-binance-client"}
 
     for attempt in range(1, tries + 1):
         for base in _BINANCE_FAPI_BASES:
             url = f"{base}/fapi/v1/premiumIndex"
             try:
-                with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True, follow_redirects=False) as client:
+                with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True) as client:
                     r = client.get(url, params={"symbol": sym}, headers=headers)
 
                 if r.status_code == 200 and "application/json" in (r.headers.get("Content-Type") or ""):
                     data = r.json()
                     if isinstance(data, dict) and "markPrice" in data:
                         return data
-
-                last_err = f"HTTP {r.status_code} from {base} / {r.text[:80]}"
-
+                else:
+                    last_err = f"{r.status_code} {r.text[:80]}"
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
         time.sleep(0.35 * attempt)
 
-    # Fallback ל־WS
-    try:
-        from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
-        rec = LAST_PRICE_CACHE.get(sym)
-        if rec and "price" in rec:
-            return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
-    except Exception:
-        pass
+    from utils.ws_fallback import LAST_PRICE_CACHE
+    rec = LAST_PRICE_CACHE.get(sym)
+    if rec and "price" in rec:
+        return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
 
     raise RuntimeError(f"[Binance] futures_mark_price_dict({sym}) failed after {tries} tries: {last_err}")
 
@@ -210,6 +144,48 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
