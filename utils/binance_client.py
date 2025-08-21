@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import json
 import time
 import logging
 from typing import Any, Callable, Optional, Dict, List
@@ -186,11 +185,9 @@ def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True, follow_redirects=False) as client:
                     r = client.get(url, params={"symbol": sym}, headers=headers)
                 if r.status_code != 200:
-                    # רוטציה במצבי 3xx/5xx או קודי rate/ban
                     if (300 <= r.status_code < 400) or (r.status_code in _RETRY_STATUSES):
                         last_err = f"HTTP {r.status_code} from {base}"
                         continue
-                    # 4xx אחר → שגיאה מפורטת
                     raise RuntimeError(f"HTTP {r.status_code} from {base}: {r.text[:200]}")
 
                 ct = (r.headers.get("Content-Type") or "")
@@ -208,8 +205,7 @@ def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
                 last_err = f"{type(e).__name__}: {e}"
                 # נמשיך לדומיין הבא
 
-        # backoff קטן בין סבבים
-        time.sleep(0.35 * attempt)
+        time.sleep(0.35 * attempt)  # backoff קטן בין סבבים
 
     # Fallback: WS cache
     try:
@@ -223,16 +219,17 @@ def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
     raise RuntimeError(f"[Binance] futures_mark_price_dict({sym}) failed after {tries} tries: {last_err}")
 
 
-def futures_mark_price(symbol: str) -> float:
+def futures_mark_price(symbol: str) -> Optional[float]:
     """
-    API נוח שמחזיר float בלבד. משתמש ב-futures_mark_price_dict.
+    מחזיר float או None (לא זורק חריגות) כדי שלולאת ה-REST לא תציף שגיאות.
     """
-    data = futures_mark_price_dict(symbol)
     try:
+        data = futures_mark_price_dict(symbol)
         return float(data.get("markPrice") or 0.0)
-    except Exception:
-        # ניסוי המרה קשיח אחרון
-        return float(str(data.get("markPrice", "0")).strip() or 0.0)
+    except Exception as e:
+        logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
+        return None
+
 
 
 
