@@ -1,3 +1,4 @@
+# routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
 from fastapi import APIRouter, Depends, Body, HTTPException, Query, Header
@@ -5,7 +6,7 @@ from pydantic import BaseModel, Field
 
 # --- Auth ---
 try:
-    from utils.auth import require_bearer_token as _raw_require_bearer  # type: ignore
+    from utils.auth import require_bearer_token as _raw_require_bearer
     def require_bearer_token(
         authorization: Optional[str] = Header(default=None, convert_underscores=False),
         x_api_key: Optional[str] = Header(default=None, alias="X-API-KEY"),
@@ -22,17 +23,17 @@ except Exception:
     def require_bearer_token():
         return None
 
-# --- Anchor (shim→fallback) ---
+# --- Anchor ---
 try:
-    from utils.anchor import evaluate_anchor, AnchorDecision  # type: ignore
+    from utils.anchor import evaluate_anchor, AnchorDecision
 except Exception:
-    from utils.btc_anchor import evaluate_anchor, AnchorDecision  # type: ignore
+    from utils.btc_anchor import evaluate_anchor, AnchorDecision
 
-# --- Quality (shim→fallback) ---
+# --- Quality ---
 try:
-    from utils.quality import compute_quality  # type: ignore
+    from utils.quality import compute_quality
 except Exception:
-    from utils.quantity_utils import compute_quality  # type: ignore
+    from utils.quantity_utils import compute_quality
 
 router = APIRouter(tags=["AI"])
 Side = Literal["LONG", "SHORT"]
@@ -132,7 +133,7 @@ async def get_ai_manual_scan(
     symbol: str = Query(...),
     market: str = Query("futures"),
     interval: str = Query("15m"),
-    bars: int = Query(200, ge=50, le=1500),
+    bars: int = Query(200, ge=50, le=500),  # ✅ הגבלה ל-500 כדי למנוע JSON ענק
     _auth=Depends(require_bearer_token),
 ) -> AiManualScanResponse:
     sym = symbol.upper().strip()
@@ -143,10 +144,10 @@ async def get_ai_manual_scan(
     except Exception as e:
         return AiManualScanResponse(
             symbol=sym,
-            results=AiManualScanItem(symbol=sym, market=market, interval=interval, reason=f"analyze-fallback: {type(e).__name__}")
+            results=AiManualScanItem(
+                symbol=sym, market=market, interval=interval, reason=f"analyze-fallback: {type(e).__name__}"
+            )
         )
-
-
 
 
 
