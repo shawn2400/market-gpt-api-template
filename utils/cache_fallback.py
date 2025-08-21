@@ -15,7 +15,6 @@ async def set_value(key: str, value: str, expire: int | None = None) -> bool:
             return True
         except Exception as e:
             logger.error(f"[CacheFallback] Redis set error: {e}")
-    # fallback
     await cache.aget_or_set(key, expire or 60, lambda: value)
     return True
 
@@ -63,4 +62,5 @@ async def ltrim(key: str, start: int, end: int):
     if isinstance(existing, list):
         new_list = existing[start:end+1]
         await cache.aget_or_set(key, 3600, lambda: new_list)
+
 
