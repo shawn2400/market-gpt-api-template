@@ -69,7 +69,6 @@ app = FastAPI(
 )
 
 # --- Middlewares ---
-# קודם הגבלת גודל (מודד raw) ואז כיווץ
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 1_048_576)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -228,15 +227,18 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
 # --- Startup ---
 @app.on_event("startup")
 async def startup_event():
-    watchlist = load_watchlist()
-    symbols = [it["symbol"] for it in watchlist]
-    if "BTCUSDT" not in [s.upper() for s in symbols]:
-        symbols.insert(0, "BTCUSDT")
-    asyncio.create_task(auto_price_updater(symbols, interval=WS_UPDATE_INTERVAL))
-    if not PRICE_MONITOR_DISABLE:
-        asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
-    asyncio.create_task(anchor_snapshot_loop())
-    asyncio.create_task(cache_cleaner())
+    try:
+        watchlist = load_watchlist()
+        symbols = [it["symbol"] for it in watchlist]
+        if "BTCUSDT" not in [s.upper() for s in symbols]:
+            symbols.insert(0, "BTCUSDT")
+        asyncio.create_task(auto_price_updater(symbols, interval=WS_UPDATE_INTERVAL))
+        if not PRICE_MONITOR_DISABLE:
+            asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
+        asyncio.create_task(anchor_snapshot_loop())
+        asyncio.create_task(cache_cleaner())
+    except Exception as e:
+        logger.error({"event": "startup_error", "error": str(e)})
 
 # --- Status / Health ---
 @app.get("/", tags=["Config"])
@@ -270,7 +272,6 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=os.getenv("APP_ENV", "prod") != "production")
-
 
 
 
