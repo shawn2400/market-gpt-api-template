@@ -37,7 +37,7 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.6")
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
+LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 500))
 LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
 
 class MemoryLogHandler(logging.Handler):
@@ -51,8 +51,12 @@ class MemoryLogHandler(logging.Handler):
 logger.addHandler(MemoryLogHandler())
 
 # --- Config check ---
-check_config()
-logger.info({"event": "config_snapshot", **dump_config_sanitized()})
+try:
+    check_config()
+    logger.info({"event": "config_snapshot", **dump_config_sanitized()})
+except Exception as e:
+    logger.error({"event": "config_error", "error": str(e)})
+    raise
 
 # --- FastAPI ---
 app = FastAPI(
@@ -178,13 +182,14 @@ async def startup_event():
             asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
         asyncio.create_task(anchor_snapshot_loop())
         asyncio.create_task(cache_cleaner())
+        logger.info({"event": "startup_ok", "symbols": symbols})
     except Exception as e:
         logger.error({"event": "startup_error", "error": str(e)})
 
 # --- Health / Status ---
 @app.get("/", tags=["Config"])
 async def root_status():
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": APP_VERSION, "config": dump_config_sanitized()}
 
 @app.get("/health", tags=["Health"])
 async def health():
@@ -213,6 +218,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
