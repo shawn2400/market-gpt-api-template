@@ -4,6 +4,7 @@ import os, asyncio, logging, json, time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +25,7 @@ from utils.auth import require_api_key   # ✅ API-Key auth
 
 # --- Env ---
 load_dotenv(override=True)
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.4")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.5")  # העלאה קלה בגרסה
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -109,7 +110,7 @@ from routes.price import router as price_router
 from routes.market import router as market_router
 from routes.scan import router as scan_utils_router
 from routes.utils import router as utils_router
-from routes.anchor import router as anchor_router   # ✅ חדש
+from routes.anchor import router as anchor_router   # ✅ Anchor
 
 # ✅ Protected routers (API-Key required)
 protected_routers = [
@@ -135,7 +136,7 @@ protected_routers = [
     (market_router, "", ["Market"]),
     (scan_utils_router, "/scan", ["Scan"]),
     (utils_router, "", ["Utils"]),
-    (anchor_router, "", ["Anchor"]),   # ✅ Anchor Router
+    (anchor_router, "", ["Anchor"]),
 ]
 
 for router, prefix, tags in protected_routers:
@@ -144,110 +145,38 @@ for router, prefix, tags in protected_routers:
 # ✅ Debug router נשאר פתוח (לא חייב API-Key)
 app.include_router(debug_router, prefix="/debug", tags=["Debug"])
 
-# --- Price Monitor Loop ---
+# --- Price Monitor Loop (smart skip & disable) ---
+PRICE_WS_FRESH_TTL = int(os.getenv("PRICE_WS_FRESH_TTL", "20"))  # שניות
+
 async def price_monitor_loop(interval: int = 30):
+    """
+    מושך Mark Price ב-REST רק לסימבולים שלא קיבלו עדכון WS טרי לאחרונה.
+    ניתן לכבות לחלוטין עם PRICE_MONITOR_DISABLE=1.
+    """
     while True:
         try:
-            now = datetime.now(timezone.utc).isoformat()
-            for sym in list(LAST_PRICE_CACHE.keys()):
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for sym, rec in list(LAST_PRICE_CACHE.items()):
                 try:
-                    data = futures_mark_price(sym)
-                    price = float(data["markPrice"]) if isinstance(data, dict) and "markPrice" in data else None
-                    if price:
-                        update_price(sym, price)
-                        logger.info({"event": "price_monitor", "symbol": sym, "price": price, "time": now})
+                    ts = float(rec.get("ts") or 0.0)
+                except Exception:
+                    ts = 0.0
+                # אם היה עדכון WS ב-TTL האחרון → דילוג על REST
+                if (time.time() - ts) < PRICE_WS_FRESH_TTL:
+                    continue
+                try:
+                    price_val = futures_mark_price(sym)  # float יציב
+                    if price_val and price_val > 0:
+                        update_price(sym, float(price_val))
+                        logger.info({"event": "price_monitor", "symbol": sym, "price": float(price_val), "time": now_iso})
                 except Exception as e:
                     logger.error({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
         except Exception as e:
             logger.error({"event": "price_monitor_loop_error", "error": str(e)})
         await asyncio.sleep(interval)
 
-# --- Anchor Snapshot Loop ---
-async def anchor_snapshot_loop(interval: int = 30):
-    sides = ["LONG", "SHORT"]
-    while True:
-        try:
-            now = int(datetime.now(timezone.utc).timestamp())
-            for side in sides:
-                try:
-                    dec = evaluate_anchor(side)
-                    key = "anchor:history"
-                    item = {"ts": now, "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
-                    await redis_store.lpush(key, json.dumps(item))
-                    await redis_store.ltrim(key, 0, 200)
-                    logger.info({"event": "anchor_snapshot", **item})
-                except Exception as e:
-                    logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
-        except Exception as e:
-            logger.error({"event": "anchor_snapshot_loop_error", "error": str(e)})
-        await asyncio.sleep(interval)
+# --- Anchor Snapshot
 
-# --- Cache Cleaner ---
-CACHE_DIR = Path("static/cache")
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int = 86400):
-    while True:
-        try:
-            files = sorted(CACHE_DIR.glob("backtest_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            now = time.time()
-            for f in files:
-                if now - f.stat().st_mtime > max_age:
-                    f.unlink(missing_ok=True)
-            for f in files[max_files:]:
-                f.unlink(missing_ok=True)
-        except Exception as e:
-            logger.error({"event": "cache_cleaner_error", "error": str(e)})
-        await asyncio.sleep(interval)
-
-# --- Startup tasks ---
-@app.on_event("startup")
-async def startup_event():
-    watchlist = load_watchlist()
-    symbols = [it["symbol"] for it in watchlist]
-    if "BTCUSDT" not in [s.upper() for s in symbols]:
-        symbols.insert(0, "BTCUSDT")
-        logger.info({"event": "watchlist", "msg": "BTCUSDT enforced as anchor"})
-
-    asyncio.create_task(auto_price_updater(symbols, interval=int(os.getenv("WS_UPDATE_INTERVAL", 15))))
-    asyncio.create_task(price_monitor_loop(interval=int(os.getenv("PRICE_MONITOR_INTERVAL", 30))))
-    asyncio.create_task(anchor_snapshot_loop(interval=int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))))
-    asyncio.create_task(cache_cleaner(interval=3600, max_files=100, max_age=86400))
-
-# --- Root / Status ---
-@app.get("/", tags=["Config"])
-async def root_status():
-    return {"status": "ok", "version": APP_VERSION}
-
-# --- Error handler ---
-@app.exception_handler(Exception)
-async def handle_exception(request: Request, exc: Exception):
-    logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
-    return JSONResponse({"detail": str(exc)}, status_code=500)
-
-# --- Health endpoints (no API-Key needed) ---
-@app.get("/health", tags=["Health"])
-async def health():
-    return {"status": "ok", "version": APP_VERSION}
-
-@app.get("/health/live", tags=["Health"])
-async def health_live():
-    return {"status": "live"}
-
-# ✅ Debug logs endpoint (no API-Key)
-@app.get("/debug/health", tags=["Debug"])
-async def debug_health(limit: int = Query(50), level: str | None = None, logger_name: str | None = None):
-    logs = list(LOG_BUFFER)[-limit:]
-    if level:
-        logs = [log for log in logs if log["level"] == level.upper()]
-    if logger_name:
-        logs = [log for log in logs if log["logger"] == logger_name]
-    return {"count": len(logs), "logs": logs}
-
-# --- Entrypoint ---
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
 
 
 
