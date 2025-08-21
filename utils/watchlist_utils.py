@@ -4,8 +4,11 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 
+from utils.redis_client import redis_client  # ✅ שימוש ב־Redis אם זמין
+
 WATCHLIST_PATH = os.getenv("WATCHLIST_PATH", "watchlist.json")
 ANCHOR_SYMBOL = "BTCUSDT"
+REDIS_KEY = "algogpt:watchlist"
 
 _DEFAULT_WATCHLIST: List[Dict[str, Any]] = [
     {"symbol": ANCHOR_SYMBOL, "direction": "LONG", "quality_score": 8},
@@ -16,6 +19,7 @@ _DEFAULT_WATCHLIST: List[Dict[str, Any]] = [
 logger = logging.getLogger("algogpt.watchlist")
 
 
+# -------------------- Helpers --------------------
 def _ensure_file(path: str = WATCHLIST_PATH) -> None:
     if not os.path.exists(path):
         try:
@@ -59,27 +63,45 @@ def _validate_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _ensure_anchor(watchlist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    ודא ש־BTCUSDT נמצא תמיד ברשימה.
-    אם לא קיים – מוסיפים אותו עם quality=8.
-    """
     if not any(it.get("symbol") == ANCHOR_SYMBOL for it in watchlist):
         watchlist.insert(0, {"symbol": ANCHOR_SYMBOL, "direction": "LONG", "quality_score": 8})
         logger.info({"event": "watchlist_anchor", "msg": f"{ANCHOR_SYMBOL} enforced"})
     return watchlist
 
 
+# -------------------- Load --------------------
 def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
-    _ensure_file(path)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, list):
-            raise ValueError("watchlist must be a list")
-    except Exception as e:
-        logger.error({"event": "watchlist_load_error", "error": str(e)})
-        data = list(_DEFAULT_WATCHLIST)
+    data: List[Dict[str, Any]]
 
+    # 🔹 קודם ננסה להביא מ־Redis
+    if redis_client:
+        try:
+            raw = redis_client.get(REDIS_KEY)
+            if raw:
+                data = json.loads(raw)
+                logger.info({"event": "watchlist_load", "src": "redis", "count": len(data)})
+            else:
+                raise ValueError("redis empty")
+        except Exception as e:
+            logger.warning({"event": "watchlist_redis_fallback", "error": str(e)})
+            data = None
+    else:
+        data = None
+
+    # 🔹 אם אין Redis או נכשל → טען מהקובץ
+    if data is None:
+        _ensure_file(path)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                raise ValueError("watchlist must be a list")
+            logger.info({"event": "watchlist_load", "src": "file", "count": len(data)})
+        except Exception as e:
+            logger.error({"event": "watchlist_load_error", "error": str(e)})
+            data = list(_DEFAULT_WATCHLIST)
+
+    # 🔹 Validate + Filter
     out: List[Dict[str, Any]] = []
     seen = set()
     for item in data:
@@ -103,6 +125,7 @@ def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH
     return out
 
 
+# -------------------- Save --------------------
 def save_watchlist(items: List[Dict[str, Any]], path: str = WATCHLIST_PATH) -> bool:
     try:
         clean: List[Dict[str, Any]] = []
@@ -119,9 +142,20 @@ def save_watchlist(items: List[Dict[str, Any]], path: str = WATCHLIST_PATH) -> b
 
         clean = _ensure_anchor(clean)
 
+        # 🔹 כתיבה ל־קובץ
         with open(path, "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
-        logger.info({"event": "watchlist_save", "count": len(clean), "path": path})
+
+        # 🔹 כתיבה ל־Redis
+        if redis_client:
+            try:
+                redis_client.set(REDIS_KEY, json.dumps(clean), ex=3600)  # Expire שעה
+                logger.info({"event": "watchlist_save", "dst": "redis+file", "count": len(clean)})
+            except Exception as e:
+                logger.error({"event": "watchlist_save_redis_error", "error": str(e)})
+        else:
+            logger.info({"event": "watchlist_save", "dst": "file", "count": len(clean)})
+
         return True
     except Exception as e:
         logger.error({"event": "watchlist_save_error", "error": str(e)})
