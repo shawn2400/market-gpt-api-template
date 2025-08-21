@@ -1,35 +1,24 @@
-# utils/anchor.py
-from dataclasses import dataclass
-from typing import Literal
-import random
+# utils/auth.py
+from fastapi import Header, HTTPException, status, Depends
+import os
 
-@dataclass
-class AnchorDecision:
-    mode_requested: Literal["LONG","SHORT"]
-    mode_applied: Literal["LONG","SHORT"]
-    bias: str
-    score: float
-    allow: bool
-    severity: str
-    reason: str
+# --- Load API Key from env ---
+API_KEY = os.getenv("API_KEY", "changeme")  # לשים ב־.env: API_KEY=xxxxx
+API_KEY_HEADER = os.getenv("API_KEY_HEADER", "X-API-KEY")
 
-def evaluate_anchor(side: str) -> AnchorDecision:
+async def verify_api_key(x_api_key: str = Header(None)) -> None:
     """
-    מעריך Anchor פשוט (אפשר לחבר בהמשך לאינדיקטורים אמיתיים).
-    כרגע — סימולציה עם bias=NEUTRAL/UP/DOWN.
+    מאמת בקשות לפי API-KEY שמועבר ב־Header (ברירת מחדל X-API-KEY).
     """
-    bias = random.choice(["UP", "DOWN", "NEUTRAL"])
-    score = round(random.uniform(0, 100), 2)
-    allow = (score >= 50)
-    return AnchorDecision(
-        mode_requested=side,
-        mode_applied=side,
-        bias=bias,
-        score=score,
-        allow=allow,
-        severity="high" if not allow else "low",
-        reason=f"Simulated decision bias={bias}, score={score}"
-    )
+    if not x_api_key or x_api_key != API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API Key",
+        )
+
+# --- Dependency לשימוש ב־routes ---
+def require_api_key(dep=Depends(verify_api_key)):
+    return dep
 
 
 
