@@ -1,65 +1,38 @@
 # routes/backtest.py
-from __future__ import annotations
-from typing import Dict, Any
-from fastapi import APIRouter, Query, Body, HTTPException
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
+from typing import List
+from utils.backtest_engine import run_backtest
 
-import pandas as pd
-from binance.client import Client
+router = APIRouter()
 
-from utils.config import BINANCE_API_KEY, BINANCE_API_SECRET
-from utils.backtest_utils import run_backtest
+class BacktestCandle(BaseModel):
+    time: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
 
-router = APIRouter(prefix="/backtest", tags=["Backtest"])
+class BacktestResult(BaseModel):
+    symbol: str
+    strategy: str
+    trades: int
+    profit_pct: float
+    candles: List[BacktestCandle]
 
-# Binance client (קריאה בלבד לנתונים היסטוריים)
-_client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
-
-
-async def fetch_klines(symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
+@router.get("/", response_model=BacktestResult)
+async def backtest(
+    symbol: str,
+    strategy: str = "ema_cross",
+    limit: int = Query(500, ge=50, le=2000)
+):
     """
-    מוריד נרות היסטוריים מ־Binance ומחזיר כ־DataFrame מוכן.
+    מריץ Backtest מוגבל עד 2000 נרות.
     """
-    try:
-        raw = _client.get_klines(symbol=symbol, interval=interval, limit=limit)
-        df = pd.DataFrame(raw, columns=[
-            "open_time", "open", "high", "low", "close", "volume",
-            "close_time", "qav", "num_trades", "taker_base", "taker_quote", "ignore"
-        ])
-        df["open"] = df["open"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["close"] = df["close"].astype(float)
-        df["volume"] = df["volume"].astype(float)
-        return df
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch klines for {symbol}: {e}")
+    result = run_backtest(symbol, strategy=strategy, limit=limit)
+    return BacktestResult(**result)
 
-
-@router.post("/", summary="Run Backtest", operation_id="postBacktest")
-async def post_backtest(
-    payload: Dict[str, Any] = Body(..., example={
-        "symbol": "BTCUSDT",
-        "interval": "15m",
-        "limit": 500,
-        "strategy": "macd_crossover",
-        "initial_balance": 1000.0
-    })
-) -> Dict[str, Any]:
-    """
-    ✅ מריץ Backtest עם אסטרטגיה נבחרת:
-    - ema_crossover
-    - macd_crossover
-    - bollinger
-    """
-    symbol = payload.get("symbol", "BTCUSDT")
-    interval = payload.get("interval", "15m")
-    limit = int(payload.get("limit", 500))
-    strategy = payload.get("strategy", "ema_crossover")
-    initial_balance = float(payload.get("initial_balance", 1000.0))
-
-    df = await fetch_klines(symbol, interval, limit)
-    result = run_backtest(df, strategy=strategy, initial_balance=initial_balance)
-    return result
 
 
 
