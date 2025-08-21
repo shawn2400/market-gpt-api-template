@@ -68,6 +68,7 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = 3, delay: float
 # Futures Exchange Info cache
 # =========================
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
+_valid_futures_symbols: Optional[set[str]] = None
 
 def futures_exchange_info_safe() -> Dict[str, Any]:
     global _futures_exchange_info_cache
@@ -78,6 +79,21 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     if isinstance(info, dict):
         _futures_exchange_info_cache = info
     return info
+
+def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
+    global _valid_futures_symbols
+    if _valid_futures_symbols is not None and not force_refresh:
+        return _valid_futures_symbols
+    info = futures_exchange_info_safe()
+    symbols = set()
+    for s in info.get("symbols", []):
+        if s.get("status") == "TRADING":
+            symbols.add(s.get("symbol", "").upper())
+    _valid_futures_symbols = symbols
+    return _valid_futures_symbols
+
+def is_valid_futures_symbol(symbol: str) -> bool:
+    return symbol.upper() in valid_futures_symbols()
 
 # =========================
 # Account helpers
@@ -131,7 +147,7 @@ def ping_and_info() -> bool:
         return False
 
 # =========================
-# Public Futures Mark Price (with WS Fallback)
+# Public Futures Mark Price
 # =========================
 def _looks_like_json(txt: str) -> bool:
     if not txt:
@@ -142,7 +158,11 @@ def _looks_like_json(txt: str) -> bool:
 def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
     sym = symbol.upper().strip()
 
-    # ✅ אם מוגדר PRICE_MONITOR_DISABLE → WS בלבד
+    # ✅ Validate symbol first
+    if not is_valid_futures_symbol(sym):
+        raise RuntimeError(f"[Binance] Symbol {sym} is not valid in Futures")
+
+    # ✅ WS only mode
     if PRICE_MONITOR_DISABLE:
         from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
         rec = LAST_PRICE_CACHE.get(sym)
@@ -171,7 +191,7 @@ def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
                 last_err = f"{type(e).__name__}: {e}"
         time.sleep(0.35 * attempt)
 
-    # fallback ל־WS גם אם REST נכשל
+    # Fallback ל־WS
     try:
         from utils.ws_fallback import LAST_PRICE_CACHE  # type: ignore
         rec = LAST_PRICE_CACHE.get(sym)
@@ -189,6 +209,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
