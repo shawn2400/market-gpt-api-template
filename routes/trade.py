@@ -1,10 +1,11 @@
 # routes/trade.py
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List
 from utils.trade_manager import get_open_trades, get_trade_history
 
-router = APIRouter()
+router = APIRouter(tags=["Trade"])
+
 
 class TradeModel(BaseModel):
     id: str
@@ -16,14 +17,34 @@ class TradeModel(BaseModel):
     status: str
     opened_at: str
 
-@router.get("/open", response_model=List[TradeModel])
-async def list_open_trades():
-    return [TradeModel(**t) for t in get_open_trades()]
 
-@router.get("/history", response_model=List[TradeModel])
+class TradesResponse(BaseModel):
+    ok: bool = True
+    count_total: int
+    returned: int
+    items: List[TradeModel] = Field(default_factory=list)
+
+
+@router.get("/open", response_model=TradesResponse)
+async def list_open_trades():
+    """
+    מחזיר את הטריידים הפתוחים כרגע.
+    """
+    trades = get_open_trades()
+    total = len(trades)
+    clean = [TradeModel(**t) for t in trades]
+    return TradesResponse(count_total=total, returned=len(clean), items=clean)
+
+
+@router.get("/history", response_model=TradesResponse)
 async def trade_history(limit: int = Query(50, ge=1, le=200)):
+    """
+    מחזיר את ההיסטוריה (ברירת מחדל 50, מקסימום 200).
+    """
     trades = get_trade_history(limit=limit)
-    return [TradeModel(**t) for t in trades]
+    total = len(trades)
+    clean = [TradeModel(**t) for t in trades[:limit]]
+    return TradesResponse(count_total=total, returned=len(clean), items=clean)
 
 
 
