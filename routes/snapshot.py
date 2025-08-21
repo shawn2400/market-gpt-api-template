@@ -1,9 +1,10 @@
 # routes/snapshot.py
 from __future__ import annotations
-import os, time
+import os, time, uuid
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from datetime import datetime
 
 # נשתמש ב-matplotlib בלי תצוגה GUI
 import matplotlib
@@ -25,15 +26,22 @@ class SnapshotTradeRequest(BaseModel):
     quality_score: Optional[float] = None
 
 
-@router.post("/trade", operation_id="postTradeSnapshot")
+class SnapshotResponse(BaseModel):
+    ok: bool = True
+    url: str
+    file_path: str
+    created_at: str
+
+
+@router.post("/trade", response_model=SnapshotResponse, operation_id="postTradeSnapshot")
 def post_trade_snapshot(payload: SnapshotTradeRequest) -> Dict[str, Any]:
     try:
         # 📂 ודא תיקייה ליצירת הסנאפשוט
         out_dir = os.path.join("static", "snapshots")
         os.makedirs(out_dir, exist_ok=True)
 
-        ts = int(time.time())
-        fname = f"trade-{payload.symbol}-{ts}.png".replace("/", "_")
+        # 🔹 שם ייחודי (uuid4 כדי למנוע התנגשויות)
+        fname = f"trade-{payload.symbol}-{uuid.uuid4().hex}.png".replace("/", "_")
         fpath = os.path.join(out_dir, fname)
 
         # 🎨 ציור תמונת סיכום
@@ -65,10 +73,15 @@ def post_trade_snapshot(payload: SnapshotTradeRequest) -> Dict[str, Any]:
         base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
         url = f"{base}/static/snapshots/{fname}" if base else f"/static/snapshots/{fname}"
 
-        return {"ok": True, "file_path": fpath, "url": url}
+        return SnapshotResponse(
+            url=url,
+            file_path=fpath,
+            created_at=datetime.utcnow().isoformat()
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"snapshot error: {e}")
+
 
 
 
