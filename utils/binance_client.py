@@ -16,7 +16,7 @@ BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
 PRICE_MONITOR_DISABLE = (os.getenv("PRICE_MONITOR_DISABLE", "false").strip().lower() in ("1", "true", "yes"))
 
-# בסיסי FAPI (עם רוטציה)
+# ✅ בסיסי FAPI עם רוטציה
 _BINANCE_FAPI_BASES: List[str] = [
     (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/"),
     "https://fapi1.binance.com",
@@ -25,6 +25,7 @@ _BINANCE_FAPI_BASES: List[str] = [
 ]
 
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "4.0"))
+_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "3"))
 
 # =========================
 # Client factory
@@ -48,7 +49,7 @@ def get_client() -> Client:
 # =========================
 # Retry helper
 # =========================
-def retry_call(fn: Callable[[], Any], label: str, retries: int = 3, delay: float = 0.5) -> Any:
+def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, delay: float = 0.5) -> Any:
     last_exc: Optional[Exception] = None
     for i in range(retries):
         try:
@@ -97,7 +98,7 @@ def is_valid_futures_symbol(symbol: str) -> bool:
 # =========================
 # Futures Mark Price (SAFE)
 # =========================
-def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
+def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str, Any]:
     sym = symbol.upper().strip()
 
     if not is_valid_futures_symbol(sym):
@@ -120,16 +121,20 @@ def futures_mark_price_dict(symbol: str, tries: int = 3) -> Dict[str, Any]:
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True) as client:
                     r = client.get(url, params={"symbol": sym}, headers=headers)
 
-                if r.status_code == 200 and "application/json" in (r.headers.get("Content-Type") or ""):
+                # ✅ בודק שהתשובה היא JSON אמיתי
+                if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("application/json"):
                     data = r.json()
                     if isinstance(data, dict) and "markPrice" in data:
                         return data
                 else:
                     last_err = f"{r.status_code} {r.text[:80]}"
+                    logger.warning(f"[Binance] {sym} invalid response from {base}: {last_err}")
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
+                logger.warning(f"[Binance] {sym} exception on {base}: {last_err}")
         time.sleep(0.35 * attempt)
 
+    # ✅ Fallback ל־WS Cache
     from utils.ws_fallback import LAST_PRICE_CACHE
     rec = LAST_PRICE_CACHE.get(sym)
     if rec and "price" in rec:
@@ -144,6 +149,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
