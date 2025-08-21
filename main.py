@@ -5,6 +5,7 @@ import asyncio
 import logging
 from collections import deque
 from datetime import datetime, timezone
+import json
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,7 @@ from utils.ws_fallback import auto_price_updater, LAST_PRICE_CACHE, update_price
 from utils.redis_client import redis_client
 from utils.watchlist_utils import load_watchlist
 from utils.binance_client import futures_mark_price
+from utils.anchor import evaluate_anchor  # ✅ Anchor evaluator
 
 # --- Env ---
 load_dotenv(override=True)
@@ -27,7 +29,7 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.4")
 # --- Logging (JSON structured) ---
 logger = setup_json_logging()
 
-# ✅ In-memory log buffer (size from .env)
+# ✅ In-memory log buffer
 LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
 LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
 
@@ -117,9 +119,6 @@ app.include_router(utils_router, tags=["Utils"])
 
 # --- Price Monitor Loop (LIVE) ---
 async def price_monitor_loop(interval: int = 30):
-    """
-    מושך מחירים מ-Binance כל X שניות לכל הסימבולים שכבר ב-Cache
-    """
     while True:
         try:
             now = datetime.now(timezone.utc).isoformat()
@@ -147,13 +146,56 @@ async def price_monitor_loop(interval: int = 30):
         await asyncio.sleep(interval)
 
 
+# --- Anchor Snapshot Loop ---
+async def anchor_snapshot_loop(interval: int = 30):
+    """
+    שומר Snapshot של Anchor (BTC) ל-Redis כל X שניות
+    """
+    sides = ["LONG", "SHORT"]
+    while True:
+        try:
+            now = int(datetime.now(timezone.utc).timestamp())
+            for side in sides:
+                try:
+                    dec = evaluate_anchor(side)
+                    if redis_client:
+                        key = "anchor:history"
+                        item = {
+                            "ts": now,
+                            "side": side,
+                            "bias": dec.bias,
+                            "score": dec.score,
+                            "allow": dec.allow,
+                        }
+                        redis_client.lpush(key, json.dumps(item))
+                        redis_client.ltrim(key, 0, 200)  # רק 200 רשומות נשמרות
+                    logger.info({
+                        "event": "anchor_snapshot",
+                        "side": side,
+                        "bias": dec.bias,
+                        "score": dec.score,
+                        "allow": dec.allow,
+                        "time": now
+                    })
+                except Exception as e:
+                    logger.error({
+                        "event": "anchor_snapshot_error",
+                        "side": side,
+                        "error": str(e)
+                    })
+        except Exception as e:
+            logger.error({"event": "anchor_snapshot_loop_error", "error": str(e)})
+
+        await asyncio.sleep(interval)
+
+
 # --- Startup tasks ---
 @app.on_event("startup")
 async def startup_event():
     if redis_client:
         logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
 
-    # ✅ Start auto price updater from watchlist (BTCUSDT always included)
+    # ✅ Start auto price updater (BTCUSDT always enforced)
     watchlist = load_watchlist()
     symbols = [it["symbol"] for it in watchlist]
     if "BTCUSDT" not in [s.upper() for s in symbols]:
@@ -167,10 +209,15 @@ async def startup_event():
         "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {updater_interval}s"
     })
 
-    # ✅ Start price monitor loop (interval configurable)
+    # ✅ Price monitor loop
     monitor_interval = int(os.getenv("PRICE_MONITOR_INTERVAL", 30))
     asyncio.create_task(price_monitor_loop(interval=monitor_interval))
-    logger.info({"event": "startup", "msg": f"✅ Price monitor loop started (interval={monitor_interval}s)"})
+    logger.info({"event": "startup", "msg": f"✅ Price monitor loop started ({monitor_interval}s)"})
+
+    # ✅ Anchor snapshot loop
+    anchor_interval = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))
+    asyncio.create_task(anchor_snapshot_loop(interval=anchor_interval))
+    logger.info({"event": "startup", "msg": f"✅ Anchor snapshot loop started ({anchor_interval}s)"})
 
 
 # --- Root / Status ---
@@ -197,12 +244,12 @@ async def health_live():
     return {"status": "live"}
 
 
-# ✅ Debug logs endpoint (filter by level + logger)
+# ✅ Debug logs endpoint
 @app.get("/debug/health", tags=["Debug"], operation_id="getDebugHealth")
 async def debug_health(
     limit: int = Query(50, description="Number of logs to return"),
-    level: str | None = Query(None, description="Filter by log level (e.g., ERROR, INFO, WARNING)"),
-    logger_name: str | None = Query(None, description="Filter by logger name (e.g., algogpt.ws, algogpt.binance)")
+    level: str | None = Query(None, description="Filter by log level"),
+    logger_name: str | None = Query(None, description="Filter by logger name")
 ):
     logs = list(LOG_BUFFER)[-limit:]
 
@@ -213,16 +260,14 @@ async def debug_health(
     if logger_name:
         logs = [log for log in logs if log["logger"] == logger_name]
 
-    return {
-        "count": len(logs),
-        "logs": logs
-    }
+    return {"count": len(logs), "logs": logs}
 
 
 # --- Entrypoint (local run only) ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
