@@ -6,7 +6,7 @@ import logging
 from collections import deque
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -149,10 +149,22 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-# ✅ Debug logs endpoint
+# ✅ Debug logs endpoint (filter by level + logger)
 @app.get("/debug/health", tags=["Debug"], operation_id="getDebugHealth")
-async def debug_health(limit: int = 50):
+async def debug_health(
+    limit: int = Query(50, description="Number of logs to return"),
+    level: str | None = Query(None, description="Filter by log level (e.g., ERROR, INFO, WARNING)"),
+    logger_name: str | None = Query(None, description="Filter by logger name (e.g., algogpt.ws, algogpt.binance)")
+):
     logs = list(LOG_BUFFER)[-limit:]
+
+    if level:
+        level = level.upper()
+        logs = [log for log in logs if log["level"] == level]
+
+    if logger_name:
+        logs = [log for log in logs if log["logger"] == logger_name]
+
     return {
         "count": len(logs),
         "logs": logs
@@ -162,6 +174,7 @@ async def debug_health(limit: int = 50):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
