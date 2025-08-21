@@ -1,23 +1,25 @@
 # routes/backtest.py
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from utils.backtest_engine import run_backtest
+from typing import List, Dict, Any, Optional
+
+from utils.backtest_utils import run_backtest
 
 router = APIRouter(tags=["Backtest"])
 
-class BacktestCandle(BaseModel):
-    time: str
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
+# =====================
+# Models
+# =====================
+class BacktestTrade(BaseModel):
+    side: str
+    entry: float
+    exit: float
+    pnl: float
 
 class BacktestSummary(BaseModel):
-    total_candles: int
-    returned_candles: int
-    trades: int
+    n_trades_total: int
+    n_trades_returned: int
+    final_balance: float
     profit_pct: float
 
 class BacktestResult(BaseModel):
@@ -25,41 +27,47 @@ class BacktestResult(BaseModel):
     symbol: str
     strategy: str
     summary: BacktestSummary
-    candles: List[BacktestCandle] = Field(default_factory=list)
+    trades: List[BacktestTrade] = Field(default_factory=list)
 
+# =====================
+# Endpoint
+# =====================
 @router.get("/", response_model=BacktestResult)
 async def backtest(
     symbol: str,
-    strategy: str = "ema_cross",
-    limit: int = Query(500, ge=50, le=1000),  # ✅ מגבלה קשיחה
-    max_return: int = Query(200, ge=50, le=500, description="מספר מקסימלי של נרות שיוחזרו ללקוח")
+    strategy: str = Query("ema_crossover", description="Strategy name"),
+    limit: int = Query(500, ge=50, le=1000, description="מספר נרות היסטוריים לבדיקה"),
+    max_trades: int = Query(200, ge=50, le=500, description="מספר מקסימלי של טריידים שיוחזרו ללקוח"),
 ):
     """
-    מריץ Backtest (מוגבל ל־1000 נרות). מחזיר עד `max_return` נרות אחרונים.
+    מריץ Backtest (מוגבל ל־1000 candles).
+    מחזיר עד `max_trades` טריידים אחרונים + summary מסכם.
     """
-    raw: Dict[str, Any] = run_backtest(symbol, strategy=strategy, limit=limit)
-
-    candles: List[BacktestCandle] = [BacktestCandle(**c) for c in raw.get("candles", [])]
-    total = len(candles)
-
-    # ✅ חותכים להחזרה רק X נרות אחרונים
-    if total > max_return:
-        candles = candles[-max_return:]
-
-    summary = BacktestSummary(
-        total_candles=total,
-        returned_candles=len(candles),
-        trades=int(raw.get("trades", 0)),
-        profit_pct=float(raw.get("profit_pct", 0.0)),
+    raw: Dict[str, Any] = run_backtest(
+        df=None,  # ⬅️ בפועל צריך לשלוף DF לפי symbol (ראה utils.data_fetcher / klines)
+        strategy=strategy,
+        initial_balance=1000.0,
+        max_trades=max_trades,
     )
+
+    # ✅ הכנה למודל
+    summary = BacktestSummary(
+        n_trades_total=raw["summary"]["n_trades_total"],
+        n_trades_returned=raw["summary"]["n_trades_returned"],
+        final_balance=raw["summary"]["final_balance"],
+        profit_pct=raw["summary"]["profit_pct"],
+    )
+
+    trades = [BacktestTrade(**t) for t in raw.get("trades", [])]
 
     return BacktestResult(
         ok=True,
-        symbol=raw.get("symbol", symbol),
-        strategy=raw.get("strategy", strategy),
+        symbol=symbol,
+        strategy=strategy,
         summary=summary,
-        candles=candles,
+        trades=trades,
     )
+
 
 
 
