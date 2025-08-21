@@ -96,16 +96,19 @@ app.include_router(utils_router, tags=["Utils"])
 # --- Startup tasks ---
 @app.on_event("startup")
 async def startup_event():
+    # Start price monitor loop (fallback WS)
     asyncio.create_task(price_monitor_loop())
-    if redis_client:
-        logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
     logger.info({"event": "startup", "msg": "✅ Price monitor loop started"})
 
-    # ✅ Start auto price updater from watchlist
+    # Redis connection check
+    if redis_client:
+        logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
+
+    # Start auto price updater based on watchlist.json
     watchlist = load_watchlist()
     symbols = [it["symbol"] for it in watchlist]
     interval = int(os.getenv("WS_UPDATE_INTERVAL", 15))
-    asyncio.create_task(auto_price_updater(symbols, interval=interval))
+    asyncio.create_task(auto_price_updater(symbols))
     logger.info({
         "event": "startup",
         "msg": f"✅ Auto price updater started for {len(symbols)} symbols every {interval}s"
@@ -135,6 +138,7 @@ async def health_live():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
