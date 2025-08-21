@@ -1,4 +1,3 @@
-# routes/trade.py
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from typing import List
