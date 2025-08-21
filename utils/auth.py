@@ -1,4 +1,3 @@
-# utils/auth.py
 from fastapi import Header, HTTPException
 import os
 
@@ -22,6 +21,7 @@ def require_api_key(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     return True
+
 
 
 
