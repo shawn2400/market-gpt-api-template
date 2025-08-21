@@ -20,7 +20,8 @@ from utils.ws_fallback import auto_price_updater, LAST_PRICE_CACHE, update_price
 from utils.redis_client import redis_client
 from utils.watchlist_utils import load_watchlist
 from utils.binance_client import futures_mark_price
-from utils.anchor import evaluate_anchor  # ✅ Anchor evaluator
+from utils.anchor import evaluate_anchor
+from utils.rate_limit import RateLimitMiddleware
 
 # --- Env ---
 load_dotenv(override=True)
@@ -56,6 +57,8 @@ app = FastAPI(
 # --- Middlewares ---
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(ResponseSizeLimiter, max_bytes=2_097_152)
+# ✅ Rate-limit כללי
+app.add_middleware(RateLimitMiddleware, limit=60, window=60)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
