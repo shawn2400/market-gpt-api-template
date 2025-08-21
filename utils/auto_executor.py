@@ -2,14 +2,14 @@
 import asyncio, logging, requests, pandas as pd, time, json
 from collections import deque
 from utils import config as cfg
-from utils.binance_client import binance_client
 from utils.indicators import prepare_indicators_for_backtest
 from utils import cache_fallback as redis_store
-from utils.binance_trader import binance_futures_trade   # ✅ החיבור ל־Binance
+from utils.binance_trader import binance_futures_trade   # ✅ חיבור לביצוע טריידים אמיתיים
+from utils.anchor import evaluate_anchor                 # ✅ Anchor אמיתי
 
 logger = logging.getLogger("algogpt.autoexec")
 
-FUTURES_BASE = "https://fapi.binance.com"
+FUTURES_BASE = cfg.BINANCE_FUTURES_HTTP_BASE
 
 EXECUTOR_RUNNING = False
 EXECUTOR_SYMBOLS: list[str] = []
@@ -49,6 +49,8 @@ async def _save_trade_to_history(trade: dict):
 async def scan_and_trade(symbol: str):
     try:
         _log("scan_start", symbol=symbol)
+
+        # --- Binance Klines ---
         url = f"{FUTURES_BASE}/fapi/v1/klines"
         r = requests.get(url, params={"symbol": symbol, "interval": "15m", "limit": 200}, timeout=10)
         r.raise_for_status()
@@ -82,11 +84,31 @@ async def scan_and_trade(symbol: str):
             return
 
         # ========================
+        # בדיקת Anchor על BTCUSDT
+        # ========================
+        anchor = evaluate_anchor(trade_decision["side"])
+        if not anchor.allow:
+            _log("anchor_blocked", symbol=symbol, anchor=anchor.__dict__)
+            return
+        else:
+            _log("anchor_allowed", symbol=symbol, anchor=anchor.__dict__)
+
+        # ========================
         # שליחת פקודה ל־Binance
         # ========================
         entry = float(row["close"])
         sl = entry * (0.99 if trade_decision["side"] == "LONG" else 1.01)
         tp = entry * (1.02 if trade_decision["side"] == "LONG" else 0.98)
+
+        trade = {
+            "symbol": symbol,
+            "decision": trade_decision,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "ts": time.time(),
+            "anchor": anchor.__dict__,
+        }
 
         if cfg.EXECUTE_TRADES:
             try:
@@ -99,13 +121,13 @@ async def scan_and_trade(symbol: str):
                     leverage=cfg.MAX_LEVERAGE,
                     budget=cfg.MAX_TRADE_BUDGET,
                 )
-                trade = {"symbol": symbol, "decision": trade_decision, "resp": resp, "ts": time.time()}
+                trade["resp"] = resp
                 await _save_trade_to_history(trade)
                 _log("trade_executed", symbol=symbol, **trade_decision)
             except Exception as e:
                 _log("trade_execution_error", symbol=symbol, level="ERROR", error=str(e))
         else:
-            trade = {"symbol": symbol, "decision": trade_decision, "mode": "dry_run", "ts": time.time()}
+            trade["mode"] = "dry_run"
             await _save_trade_to_history(trade)
             _log("trade_dry_run", symbol=symbol, **trade_decision)
 
@@ -122,7 +144,7 @@ async def auto_scan_and_trade():
     try:
         while EXECUTOR_RUNNING:
             EXECUTOR_LAST_TS = time.time()
-            EXECUTOR_SYMBOLS = [s.upper() for s in cfg.WATCHLIST]
+            EXECUTOR_SYMBOLS = [s.upper() for s in getattr(cfg, "WATCHLIST", [])]
             if "BTCUSDT" not in EXECUTOR_SYMBOLS:
                 EXECUTOR_SYMBOLS.insert(0, "BTCUSDT")
 
@@ -158,6 +180,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
