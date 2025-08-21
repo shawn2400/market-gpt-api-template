@@ -15,17 +15,17 @@ from fastapi.staticfiles import StaticFiles
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.ws_fallback import auto_price_updater, LAST_PRICE_CACHE, update_price
-from utils.redis_client import redis_client
 from utils.watchlist_utils import load_watchlist
 from utils.binance_client import futures_mark_price
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
+from utils import cache_fallback as redis_store   # ✅ abstraction אחיד
 
 # --- Env ---
 load_dotenv(override=True)
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.4")
 
-# --- Logging (JSON structured) ---
+# --- Logging ---
 logger = setup_json_logging()
 LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
 LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
@@ -45,14 +45,14 @@ logger.addHandler(MemoryLogHandler())
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
-    description="AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת (Binance Futures/Spot/Grid/AI/Backtest/Analytics/News/Indicators/Risk/Orders/Debug)"
+    description="AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת"
 )
 
 # --- Middlewares ---
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(ResponseSizeLimiter, max_bytes=2_097_152)
 
-# ✅ Load Rate-Limits from config file
+# ✅ Rate-limit config
 rate_limits_config = {"default": {"limit": 60, "window": 60}, "endpoints": {}}
 config_file = Path("config/rate_limits.json")
 if config_file.exists():
@@ -145,18 +145,9 @@ async def price_monitor_loop(interval: int = 30):
                     price = float(data["markPrice"]) if isinstance(data, dict) and "markPrice" in data else None
                     if price:
                         update_price(sym, price)
-                        logger.info({
-                            "event": "price_monitor",
-                            "symbol": sym,
-                            "price": price,
-                            "time": now
-                        })
+                        logger.info({"event": "price_monitor", "symbol": sym, "price": price, "time": now})
                 except Exception as e:
-                    logger.error({
-                        "event": "price_monitor_error",
-                        "symbol": sym,
-                        "error": str(e)
-                    })
+                    logger.error({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
         except Exception as e:
             logger.error({"event": "price_monitor_loop_error", "error": str(e)})
         await asyncio.sleep(interval)
@@ -170,11 +161,10 @@ async def anchor_snapshot_loop(interval: int = 30):
             for side in sides:
                 try:
                     dec = evaluate_anchor(side)
-                    if redis_client:
-                        key = "anchor:history"
-                        item = {"ts": now, "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
-                        redis_client.lpush(key, json.dumps(item))
-                        redis_client.ltrim(key, 0, 200)
+                    key = "anchor:history"
+                    item = {"ts": now, "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
+                    await redis_store.lpush(key, json.dumps(item))
+                    await redis_store.ltrim(key, 0, 200)
                     logger.info({"event": "anchor_snapshot", **item})
                 except Exception as e:
                     logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
@@ -203,9 +193,6 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
 # --- Startup tasks ---
 @app.on_event("startup")
 async def startup_event():
-    if redis_client:
-        logger.info({"event": "startup", "msg": "✅ Connected to Redis"})
-
     watchlist = load_watchlist()
     symbols = [it["symbol"] for it in watchlist]
     if "BTCUSDT" not in [s.upper() for s in symbols]:
@@ -251,6 +238,7 @@ async def debug_health(limit: int = Query(50), level: str | None = None, logger_
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
