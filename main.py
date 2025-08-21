@@ -208,9 +208,7 @@ async def startup_event():
         if "BTCUSDT" not in [s.upper() for s in symbols]:
             symbols.insert(0, "BTCUSDT")
 
-        # ✅ רץ מתוך main.py, Self-contained
         asyncio.create_task(auto_price_updater(symbols, interval=WS_UPDATE_INTERVAL))
-
         if not PRICE_MONITOR_DISABLE:
             asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
         asyncio.create_task(anchor_snapshot_loop())
@@ -250,6 +248,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
