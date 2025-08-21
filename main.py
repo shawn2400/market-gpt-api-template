@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 import os
 import asyncio
@@ -11,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+import time
 
 # Utils
 from utils.response_limits import ResponseSizeLimiter
@@ -57,7 +60,7 @@ app = FastAPI(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(ResponseSizeLimiter, max_bytes=2_097_152)
 
-# ✅ Rate-limit: כללי 60/דקה, אבל מותאם פר־endpoint
+# ✅ Rate-limit: כללי 60/דקה, מותאם פר־endpoint
 ENDPOINT_LIMITS = {
     "/backtest/": (10, 60),     # בקושי – 10 קריאות לדקה
     "/health": (300, 60),       # בריאות – נדיב
@@ -200,6 +203,34 @@ async def anchor_snapshot_loop(interval: int = 30):
         await asyncio.sleep(interval)
 
 
+# --- Cache Cleaner ---
+CACHE_DIR = Path("static/cache")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int = 86400):
+    """
+    מנקה קבצי cache ישנים:
+    - מוחק קבצים בני יותר מ־24 שעות (max_age)
+    - משאיר רק 100 קבצים אחרונים
+    """
+    while True:
+        try:
+            files = sorted(CACHE_DIR.glob("backtest_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            now = time.time()
+
+            for f in files:
+                if now - f.stat().st_mtime > max_age:
+                    f.unlink(missing_ok=True)
+
+            for f in files[max_files:]:
+                f.unlink(missing_ok=True)
+
+        except Exception as e:
+            logger.error({"event": "cache_cleaner_error", "error": str(e)})
+
+        await asyncio.sleep(interval)
+
+
 # --- Startup tasks ---
 @app.on_event("startup")
 async def startup_event():
@@ -226,6 +257,9 @@ async def startup_event():
     anchor_interval = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", 30))
     asyncio.create_task(anchor_snapshot_loop(interval=anchor_interval))
     logger.info({"event": "startup", "msg": f"✅ Anchor snapshot loop started ({anchor_interval}s)"})
+
+    asyncio.create_task(cache_cleaner(interval=3600, max_files=100, max_age=86400))
+    logger.info({"event": "startup", "msg": "✅ Cache cleaner started"})
 
 
 # --- Root / Status ---
@@ -275,6 +309,7 @@ async def debug_health(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+
 
 
 
