@@ -18,10 +18,10 @@ from utils.auto_executor import (
     EXECUTOR_SYMBOLS,
     EXECUTOR_LAST_TS,
     EXECUTOR_LOGS,
-    EXECUTOR_TRADES,   # 🆕 היסטוריית טריידים
+    EXECUTOR_TRADES,
 )
 from utils.watchlist_utils import load_watchlist
-
+from utils.binance_client import futures_open_positions
 
 router = APIRouter(tags=["Executor"], dependencies=[Depends(require_bearer_token)])
 
@@ -58,6 +58,12 @@ class ExecutorTradesResponse(BaseModel):
     ok: bool = True
     count: int
     trades: List[dict]
+
+
+class ExecutorPositionsResponse(BaseModel):
+    ok: bool = True
+    count: int
+    positions: List[dict]
 
 
 # =====================
@@ -117,20 +123,27 @@ def executor_symbols() -> ExecutorSymbolsResponse:
 
 @router.get("/executor/logs", response_model=ExecutorLogsResponse)
 def executor_logs(limit: int = Query(50, ge=1, le=200)) -> ExecutorLogsResponse:
-    """
-    מחזיר את הלוגים האחרונים של ה־Auto Executor (ברירת מחדל 50, מקסימום 200).
-    """
     logs = list(EXECUTOR_LOGS)[-limit:]
     return ExecutorLogsResponse(ok=True, count=len(logs), logs=logs)
 
 
 @router.get("/executor/trades", response_model=ExecutorTradesResponse)
 def executor_trades(limit: int = Query(50, ge=1, le=200)) -> ExecutorTradesResponse:
-    """
-    מחזיר את היסטוריית הטריידים האחרונים (ברירת מחדל 50, מקסימום 200).
-    """
     trades = list(EXECUTOR_TRADES)[-limit:]
     return ExecutorTradesResponse(ok=True, count=len(trades), trades=trades)
+
+
+@router.get("/executor/open_positions", response_model=ExecutorPositionsResponse)
+def executor_open_positions() -> ExecutorPositionsResponse:
+    """
+    מחזיר את כל הפוזיציות הפתוחות בחשבון Futures.
+    """
+    try:
+        positions = futures_open_positions()
+        return ExecutorPositionsResponse(ok=True, count=len(positions), positions=positions)
+    except Exception as e:
+        return ExecutorPositionsResponse(ok=False, count=0, positions=[])
+
 
 
 
