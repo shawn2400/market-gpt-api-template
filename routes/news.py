@@ -1,13 +1,11 @@
 # routes/news.py
 from __future__ import annotations
-import os
-import time
+import os, requests
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-import requests
 
-router = APIRouter(tags=["News"])  # ציבורי
+router = APIRouter(tags=["News"])
 
 class NewsItem(BaseModel):
     title: str
@@ -63,6 +61,7 @@ def get_crypto_news() -> NewsResponse:
 @router.get("/news", response_model=NewsResponse, operation_id="getNewsAlias")
 def get_news_alias() -> NewsResponse:
     return get_crypto_news()
+
 
 
 
