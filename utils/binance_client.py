@@ -1,7 +1,7 @@
 # utils/binance_client.py
 # =========================
 # מודול לניהול קריאות Binance API (Futures/Spot)
-# כולל: Client factory, retries, מחיר עתידי (markPrice), Funding cache
+# כולל: Client factory, retries, מחיר עתידי (markPrice), Funding cache, Fallback
 # =========================
 
 from __future__ import annotations
@@ -21,24 +21,18 @@ logger = logging.getLogger("algogpt.binance")
 # =========================
 BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
-USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
-PRICE_MONITOR_DISABLE = (os.getenv("PRICE_MONITOR_DISABLE", "false").strip().lower() in ("1", "true", "yes"))
+USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes"))
+PRICE_MONITOR_DISABLE = (os.getenv("PRICE_MONITOR_DISABLE", "false").lower() in ("1", "true", "yes"))
+SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").lower() in ("1", "true", "yes")
 
-SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip() in ("1", "true", "yes")
+# ✅ בסיסים
+BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
+BINANCE_FAPI_ALTS = [s.strip() for s in os.getenv("BINANCE_FAPI_ALTS", "").split(",") if s.strip()]
+BINANCE_FALLBACK_URL = (os.getenv("BINANCE_FALLBACK_URL") or "").rstrip("/")  # 👈 חדש
 
-# ✅ בסיסי FAPI עם רוטציה (כולל תאימות לשמות שונים ב־.env)
-_PRIMARY_FAPI = (
-    os.getenv("BINANCE_FUTURES_HTTP_BASE")
-    or os.getenv("BINANCE_FAPI_BASE")
-    or "https://fapi.binance.com"
-).rstrip("/")
-
-_BINANCE_FAPI_BASES: List[str] = [
-    _PRIMARY_FAPI,
-    "https://fapi1.binance.com",
-    "https://fapi2.binance.com",
-    "https://fapi3.binance.com",
-]
+_BINANCE_FAPI_BASES: List[str] = [BINANCE_FAPI_BASE] + BINANCE_FAPI_ALTS
+if BINANCE_FALLBACK_URL:
+    _BINANCE_FAPI_BASES.append(BINANCE_FALLBACK_URL)  # ✅ נוסיף fallback לסוף הרשימה
 
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "6.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
@@ -58,7 +52,7 @@ def get_client() -> Client:
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
         client.API_URL = "https://api.binance.com/api"
-        client.FUTURES_URL = f"{_PRIMARY_FAPI}/fapi/v1"
+        client.FUTURES_URL = f"{BINANCE_FAPI_BASE}/fapi/v1"
 
     return client
 
@@ -102,10 +96,7 @@ def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     if _valid_futures_symbols is not None and not force_refresh:
         return _valid_futures_symbols
     info = futures_exchange_info_safe()
-    symbols = set()
-    for s in info.get("symbols", []):
-        if s.get("status") == "TRADING":
-            symbols.add(s.get("symbol", "").upper())
+    symbols = {s.get("symbol", "").upper() for s in info.get("symbols", []) if s.get("status") == "TRADING"}
     _valid_futures_symbols = symbols
     return _valid_futures_symbols
 
@@ -113,7 +104,7 @@ def is_valid_futures_symbol(symbol: str) -> bool:
     return symbol.upper() in valid_futures_symbols()
 
 # =========================
-# Futures Mark Price (SAFE + funding + cache)
+# Futures Mark Price (SAFE + funding + cache + fallback)
 # =========================
 def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str, Any]:
     sym = symbol.upper().strip()
@@ -167,6 +158,7 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
 
     raise RuntimeError(f"[Binance] futures_mark_price_dict({sym}) failed after {tries} tries: {last_err}")
 
+
 def futures_mark_price(symbol: str) -> Optional[float]:
     """
     מחזיר מחיר נוכחי (markPrice) ושומר אותו ב־Cache.
@@ -179,14 +171,12 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         funding = float(data.get("fundingRate") or 0.0) if data.get("fundingRate") else None
         ts = data.get("ts") or int(time.time())
 
-        # ✅ עדכון Cache
         LAST_PRICE_CACHE[sym] = {
             "price": price,
             "fundingRate": funding,
             "nextFundingTime": data.get("nextFundingTime"),
             "ts": ts
         }
-
         return price
 
     except Exception as e:
@@ -194,11 +184,11 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.log(level, {"event": "futures_mark_price_error", "symbol": sym, "error": str(e)})
         return None
 
+
 def get_cached_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
-    """
-    Utility: מחזיר מה Cache גם מחיר וגם Funding אם יש.
-    """
+    """ Utility: מחזיר מה Cache גם מחיר וגם Funding אם יש. """
     return LAST_PRICE_CACHE.get(symbol.upper())
+
 
 
 
