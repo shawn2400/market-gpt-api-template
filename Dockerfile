@@ -51,8 +51,9 @@ USER appuser
 # --- Entrypoint & CMD ---
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Render יכניס PORT → אנחנו רק מאזינים אליו
+# Render מזריק את PORT בזמן ריצה
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
