@@ -1,6 +1,5 @@
 from __future__ import annotations
 import os, asyncio, logging, json, time
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -37,18 +36,21 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.6")
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
-LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
+# ✅ לא נרשום LOG_BUFFER אם בלייט־מוד
+if not LIGHT_MODE:
+    from collections import deque
+    LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
+    LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
 
-class MemoryLogHandler(logging.Handler):
-    def emit(self, record):
-        LOG_BUFFER.append({
-            "time": datetime.now(timezone.utc).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage()
-        })
-logger.addHandler(MemoryLogHandler())
+    class MemoryLogHandler(logging.Handler):
+        def emit(self, record):
+            LOG_BUFFER.append({
+                "time": datetime.now(timezone.utc).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage()
+            })
+    logger.addHandler(MemoryLogHandler())
 
 # --- Config check ---
 try:
@@ -56,7 +58,6 @@ try:
     logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 except Exception as e:
     logger.error({"event": "config_error", "error": str(e)})
-    # במצב Light Mode – לא מפיל את השרת
     if not LIGHT_MODE:
         raise
 
@@ -99,7 +100,10 @@ if ENABLE_AI_ROUTES and OPENAI_API_KEY:
 
 for r, p, t in protected_routers:
     app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
-app.include_router(debug_router, prefix="/debug", tags=["Debug"])
+
+# ✅ Debug router – רק אם לא בלייט מוד
+if not LIGHT_MODE:
+    app.include_router(debug_router, prefix="/debug", tags=["Debug"])
 
 # --- Self-contained Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
@@ -133,8 +137,8 @@ async def auto_price_updater(symbols: list[str], interval: int = WS_UPDATE_INTER
         await asyncio.sleep(interval)
 
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
-    if LIGHT_MODE:
-        logger.warning("⚠️ Skipping price_monitor_loop (LIGHT_MODE=1)")
+    if LIGHT_MODE or PRICE_MONITOR_DISABLE:
+        logger.warning("⚠️ Skipping price_monitor_loop")
         return
     while True:
         try:
@@ -156,19 +160,21 @@ async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_IN
         for side in sides:
             try:
                 dec = evaluate_anchor(side)
-                key = "anchor:history"
                 item = {"ts": int(time.time()), "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
-                await redis_store.lpush(key, json.dumps(item))
-                await redis_store.ltrim(key, 0, 200)
+                await redis_store.lpush("anchor:history", json.dumps(item))
+                await redis_store.ltrim("anchor:history", 0, 200)
                 logger.info({"event": "anchor_snapshot", **item})
             except Exception as e:
                 logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
+# ✅ Cache cleaner – רק אם לא בלייט מוד
 CACHE_DIR = Path("static/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int = 86400):
+    if LIGHT_MODE:
+        return
     while True:
         try:
             files = sorted(CACHE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -187,7 +193,7 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
 async def startup_event():
     try:
         if LIGHT_MODE:
-            logger.warning("⚠️ Startup in LIGHT_MODE=1 → Binance/Redis disabled")
+            logger.warning("⚠️ Startup in LIGHT_MODE=1 → background tasks disabled")
             return
 
         watchlist = load_watchlist()
@@ -216,14 +222,16 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-@app.get("/debug/health", tags=["Debug"])
-async def debug_health(limit: int = Query(50), level: str | None = None, logger_name: str | None = None):
-    logs = list(LOG_BUFFER)[-limit:]
-    if level:
-        logs = [l for l in logs if l["level"] == level.upper()]
-    if logger_name:
-        logs = [l for l in logs if l["logger"] == logger_name]
-    return {"count": len(logs), "logs": logs}
+# ✅ Debug health – רק אם לא בלייט מוד
+if not LIGHT_MODE:
+    @app.get("/debug/health", tags=["Debug"])
+    async def debug_health(limit: int = Query(50), level: str | None = None, logger_name: str | None = None):
+        logs = list(LOG_BUFFER)[-limit:]
+        if level:
+            logs = [l for l in logs if l["level"] == level.upper()]
+        if logger_name:
+            logs = [l for l in logs if l["logger"] == logger_name]
+        return {"count": len(logs), "logs": logs}
 
 # --- Exception handler ---
 @app.exception_handler(Exception)
@@ -235,6 +243,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
