@@ -112,7 +112,7 @@ if ENABLE_AI_ROUTES and OPENAI_API_KEY:
 for r, p, t in protected_routers:
     app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
 
-# ⬅️ Executor עם prefix + אבטחה
+# ⬅️ Executor עם prefix אחיד
 app.include_router(
     executor_router,
     prefix="/executor",
@@ -268,6 +268,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
