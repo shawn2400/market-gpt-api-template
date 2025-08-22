@@ -6,10 +6,8 @@ services:
     autoDeploy: false
     pullRequestPreviewsEnabled: false
 
-    # Render יבצע בדיקת בריאות על הנתיב הזה
     healthCheckPath: /health
 
-    # הצבעה לקבצי הדוקר
     dockerfilePath: ./Dockerfile
     dockerContext: .
 
@@ -28,9 +26,9 @@ services:
         value: "*"
 
       - key: ALGOGPT_VERSION
-        value: "2.14.5"
+        value: "2.14.6"
 
-      # דגלים אופציונליים למערכת שלך (כברירת מחדל אפשר להשאיר כמו שהם)
+      # דגלים של Price Monitor / WS
       - key: WS_UPDATE_INTERVAL
         value: "15"
       - key: PRICE_MONITOR_INTERVAL
@@ -40,18 +38,21 @@ services:
       - key: PRICE_MONITOR_DISABLE
         value: "0"
 
-      # מפתחות — להגדיר ב־Dashboard כ "Synced" (לא בקובץ)
+      # 🔑 מפתחות רגישים — להגדיר ב־Dashboard כ "Synced"
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: API_BEARER_TOKEN
+        sync: false
 
     disk:
       name: tmp
       mountPath: /tmp
       sizeGB: 1
+
 
 
 
