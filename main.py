@@ -31,13 +31,13 @@ from utils import cache_fallback as redis_store
 from utils.auth import require_api_key
 
 # --- App Version ---
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.6")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.7")
 
 # --- Logging ---
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-# ✅ לא נרשום LOG_BUFFER אם בלייט־מוד
+# ✅ Buffer only if not light
 if not LIGHT_MODE:
     from collections import deque
     LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
@@ -70,7 +70,8 @@ app = FastAPI(
 )
 
 # --- Middlewares ---
-app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 1_048_576)))
+# ⬆️ מעלה את מגבלת התגובה ל־5MB במקום 1MB
+app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
@@ -82,19 +83,21 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
-# ❌ grid_router הוסר
+from routes.grid import router as grid_router
 from routes.orderflow import router as orderflow_router
 from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
 from routes.debug import router as debug_router
+from routes.market import router as market_router
 
 protected_routers = [
     (scan_router, "", ["Scan"]),
     (trade_router, "/trade", ["Trade"]),
-    # grid_router הוסר
+    (grid_router, "/grid", ["Grid"]),
     (orderflow_router, "/orderflow", ["Orderflow"]),
     (indicators_router, "/indicators", ["Indicators"]),
     (anchor_router, "", ["Anchor"]),
+    (market_router, "/market", ["Market"]),
 ]
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     protected_routers.append((ai_router, "/ai", ["AI"]))
@@ -171,7 +174,7 @@ async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_IN
                 logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
-# ✅ Cache cleaner – רק אם לא בלייט מוד
+# ✅ Cache cleaner
 CACHE_DIR = Path("static/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -246,6 +249,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
