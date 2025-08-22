@@ -1,0 +1,20 @@
+[
+  {
+    "id": "seed-1",
+    "symbol": "BTCUSDT",
+    "levels": 5,
+    "allocated": 100.0,
+    "profit_pct": 0.0,
+    "active": true,
+    "ts": 1699999999
+  },
+  {
+    "id": "seed-2",
+    "symbol": "ETHUSDT",
+    "levels": 3,
+    "allocated": 50.0,
+    "profit_pct": 0.0,
+    "active": false,
+    "ts": 1699999999
+  }
+]
