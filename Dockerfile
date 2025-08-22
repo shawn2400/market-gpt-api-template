@@ -16,7 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # --- System deps ---
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    ca-certificates curl tini \
+    ca-certificates curl tini grep procps \
     build-essential gfortran \
     libopenblas-dev liblapack-dev \
     libfreetype6 libpng16-16 fonts-dejavu-core \
@@ -53,6 +53,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # Render מזריק את PORT בזמן ריצה
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
