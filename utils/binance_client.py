@@ -6,11 +6,8 @@ import httpx
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# 🚀 Cache מיובא ישירות מתוך main (Self-contained)
-try:
-    from main import LAST_PRICE_CACHE
-except ImportError:
-    LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
+# 🚀 Cache פנימי (אם main.py ירצה, יכול לדרוס את זה עם reference משלו)
+LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -102,7 +99,7 @@ def is_valid_futures_symbol(symbol: str) -> bool:
     return symbol.upper() in valid_futures_symbols()
 
 # =========================
-# Futures Mark Price (SAFE)
+# Futures Mark Price (SAFE + fallback)
 # =========================
 def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str, Any]:
     sym = symbol.upper().strip()
@@ -132,6 +129,8 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                         data = r.json()
                         if isinstance(data, dict) and "markPrice" in data:
                             return data
+                        else:
+                            last_err = "No markPrice in JSON"
                     else:
                         last_err = f"Invalid content-type {ctype}"
                         logger.warning(f"[Binance] {sym} got non-JSON from {base}")
@@ -144,7 +143,7 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                 logger.warning(f"[Binance] {sym} exception on {base}: {last_err}")
         time.sleep(0.35 * attempt)
 
-    # ✅ Fallback ל־Cache הפנימי של main.py
+    # ✅ Fallback ל־Cache
     rec = LAST_PRICE_CACHE.get(sym)
     if rec and "price" in rec:
         return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
@@ -158,6 +157,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
