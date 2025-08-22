@@ -34,8 +34,7 @@ def _round_step(value: float, step: float) -> float:
     """מתאים ערך ל-stepSize"""
     if step <= 0:
         return float(value)
-    precision = int(round(-Decimal(str(step)).as_tuple().exponent))
-    return float((Decimal(value).quantize(Decimal(str(step)), rounding=ROUND_DOWN)))
+    return float((Decimal(str(value)).quantize(Decimal(str(step)), rounding=ROUND_DOWN)))
 
 def _find_symbol_info(symbol: str) -> Dict[str, Any]:
     info = futures_exchange_info_safe()
@@ -49,7 +48,6 @@ def _calc_order_qty(symbol: str, entry: float, budget: float, leverage: int) -> 
     if not entry or entry <= 0:
         raise ValueError("Invalid entry price")
 
-    # budget = USD to allocate
     notional = budget * leverage
     qty = notional / entry
 
@@ -120,7 +118,6 @@ async def binance_futures_trade(symbol: str, side: str,
     symbol = symbol.upper()
     client = get_client()
 
-    # DRY-RUN MODE
     if SKIP_MUTATIONS:
         return {
             "ok": True,
@@ -135,7 +132,6 @@ async def binance_futures_trade(symbol: str, side: str,
         }
 
     try:
-        # לוודא לווראג'
         retry_call(lambda: client.futures_change_leverage(
             symbol=symbol, leverage=int(leverage)), f"set_leverage({symbol})")
 
@@ -143,10 +139,8 @@ async def binance_futures_trade(symbol: str, side: str,
         if qty <= 0:
             raise ValueError("Quantity calculated as 0")
 
-        # נקה פקודות ישנות
         _cancel_all_orders(client, symbol)
 
-        # Market Entry
         order = retry_call(
             lambda: client.futures_create_order(
                 symbol=symbol,
@@ -161,7 +155,6 @@ async def binance_futures_trade(symbol: str, side: str,
 
         result = {"ok": True, "order": order}
 
-        # SL/TP → רק אם מוגדרים
         sl, tp = float(sl), float(tp)
         stop_orders = []
         if sl > 0:
