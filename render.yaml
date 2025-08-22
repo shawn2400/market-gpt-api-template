@@ -16,7 +16,7 @@ services:
       - key: PORT
         value: "10000"
 
-      # Workers דינמיים (ברירת מחדל = לפי CPU, אפשר לדרוס ידנית מה־Dashboard)
+      # Workers דינמיים (0 = אוטומטי לפי CPU)
       - key: WORKERS
         value: "0"
 
@@ -29,7 +29,7 @@ services:
       - key: ALGOGPT_VERSION
         value: "2.14.6"
 
-      # דגלי WS/Price Monitor
+      # WS/Price Monitor
       - key: WS_UPDATE_INTERVAL
         value: "15"
       - key: PRICE_MONITOR_INTERVAL
@@ -37,6 +37,10 @@ services:
       - key: PRICE_WS_FRESH_TTL
         value: "20"
       - key: PRICE_MONITOR_DISABLE
+        value: "0"
+
+      # מצב עבודה (0=Full עם Binance+Redis, 1=Light Mode Debug)
+      - key: LIGHT_MODE
         value: "0"
 
       # 🔑 מפתחות רגישים — להגדיר ב־Dashboard כ "Synced"
@@ -53,6 +57,7 @@ services:
       name: tmp
       mountPath: /tmp
       sizeGB: 1
+
 
 
 
