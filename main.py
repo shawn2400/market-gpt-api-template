@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 # --- Env ---
 load_dotenv(override=True)
+LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip() in ("1", "true", "yes")
 
 # --- Config ---
 from utils.config import (
@@ -50,8 +51,14 @@ class MemoryLogHandler(logging.Handler):
 logger.addHandler(MemoryLogHandler())
 
 # --- Config check ---
-check_config()
-logger.info({"event": "config_snapshot", **dump_config_sanitized()})
+try:
+    check_config()
+    logger.info({"event": "config_snapshot", **dump_config_sanitized()})
+except Exception as e:
+    logger.error({"event": "config_error", "error": str(e)})
+    # במצב Light Mode – לא מפיל את השרת
+    if not LIGHT_MODE:
+        raise
 
 # --- FastAPI ---
 app = FastAPI(
@@ -64,14 +71,7 @@ app = FastAPI(
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 1_048_576)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-# ✅ Rate-limit
-app.add_middleware(
-    RateLimitMiddleware,
-    limit=60,
-    window=60,
-    endpoint_limits={},
-)
+app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
 # --- Static ---
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -94,15 +94,11 @@ protected_routers = [
     (indicators_router, "/indicators", ["Indicators"]),
     (anchor_router, "", ["Anchor"]),
 ]
-
-# ✅ AI רק אם יש מפתח
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     protected_routers.append((ai_router, "/ai", ["AI"]))
 
 for r, p, t in protected_routers:
     app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
-
-# Debug router פתוח
 app.include_router(debug_router, prefix="/debug", tags=["Debug"])
 
 # --- Self-contained Price Cache ---
@@ -120,66 +116,53 @@ def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
     info = LAST_PRICE_CACHE.get(symbol.upper())
     return bool(info and (time.time() - info.get("ts", 0)) <= max_age_sec)
 
+# --- Background tasks ---
 async def auto_price_updater(symbols: list[str], interval: int = WS_UPDATE_INTERVAL):
+    if LIGHT_MODE:
+        logger.warning("⚠️ Skipping auto_price_updater (LIGHT_MODE=1)")
+        return
     while True:
-        now = time.time()
         for sym in symbols:
             try:
                 price = futures_mark_price(sym)
-                prev_ts = LAST_PRICE_CACHE.get(sym.upper(), {}).get("ts")
-                age_sec = round(now - prev_ts, 2) if prev_ts else None
                 if price and price > 0:
                     update_price(sym, price)
-                    logger.info({
-                        "event": "price_update",
-                        "symbol": sym,
-                        "price": price,
-                        "age_sec": age_sec
-                    })
+                    logger.info({"event": "price_update", "symbol": sym, "price": price})
             except Exception as e:
                 logger.error({"event": "price_update_error", "symbol": sym, "error": str(e)})
         await asyncio.sleep(interval)
 
-# --- Background tasks ---
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
+    if LIGHT_MODE:
+        logger.warning("⚠️ Skipping price_monitor_loop (LIGHT_MODE=1)")
+        return
     while True:
         try:
-            now_iso = datetime.now(timezone.utc).isoformat()
-            for sym, rec in list(LAST_PRICE_CACHE.items()):
-                try:
-                    ts = float(rec.get("ts") or 0.0)
-                except Exception:
-                    ts = 0.0
-                if (time.time() - ts) < PRICE_WS_FRESH_TTL:
-                    continue
-                try:
-                    price_val = futures_mark_price(sym)
-                    if price_val and price_val > 0:
-                        update_price(sym, float(price_val))
-                        logger.info({"event": "price_monitor", "symbol": sym, "price": float(price_val), "time": now_iso})
-                except Exception as e:
-                    logger.warning({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
+            for sym in list(LAST_PRICE_CACHE.keys()):
+                price_val = futures_mark_price(sym)
+                if price_val:
+                    update_price(sym, price_val)
+                    logger.info({"event": "price_monitor", "symbol": sym, "price": price_val})
         except Exception as e:
-            logger.error({"event": "price_monitor_loop_error", "error": str(e)})
+            logger.error({"event": "price_monitor_error", "error": str(e)})
         await asyncio.sleep(interval)
 
 async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", "30"))):
+    if LIGHT_MODE:
+        logger.warning("⚠️ Skipping anchor_snapshot_loop (LIGHT_MODE=1)")
+        return
     sides = ["LONG", "SHORT"]
     while True:
-        try:
-            now = int(datetime.now(timezone.utc).timestamp())
-            for side in sides:
-                try:
-                    dec = evaluate_anchor(side)
-                    key = "anchor:history"
-                    item = {"ts": now, "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
-                    await redis_store.lpush(key, json.dumps(item))
-                    await redis_store.ltrim(key, 0, 200)
-                    logger.info({"event": "anchor_snapshot", **item})
-                except Exception as e:
-                    logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
-        except Exception as e:
-            logger.error({"event": "anchor_snapshot_loop_error", "error": str(e)})
+        for side in sides:
+            try:
+                dec = evaluate_anchor(side)
+                key = "anchor:history"
+                item = {"ts": int(time.time()), "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
+                await redis_store.lpush(key, json.dumps(item))
+                await redis_store.ltrim(key, 0, 200)
+                logger.info({"event": "anchor_snapshot", **item})
+            except Exception as e:
+                logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
 CACHE_DIR = Path("static/cache")
@@ -203,14 +186,18 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
 @app.on_event("startup")
 async def startup_event():
     try:
+        if LIGHT_MODE:
+            logger.warning("⚠️ Startup in LIGHT_MODE=1 → Binance/Redis disabled")
+            return
+
         watchlist = load_watchlist()
         symbols = [it["symbol"] for it in watchlist]
         if "BTCUSDT" not in [s.upper() for s in symbols]:
             symbols.insert(0, "BTCUSDT")
 
-        asyncio.create_task(auto_price_updater(symbols, interval=WS_UPDATE_INTERVAL))
+        asyncio.create_task(auto_price_updater(symbols))
         if not PRICE_MONITOR_DISABLE:
-            asyncio.create_task(price_monitor_loop(interval=PRICE_MONITOR_INTERVAL))
+            asyncio.create_task(price_monitor_loop())
         asyncio.create_task(anchor_snapshot_loop())
         asyncio.create_task(cache_cleaner())
     except Exception as e:
@@ -219,11 +206,11 @@ async def startup_event():
 # --- Health / Status ---
 @app.get("/", tags=["Config"])
 async def root_status():
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health/live", tags=["Health"])
 async def health_live():
@@ -248,6 +235,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
