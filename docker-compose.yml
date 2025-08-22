@@ -18,7 +18,8 @@ services:
       - ./static/img:/app/static/img
       - ./static/cache:/app/static/cache
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:10000/health || exit 1"]
       interval: 30s
@@ -27,16 +28,28 @@ services:
       start_period: 20s
     mem_limit: 2g
     cpus: 2.0
+    networks:
+      - algonet
 
   redis:
     image: redis:7.2-alpine
     container_name: algogpt-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     volumes:
       - ./redis-data:/data
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - algonet
+
+networks:
+  algonet:
+    driver: bridge
+
 
 
 
