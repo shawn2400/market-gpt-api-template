@@ -1,4 +1,3 @@
-# routes/market.py (אופציונלי – מעט יותר גמיש בשגיאות)
 from __future__ import annotations
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -16,9 +15,9 @@ router = APIRouter(prefix="/symbols", tags=["Analytics"], dependencies=[Depends(
 
 @router.get("/top-volume", summary="Top symbols by volume (Binance)", operation_id="getTopVolumeSymbols")
 async def get_top_volume(
-    market: str = Query("futures", enum=["futures","spot"]),
-    quote:  str = Query("USDT"),
-    limit:  int = Query(50, ge=1, le=200),
+    market: str = Query("futures", enum=["futures", "spot"]),
+    quote: str = Query("USDT"),
+    limit: int = Query(50, ge=1, le=100),   # ⬅️ הורדתי את המקסימום ל־100 במקום 200
     min_quote_volume: float = Query(0.0, ge=0.0),
 ) -> Dict[str, Any]:
     try:
@@ -26,6 +25,7 @@ async def get_top_volume(
         return {"ok": bool(ok), "market": market, "quote": quote, "limit": limit, "symbols": symbols or []}
     except Exception as e:
         return {"ok": False, "market": market, "quote": quote, "limit": limit, "symbols": [], "error": str(e)}
+
 
 
 
