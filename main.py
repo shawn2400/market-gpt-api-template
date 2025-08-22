@@ -37,7 +37,7 @@ from utils import cache_fallback as redis_store
 from utils.auth import require_api_key
 
 # --- App Version ---
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.9")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -184,7 +184,7 @@ async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_IN
                 await redis_store.ltrim("anchor:history", 0, 200)
                 logger.info({"event": "anchor_snapshot", **item})
             except Exception as e:
-                logger.error({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
+                logger.warning({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
 # ✅ Cache cleaner
@@ -204,7 +204,7 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
             for f in files[max_files:]:
                 f.unlink(missing_ok=True)
         except Exception as e:
-            logger.error({"event": "cache_cleaner_error", "error": str(e)})
+            logger.warning({"event": "cache_cleaner_error", "error": str(e)})
         await asyncio.sleep(interval)
 
 # --- Startup ---
@@ -220,7 +220,6 @@ async def startup_event():
         if "BTCUSDT" not in [s.upper() for s in symbols]:
             symbols.insert(0, "BTCUSDT")
 
-        # 🚀 מרעננים תמיד רק Anchors
         asyncio.create_task(auto_anchor_updater())
 
         if not PRICE_MONITOR_DISABLE:
@@ -264,6 +263,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
