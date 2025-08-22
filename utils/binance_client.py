@@ -26,9 +26,15 @@ PRICE_MONITOR_DISABLE = (os.getenv("PRICE_MONITOR_DISABLE", "false").strip().low
 
 SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip() in ("1", "true", "yes")
 
-# ✅ בסיסי FAPI עם רוטציה
+# ✅ בסיסי FAPI עם רוטציה (כולל תאימות לשמות שונים ב־.env)
+_PRIMARY_FAPI = (
+    os.getenv("BINANCE_FUTURES_HTTP_BASE")
+    or os.getenv("BINANCE_FAPI_BASE")
+    or "https://fapi.binance.com"
+).rstrip("/")
+
 _BINANCE_FAPI_BASES: List[str] = [
-    (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/"),
+    _PRIMARY_FAPI,
     "https://fapi1.binance.com",
     "https://fapi2.binance.com",
     "https://fapi3.binance.com",
@@ -52,7 +58,7 @@ def get_client() -> Client:
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
         client.API_URL = "https://api.binance.com/api"
-        client.FUTURES_URL = "https://fapi.binance.com/fapi/v1"
+        client.FUTURES_URL = f"{_PRIMARY_FAPI}/fapi/v1"
 
     return client
 
@@ -161,7 +167,6 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
 
     raise RuntimeError(f"[Binance] futures_mark_price_dict({sym}) failed after {tries} tries: {last_err}")
 
-
 def futures_mark_price(symbol: str) -> Optional[float]:
     """
     מחזיר מחיר נוכחי (markPrice) ושומר אותו ב־Cache.
@@ -188,7 +193,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
         logger.log(level, {"event": "futures_mark_price_error", "symbol": sym, "error": str(e)})
         return None
-
 
 def get_cached_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     """
