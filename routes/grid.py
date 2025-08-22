@@ -27,11 +27,13 @@ class GenericResponse(BaseModel):
     ok: bool = True
     message: str = "Operation completed successfully"
 
-
 # --- Endpoints ---
 
 @router.get("/status", response_model=GridListResponse)
 async def grid_status(limit: int = Query(50, ge=10, le=200), offset: int = Query(0, ge=0)):
+    """
+    מחזיר את רשימת כל הגרידים (פעילים/לא פעילים) עם פאגינציה
+    """
     grids_raw: List[Dict[str, Any]] = get_grid_status() or []
     total = len(grids_raw)
     sliced = grids_raw[offset: offset + limit]
@@ -41,6 +43,9 @@ async def grid_status(limit: int = Query(50, ge=10, le=200), offset: int = Query
 
 @router.get("/active", response_model=GridListResponse)
 async def active_grids(limit: int = Query(50, ge=10, le=200), offset: int = Query(0, ge=0)):
+    """
+    מחזיר רשימת גרידים פעילים בלבד
+    """
     grids_raw: List[Dict[str, Any]] = get_active_grids() or []
     total = len(grids_raw)
     sliced = grids_raw[offset: offset + limit]
@@ -50,7 +55,9 @@ async def active_grids(limit: int = Query(50, ge=10, le=200), offset: int = Quer
 
 @router.post("/start", response_model=GenericResponse)
 async def start_grid(symbol: str, levels: int = 5, allocated: float = 100.0):
-    """מתחיל גריד חדש ושומר אותו בקובץ"""
+    """
+    מתחיל גריד חדש ושומר אותו בקובץ grids.json
+    """
     grid = {
         "id": str(uuid.uuid4()),
         "symbol": symbol.upper(),
@@ -66,11 +73,14 @@ async def start_grid(symbol: str, levels: int = 5, allocated: float = 100.0):
 
 @router.post("/stop", response_model=GenericResponse)
 async def stop_grid_api(grid_id: str):
-    """עוצר גריד לפי ID"""
+    """
+    עוצר גריד לפי ה־ID שלו
+    """
     ok = stop_grid(grid_id)
     if ok:
         return GenericResponse(message=f"Grid {grid_id} stopped")
     return GenericResponse(ok=False, message=f"Grid {grid_id} not found")
+
 
 
 
