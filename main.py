@@ -95,6 +95,7 @@ from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
 from routes.debug import router as debug_router
 from routes.market import router as market_router
+from routes.executor import router as executor_router  # 👈 חדש
 
 protected_routers = [
     (scan_router, "", ["Scan"]),
@@ -108,8 +109,12 @@ protected_routers = [
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     protected_routers.append((ai_router, "/ai", ["AI"]))
 
+# ⬅️ רישום כל ה־routers המוגנים עם require_api_key
 for r, p, t in protected_routers:
     app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
+
+# ⬅️ רישום ה־executor ללא prefix וללא תלות כפולה (יש לו require_bearer_token בפנים)
+app.include_router(executor_router, tags=["Executor"])
 
 # ✅ Debug router – רק אם לא בלייט מוד
 if not LIGHT_MODE:
@@ -263,6 +268,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
