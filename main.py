@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 # --- Env ---
 load_dotenv(override=True)
 LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip() in ("1", "true", "yes")
+SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip() in ("1", "true", "yes")
 
 # --- Config ---
 from utils.config import (
@@ -133,7 +134,8 @@ async def auto_price_updater(symbols: list[str], interval: int = WS_UPDATE_INTER
                     update_price(sym, price)
                     logger.info({"event": "price_update", "symbol": sym, "price": price})
             except Exception as e:
-                logger.error({"event": "price_update_error", "symbol": sym, "error": str(e)})
+                level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+                logger.log(level, {"event": "price_update_error", "symbol": sym, "error": str(e)})
         await asyncio.sleep(interval)
 
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
@@ -148,7 +150,8 @@ async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
                     update_price(sym, price_val)
                     logger.info({"event": "price_monitor", "symbol": sym, "price": price_val})
         except Exception as e:
-            logger.error({"event": "price_monitor_error", "error": str(e)})
+            level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+            logger.log(level, {"event": "price_monitor_error", "error": str(e)})
         await asyncio.sleep(interval)
 
 async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", "30"))):
@@ -243,6 +246,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
