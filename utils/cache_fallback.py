@@ -1,66 +1,87 @@
 # utils/cache_fallback.py
 from __future__ import annotations
-import logging
-from utils import cache
+import logging, asyncio, time
+from typing import Any
 from utils.redis_client import redis_client
 
 logger = logging.getLogger("algogpt.cache_fallback")
+
+# --- In-memory fallback store ---
+_LOCAL_STORE: dict[str, tuple[Any, float | None]] = {}
+
+
+def _set_local(key: str, value: Any, expire: int | None = None):
+    exp_ts = time.time() + expire if expire else None
+    _LOCAL_STORE[key] = (value, exp_ts)
+
+
+def _get_local(key: str):
+    val = _LOCAL_STORE.get(key)
+    if not val:
+        return None
+    value, exp_ts = val
+    if exp_ts and exp_ts < time.time():
+        _LOCAL_STORE.pop(key, None)
+        return None
+    return value
+
 
 # --- API אחיד ל־Redis או In-Memory ---
 
 async def set_value(key: str, value: str, expire: int | None = None) -> bool:
     if redis_client:
         try:
-            redis_client.set(key, value, ex=expire)
+            await asyncio.to_thread(redis_client.set, key, value, ex=expire)
             return True
         except Exception as e:
-            logger.error(f"[CacheFallback] Redis set error: {e}")
-    await cache.aget_or_set(key, expire or 60, lambda: value)
+            logger.warning(f"[CacheFallback] Redis set error: {e}")
+    _set_local(key, value, expire)
     return True
 
 
 async def get_value(key: str):
     if redis_client:
         try:
-            return redis_client.get(key)
+            return await asyncio.to_thread(redis_client.get, key)
         except Exception as e:
-            logger.error(f"[CacheFallback] Redis get error: {e}")
-    return await cache.aget_or_set(key, 0, lambda: None)
+            logger.warning(f"[CacheFallback] Redis get error: {e}")
+    return _get_local(key)
 
 
 async def delete_value(key: str) -> bool:
     if redis_client:
         try:
-            redis_client.delete(key)
+            await asyncio.to_thread(redis_client.delete, key)
             return True
         except Exception as e:
-            logger.error(f"[CacheFallback] Redis delete error: {e}")
+            logger.warning(f"[CacheFallback] Redis delete error: {e}")
+    _LOCAL_STORE.pop(key, None)
     return True
 
 
 async def lpush(key: str, value: str):
     if redis_client:
         try:
-            redis_client.lpush(key, value)
+            await asyncio.to_thread(redis_client.lpush, key, value)
             return
         except Exception as e:
-            logger.error(f"[CacheFallback] Redis lpush error: {e}")
-    existing = await cache.aget_or_set(key, 3600, lambda: [])
-    if isinstance(existing, list):
-        existing.insert(0, value)
-        await cache.aget_or_set(key, 3600, lambda: existing)
+            logger.warning(f"[CacheFallback] Redis lpush error: {e}")
+    arr = _get_local(key) or []
+    if isinstance(arr, list):
+        arr.insert(0, value)
+        _set_local(key, arr, 3600)
 
 
 async def ltrim(key: str, start: int, end: int):
     if redis_client:
         try:
-            redis_client.ltrim(key, start, end)
+            await asyncio.to_thread(redis_client.ltrim, key, start, end)
             return
         except Exception as e:
-            logger.error(f"[CacheFallback] Redis ltrim error: {e}")
-    existing = await cache.aget_or_set(key, 3600, lambda: [])
-    if isinstance(existing, list):
-        new_list = existing[start:end+1]
-        await cache.aget_or_set(key, 3600, lambda: new_list)
+            logger.warning(f"[CacheFallback] Redis ltrim error: {e}")
+    arr = _get_local(key) or []
+    if isinstance(arr, list):
+        _set_local(key, arr[start:end + 1], 3600)
+
 
 
