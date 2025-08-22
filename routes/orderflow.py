@@ -1,13 +1,18 @@
 # routes/orderflow.py
+# =========================
+# Orderflow API Route – מחזיר snapshot של Orderflow
+# =========================
+
 from __future__ import annotations
 import asyncio
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, Path, Query
 
-from utils.auth import require_bearer_token
+from utils.auth import require_api_key
 from utils.orderflow import get_orderflow_snapshot
 
-router = APIRouter(tags=["Analytics"], dependencies=[Depends(require_bearer_token)])
+# ✅ משתמשים ב־require_api_key במקום require_bearer_token
+router = APIRouter(tags=["Analytics"], dependencies=[Depends(require_api_key)])
 
 @router.get(
     "/orderflow/{symbol}",
@@ -20,6 +25,13 @@ async def get_orderflow(
     depth_limit: int = Query(500, ge=5, le=1000, description="order book levels (5..1000)"),
     cvd_window: int = Query(300, ge=1, le=1000, description="trades window for CVD"),
 ) -> Dict[str, Any]:
+    """
+    Endpoint שמחזיר תמונת מצב של Orderflow:
+    - CVD (Cumulative Volume Delta)
+    - עומק ספר פקודות
+    - Imbalance
+    - Heuristic לאיתור Icebergs
+    """
     result = await asyncio.to_thread(
         get_orderflow_snapshot,
         symbol,
@@ -28,6 +40,7 @@ async def get_orderflow(
         cvd_window=cvd_window,
     )
     return result
+
 
 
 
