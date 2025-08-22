@@ -1,12 +1,14 @@
+# utils/auth.py
 from fastapi import Header, HTTPException
 import os
 
-# מפתח API מה־.env
+# טוקן שמוגדר בקובץ .env
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
+
 
 def require_api_key(authorization: str = Header(None)):
     """
-    Middleware פשוט להגנה על ה־API.
+    Middleware להגנה על ה־API.
     בודק Authorization: Bearer <TOKEN> מול API_BEARER_TOKEN מה־.env
     """
     if not API_BEARER_TOKEN:
@@ -21,6 +23,13 @@ def require_api_key(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     return True
+
+
+def require_bearer_token(authorization: str = Header(None)):
+    """
+    Alias ל־require_api_key — כדי לשמור תאימות לאחור
+    """
+    return require_api_key(authorization)
 
 
 
