@@ -31,7 +31,7 @@ from utils import cache_fallback as redis_store
 from utils.auth import require_api_key
 
 # --- App Version ---
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.7")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.8")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -70,7 +70,7 @@ app = FastAPI(
 )
 
 # --- Middlewares ---
-# ⬆️ מעלה את מגבלת התגובה ל־5MB במקום 1MB
+# ⬆️ העלינו את מגבלת ה־Response ל־5MB
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -120,25 +120,26 @@ def update_price(symbol: str, price: float) -> None:
 def get_price(symbol: str) -> float | None:
     return LAST_PRICE_CACHE.get(symbol.upper(), {}).get("price")
 
-def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
+def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
     info = LAST_PRICE_CACHE.get(symbol.upper())
     return bool(info and (time.time() - info.get("ts", 0)) <= max_age_sec)
 
 # --- Background tasks ---
-async def auto_price_updater(symbols: list[str], interval: int = WS_UPDATE_INTERVAL):
-    if LIGHT_MODE:
-        logger.warning("⚠️ Skipping auto_price_updater (LIGHT_MODE=1)")
-        return
+async def auto_anchor_updater(interval: int = 20):
+    """
+    מרענן אוטומטית רק את BTC/ETH/SOL/BNB כדי לשמור אותם תמיד טריים ב־Cache
+    """
+    anchors = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     while True:
-        for sym in symbols:
+        for sym in anchors:
             try:
                 price = futures_mark_price(sym)
                 if price and price > 0:
                     update_price(sym, price)
-                    logger.info({"event": "price_update", "symbol": sym, "price": price})
+                    logger.info({"event": "anchor_update", "symbol": sym, "price": price})
             except Exception as e:
                 level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-                logger.log(level, {"event": "price_update_error", "symbol": sym, "error": str(e)})
+                logger.log(level, {"event": "anchor_update_error", "symbol": sym, "error": str(e)})
         await asyncio.sleep(interval)
 
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
@@ -207,7 +208,9 @@ async def startup_event():
         if "BTCUSDT" not in [s.upper() for s in symbols]:
             symbols.insert(0, "BTCUSDT")
 
-        asyncio.create_task(auto_price_updater(symbols))
+        # 🚀 מרעננים תמיד רק Anchors
+        asyncio.create_task(auto_anchor_updater())
+
         if not PRICE_MONITOR_DISABLE:
             asyncio.create_task(price_monitor_loop())
         asyncio.create_task(anchor_snapshot_loop())
@@ -249,6 +252,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
