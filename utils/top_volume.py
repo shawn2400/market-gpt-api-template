@@ -2,6 +2,7 @@
 # =========================
 # Utility: שליפת Top Volume Symbols מ־Binance (Spot/Futures)
 # כולל סינון לפי Quote + Volume מינימלי
+# + בדיקה מול exchangeInfo כדי לא להחזיר סימבולים "מתים"
 # =========================
 
 from __future__ import annotations
@@ -9,6 +10,8 @@ import os
 from typing import Tuple, List, Dict, Any
 import requests
 import logging
+
+from utils.binance_client import valid_futures_symbols  # ✅ נוספה בדיקה מול רשימת סימבולים חוקיים
 
 logger = logging.getLogger("algogpt.top_volume")
 
@@ -48,13 +51,21 @@ def get_top_volume_symbols(
         data = r.json()
 
         rows: List[Dict[str, Any]] = []
+
         # ✅ מינימום Volume מה־env או מהפרמטר
         min_qv_env = float(os.getenv("TOP_VOLUME_MIN_QV", "0") or 0.0)
         mql = max(float(min_quote_volume or 0.0), min_qv_env)
 
+        # ✅ אם מדובר בפיוצ’רס → נטען את רשימת הסימבולים החוקיים
+        valid_fut = valid_futures_symbols() if market == "futures" else None
+
         for item in data:
             sym = (item.get("symbol") or "").upper()
             if not sym.endswith(quote.upper()):
+                continue
+
+            # ✅ נוודא שהסימבול חוקי בפיוצ’רס
+            if market == "futures" and valid_fut and sym not in valid_fut:
                 continue
 
             try:
@@ -78,6 +89,7 @@ def get_top_volume_symbols(
     except Exception as e:
         logger.warning(f"get_top_volume_symbols failed: {e}")
         return False, []
+
 
 
 
