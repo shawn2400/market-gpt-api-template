@@ -28,6 +28,11 @@ services:
       start_period: 20s
     mem_limit: 2g
     cpus: 2.0
+    logging:                      # 👈 מניעת הצטברות לוגים אינסופיים
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     networks:
       - algonet
 
@@ -37,12 +42,21 @@ services:
     restart: unless-stopped
     volumes:
       - ./redis-data:/data
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    command: >
+      redis-server 
+      --save 60 1 
+      --loglevel warning
+      # --requirepass ${REDIS_PASSWORD}   👈 להפעיל אם תרצה סיסמה (להוסיף ל-.env)
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:                      # 👈 גם ללוגי Redis
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - algonet
 
