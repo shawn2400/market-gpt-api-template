@@ -1,3 +1,9 @@
+# main.py
+# =========================
+# AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת
+# FastAPI Entrypoint
+# =========================
+
 from __future__ import annotations
 import os, asyncio, logging, json, time
 from datetime import datetime, timezone
@@ -11,8 +17,8 @@ from fastapi.staticfiles import StaticFiles
 
 # --- Env ---
 load_dotenv(override=True)
-LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip() in ("1", "true", "yes")
-SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip() in ("1", "true", "yes")
+LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip().lower() in ("1", "true", "yes")
+SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 
 # --- Config ---
 from utils.config import (
@@ -31,7 +37,7 @@ from utils import cache_fallback as redis_store
 from utils.auth import require_api_key
 
 # --- App Version ---
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.8")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.14.9")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -127,7 +133,7 @@ def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
 # --- Background tasks ---
 async def auto_anchor_updater(interval: int = 20):
     """
-    מרענן אוטומטית רק את BTC/ETH/SOL/BNB כדי לשמור אותם תמיד טריים ב־Cache
+    מרענן אוטומטית Anchors (BTC/ETH/SOL/BNB) כדי לשמור אותם תמיד טריים ב־Cache
     """
     anchors = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     while True:
@@ -167,7 +173,13 @@ async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_IN
         for side in sides:
             try:
                 dec = evaluate_anchor(side)
-                item = {"ts": int(time.time()), "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
+                item = {
+                    "ts": int(time.time()),
+                    "side": side,
+                    "bias": dec.bias,
+                    "score": dec.score,
+                    "allow": dec.allow
+                }
                 await redis_store.lpush("anchor:history", json.dumps(item))
                 await redis_store.ltrim("anchor:history", 0, 200)
                 logger.info({"event": "anchor_snapshot", **item})
@@ -252,6 +264,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
