@@ -1,7 +1,8 @@
 # utils/binance_client.py
 # =========================
-# מודול לניהול קריאות Binance API (Futures/Spot)
+# ניהול קריאות Binance API (Futures/Spot)
 # כולל: Client factory, retries, מחיר עתידי (markPrice), Funding cache
+# עם Cache פנימי + fallback
 # =========================
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import httpx
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# 🚀 Cache פנימי
+# 🚀 Cache פנימי למחירים + Funding
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 
 logger = logging.getLogger("algogpt.binance")
