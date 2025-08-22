@@ -94,7 +94,7 @@ from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
 from routes.debug import router as debug_router
 from routes.market import router as market_router
-from routes.executor import router as executor_router  # ✅ מתוקן
+import routes.executor as executor_router   # ✅ ייבוא מתוקן
 
 protected_routers = [
     (scan_router, "", ["Scan"]),
@@ -114,7 +114,7 @@ for r, p, t in protected_routers:
 
 # ⬅️ Executor עם prefix אחיד
 app.include_router(
-    executor_router,
+    executor_router.router,   # ✅ ניגשים ל־router מתוך המודול
     prefix="/executor",
     tags=["Executor"],
     dependencies=[Depends(require_api_key)]
