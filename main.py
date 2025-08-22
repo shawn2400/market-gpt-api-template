@@ -82,7 +82,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
-from routes.grid import router as grid_router
+# ❌ grid_router הוסר
 from routes.orderflow import router as orderflow_router
 from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
@@ -91,7 +91,7 @@ from routes.debug import router as debug_router
 protected_routers = [
     (scan_router, "", ["Scan"]),
     (trade_router, "/trade", ["Trade"]),
-    (grid_router, "/grid", ["Grid"]),
+    # grid_router הוסר
     (orderflow_router, "/orderflow", ["Orderflow"]),
     (indicators_router, "/indicators", ["Indicators"]),
     (anchor_router, "", ["Anchor"]),
@@ -246,6 +246,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
