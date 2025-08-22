@@ -1,7 +1,7 @@
 # routes/market.py
 # =========================
 # REST API לנתוני שוק (Top Volume Symbols)
-# כולל Rate-Limit, Cache ומידע מה-Cache של Binance Client
+# כולל Rate-Limit, שימוש ב־Cache למחירים ו-Funding
 # =========================
 
 from __future__ import annotations
@@ -24,14 +24,15 @@ router = APIRouter(
     dependencies=[Depends(require_bearer_token)]
 )
 
-# -------------------
-# Rate Limit פנימי
-# -------------------
+# =========================
+# Rate Limit פנימי (למניעת הצפות)
+# =========================
 _rate_limit_state: Dict[str, list] = {}
 
 def check_rate_limit(ip: str, limit: int, window: int = 60) -> bool:
     now = time.time()
     calls = _rate_limit_state.get(ip, [])
+    # נשמור רק קריאות מהדקה האחרונה
     calls = [c for c in calls if now - c < window]
     if len(calls) >= limit:
         return False
@@ -39,18 +40,24 @@ def check_rate_limit(ip: str, limit: int, window: int = 60) -> bool:
     _rate_limit_state[ip] = calls
     return True
 
-
-@router.get("/top-volume", summary="Top symbols by volume (Binance)")
+# =========================
+# Endpoints
+# =========================
+@router.get(
+    "/top-volume",
+    summary="Top symbols by volume (Binance)",
+    operation_id="getTopVolumeSymbols"
+)
 async def get_top_volume(
     request: Request,
     market: str = Query("futures", enum=["futures", "spot"]),
     quote: str = Query("USDT"),
-    limit: int = Query(30, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),   # ⬅️ מוגבל ל־100
     min_quote_volume: float = Query(0.0, ge=0.0),
 ) -> Dict[str, Any]:
     ip = request.client.host
-    if not check_rate_limit(ip, limit=20, window=60):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded (20 per minute)")
+    if not check_rate_limit(ip, limit=20, window=60):  # ⬅️ מקסימום 20 קריאות בדקה
+        raise HTTPException(status_code=429, detail="Rate limit exceeded (20 per 60s)")
 
     try:
         ok, symbols = await asyncio.to_thread(
@@ -60,22 +67,39 @@ async def get_top_volume(
             limit,
             min_quote_volume
         )
-        return {"ok": bool(ok), "market": market, "quote": quote, "limit": limit, "symbols": symbols or []}
+        return {
+            "ok": bool(ok),
+            "market": market,
+            "quote": quote,
+            "limit": limit,
+            "symbols": symbols or []
+        }
     except Exception as e:
-        return {"ok": False, "market": market, "quote": quote, "limit": limit, "symbols": [], "error": str(e)}
+        return {
+            "ok": False,
+            "market": market,
+            "quote": quote,
+            "limit": limit,
+            "symbols": [],
+            "error": str(e)
+        }
 
 
-@router.get("/top-volume-with-prices", summary="Top symbols + price/funding (cache)")
+@router.get(
+    "/top-volume-with-prices",
+    summary="Top symbols with markPrice + fundingRate (from cache)",
+    operation_id="getTopVolumeWithPrices"
+)
 async def get_top_volume_with_prices(
     request: Request,
     market: str = Query("futures", enum=["futures", "spot"]),
     quote: str = Query("USDT"),
-    limit: int = Query(20, ge=1, le=50),
+    limit: int = Query(20, ge=1, le=50),   # ⬅️ מוגבל ל־50 כדי לא להעמיס
     min_quote_volume: float = Query(0.0, ge=0.0),
 ) -> Dict[str, Any]:
     ip = request.client.host
-    if not check_rate_limit(ip, limit=30, window=60):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded (30 per minute)")
+    if not check_rate_limit(ip, limit=30, window=60):  # ⬅️ מקסימום 30 קריאות בדקה
+        raise HTTPException(status_code=429, detail="Rate limit exceeded (30 per 60s)")
 
     try:
         ok, symbols = await asyncio.to_thread(
@@ -85,6 +109,7 @@ async def get_top_volume_with_prices(
             limit,
             min_quote_volume
         )
+
         enriched: List[Dict[str, Any]] = []
         for sym in symbols or []:
             info = get_cached_symbol_info(sym["symbol"]) or {}
@@ -95,9 +120,24 @@ async def get_top_volume_with_prices(
                 "nextFundingTime": info.get("nextFundingTime"),
                 "ts": info.get("ts")
             })
-        return {"ok": True, "market": market, "quote": quote, "limit": limit, "symbols": enriched}
+
+        return {
+            "ok": True,
+            "market": market,
+            "quote": quote,
+            "limit": limit,
+            "symbols": enriched
+        }
     except Exception as e:
-        return {"ok": False, "market": market, "quote": quote, "limit": limit, "symbols": [], "error": str(e)}
+        return {
+            "ok": False,
+            "market": market,
+            "quote": quote,
+            "limit": limit,
+            "symbols": [],
+            "error": str(e)
+        }
+
 
 
 
