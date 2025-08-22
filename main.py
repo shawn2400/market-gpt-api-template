@@ -76,7 +76,6 @@ app = FastAPI(
 )
 
 # --- Middlewares ---
-# ⬆️ העלינו את מגבלת ה־Response ל־5MB
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -95,7 +94,7 @@ from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
 from routes.debug import router as debug_router
 from routes.market import router as market_router
-from routes.executor import router as executor_router  # 👈 חדש
+from routes.executor import router as executor_router  # ✅ מתוקן
 
 protected_routers = [
     (scan_router, "", ["Scan"]),
@@ -113,8 +112,13 @@ if ENABLE_AI_ROUTES and OPENAI_API_KEY:
 for r, p, t in protected_routers:
     app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
 
-# ⬅️ רישום ה־executor ללא prefix וללא תלות כפולה (יש לו require_bearer_token בפנים)
-app.include_router(executor_router, tags=["Executor"])
+# ⬅️ Executor עם prefix + אבטחה
+app.include_router(
+    executor_router,
+    prefix="/executor",
+    tags=["Executor"],
+    dependencies=[Depends(require_api_key)]
+)
 
 # ✅ Debug router – רק אם לא בלייט מוד
 if not LIGHT_MODE:
@@ -137,9 +141,6 @@ def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
 
 # --- Background tasks ---
 async def auto_anchor_updater(interval: int = 20):
-    """
-    מרענן אוטומטית Anchors (BTC/ETH/SOL/BNB) כדי לשמור אותם תמיד טריים ב־Cache
-    """
     anchors = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     while True:
         for sym in anchors:
@@ -226,7 +227,6 @@ async def startup_event():
             symbols.insert(0, "BTCUSDT")
 
         asyncio.create_task(auto_anchor_updater())
-
         if not PRICE_MONITOR_DISABLE:
             asyncio.create_task(price_monitor_loop())
         asyncio.create_task(anchor_snapshot_loop())
@@ -268,6 +268,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
