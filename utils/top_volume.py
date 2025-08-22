@@ -2,7 +2,7 @@
 # =========================
 # Utility: שליפת Top Volume Symbols מ־Binance (Spot/Futures)
 # כולל סינון לפי Quote + Volume מינימלי
-# + בדיקה מול exchangeInfo כדי לא להחזיר סימבולים "מתים"
+# ✅ בדיקה מול SymbolsCache (רק סימבולים חוקיים)
 # =========================
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from typing import Tuple, List, Dict, Any
 import requests
 import logging
 
-from utils.binance_client import valid_futures_symbols  # ✅ נוספה בדיקה מול רשימת סימבולים חוקיים
+from utils.symbols import SymbolsCache  # ✅ נוספה בדיקה מול cache קיים
 
 logger = logging.getLogger("algogpt.top_volume")
 
@@ -37,8 +37,8 @@ def get_top_volume_symbols(
     """
     מחזיר סימבולים ממיונים לפי quoteVolume (24h).
     - שוק: futures / spot
-    - מחזיר גם symbol וגם quoteVolume
-    - מוגן משגיאות רשת (מחזיר False, [])
+    - מסנן לפי Quote ו־Volume מינימלי
+    - כולל בדיקה מול רשימת סימבולים חוקיים (SymbolsCache)
     """
     try:
         url = (
@@ -56,16 +56,17 @@ def get_top_volume_symbols(
         min_qv_env = float(os.getenv("TOP_VOLUME_MIN_QV", "0") or 0.0)
         mql = max(float(min_quote_volume or 0.0), min_qv_env)
 
-        # ✅ אם מדובר בפיוצ’רס → נטען את רשימת הסימבולים החוקיים
-        valid_fut = valid_futures_symbols() if market == "futures" else None
+        # ✅ SymbolsCache – לבדוק חוקיות
+        sym_cache = SymbolsCache(market=market)
+        sym_cache.ensure()
 
         for item in data:
             sym = (item.get("symbol") or "").upper()
             if not sym.endswith(quote.upper()):
                 continue
 
-            # ✅ נוודא שהסימבול חוקי בפיוצ’רס
-            if market == "futures" and valid_fut and sym not in valid_fut:
+            # ❌ דילוג על סימבולים לא חוקיים
+            if not sym_cache.has(sym):
                 continue
 
             try:
