@@ -6,8 +6,8 @@ info:
   version: 2.14.7
   description: |
     AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
-    כולל: Scan / AI / Trades / Backtest / News / Grid / Risk / Indicators / Analytics / PnL / Anchor / Executor / WS.
-    ⚠️ רוב ה־endpoints דורשים Bearer Token (חוץ מ־/health ו־/debug).
+    כולל: Scan / AI / Trades / Grid / Risk / Indicators / Anchor / Executor / WS.
+    ⚠️ רוב ה־endpoints דורשים Bearer Token (חוץ מ־/health).
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -16,27 +16,18 @@ servers:
 tags:
   - name: Config
   - name: Health
-  - name: Debug
   - name: Grid
   - name: Scan
   - name: AI
   - name: Trades
-  - name: Backtest
   - name: Indicators
-  - name: Analytics
-  - name: News
-  - name: Dashboard
-  - name: Risk
-  - name: Snapshots
-  - name: PnL
-  - name: Strategy
-  - name: Orders
   - name: Anchor
+  - name: Orders
+  - name: Executor
   - name: Price
   - name: Market
-  - name: Executor
-  - name: Websocket
   - name: Utils
+  - name: Debug
 
 security:
   - HTTPBearer: []
@@ -60,6 +51,7 @@ components:
       properties:
         status: { type: string, example: ok }
         version: { type: string, example: 2.14.7 }
+        mode: { type: string, example: normal }
 
     GenericResponse:
       type: object
@@ -119,17 +111,6 @@ components:
         budget: { type: number }
         status: { type: string }
 
-    PnlUpdate:
-      type: object
-      required: [symbol, direction, entry, exit_price, leverage, qty]
-      properties:
-        symbol: { type: string }
-        direction: { type: string }
-        entry: { type: number }
-        exit_price: { type: number }
-        leverage: { type: number }
-        qty: { type: number }
-
 paths:
   /:
     get:
@@ -173,51 +154,11 @@ paths:
                 properties:
                   status: { type: string, example: live }
 
-  /debug/headers:
-    post:
-      tags: [Debug]
-      summary: Echo request headers/body
-      operationId: postDebugHeaders
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /debug/health:
-    get:
-      tags: [Debug]
-      summary: Get recent logs
-      operationId: getDebugHealth
-      parameters:
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50 }
-        - in: query
-          name: level
-          schema: { type: string }
-        - in: query
-          name: logger_name
-          schema: { type: string }
-      security: []
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
   /grid/status:
     get:
       tags: [Grid]
       summary: Grid status list
       operationId: getGridStatus
-      parameters:
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50, minimum: 10, maximum: 200 }
       responses:
         "200":
           description: ok
@@ -230,10 +171,6 @@ paths:
       tags: [Grid]
       summary: Active grids only
       operationId: getGridActive
-      parameters:
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50, minimum: 10, maximum: 200 }
       responses:
         "200":
           description: ok
@@ -281,83 +218,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TradeResponse" }
-
-  /pnl/update:
-    post:
-      tags: [PnL]
-      summary: Update PnL from a trade
-      operationId: postPnlUpdate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PnlUpdate" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /pnl/daily:
-    get:
-      tags: [PnL]
-      summary: Get daily PnL summary
-      operationId: getPnlDaily
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /pnl/report:
-    get:
-      tags: [PnL]
-      summary: Generate PnL PDF report (base64)
-      operationId: getPnlReport
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /strategy/version:
-    get:
-      tags: [Strategy]
-      summary: Get strategy version
-      operationId: getStrategyVersion
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /orders:
-    get:
-      tags: [Orders]
-      summary: List open orders
-      operationId: getOrders
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /orders/active:
-    get:
-      tags: [Orders]
-      summary: List active orders
-      operationId: getOrdersActive
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
 
   /anchor/history:
     get:
@@ -447,6 +307,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  # ✅ Debug endpoints – מופעלים רק אם LIGHT_MODE=0
+  /debug/health:
+    get:
+      tags: [Debug]
+      summary: Get recent logs (only if not LIGHT_MODE)
+      operationId: getDebugHealth
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: level
+          schema: { type: string }
+        - in: query
+          name: logger_name
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
 
 
 
