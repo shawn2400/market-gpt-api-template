@@ -1,12 +1,11 @@
 from __future__ import annotations
-
 import os, time, logging
 from typing import Any, Callable, Optional, Dict, List
 import httpx
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-# 🚀 Cache פנימי (אם main.py ירצה, יכול לדרוס את זה עם reference משלו)
+# 🚀 Cache פנימי
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 
 logger = logging.getLogger("algogpt.binance")
@@ -18,6 +17,8 @@ BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
 PRICE_MONITOR_DISABLE = (os.getenv("PRICE_MONITOR_DISABLE", "false").strip().lower() in ("1", "true", "yes"))
+
+SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip() in ("1", "true", "yes")
 
 # ✅ בסיסי FAPI עם רוטציה
 _BINANCE_FAPI_BASES: List[str] = [
@@ -59,7 +60,8 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             return fn()
         except (BinanceAPIException, BinanceRequestException, httpx.HTTPError) as e:
             last_exc = e
-            logger.warning(f"[Binance] {label} failed ({i+1}/{retries}): {e}")
+            level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+            logger.log(level, f"[Binance] {label} failed ({i+1}/{retries}): {e}")
             time.sleep(delay)
         except Exception as e:
             last_exc = e
@@ -132,16 +134,18 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                         else:
                             last_err = "No markPrice in JSON"
                     else:
-                        # לא מסוכן – רק מצביע ש־Binance החזיר HTML/טקסט
-                        logger.info(f"[Binance] {sym} got non-JSON (likely HTML) from {base}, skipping...")
+                        last_err = f"Invalid content-type {ctype}"
+                        level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+                        logger.log(level, f"[Binance] {sym} got non-JSON from {base}")
                         continue
                 else:
-                    # במקום Warning → Info, זה לא באג אמיתי
-                    logger.info(f"[Binance] {sym} invalid response {r.status_code} from {base}")
                     last_err = f"{r.status_code} {r.text[:80]}"
+                    level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+                    logger.log(level, f"[Binance] {sym} invalid response from {base}: {last_err}")
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
-                logger.warning(f"[Binance] {sym} exception on {base}: {last_err}")
+                level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+                logger.log(level, f"[Binance] {sym} exception on {base}: {last_err}")
         time.sleep(0.35 * attempt)
 
     # ✅ Fallback ל־Cache
@@ -156,7 +160,8 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         data = futures_mark_price_dict(symbol)
         return float(data.get("markPrice") or 0.0)
     except Exception as e:
-        logger.info({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
+        level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+        logger.log(level, {"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
 
 
