@@ -64,7 +64,7 @@ class ExecutorPositionsResponse(BaseModel):
 # =====================
 # Endpoints
 # =====================
-@router.get("/executor/status", response_model=ExecutorStatus)
+@router.get("/status", response_model=ExecutorStatus)
 def executor_status() -> ExecutorStatus:
     running = bool(is_executor_running())
     last_ts = (
@@ -74,7 +74,7 @@ def executor_status() -> ExecutorStatus:
     )
     return ExecutorStatus(ok=True, running=running, last_ts=last_ts)
 
-@router.post("/executor/start", response_model=ExecutorActionResponse)
+@router.post("/start", response_model=ExecutorActionResponse)
 async def executor_start() -> ExecutorActionResponse:
     try:
         if is_executor_running():
@@ -84,7 +84,7 @@ async def executor_start() -> ExecutorActionResponse:
     except Exception as e:
         return ExecutorActionResponse(ok=False, error=str(e))
 
-@router.post("/executor/stop", response_model=ExecutorActionResponse)
+@router.post("/stop", response_model=ExecutorActionResponse)
 async def executor_stop() -> ExecutorActionResponse:
     try:
         if not is_executor_running():
@@ -94,7 +94,7 @@ async def executor_stop() -> ExecutorActionResponse:
     except Exception as e:
         return ExecutorActionResponse(ok=False, error=str(e))
 
-@router.get("/executor/symbols", response_model=ExecutorSymbolsResponse)
+@router.get("/symbols", response_model=ExecutorSymbolsResponse)
 def executor_symbols() -> ExecutorSymbolsResponse:
     if EXECUTOR_SYMBOLS:
         symbols = EXECUTOR_SYMBOLS
@@ -112,17 +112,17 @@ def executor_symbols() -> ExecutorSymbolsResponse:
 
     return ExecutorSymbolsResponse(ok=True, count=len(symbols), symbols=symbols, last_ts=last_ts)
 
-@router.get("/executor/logs", response_model=ExecutorLogsResponse)
+@router.get("/logs", response_model=ExecutorLogsResponse)
 def executor_logs(limit: int = Query(50, ge=1, le=200)) -> ExecutorLogsResponse:
     logs = list(EXECUTOR_LOGS)[-limit:]
     return ExecutorLogsResponse(ok=True, count=len(logs), logs=logs)
 
-@router.get("/executor/trades", response_model=ExecutorTradesResponse)
+@router.get("/trades", response_model=ExecutorTradesResponse)
 def executor_trades(limit: int = Query(50, ge=1, le=200)) -> ExecutorTradesResponse:
     trades = list(EXECUTOR_TRADES)[-limit:]
     return ExecutorTradesResponse(ok=True, count=len(trades), trades=trades)
 
-@router.get("/executor/open_positions", response_model=ExecutorPositionsResponse)
+@router.get("/open_positions", response_model=ExecutorPositionsResponse)
 def executor_open_positions() -> ExecutorPositionsResponse:
     try:
         positions = futures_open_positions()
@@ -131,12 +131,13 @@ def executor_open_positions() -> ExecutorPositionsResponse:
         return ExecutorPositionsResponse(ok=False, count=0, positions=[], error=str(e))
 
 # 🔴 NEW: Force Close Endpoint
-@router.post("/executor/force_close", response_model=dict)
+@router.post("/force_close", response_model=dict)
 def executor_force_close(symbol: str):
     """
     סוגר בכוח פוזיציה פתוחה בסימבול מסוים.
     """
     return force_close_position(symbol)
+
 
 
 
