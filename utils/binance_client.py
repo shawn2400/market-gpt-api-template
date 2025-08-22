@@ -160,10 +160,6 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
 
 
 def futures_mark_price(symbol: str) -> Optional[float]:
-    """
-    מחזיר מחיר נוכחי (markPrice) ושומר אותו ב־Cache.
-    אם יש גם fundingRate → נשמור ונחזיר.
-    """
     sym = symbol.upper()
     try:
         data = futures_mark_price_dict(sym)
@@ -186,8 +182,24 @@ def futures_mark_price(symbol: str) -> Optional[float]:
 
 
 def get_cached_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
-    """ Utility: מחזיר מה Cache גם מחיר וגם Funding אם יש. """
     return LAST_PRICE_CACHE.get(symbol.upper())
+
+# =========================
+# Futures Open Positions ✅ חדש
+# =========================
+def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    מחזיר את כל הפוזיציות הפתוחות בחשבון Futures.
+    אם מועבר symbol -> מחזיר רק את הפוזיציה הזו.
+    """
+    client = get_client()
+    try:
+        if symbol:
+            return retry_call(lambda: client.futures_position_information(symbol=symbol.upper()), f"futures_positions({symbol})")
+        return retry_call(lambda: client.futures_position_information(), "futures_positions(all)")
+    except Exception as e:
+        raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
+
 
 
 
