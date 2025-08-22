@@ -132,12 +132,13 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                         else:
                             last_err = "No markPrice in JSON"
                     else:
-                        last_err = f"Invalid content-type {ctype}"
-                        logger.warning(f"[Binance] {sym} got non-JSON from {base}")
+                        # לא מסוכן – רק מצביע ש־Binance החזיר HTML/טקסט
+                        logger.info(f"[Binance] {sym} got non-JSON (likely HTML) from {base}, skipping...")
                         continue
                 else:
+                    # במקום Warning → Info, זה לא באג אמיתי
+                    logger.info(f"[Binance] {sym} invalid response {r.status_code} from {base}")
                     last_err = f"{r.status_code} {r.text[:80]}"
-                    logger.warning(f"[Binance] {sym} invalid response from {base}: {last_err}")
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
                 logger.warning(f"[Binance] {sym} exception on {base}: {last_err}")
@@ -155,8 +156,9 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         data = futures_mark_price_dict(symbol)
         return float(data.get("markPrice") or 0.0)
     except Exception as e:
-        logger.warning({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
+        logger.info({"event": "futures_mark_price_error", "symbol": symbol.upper(), "error": str(e)})
         return None
+
 
 
 
