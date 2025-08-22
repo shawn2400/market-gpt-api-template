@@ -9,11 +9,9 @@ logger = logging.getLogger("algogpt.cache_fallback")
 # --- In-memory fallback store ---
 _LOCAL_STORE: dict[str, tuple[Any, float | None]] = {}
 
-
 def _set_local(key: str, value: Any, expire: int | None = None):
     exp_ts = time.time() + expire if expire else None
     _LOCAL_STORE[key] = (value, exp_ts)
-
 
 def _get_local(key: str):
     val = _LOCAL_STORE.get(key)
@@ -25,9 +23,7 @@ def _get_local(key: str):
         return None
     return value
 
-
-# --- API אחיד ל־Redis או In-Memory ---
-
+# --- Unified API for Redis or Local store ---
 async def set_value(key: str, value: str, expire: int | None = None) -> bool:
     if redis_client:
         try:
@@ -38,7 +34,6 @@ async def set_value(key: str, value: str, expire: int | None = None) -> bool:
     _set_local(key, value, expire)
     return True
 
-
 async def get_value(key: str):
     if redis_client:
         try:
@@ -46,7 +41,6 @@ async def get_value(key: str):
         except Exception as e:
             logger.warning(f"[CacheFallback] Redis get error: {e}")
     return _get_local(key)
-
 
 async def delete_value(key: str) -> bool:
     if redis_client:
@@ -57,7 +51,6 @@ async def delete_value(key: str) -> bool:
             logger.warning(f"[CacheFallback] Redis delete error: {e}")
     _LOCAL_STORE.pop(key, None)
     return True
-
 
 async def lpush(key: str, value: str):
     if redis_client:
@@ -70,7 +63,6 @@ async def lpush(key: str, value: str):
     if isinstance(arr, list):
         arr.insert(0, value)
         _set_local(key, arr, 3600)
-
 
 async def ltrim(key: str, start: int, end: int):
     if redis_client:
