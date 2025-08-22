@@ -1,66 +1,31 @@
 # gunicorn_conf.py
-import multiprocessing, os, json, sys, logging
+import multiprocessing
+import os
 
-#
-# Workers & Performance
-#
-workers = int(os.getenv("WORKERS", multiprocessing.cpu_count() * 2 + 1))
+# Port injected by Render (ב־Dockerfile הוגדר כבר PORT=10000)
+bind = f"0.0.0.0:{os.getenv('PORT', '10000')}"
+
+# מספר workers - לפי WORKERS או לפי CPU
+workers = int(os.getenv("WORKERS", str(multiprocessing.cpu_count() * 2 + 1)))
+
+# Class של worker (כדי להריץ FastAPI/ASGI עם Uvicorn)
 worker_class = "uvicorn.workers.UvicornWorker"
-bind = f"0.0.0.0:{os.getenv('PORT', '8000')}"
 
-timeout = 120
-graceful_timeout = 30
-keepalive = 5
+# Timeout (ברירת מחדל 30s – כאן נתתי יותר כי Binance/AI לפעמים איטיים)
+timeout = int(os.getenv("TIMEOUT", "60"))
 
-max_requests = 2000
-max_requests_jitter = 200
-worker_tmp_dir = "/dev/shm"
-worker_connections = 1000  # מתאים ל-WS כבדים
-preload_app = True         # חוסך זמן וזיכרון ב-startup
-
-#
-# JSON Structured Logging
-#
-class JSONGunicornHandler(logging.StreamHandler):
-    def emit(self, record):
-        try:
-            log_record = {
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-            }
-            if hasattr(record, "trace_id"):
-                log_record["trace_id"] = record.trace_id
-            self.stream.write(json.dumps(log_record, ensure_ascii=False) + "\n")
-            self.flush()
-        except Exception:
-            self.handleError(record)
-
-
-def post_worker_init(worker):
-    """
-    Hook: configure JSON logging inside Gunicorn workers
-    """
-    root = logging.getLogger()
-    for h in root.handlers[:]:
-        root.removeHandler(h)
-    handler = JSONGunicornHandler(sys.stdout)
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-
-
-#
-# Gunicorn log settings
-#
-loglevel = "info"
+# לוגים ל־stdout (Render אוסף אותם לבד)
 accesslog = "-"
 errorlog = "-"
+loglevel = os.getenv("LOG_LEVEL", "info").lower()
 
-# Custom access log format → JSON
-access_log_format = (
-    '{"event":"access","client":"%(h)s","request":"%(r)s","status":"%(s)s",'
-    '"size":"%(b)s","referer":"%(f)s","agent":"%(a)s","duration":"%(L)s"}'
-)
+# Max requests (מכריח recycle של workers אחרי X בקשות → מונע memory leaks)
+max_requests = int(os.getenv("MAX_REQUESTS", "1000"))
+max_requests_jitter = int(os.getenv("MAX_REQUESTS_JITTER", "50"))
+
+# Keep-alive
+keepalive = int(os.getenv("KEEPALIVE", "5"))
+
 
 
 
