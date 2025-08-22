@@ -1,19 +1,23 @@
 # routes/scan_top_volume.py
 from __future__ import annotations
 import os
-from typing import List, Dict, Any, Optional, Iterable
+import logging
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Query, Depends
 import httpx
 import numpy as np
 from pydantic import BaseModel, Field
 
 from utils.auth import require_bearer_token
+from utils.symbols import SymbolsCache   # ✅ בדיקת סימבולים חוקיים
 
 router = APIRouter(tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 router_symbols = APIRouter(tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 _SCAN_MAX_LIMIT = min(int(os.getenv("SCAN_MAX_LIMIT", "10")), 10)
+
+logger = logging.getLogger("algogpt.scan_top_volume")
 
 # =====================
 # Models
@@ -111,16 +115,28 @@ async def _fetch_24h() -> List[Dict[str, Any]]:
         data = r.json()
         return data if isinstance(data, list) else []
 
-def _top_symbols_24h(tickers: List[Dict[str, Any]], quote: str, limit: int) -> List[str]:
+def _top_symbols_24h(tickers: List[Dict[str, Any]], quote: str, limit: int, market: str) -> List[str]:
     q = quote.upper()
     rows = [t for t in tickers if isinstance(t, dict) and str(t.get("symbol", "")).endswith(q)]
+
     def _qv(v: Any) -> float:
         try:
             return float(v.get("quoteVolume", 0.0))
         except Exception:
             return 0.0
+
     rows.sort(key=_qv, reverse=True)
-    return [r["symbol"] for r in rows[:_clamp_limit(limit)]]
+    symbols = [r["symbol"] for r in rows[:_clamp_limit(limit)]]
+
+    # ✅ סינון לפי SymbolsCache
+    sym_cache = SymbolsCache(market=market)
+    sym_cache.ensure()
+    valid_symbols = [s for s in symbols if sym_cache.has(s)]
+    dropped = set(symbols) - set(valid_symbols)
+    if dropped:
+        logger.info(f"[scan_top_volume] Dropped {len(dropped)} invalid symbols: {', '.join(dropped)}")
+
+    return valid_symbols
 
 async def _klines(symbol: str, interval: str, limit: int) -> Optional[List[List[Any]]]:
     url = f"{_FAPI}/fapi/v1/klines"
@@ -160,7 +176,7 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> ScanSignal:
         score = 6.5 + min(3.0, max(0.0, (adx14 - 20.0) * 0.1))
 
     return ScanSignal(
-        symbol=rows[0][0] if isinstance(rows[0], list) else "?",  # fallback
+        symbol=rows[0][0] if isinstance(rows[0], list) else "?",
         timeframe=interval,
         side="BUY" if direction == "LONG" else ("SELL" if direction == "SHORT" else None),
         score=round(score, 2),
@@ -188,7 +204,7 @@ async def get_symbols_top_volume(
     limit: int = Query(5, ge=1, le=100),
 ) -> SymbolListResponse:
     tickers = await _fetch_24h()
-    symbols = _top_symbols_24h(tickers, quote=quote, limit=limit)
+    symbols = _top_symbols_24h(tickers, quote=quote, limit=limit, market=market)
     return SymbolListResponse(ok=True, market=market, quote=quote,
                               count_total=len(symbols), returned=len(symbols), symbols=symbols)
 
@@ -204,7 +220,7 @@ async def scan_top_volume(
     try:
         limit = _clamp_limit(limit)
         tickers = await _fetch_24h()
-        symbols = _top_symbols_24h(tickers, quote=quote, limit=limit)
+        symbols = _top_symbols_24h(tickers, quote=quote, limit=limit, market=market)
         if symbol:
             s = symbol.upper().strip()
             symbols = [x for x in symbols if x.upper() == s] or [s]
@@ -239,6 +255,7 @@ async def scan_single(
     return await scan_top_volume(market=market, quote="USDT",
                                  limit=1, timeframe=timeframe,
                                  kline_limit=200, symbol=symbol)
+
 
 
 
