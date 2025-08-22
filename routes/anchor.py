@@ -1,76 +1,55 @@
 # routes/anchor.py
+# =========================
+# REST API לניהול Anchor (Bias/Score)
+# כולל Redis היסטוריה
+# =========================
 from __future__ import annotations
-import json
+import json, time
 from typing import List, Dict, Any
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
-
 from utils.redis_client import redis_client
 from utils.anchor import evaluate_anchor, AnchorDecision
+from utils.auth import require_api_key
 
-router = APIRouter(tags=["Anchor"])
+router = APIRouter(tags=["Anchor"], dependencies=[Depends(require_api_key)])
 
-# =====================
-# Models
-# =====================
+# --- Rate limit ---
+_rl_state = {}
+def _rl(ip: str, limit=20, window=60):
+    now = time.time()
+    calls = [c for c in _rl_state.get(ip, []) if now - c < window]
+    if len(calls) >= limit: return False
+    calls.append(now); _rl_state[ip] = calls; return True
+
 class AnchorSnapshot(BaseModel):
-    ts: int
-    side: str
-    bias: str
-    score: float
-    allow: bool
+    ts: int; side: str; bias: str; score: float; allow: bool
 
 class AnchorHistoryResponse(BaseModel):
-    ok: bool = True
-    count: int
+    ok: bool = True; count: int
     items: List[AnchorSnapshot] = Field(default_factory=list)
 
 class AnchorLiveResponse(BaseModel):
-    ok: bool = True
-    side: str
-    decision: Dict[str, Any]
+    ok: bool = True; side: str; decision: Dict[str, Any]
 
-# =====================
-# Endpoints
-# =====================
 @router.get("/anchor/history", response_model=AnchorHistoryResponse)
-async def get_anchor_history(limit: int = Query(50, ge=10, le=200)):
-    """
-    מחזיר את ההיסטוריה האחרונה של Anchor שנשמרה ב-Redis
-    (ברירת מחדל 50, מקסימום 200).
-    """
-    if not redis_client:
-        raise HTTPException(status_code=500, detail="Redis not available")
-
-    key = "anchor:history"
-    raw_items = redis_client.lrange(key, 0, limit - 1) or []
+async def get_anchor_history(limit: int = Query(50, ge=10, le=200), request: Request = None):
+    if not _rl(request.client.host): raise HTTPException(429, "Rate limit exceeded")
+    if not redis_client: raise HTTPException(status_code=500, detail="Redis not available")
+    raw_items = redis_client.lrange("anchor:history", 0, limit - 1) or []
     items: List[AnchorSnapshot] = []
-
     for raw in raw_items:
-        try:
-            data = json.loads(raw)
-            items.append(AnchorSnapshot(**data))
-        except Exception:
-            continue
-
+        try: items.append(AnchorSnapshot(**json.loads(raw)))
+        except Exception: continue
     return AnchorHistoryResponse(count=len(items), items=items)
 
 @router.get("/anchor/live", response_model=AnchorLiveResponse)
-async def get_anchor_live(side: str = Query("LONG", regex="^(LONG|SHORT)$")):
-    """
-    מריץ Evaluate Anchor בזמן אמת ומחזיר תוצאה חיה (לא רק היסטורית).
-    """
+async def get_anchor_live(side: str = Query("LONG", regex="^(LONG|SHORT)$"), request: Request = None):
+    if not _rl(request.client.host): raise HTTPException(429, "Rate limit exceeded")
     dec: AnchorDecision = evaluate_anchor(side)
-    return AnchorLiveResponse(
-        side=side,
-        decision={
-            "mode_requested": dec.mode_requested,
-            "mode_applied": dec.mode_applied,
-            "bias": dec.bias,
-            "score": dec.score,
-            "allow": dec.allow,
-            "severity": dec.severity,
-            "reason": dec.reason,
-        }
-    )
+    return AnchorLiveResponse(side=side,
+        decision={"mode_requested": dec.mode_requested, "mode_applied": dec.mode_applied,
+                  "bias": dec.bias, "score": dec.score, "allow": dec.allow,
+                  "severity": dec.severity, "reason": dec.reason})
+
 
