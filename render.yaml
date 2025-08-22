@@ -2,7 +2,8 @@ services:
   - type: web
     name: algogpt-docker
     runtime: docker
-    plan: starter
+    # כאן תשנה ל־pro/pro plus/pro max בהתאם למנוי
+    plan: pro  
     autoDeploy: false
     pullRequestPreviewsEnabled: false
 
@@ -12,24 +13,31 @@ services:
     dockerContext: .
 
     envVars:
-      # Render מזריק PORT אוטומטית; שמנו 10000 כבר ב־Dockerfile
+      # Render מזריק PORT אוטומטית; Dockerfile שלנו מקבע ל־10000
       - key: PORT
         value: "10000"
 
-      # Workers דינמיים (0 = אוטומטי לפי CPU)
+      # Workers דינמיים — 0 = auto לפי CPU (2*CPU+1)
+      # Starter (1 CPU) → 3 workers
+      # Pro Plus (4 CPU) → 9 workers
+      # Pro Max (4 CPU / 16GB) → עדיין 9 workers
+      # Pro Ultra (8 CPU / 32GB) → 17 workers
       - key: WORKERS
         value: "0"
 
+      # לוגים
       - key: LOG_LEVEL
         value: "INFO"
 
+      # CORS — בפרודקשן כדאי לשים whitelist של דומיינים מורשים
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
+      # גרסת האפליקציה
       - key: ALGOGPT_VERSION
         value: "2.14.6"
 
-      # WS/Price Monitor
+      # WS / Price Monitor flags
       - key: WS_UPDATE_INTERVAL
         value: "15"
       - key: PRICE_MONITOR_INTERVAL
@@ -37,10 +45,6 @@ services:
       - key: PRICE_WS_FRESH_TTL
         value: "20"
       - key: PRICE_MONITOR_DISABLE
-        value: "0"
-
-      # מצב עבודה (0=Full עם Binance+Redis, 1=Light Mode Debug)
-      - key: LIGHT_MODE
         value: "0"
 
       # 🔑 מפתחות רגישים — להגדיר ב־Dashboard כ "Synced"
@@ -53,10 +57,15 @@ services:
       - key: API_BEARER_TOKEN
         sync: false
 
+      # Redis (בפרודקשן אמיתי רצוי לשים Redis חיצוני, לא dummy)
+      - key: REDIS_URL
+        value: "redis://localhost:6379"
+
     disk:
       name: tmp
       mountPath: /tmp
       sizeGB: 1
+
 
 
 
