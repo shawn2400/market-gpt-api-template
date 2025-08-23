@@ -1,4 +1,4 @@
-gunicorn -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:10000 main:app
+web: gunicorn -k uvicorn.workers.UvicornWorker -w ${WORKERS:-2} -b 0.0.0.0:$PORT main:app
 
 
 
