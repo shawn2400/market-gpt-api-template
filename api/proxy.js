@@ -1,14 +1,13 @@
 // api/proxy.js
-
 export default {
   async fetch(request) {
     try {
       const url = new URL(request.url);
 
-      // נחפש אם זה קריאה ל־REST של Binance
+      // ניתוב כל מה שבא אחרי /api/proxy/
       if (url.pathname.startsWith("/api/proxy/")) {
-        const target = url.pathname.replace("/api/proxy", "");
-        const fullUrl = `https://fapi.binance.com${target}${url.search}`;
+        const targetPath = url.pathname.replace("/api/proxy", "");
+        const fullUrl = `https://fapi.binance.com${targetPath}${url.search}`;
 
         const resp = await fetch(fullUrl, {
           method: request.method,
@@ -17,17 +16,10 @@ export default {
 
         return new Response(resp.body, {
           status: resp.status,
-          headers: { "content-type": resp.headers.get("content-type") || "application/json" }
+          headers: {
+            "content-type": resp.headers.get("content-type") || "application/json"
+          }
         });
-      }
-
-      // WebSocket proxy
-      if (url.pathname === "/api/proxy/ws") {
-        const target = url.searchParams.get("target");
-        if (!target) {
-          return new Response(JSON.stringify({ error: "Missing target" }), { status: 400 });
-        }
-        return fetch(target, request); // pass-through upgrade
       }
 
       return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
