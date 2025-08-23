@@ -36,7 +36,7 @@ ccxt==4.4.34
 websockets>=12.0,<13.0
 websocket-client==1.8.0
 ta==0.11.0
-TA-Lib-binary==0.4.28   # ✅ הכי יציב, בלי system libs
+TA-Lib==0.4.28   # ✅ חבילה הרשמית, יציבה לפרודקשן
 
 # 🤖 AI
 openai==1.30.1
@@ -46,6 +46,7 @@ python-multipart==0.0.9
 
 # 🗄 Redis
 redis==5.0.4
+
 
 
 
