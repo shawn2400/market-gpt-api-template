@@ -1,4 +1,3 @@
-# utils/binance_client.py
 from __future__ import annotations
 import os, time, logging
 from typing import Any, Callable, Optional, Dict, List
@@ -15,11 +14,15 @@ BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
 
-BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
-BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
-BINANCE_FALLBACK_URL = (os.getenv("BINANCE_FALLBACK_URL") or BINANCE_FAPI_BASE).rstrip("/")
-SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").lower() in ("1", "true", "yes")
+# Direct Binance
+BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com/fapi/v1").rstrip("/")
+BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com/api/v3").rstrip("/")
 
+# Proxy fallback
+BINANCE_PROXY_FAPI = (os.getenv("BINANCE_PROXY_FAPI") or "").rstrip("/")
+BINANCE_PROXY_HTTP = (os.getenv("BINANCE_PROXY_HTTP") or "").rstrip("/")
+
+SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").lower() in ("1", "true", "yes")
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "6.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
@@ -27,6 +30,7 @@ _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
+
 
 # =========================
 # 🧩 Client
@@ -43,11 +47,11 @@ def get_client() -> Client:
         client.API_URL = "https://testnet.binance.vision/api"
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
-        # Proxy מוגדר → משתמשים בו ישירות
         client.API_URL = BINANCE_HTTP_BASE
         client.FUTURES_URL = BINANCE_FAPI_BASE
 
     return client
+
 
 # =========================
 # 🔁 Retry helper
@@ -68,19 +72,35 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
 
+
 # =========================
-# 📊 Futures Exchange Info
+# 📊 Futures Exchange Info (עם Fallback)
 # =========================
 def futures_exchange_info_safe() -> Dict[str, Any]:
     global _futures_exchange_info_cache
     if _futures_exchange_info_cache is not None:
         return _futures_exchange_info_cache
+
     client = get_client()
-    info = retry_call(lambda: client.futures_exchange_info(), "futures_exchange_info")
+    try:
+        info = retry_call(lambda: client.futures_exchange_info(), "futures_exchange_info")
+    except Exception as e:
+        logger.warning(f"[Binance] Direct futures_exchange_info failed → trying proxy: {e}")
+        if BINANCE_PROXY_FAPI:
+            url = f"{BINANCE_PROXY_FAPI}/exchangeInfo"
+            with httpx.Client(timeout=_DEFAULT_TIMEOUT) as http:
+                r = http.get(url)
+                r.raise_for_status()
+                info = r.json()
+        else:
+            raise
+
     if not isinstance(info, dict) or "symbols" not in info:
         raise RuntimeError("Invalid response from Binance futures_exchange_info")
+
     _futures_exchange_info_cache = info
     return info
+
 
 def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     global _valid_futures_symbols
@@ -91,11 +111,13 @@ def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     _valid_futures_symbols = symbols
     return _valid_futures_symbols
 
+
 def is_valid_futures_symbol(symbol: str) -> bool:
     return symbol.upper() in valid_futures_symbols()
 
+
 # =========================
-# 💵 Futures Mark Price
+# 💵 Futures Mark Price (עם Fallback)
 # =========================
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper().strip()
@@ -103,13 +125,8 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         if not is_valid_futures_symbol(sym):
             raise RuntimeError(f"Invalid futures symbol {sym}")
 
-        # Proxy כבר כולל /fapi → נוסיף רק /v1
-        url = f"{BINANCE_FAPI_BASE}/v1/premiumIndex"
-
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 AlgoGPT"
-        }
+        url = f"{BINANCE_FAPI_BASE}/premiumIndex"
+        headers = {"Accept": "application/json", "User-Agent": "AlgoGPT"}
 
         with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True) as client:
             r = client.get(url, params={"symbol": sym}, headers=headers)
@@ -120,11 +137,26 @@ def futures_mark_price(symbol: str) -> Optional[float]:
             LAST_PRICE_CACHE[sym] = {"price": price, "ts": int(time.time())}
             return price
         else:
-            logger.error(f"[Binance] Invalid response {r.status_code}: {r.text[:120]}")
-            return None
+            raise RuntimeError(f"Invalid direct response {r.status_code}")
+
     except Exception as e:
-        logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
-        return None
+        logger.warning(f"[Binance] Direct mark_price failed → trying proxy: {e}")
+        if not BINANCE_PROXY_FAPI:
+            return None
+        try:
+            url = f"{BINANCE_PROXY_FAPI}/premiumIndex"
+            with httpx.Client(timeout=_DEFAULT_TIMEOUT) as client:
+                r = client.get(url, params={"symbol": sym})
+            if r.status_code == 200:
+                data = r.json()
+                price = float(data.get("markPrice"))
+                LAST_PRICE_CACHE[sym] = {"price": price, "ts": int(time.time())}
+                return price
+        except Exception as ex:
+            logger.error(f"[Binance] Proxy mark_price also failed: {ex}")
+            return None
+    return None
+
 
 # =========================
 # 📌 Futures Open Positions
@@ -133,11 +165,9 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
     client = get_client()
     try:
         if symbol:
-            resp = retry_call(lambda: client.futures_position_information(symbol=symbol.upper()),
-                              f"futures_positions({symbol})")
+            resp = retry_call(lambda: client.futures_position_information(symbol=symbol.upper()), f"futures_positions({symbol})")
         else:
-            resp = retry_call(lambda: client.futures_position_information(),
-                              "futures_positions(all)")
+            resp = retry_call(lambda: client.futures_position_information(), "futures_positions(all)")
 
         if not isinstance(resp, list):
             raise RuntimeError(f"Unexpected response type: {type(resp)}")
