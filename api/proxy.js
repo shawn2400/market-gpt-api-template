@@ -1,75 +1,42 @@
 // api/proxy.js
-/**
- * Binance REST + WebSocket Proxy
- * Deploys on Vercel Edge (Workers runtime)
- */
 
 export default {
-  async fetch(req) {
+  async fetch(request) {
     try {
-      const url = new URL(req.url);
+      const url = new URL(request.url);
 
-      // --- WebSocket Proxy ---
-      if (url.pathname.startsWith("/api/proxy/ws")) {
-        const target = url.searchParams.get("target");
-        if (!target || !target.startsWith("wss://")) {
-          return new Response("Missing ?target=wss://...", { status: 400 });
-        }
+      // נחפש אם זה קריאה ל־REST של Binance
+      if (url.pathname.startsWith("/api/proxy/")) {
+        const target = url.pathname.replace("/api/proxy", "");
+        const fullUrl = `https://fapi.binance.com${target}${url.search}`;
 
-        const upgradeHeader = req.headers.get("upgrade") || "";
-        if (upgradeHeader.toLowerCase() !== "websocket") {
-          return new Response("Expected WebSocket", { status: 426 });
-        }
-
-        const { 0: client, 1: server } = Object.values(new WebSocketPair());
-
-        const upstream = new WebSocket(target, {
-          headers: { "User-Agent": "AlgoGPT-Proxy" },
+        const resp = await fetch(fullUrl, {
+          method: request.method,
+          headers: { "User-Agent": "AlgoGPT-Proxy" }
         });
 
-        upstream.addEventListener("message", (msg) => server.send(msg.data));
-        upstream.addEventListener("close", () => server.close());
-        upstream.addEventListener("error", (err) => {
-          console.error("WS Proxy error:", err);
-          server.close();
+        return new Response(resp.body, {
+          status: resp.status,
+          headers: { "content-type": resp.headers.get("content-type") || "application/json" }
         });
-
-        server.addEventListener("message", (msg) => upstream.send(msg.data));
-        server.accept();
-
-        return new Response(null, { status: 101, webSocket: client });
       }
 
-      // --- REST Proxy ---
-      const targetBase = url.pathname.startsWith("/api/proxy/fapi")
-        ? "https://fapi.binance.com"
-        : "https://api.binance.com";
+      // WebSocket proxy
+      if (url.pathname === "/api/proxy/ws") {
+        const target = url.searchParams.get("target");
+        if (!target) {
+          return new Response(JSON.stringify({ error: "Missing target" }), { status: 400 });
+        }
+        return fetch(target, request); // pass-through upgrade
+      }
 
-      const targetUrl = targetBase + url.pathname.replace("/api/proxy", "") + url.search;
-
-      const resp = await fetch(targetUrl, {
-        method: req.method,
-        headers: {
-          "User-Agent": "AlgoGPT-Proxy",
-          "Content-Type": "application/json",
-        },
-        body: req.method !== "GET" ? await req.text() : undefined,
-      });
-
-      return new Response(resp.body, {
-        status: resp.status,
-        headers: {
-          "Content-Type": resp.headers.get("content-type") || "application/json",
-        },
-      });
+      return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
     } catch (err) {
-      return new Response(
-        JSON.stringify({ error: "Proxy error", detail: String(err) }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
     }
-  },
+  }
 };
+
 
 
 
