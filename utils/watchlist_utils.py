@@ -18,6 +18,7 @@ _DEFAULT_WATCHLIST: List[Dict[str, Any]] = [
 
 logger = logging.getLogger("algogpt.watchlist")
 
+
 # -------------------- Helpers --------------------
 def _ensure_file(path: str = WATCHLIST_PATH) -> None:
     if not os.path.exists(path):
@@ -27,6 +28,7 @@ def _ensure_file(path: str = WATCHLIST_PATH) -> None:
             logger.info({"event": "watchlist_init", "msg": f"created default {path}"})
         except Exception as e:
             logger.error({"event": "watchlist_init_error", "error": str(e)})
+
 
 def _validate_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
@@ -59,11 +61,13 @@ def _validate_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+
 def _ensure_anchor(watchlist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not any(it.get("symbol") == ANCHOR_SYMBOL for it in watchlist):
         watchlist.insert(0, {"symbol": ANCHOR_SYMBOL, "direction": "LONG", "quality_score": 8})
         logger.info({"event": "watchlist_anchor", "msg": f"{ANCHOR_SYMBOL} enforced"})
     return watchlist
+
 
 # -------------------- Load --------------------
 def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
@@ -77,12 +81,12 @@ def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH
                 data = json.loads(raw)
                 logger.info({"event": "watchlist_load", "src": "redis", "count": len(data)})
             else:
-                raise ValueError("redis empty")
+                logger.warning({"event": "watchlist_redis_empty"})
         except Exception as e:
-            logger.warning({"event": "watchlist_redis_fallback", "error": str(e)})
+            logger.warning({"event": "watchlist_redis_error", "error": str(e)})
 
-    # 🔹 אם אין Redis או אין נתונים → טען מהקובץ
-    if data is None:
+    # 🔹 אם Redis ריק → טען מהקובץ + שמור חזרה ל־Redis
+    if not data:
         _ensure_file(path)
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -91,7 +95,6 @@ def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH
                 raise ValueError("watchlist must be a list")
             logger.info({"event": "watchlist_load", "src": "file", "count": len(data)})
 
-            # ✅ שמירה ל־Redis אחרי טעינה מהקובץ
             if redis_client:
                 try:
                     redis_client.set(REDIS_KEY, json.dumps(data), ex=3600)
@@ -124,6 +127,7 @@ def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH
     out = _ensure_anchor(out)
     out.sort(key=lambda d: (-(d.get("quality_score", -1)), d["symbol"]))
     return out
+
 
 # -------------------- Save --------------------
 def save_watchlist(items: List[Dict[str, Any]], path: str = WATCHLIST_PATH) -> bool:
@@ -160,6 +164,7 @@ def save_watchlist(items: List[Dict[str, Any]], path: str = WATCHLIST_PATH) -> b
     except Exception as e:
         logger.error({"event": "watchlist_save_error", "error": str(e)})
         return False
+
 
 
 
