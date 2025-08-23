@@ -102,7 +102,8 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         if not is_valid_futures_symbol(sym):
             raise RuntimeError(f"Invalid futures symbol {sym}")
 
-        url = f"{BINANCE_FAPI_BASE}/premiumIndex"  # כבר כולל /fapi/v1 מה-ENV
+        # Proxy כבר כולל /fapi → נוסיף רק /v1
+        url = f"{BINANCE_FAPI_BASE}/v1/premiumIndex"
 
         headers = {
             "Accept": "application/json",
@@ -158,6 +159,7 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
         return out
     except Exception as e:
         raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
+
 
 
 
