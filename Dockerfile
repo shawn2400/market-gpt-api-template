@@ -16,6 +16,9 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini grep procps \
     build-essential gfortran \
     libopenblas-dev liblapack-dev \
+    libfreetype6 libpng16-16 fonts-dejavu-core \
+    libjpeg62-turbo zlib1g \
+    libta-lib0 libta-lib0-dev \ 
  && rm -rf /var/lib/apt/lists/*
 
 # --- User & workdir ---
@@ -46,7 +49,8 @@ USER appuser
 # --- Entrypoint & CMD ---
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "2", "-b", "0.0.0.0:10000", "main:app"]
+CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
