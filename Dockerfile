@@ -8,10 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONIOENCODING=UTF-8 \
     PYTHONFAULTHANDLER=1 \
     PYTHONHASHSEED=random \
-    MPLBACKEND=Agg \
-    MPLCONFIGDIR=/tmp/matplotlib \
     TZ=UTC \
-    PATH="/home/appuser/.local/bin:$PATH" \
     PORT=10000
 
 # --- System deps ---
@@ -19,9 +16,6 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini grep procps \
     build-essential gfortran \
     libopenblas-dev liblapack-dev \
-    libfreetype6 libpng16-16 fonts-dejavu-core \
-    libjpeg62-turbo zlib1g \
-    libta-lib0 libta-lib0-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # --- User & workdir ---
@@ -38,9 +32,9 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 # --- App source ---
 COPY . /app
 
-# --- Static dirs & perms ---
-RUN mkdir -p /app/static/reports /app/static/img /tmp/matplotlib \
- && chown -R appuser:appuser /app /tmp/matplotlib
+# --- Static dirs ---
+RUN mkdir -p /app/static /tmp \
+ && chown -R appuser:appuser /app /tmp
 
 # --- Healthcheck ---
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
@@ -53,6 +47,7 @@ USER appuser
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
 CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "2", "-b", "0.0.0.0:10000", "main:app"]
+
 
 
 
