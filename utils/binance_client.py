@@ -43,6 +43,7 @@ def get_client() -> Client:
         client.API_URL = "https://testnet.binance.vision/api"
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
+        # Proxy מוגדר → משתמשים בו ישירות
         client.API_URL = BINANCE_HTTP_BASE
         client.FUTURES_URL = BINANCE_FAPI_BASE
 
@@ -159,6 +160,7 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
         return out
     except Exception as e:
         raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
+
 
 
 
