@@ -22,7 +22,7 @@ PyYAML>=6.0.1,<7.0.0
 orjson==3.10.5
 packaging>=24.0
 
-# 📊 Data science (כולל JIT)
+# 📊 Data science
 numpy==1.26.4
 pandas==2.2.2
 scipy==1.13.1
@@ -36,21 +36,17 @@ ccxt==4.4.34
 websockets>=12.0,<13.0
 websocket-client==1.8.0
 ta==0.11.0
-TA-Lib==0.4.28   # דורש ספריות מערכת (נפתר ב-Dockerfile)
+TA-Lib==0.4.28   # 📌 תמיכה באינדיקטורים מתקדמים
 
 # 🤖 AI
 openai==1.30.1
-
-# 🖼 Reports / PDF / Viz
-fpdf2==2.7.9
-Pillow==10.3.0
-matplotlib==3.8.4
 
 # 📦 Misc
 python-multipart==0.0.9
 
 # 🗄 Redis
 redis==5.0.4
+
 
 
 
