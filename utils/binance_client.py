@@ -1,7 +1,7 @@
 # utils/binance_client.py
 # =========================
 # מודול לניהול קריאות Binance API (Futures/Spot)
-# כולל: Client factory, retries, מחיר עתידי (markPrice), Funding cache, Fallback
+# כולל: Client factory, retries, מחיר עתידי (markPrice), Funding cache, Open Positions
 # =========================
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").lower() 
 # ✅ בסיסים
 BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
 BINANCE_FAPI_ALTS = [s.strip() for s in os.getenv("BINANCE_FAPI_ALTS", "").split(",") if s.strip()]
-BINANCE_FALLBACK_URL = (os.getenv("BINANCE_FALLBACK_URL") or "").rstrip("/")  # 👈 חדש
+BINANCE_FALLBACK_URL = (os.getenv("BINANCE_FALLBACK_URL") or "").rstrip("/")
 
 _BINANCE_FAPI_BASES: List[str] = [BINANCE_FAPI_BASE] + BINANCE_FAPI_ALTS
 if BINANCE_FALLBACK_URL:
-    _BINANCE_FAPI_BASES.append(BINANCE_FALLBACK_URL)  # ✅ נוסיף fallback לסוף הרשימה
+    _BINANCE_FAPI_BASES.append(BINANCE_FALLBACK_URL)
 
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "6.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
@@ -108,7 +108,6 @@ def is_valid_futures_symbol(symbol: str) -> bool:
 # =========================
 def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str, Any]:
     sym = symbol.upper().strip()
-
     if not is_valid_futures_symbol(sym):
         raise RuntimeError(f"[Binance] Symbol {sym} is not valid in Futures")
 
@@ -127,7 +126,6 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
             try:
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True) as client:
                     r = client.get(url, params={"symbol": sym}, headers=headers)
-
                 if r.status_code == 200:
                     ctype = r.headers.get("Content-Type", "")
                     if ctype.startswith("application/json"):
@@ -138,26 +136,18 @@ def futures_mark_price_dict(symbol: str, tries: int = _MAX_RETRIES) -> Dict[str,
                             last_err = "No markPrice in JSON"
                     else:
                         last_err = f"Invalid content-type {ctype}"
-                        level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-                        logger.log(level, f"[Binance] {sym} got non-JSON from {base}")
                         continue
                 else:
                     last_err = f"{r.status_code} {r.text[:80]}"
-                    level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-                    logger.log(level, f"[Binance] {sym} invalid response from {base}: {last_err}")
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
-                level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-                logger.log(level, f"[Binance] {sym} exception on {base}: {last_err}")
         time.sleep(0.35 * attempt)
 
-    # ✅ Fallback ל־Cache
     rec = LAST_PRICE_CACHE.get(sym)
     if rec and "price" in rec:
         return {"symbol": sym, "markPrice": str(rec["price"]), "ts": rec.get("ts")}
 
     raise RuntimeError(f"[Binance] futures_mark_price_dict({sym}) failed after {tries} tries: {last_err}")
-
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper()
@@ -166,7 +156,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         price = float(data.get("markPrice") or 0.0)
         funding = float(data.get("fundingRate") or 0.0) if data.get("fundingRate") else None
         ts = data.get("ts") or int(time.time())
-
         LAST_PRICE_CACHE[sym] = {
             "price": price,
             "fundingRate": funding,
@@ -174,18 +163,15 @@ def futures_mark_price(symbol: str) -> Optional[float]:
             "ts": ts
         }
         return price
-
     except Exception as e:
-        level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-        logger.log(level, {"event": "futures_mark_price_error", "symbol": sym, "error": str(e)})
+        logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
         return None
-
 
 def get_cached_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     return LAST_PRICE_CACHE.get(symbol.upper())
 
 # =========================
-# Futures Open Positions ✅ חדש
+# Futures Open Positions ✅ מתוקן
 # =========================
 def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -195,10 +181,36 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
     client = get_client()
     try:
         if symbol:
-            return retry_call(lambda: client.futures_position_information(symbol=symbol.upper()), f"futures_positions({symbol})")
-        return retry_call(lambda: client.futures_position_information(), "futures_positions(all)")
+            resp = retry_call(lambda: client.futures_position_information(symbol=symbol.upper()),
+                              f"futures_positions({symbol})")
+        else:
+            resp = retry_call(lambda: client.futures_position_information(),
+                              "futures_positions(all)")
+
+        if isinstance(resp, str):
+            raise RuntimeError(f"Invalid response (string): {resp[:80]}")
+        if not isinstance(resp, list):
+            raise RuntimeError(f"Unexpected response type: {type(resp)}")
+
+        out: List[Dict[str, Any]] = []
+        for p in resp:
+            try:
+                amt = float(p.get("positionAmt", 0))
+                if amt != 0:
+                    out.append({
+                        "symbol": p.get("symbol"),
+                        "positionAmt": amt,
+                        "entryPrice": float(p.get("entryPrice", 0)),
+                        "unRealizedProfit": float(p.get("unRealizedProfit", 0)),
+                        "leverage": int(p.get("leverage", 0)),
+                        "side": "LONG" if amt > 0 else "SHORT",
+                    })
+            except Exception as e:
+                logger.warning(f"[Binance] skip bad position: {e}")
+        return out
     except Exception as e:
         raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
+
 
 
 
