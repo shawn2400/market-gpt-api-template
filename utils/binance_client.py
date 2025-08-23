@@ -28,12 +28,13 @@ LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
 
+
 # =========================
 # 🧩 Client
 # =========================
 def get_client() -> Client:
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-        logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV in Render Dashboard")
+        logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV")
         raise RuntimeError("Missing Binance credentials")
 
     client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
@@ -43,10 +44,19 @@ def get_client() -> Client:
         client.API_URL = "https://testnet.binance.vision/api"
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
-        client.API_URL = f"{BINANCE_HTTP_BASE}/api"
-        client.FUTURES_URL = f"{BINANCE_FAPI_BASE}/fapi/v1"
+        # אם זה Proxy, נשתמש כפי שהוגדר ב-ENV
+        if "proxy" in BINANCE_HTTP_BASE:
+            client.API_URL = BINANCE_HTTP_BASE
+        else:
+            client.API_URL = f"{BINANCE_HTTP_BASE}/api"
+
+        if "proxy" in BINANCE_FAPI_BASE:
+            client.FUTURES_URL = BINANCE_FAPI_BASE
+        else:
+            client.FUTURES_URL = f"{BINANCE_FAPI_BASE}/fapi/v1"
 
     return client
+
 
 # =========================
 # 🔁 Retry helper
@@ -67,6 +77,7 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
 
+
 # =========================
 # 📊 Futures Exchange Info
 # =========================
@@ -81,6 +92,7 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     _futures_exchange_info_cache = info
     return info
 
+
 def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     global _valid_futures_symbols
     if _valid_futures_symbols is not None and not force_refresh:
@@ -90,8 +102,10 @@ def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     _valid_futures_symbols = symbols
     return _valid_futures_symbols
 
+
 def is_valid_futures_symbol(symbol: str) -> bool:
     return symbol.upper() in valid_futures_symbols()
+
 
 # =========================
 # 💵 Futures Mark Price
@@ -102,7 +116,12 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         if not is_valid_futures_symbol(sym):
             raise RuntimeError(f"Invalid futures symbol {sym}")
 
-        url = f"{BINANCE_FAPI_BASE}/fapi/v1/premiumIndex"
+        # ✅ אם עובדים מול Proxy – אל תוסיף פעמיים /fapi
+        if "proxy" in BINANCE_FAPI_BASE:
+            url = f"{BINANCE_FAPI_BASE}/v1/premiumIndex"
+        else:
+            url = f"{BINANCE_FAPI_BASE}/fapi/v1/premiumIndex"
+
         headers = {
             "Accept": "application/json",
             "User-Agent": "Mozilla/5.0 AlgoGPT"
@@ -122,6 +141,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
         return None
+
 
 # =========================
 # 📌 Futures Open Positions
@@ -157,6 +177,7 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
         return out
     except Exception as e:
         raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
+
 
 
 
