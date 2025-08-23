@@ -8,9 +8,7 @@ from pydantic import BaseModel, Field
 from utils.indicators import prepare_indicators_for_backtest
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
-
 router = APIRouter(prefix="/scan", tags=["Scan"])
-
 
 # =====================
 # Models
@@ -22,7 +20,6 @@ class IndicatorSet(BaseModel):
     atr: Optional[float] = None
     vwap_trend: Optional[bool] = None
 
-
 class ScanSignal(BaseModel):
     symbol: str
     interval: str
@@ -30,14 +27,12 @@ class ScanSignal(BaseModel):
     ok: bool = True
     error: Optional[str] = None
 
-
 class ScanResponse(BaseModel):
     ok: bool = True
     count_total: int
     returned: int
     signals: List[ScanSignal] = Field(default_factory=list)
     error: Optional[str] = None
-
 
 # =====================
 # Binance helpers
@@ -58,7 +53,6 @@ def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.Da
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
 
-
 # =====================
 # Endpoints
 # =====================
@@ -71,16 +65,13 @@ async def scan_info(
     try:
         df = _fetch_klines(symbol, interval, limit)
         if df.empty:
-            return ScanResponse(ok=False, count_total=1, returned=0, signals=[],
-                                error="no data")
+            return ScanResponse(ok=False, count_total=1, returned=0, error="no data")
         ind = prepare_indicators_for_backtest(df)
-        row = ind.iloc[-1].to_dict()
+        row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
         sig = ScanSignal(symbol=symbol, interval=interval, indicators=IndicatorSet(**row))
         return ScanResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
-        return ScanResponse(ok=False, count_total=1, returned=0, signals=[],
-                            error=str(e))
-
+        return ScanResponse(ok=False, count_total=1, returned=0, error=str(e))
 
 @router.get("/", response_model=ScanResponse, summary="Multi-symbol scan")
 async def scan_symbols(
@@ -96,12 +87,12 @@ async def scan_symbols(
                 out.append(ScanSignal(symbol=s, interval=interval, ok=False, error="no data"))
                 continue
             ind = prepare_indicators_for_backtest(df)
-            row = ind.iloc[-1].to_dict()
+            row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
             out.append(ScanSignal(symbol=s, interval=interval, indicators=IndicatorSet(**row)))
         except Exception as e:
             out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
-
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
+
 
 
 
