@@ -9,7 +9,7 @@ export default {
     try {
       const url = new URL(req.url);
 
-      // --- אם זה WebSocket ---
+      // --- WebSocket Proxy ---
       if (url.pathname.startsWith("/api/proxy/ws")) {
         const target = url.searchParams.get("target");
         if (!target || !target.startsWith("wss://")) {
@@ -23,7 +23,6 @@ export default {
 
         const { 0: client, 1: server } = Object.values(new WebSocketPair());
 
-        // חיבור ל־Binance
         const upstream = new WebSocket(target, {
           headers: { "User-Agent": "AlgoGPT-Proxy" },
         });
@@ -71,5 +70,6 @@ export default {
     }
   },
 };
+
 
 
