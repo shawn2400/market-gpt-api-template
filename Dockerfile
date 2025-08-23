@@ -14,9 +14,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # --- System deps ---
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini grep procps \
+    build-essential gfortran \
     libopenblas-dev liblapack-dev \
     libfreetype6 libpng-dev fonts-dejavu-core \
     libjpeg62-turbo-dev zlib1g-dev \
+    libta-lib0 libta-lib0-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # --- User & workdir ---
@@ -26,7 +28,9 @@ WORKDIR /app
 # --- Python deps ---
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip setuptools wheel \
- && pip install --no-cache-dir -r requirements.txt
+ && pip install --no-cache-dir -r requirements.txt \
+ && apt-get purge -y --auto-remove build-essential gfortran \
+ && rm -rf /var/lib/apt/lists/*
 
 # --- App source ---
 COPY . /app
@@ -45,6 +49,7 @@ USER appuser
 # --- Entrypoint & CMD ---
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
