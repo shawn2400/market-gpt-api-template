@@ -17,6 +17,7 @@ USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "ye
 
 BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
 BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
+BINANCE_FALLBACK_URL = (os.getenv("BINANCE_FALLBACK_URL") or BINANCE_FAPI_BASE).rstrip("/")
 SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").lower() in ("1", "true", "yes")
 
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "6.0"))
@@ -26,7 +27,6 @@ _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
-
 
 # =========================
 # 🧩 Client
@@ -48,7 +48,6 @@ def get_client() -> Client:
 
     return client
 
-
 # =========================
 # 🔁 Retry helper
 # =========================
@@ -68,7 +67,6 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
 
-
 # =========================
 # 📊 Futures Exchange Info
 # =========================
@@ -83,7 +81,6 @@ def futures_exchange_info_safe() -> Dict[str, Any]:
     _futures_exchange_info_cache = info
     return info
 
-
 def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     global _valid_futures_symbols
     if _valid_futures_symbols is not None and not force_refresh:
@@ -93,10 +90,8 @@ def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     _valid_futures_symbols = symbols
     return _valid_futures_symbols
 
-
 def is_valid_futures_symbol(symbol: str) -> bool:
     return symbol.upper() in valid_futures_symbols()
-
 
 # =========================
 # 💵 Futures Mark Price
@@ -108,7 +103,10 @@ def futures_mark_price(symbol: str) -> Optional[float]:
             raise RuntimeError(f"Invalid futures symbol {sym}")
 
         url = f"{BINANCE_FAPI_BASE}/fapi/v1/premiumIndex"
-        headers = {"Accept": "application/json", "User-Agent": "AlgoGPT-binance-client"}
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 AlgoGPT"
+        }
 
         with httpx.Client(timeout=_DEFAULT_TIMEOUT, http2=True) as client:
             r = client.get(url, params={"symbol": sym}, headers=headers)
@@ -124,7 +122,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
         return None
-
 
 # =========================
 # 📌 Futures Open Positions
@@ -160,6 +157,7 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
         return out
     except Exception as e:
         raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
+
 
 
 
