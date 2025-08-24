@@ -16,7 +16,7 @@ BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
 
 # =========================
-# 🌐 Public futures hosts (mainnet/testnet) + רוטציה
+# 🌐 Public futures hosts + רוטציה
 # =========================
 env_base = (os.getenv("BINANCE_FAPI_BASE") or "").strip().rstrip("/")
 env_alts = (os.getenv("BINANCE_FAPI_ALTS") or "").strip()
@@ -27,24 +27,21 @@ _default_mainnet = [
     "https://fapi2.binance.com",
     "https://fapi3.binance.com",
 ]
-# אם המשתמש הגדיר בסיס/אלטים – נכבד, אחרת ניקח את הדיפולטים
-_candidates = []
+
+_candidates: List[str]
 if env_base:
     _c = [env_base]
     if env_alts:
         _c += [h.strip().rstrip("/") for h in env_alts.split(",") if h.strip()]
     else:
-        _c += _default_mainnet[1:]  # ה־alts הדיפולטיים
+        _c += _default_mainnet[1:]
     _candidates = _c
 else:
     _candidates = _default_mainnet[:]
 
-# TESTNET?
 if USE_TESTNET:
-    # ב־TESTNET הכל עובר דרך testnet.binancefuture.com
     _candidates = ["https://testnet.binancefuture.com"]
 
-# דה־דופ + שימור סדר
 _seen = set()
 _BINANCE_FAPI_HOSTS: List[str] = []
 for h in _candidates:
@@ -53,7 +50,7 @@ for h in _candidates:
         _seen.add(h)
         _BINANCE_FAPI_HOSTS.append(h)
 
-# REST הראשי לחשבונות/ספוט (לקריאות חתומות דרך ה־SDK)
+# REST הראשי לקריאות חתומות/ספוט (דרך SDK)
 BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
 
 SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1","true","yes"))
@@ -90,14 +87,13 @@ def _is_json(r: httpx.Response) -> bool:
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
-    קריאה ציבורית ל-FAPI עם רוטציה בין הוסטים, בלי redirects (WAF),
-    בדיקה שזו תגובת JSON. HTTP/2 כבוי כדי להימנע מהתנהגות WAF בעייתית.
+    קריאה ציבורית ל-FAPI עם רוטציה בין הוסטים, ללא redirects (WAF).
+    ⚠️ http2=False כדי למנוע תלות ב-h2 ולהימנע מהתנהגות WAF בעייתית.
     """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
         url = f"{base}/{path.lstrip('/')}"
         try:
-            # http2=False בכוונה.
             with httpx.Client(timeout=timeout, headers=_UA, follow_redirects=False, http2=False) as client:
                 r = client.get(url, params=params)
             if r.status_code in (301, 302, 303, 307, 308):
@@ -129,7 +125,6 @@ def get_client() -> Client:
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
         client.API_URL = f"{BINANCE_HTTP_BASE}/api/v3"
-        # נשתמש בבסיס הראשון ברשימת ה-FAPI הציבוריים
         client.FUTURES_URL = f"{_BINANCE_FAPI_HOSTS[0]}/fapi/v1"
     return client
 
@@ -215,7 +210,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 # =========================
-# 🧩 Compact symbol-info map (לראוטר)
+# 🧩 Compact symbol-info map (לראוטרים)
 # =========================
 def _build_symbol_info_map(info: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
@@ -258,7 +253,7 @@ def get_cached_symbol_info(force_refresh: bool = False) -> Dict[str, Dict[str, A
     return _build_symbol_info_map(info)
 
 # =========================
-# 📌 Futures Open Positions (signed, via SDK)
+# 📌 Futures Open Positions (signed via SDK)
 # =========================
 def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     client = get_client()
