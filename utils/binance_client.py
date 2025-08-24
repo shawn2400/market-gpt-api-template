@@ -19,6 +19,8 @@ USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "t
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").rstrip("/")
 _alts_raw = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com")
 _BINANCE_FAPI_HOSTS = [h.strip().rstrip("/") for h in _alts_raw.split(",") if h.strip()]
+
+# הסר כפילויות ושמור סדר (ראשי ראשון)
 _seen = set()
 _hosts_ordered: List[str] = []
 for h in [_BINANCE_FAPI_BASE] + _BINANCE_FAPI_HOSTS:
@@ -62,7 +64,7 @@ def _is_json(r: httpx.Response) -> bool:
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
     קריאה ישירה אל FAPI עם רוטציה בין fapi1/2/3, ללא follow_redirects (WAF),
-    ובדיקה שהתגובה JSON ולא HTML. לא נוגעים ב-CB כאן — CB מנוהל עבור exchangeInfo.
+    ובדיקה שהתגובה JSON ולא HTML. (CB מנוהל עבור exchangeInfo בנפרד)
     """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
@@ -91,8 +93,8 @@ def get_client() -> Client:
         logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV")
         raise RuntimeError("Missing Binance credentials")
 
-    client = Client(api_key=BİNANCE_API_KEY, api_secret=BİNANCE_API_SECRET)  # noqa
-    # ^ intentionally keep sdk for signed calls only
+    # ⚠️ תווים לא תקינים בשם המשתנה גרמו לקריסה. זו השורה המתוקנת:
+    client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
     if USE_TESTNET:
         logger.warning("⚠️ Using Binance TESTNET endpoints")
@@ -128,7 +130,7 @@ def _cb_on_success() -> None:
 # =========================
 def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
     global _futures_exchange_info_cache
-    # אם CB פתוח – או נחזיר קאש/מבנה ריק (אם soft-allow), או נזרוק שגיאה
+    # אם CB פתוח – נחזיר קאש/מבנה ריק (אם soft-allow), או נזרוק שגיאה
     if _cb_is_open() and not force_refresh:
         if _futures_exchange_info_cache and not force_refresh:
             return _futures_exchange_info_cache
@@ -254,6 +256,7 @@ def status_snapshot() -> dict:
             "cache_symbols": len((_futures_exchange_info_cache or {}).get("symbols", [])),
         }
     }
+
 
 
 
