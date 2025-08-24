@@ -15,7 +15,7 @@ BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
 
-# Futures API bases (ללא www) + אלטים (סדר עדיפויות + ייחוד)
+# Futures API bases (ללא www) + אלטים (רוטציה בלי כפילויות)
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
 _alts_raw = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com")
 _BINANCE_FAPI_HOSTS = [h.strip().rstrip("/") for h in _alts_raw.split(",") if h.strip()]
@@ -62,13 +62,12 @@ def _is_json(r: httpx.Response) -> bool:
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
     קריאה ישירה אל FAPI עם רוטציה בין הוסטס, ללא follow_redirects (WAF),
-    ובדיקה שהתגובה JSON ולא HTML. http2 כבוי כדי לא לדרוש 'h2'.
+    ובדיקה שהתגובה JSON ולא HTML. http2=False כדי לא לדרוש חבילת h2.
     """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
         url = f"{base}/{path.lstrip('/')}"
         try:
-            # http2=False => אין תלות ב־h2
             with httpx.Client(timeout=timeout, headers=_UA, follow_redirects=False, http2=False) as client:
                 r = client.get(url, params=params)
             if r.status_code in (301, 302, 303, 307, 308):
@@ -92,7 +91,7 @@ def get_client() -> Client:
         logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV")
         raise RuntimeError("Missing Binance credentials")
 
-    client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)  # תקין
+    client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
     if USE_TESTNET:
         logger.warning("⚠️ Using Binance TESTNET endpoints")
@@ -168,7 +167,6 @@ def is_valid_futures_symbol(symbol: str) -> bool:
         logger.log(level, f"[Binance] is_valid_futures_symbol: soft-allow ({e})")
         return True
 
-# עזרי מידע לשוק
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
     sym = symbol.upper().strip()
     try:
@@ -275,6 +273,7 @@ def status_snapshot() -> dict:
             "cache_symbols": len((_futures_exchange_info_cache or {}).get("symbols", [])),
         }
     }
+
 
 
 
