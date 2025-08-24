@@ -9,13 +9,13 @@ from fastapi import APIRouter, Query, Path, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
 from utils.indicators import prepare_indicators_for_backtest
-from utils.auth import require_bearer_token   # 👈 החלפתי ל־bearer כדי להיות עקבי עם שאר הקוד
+from utils.auth import require_api_key   # ✅ אחידות אימות
 
-FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi1.binance.com").rstrip("/")
 
 router = APIRouter(
     tags=["Indicators"],
-    dependencies=[Depends(require_bearer_token)]
+    dependencies=[Depends(require_api_key)]
 )
 
 # --- Rate limit ---
@@ -31,7 +31,11 @@ def _rl(ip: str, limit=20, window=60):
 
 def _fetch_klines(symbol: str, interval: str = "1h", limit: int = 180) -> pd.DataFrame:
     url = f"{FUTURES_BASE}/fapi/v1/klines"
-    r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": int(limit)}, timeout=10)
+    r = requests.get(url, params={"symbol": symbol.upper(), "interval": interval, "limit": int(limit)},
+                     timeout=10, headers={"User-Agent": "AlgoGPT/2.x", "Accept": "application/json"})
+    ct = r.headers.get("Content-Type","").lower()
+    if "application/json" not in ct:
+        raise RuntimeError("binance non-json (WAF/HTML)")
     r.raise_for_status()
     arr = r.json()
     if not arr:
@@ -90,13 +94,14 @@ async def get_indicators_symbol(
             return IndicatorsResponse(ok=False, count_total=1, returned=0, signals=[], error="no data")
         row = ind.iloc[-1].to_dict()
         sig = IndicatorSignal(
-            symbol=symbol,
+            symbol=symbol.upper(),
             timeframe=timeframe,
             indicators=IndicatorSet(**{k: float(v) for k, v in row.items() if isinstance(v, (int, float))})
         )
         return IndicatorsResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
         return IndicatorsResponse(ok=False, count_total=1, returned=0, signals=[], error=str(e))
+
 
 
 
