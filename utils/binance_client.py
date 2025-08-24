@@ -22,20 +22,14 @@ env_base = (os.getenv("BINANCE_FAPI_BASE") or "").strip().rstrip("/")
 env_alts = (os.getenv("BINANCE_FAPI_ALTS") or "").strip()
 
 _default_mainnet = [
-    "https://fapi.binance.com",  # ✅ מאוזן (עדיפות ראשונה)
+    "https://fapi.binance.com",
     "https://fapi1.binance.com",
     "https://fapi2.binance.com",
     "https://fapi3.binance.com",
 ]
 
-_candidates: List[str]
 if env_base:
-    _c = [env_base]
-    if env_alts:
-        _c += [h.strip().rstrip("/") for h in env_alts.split(",") if h.strip()]
-    else:
-        _c += _default_mainnet[1:]
-    _candidates = _c
+    _candidates = [env_base] + ([h.strip().rstrip("/") for h in env_alts.split(",") if h.strip()] or _default_mainnet[1:])
 else:
     _candidates = _default_mainnet[:]
 
@@ -50,7 +44,6 @@ for h in _candidates:
         _seen.add(h)
         _BINANCE_FAPI_HOSTS.append(h)
 
-# REST הראשי לקריאות חתומות/ספוט (דרך SDK)
 BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
 
 SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1","true","yes"))
@@ -87,8 +80,8 @@ def _is_json(r: httpx.Response) -> bool:
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
-    קריאה ציבורית ל-FAPI עם רוטציה בין הוסטים, ללא redirects (WAF).
-    ⚠️ http2=False כדי למנוע תלות ב-h2 ולהימנע מהתנהגות WAF בעייתית.
+    קריאה ציבורית ל-FAPI עם רוטציה בין הוסטים, בלי הפניות (WAF).
+    ⚠️ http2=False — כדי שלא תידרש חבילת h2 ושלא נקבל שגיאות מיותרות.
     """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
@@ -320,6 +313,7 @@ def status_snapshot() -> dict:
             "cache_symbols": len((_futures_exchange_info_cache or {}).get("symbols", [])),
         }
     }
+
 
 
 
