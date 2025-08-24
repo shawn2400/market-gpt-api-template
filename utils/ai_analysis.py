@@ -2,9 +2,15 @@
 from __future__ import annotations
 import logging
 from typing import Tuple, Optional
-from utils.ai_client import chat
 
 logger = logging.getLogger(__name__)
+
+# נסה לייבא את לקוח ה-AI; אם לא קיים, נשתמש בפולבק
+try:
+    from utils.ai_client import chat  # חייב להחזיר str או None
+except Exception as _e:
+    chat = None  # type: ignore
+    logger.warning("utils.ai_analysis: ai_client.chat not available: %s", _e)
 
 # ספי ברירת מחדל אם config לא נטען
 try:
@@ -18,15 +24,22 @@ except Exception:
     cfg = _C()
 
 def _clip_pct(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
+    try:
+        return max(float(lo), min(float(hi), float(x)))
+    except Exception:
+        return x
 
 async def analyze_with_ai(data: dict) -> str:
     """
-    החזרת ניתוח קצר (עברית), עם fallback אם GPT נכשל.
+    החזרת ניתוח קצר (עברית), עם fallback אם GPT נכשל/לא זמין.
     """
+    symbol = data.get("symbol", "?")
     try:
+        if chat is None:
+            raise RuntimeError("AI client not available")
+
         prompt = (
-            f"ספק ניתוח קצר למטבע {data.get('symbol','?')}:\n"
+            f"ספק ניתוח קצר למטבע {symbol}:\n"
             f"• RSI: {data.get('rsi')}\n"
             f"• ADX: {data.get('adx')}\n"
             f"• מגמה: {data.get('trend')}\n"
@@ -34,10 +47,17 @@ async def analyze_with_ai(data: dict) -> str:
             f"• נפח: {data.get('volume')}\n"
             f"סיים בשורה אחת: המלצה (LONG/SHORT/HOLD) ונימוק קצר."
         )
-        txt = await chat(prompt, system="אתה אנליסט שוק קריפטו מקצועי.", temperature=0.3, max_tokens=220)
-        return txt.strip() if txt else "❌ ניתוח GPT נכשל"
+        txt = await chat(
+            prompt,
+            system="אתה אנליסט שוק קריפטו מקצועי.",
+            temperature=0.3,
+            max_tokens=220,
+        )
+        if txt:
+            return str(txt).strip()
+        return "❌ ניתוח GPT נכשל"
     except Exception as e:
-        logger.warning("⚠️ analyze_with_ai fallback: %s", e)
+        logger.warning("⚠️ analyze_with_ai fallback (%s): %s", symbol, e)
         return "❌ ניתוח GPT נכשל"
 
 def _parse_sltp(text: str) -> Optional[Tuple[float, float]]:
@@ -46,16 +66,27 @@ def _parse_sltp(text: str) -> Optional[Tuple[float, float]]:
         try:
             sl_s = t.split("SL=")[1].split(",")[0]
             tp_s = t.split("TP=")[1].split("\n")[0]
-            return float(sl_s), float(tp_s)
+            sl_v = float(sl_s)
+            tp_v = float(tp_s)
+            if sl_v > 0 and tp_v > 0:
+                return sl_v, tp_v
         except Exception as e:
             logger.warning("⚠️ parse SL/TP failed: %s", e)
     return None
 
-async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float, atr: float | None = None) -> tuple[float, float]:
+async def predict_optimal_sl_tp(
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    atr: float | None = None
+) -> tuple[float, float]:
     """
-    חיזוי SL/TP עם GPT. פולבק: חישוב דטרמיניסטי לפי אחוזים.
+    חיזוי SL/TP עם GPT. פולבק: חישוב דטרמיניסטי לפי אחוזים (בטוח ויציב).
     """
     try:
+        if chat is None:
+            raise RuntimeError("AI client not available")
+
         sys = "אתה מחשב SL/TP לטרייד בזמן אמת. החזר בפורמט: SL=..., TP=..."
         prompt = (
             f"ספק SL ו-TP לטרייד:\n"
@@ -66,31 +97,36 @@ async def predict_optimal_sl_tp(symbol: str, direction: str, entry_price: float,
             f"החזר רק: SL=..., TP=..."
         )
         txt = await chat(prompt, system=sys, temperature=0.2, max_tokens=32)
-        parsed = _parse_sltp(txt)
+        parsed = _parse_sltp(txt or "")
         if parsed:
             sl, tp = parsed
             if sl > 0 and tp > 0:
-                return sl, tp
+                return float(sl), float(tp)
     except Exception as e:
-        logger.warning("⚠️ GPT SL/TP failed: %s", e)
+        logger.warning("⚠️ GPT SL/TP failed (%s): %s", symbol, e)
 
-    # פולבק בטוח
+    # ---- Fallback בטוח ----
     long = str(direction).upper() == "LONG"
-    sl_pct = _clip_pct(0.60, cfg.SL_MIN_PCT, cfg.SL_MAX_PCT)
-    tp_pct = _clip_pct(2.00, cfg.TP_MIN_PCT, cfg.TP_MAX_PCT)
+    sl_pct = _clip_pct(0.60, cfg.SL_MIN_PCT, cfg.SL_MAX_PCT)  # 0.6%
+    tp_pct = _clip_pct(2.00, cfg.TP_MIN_PCT, cfg.TP_MAX_PCT)  # 2%
+
+    if entry_price <= 0:
+        # מקרה קצה — החזר ערכי דמה
+        return 0.0, 0.0
 
     if long:
-        sl = entry_price * (1 - sl_pct / 100)
-        tp = entry_price * (1 + tp_pct / 100)
+        sl = entry_price * (1 - sl_pct / 100.0)
+        tp = entry_price * (1 + tp_pct / 100.0)
     else:
-        sl = entry_price * (1 + sl_pct / 100)
-        tp = entry_price * (1 - tp_pct / 100)
+        sl = entry_price * (1 + sl_pct / 100.0)
+        tp = entry_price * (1 - tp_pct / 100.0)
 
-    return round(sl, 6), round(tp, 6)
+    return round(float(sl), 6), round(float(tp), 6)
 
 # תאימות לאחור
-async def predict_optimal_sl_tp_legacy(symbol: str, direction: str, entry: float) -> tuple:
+async def predict_optimal_sl_tp_legacy(symbol: str, direction: str, entry: float) -> tuple[float, float]:
     return await predict_optimal_sl_tp(symbol, direction, entry_price=entry)
+
 
 
 
