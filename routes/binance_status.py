@@ -8,27 +8,27 @@ from utils.binance_client import (
     futures_exchange_info_safe,
 )
 
+# כל הנתיבים כאן הם יחסיים לפריפיקס שיוגדר ב-main.py => "/binance"
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
-@router.get("/binance/status")
+@router.get("/status")
 def binance_status():
     snap = status_snapshot()
-    # דגימה מהירה — לא קריטי אם נכשל
+    # דגימת מחירי mark (לא קריטי אם נכשל)
     samples = {}
     for sym in ("BTCUSDT", "ETHUSDT", "BNBUSDT"):
-        price = futures_mark_price(sym)
-        samples[sym] = price
+        samples[sym] = futures_mark_price(sym)
     snap["samples"] = samples
     return snap
 
-@router.get("/binance/mark-price")
+@router.get("/mark-price")
 def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
     price = futures_mark_price(symbol)
     if price is None:
         raise HTTPException(status_code=503, detail="mark price unavailable")
     return {"symbol": symbol.upper(), "markPrice": price}
 
-@router.get("/binance/exchange-info")
+@router.get("/exchange-info")
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
     try:
         info = futures_exchange_info_safe(force_refresh=bool(force_refresh))
@@ -36,10 +36,10 @@ def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-@router.get("/binance/ping")
+@router.get("/ping")
 def ping():
-    # פינג פשוט לבדיקת זכאות וגישה לראוטר
     return {"ok": True}
+
 
 
 
