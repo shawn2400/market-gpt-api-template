@@ -1,7 +1,11 @@
 # utils/binance_client.py
 from __future__ import annotations
-import os, time, logging
+
+import os
+import time
+import logging
 from typing import Any, Callable, Optional, Dict, List
+
 import httpx
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
@@ -13,13 +17,14 @@ logger = logging.getLogger("algogpt.binance")
 # =========================
 BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
-USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes")
+USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false") or "").strip().lower() in ("1", "true", "yes")
 
 # Futures API bases (ללא www) + אלטים
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").rstrip("/")
 _alts_raw = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com")
 _BINANCE_FAPI_HOSTS = [h.strip().rstrip("/") for h in _alts_raw.split(",") if h.strip()]
-# ודא שאין כפילויות והבסיס הראשי הוא ראשון
+
+# סדר מארח ראשי + אלטים, ללא כפילויות
 _seen = set()
 _hosts_ordered: List[str] = []
 for h in [_BINANCE_FAPI_BASE] + _BINANCE_FAPI_HOSTS:
@@ -30,7 +35,7 @@ _BINANCE_FAPI_HOSTS = _hosts_ordered
 
 BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
 
-SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
+SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0") or "").strip().lower() in ("1", "true", "yes")
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
@@ -51,8 +56,8 @@ def _is_json(r: httpx.Response) -> bool:
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
-    קריאה ישירה אל FAPI עם רוטציה בין fapi1/2/3, ללא מעקב אחרי הפניות (WAF),
-    ובדיקה שהתגובה JSON ולא HTML.
+    קריאה ישירה ל-FAPI עם רוטציה בין fapi1/2/3, בלי מעקב אחרי הפניות (WAF),
+    ואכיפת JSON (דחיית HTML).
     """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
@@ -60,10 +65,10 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
         try:
             with httpx.Client(timeout=timeout, headers=_UA, follow_redirects=False, http2=True) as client:
                 r = client.get(url, params=params)
-            # הפניה? נתייחס ככשל (שכיח ב-WAF)
+            # הפניה? מתייחסים ככשל (שכיח ב-WAF)
             if r.status_code in (301, 302, 303, 307, 308):
                 raise RuntimeError(f"redirect to {r.headers.get('Location')}")
-            # לא JSON? כנראה WAF/HTML
+            # לא JSON? כנראה HTML/WAF
             if not _is_json(r):
                 raise RuntimeError("non-json (WAF/HTML)")
             r.raise_for_status()
@@ -72,7 +77,6 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
             last_err = e
             level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
             logger.log(level, f"[BinanceHTTP] GET {url} failed: {e}")
-            # ממשיכים ל-host הבא
             continue
     raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
 
@@ -98,7 +102,7 @@ def get_client() -> Client:
     return client
 
 # =========================
-# 🛈 Startup banner (עוזר לזהות טעינת קוד נכונה)
+# 🛈 Startup banner (עוזר לוודא שניטען הקוד הנכון)
 # =========================
 try:
     logger.info({
@@ -141,7 +145,7 @@ def is_valid_futures_symbol(symbol: str) -> bool:
     try:
         return symbol.upper() in valid_futures_symbols()
     except Exception as e:
-        # אם exchangeInfo לא זמין — אל תחסום לגמרי, המשך לנסות markPrice
+        # אם exchangeInfo לא זמין — אל נחסום; נמשיך לנסות markPrice
         level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
         logger.log(level, f"[Binance] is_valid_futures_symbol: exchangeInfo unavailable → soft-allow ({e})")
         return True
@@ -213,6 +217,7 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             logger.error(f"[Binance] {label} unexpected error: {e}")
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
+
 
 
 
