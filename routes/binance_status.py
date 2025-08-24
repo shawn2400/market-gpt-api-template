@@ -8,7 +8,7 @@ from utils.binance_client import (
     futures_exchange_info_safe,
 )
 
-# כל הנתיבים כאן הם יחסיים לפריפיקס שיוגדר ב-main.py => "/binance"
+# הנתיבים כאן יחסיים לפריפיקס ב-main.py => "/binance"
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 @router.get("/status")
@@ -39,6 +39,7 @@ def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
 @router.get("/ping")
 def ping():
     return {"ok": True}
+
 
 
 
