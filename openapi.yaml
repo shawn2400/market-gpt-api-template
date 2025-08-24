@@ -3,7 +3,7 @@ jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 
 info:
   title: AlgoGPT API
-  version: 2.14.7
+  version: 2.15.0
   description: |
     AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
     כולל: Scan / AI / Trades / Grid / Risk / Indicators / Anchor / Executor / WS.
@@ -22,12 +22,12 @@ tags:
   - name: Trades
   - name: Indicators
   - name: Anchor
-  - name: Orders
   - name: Executor
   - name: Price
   - name: Market
   - name: Utils
   - name: Debug
+  - name: Websocket
 
 security:
   - HTTPBearer: []
@@ -50,66 +50,15 @@ components:
       type: object
       properties:
         status: { type: string, example: ok }
-        version: { type: string, example: 2.14.7 }
+        version: { type: string, example: 2.15.0 }
         mode: { type: string, example: normal }
 
     GenericResponse:
       type: object
-      description: "Generic flexible response schema"
       properties:
-        ok:
-          type: boolean
-          example: true
-        message:
-          type: string
-          example: "Operation completed successfully"
+        ok: { type: boolean, example: true }
+        message: { type: string, example: "Operation completed successfully" }
       additionalProperties: true
-
-    GridStatus:
-      type: object
-      properties:
-        id: { type: string }
-        symbol: { type: string }
-        levels: { type: integer }
-        allocated: { type: number }
-        profit_pct: { type: number }
-        active: { type: boolean }
-
-    GridListResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        count_total: { type: integer }
-        returned: { type: integer }
-        grids:
-          type: array
-          items: { $ref: "#/components/schemas/GridStatus" }
-
-    TradeRequest:
-      type: object
-      required: [symbol, side, entry]
-      properties:
-        symbol: { type: string }
-        side: { type: string, enum: [LONG, SHORT] }
-        entry: { type: number }
-        sl: { type: number }
-        tp: { type: number }
-        leverage: { type: integer }
-        budget: { type: number }
-
-    TradeResponse:
-      type: object
-      properties:
-        ok: { type: boolean }
-        trade_id: { type: string }
-        symbol: { type: string }
-        side: { type: string }
-        entry: { type: number }
-        sl: { type: number }
-        tp: { type: number }
-        leverage: { type: integer }
-        budget: { type: number }
-        status: { type: string }
 
 paths:
   /:
@@ -129,7 +78,7 @@ paths:
     get:
       tags: [Health]
       summary: Health check
-      operationId: getHealth
+      operationId: getHealthStatus
       security: []
       responses:
         "200":
@@ -164,7 +113,7 @@ paths:
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GridListResponse" }
+              schema: { $ref: "#/components/schemas/GenericResponse" }
 
   /grid/active:
     get:
@@ -176,13 +125,13 @@ paths:
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GridListResponse" }
+              schema: { $ref: "#/components/schemas/GenericResponse" }
 
   /grid/start:
     post:
       tags: [Grid]
       summary: Start grid trading
-      operationId: postGridStart
+      operationId: startGridTrading
       responses:
         "200":
           description: ok
@@ -194,7 +143,7 @@ paths:
     post:
       tags: [Grid]
       summary: Stop grid trading
-      operationId: postGridStop
+      operationId: stopGridTrading
       responses:
         "200":
           description: ok
@@ -202,22 +151,50 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
 
-  /trade:
-    post:
+  /trade/open:
+    get:
       tags: [Trades]
-      summary: Open new trade
-      operationId: postTrade
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/TradeRequest" }
+      summary: List open trades
+      operationId: getOpenTrades
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/TradeResponse" }
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /trade/history:
+    get:
+      tags: [Trades]
+      summary: Trade history
+      operationId: getTradeHistory
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /trade/execute:
+    post:
+      tags: [Trades]
+      summary: Execute trade
+      operationId: executeTrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenericResponse" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
 
   /anchor/history:
     get:
@@ -247,7 +224,7 @@ paths:
     get:
       tags: [Price]
       summary: Get latest price for symbol
-      operationId: getPrice
+      operationId: getPriceForSymbol
       parameters:
         - in: path
           name: symbol
@@ -284,11 +261,64 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
 
-  /ws/stream:
+  /executor/symbols:
     get:
-      tags: [Websocket]
-      summary: WS stream endpoint
-      operationId: getWsStream
+      tags: [Executor]
+      summary: Executor symbols
+      operationId: getExecutorSymbols
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /executor/logs:
+    get:
+      tags: [Executor]
+      summary: Executor logs
+      operationId: getExecutorLogs
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /executor/trades:
+    get:
+      tags: [Executor]
+      summary: Executor trades
+      operationId: getExecutorTrades
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /executor/open_positions:
+    get:
+      tags: [Executor]
+      summary: Executor open positions
+      operationId: getExecutorOpenPositions
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /executor/force_close:
+    post:
+      tags: [Executor]
+      summary: Force close a position
+      operationId: forceCloseExecutorPosition
+      parameters:
+        - in: query
+          name: symbol
+          required: true
+          schema: { type: string }
       responses:
         "200":
           description: ok
@@ -300,7 +330,7 @@ paths:
     get:
       tags: [Utils]
       summary: Ping server
-      operationId: getUtilsPing
+      operationId: utilsPing
       responses:
         "200":
           description: ok
@@ -308,28 +338,28 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
 
-  # ✅ Debug endpoints – מופעלים רק אם LIGHT_MODE=0
   /debug/health:
     get:
       tags: [Debug]
       summary: Get recent logs (only if not LIGHT_MODE)
       operationId: getDebugHealth
-      parameters:
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50 }
-        - in: query
-          name: level
-          schema: { type: string }
-        - in: query
-          name: logger_name
-          schema: { type: string }
       responses:
         "200":
           description: ok
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /ws/stream:
+    get:
+      tags: [Websocket]
+      summary: WebSocket price stream (multi-symbol)
+      operationId: getWsStream
+      description: Upgrade to websocket protocol
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket upgrade)
+
 
 
 
