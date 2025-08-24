@@ -1,40 +1,38 @@
+# utils/auth.py
 from __future__ import annotations
 import os
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
-# איסוף כל הטוקנים החוקיים
-_tokens = set()
-t1 = (os.getenv("API_BEARER_TOKEN") or "").strip()
-if t1:
-    _tokens.add(t1)
-for t in (os.getenv("ALGOGPT_TOKENS") or "").split(","):
-    t = t.strip()
-    if t:
-        _tokens.add(t)
-
-SECURITY_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
+TOKENS = [t.strip() for t in (os.getenv("API_BEARER_TOKEN", "") + "," + os.getenv("ALGOGPT_TOKENS", "")).split(",") if t.strip()]
+ALLOW_ALL = os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes")
 
 async def require_api_key(
-    authorization: str | None = Header(None),
-    x_api_key: str | None = Header(None),
-    token: str | None = None,  # מאפשר גם ?token=...
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
 ):
-    if SECURITY_ALLOW_ALL:
+    if ALLOW_ALL:
         return True
 
-    candidates: list[str] = []
-    if authorization and authorization.lower().startswith("bearer "):
-        candidates.append(authorization.split(" ", 1)[1].strip())
-    if x_api_key:
-        candidates.append(x_api_key.strip())
-    if token:
-        candidates.append(token.strip())
+    supplied: str | None = None
 
-    for c in candidates:
-        if c and c in _tokens:
-            return True
+    # 1) Authorization: Bearer <token>
+    if authorization and authorization.lower().startswith("bearer "):
+        supplied = authorization[7:].strip()
+
+    # 2) X-API-Key
+    if not supplied and x_api_key:
+        supplied = x_api_key.strip()
+
+    # 3) ?token=<...>
+    if not supplied:
+        supplied = request.query_params.get("token")
+
+    if supplied and supplied in TOKENS:
+        return True
 
     raise HTTPException(status_code=401, detail="Invalid API key")
+
 
 
 
