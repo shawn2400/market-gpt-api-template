@@ -13,6 +13,7 @@ router = APIRouter(tags=["AI"], dependencies=[Depends(require_bearer_token)])
 
 _FAPI = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").rstrip("/")
 
+
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
     alpha = 2.0 / (period + 1.0)
     out = np.empty_like(arr, dtype=float)
@@ -21,6 +22,7 @@ def _ema(arr: np.ndarray, period: int) -> np.ndarray:
         out[i] = alpha * arr[i] + (1 - alpha) * out[i - 1]
     return out
 
+
 def _rma(arr: np.ndarray, period: int) -> np.ndarray:
     out = np.empty_like(arr, dtype=float)
     out[0] = arr[:period].mean()
@@ -28,6 +30,7 @@ def _rma(arr: np.ndarray, period: int) -> np.ndarray:
     for i in range(1, len(arr)):
         out[i] = (out[i - 1] * (1 - alpha)) + alpha * arr[i]
     return out
+
 
 def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     diff = np.diff(close, prepend=close[0])
@@ -38,6 +41,7 @@ def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     rs = np.where(avg_loss == 0, np.inf, avg_gain / avg_loss)
     return 100.0 - (100.0 / (1.0 + rs))
 
+
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
     prev_close = np.roll(close, 1)
     prev_close[0] = close[0]
@@ -47,6 +51,7 @@ def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14)
         np.abs(low - prev_close),
     ])
     return _rma(tr, period)
+
 
 def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
     up_move = high[1:] - high[:-1]
@@ -67,6 +72,7 @@ def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14)
     )
     return _rma(dx, period)
 
+
 async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> List[List[Any]]:
     url = f"{_FAPI}/fapi/v1/klines"
     params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
@@ -78,6 +84,7 @@ async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) ->
         if not isinstance(data, list):
             raise RuntimeError("unexpected klines shape")
         return data
+
 
 def _analyze_numpy(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
     idx_open, idx_high, idx_low, idx_close, idx_vol = 1, 2, 3, 4, 5
@@ -127,16 +134,66 @@ def _analyze_numpy(rows: List[List[Any]], interval: str) -> Dict[str, Any]:
         "atr": round(atr_last, 6),
     }
 
+
 def _parse_fields(fields: Optional[str]) -> Optional[List[str]]:
     if not fields:
         return None
     return [f.strip() for f in fields.split(",") if f.strip()]
 
+
 def _select_fields(item: Dict[str, Any], fields: Optional[Iterable[str]], compact: bool) -> Dict[str, Any]:
     if compact and not fields:
         fields = ("symbol","market","interval","signal","quality_score","confidence","reason","close","atr")
     if fields:
-        return {k: ite
+        return {k: item.get(k) for k in fields if k in item}
+    return item
+
+
+@router.get("/manual-scan", operation_id="getAiManualScan")
+async def ai_manual_scan(
+    symbol: str = Query(..., description="e.g. BTCUSDT"),
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=1500),
+    fields: Optional[str] = Query(None),
+    compact: bool = Query(True),
+) -> Dict[str, Any]:
+    symbol = symbol.upper().strip()
+    try:
+        rows = await _fetch_klines(symbol, interval=interval, limit=limit)
+        if not rows or len(rows) < 60:
+            base = {
+                "symbol": symbol,
+                "market": "futures",
+                "interval": interval,
+                "signal": "HOLD",
+                "reason": "lite (not enough data)"
+            }
+            return {"symbol": symbol, "results": _select_fields(base, _parse_fields(fields), compact)}
+
+        res = _analyze_numpy(rows, interval)
+        res["symbol"] = symbol
+        return {"symbol": symbol, "results": _select_fields(res, _parse_fields(fields), compact)}
+
+    except Exception as e:
+        base = {
+            "symbol": symbol, "market": "futures", "interval": interval,
+            "frames": [interval], "trend": None, "direction": None,
+            "rsi": None, "adx": None, "volume": None, "quality_score": None,
+            "signal": None, "confidence": None, "close": None, "atr": None,
+            "reason": f"lite (analyze-fallback: {type(e).__name__})"
+        }
+        return {"symbol": symbol, "results": _select_fields(base, _parse_fields(fields), compact)}
+
+
+@router.get("/analyze", operation_id="getAiAnalyze")
+async def ai_analyze(
+    symbol: str = Query(..., description="Trading pair e.g. BTCUSDT"),
+    interval: str = Query("15m", description="Interval e.g. 15m, 1h"),
+    market: str = Query("futures", description="Market type: futures/spot"),
+) -> Dict[str, Any]:
+    # קיצור ל-manual-scan עם limit קבוע 200
+    return await ai_manual_scan(symbol=symbol, interval=interval, limit=200, fields=None, compact=True)
+
 
 
 
