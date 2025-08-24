@@ -1,51 +1,65 @@
-# 🚀 Web framework
-fastapi==0.110.0
-starlette==0.36.3
-uvicorn[standard]==0.29.0
-gunicorn==21.2.0
+# =========================
+# 🔐 Auth / Security
+# =========================
+API_BEARER_TOKEN=rnd_yourtoken
+ALGOGPT_TOKENS=rnd_yourtoken
+SECURITY_ALLOW_ALL=0
 
-# 🌐 HTTP clients
-requests==2.32.3
-httpx[http2]==0.27.2
-aiohttp==3.9.5
-ujson==5.10.0
+# =========================
+# ⚙️ Live Trading
+# =========================
+EXECUTE_TRADES=true
+BINANCE_SKIP_ACCOUNT_MUTATIONS=false
+AUTO_RUN=true
 
-# ⚙️ Config / Utils
-python-dotenv==1.0.1
-pydantic==2.7.1
-typing_extensions>=4.10.0,<5.0
-dateparser==1.2.2
-certifi==2024.7.4
-idna==3.7
-tzdata==2024.1
-PyYAML>=6.0.1,<7.0.0
-orjson==3.10.5
-packaging>=24.0
+# =========================
+# 🔎 Scanner / Limits
+# =========================
+DEFAULT_INTERVAL=15m
+DEFAULT_MARKET=futures
+MIN_QUALITY_SCORE=7.5
+TOP_SYMBOLS=30
 
-# 📊 Data science
-numpy==1.26.4
-pandas==2.2.2
-scipy==1.13.1
-scikit-learn==1.5.1
-numba==0.59.1
-llvmlite==0.42.0
+# =========================
+# 💵 Risk / Budget
+# =========================
+MAX_LEVERAGE=35
+MAX_TRADE_BUDGET=100
+MAX_TRADES_PER_TICK=3
 
-# 💹 Trading
-python-binance==1.0.19
-ccxt==4.4.34
-websockets>=12.0,<13.0
-websocket-client==1.8.0
-ta==0.11.0
-TA-Lib==0.4.28   # ✅ נבנה מול ספריית C שהוספנו ב־Dockerfile
+# =========================
+# 🌐 Binance Base URLs
+# =========================
+BINANCE_FAPI_BASE=https://fapi.binance.com
+BINANCE_HTTP_BASE=https://api.binance.com
+BINANCE_FUTURES_WS_BASE=wss://fstream.binance.com/ws
+BINANCE_WS_BASE=wss://stream.binance.com:9443/ws
+BINANCE_FALLBACK_URL=https://fapi.binance.com
 
-# 🤖 AI
-openai==1.30.1
+# =========================
+# 🔑 Binance Keys
+# =========================
+BINANCE_API_KEY=your_real_binance_key
+BINANCE_API_SECRET=your_real_binance_secret
+BINANCE_TESTNET=false
 
-# 📦 Misc
-python-multipart==0.0.9
+# =========================
+# 🤖 OpenAI
+# =========================
+OPENAI_API_KEY=your_real_openai_key
+OPENAI_MODEL=gpt-4o
+ENABLE_AI_ROUTES=true
 
+# =========================
 # 🗄 Redis
-redis==5.0.4
+# =========================
+REDIS_URL=redis://redis:6379
+
+# =========================
+# 🏷 Version
+# =========================
+ALGOGPT_VERSION=2.15.0
+
 
 
 
