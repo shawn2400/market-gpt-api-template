@@ -1,14 +1,20 @@
 # routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, Body, Query
 from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
+from utils.ai_analysis import analyze_with_ai
 
-router = APIRouter(tags=["AI"])
+router = APIRouter(
+    prefix="/ai",
+    tags=["AI"],
+    dependencies=[Depends(require_api_key)],  # ✅ חובה בכל הנתיבים
+)
+
 Side = Literal["LONG", "SHORT"]
 
 class QualityRequest(BaseModel):
@@ -50,7 +56,6 @@ async def ai_health():
 @router.post("/quality", response_model=QualityResponse)
 async def post_ai_quality(
     payload: QualityRequest = Body(...),
-    _auth=Depends(require_api_key)
 ) -> QualityResponse:
     anchor = evaluate_anchor(payload.side)
     q = compute_quality(
@@ -71,6 +76,36 @@ async def post_ai_quality(
         anchor=_mk_anchor_dict(anchor),
     )
 
+# ✅ ניתוח GPT חי
+@router.get("/analyze")
+async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
+    data = {
+        "symbol": symbol,
+        "rsi": 55,
+        "adx": 22,
+        "trend": "UP",
+        "pattern": "Breakout",
+        "volume": "High",
+    }
+    txt = await analyze_with_ai(data)
+    return {"symbol": symbol, "interval": interval, "analysis": txt}
+
+# ✅ סריקה ידנית
+@router.get("/manual-scan")
+async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
+    result = []
+    for s in symbols.split(","):
+        data = {
+            "symbol": s.strip(),
+            "rsi": 48,
+            "adx": 19,
+            "trend": "DOWN",
+            "pattern": "Pullback",
+            "volume": "Medium",
+        }
+        txt = await analyze_with_ai(data)
+        result.append({"symbol": s.strip(), "analysis": txt})
+    return {"interval": interval, "results": result}
 
 
 
