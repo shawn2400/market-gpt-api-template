@@ -1,7 +1,7 @@
 # routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
-from fastapi import APIRouter, Depends, Body, Query
+from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
@@ -26,27 +26,6 @@ class QualityResponse(BaseModel):
     success_pct: float
     anchor: Dict[str, Any]
     components: Dict[str, Any]
-
-class AiManualScanItem(BaseModel):
-    symbol: str
-    market: Optional[str] = None
-    interval: Optional[str] = None
-    frames: List[str] = Field(default_factory=list)
-    trend: Optional[Literal["UP", "DOWN"]] = None
-    direction: Optional[Side] = None
-    rsi: Optional[float] = None
-    adx: Optional[float] = None
-    volume: Optional[float] = None
-    quality_score: Optional[float] = None
-    signal: Optional[Literal["BUY", "SELL", "HOLD"]] = None
-    confidence: Optional[int] = None
-    reason: Optional[str] = None
-    close: Optional[float] = None
-    atr: Optional[float] = None
-
-class AiManualScanResponse(BaseModel):
-    symbol: str
-    results: AiManualScanItem
 
 def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
     return {
@@ -91,51 +70,6 @@ async def post_ai_quality(
         components=q.get("components") or {},
         anchor=_mk_anchor_dict(anchor),
     )
-
-@router.get("/manual-scan", response_model=AiManualScanResponse)
-async def get_ai_manual_scan(
-    symbol: str = Query(...),
-    market: str = Query("futures"),
-    interval: str = Query("15m"),
-    bars: int = Query(200, ge=50, le=500),
-    _auth=Depends(require_api_key),
-) -> AiManualScanResponse:
-    sym = symbol.upper().strip()
-    try:
-        from utils.multi_tf_scanner import analyze_symbol
-        res = await analyze_symbol(symbol=sym, interval=interval, market_type=market, bars=bars)
-        return AiManualScanResponse(symbol=sym, results=AiManualScanItem(**res))
-    except Exception as e:
-        return AiManualScanResponse(
-            symbol=sym,
-            results=AiManualScanItem(
-                symbol=sym, market=market, interval=interval,
-                reason=f"analyze-fallback: {type(e).__name__}"
-            )
-        )
-
-# ✅ NEW ENDPOINT: /analyze
-@router.get("/analyze", response_model=AiManualScanResponse)
-async def ai_analyze(
-    symbol: str = Query(..., description="Trading pair e.g. BTCUSDT"),
-    interval: str = Query("15m", description="Interval e.g. 15m, 1h"),
-    market: str = Query("futures", description="Market type: futures/spot"),
-    _auth=Depends(require_api_key),
-) -> AiManualScanResponse:
-    """Analyze a symbol quickly (shortcut for manual-scan)."""
-    sym = symbol.upper().strip()
-    try:
-        from utils.multi_tf_scanner import analyze_symbol
-        res = await analyze_symbol(symbol=sym, interval=interval, market_type=market, bars=200)
-        return AiManualScanResponse(symbol=sym, results=AiManualScanItem(**res))
-    except Exception as e:
-        return AiManualScanResponse(
-            symbol=sym,
-            results=AiManualScanItem(
-                symbol=sym, market=market, interval=interval,
-                reason=f"analyze-fallback: {type(e).__name__}"
-            )
-        )
 
 
 
