@@ -10,10 +10,12 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
+# --- Env ---
 load_dotenv(override=True)
 LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip().lower() in ("1", "true", "yes")
 SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 
+# --- Config ---
 from utils.config import (
     check_config, dump_config_sanitized, LOG_LEVEL,
     WS_UPDATE_INTERVAL, PRICE_MONITOR_INTERVAL,
@@ -28,11 +30,14 @@ from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store
 
+# --- App Version ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
 
+# --- Logging ---
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
+# ✅ Buffer only if not light
 if not LIGHT_MODE:
     from collections import deque
     LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
@@ -48,6 +53,7 @@ if not LIGHT_MODE:
             })
     logger.addHandler(MemoryLogHandler())
 
+# --- Config check ---
 try:
     check_config()
     logger.info({"event": "config_snapshot", **dump_config_sanitized()})
@@ -56,54 +62,64 @@ except Exception as e:
     if not LIGHT_MODE:
         raise
 
+# --- FastAPI ---
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
     description="AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת"
 )
 
+# --- Middlewares ---
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
+# --- Static ---
+# מבטיח שתיקיית static קיימת לפני mount כדי למנוע קריסה
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Routers ---
-from routes.ai import router as ai_router
-from routes.ai_analyze import router as ai_analyze_router
+from routes.ai import router as ai_router                  # /ai/health , /ai/quality
+from routes.ai_analyze import router as ai_analyze_router  # /ai/manual-scan , /ai/analyze
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
 from routes.orderflow import router as orderflow_router
 from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
-from routes.debug import router as debug_router
 from routes.market import router as market_router
 from routes.binance_status import router as binance_status_router
 import routes.executor as executor_router
 
-app.include_router(scan_router,        prefix="",          tags=["Scan"])
-app.include_router(trade_router,       prefix="/trade",    tags=["Trade"])
-app.include_router(grid_router,        prefix="/grid",     tags=["Grid"])
-app.include_router(orderflow_router,   prefix="/orderflow",tags=["Orderflow"])
-app.include_router(indicators_router,  prefix="/indicators", tags=["Indicators"])
-app.include_router(anchor_router,      prefix="",          tags=["Anchor"])
-# ↓ שימו לב: אין prefix כאן — כבר מוגדרים בתוך הקבצים
-app.include_router(market_router,      tags=["Market"])
-app.include_router(binance_status_router, tags=["Binance"])
+# הרשמה: כל ראוטר כבר מגדיר את ה-dependencies שלו בקובץ שלו.
+app.include_router(scan_router,        prefix="",           tags=["Scan"])
+app.include_router(trade_router,       prefix="/trade",     tags=["Trade"])
+app.include_router(grid_router,        prefix="/grid",      tags=["Grid"])
+app.include_router(orderflow_router,   prefix="/orderflow", tags=["Orderflow"])
+app.include_router(indicators_router,  prefix="/indicators",tags=["Indicators"])
+app.include_router(anchor_router,      prefix="",           tags=["Anchor"])
 
+# ⚠️ כאן כן צריך פרפיקס, כי בקבצים עצמם אין prefix:
+app.include_router(market_router,        prefix="/market",  tags=["Market"])
+app.include_router(binance_status_router, prefix="/binance",tags=["Binance"])
+
+# ✅ ai_analyze לא תלוי ב-OpenAI → תמיד
 app.include_router(ai_analyze_router, prefix="/ai", tags=["AI"])
+
+# ai_router תלוי ב-OPENAI_API_KEY
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     app.include_router(ai_router, prefix="/ai", tags=["AI"])
 
+# Executor
 app.include_router(
     executor_router.router,
     prefix="/executor",
     tags=["Executor"],
 )
 
+# --- Self-contained Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
 
 def update_price(symbol: str, price: float) -> None:
@@ -118,6 +134,7 @@ def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
     info = LAST_PRICE_CACHE.get(symbol.upper())
     return bool(info and (time.time() - info.get("ts", 0)) <= max_age_sec)
 
+# --- Background tasks ---
 async def auto_anchor_updater(interval: int = 20):
     anchors = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     while True:
@@ -171,6 +188,7 @@ async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_IN
                 logger.warning({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
+# ✅ Cache cleaner
 CACHE_DIR = Path("static/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -190,12 +208,14 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
             logger.warning({"event": "cache_cleaner_error", "error": str(e)})
         await asyncio.sleep(interval)
 
+# --- Startup ---
 @app.on_event("startup")
 async def startup_event():
     try:
         if LIGHT_MODE:
             logger.warning("⚠️ Startup in LIGHT_MODE=1 → background tasks disabled")
             return
+
         watchlist = load_watchlist()
         symbols = [it["symbol"] for it in watchlist]
         if "BTCUSDT" not in [s.upper() for s in symbols]:
@@ -209,6 +229,7 @@ async def startup_event():
     except Exception as e:
         logger.error({"event": "startup_error", "error": str(e)})
 
+# --- Health / Status ---
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
@@ -226,6 +247,7 @@ async def health_live():
 async def list_routes():
     return [{"path": r.path, "name": r.name, "methods": list(r.methods or [])} for r in app.router.routes]
 
+# ✅ Debug health – רק אם לא בלייט מוד
 if not LIGHT_MODE:
     @app.get("/debug/health", tags=["Debug"])
     async def debug_health(limit: int = Query(50), level: str | None = None, logger_name: str | None = None):
@@ -236,14 +258,17 @@ if not LIGHT_MODE:
             logs = [l for l in logs if l["logger"] == logger_name]
         return {"count": len(logs), "logs": logs}
 
+# --- Exception handler ---
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({"event": "exception", "error": str(exc), "path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
+# --- Entrypoint ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
