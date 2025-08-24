@@ -86,12 +86,12 @@ from routes.market import router as market_router
 from routes.binance_status import router as binance_status_router
 import routes.executor as executor_router
 
-# ✅ לא לשים prefix כפול – כל ראוטר מגדיר בעצמו
+# ✅ חיבור תקין של כל הראוטרים
 app.include_router(scan_router, tags=["Scan"])
-app.include_router(trade_router, tags=["Trade"])
-app.include_router(grid_router, tags=["Grid"])
-app.include_router(orderflow_router, tags=["Orderflow"])
-app.include_router(indicators_router, tags=["Indicators"])
+app.include_router(trade_router, prefix="/trade", tags=["Trade"])   # כולל /trade/execute
+app.include_router(grid_router, prefix="/grid", tags=["Grid"])
+app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])
+app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
 app.include_router(anchor_router, tags=["Anchor"])
 app.include_router(market_router, tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
@@ -248,6 +248,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
