@@ -1,12 +1,10 @@
 # routes/trade.py
-# =========================
-# ניהול טריידים פתוחים + היסטוריה
-# =========================
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 from utils.trade_manager import get_open_trades, get_trade_history
 from utils.auth import require_api_key
+from utils.binance_trader import binance_futures_trade
 
 router = APIRouter(tags=["Trade"], dependencies=[Depends(require_api_key)])
 
@@ -26,17 +24,51 @@ class TradesSummary(BaseModel):
     returned: int
     items: List[TradeModel] = Field(default_factory=list)
 
+# --- GET open trades
 @router.get("/open", response_model=TradesSummary)
 async def list_open_trades():
     trades = get_open_trades()
     items = [TradeModel(**t) for t in trades]
     return TradesSummary(total=len(trades), returned=len(items), items=items)
 
+# --- GET history
 @router.get("/history", response_model=TradesSummary)
 async def trade_history(limit: int = Query(50, ge=10, le=200)):
     trades = get_trade_history(limit=limit)
     items = [TradeModel(**t) for t in trades[:limit]]
     return TradesSummary(total=len(trades), returned=len(items), items=items)
+
+# --- NEW: Execute trade
+class ExecuteTradeRequest(BaseModel):
+    symbol: str
+    side: str
+    budget: float
+    leverage: int = 10
+    dry_run: bool = False
+
+class ExecuteTradeResponse(BaseModel):
+    ok: bool
+    symbol: str
+    side: str
+    qty: Optional[float] = None
+    entry: Optional[float] = None
+    leverage: Optional[int] = None
+    error: Optional[str] = None
+
+@router.post("/execute", response_model=ExecuteTradeResponse)
+async def execute_trade(req: ExecuteTradeRequest):
+    try:
+        result = await binance_futures_trade(
+            symbol=req.symbol,
+            side=req.side,
+            budget=req.budget,
+            leverage=req.leverage,
+            dry_run=req.dry_run
+        )
+        return ExecuteTradeResponse(ok=True, **result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
