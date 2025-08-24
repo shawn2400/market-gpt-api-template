@@ -6,14 +6,15 @@ from fastapi import APIRouter, Query, Depends
 import httpx
 import numpy as np
 
-from utils.auth import require_bearer_token
+from utils.auth import require_api_key
 
 # -------------------------------------------------
 # Router
 # -------------------------------------------------
-router = APIRouter(tags=["AI"], dependencies=[Depends(require_bearer_token)])
+# חשוב: prefix="/ai" + אימות אחיד
+router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
 
-_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi1.binance.com").rstrip("/")
 
 # -------------------------------------------------
 # Indicators (NumPy only)
@@ -73,13 +74,18 @@ def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14)
     return _rma(dx, period)
 
 # -------------------------------------------------
-# Binance fetcher
+# Binance fetcher (klines)
 # -------------------------------------------------
 async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> List[List[Any]]:
     url = f"{_FAPI}/fapi/v1/klines"
     params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        r = await client.get(url, params=params)
+    async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent": "AlgoGPT/2.x"}) as client:
+        r = await client.get(url, params=params, follow_redirects=False)
+        # חסימת HTML/Redirect
+        if r.status_code in (301,302,303,307,308):
+            raise RuntimeError(f"binance redirect: {r.headers.get('Location')}")
+        if "application/json" not in (r.headers.get("Content-Type","").lower()):
+            raise RuntimeError("binance non-json (WAF?)")
         r.raise_for_status()
         data = r.json()
         if not isinstance(data, list):
@@ -149,13 +155,13 @@ def _select_fields(item: Dict[str, Any], fields: Optional[Iterable[str]], compac
     if compact and not fields:
         fields = ("symbol","market","interval","signal","quality_score","confidence","reason","close","atr")
     if fields:
-        return {k: item.get(k) for k in fields if k in item}
+        return {k: item.get(k) for k in item.keys() if k in fields}
     return item
 
 # -------------------------------------------------
-# Route
+# Routes
 # -------------------------------------------------
-@router.get("/ai/manual-scan", operation_id="getAiManualScan")
+@router.get("/manual-scan", operation_id="getAiManualScan")
 async def ai_manual_scan(
     symbol: str = Query(..., description="e.g. BTCUSDT"),
     interval: str = Query("15m"),
@@ -189,6 +195,39 @@ async def ai_manual_scan(
             "reason": f"lite (analyze-fallback: {type(e).__name__})"
         }
         return {"symbol": symbol, "results": _select_fields(base, _parse_fields(fields), compact)}
+
+@router.get("/analyze")
+async def ai_analyze(
+    symbol: str = Query(..., description="e.g. BTCUSDT"),
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=1500),
+    fields: Optional[str] = Query(None),
+    compact: bool = Query(True),
+) -> Dict[str, Any]:
+    symbol_up = symbol.upper().strip()
+    try:
+        rows = await _fetch_klines(symbol_up, interval=interval, limit=limit)
+        if not rows or len(rows) < 60:
+            base = {
+                "symbol": symbol_up,
+                "market": "futures",
+                "interval": interval,
+                "signal": "HOLD",
+                "reason": "lite (not enough data)"
+            }
+            return {"symbol": symbol_up, "results": _select_fields(base, _parse_fields(fields), compact)}
+        res = _analyze_numpy(rows, interval)
+        res["symbol"] = symbol_up
+        return {"symbol": symbol_up, "results": _select_fields(res, _parse_fields(fields), compact)}
+    except Exception as e:
+        base = {
+            "symbol": symbol_up, "market": "futures", "interval": interval,
+            "frames": [interval], "trend": None, "direction": None,
+            "rsi": None, "adx": None, "volume": None, "quality_score": None,
+            "signal": None, "confidence": None, "close": None, "atr": None,
+            "reason": f"lite (analyze-fallback: {type(e).__name__})"
+        }
+        return {"symbol": symbol_up, "results": _select_fields(base, _parse_fields(fields), compact)}
 
 
 
