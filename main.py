@@ -88,13 +88,14 @@ import routes.executor as executor_router
 
 # ✅ Routers
 app.include_router(scan_router, tags=["Scan"])
-app.include_router(trade_router, prefix="/trade", tags=["Trade"])   # כולל /trade/execute
+app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(grid_router, prefix="/grid", tags=["Grid"])
 app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])
 app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
 app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
-app.include_router(binance_status_router, prefix="/binance", tags=["Binance"])
+# ❌ תיקון: הורדתי prefix כפול
+app.include_router(binance_status_router, tags=["Binance"])
 
 # ✅ AI
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
