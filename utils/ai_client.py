@@ -1,16 +1,20 @@
 # utils/ai_client.py
 from __future__ import annotations
-import os, logging, openai, asyncio
+import os, logging, openai
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 openai.api_key = os.getenv("OPENAI_API_KEY", "").strip()
-
 if not openai.api_key:
     logger.error("❌ OPENAI_API_KEY not set!")
 
-async def chat(prompt: str, system: str = "", temperature: float = 0.3, max_tokens: int = 256) -> Optional[str]:
+async def chat(
+    prompt: str,
+    system: str = "You are a professional crypto analyst.",
+    temperature: float = 0.3,
+    max_tokens: int = 256
+) -> Optional[str]:
     """
     Wrapper אסינכרוני ל־OpenAI ChatCompletion.
     """
@@ -18,7 +22,7 @@ async def chat(prompt: str, system: str = "", temperature: float = 0.3, max_toke
         resp = await openai.ChatCompletion.acreate(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": system or "You are a professional crypto analyst."},
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
             temperature=temperature,
