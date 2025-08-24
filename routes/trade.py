@@ -6,8 +6,16 @@ from utils.trade_manager import get_open_trades, get_trade_history
 from utils.auth import require_api_key
 from utils.binance_trader import binance_futures_trade
 
-router = APIRouter(tags=["Trade"], dependencies=[Depends(require_api_key)])
+# ✅ הגדרה עם prefix כבר כאן
+router = APIRouter(
+    prefix="/trade",
+    tags=["Trade"],
+    dependencies=[Depends(require_api_key)]
+)
 
+# =========================
+# Models
+# =========================
 class TradeModel(BaseModel):
     id: str
     symbol: str
@@ -38,7 +46,7 @@ async def trade_history(limit: int = Query(50, ge=10, le=200)):
     items = [TradeModel(**t) for t in trades[:limit]]
     return TradesSummary(total=len(trades), returned=len(items), items=items)
 
-# --- NEW: Execute trade
+# --- POST execute trade
 class ExecuteTradeRequest(BaseModel):
     symbol: str
     side: str
@@ -68,6 +76,7 @@ async def execute_trade(req: ExecuteTradeRequest):
         return ExecuteTradeResponse(ok=True, **result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
