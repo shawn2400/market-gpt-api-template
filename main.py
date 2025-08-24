@@ -94,35 +94,32 @@ from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
 from routes.debug import router as debug_router
 from routes.market import router as market_router
-import routes.executor as executor_router   # ✅ ייבוא מתוקן
+from routes.binance_status import router as binance_status_router
+import routes.executor as executor_router
 
-# הרשמה: כל ראוטר כבר מגדיר את ה־dependencies שלו בתוך הקובץ עצמו.
-# לכן אין כאן dependencies=[...] כדי לא ליצור התנגשויות (Bearer מול API-Key).
-app.include_router(scan_router,     prefix="",      tags=["Scan"])
-app.include_router(trade_router,    prefix="/trade",   tags=["Trade"])
-app.include_router(grid_router,     prefix="/grid",    tags=["Grid"])
-app.include_router(orderflow_router,prefix="/orderflow", tags=["Orderflow"])
-app.include_router(indicators_router,prefix="/indicators", tags=["Indicators"])
-app.include_router(anchor_router,   prefix="",       tags=["Anchor"])
-app.include_router(market_router,   prefix="/market", tags=["Market"])
+# הרשמה: כל ראוטר כבר מגדיר את ה-dependencies שלו בקובץ שלו.
+app.include_router(scan_router,        prefix="",          tags=["Scan"])
+app.include_router(trade_router,       prefix="/trade",    tags=["Trade"])
+app.include_router(grid_router,        prefix="/grid",     tags=["Grid"])
+app.include_router(orderflow_router,   prefix="/orderflow",tags=["Orderflow"])
+app.include_router(indicators_router,  prefix="/indicators", tags=["Indicators"])
+app.include_router(anchor_router,      prefix="",          tags=["Anchor"])
+app.include_router(market_router,      prefix="/market",   tags=["Market"])
+app.include_router(binance_status_router, prefix="/binance", tags=["Binance"])
 
-# ✅ ai_analyze לא תלוי ב-OpenAI → תמיד נרשום אותו
+# ✅ ai_analyze לא תלוי ב-OpenAI → תמיד
 app.include_router(ai_analyze_router, prefix="/ai", tags=["AI"])
 
-# ai_router כן תלוי במפתח OpenAI (health/quality)
+# ai_router תלוי ב-OPENAI_API_KEY
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     app.include_router(ai_router, prefix="/ai", tags=["AI"])
 
-# ⬅️ Executor עם prefix אחיד
+# Executor
 app.include_router(
-    executor_router.router,   # ✅ ניגשים ל־router מתוך המודול
+    executor_router.router,
     prefix="/executor",
     tags=["Executor"],
 )
-
-# ✅ Debug router – רק אם לא בלייט מוד
-if not LIGHT_MODE:
-    app.include_router(debug_router, prefix="/debug", tags=["Debug"])
 
 # --- Self-contained Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
@@ -268,6 +265,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
