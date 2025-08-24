@@ -93,7 +93,7 @@ def get_client() -> Client:
         logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV")
         raise RuntimeError("Missing Binance credentials")
 
-    # ⚠️ תווים לא תקינים בשם המשתנה גרמו לקריסה. זו השורה המתוקנת:
+    # ✔ שמות מפתחות תקינים (תיקון לתווי İ שהפילו את השרת)
     client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
     if USE_TESTNET:
@@ -189,6 +189,57 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 # =========================
+# 🧩 Build a compact symbol-info map
+# =========================
+def _build_symbol_info_map(info: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    מחזיר מילון: { SYMBOL: {pricePrecision, quantityPrecision, tickSize, stepSize, minQty, minNotional, status, contractType} }
+    עם המרות בטוחות (מחרוזת→float) ותמיכה ב-Futures filters נפוצים.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for s in info.get("symbols", []) or []:
+        try:
+            sym = (s.get("symbol") or "").upper()
+            if not sym:
+                continue
+            filters = {f.get("filterType"): f for f in (s.get("filters") or [])}
+            price_f = filters.get("PRICE_FILTER", {})
+            lot_f = filters.get("LOT_SIZE", {}) or filters.get("MARKET_LOT_SIZE", {})
+            min_notional_f = filters.get("MIN_NOTIONAL", {}) or filters.get("NOTIONAL", {})
+
+            def fnum(v: Any, default: float = 0.0) -> float:
+                try:
+                    return float(v)
+                except Exception:
+                    return default
+
+            out[sym] = {
+                "status": s.get("status"),
+                "contractType": s.get("contractType"),
+                "pricePrecision": int(s.get("pricePrecision", 0) or 0),
+                "quantityPrecision": int(s.get("quantityPrecision", 0) or 0),
+                "tickSize": fnum(price_f.get("tickSize")),
+                "stepSize": fnum(lot_f.get("stepSize")),
+                "minQty": fnum(lot_f.get("minQty")),
+                "minNotional": fnum(min_notional_f.get("minNotional") or min_notional_f.get("notional")),
+            }
+        except Exception as e:
+            logger.warning(f"[Binance] _build_symbol_info_map skip: {e}")
+    return out
+
+def get_cached_symbol_info(force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+    """
+    API נוח לראוטר market: מחזיר מפה של פרטי סימבולים מהקאש/שרת.
+    לא מפיל את השרת – במקרה תקלה יחזיר מפה ריקה או מהקאש האחרון.
+    """
+    try:
+        info = futures_exchange_info_safe(force_refresh=force_refresh)
+    except Exception as e:
+        logger.warning(f"[Binance] get_cached_symbol_info: {e}")
+        info = _futures_exchange_info_cache or {"symbols": []}
+    return _build_symbol_info_map(info)
+
+# =========================
 # 📌 Futures Open Positions (חתום → SDK)
 # =========================
 def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -256,6 +307,7 @@ def status_snapshot() -> dict:
             "cache_symbols": len((_futures_exchange_info_cache or {}).get("symbols", [])),
         }
     }
+
 
 
 
