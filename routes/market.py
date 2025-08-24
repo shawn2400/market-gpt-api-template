@@ -8,9 +8,10 @@ from utils.binance_client import (
     valid_futures_symbols,
 )
 
+# כל הנתיבים כאן הם יחסיים לפריפיקס שיוגדר ב-main.py => "/market"
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
-@router.get("/market/symbol-info")
+@router.get("/symbol-info")
 def symbol_info(
     symbol: str = Query(..., min_length=6, max_length=20),
     force_refresh: int = Query(0, ge=0, le=1),
@@ -20,10 +21,9 @@ def symbol_info(
         raise HTTPException(status_code=404, detail="symbol not found")
     return info
 
-@router.get("/market/tickers")
+@router.get("/tickers")
 def tickers(symbols: str | None = Query(None, description="comma-separated e.g. BTCUSDT,ETHUSDT")):
     out = {}
-    syms = []
     if symbols:
         syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     else:
@@ -35,6 +35,7 @@ def tickers(symbols: str | None = Query(None, description="comma-separated e.g. 
     for s in syms:
         out[s] = futures_mark_price(s)
     return out
+
 
 
 
