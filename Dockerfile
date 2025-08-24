@@ -14,18 +14,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # --- System deps ---
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini grep procps \
-    build-essential gfortran \
+    build-essential gfortran wget make \
     libopenblas-dev liblapack-dev \
     libfreetype6 libpng-dev fonts-dejavu-core \
     libjpeg62-turbo-dev zlib1g-dev \
-    wget make \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Build TA-Lib from source ---
 WORKDIR /tmp
 RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
  && tar -xvzf ta-lib-0.4.0-src.tar.gz \
- && cd ta-lib/ && ./configure --prefix=/usr && make && make install \
+ && cd ta-lib && ./configure --prefix=/usr && make && make install \
  && cd .. && rm -rf ta-lib*
 
 # --- User & workdir ---
@@ -56,6 +55,7 @@ USER appuser
 # --- Entrypoint & CMD ---
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
