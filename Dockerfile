@@ -18,10 +18,10 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install python deps into /install
+# Install python deps into /install (נקי מקאש)
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip setuptools wheel \
- && pip install --prefix=/install -r requirements.txt
+ && pip install --prefix=/install --no-cache-dir -r requirements.txt
 
 # --- Stage 2: Final lightweight runtime ---
 FROM python:3.11-slim
@@ -37,16 +37,16 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy installed python packages
+# Copy installed python packages from builder
 COPY --from=builder /install /usr/local
 
-# Create app user
+# Create non-root user
 RUN useradd -ms /bin/bash appuser
 USER appuser
 
 WORKDIR /app
 
-# Copy source code
+# Copy app source (ללא .env – ר’ .dockerignore)
 COPY . /app
 
 # Healthcheck
@@ -55,6 +55,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
