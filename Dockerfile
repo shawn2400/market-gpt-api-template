@@ -1,60 +1,38 @@
-# --- Stage 1: Build with TA-Lib and heavy deps ---
-FROM python:3.11-slim as builder
+# Core
+fastapi==0.111.0
+uvicorn==0.30.1
+gunicorn==22.0.0
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+# Binance & Trading
+python-binance==1.0.19
+httpx==0.27.0
+websockets==12.0
 
-# System deps + TA-Lib build
-RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    ca-certificates curl build-essential gfortran wget \
-    libopenblas-dev liblapack-dev \
-    libfreetype6-dev libpng-dev libjpeg62-turbo-dev zlib1g-dev \
- && wget -q https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
- && tar xzf ta-lib-0.4.0-src.tar.gz \
- && cd ta-lib && ./configure --prefix=/usr && make && make install \
- && cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz \
- && rm -rf /var/lib/apt/lists/*
+# Data / Math
+pandas==2.2.2
+numpy==1.26.4
+scipy==1.13.1
 
-WORKDIR /app
+# Indicators
+ta==0.11.0
+pandas-ta==0.3.14b0
+# TA-Lib -> מותקן בדוקר (אל תוסיף כאן)
 
-# Install python deps into /install (נקי מקאש)
-COPY requirements.txt .
-RUN python -m pip install --upgrade pip setuptools wheel \
- && pip install --prefix=/install --no-cache-dir -r requirements.txt
+# AI / OpenAI
+openai==1.37.0
 
-# --- Stage 2: Final lightweight runtime ---
-FROM python:3.11-slim
+# Utils / Infra
+python-dotenv==1.0.1
+redis==5.0.4
+orjson==3.10.6
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=10000
+# Logging / Monitoring
+structlog==24.1.0
+prometheus-client==0.20.0
 
-# Runtime libs only
-RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    ca-certificates curl tini libgomp1 \
-    libopenblas-dev liblapack-dev \
-    libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
- && rm -rf /var/lib/apt/lists/*
+# Tests
+pytest==8.2.2
 
-# Copy installed python packages from builder
-COPY --from=builder /install /usr/local
-
-# Create non-root user
-RUN useradd -ms /bin/bash appuser
-USER appuser
-
-WORKDIR /app
-
-# Copy app source (ללא .env – ר’ .dockerignore)
-COPY . /app
-
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
-  CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
 
 
 
