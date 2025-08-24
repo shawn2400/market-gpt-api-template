@@ -1,4 +1,3 @@
-# routes/binance_status.py
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from utils.auth import require_api_key
@@ -8,7 +7,6 @@ from utils.binance_client import (
     get_cached_symbol_info,
 )
 
-# שים לב: ב-main אתה כבר עושה include_router(..., prefix="/binance")
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 @router.get("/status")
