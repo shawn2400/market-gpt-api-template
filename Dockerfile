@@ -19,15 +19,15 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Numpy ישן לפני TA-Lib כדי למנוע קונפליקט עם NumPy 2.x
+# מקבעים NumPy הישן קודם כדי למנוע קונפליקט עם NumPy 2.x
 RUN python -m pip install --upgrade pip setuptools wheel \
  && pip install --prefix=/install --no-cache-dir "numpy==1.26.4"
 
-# עטיפת ה־Python של TA-Lib מול הספרייה שב-/usr (ללא build isolation)
+# מתקינים את מעטפת ה-Python של TA-Lib מול הספרייה שב-/usr (ללא build isolation)
 RUN TA_LIBRARY_PATH=/usr/lib TA_INCLUDE_PATH=/usr/include \
     pip install --prefix=/install --no-cache-dir --no-build-isolation "TA-Lib==0.4.28"
 
-# שאר התלויות – נוודא שאין TA-Lib ב־requirements.txt אפילו אם נשלח בטעות
+# שאר התלויות – ודואגים שלא בטעות נשארת שורת TA-Lib בקובץ
 COPY requirements.txt .
 RUN sed -i '/^[Tt][Aa]-[Ll]ib.*/d' requirements.txt \
  && pip install --prefix=/install --no-cache-dir -r requirements.txt
@@ -51,7 +51,7 @@ COPY --from=builder /install /usr/local
 COPY --from=builder /usr/lib/libta_lib.so* /usr/lib/
 COPY --from=builder /usr/bin/ta-lib-config /usr/bin/
 
-# משתמש ללא root
+# non-root
 RUN useradd -ms /bin/bash appuser
 USER appuser
 
@@ -63,6 +63,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
