@@ -75,6 +75,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Routers ---
 from routes.ai import router as ai_router
+from routes.ai_analyze import router as ai_analyze_router
+from routes.ai_health import router as ai_health_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -95,9 +97,11 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI (רק ai.py)
+# ✅ AI
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     app.include_router(ai_router, prefix="/ai", tags=["AI"])
+    app.include_router(ai_analyze_router, prefix="/ai", tags=["AI"])
+    app.include_router(ai_health_router, tags=["AI"])
 
 # ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
@@ -246,6 +250,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
