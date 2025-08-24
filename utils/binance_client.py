@@ -29,12 +29,17 @@ _default_mainnet = [
 ]
 
 if env_base:
-    _candidates = [env_base] + ([h.strip().rstrip("/") for h in env_alts.split(",") if h.strip()] or _default_mainnet[1:])
+    # אם המשתמש הגדיר בסיס+אלטים, ניקח אותם — ונוסיף בסוף גם את המאוזן fapi.binance.com אם חסר
+    _candidates = [env_base] + [h.strip().rstrip("/") for h in env_alts.split(",") if h.strip()]
 else:
     _candidates = _default_mainnet[:]
 
 if USE_TESTNET:
     _candidates = ["https://testnet.binancefuture.com"]
+
+# הבטחת fallback ל-fapi.binance.com גם אם המשתמש הגדיר רק fapi1/2/3
+if (not USE_TESTNET) and ("https://fapi.binance.com" not in _candidates):
+    _candidates.append("https://fapi.binance.com")
 
 _seen = set()
 _BINANCE_FAPI_HOSTS: List[str] = []
@@ -81,7 +86,7 @@ def _is_json(r: httpx.Response) -> bool:
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
     קריאה ציבורית ל-FAPI עם רוטציה בין הוסטים, בלי הפניות (WAF).
-    ⚠️ http2=False — כדי שלא תידרש חבילת h2 ושלא נקבל שגיאות מיותרות.
+    ⚠️ http2=False — בלי תלות בחבילת h2.
     """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
@@ -313,6 +318,7 @@ def status_snapshot() -> dict:
             "cache_symbols": len((_futures_exchange_info_cache or {}).get("symbols", [])),
         }
     }
+
 
 
 
