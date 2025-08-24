@@ -15,12 +15,6 @@ async def require_api_key(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
 ):
-    """
-    אימות:
-      - Authorization: Bearer <token>
-      - X-API-Key: <token>
-      - ?token=<token>
-    """
     if ALLOW_ALL:
         return True
 
@@ -28,10 +22,8 @@ async def require_api_key(
 
     if authorization and authorization.lower().startswith("bearer "):
         supplied = authorization[7:].strip()
-
     if not supplied and x_api_key:
         supplied = x_api_key.strip()
-
     if not supplied:
         supplied = request.query_params.get("token")
 
@@ -40,7 +32,7 @@ async def require_api_key(
 
     raise HTTPException(status_code=401, detail="Invalid API key")
 
-# תאימות לאחור לקוד ישן
+# תאימות לאחור
 async def require_bearer_token(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -49,6 +41,7 @@ async def require_bearer_token(
     return await require_api_key(request, authorization, x_api_key)
 
 require_auth = require_api_key
+
 
 
 
