@@ -63,8 +63,8 @@ def _extract_token_from_authorization(authorization: str | None) -> str | None:
 
 def require_api_key(
     request: Request,
-    authorization: str | None = Header(default=None, convert_underscores=False),
-    x_api_key: str | None = Header(default=None, convert_underscores=False),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> bool:
     """
     Middleware להגנה על ה-API.
@@ -115,13 +115,14 @@ def require_api_key(
 
 def require_bearer_token(
     request: Request,
-    authorization: str | None = Header(default=None, convert_underscores=False),
-    x_api_key: str | None = Header(default=None, convert_underscores=False),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> bool:
     """
     Alias ל-require_api_key לשמירה על תאימות לאחור.
     """
     return require_api_key(request=request, authorization=authorization, x_api_key=x_api_key)
+
 
 
 
