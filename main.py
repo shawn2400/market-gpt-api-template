@@ -81,6 +81,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
 # --- Static ---
+# מבטיח שתיקיית static קיימת לפני mount כדי למנוע קריסה
+Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Routers ---
@@ -265,6 +267,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
