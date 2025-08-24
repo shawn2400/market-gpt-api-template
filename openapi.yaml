@@ -1,6 +1,4 @@
 openapi: 3.1.0
-jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
-
 info:
   title: AlgoGPT API
   version: 2.15.0
@@ -22,12 +20,12 @@ tags:
   - name: Trades
   - name: Indicators
   - name: Anchor
+  - name: Orders
   - name: Executor
   - name: Price
   - name: Market
   - name: Utils
   - name: Debug
-  - name: Websocket
 
 security:
   - HTTPBearer: []
@@ -55,16 +53,38 @@ components:
 
     GenericResponse:
       type: object
+      description: "Generic flexible response schema"
       properties:
         ok: { type: boolean, example: true }
-        message: { type: string, example: "Operation completed successfully" }
+        message: { type: string, example: Operation completed successfully }
       additionalProperties: true
+
+    TradeRequest:
+      type: object
+      required: [symbol, side, budget]
+      properties:
+        symbol: { type: string, example: BTCUSDT }
+        side: { type: string, enum: [BUY, SELL], example: BUY }
+        budget: { type: number, example: 50 }
+        leverage: { type: integer, example: 10 }
+        dry_run: { type: boolean, example: true }
+
+    TradeResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        symbol: { type: string }
+        side: { type: string }
+        qty: { type: number }
+        entry: { type: number }
+        leverage: { type: integer }
+        error: { type: string }
 
 paths:
   /:
     get:
       tags: [Config]
-      summary: Server status
+      summary: Root server status
       operationId: getRootStatus
       security: []
       responses:
@@ -78,7 +98,7 @@ paths:
     get:
       tags: [Health]
       summary: Health check
-      operationId: getHealthStatus
+      operationId: getHealth
       security: []
       responses:
         "200":
@@ -131,7 +151,7 @@ paths:
     post:
       tags: [Grid]
       summary: Start grid trading
-      operationId: startGridTrading
+      operationId: postGridStart
       responses:
         "200":
           description: ok
@@ -143,7 +163,7 @@ paths:
     post:
       tags: [Grid]
       summary: Stop grid trading
-      operationId: stopGridTrading
+      operationId: postGridStop
       responses:
         "200":
           description: ok
@@ -154,7 +174,7 @@ paths:
   /trade/open:
     get:
       tags: [Trades]
-      summary: List open trades
+      summary: Get open trades
       operationId: getOpenTrades
       responses:
         "200":
@@ -166,12 +186,8 @@ paths:
   /trade/history:
     get:
       tags: [Trades]
-      summary: Trade history
+      summary: Get trade history
       operationId: getTradeHistory
-      parameters:
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50 }
       responses:
         "200":
           description: ok
@@ -182,19 +198,19 @@ paths:
   /trade/execute:
     post:
       tags: [Trades]
-      summary: Execute trade
-      operationId: executeTrade
+      summary: Execute a trade
+      operationId: postTradeExecute
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/GenericResponse" }
+            schema: { $ref: "#/components/schemas/TradeRequest" }
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
+              schema: { $ref: "#/components/schemas/TradeResponse" }
 
   /anchor/history:
     get:
@@ -224,7 +240,7 @@ paths:
     get:
       tags: [Price]
       summary: Get latest price for symbol
-      operationId: getPriceForSymbol
+      operationId: getPrice
       parameters:
         - in: path
           name: symbol
@@ -240,7 +256,7 @@ paths:
   /market/tickers:
     get:
       tags: [Market]
-      summary: Get top tickers snapshot
+      summary: Get top market tickers
       operationId: getMarketTickers
       responses:
         "200":
@@ -312,8 +328,8 @@ paths:
   /executor/force_close:
     post:
       tags: [Executor]
-      summary: Force close a position
-      operationId: forceCloseExecutorPosition
+      summary: Force close position
+      operationId: postExecutorForceClose
       parameters:
         - in: query
           name: symbol
@@ -330,7 +346,7 @@ paths:
     get:
       tags: [Utils]
       summary: Ping server
-      operationId: utilsPing
+      operationId: getUtilsPing
       responses:
         "200":
           description: ok
@@ -353,12 +369,15 @@ paths:
   /ws/stream:
     get:
       tags: [Websocket]
-      summary: WebSocket price stream (multi-symbol)
+      summary: WS stream endpoint
       operationId: getWsStream
-      description: Upgrade to websocket protocol
       responses:
-        "101":
-          description: Switching Protocols (WebSocket upgrade)
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
 
 
 
