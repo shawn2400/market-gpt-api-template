@@ -36,7 +36,7 @@ else:
 if USE_TESTNET:
     _candidates = ["https://testnet.binancefuture.com"]
 
-# הבטחת fallback ל-fapi.binance.com גם אם המשתמש הגדיר רק fapi1/2/3
+# תמיד מוסיפים fallback ל-fapi.binance.com (אם זה מייננט)
 if (not USE_TESTNET) and ("https://fapi.binance.com" not in _candidates):
     _candidates.append("https://fapi.binance.com")
 
