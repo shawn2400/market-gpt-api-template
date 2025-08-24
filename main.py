@@ -9,7 +9,7 @@ import os, asyncio, logging, json, time
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Query, Depends
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -34,7 +34,6 @@ from utils.binance_client import futures_mark_price
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store
-from utils.auth import require_api_key
 
 # --- App Version ---
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
@@ -97,33 +96,28 @@ from routes.debug import router as debug_router
 from routes.market import router as market_router
 import routes.executor as executor_router   # ✅ ייבוא מתוקן
 
-protected_routers = [
-    (scan_router, "", ["Scan"]),
-    (trade_router, "/trade", ["Trade"]),
-    (grid_router, "/grid", ["Grid"]),
-    (orderflow_router, "/orderflow", ["Orderflow"]),
-    (indicators_router, "/indicators", ["Indicators"]),
-    (anchor_router, "", ["Anchor"]),
-    (market_router, "/market", ["Market"]),
-]
+# הרשמה: כל ראוטר כבר מגדיר את ה־dependencies שלו בתוך הקובץ עצמו.
+# לכן אין כאן dependencies=[...] כדי לא ליצור התנגשויות (Bearer מול API-Key).
+app.include_router(scan_router,     prefix="",      tags=["Scan"])
+app.include_router(trade_router,    prefix="/trade",   tags=["Trade"])
+app.include_router(grid_router,     prefix="/grid",    tags=["Grid"])
+app.include_router(orderflow_router,prefix="/orderflow", tags=["Orderflow"])
+app.include_router(indicators_router,prefix="/indicators", tags=["Indicators"])
+app.include_router(anchor_router,   prefix="",       tags=["Anchor"])
+app.include_router(market_router,   prefix="/market", tags=["Market"])
 
 # ✅ ai_analyze לא תלוי ב-OpenAI → תמיד נרשום אותו
-protected_routers.append((ai_analyze_router, "/ai", ["AI"]))
+app.include_router(ai_analyze_router, prefix="/ai", tags=["AI"])
 
 # ai_router כן תלוי במפתח OpenAI (health/quality)
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
-    protected_routers.append((ai_router, "/ai", ["AI"]))
-
-# ⬅️ רישום כל ה־routers המוגנים עם require_api_key
-for r, p, t in protected_routers:
-    app.include_router(r, prefix=p, tags=t, dependencies=[Depends(require_api_key)])
+    app.include_router(ai_router, prefix="/ai", tags=["AI"])
 
 # ⬅️ Executor עם prefix אחיד
 app.include_router(
     executor_router.router,   # ✅ ניגשים ל־router מתוך המודול
     prefix="/executor",
     tags=["Executor"],
-    dependencies=[Depends(require_api_key)]
 )
 
 # ✅ Debug router – רק אם לא בלייט מוד
