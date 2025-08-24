@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from utils.auth import require_api_key
 from utils.binance_client import get_symbol_info, futures_mark_price
 
-router = APIRouter(dependencies=[Depends(require_api_key)], tags=["Market"])
+router = APIRouter(prefix="/market", dependencies=[Depends(require_api_key)], tags=["Market"])
 
 @router.get("/symbol-info")
 def symbol_info(symbol: str = Query(..., min_length=6, max_length=20), force_refresh: int = 0):
