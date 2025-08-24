@@ -13,17 +13,24 @@ logger = logging.getLogger("algogpt.binance")
 # =========================
 BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
-USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
+USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes")
 
 # Futures API bases (ללא www) + אלטים
-_BINANCE_FAPI_HOSTS = [
-    h.strip() for h in (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com").split(",")
-    if h.strip()
-]
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").rstrip("/")
+_alts_raw = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com")
+_BINANCE_FAPI_HOSTS = [h.strip().rstrip("/") for h in _alts_raw.split(",") if h.strip()]
+# ודא שאין כפילויות והבסיס הראשי הוא ראשון
+_seen = set()
+_hosts_ordered: List[str] = []
+for h in [_BINANCE_FAPI_BASE] + _BINANCE_FAPI_HOSTS:
+    if h and h not in _seen:
+        _seen.add(h)
+        _hosts_ordered.append(h)
+_BINANCE_FAPI_HOSTS = _hosts_ordered
+
 BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
 
-SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").lower() in ("1", "true", "yes")
+SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
@@ -32,26 +39,40 @@ LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
 
-_UA = {"User-Agent": "AlgoGPT/2.x (+httpx)", "Accept": "application/json"}
+_UA = {
+    "User-Agent": "AlgoGPT/2.x (+httpx)",
+    "Accept": "application/json",
+    "Connection": "close",
+}
 
 def _is_json(r: httpx.Response) -> bool:
-    return "application/json" in (r.headers.get("Content-Type","").lower())
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    return ctype.startswith("application/json")
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
-    last_err = None
-    for base in [_BINANCE_FAPI_BASE] + _BINANCE_FAPI_HOSTS:
-        url = f"{base.rstrip('/')}/{path.lstrip('/')}"
+    """
+    קריאה ישירה אל FAPI עם רוטציה בין fapi1/2/3, ללא מעקב אחרי הפניות (WAF),
+    ובדיקה שהתגובה JSON ולא HTML.
+    """
+    last_err: Optional[Exception] = None
+    for base in _BINANCE_FAPI_HOSTS:
+        url = f"{base}/{path.lstrip('/')}"
         try:
-            with httpx.Client(timeout=timeout, headers=_UA, follow_redirects=False) as client:
+            with httpx.Client(timeout=timeout, headers=_UA, follow_redirects=False, http2=True) as client:
                 r = client.get(url, params=params)
-            if r.status_code in (301,302,303,307,308):
+            # הפניה? נתייחס ככשל (שכיח ב-WAF)
+            if r.status_code in (301, 302, 303, 307, 308):
                 raise RuntimeError(f"redirect to {r.headers.get('Location')}")
+            # לא JSON? כנראה WAF/HTML
             if not _is_json(r):
                 raise RuntimeError("non-json (WAF/HTML)")
             r.raise_for_status()
             return r.json()
         except Exception as e:
             last_err = e
+            level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+            logger.log(level, f"[BinanceHTTP] GET {url} failed: {e}")
+            # ממשיכים ל-host הבא
             continue
     raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
 
@@ -70,10 +91,27 @@ def get_client() -> Client:
         client.API_URL = "https://testnet.binance.vision/api"
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
+        # שמור על דומיינים נכונים ללא www
         client.API_URL = f"{BINANCE_HTTP_BASE}/api/v3"
         client.FUTURES_URL = f"{_BINANCE_FAPI_BASE}/fapi/v1"
 
     return client
+
+# =========================
+# 🛈 Startup banner (עוזר לזהות טעינת קוד נכונה)
+# =========================
+try:
+    logger.info({
+        "event": "binance_client_mode",
+        "http_only_for_public": True,
+        "signed_via_sdk": True,
+        "hosts": _BINANCE_FAPI_HOSTS,
+        "timeout": _DEFAULT_TIMEOUT,
+        "retries": _MAX_RETRIES,
+        "testnet": USE_TESTNET,
+    })
+except Exception:
+    pass
 
 # =========================
 # 📊 Futures Exchange Info (HTTP נקי)
@@ -109,14 +147,12 @@ def is_valid_futures_symbol(symbol: str) -> bool:
         return True
 
 # =========================
-# 💵 Futures Mark Price (HTTP ישיר + דילוג ולידאציה במקרה קצה)
+# 💵 Futures Mark Price (HTTP ישיר)
 # =========================
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper().strip()
     try:
-        # גם אם validation נכשל — ננסה למשוך בכל זאת
         data = _get_json("/fapi/v1/premiumIndex", params={"symbol": sym})
-        # יש מופעים בהם מוחזר list אם לא מספקים symbol — כאן כן סיפקנו, מצפים ל-dict
         if isinstance(data, dict) and "markPrice" in data:
             price = float(data["markPrice"])
             LAST_PRICE_CACHE[sym] = {"price": price, "ts": int(time.time())}
@@ -127,7 +163,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 # =========================
-# 📌 Futures Open Positions (נשאר עם ה-SDK כי דורש חתימה)
+# 📌 Futures Open Positions (חתום → SDK)
 # =========================
 def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     client = get_client()
@@ -150,7 +186,7 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
                         "positionAmt": amt,
                         "entryPrice": float(p.get("entryPrice", 0)),
                         "unRealizedProfit": float(p.get("unRealizedProfit", 0)),
-                        "leverage": int(p.get("leverage", 0)),
+                        "leverage": int(float(p.get("leverage", 0) or 0)),
                         "side": "LONG" if amt > 0 else "SHORT",
                     })
             except Exception as e:
@@ -177,6 +213,7 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             logger.error(f"[Binance] {label} unexpected error: {e}")
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
+
 
 
 
