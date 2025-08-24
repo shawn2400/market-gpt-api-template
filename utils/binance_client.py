@@ -182,12 +182,15 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    שליפת פוזיציות פתוחות ב־Binance Futures דרך /fapi/v2/positionRisk
+    """
     client = get_client()
     try:
         if symbol:
-            resp = retry_call(lambda: client.futures_position_information(symbol=symbol.upper()), f"futures_positions({symbol})")
+            resp = retry_call(lambda: client.futures_position_risk(symbol=symbol.upper()), f"futures_positions({symbol})")
         else:
-            resp = retry_call(lambda: client.futures_position_information(), "futures_positions(all)")
+            resp = retry_call(lambda: client.futures_position_risk(), "futures_positions(all)")
         if not isinstance(resp, list):
             raise RuntimeError(f"Unexpected response type: {type(resp)}")
 
@@ -240,6 +243,7 @@ def status_snapshot() -> dict:
             "cache_symbols": len((_futures_exchange_info_cache or {}).get("symbols", [])),
         }
     }
+
 
 
 
