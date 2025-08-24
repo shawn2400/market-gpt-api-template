@@ -34,7 +34,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini libgomp1 \
     libopenblas-dev liblapack-dev \
-    libfreetype6 libpng-dev libjpeg62-turbo zlib1g \
+    libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy installed python packages
@@ -55,6 +55,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
