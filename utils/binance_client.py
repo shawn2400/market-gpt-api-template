@@ -8,14 +8,10 @@ from binance.exceptions import BinanceAPIException, BinanceRequestException
 
 logger = logging.getLogger("algogpt.binance")
 
-# =========================
-# 🔑 ENV
-# =========================
 BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
 
-# Futures API bases (ללא www) + אלטים (רוטציה בלי כפילויות)
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
 _alts_raw = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com")
 _BINANCE_FAPI_HOSTS = [h.strip().rstrip("/") for h in _alts_raw.split(",") if h.strip()]
@@ -33,18 +29,15 @@ SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip()
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
-# Circuit Breaker לפרוסס exchangeInfo
 _CB_FAILS_FOR_OPEN = int(os.getenv("BINANCE_CB_FAILS_FOR_OPEN", "3"))
 _CB_COOLDOWN_SEC   = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
 _CB_MAX_COOLDOWN   = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
 _SOFT_ALLOW_EXINFO = (os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip().lower() in ("1","true","yes"))
 
-# Cache
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
 
-# Circuit-breaker state
 _cb_fail_count: int = 0
 _cb_open_until: float = 0.0
 _cb_current_cooldown: int = _CB_COOLDOWN_SEC
@@ -60,10 +53,6 @@ def _is_json(r: httpx.Response) -> bool:
     return ctype.startswith("application/json")
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
-    """
-    קריאה ישירה אל FAPI עם רוטציה בין הוסטס, ללא follow_redirects (WAF),
-    ובדיקה שהתגובה JSON ולא HTML. http2=False כדי לא לדרוש חבילת h2.
-    """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
         url = f"{base}/{path.lstrip('/')}"
@@ -83,16 +72,12 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
             continue
     raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
 
-# =========================
-# 🧩 Client (לקריאות חתומות בלבד)
-# =========================
 def get_client() -> Client:
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
         logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV")
         raise RuntimeError("Missing Binance credentials")
 
     client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
-
     if USE_TESTNET:
         logger.warning("⚠️ Using Binance TESTNET endpoints")
         client.API_URL = "https://testnet.binance.vision/api"
@@ -102,9 +87,6 @@ def get_client() -> Client:
         client.FUTURES_URL = f"{_BINANCE_FAPI_BASE}/fapi/v1"
     return client
 
-# =========================
-# 🔒 Circuit Breaker helpers
-# =========================
 def _cb_is_open() -> bool:
     return time.time() < _cb_open_until
 
@@ -122,9 +104,6 @@ def _cb_on_success() -> None:
     _cb_open_until = 0.0
     _cb_current_cooldown = _CB_COOLDOWN_SEC
 
-# =========================
-# 📊 Futures Exchange Info (מוגן CB)
-# =========================
 def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
     global _futures_exchange_info_cache
     if _cb_is_open() and not force_refresh:
@@ -189,9 +168,6 @@ def fapi_ping() -> bool:
         logger.log(level, f"[Binance] ping failed: {e}")
         return False
 
-# =========================
-# 💵 Futures Mark Price (HTTP ישיר; לא נחסם ע"י CB)
-# =========================
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper().strip()
     try:
@@ -205,9 +181,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
         return None
 
-# =========================
-# 📌 Futures Open Positions (חתום → SDK)
-# =========================
 def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     client = get_client()
     try:
@@ -237,9 +210,6 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
     except Exception as e:
         raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
 
-# =========================
-# 🔁 Retry helper
-# =========================
 def retry_call(fn, label: str, retries: int = _MAX_RETRIES, delay: float = 0.5):
     last_exc: Optional[Exception] = None
     for i in range(retries):
@@ -256,9 +226,6 @@ def retry_call(fn, label: str, retries: int = _MAX_RETRIES, delay: float = 0.5):
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
 
-# =========================
-# 📋 Status helper (לראוטר)
-# =========================
 def status_snapshot() -> dict:
     return {
         "hosts": _BINANCE_FAPI_HOSTS,
