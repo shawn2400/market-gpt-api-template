@@ -6,6 +6,13 @@ from utils.binance_client import status_snapshot, futures_mark_price, fapi_ping
 
 router = APIRouter(dependencies=[Depends(require_api_key)], tags=["Binance"])
 
+@router.get("/ping")
+def binance_ping():
+    ok = fapi_ping()
+    if not ok:
+        raise HTTPException(status_code=503, detail="Binance ping failed")
+    return {"ok": True}
+
 @router.get("/status")
 def binance_status():
     snap = status_snapshot()
@@ -22,11 +29,6 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
         raise HTTPException(status_code=503, detail="mark price unavailable")
     return {"symbol": symbol.upper(), "markPrice": price}
 
-@router.get("/ping")
-def ping():
-    if not fapi_ping():
-        raise HTTPException(status_code=503, detail="ping failed")
-    return {"ping": "ok"}
 
 
 
