@@ -11,6 +11,12 @@ services:
       - .env
     depends_on:
       - redis
+    # אופציונלי: מגביל זיכרון/CPU
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
 
   redis:
     image: redis:7-alpine
@@ -23,6 +29,7 @@ services:
 
 volumes:
   redis_data:
+
 
 
 
