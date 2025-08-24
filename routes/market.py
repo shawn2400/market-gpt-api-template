@@ -8,7 +8,7 @@ from utils.binance_client import (
     valid_futures_symbols,
 )
 
-# כל הנתיבים כאן הם יחסיים לפריפיקס שיוגדר ב-main.py => "/market"
+# הנתיבים כאן יחסיים לפריפיקס ב-main.py => "/market"
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 @router.get("/symbol-info")
@@ -35,6 +35,7 @@ def tickers(symbols: str | None = Query(None, description="comma-separated e.g. 
     for s in syms:
         out[s] = futures_mark_price(s)
     return out
+
 
 
 
