@@ -15,17 +15,16 @@ BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
 
-# Futures API bases (ללא www)
-# דיפולט ל-fapi1; ניתן לסבב לאלטים נוספים
+# Futures API bases (ללא www) + אלטים
 _BINANCE_FAPI_HOSTS = [
-    h.strip() for h in (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com").split(",")
+    h.strip() for h in (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com").split(",")
     if h.strip()
 ]
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").rstrip("/")
 BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
 
 SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").lower() in ("1", "true", "yes")
-_DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "6.0"))
+_DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
 # Cache
@@ -33,28 +32,10 @@ LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
 
-_UA = {"User-Agent": "AlgoGPT/2.x (+https://example.local)", "Accept": "application/json"}
+_UA = {"User-Agent": "AlgoGPT/2.x (+httpx)", "Accept": "application/json"}
 
 def _is_json(r: httpx.Response) -> bool:
     return "application/json" in (r.headers.get("Content-Type","").lower())
-
-async def _get_json_async(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
-    last_err = None
-    for base in [_BINANCE_FAPI_BASE] + _BINANCE_FAPI_HOSTS:
-        url = f"{base.rstrip('/')}/{path.lstrip('/')}"
-        try:
-            async with httpx.AsyncClient(timeout=timeout, headers=_UA, follow_redirects=False) as client:
-                r = await client.get(url, params=params)
-            if r.status_code in (301,302,303,307,308):
-                raise RuntimeError(f"redirect to {r.headers.get('Location')}")
-            if not _is_json(r):
-                raise RuntimeError("non-json (WAF/HTML)")
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            last_err = e
-            continue
-    raise RuntimeError(f"FAPI async failed: {type(last_err).__name__}: {last_err}")
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     last_err = None
@@ -75,7 +56,7 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
     raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
 
 # =========================
-# 🧩 Client (לקריאות שדורשות חתימה, למשל positionRisk)
+# 🧩 Client (לקריאות חתומות בלבד)
 # =========================
 def get_client() -> Client:
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
@@ -89,21 +70,19 @@ def get_client() -> Client:
         client.API_URL = "https://testnet.binance.vision/api"
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
-        # שמור על דומיינים נכונים ללא www
         client.API_URL = f"{BINANCE_HTTP_BASE}/api/v3"
         client.FUTURES_URL = f"{_BINANCE_FAPI_BASE}/fapi/v1"
 
     return client
 
 # =========================
-# 📊 Futures Exchange Info (HTTP ישיר, בטוח)
+# 📊 Futures Exchange Info (HTTP נקי)
 # =========================
-def futures_exchange_info_safe() -> Dict[str, Any]:
+def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
     global _futures_exchange_info_cache
-    if _futures_exchange_info_cache is not None:
+    if _futures_exchange_info_cache is not None and not force_refresh:
         return _futures_exchange_info_cache
 
-    # HTTP נקי ל-/fapi/v1/exchangeInfo
     info = _get_json("/fapi/v1/exchangeInfo")
     if not isinstance(info, dict) or "symbols" not in info:
         raise RuntimeError("Invalid response from Binance futures_exchange_info")
@@ -115,32 +94,34 @@ def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
     global _valid_futures_symbols
     if _valid_futures_symbols is not None and not force_refresh:
         return _valid_futures_symbols
-    info = futures_exchange_info_safe()
+    info = futures_exchange_info_safe(force_refresh=force_refresh)
     symbols = {s.get("symbol", "").upper() for s in info.get("symbols", []) if s.get("status") == "TRADING"}
     _valid_futures_symbols = symbols
     return _valid_futures_symbols
 
 def is_valid_futures_symbol(symbol: str) -> bool:
-    return symbol.upper() in valid_futures_symbols()
+    try:
+        return symbol.upper() in valid_futures_symbols()
+    except Exception as e:
+        # אם exchangeInfo לא זמין — אל תחסום לגמרי, המשך לנסות markPrice
+        level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+        logger.log(level, f"[Binance] is_valid_futures_symbol: exchangeInfo unavailable → soft-allow ({e})")
+        return True
 
 # =========================
-# 💵 Futures Mark Price (HTTP ישיר, בטוח)
+# 💵 Futures Mark Price (HTTP ישיר + דילוג ולידאציה במקרה קצה)
 # =========================
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper().strip()
     try:
-        if not is_valid_futures_symbol(sym):
-            # ננסה בכל זאת לקרוא — לעתים cache טרי חסר
-            data = _get_json("/fapi/v1/premiumIndex", params={"symbol": sym})
-            price = float(data.get("markPrice"))
+        # גם אם validation נכשל — ננסה למשוך בכל זאת
+        data = _get_json("/fapi/v1/premiumIndex", params={"symbol": sym})
+        # יש מופעים בהם מוחזר list אם לא מספקים symbol — כאן כן סיפקנו, מצפים ל-dict
+        if isinstance(data, dict) and "markPrice" in data:
+            price = float(data["markPrice"])
             LAST_PRICE_CACHE[sym] = {"price": price, "ts": int(time.time())}
             return price
-
-        data = _get_json("/fapi/v1/premiumIndex", params={"symbol": sym})
-        price = float(data.get("markPrice"))
-        LAST_PRICE_CACHE[sym] = {"price": price, "ts": int(time.time())}
-        return price
-
+        raise RuntimeError(f"unexpected premiumIndex payload type={type(data)}")
     except Exception as e:
         logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
         return None
@@ -196,6 +177,7 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             logger.error(f"[Binance] {label} unexpected error: {e}")
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
+
 
 
 
