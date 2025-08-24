@@ -9,10 +9,10 @@ from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.ai_analysis import analyze_with_ai
 
+# ✅ בלי prefix כאן, כי נוסיף אותו ב-main.py
 router = APIRouter(
-    prefix="/ai",
     tags=["AI"],
-    dependencies=[Depends(require_api_key)],  # ✅ חובה בכל הנתיבים
+    dependencies=[Depends(require_api_key)],  # כל הנתיבים מוגנים
 )
 
 Side = Literal["LONG", "SHORT"]
@@ -54,9 +54,7 @@ async def ai_health():
     }
 
 @router.post("/quality", response_model=QualityResponse)
-async def post_ai_quality(
-    payload: QualityRequest = Body(...),
-) -> QualityResponse:
+async def post_ai_quality(payload: QualityRequest = Body(...)) -> QualityResponse:
     anchor = evaluate_anchor(payload.side)
     q = compute_quality(
         symbol=payload.symbol,
@@ -76,7 +74,6 @@ async def post_ai_quality(
         anchor=_mk_anchor_dict(anchor),
     )
 
-# ✅ ניתוח GPT חי
 @router.get("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     data = {
@@ -90,7 +87,6 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     txt = await analyze_with_ai(data)
     return {"symbol": symbol, "interval": interval, "analysis": txt}
 
-# ✅ סריקה ידנית
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
     result = []
