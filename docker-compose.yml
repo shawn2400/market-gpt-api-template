@@ -11,7 +11,17 @@ services:
       - .env
     depends_on:
       - redis
-    # אופציונלי: מגביל זיכרון/CPU
+    command: >
+      gunicorn -k uvicorn.workers.UvicornWorker
+      -w 2
+      -b 0.0.0.0:10000
+      main:app
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:10000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    # אופציונלי: מגביל זיכרון/CPU (ב-compose זה מידעול בלבד)
     deploy:
       resources:
         limits:
@@ -29,6 +39,7 @@ services:
 
 volumes:
   redis_data:
+
 
 
 
