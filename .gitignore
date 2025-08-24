@@ -1,15 +1,15 @@
-# --- Env / Keys (לא נרצה בתוך האימג’)
+# --- Env / Keys (אל תעלה מפתחות לריפו)
 .env
 *.env
 *.key
 *.pem
 
-# --- Data / Logs (לא נרצה לשמור בתוך Docker image)
+# --- Data / Logs
 saved_trades.json
 pnl_tracker.json
 *.log
 
-# --- אבל כן נשאיר את רשימת המעקב
+# --- כן משאירים את רשימת המעקב
 !watchlist.json
 
 # --- Python caches
@@ -17,30 +17,39 @@ __pycache__/
 *.pyc
 .cache/
 
-# --- Local dev/IDE
+# --- Virtualenv / Dev
 venv/
 .idea/
 .vscode/
 *.iml
+
+# --- OS Files
 .DS_Store
 Thumbs.db
 
-# --- Reports & snapshots
+# --- Reports & snapshots (נשמר מקומית בלבד)
 *.pdf
 static/reports/
 static/snapshots/
 
-# --- Tests & local runners (לא נחוץ בפרודקשן)
+# --- Tests (לא נעלה ל-prod repo)
 tests/
 test_*.py
+
+# --- Local runners / helpers (לא דרוש ל-prod)
 run_executor.py
 scan_runner.py
 check_env.py
 get_chat_id.py
 
+# --- Build artifacts
+dist/
+build/
+*.egg-info/
+
 # --- Git metadata
-.git
 .gitignore
+
 
 
 
