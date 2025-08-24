@@ -4,13 +4,19 @@ import os
 from typing import Set, Optional
 from fastapi import Header, HTTPException, status
 
+# --- טעינת טוקנים מה־ENV ---
 def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
-# --- Load allowed tokens from ENV ---
 _TOKENS: Set[str] = set()
-for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER", "API_BEARER_TOKEN"):
+for key in (
+    "ALGOGPT_TOKENS",
+    "ALGOGPT_TOKEN",
+    "API_BEARER_TOKEN",
+    "API_BEARER",
+    "API_BEARER_TOKENS",
+):
     v = (os.getenv(key) or "").strip()
     if not v:
         continue
@@ -19,27 +25,28 @@ for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "ALGOGPT_API_TOKEN", "API_BEARER"
     else:
         _TOKENS.add(v)
 
-_ALLOW_ALL = (os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes"))
+# מאפשר לעקוף אבטחה בסביבת DEV
+_ALLOW_ALL = os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes")
 
-def require_api_key(authorization: Optional[str] = Header(default=None)) -> str:
-    """
-    דרישת API Key לכל הקריאות המוגנות.
-    """
-    if _ALLOW_ALL:
-        return "ALLOW_ALL"
-
+def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization header")
-
+        return None
     parts = authorization.strip().split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Authorization format")
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1]
+    return None
 
-    token = parts[1].strip()
-    if token not in _TOKENS:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+# --- פונקציה לשימוש בכל ראוטר ---
+async def require_api_key(authorization: Optional[str] = Header(None)) -> None:
+    if _ALLOW_ALL:
+        return  # מצב DEV: הכל עובר
+    token = _extract_bearer(authorization)
+    if not token or token not in _TOKENS:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
 
-    return token
 
 
 
