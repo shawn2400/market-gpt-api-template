@@ -2,13 +2,9 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from utils.auth import require_api_key
-from utils.binance_client import status_snapshot, futures_mark_price, futures_exchange_info_safe
+from utils.binance_client import status_snapshot, futures_mark_price, fapi_ping
 
-router = APIRouter(prefix="/binance", dependencies=[Depends(require_api_key)])
-
-@router.get("/ping")
-def ping():
-    return {"ok": True}
+router = APIRouter(dependencies=[Depends(require_api_key)], tags=["Binance"])
 
 @router.get("/status")
 def binance_status():
@@ -26,13 +22,12 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
         raise HTTPException(status_code=503, detail="mark price unavailable")
     return {"symbol": symbol.upper(), "markPrice": price}
 
-@router.get("/exchange-info")
-def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
-    try:
-        info = futures_exchange_info_safe(force_refresh=bool(force_refresh))
-        return {"count": len(info.get("symbols", [])), "data": info}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+@router.get("/ping")
+def ping():
+    if not fapi_ping():
+        raise HTTPException(status_code=503, detail="ping failed")
+    return {"ping": "ok"}
+
 
 
 
