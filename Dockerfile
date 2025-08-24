@@ -1,37 +1,69 @@
-# Core
-fastapi==0.111.0
-uvicorn==0.30.1
-gunicorn==22.0.0
+# --- Stage 1: Build with TA-Lib and heavy deps ---
+FROM python:3.11-slim as builder
 
-# Binance & Trading
-python-binance==1.0.19
-httpx==0.27.0
-websockets==12.0
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_NO_BUILD_ISOLATION=1
 
-# Data / Math
-pandas==2.2.2
-numpy==1.26.4
-scipy==1.13.1
+# System deps + build TA-Lib C library
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+    ca-certificates curl build-essential gfortran wget \
+    libopenblas-dev liblapack-dev \
+    libfreetype6-dev libpng-dev libjpeg62-turbo-dev zlib1g-dev \
+ && wget -q https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
+ && tar xzf ta-lib-0.4.0-src.tar.gz \
+ && cd ta-lib && ./configure --prefix=/usr && make -j"$(nproc)" && make install \
+ && cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz \
+ && rm -rf /var/lib/apt/lists/*
 
-# Indicators
-ta==0.11.0
-pandas-ta==0.3.14b0
-# TA-Lib -> מותקן בדוקר (אל תוסיף כאן)
+WORKDIR /app
 
-# AI / OpenAI
-openai==1.37.0
+# Numpy ישן לפני TA-Lib כדי למנוע קונפליקט עם NumPy 2.x
+RUN python -m pip install --upgrade pip setuptools wheel \
+ && pip install --prefix=/install --no-cache-dir "numpy==1.26.4"
 
-# Utils / Infra
-python-dotenv==1.0.1
-redis==5.0.4
-orjson==3.10.6
+# עטיפת ה־Python של TA-Lib מול הספרייה שב-/usr (ללא build isolation)
+RUN TA_LIBRARY_PATH=/usr/lib TA_INCLUDE_PATH=/usr/include \
+    pip install --prefix=/install --no-cache-dir --no-build-isolation "TA-Lib==0.4.28"
 
-# Logging / Monitoring
-structlog==24.1.0
-prometheus-client==0.20.0
+# שאר התלויות – נוודא שאין TA-Lib ב־requirements.txt אפילו אם נשלח בטעות
+COPY requirements.txt .
+RUN sed -i '/^[Tt][Aa]-[Ll]ib.*/d' requirements.txt \
+ && pip install --prefix=/install --no-cache-dir -r requirements.txt
 
-# Tests
-pytest==8.2.2
+# --- Stage 2: Final lightweight runtime ---
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=10000
+
+# Runtime libs only
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+    ca-certificates curl tini libgomp1 \
+    libopenblas-dev liblapack-dev \
+    libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
+ && rm -rf /var/lib/apt/lists/*
+
+# Python packages + libta_lib.so מה־builder
+COPY --from=builder /install /usr/local
+COPY --from=builder /usr/lib/libta_lib.so* /usr/lib/
+COPY --from=builder /usr/bin/ta-lib-config /usr/bin/
+
+# משתמש ללא root
+RUN useradd -ms /bin/bash appuser
+USER appuser
+
+WORKDIR /app
+COPY . /app
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
+  CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
 
 
 
