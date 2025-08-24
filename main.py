@@ -85,7 +85,8 @@ app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Routers ---
-from routes.ai import router as ai_router
+from routes.ai import router as ai_router                  # /ai/health , /ai/quality
+from routes.ai_analyze import router as ai_analyze_router  # /ai/manual-scan , /ai/analyze
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
 from routes.grid import router as grid_router
@@ -105,6 +106,11 @@ protected_routers = [
     (anchor_router, "", ["Anchor"]),
     (market_router, "/market", ["Market"]),
 ]
+
+# ✅ ai_analyze לא תלוי ב-OpenAI → תמיד נרשום אותו
+protected_routers.append((ai_analyze_router, "/ai", ["AI"]))
+
+# ai_router כן תלוי במפתח OpenAI (health/quality)
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     protected_routers.append((ai_router, "/ai", ["AI"]))
 
@@ -268,6 +274,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
