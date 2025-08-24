@@ -4,30 +4,24 @@ import os, time, logging
 from typing import Any, Callable, Optional, Dict, List
 import httpx
 
-# אם יש לך python-binance לשיחות חתומות; נשאיר ייבוא אופציונלי
 try:
     from binance.client import Client
     from binance.exceptions import BinanceAPIException, BinanceRequestException
-except Exception:  # בחלק מהדיפלויים לא מתקינים SDK
+except Exception:
     Client = None  # type: ignore
     class BinanceAPIException(Exception): ...
     class BinanceRequestException(Exception): ...
 
 logger = logging.getLogger("algogpt.binance")
 
-# =========================
-# 🔑 ENV
-# =========================
 BINANCE_API_KEY     = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET  = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET         = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
 
-# בסיס מאוזן כברירת מחדל + אלטים
 _BINANCE_FAPI_BASE  = (os.getenv("BINANCE_FAPI_BASE")  or "https://fapi.binance.com").rstrip("/")
 _alts_raw           = (os.getenv("BINANCE_FAPI_ALTS")  or "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com")
 _BINANCE_HTTP_BASE  = (os.getenv("BINANCE_HTTP_BASE")  or "https://api.binance.com").rstrip("/")
 
-# סדר רוטציה ייחודי וללא כפילויות
 _BINANCE_FAPI_HOSTS: List[str] = []
 _seen = set()
 for h in ([_BINANCE_FAPI_BASE] + [p.strip() for p in _alts_raw.split(",") if p.strip()]):
@@ -40,54 +34,40 @@ SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip()
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 _MAX_RETRIES     = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
-# Circuit Breaker (ל-exchangeInfo בלבד)
 _CB_FAILS_FOR_OPEN = int(os.getenv("BINANCE_CB_FAILS_FOR_OPEN", "3"))
 _CB_COOLDOWN_SEC   = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
 _CB_MAX_COOLDOWN   = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
 _SOFT_ALLOW_EXINFO = (os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip().lower() in ("1","true","yes"))
 
-# Cache
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
 
-# Circuit-breaker state
 _cb_fail_count: int = 0
 _cb_open_until: float = 0.0
 _cb_current_cooldown: int = _CB_COOLDOWN_SEC
 
-_UA = {
-    "User-Agent": "AlgoGPT/2.x (+httpx)",
-    "Accept": "application/json",
-    "Connection": "close",
-}
+_UA = {"User-Agent": "AlgoGPT/2.x (+httpx)", "Accept": "application/json", "Connection": "close"}
 
 def _is_json(r: httpx.Response) -> bool:
     ctype = (r.headers.get("Content-Type") or "").lower()
     return ctype.startswith("application/json")
 
 def _log(level_fn, msg: str):
-    # עוזר קצר ללוג ברמת אזהרה/שגיאה בהתאם לדגל
     if SUPPRESS_BINANCE_WARNINGS:
         level_fn = logger.warning
     level_fn(msg)
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
-    """
-    GET ישיר ל-FAPI עם רוטציה בין הוסט־ליסט, ללא follow_redirects (WAF),
-    ובלי HTTP/2 (כדי לא לדרוש h2). בודקים שהתוכן JSON ולא HTML.
-    """
     last_err: Optional[Exception] = None
     for base in _BINANCE_FAPI_HOSTS:
         url = f"{base}/{path.lstrip('/')}"
         try:
-            # http2=False למנוע תלות ב-h2
             with httpx.Client(timeout=timeout, headers=_UA, follow_redirects=False, http2=False) as client:
                 r = client.get(url, params=params)
             if r.status_code in (301, 302, 303, 307, 308):
                 raise RuntimeError(f"redirect to {r.headers.get('Location')}")
             if not _is_json(r):
-                # בדרך כלל דף HTML של WAF/404
                 raise RuntimeError("non-json (WAF/HTML)")
             r.raise_for_status()
             return r.json()
@@ -97,9 +77,6 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
             continue
     raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
 
-# =========================
-# 🧩 Client (לקריאות חתומות רק אם צריך)
-# =========================
 def get_client() -> Client:
     if Client is None:
         raise RuntimeError("python-binance not installed; signed calls unavailable")
@@ -108,7 +85,6 @@ def get_client() -> Client:
         raise RuntimeError("Missing Binance credentials")
 
     client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)  # type: ignore
-
     if USE_TESTNET:
         logger.warning("⚠️ Using Binance TESTNET endpoints")
         client.API_URL     = "https://testnet.binance.vision/api"
@@ -118,9 +94,6 @@ def get_client() -> Client:
         client.FUTURES_URL = f"{_BINANCE_FAPI_BASE}/fapi/v1"
     return client
 
-# =========================
-# 🔒 Circuit Breaker helpers (exchangeInfo)
-# =========================
 def _cb_is_open() -> bool:
     return time.time() < _cb_open_until
 
@@ -138,9 +111,6 @@ def _cb_on_success() -> None:
     _cb_open_until = 0.0
     _cb_current_cooldown = _CB_COOLDOWN_SEC
 
-# =========================
-# 📊 Futures Exchange Info (מוגן CB)
-# =========================
 def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
     global _futures_exchange_info_cache
     if _cb_is_open() and not force_refresh:
@@ -167,14 +137,10 @@ def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
         return _valid_futures_symbols
     try:
         info = futures_exchange_info_safe(force_refresh=force_refresh)
-        symbols = {
-            s.get("symbol", "").upper()
-            for s in info.get("symbols", [])
-            if s.get("status") == "TRADING"
-        }
+        symbols = {s.get("symbol", "").upper() for s in info.get("symbols", []) if s.get("status") == "TRADING"}
     except Exception as e:
         _log(logger.error, f"[Binance] valid_futures_symbols: {e}")
-        symbols = set()  # soft-allow
+        symbols = set()
     _valid_futures_symbols = symbols
     return _valid_futures_symbols
 
@@ -185,9 +151,6 @@ def is_valid_futures_symbol(symbol: str) -> bool:
         _log(logger.error, f"[Binance] is_valid_futures_symbol: soft-allow ({e})")
         return True
 
-# =========================
-# 💵 Futures Mark Price (HTTP ישיר; לא נחסם ע"י CB)
-# =========================
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper().strip()
     try:
@@ -201,9 +164,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
         return None
 
-# =========================
-# 📌 Futures Open Positions (חתום → SDK, אם זמין)
-# =========================
 def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, delay: float = 0.5) -> Any:
     last_exc: Optional[Exception] = None
     for i in range(retries):
@@ -230,7 +190,6 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
             resp = retry_call(lambda: client.futures_position_information(), "futures_positions(all)")
         if not isinstance(resp, list):
             raise RuntimeError(f"Unexpected response type: {type(resp)}")
-
         out: List[Dict[str, Any]] = []
         for p in resp:
             try:
@@ -250,9 +209,6 @@ def futures_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]
     except Exception as e:
         raise RuntimeError(f"[Binance] futures_open_positions failed: {e}")
 
-# =========================
-# 🔎 עזר: מידע סימבול מה-ExchangeInfo עם קאש
-# =========================
 def get_cached_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
     try:
         info = futures_exchange_info_safe(force_refresh=force_refresh)
@@ -265,9 +221,6 @@ def get_cached_symbol_info(symbol: str, force_refresh: bool = False) -> Optional
         _log(logger.error, f"[Binance] get_cached_symbol_info: {e}")
         return None
 
-# =========================
-# 📋 Status helper (לראוטר)
-# =========================
 def status_snapshot() -> dict:
     return {
         "hosts": _BINANCE_FAPI_HOSTS,
@@ -282,6 +235,7 @@ def status_snapshot() -> dict:
             "cache_symbols": len((_futures_exchange_info_cache or {}).get("symbols", [])),
         }
     }
+
 
 
 
