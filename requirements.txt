@@ -1,21 +1,37 @@
-# Web & API
+# Core
 fastapi==0.111.0
-uvicorn[standard]==0.30.1
+uvicorn==0.30.1
 gunicorn==22.0.0
-python-dotenv==1.0.1
-httpx==0.27.0
-pydantic==2.8.2
 
-# Data
-numpy==2.0.1
-pandas==2.2.2
-
-# Binance & Redis
+# Binance & Trading
 python-binance==1.0.19
-redis==5.0.6
+httpx==0.27.0
+websockets==12.0
 
-# TA-Lib (דורש את ספריית C שבנינו בשלב ה-build)
+# Data / Math
+pandas==2.2.2
+numpy==1.26.4
+scipy==1.13.1
+
+# Indicators
+ta==0.11.0
+pandas-ta==0.3.14b0
 TA-Lib==0.4.28
+
+# AI / OpenAI
+openai==1.37.0
+
+# Utils / Infra
+python-dotenv==1.0.1
+redis==5.0.4
+orjson==3.10.6
+
+# Logging / Monitoring
+structlog==24.1.0
+prometheus-client==0.20.0
+
+# Tests
+pytest==8.2.2
 
 
 
