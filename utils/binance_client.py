@@ -19,7 +19,7 @@ USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "tr
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").rstrip("/")
 _alts_raw = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com")
 _BINANCE_FAPI_HOSTS = [h.strip().rstrip("/") for h in _alts_raw.split(",") if h.strip()]
-# ודא שאין כפילויות והבסיס הראשי הוא ראשון
+# ודא שאין כפילויות והבסיס הראשי ראשון
 _seen = set()
 _hosts_ordered: List[str] = []
 for h in [_BINANCE_FAPI_BASE] + _BINANCE_FAPI_HOSTS:
@@ -38,8 +38,8 @@ _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 # ⚡ Circuit Breaker (לקריאות ציבוריות בלבד)
 # =========================
 _CB_FAIL_THRESHOLD = int(os.getenv("BINANCE_CB_FAIL_THRESHOLD", "3"))
-_CB_COOLDOWN_BASE = int(os.getenv("BINANCE_CB_COOLDOWN_BASE", "120"))   # שניות
-_CB_COOLDOWN_MAX  = int(os.getenv("BINANCE_CB_COOLDOWN_MAX", "600"))    # שניות
+_CB_COOLDOWN_BASE = int(os.getenv("BINANCE_CB_COOLDOWN_BASE", "120"))   # sec
+_CB_COOLDOWN_MAX  = int(os.getenv("BINANCE_CB_COOLDOWN_MAX", "600"))    # sec
 
 _cb_failures: int = 0
 _cb_open_until: float = 0.0
@@ -83,13 +83,12 @@ def _cb_record_failure(err: Exception):
     if _cb_failures >= _CB_FAIL_THRESHOLD:
         _cb_open_until = time.time() + _cb_cooldown
         _cb_cooldown = min(_cb_cooldown * 2, _CB_COOLDOWN_MAX)
-        # נשאיר את _cb_failures לאיפוס אחרי קירור
         logger.warning({"event": "binance_cb_open", "open_seconds": _cb_cooldown})
 
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
-    קריאה ישירה אל FAPI עם רוטציה בין fapi1/2/3, ללא מעקב אחרי הפניות (WAF),
-    ובדיקה שהתגובה JSON ולא HTML. כולל Circuit Breaker.
+    קריאה ישירה ל-FAPI עם רוטציה בין fapi1/2/3, ללא follow_redirects (WAF),
+    בדיקה שהתשובה JSON ולא HTML, ו-Circuit Breaker למניעת ספאם כשיש חסימה.
     """
     global _last_host, _last_json_ok, _last_ts
 
@@ -120,12 +119,11 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
             level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
             logger.log(level, f"[BinanceHTTP] GET {url} failed: {e}")
             _cb_record_failure(e)
-            # ננסה host הבא
             continue
     raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
 
 # =========================
-# 🧩 Client (לקריאות חתומות בלבד)
+# 🧩 Client (קריאות חתומות)
 # =========================
 def get_client() -> Client:
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
@@ -209,7 +207,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         raise RuntimeError(f"unexpected premiumIndex payload type={type(data)}")
     except Exception as e:
         logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
-        # החזר מהקאש אם יש
+        # החזר מהקאש אם יש – לא מפיל שרת
         cached = LAST_PRICE_CACHE.get(sym)
         if cached:
             return float(cached.get("price"))
@@ -290,6 +288,7 @@ def binance_http_status() -> Dict[str, Any]:
         "timeout": _DEFAULT_TIMEOUT,
         "testnet": USE_TESTNET,
     }
+
 
 
 
