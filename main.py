@@ -4,20 +4,20 @@ import os, asyncio, logging, json, time
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
+# --- ENV ---
 load_dotenv(override=True)
 LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip().lower() in ("1", "true", "yes")
 SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 
 from utils.config import (
     check_config, dump_config_sanitized, LOG_LEVEL,
-    WS_UPDATE_INTERVAL, PRICE_MONITOR_INTERVAL,
-    PRICE_WS_FRESH_TTL, PRICE_MONITOR_DISABLE,
+    PRICE_MONITOR_INTERVAL, PRICE_MONITOR_DISABLE,
     ENABLE_AI_ROUTES, OPENAI_API_KEY,
 )
 from utils.response_limits import ResponseSizeLimiter
@@ -30,6 +30,7 @@ from utils import cache_fallback as redis_store
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
 
+# --- Logging ---
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
@@ -56,6 +57,7 @@ except Exception as e:
     if not LIGHT_MODE:
         raise
 
+# --- FastAPI App ---
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
@@ -80,21 +82,17 @@ from routes.grid import router as grid_router
 from routes.orderflow import router as orderflow_router
 from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
-
-# חשוב: הוספתי prefix בתוך קבצי הראוטרים עצמם (ראו למטה),
-# לכן כאן אנחנו כוללים אותם ללא prefix כדי למנוע כפילות.
 from routes.market import router as market_router
 from routes.binance_status import router as binance_status_router
 import routes.executor as executor_router
 
-app.include_router(scan_router,        prefix="",           tags=["Scan"])
-app.include_router(trade_router,       prefix="/trade",     tags=["Trade"])
-app.include_router(grid_router,        prefix="/grid",      tags=["Grid"])
-app.include_router(orderflow_router,   prefix="/orderflow", tags=["Orderflow"])
-app.include_router(indicators_router,  prefix="/indicators",tags=["Indicators"])
-app.include_router(anchor_router,      prefix="",           tags=["Anchor"])
-
-# prefix כבר מוגדר בתוך כל קובץ ראוטר
+# ✅ לא לשים prefix כפול – כל ראוטר מגדיר בעצמו
+app.include_router(scan_router, tags=["Scan"])
+app.include_router(trade_router, tags=["Trade"])
+app.include_router(grid_router, tags=["Grid"])
+app.include_router(orderflow_router, tags=["Orderflow"])
+app.include_router(indicators_router, tags=["Indicators"])
+app.include_router(anchor_router, tags=["Anchor"])
 app.include_router(market_router, tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
@@ -194,7 +192,7 @@ async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int
             logger.warning({"event": "cache_cleaner_error", "error": str(e)})
         await asyncio.sleep(interval)
 
-# Startup
+# --- Startup ---
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -214,7 +212,7 @@ async def startup_event():
     except Exception as e:
         logger.error({"event": "startup_error", "error": str(e)})
 
-# Health
+# --- Health ---
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
@@ -227,7 +225,7 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-# Debug — list routes (עמיד מול Mount)
+# --- Debug: list routes ---
 @app.get("/_routes", tags=["Debug"])
 async def list_routes():
     items = []
@@ -240,14 +238,13 @@ async def list_routes():
         items.append({"path": path, "name": name, "methods": methods, "type": r.__class__.__name__})
     return items
 
-# Exceptions
-from fastapi.responses import JSONResponse
+# --- Exception Handler ---
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({"event": "exception", "error": str(exc)}, extra={"path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-# Entrypoint
+# --- Entrypoint ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
