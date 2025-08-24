@@ -15,29 +15,29 @@ BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
 
-_BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").rstrip("/")
-_alts_raw = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com")
-_BINANCE_FAPI_HOSTS = [h.strip().rstrip("/") for h in _alts_raw.split(",") if h.strip()]
-# Ensure base is first and unique
+# Futures API bases (ללא www) + אלטים
+_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi1.binance.com").strip().rstrip("/")
+_ALTS_RAW = (os.getenv("BINANCE_FAPI_ALTS") or "https://fapi2.binance.com,https://fapi3.binance.com")
+_HOSTS = [h.strip().rstrip("/") for h in _ALTS_RAW.split(",") if h.strip()]
+# סדר ייחודי: base ראשון, אח"כ אלטים ללא כפילויות
 _seen = set()
-_hosts_ordered: List[str] = []
-for h in [_BINANCE_FAPI_BASE] + _BINANCE_FAPI_HOSTS:
+_BINANCE_FAPI_HOSTS: List[str] = []
+for h in [_BASE] + _HOSTS:
     if h and h not in _seen:
         _seen.add(h)
-        _hosts_ordered.append(h)
-_BINANCE_FAPI_HOSTS = _hosts_ordered
+        _BINANCE_FAPI_HOSTS.append(h)
 
-BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
+BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").strip().rstrip("/")
 
-SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes"))
+SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "1").strip().lower() in ("1", "true", "yes"))
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
-# Circuit Breaker
+# Circuit Breaker ל-exchangeInfo
 _CB_FAILS_FOR_OPEN = int(os.getenv("BINANCE_CB_FAILS_FOR_OPEN", "3"))
-_CB_COOLDOWN_BASE = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
-_CB_COOLDOWN_MAX  = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
-_SOFT_ALLOW_EXINFO = (os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip() in ("1","true","yes"))
+_CB_COOLDOWN_SEC   = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
+_CB_MAX_COOLDOWN   = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
+_SOFT_ALLOW_EXINFO = (os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip().lower() in ("1","true","yes"))
 
 # Cache
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -50,46 +50,18 @@ _UA = {
     "Connection": "close",
 }
 
-# CB state
-_CB_STATE = {
-    "fail_rounds": 0,
-    "open_until": 0.0,
-    "cooldown": float(_CB_COOLDOWN_BASE),
-}
-
-def _cb_open_now() -> bool:
-    return time.time() < _CB_STATE["open_until"]
-
-def _cb_on_success() -> None:
-    if _CB_STATE["open_until"] > 0 or _CB_STATE["fail_rounds"] > 0:
-        logger.info({"event": "binance_cb_reset"})
-    _CB_STATE["fail_rounds"] = 0
-    _CB_STATE["open_until"] = 0.0
-    _CB_STATE["cooldown"] = float(_CB_COOLDOWN_BASE)
-
-def _cb_on_fail_cycle() -> None:
-    _CB_STATE["fail_rounds"] += 1
-    if _CB_STATE["fail_rounds"] >= _CB_FAILS_FOR_OPEN:
-        cooldown = _CB_STATE["cooldown"]
-        _CB_STATE["open_until"] = time.time() + cooldown
-        _CB_STATE["cooldown"] = min(cooldown * 2, float(_CB_COOLDOWN_MAX))
-        _CB_STATE["fail_rounds"] = 0
-        logger.warning({"event": "binance_cb_open", "cooldown_sec": int(cooldown)})
-
 def _is_json(r: httpx.Response) -> bool:
     ctype = (r.headers.get("Content-Type") or "").lower()
     return ctype.startswith("application/json")
 
+def _log(level: int, msg: str):
+    logger.log(level, msg)
+
 def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAULT_TIMEOUT) -> dict:
     """
-    קריאה ישירה אל FAPI עם רוטציה בין fapi1/2/3, ללא מעקב אחרי הפניות (WAF),
-    בדיקת JSON, ושילוב Circuit Breaker.
+    קריאה ישירה ל-FAPI עם רוטציה fapi1/2/3, ללא redirect, בדיקת JSON בלבד.
     """
-    if _cb_open_now():
-        raise RuntimeError("circuit_open")
-
     last_err: Optional[Exception] = None
-    succeeded = False
     for base in _BINANCE_FAPI_HOSTS:
         url = f"{base}/{path.lstrip('/')}"
         try:
@@ -100,22 +72,16 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
             if not _is_json(r):
                 raise RuntimeError("non-json (WAF/HTML)")
             r.raise_for_status()
-            data = r.json()
-            succeeded = True
-            _cb_on_success()
-            return data
+            return r.json()
         except Exception as e:
             last_err = e
-            level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-            logger.log(level, f"[BinanceHTTP] GET {url} failed: {e}")
+            lvl = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+            _log(lvl, f"[BinanceHTTP] GET {url} failed: {e}")
             continue
-
-    if not succeeded:
-        _cb_on_fail_cycle()
-        raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
+    raise RuntimeError(f"FAPI failed: {type(last_err).__name__}: {last_err}")
 
 # =========================
-# 🧩 Client (לקריאות חתומות בלבד)
+# 🧩 Signed client (רק לקריאות חתומות)
 # =========================
 def get_client() -> Client:
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
@@ -126,52 +92,71 @@ def get_client() -> Client:
 
     if USE_TESTNET:
         logger.warning("⚠️ Using Binance TESTNET endpoints")
-        client.API_URL   = "https://testnet.binance.vision/api"
+        client.API_URL = "https://testnet.binance.vision/api"
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
-        client.API_URL   = f"{BINANCE_HTTP_BASE}/api/v3"
-        client.FUTURES_URL = f"{_BINANCE_FAPI_BASE}/fapi/v1"
+        client.API_URL = f"{BINANCE_HTTP_BASE}/api/v3"
+        client.FUTURES_URL = f"{_BASE}/fapi/v1"
 
     return client
 
-# banner
-try:
-    logger.info({
-        "event": "binance_client_mode",
-        "http_only_for_public": True,
-        "signed_via_sdk": True,
-        "hosts": _BINANCE_FAPI_HOSTS,
-        "timeout": _DEFAULT_TIMEOUT,
-        "retries": _MAX_RETRIES,
-        "testnet": USE_TESTNET,
-        "cb": {
-            "fails_for_open": _CB_FAILS_FOR_OPEN,
-            "cooldown_base": _CB_COOLDOWN_BASE,
-            "cooldown_max": _CB_COOLDOWN_MAX,
-        }
-    })
-except Exception:
-    pass
+# =========================
+# ♻️ Circuit Breaker ל-exchangeInfo
+# =========================
+class _CB:
+    fails: int = 0
+    next_try_ts: float = 0.0
+    cooldown: int = _CB_COOLDOWN_SEC
+
+    @classmethod
+    def allow_call(cls) -> bool:
+        return time.time() >= cls.next_try_ts
+
+    @classmethod
+    def on_success(cls):
+        cls.fails = 0
+        cls.cooldown = _CB_COOLDOWN_SEC
+        cls.next_try_ts = 0.0
+
+    @classmethod
+    def on_fail(cls):
+        cls.fails += 1
+        if cls.fails >= _CB_FAILS_FOR_OPEN:
+            cls.next_try_ts = time.time() + cls.cooldown
+            cls.cooldown = min(cls.cooldown * 2, _CB_MAX_COOLDOWN)
 
 # =========================
-# 📊 Futures Exchange Info (HTTP נקי + Soft Allow)
+# 📊 Futures Exchange Info (HTTP נקי, עם CB + soft-allow)
 # =========================
 def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
     global _futures_exchange_info_cache
     if _futures_exchange_info_cache is not None and not force_refresh:
         return _futures_exchange_info_cache
+
+    if not _CB.allow_call():
+        # Circuit open – החזר קאש אם יש או מבנה ריק (אם soft-allow), בלי להפיל את המערכת
+        lvl = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+        _log(lvl, "[Binance] exchangeInfo circuit OPEN → skipping call")
+        if _futures_exchange_info_cache is not None:
+            return _futures_exchange_info_cache
+        if _SOFT_ALLOW_EXINFO:
+            return {"symbols": []}
+        raise RuntimeError("exchangeInfo CB open")
+
     try:
         info = _get_json("/fapi/v1/exchangeInfo")
         if not isinstance(info, dict) or "symbols" not in info:
-            raise RuntimeError("Invalid exchangeInfo payload")
+            raise RuntimeError("Invalid exchangeInfo JSON")
         _futures_exchange_info_cache = info
+        _CB.on_success()
         return info
     except Exception as e:
-        level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-        logger.log(level, f"[Binance] exchangeInfo unavailable: {e}")
+        _CB.on_fail()
+        lvl = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+        _log(lvl, f"[Binance] futures_exchange_info error: {e}")
         if _SOFT_ALLOW_EXINFO:
-            # החזר קאש אם יש; אחרת מבנה ריק שלא יפיל את המערכת
-            return _futures_exchange_info_cache or {"timezone": "UTC", "symbols": []}
+            # אל תעצור את המערכת – החזר קאש או ריק
+            return _futures_exchange_info_cache or {"symbols": []}
         raise
 
 def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
@@ -187,26 +172,26 @@ def is_valid_futures_symbol(symbol: str) -> bool:
     try:
         return symbol.upper() in valid_futures_symbols()
     except Exception as e:
-        # אל תחסום טריידינג/מחירים כש-exchangeInfo קורס בגלל WAF
-        level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-        logger.log(level, f"[Binance] is_valid_futures_symbol: exchangeInfo unavailable → soft-allow ({e})")
+        # אל תחסום טרייד רק בגלל exchangeInfo; תן soft-allow.
+        lvl = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+        _log(lvl, f"[Binance] is_valid_futures_symbol: exchangeInfo unavailable → soft-allow ({e})")
         return True
 
 # =========================
-# 💵 Futures Mark Price (HTTP ישיר)
+# 💵 Futures Mark Price (HTTP ישיר — ללא תלות ב-exchangeInfo)
 # =========================
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper().strip()
     try:
         data = _get_json("/fapi/v1/premiumIndex", params={"symbol": sym})
-        # מצפים ל-dict כשסיפקנו symbol
         if isinstance(data, dict) and "markPrice" in data:
             price = float(data["markPrice"])
             LAST_PRICE_CACHE[sym] = {"price": price, "ts": int(time.time())}
             return price
         raise RuntimeError(f"unexpected premiumIndex payload type={type(data)}")
     except Exception as e:
-        logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
+        lvl = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+        _log(lvl, f"[Binance] futures_mark_price error {sym}: {e}")
         return None
 
 # =========================
@@ -252,14 +237,34 @@ def retry_call(fn: Callable[[], Any], label: str, retries: int = _MAX_RETRIES, d
             return fn()
         except (BinanceAPIException, BinanceRequestException, httpx.HTTPError) as e:
             last_exc = e
-            level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-            logger.log(level, f"[Binance] {label} failed ({i+1}/{retries}): {e}")
+            lvl = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
+            logger.log(lvl, f"[Binance] {label} failed ({i+1}/{retries}): {e}")
             time.sleep(delay)
         except Exception as e:
             last_exc = e
             logger.error(f"[Binance] {label} unexpected error: {e}")
             time.sleep(delay)
     raise RuntimeError(f"[Binance] {label} failed after {retries} retries: {last_exc}")
+
+# 🛈 Banner
+try:
+    logger.info({
+        "event": "binance_client_mode",
+        "http_only_for_public": True,
+        "signed_via_sdk": True,
+        "hosts": _BINANCE_FAPI_HOSTS,
+        "timeout": _DEFAULT_TIMEOUT,
+        "retries": _MAX_RETRIES,
+        "cb": {
+            "fails_for_open": _CB_FAILS_FOR_OPEN,
+            "cooldown": _CB_COOLDOWN_SEC,
+            "max_cooldown": _CB_MAX_COOLDOWN,
+            "soft_allow": _SOFT_ALLOW_EXINFO,
+        },
+        "testnet": USE_TESTNET,
+    })
+except Exception:
+    pass
 
 
 
