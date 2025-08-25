@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import os, httpx
 
-# אבטחה: API Key + HMAC (אותו סט כמו trade-ingest)
 try:
     from utils.auth import require_api_key
 except Exception:
@@ -27,7 +26,7 @@ class AnalysisIn(BaseModel):
     reply_to_message_id: Optional[int] = None
     parse_mode: Optional[str] = "Markdown"
     disable_web_page_preview: bool = True
-    silent: bool = False  # disable_notification
+    silent: bool = False
 
 @router.post("/analysis")
 async def post_analysis(
@@ -39,12 +38,10 @@ async def post_analysis(
     if not BOT:
         raise HTTPException(500, "TELEGRAM_BOT_TOKEN not configured")
 
-    # אימות HMAC (אם מוגדר secret)
     raw = await request.body()
     if not verify_hmac(x_signature, raw):
         raise HTTPException(401, "Invalid signature")
 
-    # Idempotency (מניעת כפילויות בריטריי)
     if x_idempotency_key and idem_seen(x_idempotency_key):
         return {"ok": True, "duplicate": True}
 
@@ -52,9 +49,7 @@ async def post_analysis(
     if not chat_id:
         raise HTTPException(400, "chat_id missing and TELEGRAM_CHAT_ID not set")
 
-    # הגנה על אורך
     text = payload.text[:3900] + ("\n…" if len(payload.text) > 3900 else "")
-
     body: Dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -70,3 +65,4 @@ async def post_analysis(
         r = await client.post(f"{TELEGRAM_API}/sendMessage", json=body)
         r.raise_for_status()
         return r.json()
+
