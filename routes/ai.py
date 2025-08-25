@@ -1,15 +1,16 @@
 # routes/ai.py
 from __future__ import annotations
-from typing import Optional, Literal, Dict, Any
-from fastapi import APIRouter, Depends, Body, Query
+from typing import Optional, Literal, Dict, Any, List
+from fastapi import APIRouter, Depends, Body, Query, HTTPException
 from pydantic import BaseModel, Field
-
+import pandas as pd
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.ai_analysis import analyze_with_ai
+from utils.indicators import prepare_indicators_for_backtest
+from utils.get_klines import get_klines  # שימוש בנתונים חיים מ-Binance
 
-# Router מוגן ב־API Key
 router = APIRouter(
     prefix="/ai",
     tags=["AI"],
@@ -47,7 +48,7 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
 @router.get("/health")
 async def ai_health():
     """
-    בדיקה פשוטה אם מפתח OpenAI נטען.
+    בדיקה אם מפתח OpenAI נטען.
     """
     import os
     ok = bool(os.getenv("OPENAI_API_KEY"))
@@ -86,35 +87,32 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     """
     ניתוח GPT בסיסי עם אינדיקטורים.
     """
-    data = {
-        "symbol": symbol.upper(),
-        "rsi": 55,
-        "adx": 22,
-        "trend": "UP",
-        "pattern": "Breakout",
-        "volume": "High",
-    }
-    txt = await analyze_with_ai(data)
-    return {"symbol": symbol.upper(), "interval": interval, "analysis": txt}
+    try:
+        df = await get_klines(symbol, interval, limit=200, market="futures")
+        indicators = prepare_indicators_for_backtest(df)
+        last_row = indicators.iloc[-1].to_dict()
+        txt = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
+        return {"symbol": symbol.upper(), "interval": interval, "analysis": txt}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI analyze failed: {str(e)}")
 
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
     """
-    סריקה ידנית של כמה סמלים עם ניתוח GPT.
+    סריקה ידנית של כמה סימבולים עם ניתוח GPT על סמך אינדיקטורים חיים.
     """
     result = []
     for s in [s.strip().upper() for s in symbols.split(",")]:
-        data = {
-            "symbol": s,
-            "rsi": 48,
-            "adx": 19,
-            "trend": "DOWN",
-            "pattern": "Pullback",
-            "volume": "Medium",
-        }
-        txt = await analyze_with_ai(data)
-        result.append({"symbol": s, "analysis": txt})
+        try:
+            df = await get_klines(s, interval, limit=200, market="futures")
+            indicators = prepare_indicators_for_backtest(df)
+            last_row = indicators.iloc[-1].to_dict()
+            txt = await analyze_with_ai({"symbol": s, **last_row})
+            result.append({"symbol": s, "analysis": txt})
+        except Exception as e:
+            result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
