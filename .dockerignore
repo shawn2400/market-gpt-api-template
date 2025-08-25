@@ -1,5 +1,5 @@
 # === Environment / secrets ===
-!/.env              # ← מאפשר רק את .env הראשי
+.env                # ← אל תכלול .env בבילד (Render יספק ENV)
 *.key
 *.pem
 
