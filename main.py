@@ -92,10 +92,14 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
+# ✅ AI Router only if OPENAI key exists
 if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
     app.include_router(ai_router, prefix="/ai", tags=["AI"])
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
+else:
+    logger.warning("⚠️ AI routes disabled (missing or placeholder OPENAI_API_KEY)")
 
+# ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
 # --- Price Cache ---
@@ -190,6 +194,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
