@@ -1,3 +1,4 @@
+# utils/get_klines.py
 from __future__ import annotations
 import asyncio
 import time
@@ -50,12 +51,15 @@ def get_klines(
     market_type: str = "futures",
 ) -> Optional[pd.DataFrame]:
     """
-    שליפת klines (סינכרונית). לשימוש בקוד async – עטפו עם asyncio.to_thread.
+    שליפת klines (סינכרונית). בקוד async – השתמשו ב-aget_klines (עטיפה עם asyncio.to_thread).
     """
     market = "spot" if str(market_type).lower() == "spot" else "futures"
     sym_in = symbol.upper()
 
-    # נרמול סימבול + cache
+    if _is_invalid(market, sym_in):
+        return None
+
+    # נרמול סימבול (כולל בדיקת איות/CASE ורשימות Binance)
     try:
         norm = normalize_symbol(sym_in, market=market,
                                 cache=_symbols_cache_spot if market == "spot" else _symbols_cache_fut)
@@ -84,7 +88,7 @@ def get_klines(
         return None
     return df
 
-# עטיפה אסינכרונית נוחה (אם רוצים await)
+# עטיפה אסינכרונית נוחה
 async def aget_klines(
     symbol: str,
     interval: str,
@@ -92,6 +96,7 @@ async def aget_klines(
     market_type: str = "futures",
 ) -> Optional[pd.DataFrame]:
     return await asyncio.to_thread(get_klines, symbol, interval, limit, market_type)
+
 
 
 
