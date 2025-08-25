@@ -106,11 +106,11 @@ app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
 app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
-app.include_router(price_router, tags=["Price"])  # כולל /price ו-/price/{symbol}
+app.include_router(price_router, prefix="/price", tags=["Price"])  # ← חשוב: prefix /price
 
 # ✅ AI Router – תמיד נרשם; לוג בהתאם לזמינות מפתח
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
-if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
+if ENABLE_AI_ROUTES and OPENAI_API_KEY and not OPENAI_API_KEY.startswith("YOUR_REAL_"):
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
 else:
     logger.warning("⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)")
@@ -135,7 +135,7 @@ def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
 
 # --- Background tasks ---
 async def auto_anchor_updater_loop(interval: int = 20):
-    """מעדכן עוגנים + קאש מחיר באופן רציף כדי להוריד לטנציה לקריאות /price."""
+    """מעדכן עוגנים + קאש מחיר כדי להוריד לטנציה לקריאות /price."""
     symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     while True:
         for sym in symbols:
@@ -163,7 +163,7 @@ async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
         await asyncio.sleep(interval)
 
 async def anchor_snapshot_loop(interval: int = 30):
-    """שומר היסטוריית Anchor ב-Redis (או נפילה לקאש בזיכרון)"""
+    """שומר היסטוריית Anchor ב-Redis (או נפילה לקאש בזיכרון)."""
     while True:
         for side in ["LONG", "SHORT"]:
             try:
@@ -242,6 +242,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
