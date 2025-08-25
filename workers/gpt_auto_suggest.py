@@ -2,9 +2,10 @@
 from __future__ import annotations
 """
 GPT Auto-Suggest worker (Thin) – שולח התראות לטלגרם בלבד.
-- לא תלוי main.py
-- לא מושך נתונים חיצוניים
-- משתמש ב-GPT בלבד + Gating מקומי (Quality/Anchor/RR/EntryDist/Cooldown/De-dup)
+- רץ כל X דקות
+- אופציונלי: מושך Top-K מה-Core + קונטקסט פר סימבול מהשרת שלך
+- מריץ GPT, מסנן לפי Quality/Anchor/RR/EntryDist/Cooldown/De-dup
+- שולח אל /alerts/trade-ingest (HMAC + Idempotency) → הבוט מפרסם בטלגרם
 """
 
 import os, json, asyncio, time, uuid, hashlib, random
@@ -12,7 +13,6 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
 
-# === ENV ===
 load_dotenv(override=False)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -27,52 +27,41 @@ TZ = os.getenv("TZ", "Asia/Jerusalem")
 MIN_QUALITY_SCORE = float(os.getenv("MIN_QUALITY_SCORE", "7.5"))
 MIN_SUCCESS_PCT   = float(os.getenv("MIN_SUCCESS_PCT", "70"))
 MIN_RR            = float(os.getenv("MIN_RR", "2.0"))
-MAX_ENTRY_DIST_PCT = float(os.getenv("MAX_ENTRY_DIST_PCT", "0.5"))  # % מהמחיר
+MAX_ENTRY_DIST_PCT = float(os.getenv("MAX_ENTRY_DIST_PCT", "0.5"))
 COOLDOWN_MINUTES   = int(os.getenv("COOLDOWN_MINUTES", "45"))
 DEDUP_WINDOW_MIN   = int(os.getenv("DEDUP_WINDOW_MIN", "180"))
+MAX_TRADES_PER_SWEEP = int(os.getenv("MAX_TRADES_PER_SWEEP", "0"))  # 0 = בלי תקרה
 
-# Cap לסבב: 0 = בלי תקרה (אתה אמרת “כמה שיותר” – בגלל הסינון לא צפוי לעבור ~5 ביום)
-MAX_TRADES_PER_SWEEP = int(os.getenv("MAX_TRADES_PER_SWEEP", "0"))
-
-# Top-K דינמי מה-Core (אופציונלי, כדי לחסוך עלות GPT מראש)
+# Top-K דינאמי מה-Core (אופציונלי)
 CORE_TOPK_URL   = os.getenv("CORE_TOPK_URL", "").strip()
 CORE_TOPK_TOKEN = os.getenv("CORE_TOPK_TOKEN", "").strip()
 TOPK_PER_SWEEP  = int(os.getenv("TOPK_PER_SWEEP", "12"))
 
-# Telegram
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-USE_INLINE_BUTTONS = (os.getenv("USE_INLINE_BUTTONS", "0").lower() in ("1","true","yes"))  # עד שתחבר webhook – השאר 0
+# קונטקסט סימבול (אופציונלי)
+CONTEXT_URL     = os.getenv("CONTEXT_URL", "").strip()   # דוגמא: https://api.yourhost/context?symbol={symbol}
+CONTEXT_TOKEN   = os.getenv("CONTEXT_TOKEN", "").strip()
+CONTEXT_TIMEOUT = float(os.getenv("CONTEXT_TIMEOUT", "5"))
+
+# Ingest API (הבוט שלך)
+ALERTS_BASE     = os.getenv("ALERTS_BASE", "http://localhost:8000")
+API_BEARER      = os.getenv("API_BEARER_TOKEN", "").strip()
+HMAC_SECRET     = (os.getenv("HMAC_SECRET", "")).encode()
+
+# Telegram info לתצוגה (הוורקר לא שולח ישירות לטלגרם)
+TZ_DISPLAY = TZ
 
 if not OPENAI_API_KEY:
     raise SystemExit("OPENAI_API_KEY missing")
-if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    raise SystemExit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing")
+if not API_BEARER:
+    raise SystemExit("API_BEARER_TOKEN missing (for /alerts/trade-ingest)")
 
-# === OpenAI client ===
+# === OpenAI ===
 from openai import AsyncOpenAI
 oai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# === Telegram minimal client ===
+# === HTTP ===
 import httpx
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-async def tg_send(text: str, kb: Optional[Dict[str, Any]] = None):
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
-    if kb: payload["reply_markup"] = kb
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(f"{TELEGRAM_API}/sendMessage", json=payload)
-        r.raise_for_status()
-        return r.json()
-
-def kb_inline(trade_id: str) -> Dict[str, Any]:
-    return {
-        "inline_keyboard":[[
-            {"text":"✅ אשר","callback_data":f"approve:{trade_id}"},
-            {"text":"✏️ כוונן","callback_data":f"adjust:{trade_id}"},
-            {"text":"🛑 דחה","callback_data":f"reject:{trade_id}"}
-        ]]
-    }
+SESSION_TIMEOUT = int(os.getenv("WORKER_HTTP_TIMEOUT", "12"))
 
 # === Quality & Anchor (שלך) ===
 from utils.quality import compute_quality
@@ -82,7 +71,7 @@ ANCHOR_MODE = os.getenv("ANCHOR_MODE", "soft").strip().lower()
 if ANCHOR_MODE not in ("off", "soft", "hard"):
     ANCHOR_MODE = "soft"
 
-# === מודל הנתונים שה-GPT מחזיר (JSON) ===
+# === Models ===
 @dataclass
 class TradeSug:
     symbol: str
@@ -107,7 +96,7 @@ class TradeSug:
 
     @classmethod
     def from_json(cls, obj: Dict[str, Any]) -> "TradeSug":
-        def f(name, default=None): return obj.get(name, default)
+        def f(name, d=None): return obj.get(name, d)
         def ffloat(x):
             try: return float(x) if x is not None else None
             except: return None
@@ -137,29 +126,45 @@ class TradeSug:
             skip=bool(f("skip", False)),
         )
 
-def format_msg(t: TradeSug, trade_id: str) -> str:
-    def fmt(x): return f"`{x:.6f}`" if isinstance(x,(int,float)) and x!=0 else "`—`"
-    lines = [
-        "🧠 *AlgoGPT — טרייד מוכן*",
-        f"*{t.symbol}* | *{t.side}* | מחיר עכשיו: {fmt(t.current_price)}",
-        f"כניסה: {fmt(t.entry)} | SL: {fmt(t.sl)} | TP1: {fmt(t.tp1)} | TP2: {fmt(t.tp2)} | TP3: {fmt(t.tp3)}",
-        " | ".join([p for p in [
-            f"מינוף: `x{t.leverage}`",
-            f"תקציב: `${t.budget_usd:.2f}`" if t.budget_usd else None,
-            f"Notional: `${t.notional_usd:.2f}`" if t.notional_usd else None,
-            f"Qty≈ `{t.qty:.6f}`" if t.qty else None,
-        ] if p]),
-        (f"% הצלחה: `{t.success_pct:.1f}%`" if t.success_pct is not None else ""),
-        "⏱️ *ETAs* — "
-        + (f"SL: _{t.eta_sl}_ | " if t.eta_sl else "SL: _—_ | ")
-        + (f"TP1: _{t.eta_tp1}_ | " if t.eta_tp1 else "TP1: _—_ | ")
-        + (f"TP2: _{t.eta_tp2}_ | " if t.eta_tp2 else "TP2: _—_ | ")
-        + (f"TP3: _{t.eta_tp3}_" if t.eta_tp3 else "TP3: _—_"),
-        (f"סיבה: {t.reason}" if t.reason else "")
-    ]
-    lines.append(f"\nID: `{trade_id}`  | TZ: `{TZ}`")
-    return "\n".join([ln for ln in lines if ln])
+def format_msg_preview(t: TradeSug, tz: str) -> str:
+    def fmt(x): return f"{x:.6f}" if isinstance(x,(int,float)) and x!=0 else "—"
+    return (
+        f"{t.symbol} {t.side} | now {fmt(t.current_price)} | entry {fmt(t.entry)} | "
+        f"SL {fmt(t.sl)} | TP1 {fmt(t.tp1)} | lev x{t.leverage} | %{t.success_pct or 0:.1f} | {tz}"
+    )
 
+# === Context fetch (optional) ===
+def _build_context_url(symbol: str) -> Optional[str]:
+    if not CONTEXT_URL:
+        return None
+    if "{symbol}" in CONTEXT_URL:
+        return CONTEXT_URL.replace("{symbol}", symbol)
+    sep = "&" if ("?" in CONTEXT_URL) else "?"
+    return f"{CONTEXT_URL}{sep}symbol={symbol}"
+
+async def fetch_symbol_context(symbol: str) -> Optional[str]:
+    url = _build_context_url(symbol)
+    if not url:
+        return None
+    headers = {}
+    if CONTEXT_TOKEN:
+        headers["Authorization"] = f"Bearer {CONTEXT_TOKEN}"
+    try:
+        async with httpx.AsyncClient(timeout=CONTEXT_TIMEOUT) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            data = r.json() if "application/json" in r.headers.get("content-type","") else r.text
+            # נשמור קצר – JSON קומפקטי ומגבלה על אורך
+            if isinstance(data, (dict, list)):
+                s = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+            else:
+                s = str(data)
+            return s[:1200]  # לא נשרוף טוקנים מיותרים
+    except Exception as e:
+        print(f"[WARN] context failed for {symbol}: {e}")
+        return None
+
+# === GPT Prompt ===
 GPT_SYSTEM = (
     "You are AlgoGPT trade suggester. Return ONLY strict JSON (no prose). "
     "Keys: symbol, side, current_price, leverage, entry, sl, tp1, tp2, tp3, "
@@ -167,9 +172,8 @@ GPT_SYSTEM = (
     "If no trade, set skip=true and still return the JSON with symbol."
 )
 
-def gpt_user_prompt(symbol: str, tz: str) -> str:
-    # נשמר קצר ומובנה כדי לחסוך טוקנים
-    return (
+def gpt_user_prompt(symbol: str, tz: str, context: Optional[str]) -> str:
+    base = (
         f"Generate a SINGLE Binance futures 15m trade idea for {symbol} as of now in timezone {tz}.\n"
         f"Return JSON ONLY with the schema above.\n"
         f"- side ∈ {{LONG, SHORT}}\n"
@@ -181,14 +185,18 @@ def gpt_user_prompt(symbol: str, tz: str) -> str:
         f"- reason: 1-2 lines\n"
         f"If no clear trade, set skip=true."
     )
+    if context:
+        base += f"\n\nContext JSON (read-only, optional):\n{context}"
+    return base
 
 async def suggest_one(symbol: str) -> Optional[TradeSug]:
+    ctx = await fetch_symbol_context(symbol)
     try:
         resp = await oai.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role":"system", "content": GPT_SYSTEM},
-                {"role":"user",   "content": gpt_user_prompt(symbol, TZ)}
+                {"role":"user",   "content": gpt_user_prompt(symbol, TZ, ctx)}
             ],
             temperature=0.2,
             response_format={"type":"json_object"},
@@ -196,7 +204,7 @@ async def suggest_one(symbol: str) -> Optional[TradeSug]:
         raw = resp.choices[0].message.content
         obj = json.loads(raw)
         sug = TradeSug.from_json(obj)
-        if not sug.symbol:  # fallback
+        if not sug.symbol:
             sug.symbol = symbol
         if sug.skip:
             return None
@@ -205,9 +213,9 @@ async def suggest_one(symbol: str) -> Optional[TradeSug]:
         print(f"[WARN] GPT failed for {symbol}: {e}")
         return None
 
-# === Gating helpers ===
-_last_sent_ts: Dict[str, float] = {}        # cooldown per symbol
-_last_hash_ts: Dict[tuple, float] = {}      # dedup window
+# === Gating & helpers ===
+_last_sent_ts: Dict[str, float] = {}
+_last_hash_ts: Dict[tuple, float] = {}
 
 def rr_val(entry: float, sl: float, tp1: float) -> float:
     try:
@@ -248,10 +256,7 @@ def mark_hash(sug: TradeSug) -> None:
     _last_hash_ts[(sug.symbol, h)] = time.time()
 
 def gate_with_quality(sug: TradeSug) -> tuple[bool, str, Dict[str, Any]]:
-    # Anchor שלך
     anchor = evaluate_anchor(sug.side, ANCHOR_MODE)
-
-    # Quality שלך (בלי ATR כדי להישאר “דק” כאן)
     q = compute_quality(
         symbol=sug.symbol, side=sug.side,
         entry=sug.entry, sl=sug.sl, tp=sug.tp1,
@@ -263,7 +268,6 @@ def gate_with_quality(sug: TradeSug) -> tuple[bool, str, Dict[str, Any]]:
     dist = entry_dist_pct(sug)
     sp = float(sug.success_pct or 0.0)
 
-    # סדר בדיקות (קשיח)
     if q["quality_score"] < MIN_QUALITY_SCORE:
         return False, "min_quality", {"q": q, "rr": rr, "dist": dist, "sp": sp}
     if rr < MIN_RR:
@@ -279,15 +283,13 @@ def gate_with_quality(sug: TradeSug) -> tuple[bool, str, Dict[str, Any]]:
 
     return True, "ok", {"q": q, "rr": rr, "dist": dist, "sp": sp}
 
-def kb_for_message(trade_id: str) -> Optional[Dict[str, Any]]:
-    return (kb_inline(trade_id) if USE_INLINE_BUTTONS else None)
-
+# === choose symbols ===
 async def fetch_topk_from_core() -> Optional[List[str]]:
     if not CORE_TOPK_URL:
         return None
     try:
         headers = {"Authorization": f"Bearer {CORE_TOPK_TOKEN}"} if CORE_TOPK_TOKEN else {}
-        async with httpx.AsyncClient(timeout=8) as client:
+        async with httpx.AsyncClient(timeout=SESSION_TIMEOUT) as client:
             r = await client.get(CORE_TOPK_URL, headers=headers)
             r.raise_for_status()
             data = r.json()
@@ -299,26 +301,48 @@ async def fetch_topk_from_core() -> Optional[List[str]]:
 
 async def choose_symbols_for_sweep() -> List[str]:
     syms = await fetch_topk_from_core()
-    if syms:  # Top-K אמיתי מה-Core (מומלץ)
+    if syms:
         return syms[:TOPK_PER_SWEEP]
-    # רוטציה קלה מה־pool שלך – כדי לא “לשרוף” על כולם כל פעם
     base = SUGGEST_SYMBOLS.copy()
     random.shuffle(base)
     return base[:TOPK_PER_SWEEP]
 
+# === ingest sender ===
+def hmac_hex(body: bytes) -> str:
+    if not HMAC_SECRET:
+        return ""
+    import hmac, hashlib
+    return hmac.new(HMAC_SECRET, body, hashlib.sha256).hexdigest()
+
+async def send_ingest(trade: Dict[str, Any]) -> Dict[str, Any]:
+    body = json.dumps(trade, separators=(",", ":"), ensure_ascii=False).encode()
+    headers = {
+        "Authorization": f"Bearer {API_BEARER}",
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": trade.get("trade_id") or uuid.uuid4().hex,
+    }
+    sig = hmac_hex(body)
+    if sig:
+        headers["X-Signature"] = sig
+    url = f"{ALERTS_BASE}/alerts/trade-ingest"
+    async with httpx.AsyncClient(timeout=SESSION_TIMEOUT) as client:
+        r = await client.post(url, content=body, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
+# === loop ===
 async def loop_forever():
     sem = asyncio.Semaphore(OPENAI_MAX_CONCURRENCY)
-    sent_lock = asyncio.Lock()  # הגנה אם תרצה תקרה לסבב
+    lock = asyncio.Lock()
     while True:
         chosen = await choose_symbols_for_sweep()
-        print(f"[*] Sweep start | candidates={len(chosen)} | cap={MAX_TRADES_PER_SWEEP or '∞'} | interval={TRADE_SUGGEST_INTERVAL}m")
+        print(f"[*] Sweep | candidates={len(chosen)} | cap={MAX_TRADES_PER_SWEEP or '∞'} | interval={TRADE_SUGGEST_INTERVAL}m")
 
         sent = 0
         start = time.time()
 
         async def run_symbol(sym: str):
             nonlocal sent
-            # אם יש תקרה לסבב
             if MAX_TRADES_PER_SWEEP and (sent >= MAX_TRADES_PER_SWEEP):
                 return
             async with sem:
@@ -329,21 +353,40 @@ async def loop_forever():
                 if not ok:
                     print(f"[SKIP] {sym} via {why} | q={dbg.get('q',{}).get('quality_score')} rr={dbg.get('rr'):.3f} dist={dbg.get('dist'):.3f}% sp={dbg.get('sp')}")
                     return
-                # תקרה לסבב (אם קיימת)
-                async with sent_lock:
+                async with lock:
                     if MAX_TRADES_PER_SWEEP and (sent >= MAX_TRADES_PER_SWEEP):
                         return
                     sent += 1
                 trade_id = uuid.uuid4().hex[:8]
-                text = format_msg(sug, trade_id)
-                kb = kb_for_message(trade_id)
+                trade = {
+                    "trade_id": trade_id,
+                    "symbol": sug.symbol,
+                    "side": sug.side,
+                    "current_price": sug.current_price,
+                    "leverage": sug.leverage,
+                    "entry": sug.entry,
+                    "sl": sug.sl,
+                    "tp1": sug.tp1,
+                    "tp2": sug.tp2,
+                    "tp3": sug.tp3,
+                    "success_pct": sug.success_pct,
+                    "budget_usd": sug.budget_usd,
+                    "notional_usd": sug.notional_usd or ((sug.budget_usd or 0) * (sug.leverage or 1)),
+                    "qty": sug.qty,
+                    "eta_sl": sug.eta_sl,
+                    "eta_tp1": sug.eta_tp1,
+                    "eta_tp2": sug.eta_tp2,
+                    "eta_tp3": sug.eta_tp3,
+                    "reason": sug.reason,
+                }
                 try:
-                    await tg_send(text, kb)
+                    res = await send_ingest(trade)
                     mark_sent(sug.symbol)
                     mark_hash(sug)
-                    print(f"[OK] Alert sent: {sym} | id={trade_id} | sent={sent}")
+                    prev = format_msg_preview(sug, TZ_DISPLAY)
+                    print(f"[OK] Ingest → Telegram | {sym} | id={trade_id} | sent={sent} | {prev}")
                 except Exception as e:
-                    print(f"[ERR] Telegram send failed for {sym}: {e}")
+                    print(f"[ERR] ingest failed for {sym}: {e}")
 
         await asyncio.gather(*[run_symbol(s) for s in chosen])
 
@@ -354,4 +397,5 @@ async def loop_forever():
 
 if __name__ == "__main__":
     asyncio.run(loop_forever())
+
 
