@@ -9,6 +9,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
+# --- Env ---
 IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
 if not IS_CLOUD:
     from dotenv import load_dotenv
@@ -33,10 +34,11 @@ from utils.watchlist_utils import load_watchlist
 from utils.binance_client import futures_mark_price
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
-from utils import cache_fallback as redis_store
+from utils import cache_fallback as redis_store  # fallback אם Redis לא זמין
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
 
+# --- Logging ---
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
@@ -54,6 +56,7 @@ if not LIGHT_MODE:
             })
     logger.addHandler(MemoryLogHandler())
 
+# --- Env check ---
 BINANCE_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
 OPENAI_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 
@@ -69,6 +72,7 @@ if not BINANCE_KEY:
 if not OPENAI_KEY or OPENAI_KEY.startswith("YOUR_REAL_"):
     logger.warning("⚠️ OpenAI API key not set → AI may return fallback only")
 
+# --- FastAPI App ---
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
 
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
@@ -79,7 +83,7 @@ app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Routers
+# --- Routers ---
 from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
@@ -98,7 +102,7 @@ app.include_router(grid_router, prefix="/grid", tags=["Grid"])
 app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])
 app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
 app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
-app.include_router(market_router, prefix="/market", tags=["Market"])  # ← עכשיו הנתיב תקין
+app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 app.include_router(price_router, prefix="/price", tags=["Price"])
 
@@ -110,7 +114,127 @@ else:
 
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
-# ... (שאר הקוד – לולאות רקע, Health, Exception handler) ...
+# --- Price Cache ---
+LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
+
+def update_price_local(symbol: str, price: float) -> None:
+    if price:
+        LAST_PRICE_CACHE[symbol.upper()] = {"price": float(price), "ts": time.time()}
+
+def get_price_local(symbol: str) -> float | None:
+    info = LAST_PRICE_CACHE.get(symbol.upper(), {})
+    return float(info["price"]) if "price" in info else None
+
+def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
+    info = LAST_PRICE_CACHE.get(symbol.upper())
+    return bool(info and (time.time() - float(info.get("ts", 0))) <= max_age_sec)
+
+# --- Background tasks ---
+async def auto_anchor_updater_loop(interval: int = 20):
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+    while True:
+        for sym in symbols:
+            try:
+                price = futures_mark_price(sym)
+                if price and float(price) > 0:
+                    update_price_local(sym, float(price))
+                    logger.info({"event": "anchor_update", "symbol": sym, "price": float(price)})
+            except Exception as e:
+                logger.warning({"event": "anchor_update_error", "symbol": sym, "error": str(e)})
+        await asyncio.sleep(interval)
+
+async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
+    if PRICE_MONITOR_DISABLE:
+        return
+    while True:
+        for sym in list(LAST_PRICE_CACHE.keys()):
+            try:
+                price_val = futures_mark_price(sym)
+                if price_val:
+                    update_price_local(sym, float(price_val))
+            except Exception as e:
+                logger.warning({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
+        await asyncio.sleep(interval)
+
+async def anchor_snapshot_loop(interval: int = 30):
+    while True:
+        for side in ["LONG", "SHORT"]:
+            try:
+                dec = evaluate_anchor(side)
+                item = {
+                    "ts": int(time.time()),
+                    "side": side,
+                    "bias": dec.bias,
+                    "score": float(dec.score),
+                    "allow": bool(dec.allow),
+                }
+                try:
+                    await redis_store.lpush("anchor:history", json.dumps(item))
+                    await redis_store.ltrim("anchor:history", 0, 200)
+                except Exception as e:
+                    logger.warning({"event": "anchor_snapshot_cache_error", "side": side, "error": str(e)})
+            except Exception as e:
+                logger.warning({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
+        await asyncio.sleep(interval)
+
+# --- Startup ---
+@app.on_event("startup")
+async def startup_event():
+    if LIGHT_MODE:
+        logger.info({"event": "startup", "mode": "light"})
+        return
+    watchlist = load_watchlist()
+    symbols = [it["symbol"].upper() for it in watchlist]
+    if "BTCUSDT" not in symbols:
+        symbols.insert(0, "BTCUSDT")
+    for s in symbols[:10]:
+        try:
+            p = futures_mark_price(s)
+            if p:
+                update_price_local(s, float(p))
+        except Exception as e:
+            logger.warning({"event": "warmup_price_error", "symbol": s, "error": str(e)})
+    asyncio.create_task(auto_anchor_updater_loop())
+    asyncio.create_task(price_monitor_loop())
+    asyncio.create_task(anchor_snapshot_loop())
+    logger.info({"event": "startup", "mode": "normal", "watchlist_size": len(symbols)})
+
+# --- Health ---
+@app.get("/", tags=["Config"])
+async def root_status():
+    return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
+
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
+
+@app.get("/health/live", tags=["Health"])
+async def health_live():
+    return {"status": "live"}
+
+# --- Debug ---
+@app.get("/_routes", tags=["Debug"])
+async def list_routes():
+    return [
+        {
+            "path": r.path,
+            "name": r.name,
+            "methods": list(getattr(r, "methods", [])),
+            "type": r.__class__.__name__,
+        }
+        for r in app.router.routes
+    ]
+
+# --- Exception handler ---
+@app.exception_handler(Exception)
+async def handle_exception(request: Request, exc: Exception):
+    logger.error({"event": "exception", "error": str(exc)}, extra={"path": request.url.path})
+    return JSONResponse({"detail": str(exc)}, status_code=500)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
