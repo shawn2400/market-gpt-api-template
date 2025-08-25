@@ -7,9 +7,9 @@ from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.indicators import prepare_indicators_for_backtest
-from utils.get_klines import get_klines  # נתונים חיים מ-Binance
+from utils.get_klines import get_klines  # async
 
-# analyze_with_ai עלול לזרוק שגיאה אם הכלים לא מזוהים
+# analyze_with_ai עלול לא להיות זמין/לזרוק שגיאה בכלי
 try:
     from utils.ai_analysis import analyze_with_ai
 except Exception:
@@ -88,22 +88,34 @@ def _fallback_text(last_row: Dict[str, Any], symbol: str, interval: str) -> str:
 @router.get("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     try:
-        df = await get_klines(symbol, interval, limit=200, market="futures")
+        # ❗ ללא market=...
+        df = await get_klines(symbol, interval, limit=200)
+        if df is None or len(df) == 0:
+            raise HTTPException(status_code=502, detail="No klines data returned")
+
         indicators = prepare_indicators_for_backtest(df)
+        if indicators is None or len(indicators) == 0:
+            raise HTTPException(status_code=502, detail="Indicators preparation failed")
+
         last_row = indicators.iloc[-1].to_dict()
         if analyze_with_ai:
             try:
                 txt = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
                 return {"symbol": symbol.upper(), "interval": interval, "analysis": txt, "fallback": False}
             except Exception as e:
-                # UnrecognizedFunctionError וכל דומה – נופלים ל־fallback
-                return {"symbol": symbol.upper(), "interval": interval,
-                        "analysis": _fallback_text(last_row, symbol.upper(), interval),
-                        "fallback": True, "error": str(e)}
-        else:
-            return {"symbol": symbol.upper(), "interval": interval,
+                return {
+                    "symbol": symbol.upper(), "interval": interval,
                     "analysis": _fallback_text(last_row, symbol.upper(), interval),
-                    "fallback": True}
+                    "fallback": True, "error": str(e)
+                }
+        else:
+            return {
+                "symbol": symbol.upper(), "interval": interval,
+                "analysis": _fallback_text(last_row, symbol.upper(), interval),
+                "fallback": True
+            }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analyze failed: {str(e)}")
 
@@ -112,8 +124,16 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
     result = []
     for s in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
         try:
-            df = await get_klines(s, interval, limit=200, market="futures")
+            df = await get_klines(s, interval, limit=200)  # ❗ ללא market=...
+            if df is None or len(df) == 0:
+                result.append({"symbol": s, "error": "No klines data returned"})
+                continue
+
             indicators = prepare_indicators_for_backtest(df)
+            if indicators is None or len(indicators) == 0:
+                result.append({"symbol": s, "error": "Indicators preparation failed"})
+                continue
+
             last_row = indicators.iloc[-1].to_dict()
             if analyze_with_ai:
                 try:
@@ -128,6 +148,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
