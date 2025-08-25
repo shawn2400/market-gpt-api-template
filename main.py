@@ -54,7 +54,7 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 if not BINANCE_KEY:
     logger.warning("⚠️ Binance API key not set → trading disabled")
 if not OPENAI_KEY or OPENAI_KEY.startswith("YOUR_REAL_"):
-    logger.warning("⚠️ OpenAI API key not set → AI routes disabled")
+    logger.warning("⚠️ OpenAI API key not set → AI may return fallback only")
 
 logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
@@ -92,12 +92,12 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI Router only if OPENAI key exists
+# ✅ AI Router – תמיד נרשם
+app.include_router(ai_router, prefix="/ai", tags=["AI"])
 if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
-    app.include_router(ai_router, prefix="/ai", tags=["AI"])
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
 else:
-    logger.warning("⚠️ AI routes disabled (missing or placeholder OPENAI_API_KEY)")
+    logger.warning("⚠️ AI routes registered but may return errors (missing or placeholder OPENAI_API_KEY)")
 
 # ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
@@ -194,6 +194,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
