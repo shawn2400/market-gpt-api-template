@@ -95,7 +95,7 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI (רק ai.py, בלי כפילויות)
+# ✅ AI (רק ai.py)
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     app.include_router(ai_router, prefix="/ai", tags=["AI"])
 
@@ -246,6 +246,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
