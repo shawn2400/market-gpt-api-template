@@ -8,7 +8,7 @@ import requests
 from pydantic import BaseModel, Field
 from utils.indicators import prepare_indicators_for_backtest
 
-# שימו לב: נשאיר את הייבוא הזה, אבל נשתמש בו רק אם include_ai=True
+# יופעל רק אם include_ai=True
 from utils.ai_analysis import analyze_with_ai
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
@@ -18,23 +18,16 @@ _rate_state = {}
 def _rl(ip: str, limit=30, window=60):
     now = time.time()
     calls = [c for c in _rate_state.get(ip, []) if now - c < window]
-    if len(calls) >= limit:
-        return False
-    calls.append(now)
-    _rate_state[ip] = calls
+    if len(calls) >= limit: return False
+    calls.append(now); _rate_state[ip] = calls
     return True
 
 def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
     url = f"{FUTURES_BASE}/fapi/v1/klines"
-    r = requests.get(
-        url,
-        params={"symbol": symbol.upper(), "interval": interval, "limit": int(limit)},
-        timeout=10,
-    )
+    r = requests.get(url, params={"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}, timeout=10)
     r.raise_for_status()
     arr = r.json()
-    if not arr:
-        return pd.DataFrame()
+    if not arr: return pd.DataFrame()
     cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
     df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
     for c in ("open","high","low","close","volume"):
@@ -47,6 +40,13 @@ class IndicatorSet(BaseModel):
     adx: float | None = None
     atr: float | None = None
     vwap_trend: bool | None = None
+    ema_50: float | None = None
+    macd: float | None = None
+    macd_signal: float | None = None
+    macd_hist: float | None = None
+    bb_mid: float | None = None
+    bb_upper: float | None = None
+    bb_lower: float | None = None
 
 class ScanSignal(BaseModel):
     symbol: str
@@ -69,13 +69,16 @@ async def scan_symbols(
     interval: str = Query("15m"),
     limit: int = Query(200, ge=50, le=200),
     include_ai: bool = Query(False, description="If true, also run lightweight AI commentary"),
+    ai_fields: str = Query("rsi,adx,ema_21", description="comma fields to pass into AI prompt"),
     request: Request = None
 ) -> MultiScanResponse:
-    if not _rl(request.client.host):
+    if request is None or not _rl(request.client.host):
         raise HTTPException(429, "Rate limit exceeded")
 
     out: List[ScanSignal] = []
     syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    want = [f.strip() for f in ai_fields.split(",")] if ai_fields else []
+
     for s in syms:
         try:
             df = _fetch_klines(s, interval, limit)
@@ -88,16 +91,19 @@ async def scan_symbols(
             ai_txt = None
             if include_ai:
                 try:
-                    # מעבירים רק תקציר – commentary קצר, כדי לא להכביד
-                    ai_txt = await analyze_with_ai({"symbol": s, "rsi": row.get("rsi"), "adx": row.get("adx"), "ema_21": row.get("ema_21")})
+                    slim = {"symbol": s}
+                    for k in want:
+                        if k in row: slim[k] = row[k]
+                    ai_txt = await analyze_with_ai(slim)
                 except Exception as e:
-                    ai_txt = f"(ai failed: {e})"
+                    ai_txt = "(ai-unavailable)"
 
             out.append(ScanSignal(symbol=s, interval=interval, indicators=IndicatorSet(**row), analysis=ai_txt))
         except Exception as e:
             out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
 
     return MultiScanResponse(ok=True, count_total=len(syms), returned=len(out), signals=out)
+
 
 
 
