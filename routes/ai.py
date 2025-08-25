@@ -19,12 +19,15 @@ router = APIRouter(tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
 
+# -------------------------
+# Models
+# -------------------------
 class QualityRequest(BaseModel):
     symbol: str
     side: Side
-    entry: Optional[float] = Field(None, gt=0)
-    sl: Optional[float] = Field(None, gt=0)
-    tp: Optional[float] = Field(None, gt=0)
+    entry: Optional[float] = Field(None, ge=0)   # ← מאפשר 0
+    sl: Optional[float] = Field(None, ge=0)      # ← מאפשר 0
+    tp: Optional[float] = Field(None, ge=0)      # ← מאפשר 0
     leverage: int = Field(10, ge=1, le=125)
     budget: float = Field(100.0, gt=0)
     atr: Optional[float] = Field(None, gt=0)
@@ -35,6 +38,9 @@ class QualityResponse(BaseModel):
     anchor: Dict[str, Any]
     components: Dict[str, Any]
 
+# -------------------------
+# Helpers
+# -------------------------
 def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
     return {
         "mode_requested": getattr(anchor, "mode_requested", None),
@@ -45,6 +51,16 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
+def _fallback_text(row: Dict[str, Any], symbol: str, interval: str) -> str:
+    ema_bias = "long" if row.get("ema21", 0) > row.get("ema50", 0) else "short"
+    rsi = row.get("rsi", 50.0)
+    adx = row.get("adx", 15.0)
+    return (f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}. "
+            f"Use ATR for SL/TP; wait for confluence on dual TF.")
+
+# -------------------------
+# Routes
+# -------------------------
 @router.get("/ping")
 async def ping():
     import os
@@ -77,13 +93,6 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         components=q.get("components") or {},
         anchor=_mk_anchor_dict(anchor),
     )
-
-def _fallback_text(row: Dict[str, Any], symbol: str, interval: str) -> str:
-    ema_bias = "long" if row.get("ema21", 0) > row.get("ema50", 0) else "short"
-    rsi = row.get("rsi", 50.0)
-    adx = row.get("adx", 15.0)
-    return (f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}. "
-            f"Use ATR for SL/TP; wait for confluence on dual TF.")
 
 @router.get("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
@@ -138,6 +147,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
