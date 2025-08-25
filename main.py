@@ -90,8 +90,10 @@ from routes.indicators import router as indicators_router
 from routes.anchor import router as anchor_router
 from routes.market import router as market_router
 from routes.binance_status import router as binance_status_router
+from routes.price import router as price_router        # ← NEW: price router
 import routes.executor as executor_router
 
+# Include routers (שימי לב: ה־prefixים ניתנים כאן בלבד)
 app.include_router(scan_router, tags=["Scan"])
 app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(grid_router, prefix="/grid", tags=["Grid"])
@@ -100,6 +102,7 @@ app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
 app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
+app.include_router(price_router, prefix="/price", tags=["Price"])  # ← חשוב
 
 # ✅ AI Router – תמיד נרשם
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
@@ -111,7 +114,7 @@ else:
 # ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
-# --- Price Cache ---
+# --- Price Cache (in-memory) ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
 
 def update_price(symbol: str, price: float) -> None:
@@ -127,15 +130,17 @@ def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
 
 # --- Background tasks ---
 async def auto_anchor_updater(interval: int = 20):
-    for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]:
-        try:
-            price = futures_mark_price(sym)
-            if price and price > 0:
-                update_price(sym, price)
-                logger.info({"event": "anchor_update", "symbol": sym, "price": price})
-        except Exception as e:
-            logger.warning({"event": "anchor_update_error", "symbol": sym, "error": str(e)})
-    await asyncio.sleep(interval)
+    # מעדכן BTC/ETH/SOL/BNB אחת ל-interval שניות
+    while True:
+        for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]:
+            try:
+                price = futures_mark_price(sym)
+                if price and price > 0:
+                    update_price(sym, price)
+                    logger.info({"event": "anchor_update", "symbol": sym, "price": price})
+            except Exception as e:
+                logger.warning({"event": "anchor_update_error", "symbol": sym, "error": str(e)})
+        await asyncio.sleep(interval)
 
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
     if LIGHT_MODE or PRICE_MONITOR_DISABLE:
@@ -217,6 +222,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
