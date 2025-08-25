@@ -10,7 +10,6 @@ from utils.quality import compute_quality
 from utils.indicators import prepare_indicators_for_backtest
 from utils.get_klines import aget_klines  # async wrapper
 
-# analyze_with_ai יכול להיות לא זמין; ניפול לפולבאק טכני
 try:
     from utils.ai_analysis import analyze_with_ai
 except Exception:
@@ -95,7 +94,6 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
         indicators = prepare_indicators_for_backtest(df)
         if indicators is None or len(indicators) == 0:
             raise HTTPException(status_code=502, detail="Indicators preparation failed")
-
         last_row = indicators.iloc[-1].to_dict()
         if analyze_with_ai:
             try:
@@ -140,6 +138,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
