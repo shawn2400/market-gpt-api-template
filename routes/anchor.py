@@ -56,7 +56,7 @@ async def get_anchor_history(
     items: List[AnchorSnapshot] = []
     try:
         if not redis_client:
-            logger.warning("Redis client not initialized, returning empty history")
+            logger.warning("⚠️ Redis not initialized, returning empty history")
             return AnchorHistoryResponse(count=0, items=[])
 
         raw_items = redis_client.lrange("anchor:history", 0, limit - 1) or []
@@ -67,7 +67,7 @@ async def get_anchor_history(
                 continue
         return AnchorHistoryResponse(count=len(items), items=items)
     except Exception as e:
-        logger.error(f"Anchor history fetch failed: {e}")
+        logger.error(f"⚠️ Anchor history fetch failed: {e}")
         # fallback בטוח → מחזיר רשימה ריקה
         return AnchorHistoryResponse(count=0, items=[])
 
@@ -93,6 +93,7 @@ async def get_anchor_live(
             "reason": getattr(dec, "reason", None),
         },
     )
+
 
 
 
