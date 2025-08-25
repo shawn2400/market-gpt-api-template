@@ -7,6 +7,8 @@ import pandas as pd
 import requests
 from pydantic import BaseModel, Field
 from utils.indicators import prepare_indicators_for_backtest
+
+# שימו לב: נשאיר את הייבוא הזה, אבל נשתמש בו רק אם include_ai=True
 from utils.ai_analysis import analyze_with_ai
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
@@ -66,6 +68,7 @@ async def scan_symbols(
     symbols: str = Query(..., description="Comma-separated symbols, e.g. BTCUSDT,ETHUSDT"),
     interval: str = Query("15m"),
     limit: int = Query(200, ge=50, le=200),
+    include_ai: bool = Query(False, description="If true, also run lightweight AI commentary"),
     request: Request = None
 ) -> MultiScanResponse:
     if not _rl(request.client.host):
@@ -81,12 +84,21 @@ async def scan_symbols(
                 continue
             ind = prepare_indicators_for_backtest(df)
             row = ind.iloc[-1].to_dict()
-            ai_txt = await analyze_with_ai({"symbol": s, **row})
+
+            ai_txt = None
+            if include_ai:
+                try:
+                    # מעבירים רק תקציר – commentary קצר, כדי לא להכביד
+                    ai_txt = await analyze_with_ai({"symbol": s, "rsi": row.get("rsi"), "adx": row.get("adx"), "ema_21": row.get("ema_21")})
+                except Exception as e:
+                    ai_txt = f"(ai failed: {e})"
+
             out.append(ScanSignal(symbol=s, interval=interval, indicators=IndicatorSet(**row), analysis=ai_txt))
         except Exception as e:
             out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
 
     return MultiScanResponse(ok=True, count_total=len(syms), returned=len(out), signals=out)
+
 
 
 
