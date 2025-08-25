@@ -7,15 +7,15 @@ from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.indicators import prepare_indicators_for_backtest
-from utils.get_klines import get_klines  # async
+from utils.get_klines import aget_klines  # async wrapper ללא פרמטר market שגוי
 
-# analyze_with_ai עלול לא להיות זמין/לזרוק שגיאה בכלי
+# analyze_with_ai עלול לא להיות זמין; נטפל בפאולבק
 try:
     from utils.ai_analysis import analyze_with_ai
 except Exception:
     analyze_with_ai = None  # type: ignore
 
-router = APIRouter(tags=["AI"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
 
@@ -80,16 +80,16 @@ async def ai_quality(payload: QualityRequest = Body(...)):
 
 def _fallback_text(last_row: Dict[str, Any], symbol: str, interval: str) -> str:
     ema_bias = "long" if last_row.get("ema21", 0) > last_row.get("ema50", 0) else "short"
-    rsi = last_row.get("rsi", 50.0)
-    adx = last_row.get("adx", 15.0)
+    rsi = float(last_row.get("rsi", 50.0))
+    adx = float(last_row.get("adx", 15.0))
     return (f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}. "
             f"Use ATR for SL/TP; wait for confluence on dual TF.")
 
 @router.get("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     try:
-        # ❗ ללא market=...
-        df = await get_klines(symbol, interval, limit=200)
+        # נתונים חיים מ-Binance Futures (ברירת מחדל של aget_klines)
+        df = await aget_klines(symbol, interval, limit=200)
         if df is None or len(df) == 0:
             raise HTTPException(status_code=502, detail="No klines data returned")
 
@@ -98,6 +98,7 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
             raise HTTPException(status_code=502, detail="Indicators preparation failed")
 
         last_row = indicators.iloc[-1].to_dict()
+
         if analyze_with_ai:
             try:
                 txt = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
@@ -121,10 +122,10 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
 
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
-    result = []
+    result: List[Dict[str, Any]] = []
     for s in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
         try:
-            df = await get_klines(s, interval, limit=200)  # ❗ ללא market=...
+            df = await aget_klines(s, interval, limit=200)
             if df is None or len(df) == 0:
                 result.append({"symbol": s, "error": "No klines data returned"})
                 continue
@@ -148,6 +149,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
