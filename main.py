@@ -64,12 +64,13 @@ app = FastAPI(
     description="AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת"
 )
 
+# --- Middlewares ---
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
-# Static
+# --- Static Files ---
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -95,7 +96,7 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI (רק ai.py)
+# ✅ AI
 if ENABLE_AI_ROUTES and OPENAI_API_KEY:
     app.include_router(ai_router, prefix="/ai", tags=["AI"])
 
@@ -104,6 +105,7 @@ app.include_router(executor_router.router, prefix="/executor", tags=["Executor"]
 
 # --- Price cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
+
 def update_price(symbol: str, price: float) -> None:
     if not price:
         return
@@ -170,7 +172,7 @@ async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_IN
                 logger.warning({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
-# Cache cleaner
+# --- Cache cleaner ---
 CACHE_DIR = Path("static/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -246,6 +248,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
