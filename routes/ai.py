@@ -1,24 +1,23 @@
 # routes/ai.py
 from __future__ import annotations
-from typing import Optional, Literal, Dict, Any, List
+from typing import Optional, Literal, Dict, Any
 from fastapi import APIRouter, Depends, Body, Query
 from pydantic import BaseModel, Field
-import os
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.ai_analysis import analyze_with_ai
 
-# ❌ בלי prefix="/ai" כאן – הוא יתווסף ב-main.py
+# Router מוגן ב־API Key
 router = APIRouter(
+    prefix="/ai",
     tags=["AI"],
-    dependencies=[Depends(require_api_key)],  # ✅ כל הנתיבים מחייבים Bearer
+    dependencies=[Depends(require_api_key)],
 )
 
 Side = Literal["LONG", "SHORT"]
 
-# -------- Models --------
 class QualityRequest(BaseModel):
     symbol: str
     side: Side
@@ -35,16 +34,6 @@ class QualityResponse(BaseModel):
     anchor: Dict[str, Any]
     components: Dict[str, Any]
 
-class AnalysisResult(BaseModel):
-    symbol: str
-    interval: str
-    analysis: str
-
-class ManualScanResponse(BaseModel):
-    interval: str
-    results: List[Dict[str, Any]]
-
-# -------- Utils --------
 def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
     return {
         "mode_requested": getattr(anchor, "mode_requested", None),
@@ -55,9 +44,12 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
-# -------- Routes --------
 @router.get("/health")
 async def ai_health():
+    """
+    בדיקה פשוטה אם מפתח OpenAI נטען.
+    """
+    import os
     ok = bool(os.getenv("OPENAI_API_KEY"))
     return {
         "ok": ok,
@@ -66,7 +58,10 @@ async def ai_health():
     }
 
 @router.post("/quality", response_model=QualityResponse)
-async def post_ai_quality(payload: QualityRequest = Body(...)) -> QualityResponse:
+async def ai_quality(payload: QualityRequest = Body(...)):
+    """
+    חישוב ציון איכות לטרייד.
+    """
     anchor = evaluate_anchor(payload.side)
     q = compute_quality(
         symbol=payload.symbol,
@@ -86,10 +81,13 @@ async def post_ai_quality(payload: QualityRequest = Body(...)) -> QualityRespons
         anchor=_mk_anchor_dict(anchor),
     )
 
-@router.get("/analyze", response_model=AnalysisResult)
+@router.get("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
+    """
+    ניתוח GPT בסיסי עם אינדיקטורים.
+    """
     data = {
-        "symbol": symbol,
+        "symbol": symbol.upper(),
         "rsi": 55,
         "adx": 22,
         "trend": "UP",
@@ -97,14 +95,17 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
         "volume": "High",
     }
     txt = await analyze_with_ai(data)
-    return AnalysisResult(symbol=symbol, interval=interval, analysis=txt)
+    return {"symbol": symbol.upper(), "interval": interval, "analysis": txt}
 
-@router.get("/manual-scan", response_model=ManualScanResponse)
+@router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
+    """
+    סריקה ידנית של כמה סמלים עם ניתוח GPT.
+    """
     result = []
-    for s in symbols.split(","):
+    for s in [s.strip().upper() for s in symbols.split(",")]:
         data = {
-            "symbol": s.strip(),
+            "symbol": s,
             "rsi": 48,
             "adx": 19,
             "trend": "DOWN",
@@ -112,8 +113,9 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
             "volume": "Medium",
         }
         txt = await analyze_with_ai(data)
-        result.append({"symbol": s.strip(), "analysis": txt})
-    return ManualScanResponse(interval=interval, results=result)
+        result.append({"symbol": s, "analysis": txt})
+    return {"interval": interval, "results": result}
+
 
 
 
