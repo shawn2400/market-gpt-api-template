@@ -1,10 +1,12 @@
 # utils/anchor.py
-import math
+from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Literal
+import logging
 
-from utils.indicators import ema, rsi
 from utils.watchlist_utils import load_watchlist
+
+logger = logging.getLogger("algogpt.anchor")
 
 AnchorMode = Literal["off", "soft", "hard"]
 
@@ -24,11 +26,11 @@ def evaluate_anchor(side: str, mode: AnchorMode = "soft") -> AnchorDecision:
     side: "LONG" או "SHORT"
     mode: "off" / "soft" / "hard"
     """
-    side = side.upper()
+    side = str(side).upper()
     if side not in ("LONG", "SHORT"):
         raise ValueError(f"invalid side: {side}")
 
-    # ברירת מחדל אם אין Anchor
+    # --- Anchor disabled
     if mode == "off":
         return AnchorDecision(
             mode_requested=mode,
@@ -37,31 +39,28 @@ def evaluate_anchor(side: str, mode: AnchorMode = "soft") -> AnchorDecision:
             score=50.0,
             allow=True,
             severity="NONE",
-            reason="Anchor disabled"
+            reason="Anchor disabled",
         )
 
-    # 🚩 כאן נכניס לוגיקה פשוטה (אפשר לשפר לפי אינדיקטורים אמתיים)
+    bias, score = "NEUTRAL", 50.0
     try:
         watchlist = load_watchlist()
-        btc = next((it for it in watchlist if it["symbol"] == "BTCUSDT"), None)
-        if not btc:
-            raise RuntimeError("BTCUSDT not found in watchlist")
+        btc = next((it for it in watchlist if it.get("symbol") == "BTCUSDT"), None)
+        if btc:
+            bias = "BULLISH" if str(btc.get("direction")).upper() == "LONG" else "BEARISH"
+            score = float(btc.get("quality_score") or 5) * 10  # מדרג 0–100
+    except Exception as e:
+        logger.warning("⚠️ Anchor evaluation failed: %s", e)
 
-        bias = "BULLISH" if btc.get("direction") == "LONG" else "BEARISH"
-        score = float(btc.get("quality_score", 6)) * 10  # מדרג 0–100
-    except Exception:
-        bias, score = "NEUTRAL", 50.0
-
-    # החלטה אם לאפשר
-    allow = True
-    severity = "LOW"
-    reason = "Bias allows trade"
+    # --- החלטה
+    allow, severity, reason = True, "LOW", "Bias allows trade"
 
     if mode == "soft":
         if side == "LONG" and bias == "BEARISH":
             allow, severity, reason = False, "MEDIUM", "Soft-block: Bearish bias vs LONG"
-        if side == "SHORT" and bias == "BULLISH":
+        elif side == "SHORT" and bias == "BULLISH":
             allow, severity, reason = False, "MEDIUM", "Soft-block: Bullish bias vs SHORT"
+
     elif mode == "hard":
         if bias == "NEUTRAL":
             allow, severity, reason = False, "HIGH", "Hard-block: Neutral bias"
@@ -79,6 +78,7 @@ def evaluate_anchor(side: str, mode: AnchorMode = "soft") -> AnchorDecision:
         severity=severity,
         reason=reason,
     )
+
 
 
 
