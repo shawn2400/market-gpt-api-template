@@ -97,7 +97,7 @@ app.include_router(ai_router, prefix="/ai", tags=["AI"])
 if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
 else:
-    logger.warning("⚠️ AI routes registered but may return errors (missing or placeholder OPENAI_API_KEY)")
+    logger.warning("⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)")
 
 # ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
@@ -183,8 +183,17 @@ async def health_live():
 
 @app.get("/_routes", tags=["Debug"])
 async def list_routes():
-    return [{"path": r.path, "name": r.name, "methods": list(r.methods or []), "type": r.__class__.__name__}
-            for r in app.router.routes]
+    routes_list = []
+    for r in app.router.routes:
+        # Mount (כמו StaticFiles) אין לו methods → נדלג
+        methods = getattr(r, "methods", None)
+        routes_list.append({
+            "path": getattr(r, "path", None),
+            "name": getattr(r, "name", None),
+            "methods": list(methods) if methods else [],
+            "type": r.__class__.__name__,
+        })
+    return routes_list
 
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
@@ -194,6 +203,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
