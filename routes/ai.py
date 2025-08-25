@@ -3,19 +3,19 @@ from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
 from fastapi import APIRouter, Depends, Body, Query, HTTPException
 from pydantic import BaseModel, Field
-import pandas as pd
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
-from utils.ai_analysis import analyze_with_ai
 from utils.indicators import prepare_indicators_for_backtest
-from utils.get_klines import get_klines  # שימוש בנתונים חיים מ-Binance
+from utils.get_klines import get_klines  # נתונים חיים מ-Binance
 
-router = APIRouter(
-    prefix="/ai",
-    tags=["AI"],
-    dependencies=[Depends(require_api_key)],
-)
+# analyze_with_ai עלול לזרוק שגיאה אם הכלים לא מזוהים
+try:
+    from utils.ai_analysis import analyze_with_ai
+except Exception:
+    analyze_with_ai = None  # type: ignore
+
+router = APIRouter(tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
 
@@ -45,24 +45,20 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
+@router.get("/ping")
+async def ping():
+    import os
+    return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
+
 @router.get("/health")
 async def ai_health():
-    """
-    בדיקה אם מפתח OpenAI נטען.
-    """
     import os
     ok = bool(os.getenv("OPENAI_API_KEY"))
-    return {
-        "ok": ok,
-        "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
-        "reason": None if ok else "Missing OPENAI_API_KEY",
-    }
+    return {"ok": ok, "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+            "reason": None if ok else "Missing OPENAI_API_KEY"}
 
 @router.post("/quality", response_model=QualityResponse)
 async def ai_quality(payload: QualityRequest = Body(...)):
-    """
-    חישוב ציון איכות לטרייד.
-    """
     anchor = evaluate_anchor(payload.side)
     q = compute_quality(
         symbol=payload.symbol,
@@ -82,36 +78,57 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         anchor=_mk_anchor_dict(anchor),
     )
 
+def _fallback_text(last_row: Dict[str, Any], symbol: str, interval: str) -> str:
+    ema_bias = "long" if last_row.get("ema21", 0) > last_row.get("ema50", 0) else "short"
+    rsi = last_row.get("rsi", 50.0)
+    adx = last_row.get("adx", 15.0)
+    return (f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}. "
+            f"Use ATR for SL/TP; wait for confluence on dual TF.")
+
 @router.get("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
-    """
-    ניתוח GPT בסיסי עם אינדיקטורים.
-    """
     try:
         df = await get_klines(symbol, interval, limit=200, market="futures")
         indicators = prepare_indicators_for_backtest(df)
         last_row = indicators.iloc[-1].to_dict()
-        txt = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
-        return {"symbol": symbol.upper(), "interval": interval, "analysis": txt}
+        if analyze_with_ai:
+            try:
+                txt = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
+                return {"symbol": symbol.upper(), "interval": interval, "analysis": txt, "fallback": False}
+            except Exception as e:
+                # UnrecognizedFunctionError וכל דומה – נופלים ל־fallback
+                return {"symbol": symbol.upper(), "interval": interval,
+                        "analysis": _fallback_text(last_row, symbol.upper(), interval),
+                        "fallback": True, "error": str(e)}
+        else:
+            return {"symbol": symbol.upper(), "interval": interval,
+                    "analysis": _fallback_text(last_row, symbol.upper(), interval),
+                    "fallback": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analyze failed: {str(e)}")
 
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
-    """
-    סריקה ידנית של כמה סימבולים עם ניתוח GPT על סמך אינדיקטורים חיים.
-    """
     result = []
-    for s in [s.strip().upper() for s in symbols.split(",")]:
+    for s in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
         try:
             df = await get_klines(s, interval, limit=200, market="futures")
             indicators = prepare_indicators_for_backtest(df)
             last_row = indicators.iloc[-1].to_dict()
-            txt = await analyze_with_ai({"symbol": s, **last_row})
-            result.append({"symbol": s, "analysis": txt})
+            if analyze_with_ai:
+                try:
+                    txt = await analyze_with_ai({"symbol": s, **last_row})
+                    result.append({"symbol": s, "analysis": txt, "fallback": False})
+                except Exception as e:
+                    result.append({"symbol": s, "analysis": _fallback_text(last_row, s, interval),
+                                   "fallback": True, "error": str(e)})
+            else:
+                result.append({"symbol": s, "analysis": _fallback_text(last_row, s, interval),
+                               "fallback": True})
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
