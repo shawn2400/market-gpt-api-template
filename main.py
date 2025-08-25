@@ -11,7 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
 # --- ENV ---
-load_dotenv(override=True)
+# נטען רק אם קובץ .env קיים מקומית, בלי למחוק ENV של Render
+load_dotenv(override=False)
+
 LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip().lower() in ("1", "true", "yes")
 SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 
@@ -51,10 +53,11 @@ if not LIGHT_MODE:
 # --- Config check ---
 BINANCE_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+
 logger.info({
     "event": "env_loaded",
     "BINANCE_API_KEY_len": len(BINANCE_KEY),
-    "OPENAI_API_KEY_len": len(OPENAI_KEY)
+    "OPENAI_API_KEY_len": len(OPENAI_KEY),
 })
 
 if not BINANCE_KEY:
@@ -98,7 +101,7 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI Router
+# ✅ AI Router – תמיד נרשם
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
@@ -154,7 +157,13 @@ async def anchor_snapshot_loop(interval: int = 30):
         for side in ["LONG", "SHORT"]:
             try:
                 dec = evaluate_anchor(side)
-                item = {"ts": int(time.time()), "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
+                item = {
+                    "ts": int(time.time()),
+                    "side": side,
+                    "bias": dec.bias,
+                    "score": dec.score,
+                    "allow": dec.allow,
+                }
                 await redis_store.lpush("anchor:history", json.dumps(item))
                 await redis_store.ltrim("anchor:history", 0, 200)
             except Exception as e:
@@ -208,6 +217,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
