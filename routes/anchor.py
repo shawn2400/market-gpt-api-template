@@ -1,8 +1,4 @@
 # routes/anchor.py
-# =========================
-# REST API לניהול Anchor (Bias/Score)
-# כולל Redis היסטוריה
-# =========================
 from __future__ import annotations
 import json, time
 from typing import List, Dict, Any
@@ -14,8 +10,8 @@ from utils.auth import require_api_key
 
 router = APIRouter(tags=["Anchor"], dependencies=[Depends(require_api_key)])
 
-# --- Rate limit ---
-_rl_state = {}
+# Rate-limit פשוט בזיכרון
+_rl_state: Dict[str, list] = {}
 def _rl(ip: str, limit=20, window=60):
     now = time.time()
     calls = [c for c in _rl_state.get(ip, []) if now - c < window]
@@ -32,10 +28,12 @@ class AnchorHistoryResponse(BaseModel):
 class AnchorLiveResponse(BaseModel):
     ok: bool = True; side: str; decision: Dict[str, Any]
 
-@router.get("/anchor/history", response_model=AnchorHistoryResponse)
+@router.get("/history", response_model=AnchorHistoryResponse)
 async def get_anchor_history(limit: int = Query(50, ge=10, le=200), request: Request = None):
-    if not _rl(request.client.host): raise HTTPException(429, "Rate limit exceeded")
-    if not redis_client: raise HTTPException(status_code=500, detail="Redis not available")
+    if request and not _rl(request.client.host): 
+        raise HTTPException(429, "Rate limit exceeded")
+    if not redis_client:
+        raise HTTPException(status_code=500, detail="Redis not available")
     raw_items = redis_client.lrange("anchor:history", 0, limit - 1) or []
     items: List[AnchorSnapshot] = []
     for raw in raw_items:
@@ -43,13 +41,20 @@ async def get_anchor_history(limit: int = Query(50, ge=10, le=200), request: Req
         except Exception: continue
     return AnchorHistoryResponse(count=len(items), items=items)
 
-@router.get("/anchor/live", response_model=AnchorLiveResponse)
+@router.get("/live", response_model=AnchorLiveResponse)
 async def get_anchor_live(side: str = Query("LONG", regex="^(LONG|SHORT)$"), request: Request = None):
-    if not _rl(request.client.host): raise HTTPException(429, "Rate limit exceeded")
+    if request and not _rl(request.client.host):
+        raise HTTPException(429, "Rate limit exceeded")
     dec: AnchorDecision = evaluate_anchor(side)
-    return AnchorLiveResponse(side=side,
-        decision={"mode_requested": dec.mode_requested, "mode_applied": dec.mode_applied,
-                  "bias": dec.bias, "score": dec.score, "allow": dec.allow,
-                  "severity": dec.severity, "reason": dec.reason})
+    return AnchorLiveResponse(side=side, decision={
+        "mode_requested": getattr(dec, "mode_requested", None),
+        "mode_applied": getattr(dec, "mode_applied", None),
+        "bias": getattr(dec, "bias", None),
+        "score": getattr(dec, "score", None),
+        "allow": getattr(dec, "allow", None),
+        "severity": getattr(dec, "severity", None),
+        "reason": getattr(dec, "reason", None),
+    })
+
 
 
