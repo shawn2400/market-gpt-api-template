@@ -36,8 +36,7 @@ logging.getLogger().setLevel(LOG_LEVEL)
 
 if not LIGHT_MODE:
     from collections import deque
-    LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", 200))
-    LOG_BUFFER = deque(maxlen=LOG_BUFFER_SIZE)
+    LOG_BUFFER = deque(maxlen=int(os.getenv("LOG_BUFFER_SIZE", 200)))
 
     class MemoryLogHandler(logging.Handler):
         def emit(self, record):
@@ -49,36 +48,30 @@ if not LIGHT_MODE:
             })
     logger.addHandler(MemoryLogHandler())
 
-# --- Config Check (Soft) ---
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+# --- Config check ---
+BINANCE_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-
-if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-    logger.warning("⚠️ Binance API keys not set (trading disabled)")
+if not BINANCE_KEY:
+    logger.warning("⚠️ Binance API key not set → trading disabled")
 if not OPENAI_KEY or OPENAI_KEY.startswith("YOUR_REAL_"):
-    logger.warning("⚠️ OpenAI API key not set (AI routes disabled)")
+    logger.warning("⚠️ OpenAI API key not set → AI routes disabled")
 
 logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
 # --- FastAPI App ---
-app = FastAPI(
-    title="AlgoGPT API",
-    version=APP_VERSION,
-    description="AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת"
-)
+app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
 
-# --- Middlewares ---
+# Middlewares
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
-# --- Static Files ---
+# Static
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Routers ---
+# Routers
 from routes.ai import router as ai_router
 from routes.multi_scan import router as scan_router
 from routes.trade import router as trade_router
@@ -99,23 +92,18 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI Router only if key exists
 if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
     app.include_router(ai_router, prefix="/ai", tags=["AI"])
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
-else:
-    logger.warning("⚠️ AI routes disabled (missing or placeholder OPENAI_API_KEY)")
 
-# ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
-# --- Price cache ---
+# --- Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
 
 def update_price(symbol: str, price: float) -> None:
-    if not price:
-        return
-    LAST_PRICE_CACHE[symbol.upper()] = {"price": price, "ts": time.time()}
+    if price:
+        LAST_PRICE_CACHE[symbol.upper()] = {"price": price, "ts": time.time()}
 
 def get_price(symbol: str) -> float | None:
     return LAST_PRICE_CACHE.get(symbol.upper(), {}).get("price")
@@ -126,99 +114,57 @@ def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
 
 # --- Background tasks ---
 async def auto_anchor_updater(interval: int = 20):
-    anchors = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
-    while True:
-        for sym in anchors:
-            try:
-                price = futures_mark_price(sym)
-                if price and price > 0:
-                    update_price(sym, price)
-                    logger.info({"event": "anchor_update", "symbol": sym, "price": price})
-            except Exception as e:
-                level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-                logger.log(level, {"event": "anchor_update_error", "symbol": sym, "error": str(e)})
-        await asyncio.sleep(interval)
+    for sym in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]:
+        try:
+            price = futures_mark_price(sym)
+            if price and price > 0:
+                update_price(sym, price)
+                logger.info({"event": "anchor_update", "symbol": sym, "price": price})
+        except Exception as e:
+            logger.warning({"event": "anchor_update_error", "symbol": sym, "error": str(e)})
+    await asyncio.sleep(interval)
 
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
     if LIGHT_MODE or PRICE_MONITOR_DISABLE:
-        logger.warning("⚠️ Skipping price_monitor_loop")
         return
     while True:
-        try:
-            for sym in list(LAST_PRICE_CACHE.keys()):
+        for sym in list(LAST_PRICE_CACHE.keys()):
+            try:
                 price_val = futures_mark_price(sym)
                 if price_val:
                     update_price(sym, price_val)
-                    logger.info({"event": "price_monitor", "symbol": sym, "price": price_val})
-        except Exception as e:
-            level = logging.WARNING if SUPPRESS_BINANCE_WARNINGS else logging.ERROR
-            logger.log(level, {"event": "price_monitor_error", "error": str(e)})
+            except Exception as e:
+                logger.warning({"event": "price_monitor_error", "error": str(e)})
         await asyncio.sleep(interval)
 
-async def anchor_snapshot_loop(interval: int = int(os.getenv("ANCHOR_SNAPSHOT_INTERVAL", "30"))):
+async def anchor_snapshot_loop(interval: int = 30):
     if LIGHT_MODE:
-        logger.warning("⚠️ Skipping anchor_snapshot_loop (LIGHT_MODE=1)")
         return
-    sides = ["LONG", "SHORT"]
     while True:
-        for side in sides:
+        for side in ["LONG", "SHORT"]:
             try:
                 dec = evaluate_anchor(side)
-                item = {
-                    "ts": int(time.time()),
-                    "side": side,
-                    "bias": dec.bias,
-                    "score": dec.score,
-                    "allow": dec.allow
-                }
+                item = {"ts": int(time.time()), "side": side, "bias": dec.bias, "score": dec.score, "allow": dec.allow}
                 await redis_store.lpush("anchor:history", json.dumps(item))
                 await redis_store.ltrim("anchor:history", 0, 200)
-                logger.info({"event": "anchor_snapshot", **item})
             except Exception as e:
                 logger.warning({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
-# --- Cache cleaner ---
-CACHE_DIR = Path("static/cache")
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-async def cache_cleaner(interval: int = 3600, max_files: int = 100, max_age: int = 86400):
-    if LIGHT_MODE:
-        return
-    while True:
-        try:
-            files = sorted(CACHE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            now = time.time()
-            for f in files:
-                if now - f.stat().st_mtime > max_age:
-                    f.unlink(missing_ok=True)
-            for f in files[max_files:]:
-                f.unlink(missing_ok=True)
-        except Exception as e:
-            logger.warning({"event": "cache_cleaner_error", "error": str(e)})
-        await asyncio.sleep(interval)
-
-# --- Startup ---
+# Startup
 @app.on_event("startup")
 async def startup_event():
-    try:
-        if LIGHT_MODE:
-            logger.warning("⚠️ Startup in LIGHT_MODE=1 → background tasks disabled")
-            return
-        watchlist = load_watchlist()
-        symbols = [it["symbol"] for it in watchlist]
-        if "BTCUSDT" not in [s.upper() for s in symbols]:
-            symbols.insert(0, "BTCUSDT")
+    if LIGHT_MODE:
+        return
+    watchlist = load_watchlist()
+    symbols = [it["symbol"] for it in watchlist]
+    if "BTCUSDT" not in [s.upper() for s in symbols]:
+        symbols.insert(0, "BTCUSDT")
+    asyncio.create_task(auto_anchor_updater())
+    asyncio.create_task(price_monitor_loop())
+    asyncio.create_task(anchor_snapshot_loop())
 
-        asyncio.create_task(auto_anchor_updater())
-        if not PRICE_MONITOR_DISABLE:
-            asyncio.create_task(price_monitor_loop())
-        asyncio.create_task(anchor_snapshot_loop())
-        asyncio.create_task(cache_cleaner())
-    except Exception as e:
-        logger.error({"event": "startup_error", "error": str(e)})
-
-# --- Health ---
+# Health
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
@@ -231,29 +177,20 @@ async def health():
 async def health_live():
     return {"status": "live"}
 
-# --- Debug: list routes ---
 @app.get("/_routes", tags=["Debug"])
 async def list_routes():
-    items = []
-    for r in app.router.routes:
-        path = getattr(r, "path", None)
-        name = getattr(r, "name", None)
-        methods = list(getattr(r, "methods", []) or [])
-        if not methods and not hasattr(r, "methods"):
-            methods = ["*"]
-        items.append({"path": path, "name": name, "methods": methods, "type": r.__class__.__name__})
-    return items
+    return [{"path": r.path, "name": r.name, "methods": list(r.methods or []), "type": r.__class__.__name__}
+            for r in app.router.routes]
 
-# --- Exception Handler ---
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({"event": "exception", "error": str(exc)}, extra={"path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-# --- Entrypoint ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
