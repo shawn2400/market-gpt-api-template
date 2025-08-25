@@ -96,15 +96,13 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI Routes
+# ✅ AI
 if ENABLE_AI_ROUTES:
     if OPENAI_API_KEY and not OPENAI_API_KEY.startswith("YOUR_REAL_"):
         app.include_router(ai_router, prefix="/ai", tags=["AI"])
         logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
     else:
         logger.warning({"event": "ai_routes_disabled", "reason": "Missing or placeholder OPENAI_API_KEY"})
-else:
-    logger.info({"event": "ai_routes_disabled", "reason": "ENABLE_AI_ROUTES=false"})
 
 # ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
