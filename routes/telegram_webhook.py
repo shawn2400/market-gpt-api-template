@@ -12,19 +12,19 @@ OUT_TOK = os.getenv("OUTGOING_WEBHOOK_TOKEN", "").strip()
 
 async def _notify_core(trade_id: str, decision: str, meta: dict):
     if not OUT_URL:
-        return {"ok": True, "sent": False}  # אין לאן לשלוח → דילוג
+        return {"ok": True, "sent": False}
     payload = {"trade_id": trade_id, "decision": decision, "meta": meta, "token": OUT_TOK}
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(OUT_URL, json=payload)
-        ok = r.status_code // 100 == 2
-        return {"ok": ok, "status": r.status_code, "body": r.text}
+        return {"ok": (200 <= r.status_code < 300), "status": r.status_code, "body": r.text}
 
 @router.post("/webhook")
 async def webhook(request: Request):
     update = await request.json()
 
     if "callback_query" not in update:
-        return {"ok": True}  # מתעניינים רק בלחיצות כפתור
+        # אפשר להחזיר 200 תמיד – טלגרם מצפה לזה
+        return {"ok": True}
 
     cq      = update["callback_query"]
     data    = cq.get("data", "")
@@ -35,11 +35,10 @@ async def webhook(request: Request):
     if not data or not chat_id or not mid:
         raise HTTPException(400, "invalid callback")
 
-    # data: approve:<tid> / reject:<tid> / adjust:<tid>
-    try:
-        action, tid = data.split(":", 1)
-    except:
+    if ":" not in data:
         raise HTTPException(400, "bad callback_data")
+
+    action, tid = data.split(":", 1)
 
     if action == "approve":
         await edit_message(chat_id, mid, f"✅ טרייד {tid} — אושר")
@@ -54,3 +53,4 @@ async def webhook(request: Request):
         raise HTTPException(400, "unknown action")
 
     return {"ok": True}
+
