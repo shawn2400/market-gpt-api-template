@@ -16,7 +16,7 @@ LIGHT_MODE = os.getenv("LIGHT_MODE", "0").strip().lower() in ("1", "true", "yes"
 SUPPRESS_BINANCE_WARNINGS = os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 
 from utils.config import (
-    check_config, dump_config_sanitized, LOG_LEVEL,
+    dump_config_sanitized, LOG_LEVEL,
     PRICE_MONITOR_INTERVAL, PRICE_MONITOR_DISABLE,
     ENABLE_AI_ROUTES, OPENAI_API_KEY,
 )
@@ -49,13 +49,17 @@ if not LIGHT_MODE:
             })
     logger.addHandler(MemoryLogHandler())
 
-try:
-    check_config()
-    logger.info({"event": "config_snapshot", **dump_config_sanitized()})
-except Exception as e:
-    logger.error({"event": "config_error", "error": str(e)})
-    if not LIGHT_MODE:
-        raise
+# --- Config Check (Soft) ---
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+
+if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+    logger.warning("⚠️ Binance API keys not set (trading disabled)")
+if not OPENAI_KEY or OPENAI_KEY.startswith("YOUR_REAL_"):
+    logger.warning("⚠️ OpenAI API key not set (AI routes disabled)")
+
+logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
 # --- FastAPI App ---
 app = FastAPI(
@@ -86,7 +90,6 @@ from routes.market import router as market_router
 from routes.binance_status import router as binance_status_router
 import routes.executor as executor_router
 
-# ✅ Routers
 app.include_router(scan_router, tags=["Scan"])
 app.include_router(trade_router, prefix="/trade", tags=["Trade"])
 app.include_router(grid_router, prefix="/grid", tags=["Grid"])
@@ -96,13 +99,12 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI
-if ENABLE_AI_ROUTES:
-    if OPENAI_API_KEY and not OPENAI_API_KEY.startswith("YOUR_REAL_"):
-        app.include_router(ai_router, prefix="/ai", tags=["AI"])
-        logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
-    else:
-        logger.warning({"event": "ai_routes_disabled", "reason": "Missing or placeholder OPENAI_API_KEY"})
+# ✅ AI Router only if key exists
+if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
+    app.include_router(ai_router, prefix="/ai", tags=["AI"])
+    logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
+else:
+    logger.warning("⚠️ AI routes disabled (missing or placeholder OPENAI_API_KEY)")
 
 # ✅ Executor
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
