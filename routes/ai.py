@@ -1,22 +1,24 @@
 # routes/ai.py
 from __future__ import annotations
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Literal, Dict, Any, List
 from fastapi import APIRouter, Depends, Body, Query
 from pydantic import BaseModel, Field
+import os
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.ai_analysis import analyze_with_ai
 
-# ❌ בלי prefix="/ai" כאן – הוא יתווסף רק ב-main.py
+# ❌ בלי prefix="/ai" כאן – הוא יתווסף ב-main.py
 router = APIRouter(
     tags=["AI"],
-    dependencies=[Depends(require_api_key)],  # ✅ חובה בכל הנתיבים
+    dependencies=[Depends(require_api_key)],  # ✅ כל הנתיבים מחייבים Bearer
 )
 
 Side = Literal["LONG", "SHORT"]
 
+# -------- Models --------
 class QualityRequest(BaseModel):
     symbol: str
     side: Side
@@ -33,6 +35,16 @@ class QualityResponse(BaseModel):
     anchor: Dict[str, Any]
     components: Dict[str, Any]
 
+class AnalysisResult(BaseModel):
+    symbol: str
+    interval: str
+    analysis: str
+
+class ManualScanResponse(BaseModel):
+    interval: str
+    results: List[Dict[str, Any]]
+
+# -------- Utils --------
 def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
     return {
         "mode_requested": getattr(anchor, "mode_requested", None),
@@ -43,9 +55,9 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
+# -------- Routes --------
 @router.get("/health")
 async def ai_health():
-    import os
     ok = bool(os.getenv("OPENAI_API_KEY"))
     return {
         "ok": ok,
@@ -54,9 +66,7 @@ async def ai_health():
     }
 
 @router.post("/quality", response_model=QualityResponse)
-async def post_ai_quality(
-    payload: QualityRequest = Body(...),
-) -> QualityResponse:
+async def post_ai_quality(payload: QualityRequest = Body(...)) -> QualityResponse:
     anchor = evaluate_anchor(payload.side)
     q = compute_quality(
         symbol=payload.symbol,
@@ -76,8 +86,7 @@ async def post_ai_quality(
         anchor=_mk_anchor_dict(anchor),
     )
 
-# ✅ ניתוח GPT חי
-@router.get("/analyze")
+@router.get("/analyze", response_model=AnalysisResult)
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     data = {
         "symbol": symbol,
@@ -88,10 +97,9 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
         "volume": "High",
     }
     txt = await analyze_with_ai(data)
-    return {"symbol": symbol, "interval": interval, "analysis": txt}
+    return AnalysisResult(symbol=symbol, interval=interval, analysis=txt)
 
-# ✅ סריקה ידנית (תומך במספר סמלים)
-@router.get("/manual-scan")
+@router.get("/manual-scan", response_model=ManualScanResponse)
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
     result = []
     for s in symbols.split(","):
@@ -105,7 +113,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         }
         txt = await analyze_with_ai(data)
         result.append({"symbol": s.strip(), "analysis": txt})
-    return {"interval": interval, "results": result}
+    return ManualScanResponse(interval=interval, results=result)
 
 
 
