@@ -1,17 +1,14 @@
 # routes/trade_sink.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, Body, Header, HTTPException
+from fastapi import APIRouter, Depends, Body, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict
 from utils.auth import require_api_key
 from utils.telegram_api import send_message, approve_keyboard
-import os, uuid, time
+from utils.security import verify_hmac, idem_seen
+import uuid
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
-
-# Idempotency (אופציונלי) – זיכרון זמני למניעת שכפול הודעות
-_IDEM_CACHE: Dict[str, float] = {}
-_IDEM_TTL = 60 * 10  # 10 דקות
 
 class TradeIngest(BaseModel):
     trade_id: Optional[str] = None
@@ -33,37 +30,29 @@ class TradeIngest(BaseModel):
     eta_tp2: Optional[str] = None
     eta_tp3: Optional[str] = None
     reason: Optional[str] = None
-    # אבטחה (אופציונלי): חתימה HMAC מצד ה-Core (נבדקת ע"י reverse proxy/תוסף)
-    signature: Optional[str] = None
 
 def _fmt(v: Optional[float]) -> str:
     return f"`{v:.6f}`" if v is not None else "`—`"
 
-def _idem_ok(key: Optional[str]) -> bool:
-    if not key:
-        return True
-    now = time.time()
-    # ניקוי ישן
-    for k, ts in list(_IDEM_CACHE.items()):
-        if now - ts > _IDEM_TTL:
-            _IDEM_CACHE.pop(k, None)
-    if key in _IDEM_CACHE:
-        return False
-    _IDEM_CACHE[key] = now
-    return True
-
 @router.post("/trade-ingest")
 async def trade_ingest(
+    request: Request,
     payload: TradeIngest = Body(...),
-    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False)
+    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
+    x_signature: Optional[str] = Header(default=None, convert_underscores=False),
 ):
-    # מניעת כפילויות (אופציונלי)
+    # 1) אימות מקור (HMAC)
+    raw = await request.body()
+    if not verify_hmac(x_signature, raw):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    # 2) Idempotency – מניעת כפילויות
     idem_key = x_idempotency_key or (payload.trade_id or "")
-    if not _idem_ok(idem_key):
+    if idem_seen(idem_key):
         return {"ok": True, "duplicate": True}
 
+    # 3) שליחה לטלגרם (דק — ללא חישובים)
     tid = payload.trade_id or uuid.uuid4().hex[:8]
-
     txt = "\n".join(filter(None, [
         "🧠 *AlgoGPT — טרייד מוכן*",
         f"*{payload.symbol}* | *{payload.side.upper()}* | מחיר עכשיו: `{payload.current_price:.6f}`",
@@ -80,12 +69,13 @@ async def trade_ingest(
         + (f"TP1: _{payload.eta_tp1}_ | " if payload.eta_tp1 else "TP1: _—_ | ")
         + (f"TP2: _{payload.eta_tp2}_ | " if payload.eta_tp2 else "TP2: _—_ | ")
         + (f"TP3: _{payload.eta_tp3}_" if payload.eta_tp3 else "TP3: _—_"),
-        (f"סיבה: {payload.reason}" if payload.reason else None)
+        (f"סיבה: {payload.reason}" if payload.reason else None),
+        f"\nID: `{tid}`"
     ]))
-
-    kb = approve_keyboard(tid)
-    res = await send_message(txt, reply_markup=kb)
+    res = await send_message(txt, reply_markup=approve_keyboard(tid))
     if not res.get("ok"):
         raise HTTPException(500, f"Telegram send failed: {res}")
+
     return {"ok": True, "trade_id": tid, "telegram": res}
+
 
