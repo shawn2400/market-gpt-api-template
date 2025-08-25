@@ -3,19 +3,20 @@ from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
 from fastapi import APIRouter, Depends, Body, Query, HTTPException
 from pydantic import BaseModel, Field
+
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.indicators import prepare_indicators_for_backtest
-from utils.get_klines import aget_klines  # async wrapper ללא פרמטר market שגוי
+from utils.get_klines import aget_klines  # async wrapper
 
-# analyze_with_ai עלול לא להיות זמין; נטפל בפאולבק
+# analyze_with_ai יכול להיות לא זמין; ניפול לפולבאק טכני
 try:
     from utils.ai_analysis import analyze_with_ai
 except Exception:
     analyze_with_ai = None  # type: ignore
 
-router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
 
@@ -78,43 +79,36 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         anchor=_mk_anchor_dict(anchor),
     )
 
-def _fallback_text(last_row: Dict[str, Any], symbol: str, interval: str) -> str:
-    ema_bias = "long" if last_row.get("ema21", 0) > last_row.get("ema50", 0) else "short"
-    rsi = float(last_row.get("rsi", 50.0))
-    adx = float(last_row.get("adx", 15.0))
+def _fallback_text(row: Dict[str, Any], symbol: str, interval: str) -> str:
+    ema_bias = "long" if row.get("ema21", 0) > row.get("ema50", 0) else "short"
+    rsi = row.get("rsi", 50.0)
+    adx = row.get("adx", 15.0)
     return (f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}. "
             f"Use ATR for SL/TP; wait for confluence on dual TF.")
 
 @router.get("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     try:
-        # נתונים חיים מ-Binance Futures (ברירת מחדל של aget_klines)
-        df = await aget_klines(symbol, interval, limit=200)
+        df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
             raise HTTPException(status_code=502, detail="No klines data returned")
-
         indicators = prepare_indicators_for_backtest(df)
         if indicators is None or len(indicators) == 0:
             raise HTTPException(status_code=502, detail="Indicators preparation failed")
 
         last_row = indicators.iloc[-1].to_dict()
-
         if analyze_with_ai:
             try:
                 txt = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
                 return {"symbol": symbol.upper(), "interval": interval, "analysis": txt, "fallback": False}
             except Exception as e:
-                return {
-                    "symbol": symbol.upper(), "interval": interval,
-                    "analysis": _fallback_text(last_row, symbol.upper(), interval),
-                    "fallback": True, "error": str(e)
-                }
+                return {"symbol": symbol.upper(), "interval": interval,
+                        "analysis": _fallback_text(last_row, symbol.upper(), interval),
+                        "fallback": True, "error": str(e)}
         else:
-            return {
-                "symbol": symbol.upper(), "interval": interval,
-                "analysis": _fallback_text(last_row, symbol.upper(), interval),
-                "fallback": True
-            }
+            return {"symbol": symbol.upper(), "interval": interval,
+                    "analysis": _fallback_text(last_row, symbol.upper(), interval),
+                    "fallback": True}
     except HTTPException:
         raise
     except Exception as e:
@@ -125,30 +119,28 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
     result: List[Dict[str, Any]] = []
     for s in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
         try:
-            df = await aget_klines(s, interval, limit=200)
+            df = await aget_klines(s, interval, limit=200, market_type="futures")
             if df is None or len(df) == 0:
                 result.append({"symbol": s, "error": "No klines data returned"})
                 continue
-
             indicators = prepare_indicators_for_backtest(df)
             if indicators is None or len(indicators) == 0:
                 result.append({"symbol": s, "error": "Indicators preparation failed"})
                 continue
-
-            last_row = indicators.iloc[-1].to_dict()
+            last = indicators.iloc[-1].to_dict()
             if analyze_with_ai:
                 try:
-                    txt = await analyze_with_ai({"symbol": s, **last_row})
+                    txt = await analyze_with_ai({"symbol": s, **last})
                     result.append({"symbol": s, "analysis": txt, "fallback": False})
                 except Exception as e:
-                    result.append({"symbol": s, "analysis": _fallback_text(last_row, s, interval),
+                    result.append({"symbol": s, "analysis": _fallback_text(last, s, interval),
                                    "fallback": True, "error": str(e)})
             else:
-                result.append({"symbol": s, "analysis": _fallback_text(last_row, s, interval),
-                               "fallback": True})
+                result.append({"symbol": s, "analysis": _fallback_text(last, s, interval), "fallback": True})
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
