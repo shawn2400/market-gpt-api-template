@@ -9,8 +9,9 @@ REDIS_URL = (_raw or "").strip()
 
 redis_client: redis.Redis | None = None
 
+
 def _mask(url: str) -> str:
-    # redis://user:pass@host:6379 -> redis://user:****@host:6379
+    """הסתרת סיסמה בלוגים"""
     try:
         if "@" in url and "://" in url:
             head, tail = url.split("://", 1)
@@ -18,11 +19,12 @@ def _mask(url: str) -> str:
             if len(creds_host) == 2:
                 creds, host = creds_host
                 if ":" in creds:
-                    u, p = creds.split(":", 1)
+                    u, _ = creds.split(":", 1)
                     return f"{head}://{u}:****@{host}"
         return url
     except Exception:
         return url
+
 
 try:
     if not REDIS_URL:
@@ -40,6 +42,7 @@ try:
 except Exception as e:
     redis_client = None
     logger.error(f"[Redis] ❌ Connection failed ({_mask(REDIS_URL)}): {e} -> fallback to in-memory")
+
 
 
 
