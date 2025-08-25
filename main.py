@@ -51,6 +51,12 @@ if not LIGHT_MODE:
 # --- Config check ---
 BINANCE_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+logger.info({
+    "event": "env_loaded",
+    "BINANCE_API_KEY_len": len(BINANCE_KEY),
+    "OPENAI_API_KEY_len": len(OPENAI_KEY)
+})
+
 if not BINANCE_KEY:
     logger.warning("⚠️ Binance API key not set → trading disabled")
 if not OPENAI_KEY or OPENAI_KEY.startswith("YOUR_REAL_"):
@@ -92,7 +98,7 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 
-# ✅ AI Router – תמיד נרשם
+# ✅ AI Router
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 if ENABLE_AI_ROUTES and OPENAI_KEY and not OPENAI_KEY.startswith("YOUR_REAL_"):
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
@@ -185,7 +191,6 @@ async def health_live():
 async def list_routes():
     routes_list = []
     for r in app.router.routes:
-        # Mount (כמו StaticFiles) אין לו methods → נדלג
         methods = getattr(r, "methods", None)
         routes_list.append({
             "path": getattr(r, "path", None),
@@ -203,6 +208,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
