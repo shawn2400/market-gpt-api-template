@@ -1,10 +1,13 @@
 # routes/multi_scan.py
 from __future__ import annotations
 from fastapi import APIRouter, Query, HTTPException, Request
-from typing import Dict, List, Optional
-import os, requests, pandas as pd, time
+from typing import List
+import os, time
+import pandas as pd
+import requests
 from pydantic import BaseModel, Field
 from utils.indicators import prepare_indicators_for_backtest
+from utils.ai_analysis import analyze_with_ai
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 router = APIRouter(prefix="/scan", tags=["Scan"])
@@ -30,55 +33,33 @@ def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.Da
     arr = r.json()
     if not arr:
         return pd.DataFrame()
-    cols = [
-        "open_time","open","high","low","close","volume",
-        "close_time","qv","nTrades","taker_base","taker_quote","x"
-    ]
+    cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
     df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
-    for c in ("open", "high", "low", "close", "volume"):
+    for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df[["open", "high", "low", "close", "volume"]]
+    return df[["open","high","low","close","volume"]]
 
 class IndicatorSet(BaseModel):
-    rsi: Optional[float] = None
-    ema_21: Optional[float] = None
-    adx: Optional[float] = None
-    atr: Optional[float] = None
-    vwap_trend: Optional[bool] = None
+    rsi: float | None = None
+    ema_21: float | None = None
+    adx: float | None = None
+    atr: float | None = None
+    vwap_trend: bool | None = None
 
 class ScanSignal(BaseModel):
     symbol: str
     interval: str
-    indicators: Optional[IndicatorSet] = None
+    indicators: IndicatorSet | None = None
+    analysis: str | None = None
     ok: bool = True
-    error: Optional[str] = None
+    error: str | None = None
 
 class MultiScanResponse(BaseModel):
     ok: bool = True
     count_total: int
     returned: int
     signals: List[ScanSignal] = Field(default_factory=list)
-    error: Optional[str] = None
-
-@router.get("/info", response_model=MultiScanResponse)
-async def scan_info(
-    symbol: str = Query(...),
-    interval: str = Query("15m"),
-    limit: int = Query(200, ge=50, le=200),
-    request: Request = None
-) -> MultiScanResponse:
-    if not _rl(request.client.host):
-        raise HTTPException(429, "Rate limit exceeded")
-    try:
-        df = _fetch_klines(symbol, interval, limit)
-        if df.empty:
-            return MultiScanResponse(ok=False, count_total=1, returned=0, signals=[], error="no data")
-        ind = prepare_indicators_for_backtest(df)
-        row = ind.iloc[-1].to_dict()
-        sig = ScanSignal(symbol=symbol.upper(), interval=interval, indicators=IndicatorSet(**row))
-        return MultiScanResponse(ok=True, count_total=1, returned=1, signals=[sig])
-    except Exception as e:
-        return MultiScanResponse(ok=False, count_total=1, returned=0, signals=[], error=str(e))
+    error: str | None = None
 
 @router.get("/", response_model=MultiScanResponse)
 async def scan_symbols(
@@ -100,11 +81,13 @@ async def scan_symbols(
                 continue
             ind = prepare_indicators_for_backtest(df)
             row = ind.iloc[-1].to_dict()
-            out.append(ScanSignal(symbol=s, interval=interval, indicators=IndicatorSet(**row)))
+            ai_txt = await analyze_with_ai({"symbol": s, **row})
+            out.append(ScanSignal(symbol=s, interval=interval, indicators=IndicatorSet(**row), analysis=ai_txt))
         except Exception as e:
             out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
 
     return MultiScanResponse(ok=True, count_total=len(syms), returned=len(out), signals=out)
+
 
 
 
