@@ -1,6 +1,6 @@
 # main.py
 from __future__ import annotations
-import os, asyncio, logging, json, time
+import os, asyncio, logging, json, time, requests
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, Request
@@ -10,15 +10,22 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
 # --- Env ---
-IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
+IS_CLOUD = bool(
+    os.getenv("RENDER")
+    or os.getenv("RENDER_SERVICE_ID")
+    or os.getenv("DYNO")
+    or os.getenv("K_SERVICE")
+)
 if not IS_CLOUD:
     from dotenv import load_dotenv
     load_dotenv(override=False)
+
 
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
 
 LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
 SUPPRESS_BINANCE_WARNINGS = _to_bool(os.getenv("SUPPRESS_BINANCE_WARNINGS", "1"))
@@ -26,8 +33,10 @@ SUPPRESS_BINANCE_WARNINGS = _to_bool(os.getenv("SUPPRESS_BINANCE_WARNINGS", "1")
 # --- Config ---
 from utils import config as cfg
 from utils.config import (
-    dump_config_sanitized, LOG_LEVEL,
-    PRICE_MONITOR_INTERVAL, PRICE_MONITOR_DISABLE,
+    dump_config_sanitized,
+    LOG_LEVEL,
+    PRICE_MONITOR_INTERVAL,
+    PRICE_MONITOR_DISABLE,
     ENABLE_AI_ROUTES,
 )
 from utils.response_limits import ResponseSizeLimiter
@@ -38,7 +47,7 @@ from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store  # fallback אם Redis לא זמין
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.1")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -46,24 +55,30 @@ logging.getLogger().setLevel(LOG_LEVEL)
 
 if not LIGHT_MODE:
     from collections import deque
+
     LOG_BUFFER = deque(maxlen=int(os.getenv("LOG_BUFFER_SIZE", 200)))
 
     class MemoryLogHandler(logging.Handler):
         def emit(self, record):
-            LOG_BUFFER.append({
-                "time": datetime.now(timezone.utc).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-            })
+            LOG_BUFFER.append(
+                {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                }
+            )
+
     logger.addHandler(MemoryLogHandler())
 
 # --- Env check ---
-logger.info({
-    "event": "env_loaded",
-    "BINANCE_API_KEY_len": len(cfg.BINANCE_API_KEY),
-    "OPENAI_API_KEY_len": len(cfg.OPENAI_API_KEY),
-})
+logger.info(
+    {
+        "event": "env_loaded",
+        "BINANCE_API_KEY_len": len(cfg.BINANCE_API_KEY),
+        "OPENAI_API_KEY_len": len(cfg.OPENAI_API_KEY),
+    }
+)
 logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
 if not cfg.BINANCE_API_KEY:
@@ -72,11 +87,19 @@ if not cfg.OPENAI_API_KEY or cfg.OPENAI_API_KEY.startswith("YOUR_REAL_"):
     logger.warning("⚠️ OpenAI API key not set → AI may return fallback only")
 
 # --- FastAPI App ---
-app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
+app = FastAPI(
+    title="AlgoGPT API",
+    version=APP_VERSION,
+    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת",
+)
 
-app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
+app.add_middleware(
+    ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880))
+)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
 Path("static").mkdir(parents=True, exist_ok=True)
@@ -107,21 +130,30 @@ app.include_router(price_router, prefix="/price", tags=["Price"])
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
-if ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY and not cfg.OPENAI_API_KEY.startswith("YOUR_REAL_"):
-    logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
+if ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY and not cfg.OPENAI_API_KEY.startswith(
+    "YOUR_REAL_"
+):
+    logger.info(
+        {"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
+    )
 else:
-    logger.warning("⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)")
+    logger.warning(
+        "⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)"
+    )
 
 # --- Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
+
 
 def update_price_local(symbol: str, price: float) -> None:
     if price:
         LAST_PRICE_CACHE[symbol.upper()] = {"price": float(price), "ts": time.time()}
 
+
 def get_price_local(symbol: str) -> float | None:
     info = LAST_PRICE_CACHE.get(symbol.upper(), {})
     return float(info["price"]) if "price" in info else None
+
 
 def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
     info = LAST_PRICE_CACHE.get(symbol.upper())
@@ -136,10 +168,15 @@ async def auto_anchor_updater_loop(interval: int = 20):
                 price = futures_mark_price(sym)
                 if price and float(price) > 0:
                     update_price_local(sym, float(price))
-                    logger.info({"event": "anchor_update", "symbol": sym, "price": float(price)})
+                    logger.info(
+                        {"event": "anchor_update", "symbol": sym, "price": float(price)}
+                    )
             except Exception as e:
-                logger.warning({"event": "anchor_update_error", "symbol": sym, "error": str(e)})
+                logger.warning(
+                    {"event": "anchor_update_error", "symbol": sym, "error": str(e)}
+                )
         await asyncio.sleep(interval)
+
 
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
     if PRICE_MONITOR_DISABLE:
@@ -151,8 +188,11 @@ async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
                 if price_val:
                     update_price_local(sym, float(price_val))
             except Exception as e:
-                logger.warning({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
+                logger.warning(
+                    {"event": "price_monitor_error", "symbol": sym, "error": str(e)}
+                )
         await asyncio.sleep(interval)
+
 
 async def anchor_snapshot_loop(interval: int = 30):
     while True:
@@ -170,9 +210,17 @@ async def anchor_snapshot_loop(interval: int = 30):
                     await redis_store.lpush("anchor:history", json.dumps(item))
                     await redis_store.ltrim("anchor:history", 0, 200)
                 except Exception as e:
-                    logger.warning({"event": "anchor_snapshot_cache_error", "side": side, "error": str(e)})
+                    logger.warning(
+                        {
+                            "event": "anchor_snapshot_cache_error",
+                            "side": side,
+                            "error": str(e),
+                        }
+                    )
             except Exception as e:
-                logger.warning({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
+                logger.warning(
+                    {"event": "anchor_snapshot_error", "side": side, "error": str(e)}
+                )
         await asyncio.sleep(interval)
 
 # --- Startup ---
@@ -192,22 +240,25 @@ async def startup_event():
         logger.error({"event": "binance_ping_error", "error": str(e)})
 
     # --- OpenAI quick check ---
-    if cfg.ENABLE_AI_ROUTES:
+    if cfg.ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY:
         try:
-            import requests
             r = requests.get(
                 "https://api.openai.com/v1/models",
                 headers={"Authorization": f"Bearer {cfg.OPENAI_API_KEY}"},
                 timeout=5,
             )
             if r.status_code == 200:
-                logger.info({"event": "openai_key_validated", "model": cfg.OPENAI_MODEL})
+                logger.info(
+                    {"event": "openai_key_validated", "model": cfg.OPENAI_MODEL}
+                )
             else:
-                logger.error({
-                    "event": "openai_key_invalid",
-                    "status_code": r.status_code,
-                    "detail": r.text[:200]
-                })
+                logger.error(
+                    {
+                        "event": "openai_key_invalid",
+                        "status_code": r.status_code,
+                        "detail": r.text[:200],
+                    }
+                )
         except Exception as e:
             logger.error({"event": "openai_key_check_failed", "error": str(e)})
 
@@ -222,7 +273,9 @@ async def startup_event():
             if p:
                 update_price_local(s, float(p))
         except Exception as e:
-            logger.warning({"event": "warmup_price_error", "symbol": s, "error": str(e)})
+            logger.warning(
+                {"event": "warmup_price_error", "symbol": s, "error": str(e)}
+            )
 
     asyncio.create_task(auto_anchor_updater_loop())
     asyncio.create_task(price_monitor_loop())
@@ -232,11 +285,23 @@ async def startup_event():
 # --- Health ---
 @app.get("/", tags=["Config"])
 async def root_status():
-    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
+    return {
+        "ok": True,
+        "status": "ok",
+        "version": APP_VERSION,
+        "mode": "light" if LIGHT_MODE else "normal",
+    }
+
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
+    return {
+        "ok": True,
+        "status": "ok",
+        "version": APP_VERSION,
+        "mode": "light" if LIGHT_MODE else "normal",
+    }
+
 
 @app.get("/health/live", tags=["Health"])
 async def health_live():
@@ -258,12 +323,19 @@ async def list_routes():
 # --- Exception handler ---
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
-    logger.error({"event": "exception", "error": str(exc)}, extra={"path": request.url.path})
+    logger.error(
+        {"event": "exception", "error": str(exc)}, extra={"path": request.url.path}
+    )
     return JSONResponse({"detail": str(exc)}, status_code=500)
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
+    uvicorn.run(
+        "main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False
+    )
+
 
 
 
