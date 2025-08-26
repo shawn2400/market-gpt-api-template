@@ -2,7 +2,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List
 from utils.watchlist_utils import build_symbol_pool
 
 topk_router = APIRouter()
@@ -28,5 +28,6 @@ def context_topk(
         explore_prob=explore_prob,
     )
     return TopKOut(ok=True, symbols=syms)
+
 
 
