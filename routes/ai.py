@@ -200,3 +200,4 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
 
 
 
+
