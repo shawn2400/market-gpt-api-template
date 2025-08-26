@@ -11,7 +11,7 @@ from utils.auth import require_api_key
 
 logger = logging.getLogger("algogpt.anchor")
 
-router = APIRouter(tags=["Anchor"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["Anchor"], prefix="/anchor", dependencies=[Depends(require_api_key)])
 
 # --- Rate-limit פשוט בזיכרון ---
 _rl_state: Dict[str, list] = {}
@@ -23,7 +23,6 @@ def _rl(ip: str, limit=20, window=60):
     calls.append(now)
     _rl_state[ip] = calls
     return True
-
 
 # --- Models ---
 class AnchorSnapshot(BaseModel):
@@ -43,11 +42,10 @@ class AnchorLiveResponse(BaseModel):
     side: str
     decision: Dict[str, Any]
 
-
 # --- Endpoints ---
 @router.get("/history", response_model=AnchorHistoryResponse)
 async def get_anchor_history(
-    limit: int = Query(50, ge=10, le=200),
+    limit: int = Query(20, ge=10, le=200),
     request: Request = None,
 ):
     if request and not _rl(request.client.host):
@@ -57,7 +55,7 @@ async def get_anchor_history(
     try:
         if not redis_client:
             logger.warning("⚠️ Redis not initialized, returning empty history")
-            return AnchorHistoryResponse(count=0, items=[])
+            return AnchorHistoryResponse(ok=True, count=0, items=[])
 
         raw_items = redis_client.lrange("anchor:history", 0, limit - 1) or []
         for raw in raw_items:
@@ -65,12 +63,10 @@ async def get_anchor_history(
                 items.append(AnchorSnapshot(**json.loads(raw)))
             except Exception:
                 continue
-        return AnchorHistoryResponse(count=len(items), items=items)
+        return AnchorHistoryResponse(ok=True, count=len(items), items=items)
     except Exception as e:
         logger.error(f"⚠️ Anchor history fetch failed: {e}")
-        # fallback בטוח → מחזיר רשימה ריקה
-        return AnchorHistoryResponse(count=0, items=[])
-
+        return AnchorHistoryResponse(ok=False, count=0, items=[])
 
 @router.get("/live", response_model=AnchorLiveResponse)
 async def get_anchor_live(
@@ -82,6 +78,7 @@ async def get_anchor_live(
 
     dec: AnchorDecision = evaluate_anchor(side)
     return AnchorLiveResponse(
+        ok=True,
         side=side,
         decision={
             "mode_requested": getattr(dec, "mode_requested", None),
@@ -93,6 +90,7 @@ async def get_anchor_live(
             "reason": getattr(dec, "reason", None),
         },
     )
+
 
 
 
