@@ -1,6 +1,6 @@
 # utils/binance_client.py
 from __future__ import annotations
-import os, time, logging
+import os, logging
 from typing import Any, Optional, Dict
 import httpx
 from binance.client import Client
@@ -15,10 +15,8 @@ USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "t
 
 # --- Hosts ---
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
-_alts_raw = (
-    os.getenv("BINANCE_FAPI_ALTS")
-    or "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com"
-)
+_alts_raw = os.getenv("BINANCE_FAPI_ALTS") or \
+    "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com"
 _BINANCE_FAPI_HOSTS = []
 _seen = set()
 for h in [_BINANCE_FAPI_BASE] + [a.strip().rstrip("/") for a in _alts_raw.split(",") if a.strip()]:
@@ -32,24 +30,13 @@ SUPPRESS_BINANCE_WARNINGS = (
     os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 )
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
-_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
-# --- Circuit Breaker ---
-_CB_FAILS_FOR_OPEN = int(os.getenv("BINANCE_CB_FAILS_FOR_OPEN", "3"))
-_CB_COOLDOWN_SEC = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
-_CB_MAX_COOLDOWN = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
-_SOFT_ALLOW_EXINFO = (
-    os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip().lower() in ("1", "true", "yes")
-)
-
+# --- Cache ---
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
 _valid_futures_symbols: Optional[set[str]] = None
 
-_cb_fail_count: int = 0
-_cb_open_until: float = 0.0
-_cb_current_cooldown: int = _CB_COOLDOWN_SEC
-
+# --- UA ---
 _UA = {
     "User-Agent": "AlgoGPT/2.x (+httpx)",
     "Accept": "application/json",
@@ -126,13 +113,14 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
     if _futures_exchange_info_cache and not force_refresh:
         return _futures_exchange_info_cache
 
-    data = _get_json("fapi/v1/exchangeInfo")
-    _futures_exchange_info_cache = data
     try:
+        data = _get_json("fapi/v1/exchangeInfo")
+        _futures_exchange_info_cache = data
         symbols = {s["symbol"] for s in data.get("symbols", []) if s.get("contractType") == "PERPETUAL"}
         _valid_futures_symbols = symbols
-    except Exception:
-        _valid_futures_symbols = set()
+    except Exception as e:
+        logger.error(f"[Binance] futures_exchange_info_safe failed: {e}")
+        return _futures_exchange_info_cache or {"symbols": []}
     return _futures_exchange_info_cache
 
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
@@ -144,6 +132,7 @@ def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[s
         if s.get("symbol") == symbol.upper():
             return s
     return None
+
 
 
 
