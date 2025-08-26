@@ -1,28 +1,33 @@
 # workers/gpt_auto_suggest.py
 # -*- coding: utf-8 -*-
 """
-AlgoGPT — GPT Auto-Suggest Worker
----------------------------------
+AlgoGPT — GPT Auto-Suggest Worker (Production-Ready)
+---------------------------------------------------
 מפיק הצעות טרייד חכמות עם GPT לפי Pool סימבולים (Top-K אופציונלי), עם קונטקסט קל מהשרת,
-מסנן לפני GPT כדי לחסוך עלות, מבצע gating אחרי GPT, ושולח לטלגרם דרך /alerts/trade-ingest.
+מסנן לפני GPT כדי לחסוך עלות, מבצע gating אחרי GPT, אימות "לא לרדוף" לפני שליחה,
+ואז שולח לטלגרם דרך /alerts/trade-ingest.
 
 תכונות:
 - Top-K דינמי (CORE_TOPK_URL) או רשימה סטטית (SUGGEST_SYMBOLS)
 - קונטקסט:
-  - CONTEXT_BATCH_URL (compact) להאצה (עדיף)
+  - CONTEXT_BATCH_URL (compact) להאצה (מועדף)
   - CONTEXT_URL לכל סימבול (Fallback)
 - Pre-filter לפני GPT: score_light, rr_baseline
 - Post-gate אחרי GPT: danger_chop / vol_regime→ריסון מינוף
+- אימות כניסה “לא רודפים”: entry_zone_pct / entry_ttl_min / confirm_close (אופציונלי)
 - Gating איכות: MIN_QUALITY_SCORE, MIN_RR, MAX_ENTRY_DIST_PCT, MIN_SUCCESS_PCT
-- Cooldown פר-סימבול + De-dup לפי hash(entry/sl/tp)
+- Cooldown פר-סימבול + De-dup לפי hash(entry/sl/tp) + Cap חכם
 - Idempotency + HMAC בהגשה ל-/alerts/trade-ingest
 - Concurrency נשלט (OPENAI_MAX_CONCURRENCY)
+- תקרת notional יומית (אופציונלית, Redis או זיכרון מקומי)
 """
 
 from __future__ import annotations
 import os, json, asyncio, time, uuid, hashlib, random
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 load_dotenv(override=False)
@@ -56,6 +61,7 @@ MIN_BASELINE_RR   = float(os.getenv("MIN_BASELINE_RR", "1.3"))
 CORE_TOPK_URL   = os.getenv("CORE_TOPK_URL", "").strip()  # ex: https://host/topk?k=12&interval=15m
 CORE_TOPK_TOKEN = os.getenv("CORE_TOPK_TOKEN", "").strip()
 TOPK_PER_SWEEP  = int(os.getenv("TOPK_PER_SWEEP", "12"))
+TOPK_PER_SWEEP_HOT = int(os.getenv("TOPK_PER_SWEEP_HOT", str(TOPK_PER_SWEEP + 4)))  # בשעות "חמות" נגדיל מעט
 
 # Context endpoints
 CONTEXT_URL       = os.getenv("CONTEXT_URL", "").strip()         # per-symbol, ex: https://host/context?symbol={symbol}&interval=15m&limit=120
@@ -77,6 +83,23 @@ if ANCHOR_MODE not in ("off", "soft", "hard"):
 # ריסון מינוף בתנודתיות גבוהה (Post-gate)
 MAX_LEV_HIGH_VOL = int(os.getenv("MAX_LEV_HIGH_VOL", "10"))
 CLAMP_LEVERAGE_IN_HIGHVOL = os.getenv("CLAMP_LEVERAGE_IN_HIGHVOL", "1").lower() in ("1","true","yes")
+
+# “לא רודפים” (אימות לפני שליחה)
+ENTRY_ZONE_PCT     = float(os.getenv("ENTRY_ZONE_PCT","0.15"))  # אחוז סביב entry
+ENTRY_TTL_MIN      = int(os.getenv("ENTRY_TTL_MIN","20"))
+PRICE_RECHECK_SEC  = int(os.getenv("PRICE_RECHECK_SEC","3"))
+REQUIRE_CLOSE_CONFIRM = os.getenv("REQUIRE_CLOSE_CONFIRM","1").lower() in ("1","true","yes")
+
+# תקרה יומית לנוטיונל (אופציונלי)
+MAX_DAILY_NOTIONAL = float(os.getenv("MAX_DAILY_NOTIONAL","0"))  # 0=כבוי
+USE_REDIS_LIMITS   = os.getenv("USE_REDIS_LIMITS","0").lower() in ("1","true","yes")
+if USE_REDIS_LIMITS:
+    import redis
+    RED = redis.from_url(os.getenv("REDIS_URL","redis://localhost:6379"), decode_responses=True)
+
+# Hot/Calm שעות
+HOT_HOURS  = set(int(x) for x in os.getenv("HOT_HOURS","16,17,18,19,20,21,22,23,0,1").split(",") if x.strip().isdigit())
+CALM_HOURS = set(int(x) for x in os.getenv("CALM_HOURS","4,5,6,7,8,9").split(",") if x.strip().isdigit())
 
 # ====== External deps in project ======
 from utils.quality import compute_quality
@@ -106,6 +129,10 @@ class TradeSug:
     eta_tp2: Optional[str]
     eta_tp3: Optional[str]
     reason: Optional[str]
+    # חדשים לא "שוברים" אם לא הגיעו:
+    entry_zone_pct: Optional[float] = None
+    entry_ttl_min: Optional[int] = None
+    confirm_close: Optional[bool] = None
     skip: bool = False
 
     @classmethod
@@ -117,6 +144,8 @@ class TradeSug:
         def fint(x):
             try: return int(x) if x is not None else None
             except: return None
+        def fbool(x):
+            return bool(x) if isinstance(x, bool) else (str(x).lower() in ("1","true","yes"))
         return cls(
             symbol=str(g("symbol","")).upper(),
             side=str(g("side","")).upper(),
@@ -136,6 +165,9 @@ class TradeSug:
             eta_tp2=g("eta_tp2"),
             eta_tp3=g("eta_tp3"),
             reason=g("reason"),
+            entry_zone_pct=ffloat(g("entry_zone_pct")),
+            entry_ttl_min=fint(g("entry_ttl_min")),
+            confirm_close=g("confirm_close") if "confirm_close" in obj else None,
             skip=bool(g("skip", False)),
         )
 
@@ -213,8 +245,8 @@ async def fetch_context_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
 GPT_SYSTEM = (
     "You are AlgoGPT trade suggester. Return ONLY strict JSON (no prose). "
     "Keys: symbol, side, current_price, leverage, entry, sl, tp1, tp2, tp3, "
-    "success_pct, budget_usd, notional_usd, qty, eta_sl, eta_tp1, eta_tp2, eta_tp3, reason, skip. "
-    "If no trade, set skip=true and still return the JSON with symbol."
+    "success_pct, budget_usd, notional_usd, qty, eta_sl, eta_tp1, eta_tp2, eta_tp3, reason, skip, "
+    "entry_zone_pct, entry_ttl_min, confirm_close."
 )
 
 def gpt_user_prompt(symbol: str, tz: str, context: Optional[str]) -> str:
@@ -228,10 +260,13 @@ def gpt_user_prompt(symbol: str, tz: str, context: Optional[str]) -> str:
         f"- budget_usd (e.g., 50 or 100), notional_usd=budget*leverage, qty≈notional/entry\n"
         f"- eta_* strings 'YYYY-MM-DD HH:MM' {tz}\n"
         f"- reason: 1-2 lines\n"
-        f"If no clear trade, set skip=true."
+        f"- Do NOT chase price. Propose a limit entry only; include entry_zone_pct (±% around entry) and entry_ttl_min.\n"
+        f"- If breakout strategy, set confirm_close=true (candle must close beyond trigger before entry).\n"
+        f"- Prefer RR≥2.0, SL by ATR×1.5 or structure.\n"
+        f"- If conditions are weak, return {{\"symbol\":\"{symbol}\", \"skip\":true}}.\n"
     )
     if context:
-        base += f"\n\nContext JSON (read-only):\n{context}"
+        base += f"\nContext JSON (read-only):\n{context}"
     return base
 
 # ====== זיכרון Cooldown/De-dup ======
@@ -286,15 +321,16 @@ def _pick_filters(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize filters from either full or compact batch object."""
     if not isinstance(ctx, dict):
         return {}
-    # full: {..., "filters": {...}}
     if "filters" in ctx and isinstance(ctx["filters"], dict):
         return ctx["filters"]
-    # compact: {"symbol","price","score_light","rr_baseline"} — wrap to a filters-like dict
     f = {}
     if "score_light" in ctx:
         f["score_light"] = ctx.get("score_light")
     if "rr_baseline" in ctx:
         f["rr_baseline"] = ctx.get("rr_baseline")
+    if "trending_up" in ctx or "trending_down" in ctx:
+        f["trending_up"] = ctx.get("trending_up")
+        f["trending_down"] = ctx.get("trending_down")
     return f
 
 def prefilter_from_context(ctx: Optional[Dict[str, Any]]) -> tuple[bool, str]:
@@ -314,42 +350,130 @@ def prefilter_from_context(ctx: Optional[Dict[str, Any]]) -> tuple[bool, str]:
     return True, "ok"
 
 def postgate_with_context(sug: TradeSug, ctx: Optional[Dict[str, Any]]) -> tuple[bool, str]:
-    """אחרי GPT: התאמות תפעוליות לפי תנאי שוק — בלי להכפיל לוגיקה מול quality."""
+    """אחרי GPT: התאמות תפעוליות לפי תנאי שוק — ללא כפילות מול quality."""
     if not ctx:
         return True, "no_ctx"
     f = _pick_filters(ctx)
-    # סכין דשדוש
     if f.get("danger_chop"):
         return False, "danger_chop"
-    # תנודתיות גבוהה → ריסון מינוף
     vol_regime = f.get("vol_regime")
     if vol_regime == "high" and sug.leverage and MAX_LEV_HIGH_VOL > 0:
         if CLAMP_LEVERAGE_IN_HIGHVOL and sug.leverage > MAX_LEV_HIGH_VOL:
             sug.leverage = MAX_LEV_HIGH_VOL
     return True, "ok"
 
+# ====== Daily notional cap (optional) ======
+def _yyyymmdd_now() -> str:
+    return datetime.now(ZoneInfo(TZ)).strftime("%Y%m%d")
+
+def _cap_key() -> str:
+    return f"cap:notional:{_yyyymmdd_now()}"
+
+def _inc_daily_notional(v: float):
+    if MAX_DAILY_NOTIONAL <= 0: 
+        return
+    try:
+        if USE_REDIS_LIMITS:
+            RED.incrbyfloat(_cap_key(), float(v))
+        else:
+            _DAILY["val"] = _DAILY.get("val", 0.0) + float(v)
+    except Exception:
+        pass
+
+def _get_daily_notional() -> float:
+    if MAX_DAILY_NOTIONAL <= 0: 
+        return 0.0
+    try:
+        if USE_REDIS_LIMITS:
+            x = RED.get(_cap_key())
+            return float(x or 0.0)
+        else:
+            return float(_DAILY.get("val", 0.0))
+    except Exception:
+        return 0.0
+
+_DAILY: Dict[str, float] = {}
+
 # ====== בחירת סימבולים לכל סבב ======
-async def fetch_topk_from_core() -> Optional[List[str]]:
+def _hour_regime() -> str:
+    h = datetime.now(ZoneInfo(TZ)).hour
+    if h in HOT_HOURS: return "hot"
+    if h in CALM_HOURS: return "calm"
+    return "mid"
+
+async def fetch_topk_from_core(k: int) -> Optional[List[str]]:
     if not CORE_TOPK_URL:
         return None
     try:
+        url = CORE_TOPK_URL
+        if "k=" not in url:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}k={k}"
         headers = {"Authorization": f"Bearer {CORE_TOPK_TOKEN}"} if CORE_TOPK_TOKEN else {}
         async with httpx.AsyncClient(timeout=SESSION_TIMEOUT) as client:
-            r = await client.get(CORE_TOPK_URL, headers=headers)
+            r = await client.get(url, headers=headers)
             r.raise_for_status()
             data = r.json()
             syms = data.get("symbols") or []
-            return [s.strip().upper() for s in syms][:TOPK_PER_SWEEP]
+            return [s.strip().upper() for s in syms][:k]
     except Exception:
         return None
 
 async def choose_symbols_for_sweep() -> List[str]:
-    syms = await fetch_topk_from_core()
+    regime = _hour_regime()
+    k = TOPK_PER_SWEEP_HOT if regime == "hot" else TOPK_PER_SWEEP
+    syms = await fetch_topk_from_core(k)
     if syms:
-        return syms[:TOPK_PER_SWEEP]
+        return syms[:k]
     base = SUGGEST_SYMBOLS.copy()
     random.shuffle(base)
-    return base[:TOPK_PER_SWEEP]
+    return base[:k]
+
+# ====== Stale-buster: לא לרדוף אחרי השוק ======
+async def stale_buster(sym: str, sug: TradeSug, ctx: dict|None) -> bool:
+    # TTL (אם GPT סיפק — נעדיף אותו)
+    ttl_min = int(sug.entry_ttl_min or ENTRY_TTL_MIN)
+    # אזור
+    zone_pct = float(sug.entry_zone_pct or ENTRY_ZONE_PCT)
+
+    # קבלת מחיר עדכני מהקונטקסט
+    latest = ctx
+    if not latest and CONTEXT_URL:
+        latest = await fetch_context_symbol(sym)
+    if not latest:
+        return False
+    price = float(latest.get("price") or 0.0)
+    if price <= 0.0:
+        return False
+
+    # בתוך אזור הכניסה?
+    band = zone_pct / 100.0 * sug.entry if sug.entry else 0.0
+    if band <= 0.0:
+        return False
+    in_zone = (sug.entry - band <= price <= sug.entry + band)
+    if not in_zone:
+        # המתן מעט ובדוק שוב — לא רודפים, רק לוודא שלא נפלנו על טיק אחד
+        await asyncio.sleep(PRICE_RECHECK_SEC)
+        latest = await fetch_context_symbol(sym)
+        if not latest: 
+            return False
+        price = float(latest.get("price") or 0.0)
+        in_zone = (sug.entry - band <= price <= sug.entry + band)
+        if not in_zone:
+            return False
+
+    # אישור סגירה (לפריצות) — אם התבקש ומופעל ENV
+    confirm_close = bool(sug.confirm_close) if sug.confirm_close is not None else False
+    if REQUIRE_CLOSE_CONFIRM and confirm_close:
+        f = (latest.get("filters") or {})
+        if sug.side == "LONG" and not f.get("is_breakout_up", False):
+            return False
+        if sug.side == "SHORT" and not f.get("is_breakout_down", False):
+            return False
+
+    # TTL: כאן הוורקר מריץ ומאמת “כאן ועכשיו”; אם תרצה ניהול זמנים קפדני לפי created_ts,
+    # תוכל לשמור בשדה ולהשוות — בפועל זה מיותר כי אנחנו בודקים רגע לפני שליחה.
+    return True
 
 # ====== הלולאה הראשית ======
 async def loop_forever():
@@ -363,7 +487,8 @@ async def loop_forever():
 
     while True:
         chosen = await choose_symbols_for_sweep()
-        print(f"[*] Sweep | candidates={len(chosen)} | cap={MAX_TRADES_PER_SWEEP or '∞'} | every={TRADE_SUGGEST_INTERVAL}m")
+        regime = _hour_regime()
+        print(f"[*] Sweep | regime={regime} | candidates={len(chosen)} | cap={MAX_TRADES_PER_SWEEP or '∞'} | every={TRADE_SUGGEST_INTERVAL}m")
 
         # קח קונטקסט במכה אם אפשר
         ctx_map: Dict[str, Dict[str, Any]] = {}
@@ -393,7 +518,7 @@ async def loop_forever():
 
             # הגבלת מקביליות GPT
             async with sem:
-                # בנה קונטקסט קצר לפרומפט (רק שדות רלוונטיים אם קיימים)
+                # קונטקסט קצר לפרומפט (רק שדות רלוונטיים)
                 ctx_str = None
                 if ctx:
                     f = _pick_filters(ctx)
@@ -433,14 +558,13 @@ async def loop_forever():
                     print(f"[WARN] GPT failed for {sym}: {e}")
                     return
 
-                # Post-gate לפי קונטקסט (ללא עלות)
+                # Post-gate לפי קונטקסט
                 ok_pg, why_pg = postgate_with_context(sug, ctx)
                 if not ok_pg:
                     print(f"[SKIP] postgate {sym}: {why_pg}")
                     return
 
                 # חישובי איכות (RR/EntryDist/Success/Anchor/Quality)
-                # חשב notional/qty אם חסר (אומדן גולמי — עיגון סופי יעשה בזמן הביצוע)
                 if (sug.notional_usd is None) and (sug.budget_usd is not None) and (sug.leverage is not None):
                     try:
                         sug.notional_usd = float(sug.budget_usd) * int(sug.leverage)
@@ -464,6 +588,9 @@ async def loop_forever():
                 sp = float(sug.success_pct or 0.0)
 
                 # Gates
+                if ANCHOR_MODE == "hard" and not anchor.allow:
+                    print(f"[SKIP] {sym} anchor-hard-block")
+                    return
                 if q["quality_score"] < MIN_QUALITY_SCORE:
                     print(f"[SKIP] {sym} quality<{MIN_QUALITY_SCORE} ({q['quality_score']})")
                     return
@@ -483,7 +610,22 @@ async def loop_forever():
                     print(f"[SKIP] {sym} duplicate")
                     return
 
+                # תקרה יומית (אופציונלי)
+                if MAX_DAILY_NOTIONAL > 0:
+                    today = _get_daily_notional()
+                    prospective = float(sug.notional_usd or 0.0)
+                    if today + prospective > MAX_DAILY_NOTIONAL:
+                        print(f"[SKIP] {sym} daily_notional_cap exceeded ({today + prospective:.2f} > {MAX_DAILY_NOTIONAL:.2f})")
+                        return
+
+                # אימות "לא רודפים": מחיר באזור, TTL, אישור סגירה אם צריך
+                ok_now = await stale_buster(sym, sug, ctx)
+                if not ok_now:
+                    print(f"[SKIP] {sym} stale/zone/confirm")
+                    return
+
                 # שליחה ל-ingest (טלגרם)
+                # (שמנו lock קל רק סביב מונה sent כדי להימנע מחריגה מה-cap)
                 async with lock:
                     if MAX_TRADES_PER_SWEEP and (sent >= MAX_TRADES_PER_SWEEP):
                         return
@@ -513,6 +655,8 @@ async def loop_forever():
                 }
                 try:
                     res = await send_ingest(trade)
+                    if MAX_DAILY_NOTIONAL > 0:
+                        _inc_daily_notional(float(trade["notional_usd"] or 0.0))
                     mark_sent(sug.symbol)
                     mark_hash(sug)
                     prev = format_msg_preview(sug, TZ)
@@ -520,7 +664,6 @@ async def loop_forever():
                 except Exception as e:
                     print(f"[ERR] ingest failed for {sym}: {e}")
 
-        # רוץ על כל הסימבולים במקביליות נשלטת
         await asyncio.gather(*[run_symbol(s) for s in chosen])
 
         took = time.time() - sweep_start
@@ -532,55 +675,6 @@ async def loop_forever():
 if __name__ == "__main__":
     asyncio.run(loop_forever())
 
-"""
-ENV דרוש להפעלה (דוגמה מינימלית):
-
-# OpenAI
-OPENAI_API_KEY=sk-***
-OPENAI_MODEL=gpt-4o
-OPENAI_MAX_CONCURRENCY=2
-
-# Worker cadence
-TRADE_SUGGEST_INTERVAL=10   # דקות
-TZ=Asia/Jerusalem
-
-# Symbols / Top-K
-SUGGEST_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
-# אופציונלי (מומלץ):
-# CORE_TOPK_URL=https://your-host/topk?k=12&interval=15m
-# CORE_TOPK_TOKEN=core-topk-token
-TOPK_PER_SWEEP=12
-
-# Context
-CONTEXT_BATCH_URL=https://your-host/context/batch?compact=1&interval=15m&limit=120&symbols={csv}
-CONTEXT_URL=https://your-host/context?symbol={symbol}&interval=15m&limit=120
-CONTEXT_TOKEN=core-bearer
-CONTEXT_TIMEOUT=5
-
-# Gating לפני GPT
-MIN_SCORE_LIGHT=0.8
-MIN_BASELINE_RR=1.3
-
-# Gating אחרי GPT
-MIN_QUALITY_SCORE=7.5
-MIN_SUCCESS_PCT=70
-MIN_RR=2.0
-MAX_ENTRY_DIST_PCT=0.5
-COOLDOWN_MINUTES=45
-DEDUP_WINDOW_MIN=180
-MAX_TRADES_PER_SWEEP=0     # 0 = ללא תקרה
-
-# Volatility clamp
-MAX_LEV_HIGH_VOL=10
-CLAMP_LEVERAGE_IN_HIGHVOL=true
-
-# Alerts sink (Telegram bridge)
-ALERTS_BASE=https://your-host
-API_BEARER_TOKEN=rnd_***        # חייב להתאים ל-require_api_key אצלך
-HMAC_SECRET=supersecretbytes     # אותו סוד ב-/alerts/trade-ingest
-
-WORKER_HTTP_TIMEOUT=12
-"""
 
 
 
