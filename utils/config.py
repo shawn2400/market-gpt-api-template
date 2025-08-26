@@ -1,3 +1,4 @@
+# utils/config.py
 from __future__ import annotations
 import os, re, logging
 from typing import List
@@ -6,19 +7,24 @@ from typing import List
 # Helpers
 # ---------------------------
 def _as_bool(val: str | None, default: bool = False) -> bool:
-    if val is None: return default
-    return str(val).strip().lower() in {"1","true","yes","on"}
+    if val is None: 
+        return default
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
 def _as_int(val: str | None, default: int, min_v: int|None=None, max_v: int|None=None) -> int:
-    try: x = int(str(val).strip()) if val else default
-    except: x = default
+    try: 
+        x = int(str(val).strip()) if val else default
+    except: 
+        x = default
     if min_v is not None and x < min_v: x = min_v
     if max_v is not None and x > max_v: x = max_v
     return x
 
 def _as_float(val: str | None, default: float, min_v: float|None=None, max_v: float|None=None) -> float:
-    try: x = float(str(val).strip()) if val else default
-    except: x = default
+    try: 
+        x = float(str(val).strip()) if val else default
+    except: 
+        x = default
     if min_v is not None and x < min_v: x = min_v
     if max_v is not None and x > max_v: x = max_v
     return x
@@ -27,6 +33,10 @@ def _csv(val: str|None, default: str="")->List[str]:
     s = val.strip() if (val and isinstance(val,str)) else default.strip()
     if not s: return []
     return [p.strip() for p in s.split(",") if p.strip()]
+
+def _clean_env(name: str) -> str:
+    """ניקוי משתני ENV מרווחים ותווי newline מיותרים"""
+    return (os.getenv(name) or "").strip().replace("\n", "").replace("\r", "")
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{3,20}$")
 _INTERVAL_RE = re.compile(r"^(\d+)(m|h|d|w|M|y)$", re.IGNORECASE)
@@ -46,7 +56,8 @@ def _norm_intervals(items: List[str], fallback: List[str]) -> List[str]:
     for it in items:
         if _INTERVAL_RE.match(str(it).strip()):
             out.append(it.strip())
-        else: logging.warning(f"[CONFIG] Ignoring invalid interval '{it}'")
+        else: 
+            logging.warning(f"[CONFIG] Ignoring invalid interval '{it}'")
     return out or fallback
 
 def _require_url(name,val,must_start:tuple[str,...])->str:
@@ -61,12 +72,12 @@ APP_ENV=os.getenv("APP_ENV","production").strip().lower()
 IS_PROD=APP_ENV=="production"
 
 # Binance
-BINANCE_API_KEY=(os.getenv("BINANCE_API_KEY") or "").strip()
-BINANCE_API_SECRET=(os.getenv("BINANCE_API_SECRET") or "").strip()
-BINANCE_HTTP_BASE=os.getenv("BINANCE_HTTP_BASE","https://api.binance.com").strip()
-BINANCE_FUTURES_HTTP_BASE=os.getenv("BINANCE_FUTURES_HTTP_BASE","https://fapi.binance.com").strip()
-BINANCE_WS_BASE=os.getenv("BINANCE_WS_BASE","wss://stream.binance.com:9443").strip()
-BINANCE_FUTURES_WS_BASE=os.getenv("BINANCE_FUTURES_WS_BASE","wss://fstream.binance.com").strip()
+BINANCE_API_KEY=_clean_env("BINANCE_API_KEY")
+BINANCE_API_SECRET=_clean_env("BINANCE_API_SECRET")
+BINANCE_HTTP_BASE=_clean_env("BINANCE_HTTP_BASE") or "https://api.binance.com"
+BINANCE_FUTURES_HTTP_BASE=_clean_env("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com"
+BINANCE_WS_BASE=_clean_env("BINANCE_WS_BASE") or "wss://stream.binance.com:9443"
+BINANCE_FUTURES_WS_BASE=_clean_env("BINANCE_FUTURES_WS_BASE") or "wss://fstream.binance.com"
 BINANCE_FAPI_ALTS=[b.strip() for b in _csv(os.getenv("BINANCE_FAPI_ALTS"),
     "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com")]
 
@@ -110,8 +121,8 @@ if BINANCE_MARGIN_TYPE_DEFAULT not in {"ISOLATED","CROSSED"}:
     BINANCE_MARGIN_TYPE_DEFAULT="ISOLATED"
 
 # OpenAI
-OPENAI_API_KEY=(os.getenv("OPENAI_API_KEY") or "").strip()
-OPENAI_MODEL=(os.getenv("OPENAI_MODEL") or "gpt-4o").strip()
+OPENAI_API_KEY=_clean_env("OPENAI_API_KEY")
+OPENAI_MODEL=_clean_env("OPENAI_MODEL") or "gpt-4o"
 ENABLE_AI_ROUTES=_as_bool(os.getenv("ENABLE_AI_ROUTES"),True)
 
 # Limits
@@ -125,7 +136,8 @@ PRICE_MONITOR_DISABLE=_as_bool(os.getenv("PRICE_MONITOR_DISABLE"),False)
 
 # Logging
 LOG_LEVEL=(os.getenv("LOG_LEVEL") or "INFO").strip().upper()
-if LOG_LEVEL not in {"CRITICAL","ERROR","WARNING","INFO","DEBUG"}: LOG_LEVEL="INFO"
+if LOG_LEVEL not in {"CRITICAL","ERROR","WARNING","INFO","DEBUG"}: 
+    LOG_LEVEL="INFO"
 
 # ---------------------------
 # Validation
@@ -136,7 +148,8 @@ def _validate_urls():
     _require_url("BINANCE_WS_BASE",BINANCE_WS_BASE,("wss://",))
     _require_url("BINANCE_FUTURES_WS_BASE",BINANCE_FUTURES_WS_BASE,("wss://",))
     for alt in BINANCE_FAPI_ALTS:
-        if not alt.startswith("https://"): raise RuntimeError(f"❌ bad alt {alt}")
+        if not alt.startswith("https://"): 
+            raise RuntimeError(f"❌ bad alt {alt}")
 
 def _validate_keys():
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
@@ -147,9 +160,12 @@ def _validate_keys():
         logging.warning("⚠️ ENABLE_AI_ROUTES=true but no OPENAI_API_KEY → AI disabled")
 
 def _validate_semantics():
-    if MIN_LEVERAGE>MAX_LEVERAGE: raise RuntimeError("❌ MIN>MAX leverage")
-    if not INDICATOR_INTERVALS: raise RuntimeError("❌ No valid intervals")
-    if not WATCHLIST: raise RuntimeError("❌ Empty watchlist")
+    if MIN_LEVERAGE>MAX_LEVERAGE: 
+        raise RuntimeError("❌ MIN>MAX leverage")
+    if not INDICATOR_INTERVALS: 
+        raise RuntimeError("❌ No valid intervals")
+    if not WATCHLIST: 
+        raise RuntimeError("❌ Empty watchlist")
 
 def check_config():
     _validate_urls(); _validate_keys(); _validate_semantics()
@@ -171,6 +187,7 @@ def dump_config_sanitized()->dict:
         "binance_key_len": len(BINANCE_API_KEY),
         "openai_key_len": len(OPENAI_API_KEY),
     }
+
 
 
 
