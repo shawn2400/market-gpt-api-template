@@ -1,141 +1,123 @@
 # workers/trade_watchdog.py
 from __future__ import annotations
-import os, time, json, math, asyncio, logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
+import os, time, asyncio, logging
+from typing import Dict, Any, List, Optional
 
 import httpx
-from utils.anchor import evaluate_anchor
+
+from utils.trade_store import list_active, update_trade
+from utils.redis_client import redis_client as RED  # may be None
 
 BINANCE_FUTURES_HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
-CHECK_INTERVAL_SECONDS    = int(float(os.getenv("WATCHDOG_INTERVAL_SECONDS","180")))   # כל 3 דק׳
-NEAR_PCT                  = float(os.getenv("WATCHDOG_NEAR_PCT","0.35"))               # קרבה ליעד/סטופ באחוז
-BUNDLE_WINDOW_SECONDS     = int(float(os.getenv("WATCHDOG_BUNDLE_WINDOW","60")))
 
-ACTIVE_TRADES_URL         = os.getenv("CORE_ACTIVE_TRADES_URL","").strip()
-ACTIVE_TRADES_TOKEN       = os.getenv("CORE_ACTIVE_TRADES_TOKEN","").strip()
-ACTIVE_TRADES_PATH        = os.getenv("ACTIVE_TRADES_PATH","data/active_trades.json")
-
-OUTGOING_WEBHOOK_URL      = os.getenv("OUTGOING_WEBHOOK_URL","").strip()
-OUTGOING_TOKEN            = os.getenv("OUTGOING_TOKEN","").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","")
+ADMIN_CHAT_ID      = os.getenv("ADMIN_CHAT_ID","")  # chat id למשל שלך
+POLL_INTERVAL_SEC  = int(float(os.getenv("WATCHDOG_INTERVAL_SECONDS","20")))
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("trade_watchdog")
 
-async def get_mark_price(sym: str) -> Optional[float]:
-    url = f"{BINANCE_FUTURES_HTTP_BASE}/fapi/v1/premiumIndex"
+async def _get_price(sym: str) -> Optional[float]:
+    url = f"{BINANCE_FUTURES_HTTP_BASE}/fapi/v1/ticker/price"
     try:
-        async with httpx.AsyncClient(timeout=8) as client:
+        async with httpx.AsyncClient(timeout=6) as client:
             r = await client.get(url, params={"symbol": sym})
             if r.status_code == 200:
-                j = r.json()
-                p = j.get("markPrice")
-                return float(p) if p else None
-    except Exception:
-        pass
+                return float(r.json().get("price"))
+    except Exception as e:
+        log.warning({"event":"price_fail","sym":sym,"err":str(e)})
     return None
 
-async def load_active_trades() -> List[Dict[str, Any]]:
-    # עדיפות ל־URL
-    if ACTIVE_TRADES_URL:
-        headers = {}
-        if ACTIVE_TRADES_TOKEN:
-            headers["Authorization"] = f"Bearer {ACTIVE_TRADES_TOKEN}"
-        try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get(ACTIVE_TRADES_URL, headers=headers)
-                if r.status_code == 200:
-                    j = r.json()
-                    return j.get("trades") or j if isinstance(j, list) else []
-        except Exception as e:
-            log.warning({"event":"load_active_trades_http_fail","err":str(e)})
-    # קובץ fallback
-    try:
-        with open(ACTIVE_TRADES_PATH,"r",encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
-    except Exception:
-        return []
-
-def pct(a: float, b: float) -> float:
-    try:
-        return 100.0 * abs(a-b) / b if b else 0.0
-    except Exception:
-        return 0.0
-
-async def post_alert(payload: dict) -> bool:
-    if not OUTGOING_WEBHOOK_URL:
-        print("[WATCHDOG-DRY]", json.dumps(payload, ensure_ascii=False))
-        return True
-    headers = {"Content-Type":"application/json"}
-    if OUTGOING_TOKEN:
-        headers["Authorization"] = f"Bearer {OUTGOING_TOKEN}"
+async def _tg_send(text: str, kb: Optional[dict] = None):
+    if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
+        log.info({"event":"tg_skip","reason":"missing token/chat"})
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    if kb: payload["reply_markup"] = kb
     try:
         async with httpx.AsyncClient(timeout=8) as client:
-            r = await client.post(OUTGOING_WEBHOOK_URL, json=payload, headers=headers)
-            return r.status_code in (200,201,202)
+            await client.post(url, json=payload)
+    except Exception as e:
+        log.warning({"event":"tg_send_fail","err":str(e)})
+
+def _flag_key(tid: str, name: str) -> str:
+    return f"algogpt:wd:{tid}:{name}"
+
+def _flag_is_set(tid: str, name: str) -> bool:
+    if not RED: return False
+    try:
+        return bool(RED.get(_flag_key(tid,name)))
     except Exception:
         return False
 
-async def process_once():
-    trades = await load_active_trades()
-    if not trades:
-        return
+def _flag_set(tid: str, name: str, ttl: int = 86400):
+    if not RED: return
+    try:
+        RED.set(_flag_key(tid,name), "1", ex=ttl)
+    except Exception:
+        pass
 
-    msgs: List[str] = []
-    for t in trades:
-        sym = t.get("symbol"); side = (t.get("side") or "").upper()
-        entry = float(t.get("entry") or 0.0)
-        sl    = float(t.get("sl") or 0.0)
-        tp1   = float(t.get("tp1") or 0.0)
-        tp2   = float(t.get("tp2") or 0.0)
-        tp3   = float(t.get("tp3") or 0.0)
-        if not sym or entry<=0 or sl<=0 or tp1<=0:
-            continue
+def _touch_state(tr: Dict[str, Any], state: str):
+    update_trade(tr["id"], {"status": state, f"state_{state}_ts": int(time.time())})
 
-        price = await get_mark_price(sym)
-        if not price:
-            continue
+def _cross_up(p: float, level: float) -> bool:
+    return p is not None and level is not None and p >= level
 
-        # קרבה ליעדים
-        near_msgs = []
-        if pct(price, tp1) <= NEAR_PCT: near_msgs.append("⚑ קרוב ל-TP1")
-        if tp2>0 and pct(price, tp2) <= NEAR_PCT: near_msgs.append("⚑ קרוב ל-TP2")
-        if tp3>0 and pct(price, tp3) <= NEAR_PCT: near_msgs.append("⚑ קרוב ל-TP3")
-        if pct(price, sl)  <= NEAR_PCT: near_msgs.append("⚠︎ קרוב ל-SL")
+def _cross_down(p: float, level: float) -> bool:
+    return p is not None and level is not None and p <= level
 
-        # הצעת SL→BE אחרי TP1 (אם מצוין reached_tp1)
-        reached_tp1 = bool(t.get("reached_tp1"))
-        if reached_tp1:
-            be = entry
-            near_msgs.append(f"🛡️ הצעה: עדכון SL→BE ({be:.6f})")
-
-        # Anchor שינוי בייס
-        dec = evaluate_anchor(side or "LONG", mode="soft")
-        if not dec.allow:
-            near_msgs.append(f"⚠︎ Anchor נגד הכיוון ({dec.bias}, score={dec.score:.0f})")
-
-        if near_msgs:
-            msgs.append(f"{sym} @ {price:.6f}: " + " | ".join(near_msgs))
-
-    # Bundling: הודעה אחת מרוכזת
-    if msgs:
-        payload = {
-            "type": "watchdog_summary",
-            "ts": int(time.time()),
-            "items": msgs
-        }
-        await post_alert(payload)
-
-async def main():
+async def loop():
     while True:
         try:
-            await process_once()
+            act = list_active()
+            for tr in act:
+                sym  = tr.get("symbol") or tr.get("proposal",{}).get("symbol")
+                if not sym: continue
+                side = tr.get("proposal",{}).get("side","LONG").upper()
+                entry= float(tr.get("proposal",{}).get("entry") or 0)
+                sl   = float(tr.get("proposal",{}).get("sl") or 0)
+                tp1  = float(tr.get("proposal",{}).get("tp1") or 0)
+                tid  = tr.get("id")
+
+                price = await _get_price(sym)
+                if price is None or price<=0: continue
+
+                status = tr.get("status","TRACKED").upper()
+
+                # פתיחה כשל המחיר מגיע ל-entry
+                if status in {"TRACKED","PENDING"}:
+                    if (side=="LONG" and _cross_up(price, entry)) or (side=="SHORT" and _cross_down(price, entry)):
+                        _touch_state(tr, "OPEN")
+                        await _tg_send(f"🚀 <b>{sym}</b> נפתח במחיר ~<b>{price:.4f}</b> (יעד1: {tp1}, SL: {sl})")
+                        continue
+
+                # TP1
+                if status=="OPEN" and not _flag_is_set(tid,"tp1"):
+                    hit = (_cross_up(price, tp1) if side=="LONG" else _cross_down(price, tp1))
+                    if hit:
+                        _flag_set(tid,"tp1")
+                        kb = {"inline_keyboard":[[
+                            {"text":"🔒 עדכן SL → BE","callback_data": f"slbe:{tid}"}
+                        ]]}
+                        await _tg_send(f"✅ <b>{sym}</b> הגיע ל־TP1 ({tp1}).", kb)
+                        continue
+
+                # SL
+                if status=="OPEN" and not _flag_is_set(tid,"sl"):
+                    hit_sl = (_cross_down(price, sl) if side=="LONG" else _cross_up(price, sl))
+                    if hit_sl:
+                        _flag_set(tid,"sl")
+                        _touch_state(tr, "CLOSED")
+                        await _tg_send(f"⛔ <b>{sym}</b> פגע ב־SL ({sl}). נסגר.")
+                        continue
+
         except Exception as e:
-            log.error({"event":"watchdog_error","err":str(e)})
-        await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+            log.error({"event":"watchdog_err","err":str(e)})
+        await asyncio.sleep(POLL_INTERVAL_SEC)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(loop())
+
 
 
