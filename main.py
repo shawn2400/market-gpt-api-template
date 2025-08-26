@@ -33,11 +33,10 @@ from utils.config import (
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.watchlist_utils import load_watchlist
-from utils.binance_client import futures_mark_price, fapi_ping
+from utils.binance_client import futures_mark_price, fapi_ping, clean_watchlist
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store  # fallback אם Redis לא זמין
-from utils.binance_client import clean_watchlist   # ✅ הוספנו ניקוי רשימת מעקב
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
 
@@ -194,8 +193,14 @@ async def startup_event():
 
     # --- Clean watchlist (חד־פעמי) ---
     try:
-        clean_watchlist()
-        logger.info({"event": "watchlist_cleaned"})
+        cleaned, removed = clean_watchlist()
+        logger.info({
+            "event": "watchlist_cleaned",
+            "cleaned_symbols": cleaned,
+            "removed_symbols": removed,
+            "count_cleaned": len(cleaned),
+            "count_removed": len(removed)
+        })
     except Exception as e:
         logger.error({"event": "watchlist_clean_error", "error": str(e)})
 
