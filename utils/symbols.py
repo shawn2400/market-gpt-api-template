@@ -1,7 +1,7 @@
+# utils/symbols.py
 from __future__ import annotations
 import os, time, threading, requests
 from typing import Optional, Set
-
 from utils.binance_client import futures_exchange_info_safe
 
 _SPOT_BASE = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com")
@@ -12,7 +12,7 @@ class SymbolsCache:
         self._symbols: Set[str] = set()
         self._ts = 0.0
         self._lock = threading.Lock()
-        self.ttl = 1800.0
+        self.ttl = 1800.0  # cache 30 דקות
 
     def _refresh(self):
         if self.market == "futures":
@@ -51,6 +51,7 @@ def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[Symbo
     if not cache.has(s):
         return s
     return s
+
 
 
 
