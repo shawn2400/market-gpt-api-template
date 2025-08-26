@@ -1,13 +1,5 @@
 # workers/gpt_auto_suggest.py
 from __future__ import annotations
-"""
-GPT Auto-Suggest worker (Thin) – שולח התראות לטלגרם בלבד.
-- רץ כל X דקות
-- אופציונלי: מושך Top-K מה-Core + קונטקסט פר סימבול מהשרת שלך
-- מריץ GPT, מסנן לפי Quality/Anchor/RR/EntryDist/Cooldown/De-dup
-- שולח אל /alerts/trade-ingest (HMAC + Idempotency) → הבוט מפרסם בטלגרם
-"""
-
 import os, json, asyncio, time, uuid, hashlib, random
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
@@ -32,38 +24,37 @@ COOLDOWN_MINUTES   = int(os.getenv("COOLDOWN_MINUTES", "45"))
 DEDUP_WINDOW_MIN   = int(os.getenv("DEDUP_WINDOW_MIN", "180"))
 MAX_TRADES_PER_SWEEP = int(os.getenv("MAX_TRADES_PER_SWEEP", "0"))  # 0 = בלי תקרה
 
-# Top-K דינאמי מה-Core (אופציונלי)
+# Pre-filter מהקונטקסט (ללא GPT)
+MIN_SCORE_LIGHT   = float(os.getenv("MIN_SCORE_LIGHT", "0.8"))   # אם score_light נמוך → אל תריץ GPT
+MIN_BASELINE_RR   = float(os.getenv("MIN_BASELINE_RR", "1.3"))   # דרישת rr_baseline (לפני GPT)
+
+# Top-K דינמי (אופציונלי)
 CORE_TOPK_URL   = os.getenv("CORE_TOPK_URL", "").strip()
 CORE_TOPK_TOKEN = os.getenv("CORE_TOPK_TOKEN", "").strip()
 TOPK_PER_SWEEP  = int(os.getenv("TOPK_PER_SWEEP", "12"))
 
-# קונטקסט סימבול (אופציונלי)
-CONTEXT_URL     = os.getenv("CONTEXT_URL", "").strip()   # דוגמא: https://api.yourhost/context?symbol={symbol}
-CONTEXT_TOKEN   = os.getenv("CONTEXT_TOKEN", "").strip()
-CONTEXT_TIMEOUT = float(os.getenv("CONTEXT_TIMEOUT", "5"))
+# קונטקסט
+CONTEXT_URL       = os.getenv("CONTEXT_URL", "").strip()         # per-symbol
+CONTEXT_TOKEN     = os.getenv("CONTEXT_TOKEN", "").strip()
+CONTEXT_TIMEOUT   = float(os.getenv("CONTEXT_TIMEOUT", "5"))
+CONTEXT_BATCH_URL = os.getenv("CONTEXT_BATCH_URL", "").strip()   # batch (compact)
+# דוגמה: https://your-host/context/batch?compact=1&interval=15m&limit=120&symbols={csv}
 
-# Ingest API (הבוט שלך)
+# Ingest (הבוט שלך)
 ALERTS_BASE     = os.getenv("ALERTS_BASE", "http://localhost:8000")
 API_BEARER      = os.getenv("API_BEARER_TOKEN", "").strip()
 HMAC_SECRET     = (os.getenv("HMAC_SECRET", "")).encode()
 
-# Telegram info לתצוגה (הוורקר לא שולח ישירות לטלגרם)
-TZ_DISPLAY = TZ
+# עידון מינוף לפי תנודתיות
+MAX_LEV_HIGH_VOL = int(os.getenv("MAX_LEV_HIGH_VOL", "10"))   # בתנודתיות גבוהה — נרסן מינוף
+CLAMP_LEVERAGE_IN_HIGHVOL = os.getenv("CLAMP_LEVERAGE_IN_HIGHVOL","1").lower() in ("1","true","yes")
 
-if not OPENAI_API_KEY:
-    raise SystemExit("OPENAI_API_KEY missing")
-if not API_BEARER:
-    raise SystemExit("API_BEARER_TOKEN missing (for /alerts/trade-ingest)")
-
-# === OpenAI ===
 from openai import AsyncOpenAI
 oai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# === HTTP ===
 import httpx
 SESSION_TIMEOUT = int(os.getenv("WORKER_HTTP_TIMEOUT", "12"))
 
-# === Quality & Anchor (שלך) ===
 from utils.quality import compute_quality
 from utils.anchor import evaluate_anchor
 
@@ -71,7 +62,6 @@ ANCHOR_MODE = os.getenv("ANCHOR_MODE", "soft").strip().lower()
 if ANCHOR_MODE not in ("off", "soft", "hard"):
     ANCHOR_MODE = "soft"
 
-# === Models ===
 @dataclass
 class TradeSug:
     symbol: str
@@ -96,73 +86,74 @@ class TradeSug:
 
     @classmethod
     def from_json(cls, obj: Dict[str, Any]) -> "TradeSug":
-        def f(name, d=None): return obj.get(name, d)
-        def ffloat(x):
+        def g(name, d=None): return obj.get(name, d)
+        def ffloat(x): 
             try: return float(x) if x is not None else None
             except: return None
-        def fint(x):
+        def fint(x): 
             try: return int(x) if x is not None else None
             except: return None
-
         return cls(
-            symbol=str(f("symbol","")).upper(),
-            side=str(f("side","")).upper(),
-            current_price=ffloat(f("current_price")) or 0.0,
-            leverage=fint(f("leverage")) or 10,
-            entry=ffloat(f("entry")) or 0.0,
-            sl=ffloat(f("sl")) or 0.0,
-            tp1=ffloat(f("tp1")) or 0.0,
-            tp2=ffloat(f("tp2")),
-            tp3=ffloat(f("tp3")),
-            success_pct=ffloat(f("success_pct")),
-            budget_usd=ffloat(f("budget_usd")),
-            notional_usd=ffloat(f("notional_usd")),
-            qty=ffloat(f("qty")),
-            eta_sl=f("eta_sl"),
-            eta_tp1=f("eta_tp1"),
-            eta_tp2=f("eta_tp2"),
-            eta_tp3=f("eta_tp3"),
-            reason=f("reason"),
-            skip=bool(f("skip", False)),
+            symbol=str(g("symbol","")).upper(),
+            side=str(g("side","")).upper(),
+            current_price=ffloat(g("current_price")) or 0.0,
+            leverage=fint(g("leverage")) or 10,
+            entry=ffloat(g("entry")) or 0.0,
+            sl=ffloat(g("sl")) or 0.0,
+            tp1=ffloat(g("tp1")) or 0.0,
+            tp2=ffloat(g("tp2")),
+            tp3=ffloat(g("tp3")),
+            success_pct=ffloat(g("success_pct")),
+            budget_usd=ffloat(g("budget_usd")),
+            notional_usd=ffloat(g("notional_usd")),
+            qty=ffloat(g("qty")),
+            eta_sl=g("eta_sl"),
+            eta_tp1=g("eta_tp1"),
+            eta_tp2=g("eta_tp2"),
+            eta_tp3=g("eta_tp3"),
+            reason=g("reason"),
+            skip=bool(g("skip", False)),
         )
 
 def format_msg_preview(t: TradeSug, tz: str) -> str:
     def fmt(x): return f"{x:.6f}" if isinstance(x,(int,float)) and x!=0 else "—"
-    return (
-        f"{t.symbol} {t.side} | now {fmt(t.current_price)} | entry {fmt(t.entry)} | "
-        f"SL {fmt(t.sl)} | TP1 {fmt(t.tp1)} | lev x{t.leverage} | %{t.success_pct or 0:.1f} | {tz}"
-    )
+    return f"{t.symbol} {t.side} | now {fmt(t.current_price)} | entry {fmt(t.entry)} | SL {fmt(t.sl)} | TP1 {fmt(t.tp1)} | lev x{t.leverage} | %{t.success_pct or 0:.1f} | {tz}"
 
-# === Context fetch (optional) ===
-def _build_context_url(symbol: str) -> Optional[str]:
+# === Context fetching ===
+async def fetch_context_symbol(symbol: str) -> Optional[Dict[str, Any]]:
     if not CONTEXT_URL:
         return None
-    if "{symbol}" in CONTEXT_URL:
-        return CONTEXT_URL.replace("{symbol}", symbol)
-    sep = "&" if ("?" in CONTEXT_URL) else "?"
-    return f"{CONTEXT_URL}{sep}symbol={symbol}"
-
-async def fetch_symbol_context(symbol: str) -> Optional[str]:
-    url = _build_context_url(symbol)
-    if not url:
-        return None
-    headers = {}
-    if CONTEXT_TOKEN:
-        headers["Authorization"] = f"Bearer {CONTEXT_TOKEN}"
+    url = CONTEXT_URL.replace("{symbol}", symbol) if "{symbol}" in CONTEXT_URL else f"{CONTEXT_URL}{'&' if '?' in CONTEXT_URL else '?'}symbol={symbol}"
+    headers = {"Authorization": f"Bearer {CONTEXT_TOKEN}"} if CONTEXT_TOKEN else {}
     try:
         async with httpx.AsyncClient(timeout=CONTEXT_TIMEOUT) as client:
             r = await client.get(url, headers=headers)
             r.raise_for_status()
-            data = r.json() if "application/json" in r.headers.get("content-type","") else r.text
-            # נשמור קצר – JSON קומפקטי ומגבלה על אורך
-            if isinstance(data, (dict, list)):
-                s = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-            else:
-                s = str(data)
-            return s[:1200]  # לא נשרוף טוקנים מיותרים
-    except Exception as e:
-        print(f"[WARN] context failed for {symbol}: {e}")
+            return r.json()
+    except Exception:
         return None
+
+async def fetch_context_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    if not CONTEXT_BATCH_URL:
+        return {}
+    csv = ",".join(symbols)
+    url = CONTEXT_BATCH_URL.replace("{csv}", csv)
+    headers = {"Authorization": f"Bearer {CONTEXT_TOKEN}"} if CONTEXT_TOKEN else {}
+    try:
+        async with httpx.AsyncClient(timeout=max(CONTEXT_TIMEOUT, 8.0)) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            out: Dict[str, Dict[str, Any]] = {}
+            items = data.get("items") or []
+            # תומך גם ב-compact וגם ב-full
+            for it in items:
+                sym = (it.get("symbol") or "").upper()
+                if not sym: continue
+                out[sym] = it
+            return out
+    except Exception:
+        return {}
 
 # === GPT Prompt ===
 GPT_SYSTEM = (
@@ -189,31 +180,10 @@ def gpt_user_prompt(symbol: str, tz: str, context: Optional[str]) -> str:
         base += f"\n\nContext JSON (read-only, optional):\n{context}"
     return base
 
-async def suggest_one(symbol: str) -> Optional[TradeSug]:
-    ctx = await fetch_symbol_context(symbol)
-    try:
-        resp = await oai.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role":"system", "content": GPT_SYSTEM},
-                {"role":"user",   "content": gpt_user_prompt(symbol, TZ, ctx)}
-            ],
-            temperature=0.2,
-            response_format={"type":"json_object"},
-        )
-        raw = resp.choices[0].message.content
-        obj = json.loads(raw)
-        sug = TradeSug.from_json(obj)
-        if not sug.symbol:
-            sug.symbol = symbol
-        if sug.skip:
-            return None
-        return sug
-    except Exception as e:
-        print(f"[WARN] GPT failed for {symbol}: {e}")
-        return None
+from openai import AsyncOpenAI
+oai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# === Gating & helpers ===
+# memory for cooldown/dedup
 _last_sent_ts: Dict[str, float] = {}
 _last_hash_ts: Dict[tuple, float] = {}
 
@@ -226,10 +196,9 @@ def rr_val(entry: float, sl: float, tp1: float) -> float:
     except Exception:
         return 0.0
 
-def entry_dist_pct(sug: TradeSug) -> float:
-    if sug.current_price <= 0 or sug.entry <= 0:
-        return 999.0
-    return abs(sug.entry - sug.current_price) / sug.current_price * 100.0
+def entry_dist_pct(entry: float, price: float) -> float:
+    if price <= 0 or entry <= 0: return 999.0
+    return abs(entry - price) / price * 100.0
 
 def allow_by_cooldown(symbol: str) -> bool:
     last = _last_sent_ts.get(symbol)
@@ -247,67 +216,13 @@ def is_duplicate(sug: TradeSug) -> bool:
     h = hash_trade(sug)
     key = (sug.symbol, h)
     ts = _last_hash_ts.get(key)
-    if not ts:
-        return False
+    if not ts: return False
     return (time.time() - ts) < DEDUP_WINDOW_MIN*60
 
 def mark_hash(sug: TradeSug) -> None:
     h = hash_trade(sug)
     _last_hash_ts[(sug.symbol, h)] = time.time()
 
-def gate_with_quality(sug: TradeSug) -> tuple[bool, str, Dict[str, Any]]:
-    anchor = evaluate_anchor(sug.side, ANCHOR_MODE)
-    q = compute_quality(
-        symbol=sug.symbol, side=sug.side,
-        entry=sug.entry, sl=sug.sl, tp=sug.tp1,
-        leverage=sug.leverage, budget=float(sug.budget_usd or 100.0),
-        anchor=anchor, atr=None,
-    )
-
-    rr = rr_val(sug.entry, sug.sl, sug.tp1)
-    dist = entry_dist_pct(sug)
-    sp = float(sug.success_pct or 0.0)
-
-    if q["quality_score"] < MIN_QUALITY_SCORE:
-        return False, "min_quality", {"q": q, "rr": rr, "dist": dist, "sp": sp}
-    if rr < MIN_RR:
-        return False, "min_rr", {"q": q, "rr": rr, "dist": dist, "sp": sp}
-    if dist > MAX_ENTRY_DIST_PCT:
-        return False, "entry_dist", {"q": q, "rr": rr, "dist": dist, "sp": sp}
-    if sp and sp < MIN_SUCCESS_PCT:
-        return False, "min_success_pct", {"q": q, "rr": rr, "dist": dist, "sp": sp}
-    if not allow_by_cooldown(sug.symbol):
-        return False, "cooldown", {"q": q, "rr": rr, "dist": dist, "sp": sp}
-    if is_duplicate(sug):
-        return False, "duplicate", {"q": q, "rr": rr, "dist": dist, "sp": sp}
-
-    return True, "ok", {"q": q, "rr": rr, "dist": dist, "sp": sp}
-
-# === choose symbols ===
-async def fetch_topk_from_core() -> Optional[List[str]]:
-    if not CORE_TOPK_URL:
-        return None
-    try:
-        headers = {"Authorization": f"Bearer {CORE_TOPK_TOKEN}"} if CORE_TOPK_TOKEN else {}
-        async with httpx.AsyncClient(timeout=SESSION_TIMEOUT) as client:
-            r = await client.get(CORE_TOPK_URL, headers=headers)
-            r.raise_for_status()
-            data = r.json()
-            syms = data.get("symbols") or []
-            return [s.strip().upper() for s in syms][:TOPK_PER_SWEEP]
-    except Exception as e:
-        print(f"[WARN] CORE_TOPK_URL failed: {e}")
-        return None
-
-async def choose_symbols_for_sweep() -> List[str]:
-    syms = await fetch_topk_from_core()
-    if syms:
-        return syms[:TOPK_PER_SWEEP]
-    base = SUGGEST_SYMBOLS.copy()
-    random.shuffle(base)
-    return base[:TOPK_PER_SWEEP]
-
-# === ingest sender ===
 def hmac_hex(body: bytes) -> str:
     if not HMAC_SECRET:
         return ""
@@ -330,13 +245,70 @@ async def send_ingest(trade: Dict[str, Any]) -> Dict[str, Any]:
         r.raise_for_status()
         return r.json()
 
+# --- Pre/Post gates using context ---
+def prefilter_from_context(ctx: Optional[Dict[str, Any]]) -> tuple[bool, str]:
+    """דילוג לפני GPT: score_light/rr_baseline נמוכים וכו'."""
+    if not ctx: 
+        return True, "no_ctx"
+    f = ctx.get("filters") or {}
+    score = f.get("score_light")
+    rr_b  = f.get("rr_baseline")
+    if score is not None and float(score) < MIN_SCORE_LIGHT:
+        return False, f"score_light<{MIN_SCORE_LIGHT}"
+    if rr_b is not None and float(rr_b) < MIN_BASELINE_RR:
+        return False, f"rr_baseline<{MIN_BASELINE_RR}"
+    return True, "ok"
+
+def postgate_with_context(sug: TradeSug, ctx: Optional[Dict[str, Any]]) -> tuple[bool, str]:
+    """אחרי GPT: סכינים קלים לפי תנאי שוק, בלי כפילות עם ה-quality."""
+    if not ctx:
+        return True, "no_ctx"
+    f = ctx.get("filters") or {}
+    if f.get("danger_chop"):
+        return False, "danger_chop"
+    vol_regime = f.get("vol_regime")
+    if vol_regime == "high" and sug.leverage and MAX_LEV_HIGH_VOL>0:
+        if CLAMP_LEVERAGE_IN_HIGHVOL and sug.leverage > MAX_LEV_HIGH_VOL:
+            sug.leverage = MAX_LEV_HIGH_VOL  # ריסון מינוף במקום לפסול
+        # לא נפסול אם ריסנו מינוף
+    return True, "ok"
+
+# === choose symbols ===
+async def fetch_topk_from_core() -> Optional[List[str]]:
+    if not CORE_TOPK_URL:
+        return None
+    try:
+        headers = {"Authorization": f"Bearer {CORE_TOPK_TOKEN}"} if CORE_TOPK_TOKEN else {}
+        async with httpx.AsyncClient(timeout=SESSION_TIMEOUT) as client:
+            r = await client.get(CORE_TOPK_URL, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            syms = data.get("symbols") or []
+            return [s.strip().upper() for s in syms][:TOPK_PER_SWEEP]
+    except Exception:
+        return None
+
+async def choose_symbols_for_sweep() -> List[str]:
+    syms = await fetch_topk_from_core()
+    if syms:
+        return syms[:TOPK_PER_SWEEP]
+    base = SUGGEST_SYMBOLS.copy()
+    random.shuffle(base)
+    return base[:TOPK_PER_SWEEP]
+
 # === loop ===
 async def loop_forever():
     sem = asyncio.Semaphore(OPENAI_MAX_CONCURRENCY)
     lock = asyncio.Lock()
+
     while True:
         chosen = await choose_symbols_for_sweep()
         print(f"[*] Sweep | candidates={len(chosen)} | cap={MAX_TRADES_PER_SWEEP or '∞'} | interval={TRADE_SUGGEST_INTERVAL}m")
+
+        # משוך קונטקסט במכה אם אפשר
+        ctx_map: Dict[str, Dict[str, Any]] = {}
+        if CONTEXT_BATCH_URL:
+            ctx_map = await fetch_context_batch(chosen)
 
         sent = 0
         start = time.time()
@@ -345,18 +317,93 @@ async def loop_forever():
             nonlocal sent
             if MAX_TRADES_PER_SWEEP and (sent >= MAX_TRADES_PER_SWEEP):
                 return
+
+            # קונטקסט: batch אם יש, אחרת per symbol
+            ctx = ctx_map.get(sym)
+            if ctx is None and CONTEXT_URL:
+                ctx = await fetch_context_symbol(sym)
+
+            # Pre-filter לפני GPT (חוסך עלות)
+            ok_pf, why_pf = prefilter_from_context(ctx)
+            if not ok_pf:
+                print(f"[SKIP] prefilter {sym}: {why_pf}")
+                return
+
             async with sem:
-                sug = await suggest_one(sym)
-                if not sug:
+                # בנה context string קצר ל-prompt אם יש
+                ctx_str = None
+                if ctx:
+                    # compact מועדף: רק price + filters
+                    c = {
+                        "symbol": ctx.get("symbol"),
+                        "price": ctx.get("price"),
+                        "filters": {k: ctx.get("filters", {}).get(k) for k in (
+                            "trending_up","trending_down","overbought","oversold",
+                            "volume_spike","ema_cross_bull","ema_cross_bear","is_breakout_up",
+                            "is_breakout_down","atr_pct","rr_baseline","vol_regime","danger_chop","score_light"
+                        )}
+                    }
+                    ctx_str = json.dumps(c, separators=(",", ":"), ensure_ascii=False)
+
+                # GPT
+                try:
+                    resp = await oai.chat.completions.create(
+                        model=OPENAI_MODEL,
+                        messages=[{"role":"system","content":GPT_SYSTEM},{"role":"user","content":gpt_user_prompt(sym, TZ, ctx_str)}],
+                        temperature=0.2,
+                        response_format={"type":"json_object"},
+                    )
+                    raw = resp.choices[0].message.content
+                    obj = json.loads(raw)
+                    sug = TradeSug.from_json(obj)
+                    if not sug.symbol: sug.symbol = sym
+                    if sug.skip: return
+                except Exception as e:
+                    print(f"[WARN] GPT failed for {sym}: {e}")
                     return
-                ok, why, dbg = gate_with_quality(sug)
-                if not ok:
-                    print(f"[SKIP] {sym} via {why} | q={dbg.get('q',{}).get('quality_score')} rr={dbg.get('rr'):.3f} dist={dbg.get('dist'):.3f}% sp={dbg.get('sp')}")
+
+                # Post-gate עם context (רסון מינוף/מצבי שוק)
+                ok_pg, why_pg = postgate_with_context(sug, ctx)
+                if not ok_pg:
+                    print(f"[SKIP] postgate {sym}: {why_pg}")
                     return
+
+                # Quality gates (ללא כפילות מול context)
+                anchor = evaluate_anchor(sug.side, ANCHOR_MODE)
+                q = compute_quality(
+                    symbol=sug.symbol, side=sug.side,
+                    entry=sug.entry, sl=sug.sl, tp=sug.tp1,
+                    leverage=sug.leverage, budget=float(sug.budget_usd or 100.0),
+                    anchor=anchor, atr=None,
+                )
+                rr = rr_val(sug.entry, sug.sl, sug.tp1)
+                dist = entry_dist_pct(sug.entry, sug.current_price)
+                sp = float(sug.success_pct or 0.0)
+
+                if q["quality_score"] < MIN_QUALITY_SCORE:
+                    print(f"[SKIP] {sym} quality<{MIN_QUALITY_SCORE} ({q['quality_score']})")
+                    return
+                if rr < MIN_RR:
+                    print(f"[SKIP] {sym} rr<{MIN_RR} ({rr:.3f})")
+                    return
+                if dist > MAX_ENTRY_DIST_PCT:
+                    print(f"[SKIP] {sym} entry_dist>{MAX_ENTRY_DIST_PCT}% ({dist:.3f}%)")
+                    return
+                if sp and sp < MIN_SUCCESS_PCT:
+                    print(f"[SKIP] {sym} success_pct<{MIN_SUCCESS_PCT} ({sp})")
+                    return
+                if not allow_by_cooldown(sug.symbol):
+                    print(f"[SKIP] {sym} cooldown")
+                    return
+                if is_duplicate(sug):
+                    print(f"[SKIP] {sym} duplicate")
+                    return
+
                 async with lock:
                     if MAX_TRADES_PER_SWEEP and (sent >= MAX_TRADES_PER_SWEEP):
                         return
                     sent += 1
+
                 trade_id = uuid.uuid4().hex[:8]
                 trade = {
                     "trade_id": trade_id,
@@ -383,7 +430,7 @@ async def loop_forever():
                     res = await send_ingest(trade)
                     mark_sent(sug.symbol)
                     mark_hash(sug)
-                    prev = format_msg_preview(sug, TZ_DISPLAY)
+                    prev = format_msg_preview(sug, TZ)
                     print(f"[OK] Ingest → Telegram | {sym} | id={trade_id} | sent={sent} | {prev}")
                 except Exception as e:
                     print(f"[ERR] ingest failed for {sym}: {e}")
@@ -396,6 +443,9 @@ async def loop_forever():
         await asyncio.sleep(sleep_sec)
 
 if __name__ == "__main__":
+    if not OPENAI_API_KEY: raise SystemExit("OPENAI_API_KEY missing")
+    if not API_BEARER: raise SystemExit("API_BEARER_TOKEN missing (for /alerts/trade-ingest)")
     asyncio.run(loop_forever())
+
 
 
