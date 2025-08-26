@@ -6,16 +6,12 @@ from typing import List, Dict, Any
 from utils.auth import require_api_key
 from utils.binance_client import futures_open_positions
 
-router = APIRouter(
-    prefix="/executor",
-    dependencies=[Depends(require_api_key)],
-)
+router = APIRouter(prefix="/executor", dependencies=[Depends(require_api_key)])
+
 
 @router.get("/positions", response_model=List[Dict[str, Any]])
 def list_open_positions() -> List[Dict[str, Any]]:
-    """
-    מחזיר רשימת פוזיציות פתוחות מחשבון Binance Futures.
-    """
+    """מחזיר רשימת פוזיציות פתוחות ב-Binance Futures"""
     try:
         positions = futures_open_positions()
         if not positions:
@@ -34,13 +30,10 @@ def list_open_positions() -> List[Dict[str, Any]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch open positions: {e}")
 
+
 @router.get("/status")
 def executor_status() -> Dict[str, Any]:
-    return {
-        "ok": True,
-        "executor": "running",
-        "positions_endpoint": "/executor/positions",
-    }
+    return {"ok": True, "executor": "running", "positions_endpoint": "/executor/positions"}
 
 
 
