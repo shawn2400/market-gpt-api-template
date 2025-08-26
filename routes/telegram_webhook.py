@@ -227,7 +227,74 @@ async def loop_watchdog():
                         band = ENTRY_ZONE_PCT/100.0 * lv.entry
                         in_zone = (lv.entry - band <= price <= lv.entry + band)
                         zkey = f"{rec['trade_id']}:zone"
-                        if in_zone and not _zone_notified.g_
+                        if in_zone and not _zone_notified.get(zkey, False):
+                            _zone_notified[zkey] = True
+                            await send_analysis(chat_id, f"🎯 *{sym}* נכנס לאזור *כניסה* סביב `{_fmt(lv.entry)}` (±{ENTRY_ZONE_PCT:.2f}%)", reply_to=mid, silent=False)
+
+                    # קרבה ליעד (TP/SL)
+                    tgt_name, tgt_dist = _nearest_target(lv, price)
+                    if tgt_name and tgt_dist <= near_pct:
+                        key = f"{rec['trade_id']}:near:{tgt_name}"
+                        if _cooldown(key, COOLDOWN_ALERT_SEC):
+                            d = f"{tgt_dist:.2f}%"
+                            ttxt = f"⏳ *{sym}* קרוב ל־*{tgt_name.upper()}* ({d}). Now `{_fmt(price)}`"
+                            btc_f = (ctx_map.get("BTCUSDT", {}).get('filters') or {})
+                            if btc_f.get('trending_up'): ttxt += " | BTC:↑"
+                            elif btc_f.get('trending_down'): ttxt += " | BTC:↓"
+                            await send_analysis(chat_id, ttxt, reply_to=mid, silent=True)
+
+                    # חציית יעדים
+                    def crossed(level: float, kind: str) -> bool:
+                        if level <= 0: return False
+                        hit = (price >= level) if level >= lv.entry else (price <= level)
+                        if not hit: return False
+                        key = f"{rec['trade_id']}:hit:{kind}"
+                        return _cooldown(key, COOLDOWN_ALERT_SEC)
+
+                    if lv.tp1 and crossed(lv.tp1, "tp1"):
+                        await send_analysis(chat_id, f"✅ *{sym}* הגיע *TP1* @ `{_fmt(lv.tp1)}` (Now `{_fmt(price)}`) — שקול SL→BE.", reply_to=mid, silent=False)
+                    if lv.tp2 and crossed(lv.tp2, "tp2"):
+                        await send_analysis(chat_id, f"✅ *{sym}* הגיע *TP2* @ `{_fmt(lv.tp2)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+                    if lv.tp3 and crossed(lv.tp3, "tp3"):
+                        await send_analysis(chat_id, f"✅ *{sym}* הגיע *TP3* @ `{_fmt(lv.tp3)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+                    if lv.sl and crossed(lv.sl, "sl"):
+                        await send_analysis(chat_id, f"❌ *{sym}* פגע *SL* @ `{_fmt(lv.sl)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+
+                else:  # GRID
+                    lines = _grid_lines(rec)
+                    if not lines: 
+                        continue
+                    # זהה/דומה? אזעקה רק פעם אחת לכל קו
+                    hit_idx: List[int] = _grid_hits.get(rec["trade_id"], [])
+                    for i, level in enumerate(lines):
+                        dist = abs(price - level) / (level or price) * 100.0 if level else 999.0
+                        if dist <= _near_pct_runtime():
+                            key = f"{rec['trade_id']}:grid:near:{i}"
+                            if _cooldown(key, COOLDOWN_ALERT_SEC):
+                                await send_analysis(chat_id, f"📶 *{sym}* קרוב לקו גריד #{i+1} @ `{_fmt(level)}` (Δ≈{dist:.2f}%)", reply_to=mid, silent=True)
+                        # פגיעה בקו
+                        hit = (price >= level and prev and prev < level) or (price <= level and prev and prev > level)
+                        if hit and i not in hit_idx:
+                            hit_idx.append(i)
+                            await send_analysis(chat_id, f"🧩 *{sym}* פגע *GRID #{i+1}* @ `{_fmt(level)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+                    _grid_hits[rec["trade_id"]] = hit_idx
+
+                # Heartbeat
+                last_hb = _last_heartbeat.get(rec["trade_id"], 0)
+                if _now() - last_hb >= HEARTBEAT_MINUTES*60:
+                    _last_heartbeat[rec["trade_id"]] = _now()
+                    hb = f"📬 *Heartbeat* #{rec['trade_id']} — *{sym}* Now `{_fmt(price)}` | סוג `{ttype}` | מגמה `{cur_trend}` | חלון: {_near_pct_runtime():.2f}%"
+                    await send_analysis(chat_id, hb, reply_to=mid, silent=True)
+
+        except Exception as e:
+            print("[watchdog] error:", e)
+
+        await asyncio.sleep(POLL_SECONDS)
+
+if __name__ == "__main__":
+    if not API_BEARER: raise SystemExit("API_BEARER_TOKEN missing")
+    asyncio.run(loop_watchdog())
+
 
 
 
