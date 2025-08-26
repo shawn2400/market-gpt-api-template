@@ -38,6 +38,10 @@ class QualityResponse(BaseModel):
     anchor: Dict[str, Any]
     components: Dict[str, Any]
 
+class AnalyzeRequest(BaseModel):
+    symbol: str = Field(..., description="Trading pair symbol, e.g. BTCUSDT")
+    interval: str = Field("15m", description="Kline interval, e.g. 15m,1h,4h")
+
 # -------------------------
 # Helpers
 # -------------------------
@@ -96,8 +100,14 @@ async def ai_quality(payload: QualityRequest = Body(...)):
 
 # --- ניתוח (GET/POST) ---
 @router.get("/analyze")
+async def ai_analyze_get(symbol: str = Query(...), interval: str = Query("15m")):
+    return await _do_ai_analyze(symbol, interval)
+
 @router.post("/analyze")
-async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
+async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
+    return await _do_ai_analyze(payload.symbol, payload.interval)
+
+async def _do_ai_analyze(symbol: str, interval: str):
     try:
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
@@ -157,6 +167,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
