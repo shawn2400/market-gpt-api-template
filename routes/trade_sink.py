@@ -1,6 +1,6 @@
 # routes/trade_sink.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, Body, Header, HTTPException
+from fastapi import APIRouter, Depends, Body, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 import os, time, json, httpx
@@ -11,21 +11,60 @@ except Exception:
     def require_api_key():
         return None
 
-from utils.security import verify_hmac, idem_seen
+from utils.hmac_utils import (
+    HDR_SIGNATURE, HDR_TIMESTAMP, HDR_IDEMPOTENCY,
+    check_inbound,  # אימות HMAC+Timestamp
+)
+from utils.redis_client import redis_client as RED
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
 
+# ---------- ENV ----------
 BOT = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-CHAT_ID_DEFAULT = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT}"
+CHAT_ID_DEFAULT = os.getenv("TELEGRAM_CHAT_ID", "").strip() or os.getenv("ADMIN_CHAT_ID","").strip()
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT}" if BOT else ""
 TIMEOUT = float(os.getenv("TELEGRAM_HTTP_TIMEOUT", "15"))
+WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET","").strip()  # סוד משותף לחתימה
 
 USE_REDIS_TRADES = os.getenv("USE_REDIS_TRADES","0").lower() in ("1","true","yes")
-if USE_REDIS_TRADES:
-    import redis
-    RED = redis.from_url(os.getenv("REDIS_URL","redis://localhost:6379"), decode_responses=True)
+IDEM_TTL_SEC = int(float(os.getenv("IDEM_TTL_SEC","86400")))  # 24h
+
+# ---------- Storage ----------
+if USE_REDIS_TRADES and RED:
+    _TRADES: Dict[str, Dict[str, Any]] = {}  # לא בשימוש בפועל כשיש Redis
 else:
     _TRADES: Dict[str, Dict[str, Any]] = {}
+
+# Idempotency fallback (אם אין Redis)
+_IDEM_LOCAL: Dict[str, float] = {}
+
+def _idem_seen(key: Optional[str]) -> bool:
+    """
+    החזרת True אם מפתח כבר נראה (ונשמר) + שמירה כעת אם טרי.
+    Redis עדיף; אם אין – זיכרון מקומי.
+    """
+    if not key:
+        return False
+    now = time.time()
+    if RED:
+        rkey = f"algogpt:idem:{key}"
+        try:
+            if RED.get(rkey):
+                return True
+            RED.set(rkey, "1", ex=IDEM_TTL_SEC)
+            return False
+        except Exception:
+            # ניפול ל-local
+            pass
+    # local
+    # ניקוי קל למפתחות ישנים
+    stale = [k for k, ts in _IDEM_LOCAL.items() if (now - ts) > IDEM_TTL_SEC]
+    for k in stale:
+        _IDEM_LOCAL.pop(k, None)
+    if key in _IDEM_LOCAL:
+        return True
+    _IDEM_LOCAL[key] = now
+    return False
 
 # ====== Models ======
 class TradeIn(BaseModel):
@@ -67,20 +106,32 @@ class TradeOut(BaseModel):
     chat_id: Optional[str | int] = None
 
 def _store_trade(item: Dict[str, Any]):
-    if USE_REDIS_TRADES:
-        RED.hset(f"trades:active:{item['trade_id']}", mapping=item)
+    if RED and USE_REDIS_TRADES:
+        key = f"trades:active:{item['trade_id']}"
+        mapping = {k: (json.dumps(v, ensure_ascii=False) if isinstance(v,(dict,list)) else str(v))
+                   for k, v in item.items()}
+        RED.hset(key, mapping=mapping)
         RED.sadd("trades:active:set", item["trade_id"])
     else:
         _TRADES[item["trade_id"]] = item
 
 def _get_trade(tid: str) -> Optional[Dict[str, Any]]:
-    if USE_REDIS_TRADES:
-        data = RED.hgetall(f"trades:active:{tid}")
+    if RED and USE_REDIS_TRADES:
+        key = f"trades:active:{tid}"
+        data = RED.hgetall(key)
+        # הפוך JSON-ים לשדות מקוריים אם צריך
+        if data:
+            for k in ("hits","near","grid_lines"):
+                if k in data and isinstance(data[k], str):
+                    try:
+                        data[k] = json.loads(data[k])
+                    except Exception:
+                        pass
         return data or None
     return _TRADES.get(tid)
 
 def _all_active() -> List[Dict[str, Any]]:
-    if USE_REDIS_TRADES:
+    if RED and USE_REDIS_TRADES:
         tids = RED.smembers("trades:active:set") or []
         out = []
         for tid in tids:
@@ -90,10 +141,13 @@ def _all_active() -> List[Dict[str, Any]]:
     return list(_TRADES.values())
 
 def _update_trade(tid: str, **updates):
-    if USE_REDIS_TRADES:
+    if RED and USE_REDIS_TRADES:
         key = f"trades:active:{tid}"
-        if not RED.exists(key): return
-        RED.hset(key, mapping=updates)
+        if not RED.exists(key):
+            return
+        mapping = {k: (json.dumps(v, ensure_ascii=False) if isinstance(v,(dict,list)) else str(v))
+                   for k, v in updates.items()}
+        RED.hset(key, mapping=mapping)
     else:
         if tid in _TRADES:
             _TRADES[tid].update(updates)
@@ -120,7 +174,7 @@ def _format_trade_message(rec: Dict[str, Any]) -> str:
         lines = [
             header + f"  [{side}]",
             f"Now: `{nowp}`  Range: `{grid_min}` – `{grid_max}`",
-            f"Levels: *{levels}*  Step≈*{step_pct:.2f}%*  TP/fill: *{(tp_pct or 0):.2f}%*",
+            f"Levels: *{levels}*  Step≈*{(float(step_pct) if step_pct else 0.0):.2f}%*  TP/fill: *{(float(tp_pct) if tp_pct else 0.0):.2f}%*",
         ]
         if rec.get("budget_usd"):
             lines.append(f"Budget: ${float(rec['budget_usd']):.2f}")
@@ -153,43 +207,62 @@ def _approve_keyboard(trade_id: str) -> dict:
         ]]
     }
 
+# ========= Endpoints =========
+
 @router.post("/trade-ingest", response_model=TradeOut)
 async def trade_ingest(
+    request: Request,
     payload: TradeIn = Body(...),
-    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
     x_signature: Optional[str] = Header(default=None, convert_underscores=False),
+    x_timestamp: Optional[str] = Header(default=None, convert_underscores=False),
+    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
 ):
     if not BOT:
         raise HTTPException(500, "TELEGRAM_BOT_TOKEN not configured")
+    if not WEBHOOK_HMAC_SECRET:
+        raise HTTPException(500, "WEBHOOK_HMAC_SECRET not configured")
 
-    raw = json.dumps(payload.model_dump(), separators=(",", ":"), ensure_ascii=False).encode()
-    if not verify_hmac(x_signature, raw):
-        raise HTTPException(401, "Invalid signature")
+    # נבנה bytes קנוני מהמודל (תואם ל-sign_payload)
+    raw = json.dumps(payload.model_dump(), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
-    if x_idempotency_key and idem_seen(x_idempotency_key):
+    # אימות HMAC+Timestamp
+    headers = {
+        HDR_SIGNATURE: x_signature or request.headers.get(HDR_SIGNATURE) or request.headers.get(HDR_SIGNATURE.lower()),
+        HDR_TIMESTAMP: x_timestamp or request.headers.get(HDR_TIMESTAMP) or request.headers.get(HDR_TIMESTAMP.lower()),
+    }
+    ok, reason = check_inbound(WEBHOOK_HMAC_SECRET, headers, raw, tolerance_sec=300)
+    if not ok:
+        raise HTTPException(401, f"Invalid signature: {reason}")
+
+    # Idempotency
+    idem = x_idempotency_key or request.headers.get(HDR_IDEMPOTENCY) or request.headers.get(HDR_IDEMPOTENCY.lower())
+    if _idem_seen(idem):
         rec = _get_trade(payload.trade_id) or {}
-        return TradeOut(ok=True, trade_id=payload.trade_id, message_id=int(rec.get("message_id") or 0) or None, chat_id=rec.get("chat_id"))
+        mid = rec.get("message_id")
+        return TradeOut(ok=True, trade_id=payload.trade_id, message_id=int(mid) if mid else None, chat_id=rec.get("chat_id"))
 
+    # Persist
     rec = payload.model_dump()
     rec.update({
         "status":"active",
         "ts": int(time.time()),
-        "hits": json.dumps({"tp1":False,"tp2":False,"tp3":False,"sl":False}),
-        "near": json.dumps({"tp1":False,"tp2":False,"tp3":False,"sl":False}),
+        "hits": {"tp1":False,"tp2":False,"tp3":False,"sl":False},
+        "near": {"tp1":False,"tp2":False,"tp3":False,"sl":False},
     })
 
-    # GRID: נחשב ונשמור גם רשימת קווים לגלאי watchdog (שימוש פנימי)
+    # GRID: הכנת קווי גריד ל-watchdog (אופציונלי)
     if rec["trade_type"] == "GRID":
         try:
             gmin = float(rec.get("grid_min") or 0)
             gmax = float(rec.get("grid_max") or 0)
             L    = int(rec.get("grid_levels") or 0)
+            lines = []
             if gmin > 0 and gmax > 0 and L >= 2:
                 step = (gmax - gmin) / (L - 1)
                 lines = [gmin + i * step for i in range(L)]
-                rec["grid_lines"] = json.dumps(lines)
+            rec["grid_lines"] = lines
         except Exception:
-            rec["grid_lines"] = json.dumps([])
+            rec["grid_lines"] = []
 
     txt = _format_trade_message(rec)
     body = {
@@ -199,6 +272,7 @@ async def trade_ingest(
         "disable_web_page_preview": True,
         "reply_markup": _approve_keyboard(payload.trade_id),
     }
+
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.post(f"{TELEGRAM_API}/sendMessage", json=body)
         r.raise_for_status()
@@ -237,18 +311,29 @@ class AnalysisIn(BaseModel):
 
 @router.post("/analysis", response_model=dict)
 async def analysis_ingest(
+    request: Request,
     payload: AnalysisIn = Body(...),
-    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
     x_signature: Optional[str] = Header(default=None, convert_underscores=False),
+    x_timestamp: Optional[str] = Header(default=None, convert_underscores=False),
+    x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
 ):
-    raw = json.dumps(payload.model_dump(), separators=(",", ":"), ensure_ascii=False).encode()
-    if not verify_hmac(x_signature, raw):
-        raise HTTPException(401, "Invalid signature")
-    if x_idempotency_key and idem_seen(x_idempotency_key):
-        return {"ok": True, "status": "duplicate_ignored"}
-
     if not BOT:
         raise HTTPException(500, "TELEGRAM_BOT_TOKEN not configured")
+    if not WEBHOOK_HMAC_SECRET:
+        raise HTTPException(500, "WEBHOOK_HMAC_SECRET not configured")
+
+    raw = json.dumps(payload.model_dump(), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    headers = {
+        HDR_SIGNATURE: x_signature or request.headers.get(HDR_SIGNATURE) or request.headers.get(HDR_SIGNATURE.lower()),
+        HDR_TIMESTAMP: x_timestamp or request.headers.get(HDR_TIMESTAMP) or request.headers.get(HDR_TIMESTAMP.lower()),
+    }
+    ok, reason = check_inbound(WEBHOOK_HMAC_SECRET, headers, raw, tolerance_sec=300)
+    if not ok:
+        raise HTTPException(401, f"Invalid signature: {reason}")
+
+    idem = x_idempotency_key or request.headers.get(HDR_IDEMPOTENCY) or request.headers.get(HDR_IDEMPOTENCY.lower())
+    if _idem_seen(idem):
+        return {"ok": True, "status": "duplicate_ignored"}
 
     body = {
         "chat_id": payload.chat_id,
@@ -265,6 +350,7 @@ async def analysis_ingest(
         r = await client.post(f"{TELEGRAM_API}/sendMessage", json=body)
         r.raise_for_status()
         return {"ok": True}
+
 
 
 
