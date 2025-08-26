@@ -2,7 +2,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Query, Body
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 import pandas as pd
 import requests
 import os
@@ -89,6 +89,7 @@ def context_batch(payload: CtxBatchIn = Body(...)) -> CtxBatchOut:
         except Exception:
             items.append(CtxOut(symbol=s, price=None, ind={}, filters={}))
     return CtxBatchOut(ok=True, items=items)
+
 
 
 
