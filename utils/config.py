@@ -1,4 +1,3 @@
-# utils/config.py
 from __future__ import annotations
 import os, re, logging
 from typing import List
@@ -187,6 +186,7 @@ def dump_config_sanitized()->dict:
         "binance_key_len": len(BINANCE_API_KEY),
         "openai_key_len": len(OPENAI_API_KEY),
     }
+
 
 
 
