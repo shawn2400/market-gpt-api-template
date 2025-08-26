@@ -7,8 +7,6 @@ import pandas as pd
 import requests
 from pydantic import BaseModel, Field
 from utils.indicators import prepare_indicators_for_backtest
-
-# יופעל רק אם include_ai=True
 from utils.ai_analysis import analyze_with_ai
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
@@ -65,11 +63,11 @@ class MultiScanResponse(BaseModel):
 
 @router.get("/", response_model=MultiScanResponse)
 async def scan_symbols(
-    symbols: str = Query(..., description="Comma-separated symbols, e.g. BTCUSDT,ETHUSDT"),
+    symbols: str = Query(...),
     interval: str = Query("15m"),
     limit: int = Query(200, ge=50, le=200),
-    include_ai: bool = Query(False, description="If true, also run lightweight AI commentary"),
-    ai_fields: str = Query("rsi,adx,ema_21", description="comma fields to pass into AI prompt"),
+    include_ai: bool = Query(False),
+    ai_fields: str = Query("rsi,adx,ema_21"),
     request: Request = None
 ) -> MultiScanResponse:
     if request is None or not _rl(request.client.host):
@@ -90,19 +88,18 @@ async def scan_symbols(
 
             ai_txt = None
             if include_ai:
-                try:
-                    slim = {"symbol": s}
-                    for k in want:
-                        if k in row: slim[k] = row[k]
-                    ai_txt = await analyze_with_ai(slim)
-                except Exception as e:
-                    ai_txt = "(ai-unavailable)"
+                slim = {"symbol": s}
+                for k in want:
+                    if k in row: slim[k] = row[k]
+                ai_res = await analyze_with_ai(slim)
+                ai_txt = ai_res.get("analysis")
 
             out.append(ScanSignal(symbol=s, interval=interval, indicators=IndicatorSet(**row), analysis=ai_txt))
         except Exception as e:
             out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
 
     return MultiScanResponse(ok=True, count_total=len(syms), returned=len(out), signals=out)
+
 
 
 
