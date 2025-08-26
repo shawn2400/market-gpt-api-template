@@ -1,10 +1,9 @@
 # utils/binance_client.py
 from __future__ import annotations
 import os, time, logging
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, List
 import httpx
 from binance.client import Client
-from binance.exceptions import BinanceAPIException, BinanceRequestException
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -32,23 +31,10 @@ SUPPRESS_BINANCE_WARNINGS = (
     os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes")
 )
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
-_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
 # --- Circuit Breaker ---
-_CB_FAILS_FOR_OPEN = int(os.getenv("BINANCE_CB_FAILS_FOR_OPEN", "3"))
-_CB_COOLDOWN_SEC = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
-_CB_MAX_COOLDOWN = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
-_SOFT_ALLOW_EXINFO = (
-    os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip().lower() in ("1", "true", "yes")
-)
-
-LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
-_futures_exchange_info_cache: Optional[Dict[str, Any]] = None
-_valid_futures_symbols: Optional[set[str]] = None
-
 _cb_fail_count: int = 0
 _cb_open_until: float = 0.0
-_cb_current_cooldown: int = _CB_COOLDOWN_SEC
 
 _UA = {
     "User-Agent": "AlgoGPT/2.x (+httpx)",
@@ -68,8 +54,6 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
         try:
             with httpx.Client(timeout=timeout, headers=_UA, follow_redirects=False, http2=False) as client:
                 r = client.get(url, params=params)
-            if r.status_code in (301, 302, 303, 307, 308):
-                raise RuntimeError(f"redirect to {r.headers.get('Location')}")
             if not _is_json(r):
                 raise RuntimeError("non-json (WAF/HTML)")
             r.raise_for_status()
@@ -84,12 +68,9 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = _DEFAUL
 # --- Client ---
 def get_client() -> Client:
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-        logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV")
         raise RuntimeError("Missing Binance credentials")
-
     client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
     if USE_TESTNET:
-        logger.warning("⚠️ Using Binance TESTNET endpoints")
         client.API_URL = "https://testnet.binance.vision/api"
         client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
     else:
@@ -97,18 +78,23 @@ def get_client() -> Client:
         client.FUTURES_URL = f"{_BINANCE_FAPI_BASE}/fapi/v1"
     return client
 
-# --- Futures helpers ---
+# --- Status ---
 def fapi_ping() -> bool:
-    """בודק חיבור ל-Binance Futures"""
     try:
         _get_json("fapi/v1/ping")
         return True
-    except Exception as e:
-        logger.warning(f"[Binance] fapi_ping failed: {e}")
+    except Exception:
         return False
 
+def status_snapshot() -> dict:
+    """Snapshot בסיסי למצב Binance"""
+    return {
+        "fapi_ping": fapi_ping(),
+        "api_key_loaded": bool(BINANCE_API_KEY),
+    }
+
+# --- Futures helpers ---
 def futures_mark_price(symbol: str) -> Optional[float]:
-    """מחזיר Mark Price עדכני לסימבול"""
     try:
         data = _get_json("fapi/v1/premiumIndex", params={"symbol": symbol.upper()})
         return float(data.get("markPrice")) if "markPrice" in data else None
@@ -116,59 +102,33 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.error(f"[Binance] futures_mark_price error {symbol}: {e}")
         return None
 
-# --- Exchange Info Cache ---
 def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
-    """
-    מחזיר snapshot של Binance Futures Exchange Info, עם cache פנימי.
-    אם force_refresh=True נבקש מחדש מהשרת.
-    """
-    global _futures_exchange_info_cache, _valid_futures_symbols
-    if _futures_exchange_info_cache and not force_refresh:
+    """מחזיר Exchange Info עם cache פנימי"""
+    global _futures_exchange_info_cache
+    if "_futures_exchange_info_cache" in globals() and _futures_exchange_info_cache and not force_refresh:
         return _futures_exchange_info_cache
-
     data = _get_json("fapi/v1/exchangeInfo")
-    _futures_exchange_info_cache = data
-    try:
-        symbols = {s["symbol"] for s in data.get("symbols", []) if s.get("contractType") == "PERPETUAL"}
-        _valid_futures_symbols = symbols
-    except Exception:
-        _valid_futures_symbols = set()
-    return _futures_exchange_info_cache
+    globals()["_futures_exchange_info_cache"] = data
+    return data
 
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-    """
-    מחזיר מידע על סימבול יחיד מ-exchangeInfo (minQty, tickSize וכו').
-    """
     info = futures_exchange_info_safe(force_refresh=force_refresh)
     for s in info.get("symbols", []):
         if s.get("symbol") == symbol.upper():
             return s
     return None
 
-# --- Status Snapshot ---
-def status_snapshot() -> Dict[str, Any]:
+def futures_open_positions() -> List[Dict[str, Any]]:
     """
-    מחזיר snapshot כללי על מצב Binance API
+    מחזיר את רשימת הפוזיציות הפתוחות בחשבון (צריך API KEY עם הרשאות TRADE).
     """
-    snap: Dict[str, Any] = {
-        "ok": False,
-        "fapi_ping": False,
-        "valid_key": False,
-    }
-    # בדיקת חיבור ל-Futures
     try:
-        snap["fapi_ping"] = fapi_ping()
+        client = get_client()
+        return client.futures_position_information()
     except Exception as e:
-        logger.error(f"[Binance] status_snapshot fapi_ping failed: {e}")
+        logger.error(f"[Binance] futures_open_positions failed: {e}")
+        return []
 
-    # בדיקת API keys
-    if BINANCE_API_KEY and BINANCE_API_SECRET:
-        snap["valid_key"] = True
-    else:
-        snap["valid_key"] = False
-
-    snap["ok"] = snap["fapi_ping"] and snap["valid_key"]
-    return snap
 
 
 
