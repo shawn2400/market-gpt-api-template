@@ -23,10 +23,12 @@ def _to_bool(v: str | None, default: bool = False) -> bool:
 LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
 SUPPRESS_BINANCE_WARNINGS = _to_bool(os.getenv("SUPPRESS_BINANCE_WARNINGS", "1"))
 
+# --- Config ---
+from utils import config as cfg
 from utils.config import (
     dump_config_sanitized, LOG_LEVEL,
     PRICE_MONITOR_INTERVAL, PRICE_MONITOR_DISABLE,
-    ENABLE_AI_ROUTES, OPENAI_API_KEY,
+    ENABLE_AI_ROUTES,
 )
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
@@ -56,20 +58,17 @@ if not LIGHT_MODE:
             })
     logger.addHandler(MemoryLogHandler())
 
-# --- Env check ---
-BINANCE_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
-OPENAI_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
-
+# --- Env check (דרך config) ---
 logger.info({
     "event": "env_loaded",
-    "BINANCE_API_KEY_len": len(BINANCE_KEY),
-    "OPENAI_API_KEY_len": len(OPENAI_KEY),
+    "BINANCE_API_KEY_len": len(cfg.BINANCE_API_KEY),
+    "OPENAI_API_KEY_len": len(cfg.OPENAI_API_KEY),
 })
 logger.info({"event": "config_snapshot", **dump_config_sanitized()})
 
-if not BINANCE_KEY:
+if not cfg.BINANCE_API_KEY:
     logger.warning("⚠️ Binance API key not set → trading disabled")
-if not OPENAI_KEY or OPENAI_KEY.startswith("YOUR_REAL_"):
+if not cfg.OPENAI_API_KEY or cfg.OPENAI_API_KEY.startswith("YOUR_REAL_"):
     logger.warning("⚠️ OpenAI API key not set → AI may return fallback only")
 
 # --- FastAPI App ---
@@ -108,7 +107,7 @@ app.include_router(price_router, prefix="/price", tags=["Price"])
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
-if ENABLE_AI_ROUTES and OPENAI_API_KEY and not OPENAI_API_KEY.startswith("YOUR_REAL_"):
+if ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY and not cfg.OPENAI_API_KEY.startswith("YOUR_REAL_"):
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
 else:
     logger.warning("⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)")
@@ -233,6 +232,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
