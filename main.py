@@ -33,7 +33,7 @@ from utils.config import (
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.watchlist_utils import load_watchlist
-from utils.binance_client import futures_mark_price
+from utils.binance_client import futures_mark_price, fapi_ping
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store  # fallback אם Redis לא זמין
@@ -58,7 +58,7 @@ if not LIGHT_MODE:
             })
     logger.addHandler(MemoryLogHandler())
 
-# --- Env check (דרך config) ---
+# --- Env check ---
 logger.info({
     "event": "env_loaded",
     "BINANCE_API_KEY_len": len(cfg.BINANCE_API_KEY),
@@ -178,24 +178,20 @@ async def anchor_snapshot_loop(interval: int = 30):
 # --- Startup ---
 @app.on_event("startup")
 async def startup_event():
-    # 🔑 ניקוי ENV Keys אוטומטי
-    def _clean_env(name: str) -> str:
-        val = (os.getenv(name) or "").strip().replace("\n", "").replace("\r", "")
-        if val:
-            os.environ[name] = val
-            logger.info({"event": "env_fix", name: f"len={len(val)}"})
-        else:
-            logger.warning({"event": "env_missing", "var": name})
-        return val
-
-    _clean_env("BINANCE_API_KEY")
-    _clean_env("BINANCE_API_SECRET")
-    _clean_env("OPENAI_API_KEY")
-
     if LIGHT_MODE:
         logger.info({"event": "startup", "mode": "light"})
         return
 
+    # --- Binance quick check ---
+    try:
+        if fapi_ping():
+            logger.info({"event": "binance_ping_ok"})
+        else:
+            logger.warning({"event": "binance_ping_fail"})
+    except Exception as e:
+        logger.error({"event": "binance_ping_error", "error": str(e)})
+
+    # --- Warmup watchlist ---
     watchlist = load_watchlist()
     symbols = [it["symbol"].upper() for it in watchlist]
     if "BTCUSDT" not in symbols:
@@ -207,6 +203,7 @@ async def startup_event():
                 update_price_local(s, float(p))
         except Exception as e:
             logger.warning({"event": "warmup_price_error", "symbol": s, "error": str(e)})
+
     asyncio.create_task(auto_anchor_updater_loop())
     asyncio.create_task(price_monitor_loop())
     asyncio.create_task(anchor_snapshot_loop())
@@ -247,6 +244,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
