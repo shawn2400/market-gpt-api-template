@@ -25,7 +25,7 @@ FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com"
 CTX_CACHE_TTL = int(os.getenv("CONTEXT_TTL_SECONDS", "20"))
 MAX_LIMIT = 200
 
-# פרמטרים לדגלים (אפשר לכוונן ב־ENV אם תרצה בהמשך)
+# פרמטרים לכיוונון דגלים (ENV)
 BREAKOUT_WINDOW = int(os.getenv("BREAKOUT_WINDOW", "50"))
 EMA_CROSS_LOOKBACK = int(os.getenv("EMA_CROSS_LOOKBACK", "2"))
 ATR_MULT_STOP = float(os.getenv("ATR_MULT_STOP", "1.5"))
@@ -75,7 +75,6 @@ async def _fetch_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
 
-# OBV "דק" ומנורמל (zscore)
 def _obv_z(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty: return pd.Series(dtype=float)
     close = pd.to_numeric(df["close"], errors="coerce")
@@ -102,13 +101,12 @@ class ContextOut(BaseModel):
     bb_lower: float | None = None
     obv_z: float | None = None
     vol_15m_est: float | None = None
-    # דגלים/מדדים משודרגים
     filters: Dict[str, Any] = {}
     ts: int
 
 class BatchOut(BaseModel):
     count: int
-    items: List[ContextOut]
+    items: List[Dict[str, Any]]   # תומך גם ב-full וגם ב-compact
     errors: Dict[str, str] = {}
 
 def _last(s: pd.Series) -> Optional[float]:
@@ -130,7 +128,6 @@ def _anchor_hint() -> str:
     return "NEUTRAL"
 
 async def compute_context(symbol: str, interval: str, limit: int, include_filters: bool) -> ContextOut:
-    # קאש לפי מפתח
     key = f"{symbol.upper()}|{interval}|{limit}|{int(include_filters)}"
     cached = _in_cache(key)
     if cached:
@@ -146,7 +143,6 @@ async def compute_context(symbol: str, interval: str, limit: int, include_filter
     vol   = pd.to_numeric(df["volume"], errors="coerce")
     price = float(close.iloc[-1])
 
-    # אינדיקטורים בסיסיים
     rsi_s  = rsi_fn(close, 14)
     adx_s  = adx_fn(df, 14)
     atr_s  = atr_fn(df, 14)
@@ -155,11 +151,9 @@ async def compute_context(symbol: str, interval: str, limit: int, include_filter
     bb_mid_s, bb_up_s, bb_lo_s = bollinger_bands(close, period=20, std_factor=2.0)
     obv_zs = _obv_z(df)
 
-    # עלויות חישוב קלות
     diffs = close.diff().abs().dropna()
     vol_15m_est = float(diffs.tail(20).mean() or 0.0) if not diffs.empty else None
 
-    # בסיס הנתונים
     data = {
         "symbol": symbol.upper(),
         "interval": interval,
@@ -189,47 +183,39 @@ async def compute_context(symbol: str, interval: str, limit: int, include_filter
         bbl     = data["bb_lower"]
         obvz    = data["obv_z"] or 0.0
 
-        # טרנד
         trending_up   = (price > ema21_v) and (ema21_v > ema50_v) and (adx_v >= ADX_TREND_MIN)
         trending_down = (price < ema21_v) and (ema21_v < ema50_v) and (adx_v >= ADX_TREND_MIN)
 
-        # קניות/מכירות יתר
         overbought = rsi_v >= RSI_OB
         oversold   = rsi_v <= RSI_OS
 
-        # Volume spike
         v_ma = float(vol.rolling(30, min_periods=15).mean().iloc[-1] or 0.0)
         v_spike = (float(vol.iloc[-1]) / v_ma >= 2.0) if v_ma > 0 else False
 
-        # EMA cross (בזמן האחרון)
         ema21_prev = float(ema21.iloc[-EMA_CROSS_LOOKBACK]) if len(ema21) > EMA_CROSS_LOOKBACK else ema21_v
         ema50_prev = float(ema50.iloc[-EMA_CROSS_LOOKBACK]) if len(ema50) > EMA_CROSS_LOOKBACK else ema50_v
         ema_cross_bull = (ema21_prev <= ema50_prev) and (ema21_v > ema50_v)
         ema_cross_bear = (ema21_prev >= ema50_prev) and (ema21_v < ema50_v)
 
-        # Breakout לעומת שיא/שפל אחרונים (לפי נר קודם כדי לא “לדעת” את הנר הנוכחי)
         win = min(BREAKOUT_WINDOW, len(high)-1) if len(high) > 1 else 1
         prev_max = float(high.iloc[-win-1:-1].max()) if win >= 2 else float(high.iloc[-2])
-        prev_min = float(low.iloc[-win-1:-1].min())  if win >= 2 else float(low.iloc[-2])
+        prev_min = float(low .iloc[-win-1:-1].min()) if win >= 2 else float(low .iloc[-2])
         breakout_up   = price > prev_max
         breakout_down = price < prev_min
 
-        # ATR % ומצב תנודתיות
         atr_pct = (atr_v / price * 100.0) if price > 0 and atr_v > 0 else None
         vol_regime = "low"
         if atr_pct is not None:
             if atr_pct >= ATR_PCT_HIGH: vol_regime = "high"
             elif atr_pct >= ATR_PCT_LOW: vol_regime = "mid"
 
-        # Bandwidth של בולינגר כדי לזהות CHOP
         bb_bw = None
         danger_chop = False
         if bbm and bbu and bbl and bbm != 0:
             bb_bw = (bbu - bbl) / abs(bbm)
-            near_mid = abs(price - bbm)/price <= 0.002  # ~0.2%
+            near_mid = abs(price - bbm)/price <= 0.002
             danger_chop = (adx_v < 18.0) and (bb_bw <= BB_BW_THR) and near_mid
 
-        # RR baseline — יעד מול סיכון ATR*1.5
         risk_stop = atr_v * ATR_MULT_STOP if atr_v else None
         rr_up = rr_down = None
         if risk_stop and risk_stop > 0:
@@ -248,10 +234,8 @@ async def compute_context(symbol: str, interval: str, limit: int, include_filter
         elif rr_up: rr_baseline = rr_up
         elif rr_down: rr_baseline = rr_down
 
-        # Anchor hint
         anchor_hint = _anchor_hint()
 
-        # ניקוד קל (“score_light”) – שקוף וזול
         score = 0.0
         score += 1.5 if trending_up else 0.0
         score -= 1.0 if trending_down else 0.0
@@ -262,7 +246,6 @@ async def compute_context(symbol: str, interval: str, limit: int, include_filter
         score -= 0.5 if overbought else 0.0
         score -= 0.4 if oversold else 0.0
         score -= 0.8 if danger_chop else 0.0
-        # בונוס קטן אם עוגן בוליש ובפועל trending_up (או הפוך)
         if anchor_hint == "BULLISH" and trending_up: score += 0.3
         if anchor_hint == "BEARISH" and trending_down: score += 0.3
 
@@ -299,10 +282,15 @@ async def get_context(
     limit: int = Query(120, ge=60, le=MAX_LIMIT),
     include_filters: bool = Query(True),
 ):
-    # Rate limit לפי IP לבקשה
     if not _rl(request.client.host):
         raise HTTPException(429, "Rate limit exceeded")
     return await compute_context(symbol, interval, limit, include_filters)
+
+class BatchCompactItem(BaseModel):
+    symbol: str
+    price: float
+    score_light: float | None = None
+    rr_baseline: float | None = None
 
 @router.get("/context/batch", response_model=BatchOut)
 async def get_context_batch(
@@ -311,7 +299,8 @@ async def get_context_batch(
     interval: str = Query("15m"),
     limit: int = Query(120, ge=60, le=MAX_LIMIT),
     include_filters: bool = Query(True),
-    k: Optional[int] = Query(None, ge=1, le=100, description="אופציונלי: להחזיר רק K ראשונים לפי score_light"),
+    k: Optional[int] = Query(None, ge=1, le=100, description="אופציונלי: K ראשונים לפי score_light"),
+    compact: bool = Query(False, description="החזר קומפקטי: symbol, price, score_light, rr_baseline"),
 ):
     if not _rl(request.client.host):
         raise HTTPException(429, "Rate limit exceeded")
@@ -339,10 +328,24 @@ async def get_context_batch(
 
     await asyncio.gather(*[one(s) for s in pool])
 
+    # מיון לפי score_light אם יש וצריך K
     if k is not None and include_filters:
-        # מיין לפי score_light אם קיים
         results.sort(key=lambda c: ((c.filters or {}).get("score_light", 0.0)), reverse=True)
         results = results[:k]
 
-    return BatchOut(count=len(results), items=results, errors=errors)
+    if compact:
+        items = []
+        for c in results:
+            f = c.filters or {}
+            items.append(BatchCompactItem(
+                symbol=c.symbol,
+                price=c.price,
+                score_light=float(f.get("score_light")) if f.get("score_light") is not None else None,
+                rr_baseline=float(f.get("rr_baseline")) if f.get("rr_baseline") is not None else None,
+            ).model_dump())
+        return BatchOut(count=len(items), items=items, errors=errors)
+
+    # full
+    return BatchOut(count=len(results), items=[c.model_dump() for c in results], errors=errors)
+
 
