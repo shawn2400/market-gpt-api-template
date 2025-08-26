@@ -178,9 +178,24 @@ async def anchor_snapshot_loop(interval: int = 30):
 # --- Startup ---
 @app.on_event("startup")
 async def startup_event():
+    # 🔑 ניקוי ENV Keys אוטומטי
+    def _clean_env(name: str) -> str:
+        val = (os.getenv(name) or "").strip().replace("\n", "").replace("\r", "")
+        if val:
+            os.environ[name] = val
+            logger.info({"event": "env_fix", name: f"len={len(val)}"})
+        else:
+            logger.warning({"event": "env_missing", "var": name})
+        return val
+
+    _clean_env("BINANCE_API_KEY")
+    _clean_env("BINANCE_API_SECRET")
+    _clean_env("OPENAI_API_KEY")
+
     if LIGHT_MODE:
         logger.info({"event": "startup", "mode": "light"})
         return
+
     watchlist = load_watchlist()
     symbols = [it["symbol"].upper() for it in watchlist]
     if "BTCUSDT" not in symbols:
@@ -232,6 +247,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
