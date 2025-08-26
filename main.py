@@ -105,14 +105,13 @@ app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
 app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 app.include_router(price_router, prefix="/price", tags=["Price"])
-
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
+app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
+
 if ENABLE_AI_ROUTES and OPENAI_API_KEY and not OPENAI_API_KEY.startswith("YOUR_REAL_"):
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
 else:
     logger.warning("⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)")
-
-app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
 # --- Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
@@ -202,15 +201,15 @@ async def startup_event():
 # --- Health ---
 @app.get("/", tags=["Config"])
 async def root_status():
-    return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
+    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
+    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health/live", tags=["Health"])
 async def health_live():
-    return {"status": "live"}
+    return {"ok": True, "status": "live"}
 
 # --- Debug ---
 @app.get("/_routes", tags=["Debug"])
@@ -234,6 +233,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
