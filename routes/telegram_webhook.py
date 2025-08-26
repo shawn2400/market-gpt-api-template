@@ -1,151 +1,234 @@
-# routes/telegram_webhook.py
+# workers/trade_watchdog.py
 from __future__ import annotations
-from fastapi import APIRouter, Request, HTTPException, Depends, Body
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-import os, json, hmac, hashlib, httpx
+import os, json, time, asyncio, math, httpx
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
+load_dotenv(override=False)
 
-# שים לב: ל-webhook של טלגרם לא שמים require_api_key (טלגרם לא ישלח Authorization).
-# לכן נגן באמצעות secret token של טלגרם (X-Telegram-Bot-Api-Secret-Token).
+ALERTS_BASE   = os.getenv("ALERTS_BASE", "http://localhost:8000").rstrip("/")
+API_BEARER    = os.getenv("API_BEARER_TOKEN","")
+HMAC_SECRET   = (os.getenv("HMAC_SECRET","")).encode()
 
-router = APIRouter(prefix="/telegram", tags=["Telegram"])
+CONTEXT_BATCH_URL = os.getenv("CONTEXT_BATCH_URL","").strip()
+CONTEXT_URL       = os.getenv("CONTEXT_URL","").strip()
+CONTEXT_TOKEN     = os.getenv("CONTEXT_TOKEN","").strip()
 
-# --- ENV ---
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", "").strip()  # אם תגדיר, טלגרם ישלח Header לבדיקת מקור
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+POLL_SECONDS        = int(os.getenv("WATCHDOG_POLL_SECONDS","20"))
+HEARTBEAT_MINUTES   = int(os.getenv("HEARTBEAT_MINUTES","30"))
+NEAR_PCT_BASE       = float(os.getenv("NEAR_PCT_BASE","0.35"))
+COOLDOWN_ALERT_SEC  = int(os.getenv("COOLDOWN_ALERT_SEC","90"))
+PRICE_DELTA_MIN_PCT = float(os.getenv("PRICE_DELTA_MIN_PCT","0.05"))
+TZ_NAME = os.getenv("TZ","Asia/Jerusalem")
+HOT_HOURS   = [int(x) for x in os.getenv("HOT_HOURS","16,17,18,19,20,21,22,23,0,1").split(",") if x.strip().isdigit()]
+CALM_HOURS  = [int(x) for x in os.getenv("CALM_HOURS","4,5,6,7,8,9").split(",") if x.strip().isdigit()]
+NEAR_MULT_HOT  = float(os.getenv("NEAR_MULT_HOT","0.8"))
+NEAR_MULT_CALM = float(os.getenv("NEAR_MULT_CALM","1.2"))
 
-OUT_URL = os.getenv("OUTGOING_WEBHOOK_URL", "").strip()
-OUT_TOK = os.getenv("OUTGOING_WEBHOOK_TOKEN", "").strip()
-OUT_HMAC_SECRET = (os.getenv("OUTGOING_HMAC_SECRET") or os.getenv("HMAC_SECRET") or "").encode()
+ENTRY_ZONE_PCT     = float(os.getenv("ENTRY_ZONE_PCT","0.15"))
+ENTRY_ZONE_ALERT   = os.getenv("ENTRY_ZONE_ALERT","1").lower() in ("1","true","yes")
+ANCHOR_FLIP_WARN_COUNT = int(os.getenv("ANCHOR_FLIP_WARN_COUNT","2"))
 
-from utils.telegram_api import edit_message
+_last_event_ts: Dict[str, float] = {}
+_last_price: Dict[str, float] = {}
+_last_trend: Dict[str, str] = {}
+_last_heartbeat: Dict[str, float] = {}
+_anchor_state: Dict[str, int] = {}
+_zone_notified: Dict[str, bool] = {}
+_grid_hits: Dict[str, List[int]] = {}  # trade_id -> indices of hit lines
 
-def _sign(body: bytes) -> str:
-    if not OUT_HMAC_SECRET:
-        return ""
-    return hmac.new(OUT_HMAC_SECRET, body, hashlib.sha256).hexdigest()
+def _hmac_hex(body: bytes) -> str:
+    if not HMAC_SECRET: return ""
+    import hmac, hashlib
+    return hmac.new(HMAC_SECRET, body, hashlib.sha256).hexdigest()
 
-class WebhookSet(BaseModel):
-    url: str
-    secret_token: Optional[str] = None
+def _now() -> float: return time.time()
 
-@router.post("/set-webhook")
-async def set_webhook(cfg: WebhookSet):
-    if not BOT_TOKEN:
-        raise HTTPException(400, "missing TELEGRAM_BOT_TOKEN")
-    payload = {"url": cfg.url}
-    # אפשר להעביר secret_token (מומלץ) — טלגרם ישלח אותו בכותרת ל-webhook שלך
-    if cfg.secret_token:
-        payload["secret_token"] = cfg.secret_token
+def _local_hour() -> int:
+    return datetime.now(ZoneInfo(TZ_NAME)).hour
+
+def _near_pct_runtime() -> float:
+    hr = _local_hour()
+    if hr in HOT_HOURS: return NEAR_PCT_BASE * NEAR_MULT_HOT
+    if hr in CALM_HOURS: return NEAR_PCT_BASE * NEAR_MULT_CALM
+    return NEAR_PCT_BASE
+
+def _cooldown(key: str, sec: int) -> bool:
+    ts = _last_event_ts.get(key, 0)
+    if _now() - ts < sec: return False
+    _last_event_ts[key] = _now()
+    return True
+
+def _fmt(x) -> str:
+    try:
+        v = float(x)
+        return f"{v:.6f}"
+    except Exception:
+        return "—"
+
+def _percent(a: float, b: float) -> float:
+    if b == 0: return 0.0
+    return 100.0 * (a - b) / b
+
+async def get_active_trades() -> List[Dict[str, Any]]:
+    headers = {"Authorization": f"Bearer {API_BEARER}"} if API_BEARER else {}
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(f"{TELEGRAM_API}/setWebhook", json=payload)
+        r = await client.get(f"{ALERTS_BASE}/alerts/trades/active", headers=headers)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        return data.get("items", [])
 
-async def _notify_core(trade_id: str, decision: str, meta: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    מודיע ל-Core על החלטת המשתמש (APPROVE/REJECT/ADJUST/ANALYZE) עם Outbound HMAC.
-    """
-    if not OUT_URL:
-        return {"ok": True, "sent": False, "reason": "OUTGOING_WEBHOOK_URL not set"}
-    body = json.dumps({"trade_id": trade_id, "decision": decision, "meta": meta}, separators=(",", ":")).encode()
-    headers = {"Content-Type": "application/json", "X-Idempotency-Key": trade_id}
-    if OUT_TOK:
-        headers["Authorization"] = f"Bearer {OUT_TOK}"
-    sig = _sign(body)
-    if sig:
-        headers["X-Signature"] = sig
+async def send_analysis(chat_id: str|int, text: str, reply_to: Optional[int]=None, silent: bool=True):
+    body = {"text": text, "chat_id": chat_id, "reply_to_message_id": reply_to, "silent": silent}
+    raw = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
+    headers = {"Authorization": f"Bearer {API_BEARER}", "Content-Type":"application/json", "X-Idempotency-Key": f"wd-{int(_now())}-{hash(text)%9999}"}
+    sig = _hmac_hex(raw)
+    if sig: headers["X-Signature"] = sig
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(OUT_URL, content=body, headers=headers)
-        ok = 200 <= r.status_code < 300
-        return {"ok": ok, "status": r.status_code, "body": r.text}
+        r = await client.post(f"{ALERTS_BASE}/alerts/analysis", content=raw, headers=headers)
+        r.raise_for_status()
 
-def _append_status_to_text(txt: str, badge: str) -> str:
-    # מוסיף שורת סטטוס בראש הטקסט, בלי לפרק את תוכן ההודעה המקורית
-    prefix = f"{badge}\n"
-    if txt.startswith("🧠"):
-        return prefix + txt
-    return prefix + txt
+async def fetch_ctx_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    if not CONTEXT_BATCH_URL:
+        return {}
+    csv = ",".join(symbols)
+    url = CONTEXT_BATCH_URL.replace("{csv}", csv)
+    headers = {"Authorization": f"Bearer {CONTEXT_TOKEN}"} if CONTEXT_TOKEN else {}
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(url, headers=headers)
+        r.raise_for_status()
+        data = r.json()
+        out = {}
+        for it in data.get("items", []):
+            sym = (it.get("symbol") or "").upper()
+            if sym: out[sym] = it
+        return out
 
-@router.post("/webhook")
-async def webhook(request: Request):
-    # 1) אימות מקור מטלגרם (אופציונלי אך מומלץ)
-    if SECRET_TOKEN:
-        got = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-        if got != SECRET_TOKEN:
-            raise HTTPException(401, "invalid telegram secret token")
+@dataclass
+class Levels:
+    entry: float
+    sl: float
+    tp1: float
+    tp2: Optional[float]
+    tp3: Optional[float]
 
-    upd = await request.json()
+def _nearest_target(levels: Levels, price: float) -> tuple[str, float]:
+    candidates: List[tuple[str,float]] = []
+    def dist_pct(a,b): return abs(a-b)/b * 100.0 if b>0 else 999.0
+    if levels.tp1: candidates.append(("tp1", dist_pct(levels.tp1, price)))
+    if levels.tp2: candidates.append(("tp2", dist_pct(levels.tp2, price)))
+    if levels.tp3: candidates.append(("tp3", dist_pct(levels.tp3, price)))
+    if levels.sl:  candidates.append(("sl",  dist_pct(levels.sl,  price)))
+    candidates.sort(key=lambda x: x[1])
+    return candidates[0] if candidates else ("", 999.0)
 
-    # A) הודעות פקודה (אופציונלי, מינימלי)
-    if "message" in upd:
-        msg = upd["message"]
-        text = str(msg.get("text", "") or "").strip()
-        chat_id = msg["chat"]["id"]
-        mid = msg.get("message_id")
-        if text.startswith("/start"):
-            return {"ok": True}
-        if text.startswith("/help"):
-            return {"ok": True}
-        # לא מריצים כאן GPT ולא קוראים ל-Core — הבוט דק
-        return {"ok": True}
+def _trend_label(filters: Dict[str, Any]) -> str:
+    if filters.get("trending_up"): return "UP"
+    if filters.get("trending_down"): return "DOWN"
+    return "NONE"
 
-    # B) לחיצות על כפתורים
-    if "callback_query" in upd:
-        cq = upd["callback_query"]
-        data = cq.get("data", "")
-        chat_id = cq["message"]["chat"]["id"]
-        mid = cq["message"]["message_id"]
-        txt = cq["message"].get("text", "")
+def _grid_lines(rec: Dict[str, Any]) -> List[float]:
+    # נשמר ע"י trade_sink כ-json אם קיים
+    try:
+        if rec.get("grid_lines"):
+            return [float(x) for x in json.loads(rec["grid_lines"])]
+    except Exception:
+        pass
+    # אחרת — נחשב דינמית
+    try:
+        gmin = float(rec.get("grid_min") or 0)
+        gmax = float(rec.get("grid_max") or 0)
+        L    = int(rec.get("grid_levels") or 0)
+        if gmin > 0 and gmax > 0 and L >= 2:
+            step = (gmax - gmin) / (L - 1)
+            return [gmin + i * step for i in range(L)]
+    except Exception:
+        pass
+    return []
 
-        if ":" in data:
-            action, tid = data.split(":", 1)
-            action = action.strip().lower()
-        else:
-            action, tid = data.lower(), ""
+async def loop_watchdog():
+    while True:
+        try:
+            trades = await get_active_trades()
+            if not trades:
+                await asyncio.sleep(POLL_SECONDS)
+                continue
 
-        if action == "approve":
-            # עריכה מיידית + הודעה ל-Core
-            new_txt = _append_status_to_text(txt, "✅ *אושר ע\"י משתמש*")
-            try:
-                await edit_message(chat_id, mid, new_txt)
-            except Exception:
-                pass
-            res = await _notify_core(tid, "APPROVE", {"chat_id": chat_id, "message_id": mid})
-            return {"ok": True, "core": res}
+            symbols = sorted({ str(t["symbol"]).upper() for t in trades })
+            if "BTCUSDT" not in symbols: symbols.append("BTCUSDT")
+            if "ETHUSDT" not in symbols: symbols.append("ETHUSDT")
 
-        if action == "reject":
-            new_txt = _append_status_to_text(txt, "❌ *נדחה ע\"י משתמש*")
-            try:
-                await edit_message(chat_id, mid, new_txt)
-            except Exception:
-                pass
-            res = await _notify_core(tid, "REJECT", {"chat_id": chat_id, "message_id": mid})
-            return {"ok": True, "core": res}
+            ctx_map = await fetch_ctx_batch(symbols)
+            near_pct = _near_pct_runtime()
 
-        if action == "adjust":
-            new_txt = _append_status_to_text(txt, "✏️ *לבקשת כוונון* — שלח ערכים מעודכנים בבקשה")
-            try:
-                await edit_message(chat_id, mid, new_txt)
-            except Exception:
-                pass
-            res = await _notify_core(tid, "ADJUST", {"chat_id": chat_id, "message_id": mid})
-            return {"ok": True, "core": res}
+            # Anchor (BTC)
+            btc_trend = "NONE"
+            btc = ctx_map.get("BTCUSDT", {})
+            if btc:
+                btc_f = (btc.get("filters") or {})
+                btc_trend = "UP" if btc_f.get("trending_up") else ("DOWN" if btc_f.get("trending_down") else "NONE")
+                cnt = _anchor_state.get("BTCUSDT", 0)
+                if btc_trend == "UP":   cnt = cnt + 1 if cnt >= 0 else 1
+                elif btc_trend == "DOWN": cnt = cnt - 1 if cnt <= 0 else -1
+                else: cnt = 0
+                _anchor_state["BTCUSDT"] = cnt
 
-        if action == "analyze":
-            # אל תריץ GPT כאן; רק סימון UI + שליחת בקשה ל-Core
-            new_txt = _append_status_to_text(txt, "⏳ *ניתוח GPT בתהליך…*")
-            try:
-                await edit_message(chat_id, mid, new_txt)
-            except Exception:
-                pass
-            res = await _notify_core(tid, "ANALYZE", {"chat_id": chat_id, "message_id": mid})
-            return {"ok": True, "core": res}
+            for rec in trades:
+                sym = str(rec["symbol"]).upper()
+                chat_id = rec.get("chat_id")
+                mid = rec.get("message_id")
+                ttype = str(rec.get("trade_type","FUTURES")).upper()
 
-        return {"ok": True}
+                ctx = ctx_map.get(sym) or {}
+                price = float(ctx.get("price") or rec.get("current_price") or 0.0)
+                if price <= 0: 
+                    continue
 
-    return {"ok": True}
+                prev = _last_price.get(sym)
+                if prev is not None and abs(_percent(price, prev)) < PRICE_DELTA_MIN_PCT:
+                    pass
+                _last_price[sym] = price
+
+                filters = (ctx.get("filters") or {}) if isinstance(ctx, dict) else {}
+                cur_trend = _trend_label(filters)
+                last_tr = _last_trend.get(sym, "NONE")
+                if cur_trend != last_tr:
+                    _last_trend[sym] = cur_trend
+                    key = f"{rec['trade_id']}:trend:{cur_trend}"
+                    if _cooldown(key, COOLDOWN_ALERT_SEC):
+                        await send_analysis(chat_id, f"📈 שינוי מגמה ב־*{sym}*: `{last_tr}` → `{cur_trend}` (Now `{_fmt(price)}`)", reply_to=mid, silent=True)
+
+                # Anchor flip guard (FUTURES בלבד)
+                cnt = _anchor_state.get("BTCUSDT", 0)
+                if ttype == "FUTURES" and ANCHOR_FLIP_WARN_COUNT > 0 and rec.get("side"):
+                    side = str(rec["side"]).upper()
+                    if side == "LONG" and cnt <= -ANCHOR_FLIP_WARN_COUNT:
+                        if _cooldown(f"{rec['trade_id']}:anchor:bear", COOLDOWN_ALERT_SEC*2):
+                            await send_analysis(chat_id, f"⚠️ *BTC Anchor* BEAR ({abs(cnt)} רצופים). LONG ב־{sym} — זהירות.", reply_to=mid, silent=True)
+                    if side == "SHORT" and cnt >= ANCHOR_FLIP_WARN_COUNT:
+                        if _cooldown(f"{rec['trade_id']}:anchor:bull", COOLDOWN_ALERT_SEC*2):
+                            await send_analysis(chat_id, f"⚠️ *BTC Anchor* BULL ({abs(cnt)} רצופים). SHORT ב־{sym} — זהירות.", reply_to=mid, silent=True)
+
+                # סוג-ספציפי
+                if ttype in ("FUTURES","SPOT"):
+                    lv = Levels(
+                        entry=float(rec.get("entry") or 0.0),
+                        sl=float(rec.get("sl") or 0.0),
+                        tp1=float(rec.get("tp1") or 0.0),
+                        tp2=float(rec.get("tp2") or 0.0) if rec.get("tp2") else None,
+                        tp3=float(rec.get("tp3") or 0.0) if rec.get("tp3") else None,
+                    )
+                    side = str(rec.get("side","")).upper()
+
+                    # “כניסה לאזור”
+                    if ENTRY_ZONE_ALERT and lv.entry and ENTRY_ZONE_PCT > 0:
+                        band = ENTRY_ZONE_PCT/100.0 * lv.entry
+                        in_zone = (lv.entry - band <= price <= lv.entry + band)
+                        zkey = f"{rec['trade_id']}:zone"
+                        if in_zone and not _zone_notified.g_
+
 
 
 
