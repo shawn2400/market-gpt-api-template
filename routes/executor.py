@@ -15,32 +15,27 @@ router = APIRouter(
 def list_open_positions() -> List[Dict[str, Any]]:
     """
     מחזיר רשימת פוזיציות פתוחות מחשבון Binance Futures.
-    אם אין פוזיציות → מחזיר [].
     """
     try:
         positions = futures_open_positions()
         if not positions:
             return []
-        # ניקוי/המרה לשדות רלוונטיים בלבד
-        clean = []
-        for p in positions:
-            clean.append({
+        return [
+            {
                 "symbol": p.get("symbol"),
                 "positionAmt": p.get("positionAmt"),
                 "entryPrice": p.get("entryPrice"),
                 "unRealizedProfit": p.get("unRealizedProfit"),
                 "leverage": p.get("leverage"),
                 "marginType": p.get("marginType"),
-            })
-        return clean
+            }
+            for p in positions
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch open positions: {e}")
 
 @router.get("/status")
 def executor_status() -> Dict[str, Any]:
-    """
-    מחזיר סטטוס בסיסי של ה־Executor.
-    """
     return {
         "ok": True,
         "executor": "running",
