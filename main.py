@@ -20,12 +20,10 @@ if not IS_CLOUD:
     from dotenv import load_dotenv
     load_dotenv(override=False)
 
-
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
-
 
 LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
 SUPPRESS_BINANCE_WARNINGS = _to_bool(os.getenv("SUPPRESS_BINANCE_WARNINGS", "1"))
@@ -55,7 +53,6 @@ logging.getLogger().setLevel(LOG_LEVEL)
 
 if not LIGHT_MODE:
     from collections import deque
-
     LOG_BUFFER = deque(maxlen=int(os.getenv("LOG_BUFFER_SIZE", 200)))
 
     class MemoryLogHandler(logging.Handler):
@@ -68,7 +65,6 @@ if not LIGHT_MODE:
                     "message": record.getMessage(),
                 }
             )
-
     logger.addHandler(MemoryLogHandler())
 
 # --- Env check ---
@@ -130,30 +126,21 @@ app.include_router(price_router, prefix="/price", tags=["Price"])
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
 
-if ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY and not cfg.OPENAI_API_KEY.startswith(
-    "YOUR_REAL_"
-):
-    logger.info(
-        {"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
-    )
+if ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY and not cfg.OPENAI_API_KEY.startswith("YOUR_REAL_"):
+    logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
 else:
-    logger.warning(
-        "⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)"
-    )
+    logger.warning("⚠️ AI routes registered but may fallback (missing or placeholder OPENAI_API_KEY)")
 
 # --- Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
-
 
 def update_price_local(symbol: str, price: float) -> None:
     if price:
         LAST_PRICE_CACHE[symbol.upper()] = {"price": float(price), "ts": time.time()}
 
-
 def get_price_local(symbol: str) -> float | None:
     info = LAST_PRICE_CACHE.get(symbol.upper(), {})
     return float(info["price"]) if "price" in info else None
-
 
 def is_price_fresh(symbol: str, max_age_sec: int = 20) -> bool:
     info = LAST_PRICE_CACHE.get(symbol.upper())
@@ -168,15 +155,10 @@ async def auto_anchor_updater_loop(interval: int = 20):
                 price = futures_mark_price(sym)
                 if price and float(price) > 0:
                     update_price_local(sym, float(price))
-                    logger.info(
-                        {"event": "anchor_update", "symbol": sym, "price": float(price)}
-                    )
+                    logger.info({"event": "anchor_update", "symbol": sym, "price": float(price)})
             except Exception as e:
-                logger.warning(
-                    {"event": "anchor_update_error", "symbol": sym, "error": str(e)}
-                )
+                logger.warning({"event": "anchor_update_error", "symbol": sym, "error": str(e)})
         await asyncio.sleep(interval)
-
 
 async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
     if PRICE_MONITOR_DISABLE:
@@ -188,11 +170,8 @@ async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
                 if price_val:
                     update_price_local(sym, float(price_val))
             except Exception as e:
-                logger.warning(
-                    {"event": "price_monitor_error", "symbol": sym, "error": str(e)}
-                )
+                logger.warning({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
         await asyncio.sleep(interval)
-
 
 async def anchor_snapshot_loop(interval: int = 30):
     while True:
@@ -210,17 +189,9 @@ async def anchor_snapshot_loop(interval: int = 30):
                     await redis_store.lpush("anchor:history", json.dumps(item))
                     await redis_store.ltrim("anchor:history", 0, 200)
                 except Exception as e:
-                    logger.warning(
-                        {
-                            "event": "anchor_snapshot_cache_error",
-                            "side": side,
-                            "error": str(e),
-                        }
-                    )
+                    logger.warning({"event": "anchor_snapshot_cache_error", "side": side, "error": str(e)})
             except Exception as e:
-                logger.warning(
-                    {"event": "anchor_snapshot_error", "side": side, "error": str(e)}
-                )
+                logger.warning({"event": "anchor_snapshot_error", "side": side, "error": str(e)})
         await asyncio.sleep(interval)
 
 # --- Startup ---
@@ -230,7 +201,7 @@ async def startup_event():
         logger.info({"event": "startup", "mode": "light"})
         return
 
-    # --- Binance quick check ---
+    # Binance quick check
     try:
         if fapi_ping():
             logger.info({"event": "binance_ping_ok"})
@@ -239,7 +210,7 @@ async def startup_event():
     except Exception as e:
         logger.error({"event": "binance_ping_error", "error": str(e)})
 
-    # --- OpenAI quick check ---
+    # OpenAI quick check
     if cfg.ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY:
         try:
             r = requests.get(
@@ -248,21 +219,13 @@ async def startup_event():
                 timeout=5,
             )
             if r.status_code == 200:
-                logger.info(
-                    {"event": "openai_key_validated", "model": cfg.OPENAI_MODEL}
-                )
+                logger.info({"event": "openai_key_validated", "model": cfg.OPENAI_MODEL})
             else:
-                logger.error(
-                    {
-                        "event": "openai_key_invalid",
-                        "status_code": r.status_code,
-                        "detail": r.text[:200],
-                    }
-                )
+                logger.error({"event": "openai_key_invalid", "status_code": r.status_code, "detail": r.text[:200]})
         except Exception as e:
             logger.error({"event": "openai_key_check_failed", "error": str(e)})
 
-    # --- Warmup watchlist ---
+    # Warmup watchlist
     watchlist = load_watchlist()
     symbols = [it["symbol"].upper() for it in watchlist]
     if "BTCUSDT" not in symbols:
@@ -273,9 +236,7 @@ async def startup_event():
             if p:
                 update_price_local(s, float(p))
         except Exception as e:
-            logger.warning(
-                {"event": "warmup_price_error", "symbol": s, "error": str(e)}
-            )
+            logger.warning({"event": "warmup_price_error", "symbol": s, "error": str(e)})
 
     asyncio.create_task(auto_anchor_updater_loop())
     asyncio.create_task(price_monitor_loop())
@@ -285,23 +246,11 @@ async def startup_event():
 # --- Health ---
 @app.get("/", tags=["Config"])
 async def root_status():
-    return {
-        "ok": True,
-        "status": "ok",
-        "version": APP_VERSION,
-        "mode": "light" if LIGHT_MODE else "normal",
-    }
-
+    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {
-        "ok": True,
-        "status": "ok",
-        "version": APP_VERSION,
-        "mode": "light" if LIGHT_MODE else "normal",
-    }
-
+    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health/live", tags=["Health"])
 async def health_live():
@@ -311,30 +260,20 @@ async def health_live():
 @app.get("/_routes", tags=["Debug"])
 async def list_routes():
     return [
-        {
-            "path": r.path,
-            "name": r.name,
-            "methods": list(getattr(r, "methods", [])),
-            "type": r.__class__.__name__,
-        }
+        {"path": r.path, "name": r.name, "methods": list(getattr(r, "methods", [])), "type": r.__class__.__name__}
         for r in app.router.routes
     ]
 
 # --- Exception handler ---
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
-    logger.error(
-        {"event": "exception", "error": str(exc)}, extra={"path": request.url.path}
-    )
+    logger.error({"event": "exception", "error": str(exc)}, extra={"path": request.url.path})
     return JSONResponse({"detail": str(exc)}, status_code=500)
-
 
 if __name__ == "__main__":
     import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
 
-    uvicorn.run(
-        "main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False
-    )
 
 
 
