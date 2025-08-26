@@ -1,7 +1,7 @@
 # utils/binance_client.py
 from __future__ import annotations
-import os, time, logging
-from typing import Any, Optional, Dict, List
+import os, time, logging, json
+from typing import Any, Optional, Dict, List, Set
 import httpx
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
@@ -9,9 +9,9 @@ from binance.exceptions import BinanceAPIException, BinanceRequestException
 logger = logging.getLogger("algogpt.binance")
 
 # --- Keys ---
-BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip().replace("\n", "").replace("\r", "")
-BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip().replace("\n", "").replace("\r", "")
-USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1", "true", "yes"))
+BINANCE_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip().replace("\n","").replace("\r","")
+BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip().replace("\n","").replace("\r","")
+USE_TESTNET = (os.getenv("BINANCE_TESTNET", "false").strip().lower() in ("1","true","yes"))
 
 # --- Hosts ---
 _BINANCE_FAPI_BASE = (os.getenv("BINANCE_FAPI_BASE") or "https://fapi.binance.com").rstrip("/")
@@ -26,19 +26,19 @@ for h in [_BINANCE_FAPI_BASE] + [a.strip().rstrip("/") for a in _alts_raw.split(
 
 BINANCE_HTTP_BASE = (os.getenv("BINANCE_HTTP_BASE") or "https://api.binance.com").rstrip("/")
 
-SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1", "true", "yes"))
+SUPPRESS_BINANCE_WARNINGS = (os.getenv("SUPPRESS_BINANCE_WARNINGS", "0").strip().lower() in ("1","true","yes"))
 _DEFAULT_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 _MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 
 # --- Circuit Breaker ---
 _CB_FAILS_FOR_OPEN = int(os.getenv("BINANCE_CB_FAILS_FOR_OPEN", "3"))
-_CB_COOLDOWN_SEC = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
-_CB_MAX_COOLDOWN = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
-_SOFT_ALLOW_EXINFO = (os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip().lower() in ("1", "true", "yes"))
+_CB_COOLDOWN_SEC   = int(os.getenv("BINANCE_CB_COOLDOWN_SEC", "120"))
+_CB_MAX_COOLDOWN   = int(os.getenv("BINANCE_CB_MAX_COOLDOWN", "600"))
+_SOFT_ALLOW_EXINFO = (os.getenv("BINANCE_SOFT_ALLOW_EXCHANGE_INFO", "1").strip().lower() in ("1","true","yes"))
 
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 _futures_exchange_info_cache: Optional[Dict[str, Any]] = None
-_valid_futures_symbols: Optional[set[str]] = None
+_valid_futures_symbols: Optional[Set[str]] = None
 
 _cb_fail_count: int = 0
 _cb_open_until: float = 0.0
@@ -91,57 +91,57 @@ def get_client() -> Client:
         client.FUTURES_URL = f"{_BINANCE_FAPI_BASE}/fapi/v1"
     return client
 
-# --- Exchange Info + Symbols ---
-def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
-    global _futures_exchange_info_cache
-    if _futures_exchange_info_cache and not force_refresh:
-        return _futures_exchange_info_cache
+# --- Public Futures helpers ---
+def fapi_ping() -> bool:
     try:
-        info = _get_json("/fapi/v1/exchangeInfo")
-        if not isinstance(info, dict) or "symbols" not in info:
-            raise RuntimeError("Invalid response from Binance exchangeInfo")
-        _futures_exchange_info_cache = info
-        return info
+        _get_json("/fapi/v1/ping", timeout=3.0)
+        return True
     except Exception as e:
-        logger.error(f"[Binance] exchangeInfo failed: {e}")
-        return {"symbols": []}
-
-def valid_futures_symbols(force_refresh: bool = False) -> set[str]:
-    global _valid_futures_symbols
-    if _valid_futures_symbols is not None and not force_refresh:
-        return _valid_futures_symbols
-    try:
-        info = futures_exchange_info_safe(force_refresh=force_refresh)
-        symbols = {s.get("symbol", "").upper() for s in info.get("symbols", []) if s.get("status") == "TRADING"}
-    except Exception as e:
-        logger.error(f"[Binance] valid_futures_symbols error: {e}")
-        symbols = set()
-    _valid_futures_symbols = symbols
-    return _valid_futures_symbols
-
-def is_valid_futures_symbol(symbol: str) -> bool:
-    try:
-        return symbol.upper() in valid_futures_symbols()
-    except Exception as e:
-        logger.warning(f"[Binance] is_valid_futures_symbol fallback: {e}")
+        logger.warning(f"[Binance] fapi_ping fail: {e}")
         return False
 
-# --- Price ---
 def futures_mark_price(symbol: str) -> Optional[float]:
-    sym = symbol.upper().strip()
-    if not is_valid_futures_symbol(sym):
-        logger.warning(f"[Binance] Symbol {sym} not in valid futures list, skipping")
-        return None
     try:
-        data = _get_json("/fapi/v1/premiumIndex", params={"symbol": sym})
-        if isinstance(data, dict) and "markPrice" in data:
-            price = float(data["markPrice"])
-            LAST_PRICE_CACHE[sym] = {"price": price, "ts": int(time.time())}
-            return price
-        raise RuntimeError("unexpected premiumIndex payload")
+        data = _get_json("/fapi/v1/premiumIndex", params={"symbol": symbol.upper()}, timeout=5.0)
+        return float(data["markPrice"])
     except Exception as e:
-        logger.error(f"[Binance] futures_mark_price error {sym}: {e}")
+        logger.error(f"[Binance] futures_mark_price error {symbol}: {e}")
         return None
+
+def futures_exchange_info_safe() -> dict:
+    global _futures_exchange_info_cache, _valid_futures_symbols
+    if _futures_exchange_info_cache:
+        return _futures_exchange_info_cache
+    try:
+        data = _get_json("/fapi/v1/exchangeInfo", timeout=10.0)
+        _futures_exchange_info_cache = data
+        _valid_futures_symbols = {s["symbol"].upper() for s in data.get("symbols", []) if s.get("status") == "TRADING"}
+        return data
+    except Exception as e:
+        logger.error(f"[Binance] futures_exchange_info_safe fail: {e}")
+        return {}
+
+def valid_futures_symbols() -> Set[str]:
+    global _valid_futures_symbols
+    if not _valid_futures_symbols:
+        futures_exchange_info_safe()
+    return _valid_futures_symbols or set()
+
+# --- Watchlist Cleaner ---
+def clean_watchlist(path: str = "watchlist.json") -> None:
+    """ניקוי watchlist.json מסימבולים לא חוקיים בפיוצ'רס"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        valid_syms = valid_futures_symbols()
+        cleaned = [row for row in data if row.get("symbol", "").upper() in valid_syms]
+        if len(cleaned) != len(data):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cleaned, f, indent=2, ensure_ascii=False)
+            logger.warning(f"[Watchlist] Cleaned invalid symbols → {len(data)-len(cleaned)} removed")
+    except Exception as e:
+        logger.error(f"[Watchlist] Failed to clean: {e}")
+
 
 
 
