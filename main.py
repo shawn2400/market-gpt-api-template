@@ -37,6 +37,7 @@ from utils.binance_client import futures_mark_price, fapi_ping
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store  # fallback אם Redis לא זמין
+from utils.binance_client import clean_watchlist   # ✅ הוספנו ניקוי רשימת מעקב
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.0")
 
@@ -191,6 +192,13 @@ async def startup_event():
     except Exception as e:
         logger.error({"event": "binance_ping_error", "error": str(e)})
 
+    # --- Clean watchlist (חד־פעמי) ---
+    try:
+        clean_watchlist()
+        logger.info({"event": "watchlist_cleaned"})
+    except Exception as e:
+        logger.error({"event": "watchlist_clean_error", "error": str(e)})
+
     # --- Warmup watchlist ---
     watchlist = load_watchlist()
     symbols = [it["symbol"].upper() for it in watchlist]
@@ -244,6 +252,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
