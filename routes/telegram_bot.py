@@ -3,40 +3,35 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
-import os, json, asyncio, time, uuid
+import os, json, asyncio, uuid
 
 import httpx
 
 from utils.auth import require_api_key
-from utils.telegram_api import send_message, edit_message  # approve_keyboard לא נדרש כאן
+from utils.telegram_api import send_message, edit_message
 from utils.trade_models import TradeProposal, build_eta, summarize
 from utils.eta import per_minute_move_estimate
 from utils.get_klines import get_klines
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ai_analysis import analyze_with_ai
+from utils.liquidity import estimate_slippage  # ✅ חדש
 
 router = APIRouter(prefix="/telegram", tags=["Telegram"], dependencies=[Depends(require_api_key)])
 
-# זיכרון זמני להצעות ידניות שממתינות לאישור
 PENDING: Dict[str, Dict[str, Any]] = {}
 
-# --- קונפיג מה-ENV (ללא תלות ב-main)
 ALERTS_ACTIVE_URL = os.getenv("ALERTS_ACTIVE_URL", "http://127.0.0.1:8000/alerts/trades/active").strip()
 ALERTS_UPDATE_URL = os.getenv("ALERTS_UPDATE_URL", "http://127.0.0.1:8000/alerts/trades/update").strip()
 ALERTS_ANALYSIS_URL = os.getenv("ALERTS_ANALYSIS_URL", "http://127.0.0.1:8000/alerts/analysis").strip()
+RISK_QUICK_URL = os.getenv("RISK_QUICK_URL", "http://127.0.0.1:8000/risk/quick").strip()
 
 DEFAULT_INTERVAL = os.getenv("DEFAULT_INTERVAL", "15m")
 DEFAULT_MARKET = os.getenv("DEFAULT_MARKET", "futures")
 
-# ------------ Models ------------
 class WebhookSet(BaseModel):
     url: str
 
-# ------------ Helpers ------------
 async def _load_trade_by_id(tid: str) -> Optional[Dict[str, Any]]:
-    """
-    מושך את רשימת הטריידים הפעילים מה-sink ומאתר לפי trade_id.
-    """
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(ALERTS_ACTIVE_URL)
@@ -47,7 +42,6 @@ async def _load_trade_by_id(tid: str) -> Optional[Dict[str, Any]]:
                 return it
     except Exception:
         pass
-    # fallback להצעות ידניות שלא נכנסו ל-sink:
     if tid in PENDING:
         d = PENDING[tid]
         return {"trade_id": tid, **d.get("tp", {})}
@@ -58,13 +52,17 @@ def _mk_slbe_keyboard(trade_id: str) -> dict:
         {"text": "🔒 SL→BE", "callback_data": f"slbe:{trade_id}"},
     ]]}
 
-# ------------ Routes ------------
+def _mk_tp_presets_keyboard(trade_id: str) -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text":"50/30/20", "callback_data":f"tppreset:{trade_id}:50:30:20"}],
+            [{"text":"60/25/15", "callback_data":f"tppreset:{trade_id}:60:25:15"}],
+            [{"text":"40/40/20", "callback_data":f"tppreset:{trade_id}:40:40:20"}],
+        ]
+    }
+
 @router.post("/set-webhook")
 async def set_webhook(cfg: WebhookSet):
-    """
-    רושם webhook לבוט בטלגרם (צריך TELEGRAM_BOT_TOKEN ב-ENV).
-    """
-    import os
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise HTTPException(400, "missing TELEGRAM_BOT_TOKEN")
@@ -75,12 +73,8 @@ async def set_webhook(cfg: WebhookSet):
 
 @router.post("/webhook")
 async def webhook(request: Request):
-    """
-    נקודת כניסה מ-Telegram: מטפלת במסרים ובלחיצות כפתורים (callback_query).
-    """
     update = await request.json()
 
-    # --- הודעות טקסט
     if "message" in update:
         msg = update["message"]
         text = str(msg.get("text", "")).strip()
@@ -91,19 +85,19 @@ async def webhook(request: Request):
             return await send_message("🤖 AlgoGPT Bot מוכן. שלח /help לקבלת הוראות.")
         if text.startswith("/help"):
             return await send_message(
-                "פקודות עיקריות:\n"
+                "פקודות:\n"
                 "/propose BTCUSDT 15m LONG 10 65000 64500 66170 67400 68800 72.5\n"
-                "↳ פורמט: {symbol} {interval} {side} {lev} {entry} {sl} {tp1} {tp2} {tp3} {success%}\n"
-                "/auto_on | /auto_off — הדלקת/כיבוי הצעות GPT אוטומטיות\n"
+                "/auto_on | /auto_off\n"
                 "/approve <id> | /reject <id>\n"
-                "/tp_scale <id> <p1> <p2> <p3> — חלוקת כמות בין היעדים (למשל 50 30 20)\n"
-                "/sl_be <id> — קבע Stop-Loss ל-Break-Even (שווה ל-entry)\n"
-                "טיפים: ניתן לאשר/לדחות מהכפתורים בהודעה; כפתור SL→BE יופיע אוטומטית בהגעה ל-TP1."
+                "/tp_scale <id> 50 30 20\n"
+                "/sl_be <id>\n"
+                "/liquidity <symbol> <notional_usd> <side>\n"
+                "/risk <trade-id>  — RR/Kelly/Lev Cap על הטרייד\n"
             )
 
         if text.startswith("/auto_on"):
             os.environ["TRADE_AUTO_SUGGEST"] = "1"
-            return await send_message("🟢 Auto-Suggest הופעל (הוורקר יתחיל להציע טריידים).")
+            return await send_message("🟢 Auto-Suggest הופעל.")
         if text.startswith("/auto_off"):
             os.environ["TRADE_AUTO_SUGGEST"] = "0"
             return await send_message("🔴 Auto-Suggest כובה.")
@@ -118,25 +112,21 @@ async def webhook(request: Request):
             return await send_message(f"❌ טרייד {tid} נדחה")
 
         if text.startswith("/tp_scale "):
-            # /tp_scale <id> 50 30 20
             try:
                 _, tid, p1, p2, p3 = text.split()
                 p = [float(p1), float(p2), float(p3)]
                 if abs(sum(p) - 100.0) > 1e-6:
                     return await send_message("⚠️ הסכום חייב להיות 100 (למשל 50 30 20).")
-                # נשמור ב-sink לשימוש ניהול פוזיציה (watchdog/אוטו-מנהל בעתיד)
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.post(ALERTS_UPDATE_URL, json={
-                        "trade_id": tid,
-                        "updates": {"tp_scale": json.dumps(p)}
+                        "trade_id": tid, "updates": {"tp_scale": json.dumps(p)}
                     })
                     r.raise_for_status()
-                return await send_message(f"✅ נשמרה חלוקת TP ל-#{tid}: {int(p[0])}/{int(p[1])}/{int(p[2])}%")
+                return await send_message(f"✅ TP Scale ל-#{tid}: {int(p[0])}/{int(p[1])}/{int(p[2])}%")
             except Exception as e:
                 return await send_message(f"❌ שימוש: /tp_scale <id> <p1> <p2> <p3>\n({e})")
 
         if text.startswith("/sl_be "):
-            # /sl_be <id> — קובע SL ל-entry
             try:
                 _, tid = text.split(maxsplit=1)
                 rec = await _load_trade_by_id(tid)
@@ -145,27 +135,63 @@ async def webhook(request: Request):
                 if entry is None: return await send_message("אין entry מוגדר להצעה זו.")
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.post(ALERTS_UPDATE_URL, json={
-                        "trade_id": tid,
-                        "updates": {"sl": float(entry)}
+                        "trade_id": tid, "updates": {"sl": float(entry)}
                     })
                     r.raise_for_status()
                 return await send_message(f"🔒 SL הוגדר ל-BE ({float(entry):.6f}) ב-#{tid}")
             except Exception as e:
                 return await send_message(f"❌ שימוש: /sl_be <id>\n({e})")
 
+        if text.startswith("/liquidity "):
+            # /liquidity BTCUSDT 10000 LONG
+            try:
+                _, sym, notional, side = text.split()
+                notional = float(notional)
+                res = await estimate_slippage(sym, side, notional)
+                if not res.get("ok"):
+                    return await send_message(f"❌ {res.get('error','liquidity error')}")
+                msg = (
+                    f"💧 *Liquidity* {sym.upper()} {side.upper()} ${int(notional)}\n"
+                    f"Mid: `{res['mid_price']:.6f}`  Avg Fill: `{res['avg_fill_price']:.6f}`\n"
+                    f"Slippage: *{res['slippage_pct']:.3f}%*"
+                )
+                return await send_message(msg)
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /liquidity <symbol> <notional_usd> <side>\n({e})")
+
+        if text.startswith("/risk "):
+            # /risk <trade-id>
+            try:
+                _, tid = text.split(maxsplit=1)
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.get(RISK_QUICK_URL, params={"trade_id": tid})
+                    r.raise_for_status()
+                    data = r.json()
+                if not data.get("ok"):
+                    return await send_message("❌ risk: not ok")
+                rr = data.get("rr"); rr_s = f"{rr:.2f}" if rr else "—"
+                k = data.get("kelly_fraction"); k_s = f"{k*100:.1f}%" if k is not None else "—"
+                lev = data.get("leverage_cap") or "—"
+                msg = (
+                    f"🛡️ *Risk* #{tid}\n"
+                    f"{data['symbol']} {data['side']}\n"
+                    f"Entry: `{data['entry']:.6f}`  SL: `{data['sl']:.6f}`  TP1: `{(data['tp1'] or 0):.6f}`\n"
+                    f"RR≈ *{rr_s}*  |  Kelly≈ *{k_s}*  |  Lev Cap≈ *x{lev}*\n"
+                    f"Success: ~{(data.get('success_pct') or 0):.1f}%"
+                )
+                return await send_message(msg)
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /risk <trade-id>\n({e})")
+
         if text.startswith("/propose"):
-            # קלט ידני: /propose BTCUSDT 15m LONG 10 65000 64500 66170 67400 68800 72.5
             try:
                 parts = text.split()
                 symbol, interval, side, lev, entry, sl, tp1, tp2, tp3, succ = parts[1:11]
                 lev = int(lev); entry=float(entry); sl=float(sl); tp1=float(tp1)
                 tp2=float(tp2); tp3=float(tp3); succ=float(succ)
-
-                # מחיר נוכחי מהשוק (לפי interval)
                 df = await get_klines(symbol, interval=interval or DEFAULT_INTERVAL, limit=50, market=DEFAULT_MARKET)
                 price = float(df["close"].iloc[-1])
                 vol_per_min = per_minute_move_estimate(df) / (15 if "15" in (interval or "15m") else 1)
-
                 tp = TradeProposal(
                     symbol=symbol.upper(), side=side.upper(), current_price=price,
                     leverage=lev, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, success_pct=succ
@@ -173,18 +199,17 @@ async def webhook(request: Request):
                 eta = build_eta(tp, per_min_move=vol_per_min)
                 tid = uuid.uuid4().hex[:8]
                 PENDING[tid] = {"tp": tp.dict(), "eta": eta.dict(), "interval": interval}
-
                 txt = summarize(tp, eta, why="הוזן ידנית ע״י המשתמש")
                 kb = {
                     "inline_keyboard":[
                         [
-                            {"text":"✅ אשר", "callback_data":f"approve:{tid}"},
-                            {"text":"✏️ כוונן", "callback_data":f"adjust:{tid}"},
-                            {"text":"🛑 דחה", "callback_data":f"reject:{tid}"}
+                            {"text":"✅ אשר","callback_data":f"approve:{tid}"},
+                            {"text":"✏️ כוונן","callback_data":f"adjust:{tid}"},
+                            {"text":"🛑 דחה","callback_data":f"reject:{tid}"}
                         ],
                         [
-                            {"text":"🔒 SL→BE", "callback_data":f"slbe:{tid}"},
-                            {"text":"📊 TP Scale", "callback_data":f"tpask:{tid}"}
+                            {"text":"🔒 SL→BE","callback_data":f"slbe:{tid}"},
+                            {"text":"📊 TP Presets","callback_data":f"tpask:{tid}"}
                         ]
                     ]
                 }
@@ -192,17 +217,14 @@ async def webhook(request: Request):
             except Exception as e:
                 return await send_message(f"❌ קלט לא תקין: {e}")
 
-        # פקודה לא מזוהה
         return await send_message("שלח /help לקבלת פורמט.")
 
-    # --- לחיצות כפתור (callback_query)
     if "callback_query" in update:
         cq = update["callback_query"]
         data = cq.get("data","")
         chat_id = cq["message"]["chat"]["id"]
         mid = cq["message"]["message_id"]
 
-        # אישור/דחייה/כוונון להצעות ידניות (PENDING)
         if data.startswith("approve:"):
             tid = data.split(":",1)[1]
             return await _approve_trade_id(tid, chat_id, mid)
@@ -214,18 +236,15 @@ async def webhook(request: Request):
             tid = data.split(":",1)[1]
             return await edit_message(chat_id, mid, f"✏️ טרייד {tid} — שלח /propose עם ערכים מעודכנים.")
 
-        # --- חדש: כפתור SL→BE (גם מה-watchdog, גם מהצעת /propose)
         if data.startswith("slbe:"):
             tid = data.split(":",1)[1]
             rec = await _load_trade_by_id(tid)
             if not rec:
-                # יתכן שזה PENDING בלבד
                 p = PENDING.get(tid, {}).get("tp", {})
                 entry = p.get("entry")
                 if entry is None:
                     return await edit_message(chat_id, mid, "⚠️ אין entry מוגדר להצעה זו.")
-                # עדכון רק בטקסט (אין sink)
-                return await edit_message(chat_id, mid, "🔒 SL→BE יקבע לאחר שהצעה תאושר ותיכנס ל-sink.")
+                return await edit_message(chat_id, mid, "🔒 SL→BE יתבצע לאחר שהצעה תאושר ותיכנס ל-sink.")
             entry = rec.get("entry")
             if entry is None:
                 return await edit_message(chat_id, mid, "⚠️ אין entry מוגדר להצעה זו.")
@@ -239,38 +258,41 @@ async def webhook(request: Request):
             except Exception as e:
                 return await edit_message(chat_id, mid, f"❌ שגיאה בהגדרת SL→BE: {e}")
 
-        # --- חדש: בקשה להגדרת TP Scale מתוך כפתור
         if data.startswith("tpask:"):
             tid = data.split(":",1)[1]
-            text = (
-                f"🔧 הזן חלוקת TP ל-#{tid} בפורמט:\n"
-                f"`/tp_scale {tid} 50 30 20`\n"
-                f"(הסכום חייב להיות 100)"
-            )
-            return await edit_message(chat_id, mid, text)
+            text = f"בחר פריסט או שלח ידנית:\n`/tp_scale {tid} 50 30 20` (סה\"כ 100)\n"
+            kb = _mk_tp_presets_keyboard(tid)
+            return await edit_message(chat_id, mid, text, kb)
+
+        if data.startswith("tppreset:"):
+            # tppreset:<id>:a:b:c
+            try:
+                _, tid, a, b, c = data.split(":")
+                p = [float(a), float(b), float(c)]
+                if abs(sum(p)-100.0) > 1e-6:
+                    return await edit_message(chat_id, mid, "⚠️ סכום הפריסט אינו 100")
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.post(ALERTS_UPDATE_URL, json={
+                        "trade_id": tid, "updates": {"tp_scale": json.dumps(p)}
+                    })
+                    r.raise_for_status()
+                return await edit_message(chat_id, mid, f"✅ נקבע TP Scale {int(p[0])}/{int(p[1])}/{int(p[2])}%")
+            except Exception as e:
+                return await edit_message(chat_id, mid, f"❌ שגיאה בפריסט: {e}")
 
         return {"ok": True}
 
     return {"ok": True}
 
-# -------- Internal approve helper --------
 async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
-    """
-    מציג סיכום “מוכן להזמנה” להצעה ידנית (PENDING).
-    אין כאן שליחה לבינאנס — רק טקסט/ETA מפורט.
-    """
     item = PENDING.get(tid)
     if not item:
         return await send_message(f"⚠️ טרייד {tid} לא קיים/פג תוקף")
     tp = TradeProposal(**item["tp"])
-
     exec_trades = (os.getenv("EXECUTE_TRADES","false").lower() in ("1","true","yes"))
     details = ("🔐 מצב הדמיה/ידני (לא נשלח לבינאנס)\n" if not exec_trades else "🚀 מבצע הזמנה בבינאנס...\n")
     txt = summarize(tp, build_eta(tp, per_min_move=0), why=details)
-
-    # הוספת כפתור SL→BE גם כאן
     kb = _mk_slbe_keyboard(tid)
-
     if message_id:
         return await edit_message(chat_id, message_id, txt, kb)
     else:
