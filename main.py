@@ -20,10 +20,12 @@ if not IS_CLOUD:
     from dotenv import load_dotenv
     load_dotenv(override=False)
 
+
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
 
 LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
 SUPPRESS_BINANCE_WARNINGS = _to_bool(os.getenv("SUPPRESS_BINANCE_WARNINGS", "1"))
@@ -45,7 +47,7 @@ from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store  # fallback אם Redis לא זמין
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.1")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.2")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -124,7 +126,8 @@ app.include_router(market_router, prefix="/market", tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
 app.include_router(price_router, prefix="/price", tags=["Price"])
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
-app.include_router(executor_router.router, prefix="/executor", tags=["Executor"])
+# ❗ כאן התיקון – לא מוסיפים שוב prefix כי הוא כבר מוגדר בתוך routes/executor.py
+app.include_router(executor_router.router, tags=["Executor"])
 
 if ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY and not cfg.OPENAI_API_KEY.startswith("YOUR_REAL_"):
     logger.info({"event": "ai_routes_enabled", "model": os.getenv("OPENAI_MODEL", "gpt-4o")})
@@ -201,7 +204,6 @@ async def startup_event():
         logger.info({"event": "startup", "mode": "light"})
         return
 
-    # Binance quick check
     try:
         if fapi_ping():
             logger.info({"event": "binance_ping_ok"})
@@ -210,7 +212,6 @@ async def startup_event():
     except Exception as e:
         logger.error({"event": "binance_ping_error", "error": str(e)})
 
-    # OpenAI quick check
     if cfg.ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY:
         try:
             r = requests.get(
@@ -225,7 +226,6 @@ async def startup_event():
         except Exception as e:
             logger.error({"event": "openai_key_check_failed", "error": str(e)})
 
-    # Warmup watchlist
     watchlist = load_watchlist()
     symbols = [it["symbol"].upper() for it in watchlist]
     if "BTCUSDT" not in symbols:
@@ -273,6 +273,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
