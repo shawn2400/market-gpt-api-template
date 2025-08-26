@@ -139,6 +139,8 @@ def _validate_urls():
         if not alt.startswith("https://"): raise RuntimeError(f"❌ bad alt {alt}")
 
 def _validate_keys():
+    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+        logging.warning("⚠️ Binance API key/secret missing")
     if EXECUTE_TRADES and (not BINANCE_API_KEY or not BINANCE_API_SECRET):
         raise RuntimeError("❌ EXECUTE_TRADES=true requires keys")
     if ENABLE_AI_ROUTES and not OPENAI_API_KEY:
@@ -166,7 +168,11 @@ def dump_config_sanitized()->dict:
         "exec_trades":EXECUTE_TRADES,
         "enable_ai":ENABLE_AI_ROUTES,
         "model":OPENAI_MODEL,
+        "binance_key_len": len(BINANCE_API_KEY),
+        "openai_key_len": len(OPENAI_API_KEY),
     }
+
+
 
 
 
