@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
 from fastapi import APIRouter, Depends, Body, Query, HTTPException
 from pydantic import BaseModel, Field
+import os
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
@@ -16,7 +17,6 @@ except Exception:
     analyze_with_ai = None  # type: ignore
 
 router = APIRouter(tags=["AI"], dependencies=[Depends(require_api_key)])
-
 Side = Literal["LONG", "SHORT"]
 
 # -------------------------
@@ -25,9 +25,9 @@ Side = Literal["LONG", "SHORT"]
 class QualityRequest(BaseModel):
     symbol: str
     side: Side
-    entry: Optional[float] = Field(None, ge=0)   # ← מאפשר 0
-    sl: Optional[float] = Field(None, ge=0)      # ← מאפשר 0
-    tp: Optional[float] = Field(None, ge=0)      # ← מאפשר 0
+    entry: Optional[float] = Field(None, ge=0)
+    sl: Optional[float] = Field(None, ge=0)
+    tp: Optional[float] = Field(None, ge=0)
     leverage: int = Field(10, ge=1, le=125)
     budget: float = Field(100.0, gt=0)
     atr: Optional[float] = Field(None, gt=0)
@@ -55,23 +55,23 @@ def _fallback_text(row: Dict[str, Any], symbol: str, interval: str) -> str:
     ema_bias = "long" if row.get("ema21", 0) > row.get("ema50", 0) else "short"
     rsi = row.get("rsi", 50.0)
     adx = row.get("adx", 15.0)
-    return (f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}. "
-            f"Use ATR for SL/TP; wait for confluence on dual TF.")
+    return f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}"
 
 # -------------------------
 # Routes
 # -------------------------
 @router.get("/ping")
 async def ping():
-    import os
     return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
 
 @router.get("/health")
 async def ai_health():
-    import os
     ok = bool(os.getenv("OPENAI_API_KEY"))
-    return {"ok": ok, "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
-            "reason": None if ok else "Missing OPENAI_API_KEY"}
+    return {
+        "ok": ok,
+        "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+        "reason": None if ok else "Missing OPENAI_API_KEY",
+    }
 
 @router.post("/quality", response_model=QualityResponse)
 async def ai_quality(payload: QualityRequest = Body(...)):
@@ -94,7 +94,9 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         anchor=_mk_anchor_dict(anchor),
     )
 
+# --- ניתוח (GET/POST) ---
 @router.get("/analyze")
+@router.post("/analyze")
 async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
     try:
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
@@ -103,23 +105,27 @@ async def ai_analyze(symbol: str = Query(...), interval: str = Query("15m")):
         indicators = prepare_indicators_for_backtest(df)
         if indicators is None or len(indicators) == 0:
             raise HTTPException(status_code=502, detail="Indicators preparation failed")
+
         last_row = indicators.iloc[-1].to_dict()
         if analyze_with_ai:
-            try:
-                txt = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
-                return {"symbol": symbol.upper(), "interval": interval, "analysis": txt, "fallback": False}
-            except Exception as e:
-                return {"symbol": symbol.upper(), "interval": interval,
-                        "analysis": _fallback_text(last_row, symbol.upper(), interval),
-                        "fallback": True, "error": str(e)}
+            res = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
+            return {
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "analysis": res.get("analysis", ""),
+                "fallback": not res.get("ok", False),
+            }
         else:
-            return {"symbol": symbol.upper(), "interval": interval,
-                    "analysis": _fallback_text(last_row, symbol.upper(), interval),
-                    "fallback": True}
+            return {
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "analysis": _fallback_text(last_row, symbol.upper(), interval),
+                "fallback": True,
+            }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI analyze failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI analyze failed: {e}")
 
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
@@ -136,17 +142,22 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
                 continue
             last = indicators.iloc[-1].to_dict()
             if analyze_with_ai:
-                try:
-                    txt = await analyze_with_ai({"symbol": s, **last})
-                    result.append({"symbol": s, "analysis": txt, "fallback": False})
-                except Exception as e:
-                    result.append({"symbol": s, "analysis": _fallback_text(last, s, interval),
-                                   "fallback": True, "error": str(e)})
+                res = await analyze_with_ai({"symbol": s, **last})
+                result.append({
+                    "symbol": s,
+                    "analysis": res.get("analysis", ""),
+                    "fallback": not res.get("ok", False),
+                })
             else:
-                result.append({"symbol": s, "analysis": _fallback_text(last, s, interval), "fallback": True})
+                result.append({
+                    "symbol": s,
+                    "analysis": _fallback_text(last, s, interval),
+                    "fallback": True,
+                })
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
