@@ -1,16 +1,26 @@
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+# routes/debug.py
+from __future__ import annotations
+from fastapi import APIRouter
+from typing import Dict
+import os, platform, time
 
-router = APIRouter(tags=["Debug"])
+router = APIRouter(prefix="/debug", tags=["Debug"])
 
-@router.post("/headers")
-async def debug_headers(request: Request):
-    headers = dict(request.headers)
-    try:
-        body = await request.json()
-    except Exception:
-        body = None
-    return JSONResponse(content={"headers": headers, "body": body})
+@router.get("/health")
+def debug_health() -> Dict[str, Any]:
+    """מידע Debug בסיסי"""
+    return {
+        "ok": True,
+        "env": os.getenv("ENV", "production"),
+        "platform": platform.platform(),
+        "time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    }
+
+@router.get("/ping")
+def debug_ping() -> Dict[str, str]:
+    """בדיקת זמינות (פינג לשרת)"""
+    return {"pong": "ok"}
+
 
 
 
