@@ -3,6 +3,7 @@ from __future__ import annotations
 import os, logging
 from typing import Any, Optional, Dict
 import httpx
+from binance.client import Client
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -51,6 +52,23 @@ def _get_json(path: str, params: Optional[dict] = None, timeout: float = DEFAULT
             continue
     raise RuntimeError(f"All Binance hosts failed: {last_err}")
 
+# --- Client (נדרש ע"י binance_trader וכו') ---
+def get_client() -> Client:
+    """Binance REST client with API/Secret (כולל תמיכה ב־Testnet)"""
+    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+        logger.error("❌ BINANCE_API_KEY / BINANCE_API_SECRET missing → check ENV")
+        raise RuntimeError("Missing Binance credentials")
+
+    client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+    if USE_TESTNET:
+        logger.warning("⚠️ Using Binance TESTNET endpoints")
+        client.API_URL = "https://testnet.binance.vision/api"
+        client.FUTURES_URL = "https://testnet.binancefuture.com/fapi/v1"
+    else:
+        client.API_URL = f"{HTTP_BASE}/api/v3"
+        client.FUTURES_URL = f"{FAPI_HOSTS[0]}/fapi/v1"
+    return client
+
 # --- Futures helpers ---
 def fapi_ping() -> bool:
     try:
@@ -69,7 +87,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error(f"[Binance] futures_mark_price HTTP failed for {symbol}: {e}")
 
-    # --- fallback ל־WebSocket ---
     if ws_get_price:
         try:
             price = ws_get_price(symbol.upper())
@@ -89,6 +106,7 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
         return _futures_exchange_info_cache
     _futures_exchange_info_cache = _get_json("fapi/v1/exchangeInfo")
     return _futures_exchange_info_cache
+
 
 
 
