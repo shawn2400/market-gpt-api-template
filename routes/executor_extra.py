@@ -15,7 +15,7 @@ router = APIRouter(
 
 @router.get("/symbols")
 def executor_symbols() -> List[str]:
-    """רשימת כל הסימבולים הזמינים (Futures)"""
+    """רשימת כל הסימבולים הזמינים ב-Binance Futures"""
     info = futures_exchange_info_safe()
     return [s["symbol"] for s in info.get("symbols", [])]
 
@@ -28,3 +28,4 @@ def open_positions() -> List[Dict[str, Any]]:
 def executor_trades(limit: int = 50) -> List[Dict[str, Any]]:
     """היסטוריית טריידים מה־trade_manager"""
     return get_trade_history(limit=limit)
+
