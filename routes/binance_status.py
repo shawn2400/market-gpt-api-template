@@ -20,11 +20,7 @@ def ping():
 
 @router.get("/status")
 def binance_status():
-    """
-    סטטוס כללי של Binance Futures:
-    - זמינות API
-    - מחירי מדגם ל־BTC/ETH/BNB
-    """
+    """סטטוס כללי של Binance Futures"""
     try:
         samples = {}
         for sym in ("BTCUSDT", "ETHUSDT", "BNBUSDT"):
@@ -39,7 +35,7 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
     try:
         price = futures_mark_price(symbol)
         if price is None:
-            raise HTTPException(status_code=503, detail=f"Mark price unavailable for {symbol}")
+            raise HTTPException(status_code=503, detail="mark price unavailable")
         return {"symbol": symbol.upper(), "markPrice": price}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch mark price: {e}")
@@ -48,9 +44,13 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
     """מחזיר snapshot מלא של exchangeInfo (Binance Futures)."""
     try:
-        return futures_exchange_info_safe(force_refresh=bool(force_refresh))
+        data = futures_exchange_info_safe(force_refresh=bool(force_refresh))
+        if not data or "symbols" not in data:
+            raise HTTPException(status_code=502, detail="Exchange info unavailable")
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
+
 
 
 
