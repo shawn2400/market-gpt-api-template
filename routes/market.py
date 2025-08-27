@@ -19,10 +19,7 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
     return {"symbol": symbol.upper(), "markPrice": price}
 
 @router.get("/symbol-info")
-def symbol_info(
-    symbol: str = Query(..., min_length=6, max_length=20),
-    force_refresh: int = Query(0, ge=0, le=1),
-):
+def symbol_info(symbol: str = Query(..., min_length=6, max_length=20), force_refresh: int = Query(0, ge=0, le=1)):
     """מידע מלא על סימבול יחיד"""
     info = get_symbol_info(symbol, force_refresh=bool(force_refresh))
     if not info:
@@ -33,6 +30,7 @@ def symbol_info(
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
     """snapshot מלא של exchangeInfo"""
     return futures_exchange_info_safe(force_refresh=bool(force_refresh))
+
 
 
 
