@@ -13,7 +13,10 @@ router = APIRouter(
 @router.get("/ping")
 def ping():
     """בודק זמינות Binance API"""
-    return {"ok": fapi_ping()}
+    try:
+        return {"ok": fapi_ping()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ping failed: {e}")
 
 @router.get("/status")
 def binance_status():
@@ -26,12 +29,7 @@ def binance_status():
         samples = {}
         for sym in ("BTCUSDT", "ETHUSDT", "BNBUSDT"):
             samples[sym] = futures_mark_price(sym)
-
-        return {
-            "ok": True,
-            "api": fapi_ping(),
-            "samples": samples,
-        }
+        return {"ok": True, "api": fapi_ping(), "samples": samples}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Binance status failed: {e}")
 
@@ -41,18 +39,19 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
     try:
         price = futures_mark_price(symbol)
         if price is None:
-            raise HTTPException(status_code=503, detail="mark price unavailable")
+            raise HTTPException(status_code=503, detail=f"Mark price unavailable for {symbol}")
         return {"symbol": symbol.upper(), "markPrice": price}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch mark price: {e}")
 
 @router.get("/exchange-info")
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
-    """מידע מלא על כל החוזים ב־Binance Futures"""
+    """מחזיר snapshot מלא של exchangeInfo (Binance Futures)."""
     try:
         return futures_exchange_info_safe(force_refresh=bool(force_refresh))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
+
 
 
 
