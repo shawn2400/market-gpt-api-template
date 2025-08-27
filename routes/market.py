@@ -4,8 +4,11 @@ from fastapi import APIRouter, Query, HTTPException, Depends
 from utils.auth import require_api_key
 from utils.binance_client import get_symbol_info, futures_mark_price, futures_exchange_info_safe
 
-router = APIRouter(prefix="/market", tags=["Market"], dependencies=[Depends(require_api_key)])
-
+router = APIRouter(
+    prefix="/market",
+    tags=["Market"],
+    dependencies=[Depends(require_api_key)]
+)
 
 @router.get("/mark-price")
 def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
@@ -15,25 +18,22 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
         raise HTTPException(status_code=503, detail=f"Mark price unavailable for {symbol}")
     return {"symbol": symbol.upper(), "markPrice": price}
 
-
 @router.get("/symbol-info")
-def symbol_info(symbol: str = Query(..., min_length=6, max_length=20), force_refresh: int = Query(0, ge=0, le=1)):
-    """
-    מחזיר מידע על סימבול (minQty, tickSize וכו').
-    שימושי לבדיקת דיוק בבניית פקודות.
-    """
+def symbol_info(
+    symbol: str = Query(..., min_length=6, max_length=20),
+    force_refresh: int = Query(0, ge=0, le=1),
+):
+    """מידע מלא על סימבול יחיד"""
     info = get_symbol_info(symbol, force_refresh=bool(force_refresh))
     if not info:
         raise HTTPException(status_code=404, detail=f"Symbol info not found for {symbol}")
     return info
 
-
 @router.get("/exchange-info")
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
-    """
-    מחזיר snapshot מלא של exchangeInfo (מכיל את כל החוזים).
-    """
+    """snapshot מלא של exchangeInfo"""
     return futures_exchange_info_safe(force_refresh=bool(force_refresh))
+
 
 
 
