@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, logging
 from collections import defaultdict, deque
-from typing import Deque, Dict
+from typing import Deque, Dict, List
 
 logger = logging.getLogger("algogpt.redis")
 
@@ -73,6 +73,16 @@ async def ltrim(key: str, start: int, stop: int):
         return await _fb()
     return await _safe_call(_redis.ltrim(key, start, stop), _fb)
 
+async def lrange(key: str, start: int, stop: int) -> List[str]:
+    """מקביל ל־LRANGE ב־Redis, עם fallback לזיכרון"""
+    async def _fb():
+        dq = _mem_lists[key]
+        # Redis כולל את stop, Python slicing לא → מוסיפים +1
+        return list(dq)[start: stop + 1]
+    if _use_memory_only:
+        return await _fb()
+    return await _safe_call(_redis.lrange(key, start, stop), _fb)
+
 async def ping() -> bool:
     if _use_memory_only or _redis is None:
         return True
@@ -80,6 +90,7 @@ async def ping() -> bool:
         return (await _redis.ping()) is True
     except Exception:
         return False
+
 
 
 
