@@ -20,12 +20,10 @@ if not IS_CLOUD:
     from dotenv import load_dotenv
     load_dotenv(override=False)
 
-
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
-
 
 LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
 SUPPRESS_BINANCE_WARNINGS = _to_bool(os.getenv("SUPPRESS_BINANCE_WARNINGS", "1"))
@@ -47,7 +45,7 @@ from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
 from utils import cache_fallback as redis_store
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.3")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.4")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -111,6 +109,7 @@ from routes.market import router as market_router
 from routes.binance_status import router as binance_status_router
 from routes.price import router as price_router
 import routes.executor as executor_router
+from routes import ws as ws_router   # ✅ חדש: WebSocket router
 
 # ❗ לא מוסיפים prefix כפול
 app.include_router(scan_router, tags=["Scan"])
@@ -124,6 +123,7 @@ app.include_router(binance_status_router, tags=["Binance"])
 app.include_router(price_router, tags=["Price"])
 app.include_router(ai_router, tags=["AI"])
 app.include_router(executor_router.router, tags=["Executor"])
+app.include_router(ws_router.router, tags=["WebSocket"])  # ✅ חדש
 
 # --- Price Cache ---
 LAST_PRICE_CACHE: dict[str, dict[str, float | int]] = {}
@@ -153,32 +153,74 @@ async def auto_anchor_updater_loop(interval: int = 20):
                 logger.warning({"event": "anchor_update_error", "symbol": sym, "error": str(e)})
         await asyncio.sleep(interval)
 
+async def price_monitor_loop(interval: int = PRICE_MONITOR_INTERVAL):
+    if PRICE_MONITOR_DISABLE:
+        return
+    while True:
+        for sym in list(LAST_PRICE_CACHE.keys()):
+            try:
+                price_val = futures_mark_price(sym)
+                if price_val:
+                    update_price_local(sym, float(price_val))
+            except Exception as e:
+                logger.warning({"event": "price_monitor_error", "symbol": sym, "error": str(e)})
+        await asyncio.sleep(interval)
+
 # --- Startup ---
 @app.on_event("startup")
 async def startup_event():
     if LIGHT_MODE:
+        logger.info({"event": "startup", "mode": "light"})
         return
+
     try:
-        fapi_ping()
+        if fapi_ping():
+            logger.info({"event": "binance_ping_ok"})
+        else:
+            logger.warning({"event": "binance_ping_fail"})
     except Exception as e:
         logger.error({"event": "binance_ping_error", "error": str(e)})
+
+    # חימום watchlist
+    watchlist = load_watchlist()
+    symbols = [it["symbol"].upper() for it in watchlist]
+    if "BTCUSDT" not in symbols:
+        symbols.insert(0, "BTCUSDT")
+    for s in symbols[:10]:
+        try:
+            p = futures_mark_price(s)
+            if p:
+                update_price_local(s, float(p))
+        except Exception as e:
+            logger.warning({"event": "warmup_price_error", "symbol": s, "error": str(e)})
+
+    asyncio.create_task(auto_anchor_updater_loop())
+    asyncio.create_task(price_monitor_loop())
+    logger.info({"event": "startup", "mode": "normal", "watchlist_size": len(symbols)})
 
 # --- Health ---
 @app.get("/", tags=["Config"])
 async def root_status():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+    return {"ok": True, "status": "ok", "version": APP_VERSION, "mode": "light" if LIGHT_MODE else "normal"}
 
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"ok": True, "status": "live"}
 
+# --- Exception handler ---
+@app.exception_handler(Exception)
+async def handle_exception(request: Request, exc: Exception):
+    logger.error({"event": "exception", "error": str(exc)}, extra={"path": request.url.path})
+    return JSONResponse({"detail": str(exc)}, status_code=500)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
