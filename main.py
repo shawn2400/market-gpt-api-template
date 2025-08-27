@@ -20,12 +20,10 @@ if not IS_CLOUD:
     from dotenv import load_dotenv
     load_dotenv(override=False)
 
-
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
-
 
 LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
 SUPPRESS_BINANCE_WARNINGS = _to_bool(os.getenv("SUPPRESS_BINANCE_WARNINGS", "1"))
@@ -45,9 +43,9 @@ from utils.watchlist_utils import load_watchlist
 from utils.binance_client import futures_mark_price, fapi_ping
 from utils.anchor import evaluate_anchor
 from utils.rate_limit import RateLimitMiddleware
-from utils import cache_fallback as redis_store  # fallback אם Redis לא זמין
+from utils import cache_fallback as redis_store
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.2")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.3")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -91,13 +89,9 @@ app = FastAPI(
     description="AlgoGPT — מסחר אלגוריתמי בזמן אמת",
 )
 
-app.add_middleware(
-    ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880))
-)
+app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
 Path("static").mkdir(parents=True, exist_ok=True)
@@ -116,17 +110,17 @@ from routes.binance_status import router as binance_status_router
 from routes.price import router as price_router
 import routes.executor as executor_router
 
+# ✅ לא מוסיפים prefix כפול
 app.include_router(scan_router, tags=["Scan"])
-app.include_router(trade_router, prefix="/trade", tags=["Trade"])
-app.include_router(grid_router, prefix="/grid", tags=["Grid"])
-app.include_router(orderflow_router, prefix="/orderflow", tags=["Orderflow"])
-app.include_router(indicators_router, prefix="/indicators", tags=["Indicators"])
-app.include_router(anchor_router, prefix="/anchor", tags=["Anchor"])
-app.include_router(market_router, prefix="/market", tags=["Market"])
+app.include_router(trade_router, tags=["Trade"])
+app.include_router(grid_router, tags=["Grid"])
+app.include_router(orderflow_router, tags=["Orderflow"])
+app.include_router(indicators_router, tags=["Indicators"])
+app.include_router(anchor_router, tags=["Anchor"])
+app.include_router(market_router, tags=["Market"])
 app.include_router(binance_status_router, tags=["Binance"])
-app.include_router(price_router, prefix="/price", tags=["Price"])
-app.include_router(ai_router, prefix="/ai", tags=["AI"])
-# ❗ כאן התיקון – לא מוסיפים שוב prefix כי הוא כבר מוגדר בתוך routes/executor.py
+app.include_router(price_router, tags=["Price"])
+app.include_router(ai_router, tags=["AI"])
 app.include_router(executor_router.router, tags=["Executor"])
 
 if ENABLE_AI_ROUTES and cfg.OPENAI_API_KEY and not cfg.OPENAI_API_KEY.startswith("YOUR_REAL_"):
@@ -273,6 +267,7 @@ async def handle_exception(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
