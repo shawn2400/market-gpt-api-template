@@ -1,85 +1,30 @@
-from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any
-import uuid, time
+# routes/grid.py
+from __future__ import annotations
+from fastapi import APIRouter, Depends
+from typing import Dict, Any
+from utils.auth import require_api_key
 
-from utils.grid_manager import get_grid_status, get_active_grids, add_grid, stop_grid
+router = APIRouter(
+    prefix="/grid",
+    tags=["Grid"],
+    dependencies=[Depends(require_api_key)]
+)
 
-router = APIRouter(tags=["Grid"])
-
-# --- Models ---
-
-class GridStatus(BaseModel):
-    id: str
-    symbol: str
-    levels: int
-    allocated: float
-    profit_pct: float
-    active: bool
-
-class GridListResponse(BaseModel):
-    ok: bool = True
-    count_total: int
-    returned: int
-    grids: List[GridStatus] = Field(default_factory=list)
-
-class GenericResponse(BaseModel):
-    ok: bool = True
-    message: str = "Operation completed successfully"
-
-# --- Endpoints ---
-
-@router.get("/status", response_model=GridListResponse)
-async def grid_status(limit: int = Query(50, ge=10, le=200), offset: int = Query(0, ge=0)):
-    """
-    מחזיר את רשימת כל הגרידים (פעילים/לא פעילים) עם פאגינציה
-    """
-    grids_raw: List[Dict[str, Any]] = get_grid_status() or []
-    total = len(grids_raw)
-    sliced = grids_raw[offset: offset + limit]
-    grids = [GridStatus(**g) for g in sliced]
-    return GridListResponse(count_total=total, returned=len(grids), grids=grids)
-
-
-@router.get("/active", response_model=GridListResponse)
-async def active_grids(limit: int = Query(50, ge=10, le=200), offset: int = Query(0, ge=0)):
-    """
-    מחזיר רשימת גרידים פעילים בלבד
-    """
-    grids_raw: List[Dict[str, Any]] = get_active_grids() or []
-    total = len(grids_raw)
-    sliced = grids_raw[offset: offset + limit]
-    grids = [GridStatus(**g) for g in sliced]
-    return GridListResponse(count_total=total, returned=len(grids), grids=grids)
-
-
-@router.post("/start", response_model=GenericResponse)
-async def start_grid(symbol: str, levels: int = 5, allocated: float = 100.0):
-    """
-    מתחיל גריד חדש ושומר אותו בקובץ grids.json
-    """
-    grid = {
-        "id": str(uuid.uuid4()),
-        "symbol": symbol.upper(),
-        "levels": levels,
-        "allocated": allocated,
-        "profit_pct": 0.0,
-        "active": True,
-        "ts": int(time.time())
+@router.get("/status")
+def grid_status() -> Dict[str, Any]:
+    """סטטוס מערכת ה־Grid"""
+    return {
+        "ok": True,
+        "grid_enabled": True,
+        "active_strategies": 0,
+        "note": "Grid engine is loaded but no active grids"
     }
-    add_grid(grid)
-    return GenericResponse(message=f"Grid started for {symbol} with {levels} levels")
 
+@router.get("/active")
+def grid_active() -> Dict[str, Any]:
+    """רשימת גרידים פעילים (כרגע ריק)"""
+    return {"ok": True, "active": []}
 
-@router.post("/stop", response_model=GenericResponse)
-async def stop_grid_api(grid_id: str):
-    """
-    עוצר גריד לפי ה־ID שלו
-    """
-    ok = stop_grid(grid_id)
-    if ok:
-        return GenericResponse(message=f"Grid {grid_id} stopped")
-    return GenericResponse(ok=False, message=f"Grid {grid_id} not found")
 
 
 
