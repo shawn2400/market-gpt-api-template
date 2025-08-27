@@ -13,7 +13,7 @@ pandas==2.2.2
 numpy==1.26.4
 scipy==1.13.1
 
-# Indicators (ללא חבילת TA-Lib לפייתון)
+# Indicators
 ta==0.11.0
 pandas-ta==0.3.14b0
 
@@ -24,6 +24,7 @@ openai==1.37.0
 python-dotenv==1.0.1
 redis==5.0.4
 orjson==3.10.6
+psutil==5.9.8   # NEW: דרוש ל-/debug/health
 
 # Logging / Monitoring
 structlog==24.1.0
@@ -31,6 +32,7 @@ prometheus-client==0.20.0
 
 # Tests
 pytest==8.2.2
+
 
 
 
