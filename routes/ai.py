@@ -16,7 +16,13 @@ try:
 except Exception:
     analyze_with_ai = None  # type: ignore
 
-router = APIRouter(tags=["AI"], dependencies=[Depends(require_api_key)])
+# ✅ נוסיף prefix "/ai"
+router = APIRouter(
+    prefix="/ai",
+    tags=["AI"],
+    dependencies=[Depends(require_api_key)]
+)
+
 Side = Literal["LONG", "SHORT"]
 
 # -------------------------
@@ -98,7 +104,6 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         anchor=_mk_anchor_dict(anchor),
     )
 
-# --- ניתוח (GET/POST) ---
 @router.get("/analyze")
 async def ai_analyze_get(symbol: str = Query(...), interval: str = Query("15m")):
     return await _do_ai_analyze(symbol, interval)
@@ -167,6 +172,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
