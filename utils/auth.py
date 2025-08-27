@@ -4,19 +4,12 @@ import os
 from typing import Set, Optional
 from fastapi import Header, HTTPException, status
 
-# --- טעינת טוקנים מה־ENV ---
 def _split_tokens(val: str) -> Set[str]:
     parts = [p.strip() for p in val.replace(";", ",").split(",")]
     return {p for p in parts if p}
 
 _TOKENS: Set[str] = set()
-for key in (
-    "ALGOGPT_TOKENS",
-    "ALGOGPT_TOKEN",
-    "API_BEARER_TOKEN",
-    "API_BEARER",
-    "API_BEARER_TOKENS",
-):
+for key in ("ALGOGPT_TOKENS", "ALGOGPT_TOKEN", "API_BEARER_TOKEN", "API_BEARER", "API_BEARER_TOKENS"):
     v = (os.getenv(key) or "").strip()
     if not v:
         continue
@@ -25,7 +18,6 @@ for key in (
     else:
         _TOKENS.add(v)
 
-# מאפשר לעקוף אבטחה בסביבת DEV
 _ALLOW_ALL = os.getenv("SECURITY_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes")
 
 def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
@@ -36,16 +28,16 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
         return parts[1]
     return None
 
-# --- פונקציה לשימוש בכל ראוטר ---
 async def require_api_key(authorization: Optional[str] = Header(None)) -> None:
     if _ALLOW_ALL:
-        return  # מצב DEV: הכל עובר
+        return
     token = _extract_bearer(authorization)
     if not token or token not in _TOKENS:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
         )
+
 
 
 
