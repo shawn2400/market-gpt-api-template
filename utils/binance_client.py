@@ -107,6 +107,20 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
     _futures_exchange_info_cache = _get_json("fapi/v1/exchangeInfo")
     return _futures_exchange_info_cache
 
+def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    """מחזיר מידע על סימבול יחיד מתוך exchangeInfo"""
+    try:
+        info = futures_exchange_info_safe(force_refresh=force_refresh)
+        if not info or "symbols" not in info:
+            return None
+        for s in info["symbols"]:
+            if s.get("symbol", "").upper() == symbol.upper():
+                return s
+    except Exception as e:
+        logger.error(f"[Binance] get_symbol_info failed for {symbol}: {e}")
+    return None
+
+
 
 
 
