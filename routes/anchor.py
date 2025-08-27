@@ -10,7 +10,6 @@ from utils import cache_fallback as redis_store
 
 router = APIRouter(prefix="/anchor", tags=["Anchor"], dependencies=[Depends(require_api_key)])
 
-
 @router.get("/history", response_model=List[Dict[str, Any]])
 async def anchor_history(limit: int = 50):
     """היסטוריית Anchor מה־Redis (אם קיים)"""
@@ -19,7 +18,6 @@ async def anchor_history(limit: int = 50):
         return [json.loads(x) for x in data] if data else []
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch anchor history: {e}")
-
 
 @router.get("/live", response_model=Dict[str, Any])
 def anchor_live():
@@ -31,6 +29,7 @@ def anchor_live():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to evaluate anchor: {e}")
+
 
 
 
