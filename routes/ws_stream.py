@@ -1,16 +1,18 @@
 # routes/ws_stream.py
 from __future__ import annotations
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-import asyncio
-import json
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import asyncio, json
 from utils.ws_fallback import get_price
 
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 @router.websocket("/stream")
-async def ws_stream(ws: WebSocket, symbols: str = Query(...)):
+async def ws_stream(ws: WebSocket):
+    # קבלת query params ידנית
+    symbols_param = ws.query_params.get("symbols", "")
+    symbols_list = [s.strip().upper() for s in symbols_param.split(",") if s.strip()]
+
     await ws.accept()
-    symbols_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     try:
         while True:
             data = {}
@@ -22,3 +24,4 @@ async def ws_stream(ws: WebSocket, symbols: str = Query(...)):
             await asyncio.sleep(2)
     except WebSocketDisconnect:
         return
+
