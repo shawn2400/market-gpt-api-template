@@ -19,16 +19,17 @@ def anchor_live() -> Dict[str, Dict[str, Any]]:
     """Anchor בזמן אמת לשני הצדדים (LONG/SHORT)"""
     return {
         "LONG": evaluate_anchor("LONG").__dict__,
-        "SHORT": evaluate_anchor("SHORT").__dict__
+        "SHORT": evaluate_anchor("SHORT").__dict__,
     }
 
 @router.get("/history")
 async def anchor_history(limit: int = 50) -> List[Dict[str, Any]]:
-    """Anchor היסטורי מתוך Redis (עד limit אחרונים)"""
+    """Anchor היסטורי מתוך Redis או In-Memory (עד limit אחרונים)"""
     try:
         data = await redis_store.lrange("anchor:history", 0, limit - 1)
         return [json.loads(x) for x in data] if data else []
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch anchor history: {e}")
+
 
 
