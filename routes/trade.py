@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
-from utils.trade_manager import get_open_trades, get_trade_history
+from utils.trade_manager import get_open_trades, get_trade_history, add_trade
 from utils.auth import require_api_key
 from utils.binance_trader import binance_futures_trade
 
@@ -72,9 +72,12 @@ async def execute_trade(req: ExecuteTradeRequest):
             leverage=req.leverage,
             dry_run=req.dry_run,
         )
+        if not req.dry_run:
+            add_trade(req.symbol, req.side, result["entry"], result["qty"])
         return ExecuteTradeResponse(ok=True, **result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trade execution failed: {e}")
+
 
 
 
