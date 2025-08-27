@@ -1,18 +1,20 @@
 # routes/trade.py
-from fastapi import APIRouter, Query, Depends, HTTPException
+from __future__ import annotations
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+
 from utils.trade_manager import get_open_trades, get_trade_history
 from utils.auth import require_api_key
 from utils.binance_trader import binance_futures_trade
 
-# ✅ מוסיפים prefix כאן ליתר ביטחון
 router = APIRouter(
     prefix="/trade",
     tags=["Trade"],
     dependencies=[Depends(require_api_key)]
 )
 
+# --- Models ---
 class TradeModel(BaseModel):
     id: str
     symbol: str
@@ -29,21 +31,20 @@ class TradesSummary(BaseModel):
     returned: int
     items: List[TradeModel] = Field(default_factory=list)
 
-# --- GET open trades
+# --- Endpoints ---
 @router.get("/open", response_model=TradesSummary)
 async def list_open_trades():
     trades = get_open_trades()
     items = [TradeModel(**t) for t in trades]
     return TradesSummary(total=len(trades), returned=len(items), items=items)
 
-# --- GET history
 @router.get("/history", response_model=TradesSummary)
-async def trade_history(limit: int = Query(50, ge=10, le=200)):
+async def trade_history(limit: int = 50):
     trades = get_trade_history(limit=limit)
     items = [TradeModel(**t) for t in trades[:limit]]
     return TradesSummary(total=len(trades), returned=len(items), items=items)
 
-# --- POST execute trade
+# --- Execute Trade ---
 class ExecuteTradeRequest(BaseModel):
     symbol: str
     side: str
@@ -62,17 +63,19 @@ class ExecuteTradeResponse(BaseModel):
 
 @router.post("/execute", response_model=ExecuteTradeResponse)
 async def execute_trade(req: ExecuteTradeRequest):
+    """ביצוע טרייד בפועל או Dry-Run"""
     try:
-        result = await binance_futures_trade(
+        result: Dict[str, Any] = await binance_futures_trade(
             symbol=req.symbol,
             side=req.side,
             budget=req.budget,
             leverage=req.leverage,
-            dry_run=req.dry_run
+            dry_run=req.dry_run,
         )
         return ExecuteTradeResponse(ok=True, **result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trade execution failed: {e}")
+
 
 
 
