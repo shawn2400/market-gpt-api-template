@@ -8,19 +8,29 @@ router = APIRouter(prefix="/debug", tags=["Debug"])
 
 @router.get("/health")
 def debug_health() -> Dict[str, Any]:
-    """מצב מערכת (Health Debug)"""
+    """מידע Debug בסיסי + שימוש ב־CPU וזיכרון"""
+    vm = psutil.virtual_memory()
+    cpu = psutil.cpu_percent(interval=0.5)
+
     return {
         "ok": True,
         "env": os.getenv("ENV", "production"),
         "platform": platform.platform(),
         "time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
-        "cpu_percent": psutil.cpu_percent(interval=0.1),
-        "memory": dict(psutil.virtual_memory()._asdict()),
+
+        # 🔍 מידע עומסים
+        "cpu_percent": cpu,
+        "memory": {
+            "total_mb": round(vm.total / (1024 * 1024), 2),
+            "used_mb": round(vm.used / (1024 * 1024), 2),
+            "free_mb": round(vm.available / (1024 * 1024), 2),
+            "percent": vm.percent,
+        },
     }
 
 @router.get("/ping")
 def debug_ping() -> Dict[str, str]:
-    """בדיקת זמינות השרת (Ping)"""
+    """בדיקת זמינות (פינג לשרת)"""
     return {"pong": "ok"}
 
 
