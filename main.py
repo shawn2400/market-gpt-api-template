@@ -66,6 +66,8 @@ from routes.market_extra import router as market_extra_router
 from routes.executor_extra import router as executor_extra_router
 from routes.anchor_extra import router as anchor_extra_router
 from routes.ws_stream import router as ws_stream_router
+from routes.grid import router as grid_router
+from routes.debug import router as debug_router
 
 # Register routers
 app.include_router(trade_router)
@@ -79,6 +81,8 @@ app.include_router(market_extra_router)
 app.include_router(executor_extra_router)
 app.include_router(anchor_extra_router)
 app.include_router(ws_stream_router)
+app.include_router(grid_router)
+app.include_router(debug_router)
 
 # --- Health ---
 @app.get("/", tags=["Config"])
@@ -118,6 +122,7 @@ async def startup_event():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
