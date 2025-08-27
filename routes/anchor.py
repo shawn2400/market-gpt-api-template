@@ -1,22 +1,24 @@
 # routes/anchor_extra.py
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Dict, Any
+from typing import Dict, List, Any
 import json
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor
 from utils import cache_fallback as redis_store
 
-router = APIRouter(prefix="/anchor", tags=["AnchorExtra"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/anchor",
+    tags=["Anchor"],
+    dependencies=[Depends(require_api_key)]
+)
 
 @router.get("/history", response_model=List[Dict[str, Any]])
 async def anchor_history(limit: int = 50):
     """היסטוריית Anchor מה־Redis (אם קיים)"""
     try:
-        data = redis_store.lrange("anchor:history", 0, limit - 1)
-        if hasattr(data, "__await__"):  # async client
-            data = await data
+        data = await redis_store.lrange("anchor:history", 0, limit - 1)
         return [json.loads(x) for x in data] if data else []
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch anchor history: {e}")
@@ -31,6 +33,7 @@ def anchor_live():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to evaluate anchor: {e}")
+
 
 
 
