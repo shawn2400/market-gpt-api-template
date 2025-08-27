@@ -43,9 +43,13 @@ def symbol_info(
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
     """Snapshot מלא של exchangeInfo (Binance Futures)."""
     try:
-        return futures_exchange_info_safe(force_refresh=bool(force_refresh))
+        data = futures_exchange_info_safe(force_refresh=bool(force_refresh))
+        if not data or "symbols" not in data:
+            raise HTTPException(status_code=502, detail="Exchange info unavailable")
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
+
 
 
 
