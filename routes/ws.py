@@ -1,56 +1,46 @@
 # routes/ws.py
-from fastapi import APIRouter, Query
-from datetime import datetime, timezone
-import logging
+from __future__ import annotations
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+import asyncio, json, logging
+from typing import Dict, Any
 
-from utils.ws_fallback import LAST_PRICE_CACHE, update_price
-from utils.binance_client import futures_mark_price
+from utils.auth import require_api_key
+from utils.ws_fallback import get_price, auto_price_updater, update_price
 
-router = APIRouter()
-logger = logging.getLogger("algogpt")
+logger = logging.getLogger("algogpt.ws")
 
-STALE_THRESHOLD = 10  # שניות
+router = APIRouter(prefix="/ws", tags=["WebSocket"], dependencies=[Depends(require_api_key)])
 
-@router.get("/status", tags=["Websocket"])
-async def ws_status():
+# שמירת חיבורים פעילים
+connections: Dict[str, WebSocket] = {}
+
+@router.websocket("/stream")
+async def ws_stream(ws: WebSocket):
     """
-    בדיקת סטטוס עדכניות מחירים מ-WS
+    חיבור WebSocket שמזרים מחירי Binance מה־cache.
+    עובד עם ws_fallback.auto_price_updater ברקע.
     """
-    now = datetime.now(timezone.utc).timestamp()
-    stale = []
+    await ws.accept()
+    cid = f"conn-{id(ws)}"
+    connections[cid] = ws
+    logger.info(f"[WS] Client connected: {cid}")
 
-    for symbol, info in LAST_PRICE_CACHE.items():
-        last_update = info.get("ts", 0)
-        age = now - last_update
-        if age > STALE_THRESHOLD:
-            stale.append({
-                "symbol": symbol,
-                "last_update_sec": last_update,
-                "age_sec": round(age, 2),
-            })
-            logger.warning(f"[WS-STALE] {symbol} price not fresh ({age:.1f}s old)")
-
-    return {
-        "ok": True,
-        "stale": stale,
-        "last_checked": datetime.now(timezone.utc).isoformat()
-    }
-
-# ✅ NEW: endpoint לעדכון מחיר ידני או מה-Binance
-@router.post("/update-price", tags=["Websocket"])
-async def update_price_api(symbol: str = Query(..., example="BTCUSDT")):
-    """
-    מושך Mark Price מ-Binance ושומר אותו ב-cache
-    """
     try:
-        price = futures_mark_price(symbol)
-        update_price(symbol, price)
-        return {
-            "ok": True,
-            "symbol": symbol.upper(),
-            "price": price,
-            "msg": "Price updated in cache"
-        }
+        while True:
+            # נשלח snapshot קטן של כל המחירים הטריים
+            snapshot: Dict[str, Any] = {}
+            for sym, info in list(getattr(__import__('utils.ws_fallback'), 'LAST_PRICE_CACHE', {}).items()):
+                snapshot[sym] = {
+                    "price": info.get("price"),
+                    "ts": info.get("ts")
+                }
+            await ws.send_text(json.dumps({"event": "price_snapshot", "data": snapshot}))
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        logger.info(f"[WS] Client disconnected: {cid}")
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        logger.error(f"[WS] Error for {cid}: {e}")
+    finally:
+        connections.pop(cid, None)
+
 
