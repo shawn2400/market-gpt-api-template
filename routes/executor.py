@@ -9,7 +9,6 @@ from utils.trade_manager import get_open_trades, get_trade_history
 
 router = APIRouter(prefix="/executor", tags=["Executor"], dependencies=[Depends(require_api_key)])
 
-
 @router.get("/positions", response_model=List[Dict[str, Any]])
 def list_open_positions() -> List[Dict[str, Any]]:
     """מחזיר רשימת פוזיציות פתוחות ב-Binance Futures"""
@@ -18,12 +17,10 @@ def list_open_positions() -> List[Dict[str, Any]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch positions: {e}")
 
-
 @router.get("/open_positions", response_model=List[Dict[str, Any]])
 def alias_open_positions():
     """Alias ל־/positions"""
     return list_open_positions()
-
 
 @router.get("/symbols", response_model=List[str])
 def list_symbols() -> List[str]:
@@ -34,7 +31,6 @@ def list_symbols() -> List[str]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch symbols: {e}")
 
-
 @router.get("/trades", response_model=List[Dict[str, Any]])
 def list_trades(limit: int = 50):
     """מחזיר היסטוריית טריידים"""
@@ -43,11 +39,11 @@ def list_trades(limit: int = 50):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch trades: {e}")
 
-
 @router.get("/status")
 def executor_status() -> Dict[str, Any]:
     """סטטוס Executor"""
     return {"ok": True, "executor": "running", "positions_endpoint": "/executor/positions"}
+
 
 
 
