@@ -75,6 +75,9 @@ async def scan_symbols(
 
     out: List[ScanSignal] = []
     syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    # ✅ מוסיפים USDT אם חסר
+    syms = [s if s.endswith("USDT") else s + "USDT" for s in syms]
+
     want = [f.strip() for f in ai_fields.split(",")] if ai_fields else []
 
     for s in syms:
@@ -99,6 +102,7 @@ async def scan_symbols(
             out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
 
     return MultiScanResponse(ok=True, count_total=len(syms), returned=len(out), signals=out)
+
 
 
 
