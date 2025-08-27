@@ -1,41 +1,28 @@
-# routes/grid.py
+# routes/debug.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 from typing import Dict, Any
-from utils.auth import require_api_key
+import os, platform, time, psutil
 
-router = APIRouter(
-    prefix="/grid",
-    tags=["Grid"],
-    dependencies=[Depends(require_api_key)]
-)
+router = APIRouter(prefix="/debug", tags=["Debug"])
 
-@router.get("/status")
-def grid_status() -> Dict[str, Any]:
-    """
-    סטטוס מערכת ה־Grid.
-    כרגע ריק (אין אסטרטגיות פעילות), אבל אפשר להרחיב בהמשך.
-    """
-    try:
-        return {
-            "ok": True,
-            "grid_enabled": True,
-            "active_strategies": 0,
-            "note": "Grid engine is loaded but no active grids"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Grid status error: {e}")
+@router.get("/health")
+def debug_health() -> Dict[str, Any]:
+    """מצב מערכת (Health Debug)"""
+    return {
+        "ok": True,
+        "env": os.getenv("ENV", "production"),
+        "platform": platform.platform(),
+        "time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+        "cpu_percent": psutil.cpu_percent(interval=0.1),
+        "memory": dict(psutil.virtual_memory()._asdict()),
+    }
 
-@router.get("/active")
-def grid_active() -> Dict[str, Any]:
-    """
-    רשימת גרידים פעילים (כרגע ריק).
-    אפשר להרחיב בהמשך למידע על אסטרטגיות פעילות.
-    """
-    try:
-        return {"ok": True, "active": []}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Grid active error: {e}")
+@router.get("/ping")
+def debug_ping() -> Dict[str, str]:
+    """בדיקת זמינות השרת (Ping)"""
+    return {"pong": "ok"}
+
 
 
 
