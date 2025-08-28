@@ -22,7 +22,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=10000
 
-# runtime deps (+ כלים דיאגנוסטיים קלים)
+# runtime deps (+ כלי דיאגנוסטיקה קלים)
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini libgomp1 \
     libopenblas-dev liblapack-dev \
@@ -33,30 +33,36 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 # ספריות פייתון שנבנו בשלב builder
 COPY --from=builder /install /usr/local
 
-# משתמש לא-Root
+# משתמש אפליקטיבי
 RUN useradd -ms /bin/bash appuser
 
+# נעתיק את האפליקציה, נוודא תיקיות ו"בעלות" לפני מעבר ל-user
 WORKDIR /app
+# חשוב: בשלב הזה אנחנו עדיין root
+COPY . /app
 
-# מעתיקים בבעלות appuser כדי למנוע בעיות הרשאות בזמן ריצה
-COPY --chown=appuser:appuser . /app
+# צור/תקן הרשאות לתיקיות דרושות להרצה
+RUN set -eux; \
+    mkdir -p /app/static /app/logs; \
+    chmod 755 /app/static; \
+    chmod 755 /app/logs || true; \
+    chown -R appuser:appuser /app
 
-# אנחנו עדיין root פה → ניתן ביט הרצה לסקריפטים אם קיימים (לא חובה כי נריץ עם bash)
+# אם יש סקריפטים — תן להם exec (עדיין root פה)
 RUN test -f /app/prestart.sh && chmod +x /app/prestart.sh || true \
  && test -f /app/health_full.sh && chmod +x /app/health_full.sh || true
 
-# מעבר למשתמש היישומי
+# עכשיו עוברים למשתמש האפליקטיבי
 USER appuser
 
-# Healthcheck: קודם נסה סקריפט, אם אין – גבה על HTTP
+# Healthcheck: סקריפט אם קיים, אחרת HTTP fallback
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD [ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# חשוב: מריצים את prestart דרך bash כדי לא להיות תלויים ב-exec bit
+# נפעיל prestart דרך bash (לא תלוי ב-exec bit) ואז gunicorn
 CMD ["bash","-lc","bash /app/prestart.sh && gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:${PORT:-10000} main:app --timeout ${GUNICORN_TIMEOUT:-120}"]
-
 
 
 
