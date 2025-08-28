@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict, Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,6 +38,10 @@ def _to_bool(v: str | None, default: bool = False) -> bool:
 def _parse_csv(s: str) -> List[str]:
     return [x.strip() for x in (s or "").split(",") if x.strip()]
 
+def _clean_key(s: str | None) -> str:
+    # ניקוי מהיר כמו ב-binance_client (לצורכי Health בלבד)
+    return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
+
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -47,6 +52,16 @@ from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.rate_limit import RateLimitMiddleware
+
+# Binance helpers
+from utils.binance_client import (
+    fapi_ping,
+    futures_balance,
+    futures_mark_price,
+    start_user_stream_keepalive,
+    stop_user_stream,
+)
+from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
@@ -68,7 +83,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # CORS
 CORS_ALLOWED = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
-CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"))
+CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
 if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
     CORS_ALLOW_CREDENTIALS = False
 allow_origins = ["*"] if CORS_ALLOWED == "*" else _parse_csv(CORS_ALLOWED)
@@ -79,6 +94,9 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
+
+# Rate limit (אם בשימוש)
+# app.add_middleware(RateLimitMiddleware, ...)
 
 # Static
 Path("static").mkdir(parents=True, exist_ok=True)
@@ -152,7 +170,7 @@ for mod, attr in EXTRA_ROUTERS:
     _include_router(mod, attr)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Health & Root
+# Root & Basic Health
 # ──────────────────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Config"])
 async def root_status():
@@ -165,6 +183,64 @@ async def health():
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"ok": True, "status": "live"}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Full Health
+# ──────────────────────────────────────────────────────────────────────────────
+@app.get("/health_full", tags=["Health"])
+async def health_full():
+    # אורך מפתחות אחרי ניקוי
+    k = _clean_key(os.getenv("BINANCE_API_KEY"))
+    s = _clean_key(os.getenv("BINANCE_API_SECRET"))
+    key_len = len(k)
+    sec_len = len(s)
+
+    # זמן Binance (public)
+    try:
+        ping_ok = bool(fapi_ping())
+    except Exception as e:
+        ping_ok = False
+        logger.warning({"event": "health_ping_error", "error": str(e)})
+
+    # חשבון (signed)
+    try:
+        bal = futures_balance()
+        account_ok = isinstance(bal, list)
+    except Exception as e:
+        account_ok = False
+        logger.warning({"event": "health_account_error", "error": str(e)})
+
+    # listenKey (ensure running)
+    try:
+        lk = start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
+        listen_key_ok = bool(lk)
+    except Exception as e:
+        listen_key_ok = False
+        logger.warning({"event": "health_listenkey_error", "error": str(e)})
+        lk = None
+
+    # מחירי סימבולים נבחרים
+    symbols = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
+    prices: Dict[str, Any] = {}
+    for sym in symbols:
+        prices[sym] = {
+            "fresh": is_price_fresh(sym, max_age_sec=int(os.getenv("HEALTH_PRICE_MAX_AGE", "30"))),
+            "price": get_price(sym),
+        }
+
+    return {
+        "ok": bool(ping_ok and (key_len == 64) and (sec_len == 64) and account_ok),
+        "version": APP_VERSION,
+        "binance": {
+            "key_len": key_len,
+            "secret_len": sec_len,
+            "fapi_time_ok": ping_ok,
+            "account_ok": account_ok,
+            "listenKey_ok": listen_key_ok,
+        },
+        "prices": prices,
+        "time": datetime.now(timezone.utc).isoformat(),
+    }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Exception handler
@@ -182,17 +258,54 @@ async def handle_exception(request: Request, exc: Exception):
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Startup log
+# Startup / Shutdown
 # ──────────────────────────────────────────────────────────────────────────────
+_price_task: Optional[asyncio.Task] = None
+
 @app.on_event("startup")
 async def startup_event():
+    global _price_task
     logger.info({
         "event": "startup",
         "APP_VERSION": APP_VERSION,
-        "BINANCE_KEY_LEN": len(cfg.BINANCE_API_KEY or ""),
-        "OPENAI_KEY_LEN": len(cfg.OPENAI_API_KEY or ""),
+        "BINANCE_KEY_LEN": len(_clean_key(os.getenv("BINANCE_API_KEY"))),
+        "OPENAI_KEY_LEN": len((os.getenv("OPENAI_API_KEY") or "").strip()),
         "config": dump_config_sanitized(),
     })
+
+    # 1) Binance listenKey keepalive (threaded; idempotent)
+    try:
+        start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
+        logger.info({"event": "listen_key_keepalive_started"})
+    except Exception as e:
+        logger.warning({"event": "listen_key_keepalive_failed", "error": str(e)})
+
+    # 2) Price updater background task (REST fallback)
+    symbols = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
+    interval = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
+    stagger = float(os.getenv("PRICE_SCAN_STAGGER", "0.2"))
+    if symbols:
+        try:
+            _price_task = asyncio.create_task(auto_price_updater(symbols, interval=interval, stagger=stagger))
+            logger.info({"event": "price_updater_started", "symbols": symbols, "interval": interval, "stagger": stagger})
+        except Exception as e:
+            logger.warning({"event": "price_updater_failed_start", "error": str(e)})
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _price_task
+    try:
+        stop_user_stream()
+        logger.info({"event": "listen_key_keepalive_stopped"})
+    except Exception as e:
+        logger.warning({"event": "listen_key_keepalive_stop_error", "error": str(e)})
+
+    if _price_task:
+        try:
+            _price_task.cancel()
+        except Exception:
+            pass
+        _price_task = None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Uvicorn entry
@@ -206,6 +319,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
