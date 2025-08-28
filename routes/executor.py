@@ -84,18 +84,20 @@ class ExchangeInfoResponse(BaseModel):
 class StatusResponse(BaseModel):
     ok: bool = True
     executor: str = "running"
-    endpoints: Dict[str, str] = {
-        "ping": "/executor/ping",
-        "positions": "/executor/positions",
-        "balance": "/executor/balance",
-        "symbols": "/executor/symbols",
-        "symbol_info": "/executor/symbol-info/{symbol}",
-        "mark_price": "/executor/mark-price/{symbol}",
-        "exchange_info": "/executor/exchange-info",
-        "trades": "/executor/trades",
-        "health": "/executor/health",
-        "status": "/executor/status",
-    }
+    endpoints: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "ping": "/executor/ping",
+            "positions": "/executor/positions",
+            "balance": "/executor/balance",
+            "symbols": "/executor/symbols",
+            "symbol_info": "/executor/symbol-info/{symbol}",
+            "mark_price": "/executor/mark-price/{symbol}",
+            "exchange_info": "/executor/exchange-info",
+            "trades": "/executor/trades",
+            "health": "/executor/health",
+            "status": "/executor/status",
+        }
+    )
 
 class HealthResponse(BaseModel):
     ok: bool = True
@@ -201,7 +203,7 @@ def executor_status() -> StatusResponse:
 # =========
 # HEALTH (קליל עם Cache)
 # =========
-_health_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_health_cache: Dict[str, Any] = {"ts": 0.0, "payload": None}
 _HEALTH_TTL = 10  # שניות
 
 @router.get("/health", response_model=HealthResponse)
@@ -214,10 +216,10 @@ def health_check(symbol: str = Query("BTCUSDT", min_length=3, max_length=20)) ->
     תוצאת הבדיקה נשמרת ל-10 שניות כדי למנוע עומס.
     """
     now = time.time()
-    cached = _health_cache["data"]
-    if cached and (now - _health_cache["ts"] < _HEALTH_TTL):
-        # החזרה מהירה מה-Cache
-        return HealthResponse(**cached, cached=True)
+    if _health_cache["payload"] and (now - _health_cache["ts"] < _HEALTH_TTL):
+        cached_payload: Dict[str, Any] = dict(_health_cache["payload"])
+        cached_payload["cached"] = True
+        return HealthResponse(**cached_payload)
 
     details: Dict[str, Any] = {}
 
@@ -251,18 +253,20 @@ def health_check(symbol: str = Query("BTCUSDT", min_length=3, max_length=20)) ->
         details["mark_price_error"] = str(e)
 
     ok = ping_ok and signed_ok and mp_ok
-    resp = HealthResponse(
-        ok=ok,
-        binance_ping=ping_ok,
-        signed_balance_ok=signed_ok,
-        mark_price_ok=mp_ok,
-        details=details,
-        cached=False,
-    ).dict()
+    payload = {
+        "ok": ok,
+        "binance_ping": ping_ok,
+        "signed_balance_ok": signed_ok,
+        "mark_price_ok": mp_ok,
+        "details": details,
+        "cached": False,
+        "ttl_seconds": _HEALTH_TTL,
+    }
 
     _health_cache["ts"] = now
-    _health_cache["data"] = resp
-    return HealthResponse(**resp)
+    _health_cache["payload"] = dict(payload)
+    return HealthResponse(**payload)
+
 
 
 
