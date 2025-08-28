@@ -1,23 +1,14 @@
 # routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
-
-import os
 from fastapi import APIRouter, Depends, Body, Query, HTTPException
 from pydantic import BaseModel, Field
+import os
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
-from utils.indicators import prepare_indicators_for_backtest
-from utils.get_klines import aget_klines  # async wrapper
 
-try:
-    from utils.ai_analysis import analyze_with_ai  # אופציונלי
-except Exception:
-    analyze_with_ai = None  # type: ignore
-
-# ✅ Prefix "/ai"
 router = APIRouter(
     prefix="/ai",
     tags=["AI"],
@@ -26,9 +17,9 @@ router = APIRouter(
 
 Side = Literal["LONG", "SHORT"]
 
-# ──────────────────────────────────────────────────────────────────────────────
+# -------------------------
 # Models
-# ──────────────────────────────────────────────────────────────────────────────
+# -------------------------
 class QualityRequest(BaseModel):
     symbol: str
     side: Side
@@ -49,9 +40,9 @@ class AnalyzeRequest(BaseModel):
     symbol: str = Field(..., description="Trading pair symbol, e.g. BTCUSDT")
     interval: str = Field("15m", description="Kline interval, e.g. 15m,1h,4h")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# -------------------------
+# Helpers (lazy imports)
+# -------------------------
 def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
     return {
         "mode_requested": getattr(anchor, "mode_requested", None),
@@ -64,13 +55,31 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
 
 def _fallback_text(row: Dict[str, Any], symbol: str, interval: str) -> str:
     ema_bias = "long" if row.get("ema21", 0) > row.get("ema50", 0) else "short"
-    rsi = float(row.get("rsi", 50.0))
-    adx = float(row.get("adx", 15.0))
+    rsi = row.get("rsi", 50.0)
+    adx = row.get("adx", 15.0)
     return f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}"
 
-# ──────────────────────────────────────────────────────────────────────────────
+def _load_klines_and_indicators():
+    """
+    מייבא רק כשצריך. אם משהו נכשל (pandas וכד'), מחזיר שגיאה טקסטואלית במקום להפיל ראוטר.
+    """
+    try:
+        from utils.get_klines import aget_klines  # async
+        from utils.indicators import prepare_indicators_for_backtest
+        return aget_klines, prepare_indicators_for_backtest, None
+    except Exception as e:
+        return None, None, str(e)
+
+def _load_ai_analysis():
+    try:
+        from utils.ai_analysis import analyze_with_ai
+        return analyze_with_ai, None
+    except Exception as e:
+        return None, str(e)
+
+# -------------------------
 # Routes
-# ──────────────────────────────────────────────────────────────────────────────
+# -------------------------
 @router.get("/ping")
 async def ping():
     return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
@@ -114,6 +123,16 @@ async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
     return await _do_ai_analyze(payload.symbol, payload.interval)
 
 async def _do_ai_analyze(symbol: str, interval: str):
+    aget_klines, prepare_indicators_for_backtest, imp_err = _load_klines_and_indicators()
+    if imp_err:
+        # אין תלותים -> החזר הודעת Fallback ידידותית
+        return {
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "analysis": f"[Fallback] dependencies unavailable: {imp_err}",
+            "fallback": True,
+        }
+
     try:
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
@@ -124,7 +143,9 @@ async def _do_ai_analyze(symbol: str, interval: str):
             raise HTTPException(status_code=502, detail="Indicators preparation failed")
 
         last_row = indicators.iloc[-1].to_dict()
-        if analyze_with_ai:
+
+        analyze_with_ai, ai_err = _load_ai_analysis()
+        if analyze_with_ai and not ai_err:
             res = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
             return {
                 "symbol": symbol.upper(),
@@ -139,6 +160,7 @@ async def _do_ai_analyze(symbol: str, interval: str):
                 "analysis": _fallback_text(last_row, symbol.upper(), interval),
                 "fallback": True,
             }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -147,6 +169,10 @@ async def _do_ai_analyze(symbol: str, interval: str):
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
     result: List[Dict[str, Any]] = []
+    aget_klines, prepare_indicators_for_backtest, imp_err = _load_klines_and_indicators()
+    if imp_err:
+        return {"interval": interval, "results": [{"error": f"dependencies unavailable: {imp_err}"}]}
+
     for s in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
         try:
             df = await aget_klines(s, interval, limit=200, market_type="futures")
@@ -157,8 +183,10 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
             if indicators is None or len(indicators) == 0:
                 result.append({"symbol": s, "error": "Indicators preparation failed"})
                 continue
+
             last = indicators.iloc[-1].to_dict()
-            if analyze_with_ai:
+            analyze_with_ai, ai_err = _load_ai_analysis()
+            if analyze_with_ai and not ai_err:
                 res = await analyze_with_ai({"symbol": s, **last})
                 result.append({
                     "symbol": s,
@@ -174,6 +202,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
