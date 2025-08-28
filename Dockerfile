@@ -49,12 +49,16 @@ WORKDIR /app
 # Copy app source (ללא .env – ודא שיש .dockerignore)
 COPY . /app
 
+# ודא של-prestart יש הרשאות ריצה גם אם ביט ה-exec לא נשמר ב-Git
+RUN [ -f /app/prestart.sh ] && chmod +x /app/prestart.sh || true
+
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "2", "-b", "0.0.0.0:10000", "main:app"]
+CMD ["bash","-lc","/app/prestart.sh && gunicorn -k uvicorn.workers.UvicornWorker -w ${WORKERS:-2} -b 0.0.0.0:${PORT:-10000} main:app --timeout ${GUNICORN_TIMEOUT:-120}"]
+
 
 
 
