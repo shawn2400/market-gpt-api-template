@@ -15,13 +15,12 @@ logger = logging.getLogger("algogpt.symbols")
 # ENV / Defaults
 # ──────────────────────────────────────────────────────────────────────────────
 DEFAULT_QUOTE = (os.getenv("DEFAULT_QUOTE") or "USDT").upper()
-SYMBOLS_TTL_SEC = int(os.getenv("SYMBOLS_CACHE_TTL", "900"))  # 15m
+SYMBOLS_TTL_SEC = int(os.getenv("SYMBOLS_CACHE_TTL", "900"))  # 15 דקות
 SPOT_EXCHANGE_INFO_URL = os.getenv(
     "BINANCE_SPOT_EXCHANGE_INFO",
     "https://api.binance.com/api/v3/exchangeInfo",
 )
 
-# Quotes נפוצים; בפועל יוחלפו מתוך exchangeInfo
 COMMON_QUOTES: Set[str] = {
     "USDT", "USDC", "BUSD", "FDUSD", "TUSD", "BIDR", "TRY", "EUR", "BRL", "GBP"
 }
@@ -32,11 +31,12 @@ try:
 except Exception:
     # fallback בטוח – לא מפיל import
     from utils.binance_client import _CLIENT as _BN  # type: ignore
+
     def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:  # type: ignore
         return _BN.exchange_info(force_refresh=force_refresh)  # type: ignore
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Utils
+# Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 _sep_re = re.compile(r"[^A-Z0-9]+")
 
@@ -90,7 +90,7 @@ class SymbolsCache:
             if not sym:
                 continue
             status = s.get("status")
-            # נסנֵן לא פעילים בספוט/פיוצ'רס
+            # מסננים לא-פעילים
             if status and status not in ("TRADING", "PENDING_TRADING"):
                 continue
             index[sym] = s
@@ -247,6 +247,7 @@ if __name__ == "__main__":
     c = SymbolsCache("futures")
     print("has normalize:", hasattr(__import__(__name__), "normalize_symbol"))
     print("quotes count:", len(c.quotes()))
+
 
 
 
