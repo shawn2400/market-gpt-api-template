@@ -14,9 +14,7 @@ import httpx
 
 logger = logging.getLogger("algogpt.binance")
 
-# ============
-# ENV & Config
-# ============
+# ============ ENV & Config ============
 def _clean_env(s: Optional[str]) -> str:
     """Remove whitespace/newlines/tabs and strip edges."""
     if not s:
@@ -25,7 +23,6 @@ def _clean_env(s: Optional[str]) -> str:
 
 BINANCE_API_KEY = _clean_env(os.getenv("BINANCE_API_KEY"))
 BINANCE_API_SECRET = _clean_env(os.getenv("BINANCE_API_SECRET"))
-
 USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
 
 FAPI_BASE = (
@@ -43,9 +40,7 @@ SUPPRESS_WARN = os.getenv("SUPPRESS_BINANCE_WARNINGS", "1").lower() in ("1", "tr
 if SUPPRESS_WARN:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# ===============
-# HTTP Client Wrap
-# ===============
+# =============== HTTP Client Wrap ===============
 class _BinanceFutures:
     """
     Robust Binance Futures REST client (sync):
@@ -92,6 +87,7 @@ class _BinanceFutures:
         return {"X-MBX-APIKEY": self.api_key} if self.api_key else {}
 
     def _sign(self, params: Dict[str, Any]) -> Tuple[str, str]:
+        # Sort keys for deterministic signing
         items = [f"{k}={params[k]}" for k in sorted(params.keys())]
         query = "&".join(items)
         signature = hmac.new(
@@ -177,9 +173,7 @@ class _BinanceFutures:
 
         raise RuntimeError(f"[Binance] signed {method} {path} exhausted retries")
 
-    # =========
-    # Endpoints
-    # =========
+    # ========= Endpoints =========
     def ping(self) -> bool:
         try:
             self._public_get("fapi/v1/ping")
@@ -233,9 +227,7 @@ class _BinanceFutures:
             logger.error(f"[Binance] balance failed: {e}")
             return []
 
-    # ========
-    # Filters (helpers used by trader modules)
-    # ========
+    # ======== Filters / Normalization ========
     def _symbol_filters(self, symbol: str) -> Dict[str, Any]:
         info = self.symbol_info(symbol, force_refresh=False)
         if not info:
@@ -250,7 +242,7 @@ class _BinanceFutures:
         step = float(lot.get("stepSize", "0.00000001"))
         min_qty = float(lot.get("minQty", "0"))
 
-        notional = fs.get("NOTIONAL") or fs.get("MIN_NOTIONAL") or {}
+        notional = fs.get("MIN_NOTIONAL") or fs.get("NOTIONAL") or {}
         min_notional = float(notional.get("minNotional", "0")) if notional else 0.0
 
         pf = fs.get("PRICE_FILTER", {})
@@ -276,9 +268,7 @@ class _BinanceFutures:
 
         return p, q
 
-    # ====================
-    # Account/Mode helpers
-    # ====================
+    # ==================== Account/Mode ====================
     def set_position_mode(self, hedge: bool) -> Any:
         return self.signed_post("fapi/v1/positionSide/dual", {"dualSidePosition": str(hedge).lower()})
 
@@ -294,9 +284,7 @@ class _BinanceFutures:
             raise ValueError("leverage must be 1..125")
         return self.signed_post("fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": lev})
 
-    # ===========
-    # Order APIs
-    # ===========
+    # ======================= Order APIs =======================
     def place_limit_order(
         self,
         symbol: str,
@@ -451,9 +439,7 @@ class _BinanceFutures:
 # Singleton
 _CLIENT = _BinanceFutures()
 
-# ========================
-# Backward-compatible APIs
-# ========================
+# ======================== Backward-compatible APIs ========================
 def fapi_ping() -> bool:
     return _CLIENT.ping()
 
@@ -477,7 +463,7 @@ def futures_open_positions() -> list[dict]:
 def futures_balance() -> list[dict]:
     return _CLIENT.balance()
 
-# Order/mode public wrappers
+# Account/mode wrappers
 def set_position_mode(hedge: bool) -> Any:
     return _CLIENT.set_position_mode(hedge)
 
@@ -487,6 +473,7 @@ def set_margin_type(symbol: str, margin_type: str = "ISOLATED") -> Any:
 def set_leverage(symbol: str, leverage: int) -> Any:
     return _CLIENT.set_leverage(symbol, leverage)
 
+# Order wrappers
 def place_limit_order(
     symbol: str, side: str, quantity: float, price: float, *,
     post_only: bool = True, reduce_only: bool = False,
@@ -536,9 +523,7 @@ def get_order(symbol: str, order_id: Optional[int] = None, client_oid: Optional[
     return _CLIENT.get_order(symbol, order_id, client_oid)
 
 
-# ===========
-# Self-checks
-# ===========
+# =========== Self-checks ===========
 if __name__ == "__main__":
     print("Ping:", fapi_ping())
     try:
@@ -551,6 +536,7 @@ if __name__ == "__main__":
         print("Balance sample:", bal[:1])
     except Exception as e:
         print("Balance error:", e)
+
 
 
 
