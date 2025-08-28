@@ -8,30 +8,46 @@ import json
 import math
 import hashlib
 import logging
+import random
 from typing import Any, Dict, Optional, Tuple, List
 from threading import Event, Thread
 
 import httpx
-from httpx import Limits
+from httpx import Limits, ProxyError, ReadTimeout, ConnectTimeout, TransportError
 
 logger = logging.getLogger("algogpt.binance")
 
-# ============ ENV & Config ============
+# ──────────────────────────────────────────────────────────────────────────────
+# Exceptions מפורשות כדי לאבחן מהר upstream
+# ──────────────────────────────────────────────────────────────────────────────
+class BinanceAuthError(RuntimeError):
+    """-2015 Invalid API-key, IP, or permissions / 401/403"""
+    pass
+
+class BinanceSignatureError(RuntimeError):
+    """-1022 Signature invalid"""
+    pass
+
+class BinanceTimestampError(RuntimeError):
+    """-1021 Timestamp out of recvWindow"""
+    pass
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENV & Config
+# ──────────────────────────────────────────────────────────────────────────────
 def _clean_env(s: Optional[str]) -> str:
-    """
-    Remove CR/LF/TAB and surrounding quotes/spaces. Binance keys must be one line, 64/64.
-    """
+    """מסיר CR/LF/TAB ומרכאות/רווחים בקצוות. מפתחות Binance חייבים להיות שורה אחת (64/64)."""
     if not s:
         return ""
-    s = s.strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
-    return s
+    return s.strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
 BINANCE_API_KEY = _clean_env(os.getenv("BINANCE_API_KEY"))
 BINANCE_API_SECRET = _clean_env(os.getenv("BINANCE_API_SECRET"))
-USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
 
+USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
 FAPI_BASE = (
-    os.getenv("BINANCE_FUTURES_HTTP_BASE")
+    os.getenv("BINANCE_FUTURES_HTTP_BASE")  # אופציונלי: פרוקסי/סטאב
     or os.getenv("BINANCE_FAPI_BASE")
     or ("https://testnet.binancefuture.com" if USE_TESTNET else "https://fapi.binance.com")
 ).rstrip("/")
@@ -39,22 +55,28 @@ FAPI_BASE = (
 HTTP_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 RECV_WINDOW = int(float(os.getenv("BINANCE_RECV_WINDOW", "20000")))
 MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
-BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))  # seconds
-
+BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))  # שניות
 SUPPRESS_WARN = os.getenv("SUPPRESS_BINANCE_WARNINGS", "1").lower() in ("1", "true", "yes")
+
+# פרוקסי (אופציונלי): BINANCE_HTTP_PROXY=http://user:pass@host:port
+PROXY = os.getenv("BINANCE_HTTP_PROXY", "").strip() or None
+
 if SUPPRESS_WARN:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-# =============== HTTP Client Wrap ===============
+# ──────────────────────────────────────────────────────────────────────────────
+# קליינט
+# ──────────────────────────────────────────────────────────────────────────────
 class _BinanceFutures:
     """
-    Robust Binance Futures REST client (sync):
+    Binance Futures REST client (sync) מוקשח:
       - HMAC-SHA256 signing
-      - Timestamp drift handling (-1021) via time sync
-      - Retries with backoff (429/418/5xx)
-      - Public & signed helpers
-      - Basic symbol filters normalization (price/qty/notional)
+      - טיפול -1021 (סנכרון זמן) ורטריי
+      - רטריי עם backoff+ג'יטר ל-429/418/5xx/Transport
+      - פילטרים (PRICE/Lot/Notional) לנירמול מחיר/כמות
+      - ניהול listenKey (יצירה/keepalive/סגירה)
+      - לוגים מפורטים (כולל code/msg/base/testnet)
     """
 
     def __init__(self) -> None:
@@ -68,17 +90,27 @@ class _BinanceFutures:
         self._time_offset_ms = 0  # server_time - local_time
         self._exchange_info_cache: Optional[Dict[str, Any]] = None
 
-        self._client = httpx.Client(
-            timeout=self.timeout,
-            http2=False,
-            limits=Limits(max_keepalive_connections=20, max_connections=50),
-        )
+        limits = Limits(max_keepalive_connections=32, max_connections=64)
+        kwargs: Dict[str, Any] = dict(timeout=self.timeout, http2=False, limits=limits)
+        if PROXY:
+            kwargs["proxies"] = PROXY
 
-        # Key length sanity (do not raise to allow public endpoints in degraded mode)
+        self._client = httpx.Client(**kwargs)
+
+        # בדיקת אורך מפתחות (לא נרים חריגה כדי לאפשר public endpoints)
         if (self.api_key and len(self.api_key) != 64) or (self.api_secret and len(self.api_secret) != 64):
             logger.error("[Binance] API keys invalid length (must be 64/64).")
 
-    # ---- Utilities ----
+        logger.info({
+            "event": "binance_client_init",
+            "base": self.base,
+            "testnet": USE_TESTNET,
+            "recv_window": self.recv_window,
+            "timeout": self.timeout,
+            "has_key": bool(self.api_key),
+        })
+
+    # --- Utilities ---
     def _now_ms(self) -> int:
         return int(time.time() * 1000)
 
@@ -100,7 +132,7 @@ class _BinanceFutures:
         return {"X-MBX-APIKEY": self.api_key} if self.api_key else {}
 
     def _sign(self, params: Dict[str, Any]) -> Tuple[str, str]:
-        # Sort keys for deterministic signing
+        # Binance דורש חתימה על query-string ממויין
         items = [f"{k}={params[k]}" for k in sorted(params.keys())]
         query = "&".join(items)
         signature = hmac.new(
@@ -108,10 +140,13 @@ class _BinanceFutures:
         ).hexdigest()
         return query, signature
 
-    def _backoff(self, attempt: int) -> float:
-        return min(self.backoff_base * (2 ** attempt), 4.5)
+    def _sleep_backoff(self, attempt: int) -> None:
+        # backoff אקספוננציאלי + ג'יטר קטן
+        delay = min(self.backoff_base * (2 ** attempt), 4.5)
+        delay *= (0.85 + 0.3 * random.random())
+        time.sleep(delay)
 
-    # ---- Core Requestors ----
+    # --- Core Requestors ---
     def _public_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         url = f"{self.base}/{path.lstrip('/')}"
         for attempt in range(self.max_retries):
@@ -122,14 +157,17 @@ class _BinanceFutures:
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 body = e.response.text
-                logger.error(f"[Binance] public GET {path} failed ({status}): {body[:200]}")
+                logger.error(f"[Binance] public GET {path} failed ({status}): {body[:300]}")
                 if status >= 500:
-                    time.sleep(self._backoff(attempt))
+                    self._sleep_backoff(attempt)
                     continue
                 raise
+            except (ProxyError, ReadTimeout, ConnectTimeout, TransportError) as e:
+                logger.warning(f"[Binance] public GET transport error: {e}")
+                self._sleep_backoff(attempt)
             except Exception as e:
                 logger.error(f"[Binance] public GET {path} exception: {e}")
-                time.sleep(self._backoff(attempt))
+                self._sleep_backoff(attempt)
         raise RuntimeError(f"[Binance] public GET {path} exhausted retries")
 
     def _signed(self, method: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -141,55 +179,80 @@ class _BinanceFutures:
         params.setdefault("recvWindow", self.recv_window)
 
         url = f"{self.base}/{path.lstrip('/')}"
-
         for attempt in range(self.max_retries):
             query, sig = self._sign(params)
             full_url = f"{url}?{query}&signature={sig}"
             try:
                 r = self._client.request(method.upper(), full_url, headers=self._headers())
 
-                # Backoff on rate-limit/ban and 5xx
+                # Backoff on 429/418/5xx
                 if r.status_code in (418, 429) or r.status_code >= 500:
-                    logger.warning(f"[Binance] signed {method} {path} rate/5xx ({r.status_code}): {r.text[:200]}")
-                    time.sleep(self._backoff(attempt))
+                    logger.warning(f"[Binance] signed {method} {path} rate/5xx ({r.status_code}): {r.text[:300]}")
+                    self._sleep_backoff(attempt)
                     continue
 
-                # Handle timestamp drift (-1021) by syncing time and retrying
-                if r.status_code == 400:
+                # טיפול ספציפי בקודי Binance
+                if r.status_code >= 400:
+                    # ננסה לפענח json
                     try:
                         data = r.json()
                         code = data.get("code")
+                        msg = data.get("msg")
                     except Exception:
-                        code = None
+                        code, msg = None, r.text
+
+                    # -1021: Timestamp drift → sync time & retry
                     if code == -1021:
                         logger.warning("[Binance] -1021 (timestamp). Syncing time and retrying...")
                         self._sync_time()
                         params["timestamp"] = self._now_ms() + self._time_offset_ms
+                        self._sleep_backoff(attempt)
                         continue
+
+                    # -1022: Signature invalid
+                    if code == -1022:
+                        logger.error({"event": "binance_sig_error", "code": code, "msg": msg, "path": path})
+                        raise BinanceSignatureError(f"{code}: {msg}")
+
+                    # -2015: Invalid API-key/IP/permissions
+                    if code == -2015 or r.status_code in (401, 403):
+                        logger.error({
+                            "event": "binance_auth_error",
+                            "status": r.status_code,
+                            "code": code,
+                            "msg": msg,
+                            "base": self.base,
+                            "testnet": USE_TESTNET,
+                        })
+                        raise BinanceAuthError(f"{code}: {msg}")
 
                 r.raise_for_status()
                 return r.json()
 
             except httpx.HTTPStatusError as e:
+                # 4xx: נעצור; 5xx: ננסה שוב
                 try:
                     err = e.response.json()
                 except Exception:
                     err = {"raw": e.response.text}
                 logger.error(
-                    f"[Binance] signed {method} {path} failed {e.response.status_code}: {json.dumps(err)[:300]}"
+                    f"[Binance] signed {method} {path} failed {e.response.status_code}: {json.dumps(err)[:500]}"
                 )
                 if 400 <= e.response.status_code < 500:
-                    # Most likely -2015 invalid key/IP/permissions or signature issues: bubble up
                     raise
-                time.sleep(self._backoff(attempt))
+                self._sleep_backoff(attempt)
+
+            except (ProxyError, ReadTimeout, ConnectTimeout, TransportError) as e:
+                logger.warning(f"[Binance] signed transport error: {e}")
+                self._sleep_backoff(attempt)
 
             except Exception as e:
                 logger.error(f"[Binance] signed {method} {path} exception: {e}")
-                time.sleep(self._backoff(attempt))
+                self._sleep_backoff(attempt)
 
         raise RuntimeError(f"[Binance] signed {method} {path} exhausted retries")
 
-    # ========= Public Endpoints =========
+    # ─────────── Public Endpoints ───────────
     def ping(self) -> bool:
         try:
             self._public_get("fapi/v1/ping")
@@ -227,7 +290,7 @@ class _BinanceFutures:
                 return s
         return None
 
-    # ========= Signed Account Endpoints =========
+    # ─────────── Signed Account Endpoints ───────────
     def position_risk(self) -> List[dict]:
         try:
             res = self._signed("GET", "fapi/v2/positionRisk")
@@ -244,7 +307,7 @@ class _BinanceFutures:
             logger.error(f"[Binance] balance failed: {e}")
             return []
 
-    # ======== Filters / Normalization ========
+    # ─────────── Filters / Normalization ───────────
     def _symbol_filters(self, symbol: str) -> Dict[str, Any]:
         info = self.symbol_info(symbol, force_refresh=False)
         if not info:
@@ -286,7 +349,7 @@ class _BinanceFutures:
 
         return p, q
 
-    # ==================== Account/Mode ====================
+    # ─────────── Account/Mode ───────────
     def set_position_mode(self, hedge: bool) -> Any:
         return self.signed_post("fapi/v1/positionSide/dual", {"dualSidePosition": str(hedge).lower()})
 
@@ -302,7 +365,7 @@ class _BinanceFutures:
             raise ValueError("leverage must be 1..125")
         return self.signed_post("fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": lev})
 
-    # ======================= Order APIs =======================
+    # ─────────── Orders ───────────
     def place_limit_order(
         self,
         symbol: str,
@@ -448,14 +511,15 @@ class _BinanceFutures:
         return self._signed("GET", path, params)
 
     def signed_post(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        # Binance מצפה שגם POST יגיעו כ-query עם חתימה, ללא body
         return self._signed("POST", path, params)
 
     def signed_delete(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         return self._signed("DELETE", path, params)
 
-    # ----- User Data Stream (Futures) -----
+    # ─────────── User Data Stream (Futures) ───────────
     def user_stream_start(self) -> str:
-        """Create a listenKey for futures user data stream."""
+        """יצירת listenKey ל־Futures."""
         url = f"{self.base}/fapi/v1/listenKey"
         r = self._client.post(url, headers=self._headers())
         r.raise_for_status()
@@ -466,7 +530,7 @@ class _BinanceFutures:
         return lk
 
     def user_stream_keepalive(self, listen_key: str) -> None:
-        """Keep the listenKey alive (call at least once every 30 minutes)."""
+        """רענון listenKey (לפחות פעם ב־30 דק')."""
         url = f"{self.base}/fapi/v1/listenKey"
         r = self._client.put(url, headers=self._headers(), params={"listenKey": listen_key})
         if r.status_code == 200:
@@ -475,7 +539,7 @@ class _BinanceFutures:
             logger.warning(f"[Binance] listenKey keepalive status {r.status_code}: {r.text[:200]}")
 
     def user_stream_close(self, listen_key: str) -> None:
-        """Close the listenKey (cleanup)."""
+        """סגירת listenKey (ניקיון)."""
         url = f"{self.base}/fapi/v1/listenKey"
         r = self._client.delete(url, headers=self._headers(), params={"listenKey": listen_key})
         if r.status_code == 200:
@@ -483,18 +547,24 @@ class _BinanceFutures:
         else:
             logger.warning(f"[Binance] listenKey close status {r.status_code}: {r.text[:200]}")
 
+    def close(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
+
 
 # Singleton
 _CLIENT = _BinanceFutures()
 
-# Background keepalive management for listenKey
+# ─────────── Background keepalive management for listenKey ───────────
 _listen_key: Optional[str] = None
 _lk_thread_stop = Event()
 _lk_thread: Optional[Thread] = None
 
 def start_user_stream_keepalive(period_sec: int = 1800) -> str:
     """
-    Start user-stream (listenKey) and keep it alive in background.
+    Start user-stream (listenKey) and keep it alive ברקע.
     period_sec=1800 (30m). Binance דורשת רענון < 60m.
     """
     global _listen_key, _lk_thread, _lk_thread_stop
@@ -515,7 +585,7 @@ def start_user_stream_keepalive(period_sec: int = 1800) -> str:
     return _listen_key
 
 def stop_user_stream():
-    """Stop background keepalive and close the listenKey."""
+    """עצירת keepalive וסגירת listenKey."""
     global _listen_key, _lk_thread, _lk_thread_stop
     try:
         _lk_thread_stop.set()
@@ -532,7 +602,9 @@ def stop_user_stream():
         _lk_thread_stop.clear()
 
 
-# ======================== Public Wrappers ========================
+# ──────────────────────────────────────────────────────────────────────────────
+# Public Wrappers (שומרים על API חיצוני זהה)
+# ──────────────────────────────────────────────────────────────────────────────
 def fapi_ping() -> bool:
     return _CLIENT.ping()
 
@@ -616,7 +688,9 @@ def get_order(symbol: str, order_id: Optional[int] = None, client_oid: Optional[
     return _CLIENT.get_order(symbol, order_id, client_oid)
 
 
-# =========== Self-checks ===========
+# ──────────────────────────────────────────────────────────────────────────────
+# Self-checks (ריצה ידנית: python -m utils.binance_client)
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Ping:", fapi_ping())
     try:
@@ -629,6 +703,7 @@ if __name__ == "__main__":
         print("Balance sample:", bal[:1])
     except Exception as e:
         print("Balance error:", e)
+
 
 
 
