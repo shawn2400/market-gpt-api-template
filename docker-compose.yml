@@ -6,26 +6,24 @@ services:
     container_name: algogpt
     restart: always
     ports:
-      - "10000:10000"
+      - "${PORT:-10000}:${PORT:-10000}"
     env_file:
       - .env
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     command: >
+      bash -lc "/app/prestart.sh &&
       gunicorn -k uvicorn.workers.UvicornWorker
-      -w 2
-      -b 0.0.0.0:10000
+      -w ${WEB_CONCURRENCY:-2}
+      -b 0.0.0.0:${PORT:-10000}
       main:app
+      --timeout ${GUNICORN_TIMEOUT:-120}"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:10000/health',timeout=3).status==200 else 1)"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${PORT:-10000}/health_full || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 2G
 
   redis:
     image: redis:7-alpine
@@ -35,6 +33,11 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
 volumes:
   redis_data:
