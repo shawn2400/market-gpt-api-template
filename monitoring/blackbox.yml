@@ -4,5 +4,6 @@ modules:
     timeout: 5s
     http:
       method: GET
-      valid_status_codes: [200]   # תקין רק 200
+      valid_status_codes: [200]
       preferred_ip_protocol: "ip4"
+
