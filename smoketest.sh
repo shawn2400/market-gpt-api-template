@@ -1,6 +1,6 @@
 #!/bin/bash
 HOST="${HOST:-http://localhost:10000}"
-TOKEN="${TOKEN:-rnd_I7f7QQ6JXu55tuqfORcQKBdlxMPK}"
+TOKEN="${TOKEN:rnd_XVyANQbo1mk8Q8nny3kTNDEzKoF7}"
 AUTH="Authorization: Bearer ${TOKEN}"
 
 NC='\033[0m'
