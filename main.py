@@ -86,7 +86,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # ──────────────────────────────────────────────────────────────────────────────
 # Authorization Middleware (Bearer Token Validation)
 # ──────────────────────────────────────────────────────────────────────────────
-EXPECTED_TOKEN = "rnd_I7f7QQ6JXu55tuqfORcQKBdlxMPK"
+EXPECTED_TOKEN = "rnd_XVyANQbo1mk8Q8nny3kTNDEzKoF7"
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
@@ -188,6 +188,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
