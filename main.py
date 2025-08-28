@@ -1,4 +1,3 @@
-# main.py
 from __future__ import annotations
 
 import os
@@ -70,7 +69,6 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 CORS_ALLOWED = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"))
 if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
-    # לפי התקן, אי אפשר "*" עם credentials; ננטרל credentials כדי למנוע בעיות בדפדפנים
     CORS_ALLOW_CREDENTIALS = False
 allow_origins = ["*"] if CORS_ALLOWED == "*" else _parse_csv(CORS_ALLOWED)
 app.add_middleware(
@@ -81,22 +79,26 @@ app.add_middleware(
     allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
 
-# Global rate limit (קליל, נשלט ENV)
-RATE_LIMIT_GLOBAL = int(os.getenv("RATE_LIMIT_GLOBAL", "60"))   # בקשות לדקה
-RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))   # חלון בשניות
-app.add_middleware(
-    RateLimitMiddleware,
-    limit=RATE_LIMIT_GLOBAL,
-    window=RATE_LIMIT_WINDOW,
-    endpoint_limits={},  # ניתן להזריק מפה פר-Route אם תרצה
-)
-
 # Static
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Routers – טעינה בטוחה (מודול שבור לא מפיל את האפליקציה)
+# Authorization Middleware (Bearer Token Validation)
+# ──────────────────────────────────────────────────────────────────────────────
+EXPECTED_TOKEN = "rnd_I7f7QQ6JXu55tuqfORcQKBdlxMPK"
+
+@app.middleware("http")
+async def validate_token(request: Request, call_next):
+    if request.url.path.startswith("/static") or request.url.path.startswith("/health") or request.url.path == "/":
+        return await call_next(request)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header != f"Bearer {EXPECTED_TOKEN}":
+        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    return await call_next(request)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Routers – טעינה בטוחה
 # ──────────────────────────────────────────────────────────────────────────────
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
@@ -111,10 +113,9 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.trade", "router"),
     ("routes.market", "router"),
     ("routes.binance_status", "router"),
-    ("routes.executor", "router"),           # מייצא router ברמת מודול
+    ("routes.executor", "router"),
 ]
 
-# נטען AI רק אם מאופשר ב-ENV (כדי למנוע 404 או תלות במודולים חיצוניים כשלא צריך)
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     CORE_ROUTERS.append(("routes.ai", "router"))
 
@@ -148,7 +149,7 @@ async def health_live():
     return {"ok": True, "status": "live"}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Exception handler (JSON + לוג)
+# Exception handler
 # ──────────────────────────────────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
@@ -176,7 +177,7 @@ async def startup_event():
     })
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Uvicorn entry (local dev)
+# Uvicorn entry
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
@@ -187,6 +188,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
