@@ -2,27 +2,29 @@
 from __future__ import annotations
 import asyncio
 import time
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
 
 import httpx
 import pandas as pd
 
-from utils.symbols import normalize_symbol, SymbolsCache
+from utils.symbols import normalize_symbol
 
+# Endpoints
 BINANCE_FAPI = "https://fapi.binance.com"
 BINANCE_SPOT = "https://api.binance.com"
 
-_symbols_cache_fut = SymbolsCache(market="futures")
-_symbols_cache_spot = SymbolsCache(market="spot")
-
+# Cache של סמלים לא-תקינים (כדי לא לבזבז קריאות)
 _INVALID_TTL = 900  # 15 דקות
-_invalid_cache: Dict[Tuple[str, str], float] = {}  # {(market, symbol_upper): ts_expire}
+_invalid_cache: Dict[str, float] = {}  # key: "<market>:<SYMBOL>" -> ts_expire
+
+def _cache_key(market: str, symbol: str) -> str:
+    return f"{market}:{symbol.upper()}"
 
 def _is_invalid(market: str, symbol: str) -> bool:
-    return _invalid_cache.get((market, symbol.upper()), 0.0) > time.time()
+    return _invalid_cache.get(_cache_key(market, symbol), 0.0) > time.time()
 
 def _mark_invalid(market: str, symbol: str) -> None:
-    _invalid_cache[(market, symbol.upper())] = time.time() + _INVALID_TTL
+    _invalid_cache[_cache_key(market, symbol)] = time.time() + _INVALID_TTL
 
 def _endpoint_for(market_type: str) -> str:
     if str(market_type).lower() == "spot":
@@ -51,18 +53,27 @@ def get_klines(
     market_type: str = "futures",
 ) -> Optional[pd.DataFrame]:
     """
-    שליפת klines (סינכרונית). בקוד async – השתמשו ב-aget_klines (עטיפה עם asyncio.to_thread).
+    שליפת klines (סינכרונית).
+    הערות:
+    - כברירת מחדל מתבסס על Futures. עבור Spot נעשה נרמול מינימלי.
+    - אם הסימבול לא חוקי/לא קיים — נשמר ב-Invalid Cache ל-15 דקות.
     """
     market = "spot" if str(market_type).lower() == "spot" else "futures"
-    sym_in = symbol.upper()
+    sym_in = (symbol or "").upper().strip()
+    if not sym_in:
+        raise ValueError("symbol is required")
 
     if _is_invalid(market, sym_in):
         return None
 
-    # נרמול סימבול (כולל בדיקת איות/CASE ורשימות Binance)
+    # Normalization:
+    # Futures: נשתמש ב-normalize_symbol (מבוסס exchangeInfo של Futures)
+    # Spot: נשאיר Uppercase בלבד (אין לנו cache/normalize ל-spot כאן), ונסמוך על השגיאה מה-API אם לא קיים.
     try:
-        norm = normalize_symbol(sym_in, market=market,
-                                cache=_symbols_cache_spot if market == "spot" else _symbols_cache_fut)
+        if market == "futures":
+            norm = normalize_symbol(sym_in)  # משתמש ב-SYMBOLS cache של Futures
+        else:
+            norm = sym_in  # עבור Spot — בלי normalize חכם
     except Exception:
         _mark_invalid(market, sym_in)
         raise
@@ -96,6 +107,7 @@ async def aget_klines(
     market_type: str = "futures",
 ) -> Optional[pd.DataFrame]:
     return await asyncio.to_thread(get_klines, symbol, interval, limit, market_type)
+
 
 
 
