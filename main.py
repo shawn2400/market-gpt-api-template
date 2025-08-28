@@ -111,9 +111,13 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.trade", "router"),
     ("routes.market", "router"),
     ("routes.binance_status", "router"),
-    ("routes.ai", "router"),
     ("routes.executor", "router"),           # מייצא router ברמת מודול
 ]
+
+# נטען AI רק אם מאופשר ב-ENV (כדי למנוע 404 או תלות במודולים חיצוניים כשלא צריך)
+if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
+    CORE_ROUTERS.append(("routes.ai", "router"))
+
 EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.market_extra", "router"),
     ("routes.executor_extra", "router"),
@@ -183,6 +187,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
