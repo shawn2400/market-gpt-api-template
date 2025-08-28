@@ -3,76 +3,132 @@ from __future__ import annotations
 
 import os
 import time
+import logging
 import re
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Set
 
+import httpx
+
+logger = logging.getLogger("algogpt.symbols")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENV / Defaults
+# ──────────────────────────────────────────────────────────────────────────────
+DEFAULT_QUOTE = (os.getenv("DEFAULT_QUOTE") or "USDT").upper()
+SYMBOLS_TTL_SEC = int(os.getenv("SYMBOLS_CACHE_TTL", "900"))  # 15m
+SPOT_EXCHANGE_INFO_URL = os.getenv(
+    "BINANCE_SPOT_EXCHANGE_INFO",
+    "https://api.binance.com/api/v3/exchangeInfo",
+)
+
+# Quotes נפוצים (ישודרגו בפועל מה־exchangeInfo)
+COMMON_QUOTES: Set[str] = {
+    "USDT", "USDC", "BUSD", "FDUSD", "TUSD", "BIDR", "TRY", "EUR", "BRL", "GBP"
+}
+
+# ניסיון ראשי לייבא את exchangeInfo של פיוצ'רס דרך הלקוח המקומי
 try:
-    # primary import (recommended)
     from utils.binance_client import futures_exchange_info_safe
-except ImportError:
-    # safe fallback for older builds (avoid hard crash on import)
-    from utils.binance_client import _CLIENT as _BN   # type: ignore
-    def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
+except Exception:
+    # fallback בטוח כדי לא להפיל import
+    from utils.binance_client import _CLIENT as _BN  # type: ignore
+
+    def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:  # type: ignore
         return _BN.exchange_info(force_refresh=force_refresh)  # type: ignore
 
-DEFAULT_QUOTE = os.getenv("DEFAULT_QUOTE", "USDT").upper()
-SYMBOLS_TTL_SEC = int(os.getenv("SYMBOLS_CACHE_TTL", "600"))
 
-# quotes שנפוצים בבינאנס פיוצ'רס (מוגדרים גם דיפולטית אם אין cache)
-COMMON_QUOTES = {"USDT", "USDC", "BUSD", "FDUSD", "TUSD", "BIDR", "TRY"}
+# ──────────────────────────────────────────────────────────────────────────────
+# Utils
+# ──────────────────────────────────────────────────────────────────────────────
+_sep_re = re.compile(r"[^A-Z0-9]+")
+
+def _sanitize_symbol(sym: str) -> str:
+    """
+    מנרמל קלט משתמש: 'btc/usdt' → 'BTCUSDT', 'btc-usdt' → 'BTCUSDT', ' btc usdt ' → 'BTCUSDT'
+    """
+    s = str(sym or "").strip().upper()
+    if not s:
+        return s
+    s = _sep_re.sub(" ", s)
+    parts = [p for p in s.split() if p]
+    return "".join(parts)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Symbols Cache
+# ──────────────────────────────────────────────────────────────────────────────
 class SymbolsCache:
     """
-    Cache קליל ל-exchangeInfo של Binance Futures + עזרי פילטרים/עיגול.
+    Cache לשמות סימבולים ו־filters לפי שוק (spot/futures), עם TTL להגנה על רשת.
     """
-    def __init__(self, ttl_sec: int = SYMBOLS_TTL_SEC):
+    def __init__(self, market: str = "futures", ttl_sec: int = SYMBOLS_TTL_SEC) -> None:
+        self.market = "spot" if str(market).lower() == "spot" else "futures"
         self.ttl = max(30, int(ttl_sec))
-        self._last: float = 0.0
+        self._ts: float = 0.0
         self._raw: Dict[str, Any] = {}
         self._index: Dict[str, Dict[str, Any]] = {}
-        self._quotes: set[str] = set(COMMON_QUOTES)
+        self._quotes: Set[str] = set(COMMON_QUOTES)
 
-    def _refresh(self, force: bool = False) -> None:
-        now = time.time()
-        if not force and self._raw and (now - self._last) < self.ttl:
+    def _expired(self) -> bool:
+        return (time.time() - self._ts) > self.ttl or not self._index
+
+    def _fetch_spot_exchange_info(self) -> Dict[str, Any]:
+        with httpx.Client(timeout=6.0) as x:
+            r = x.get(SPOT_EXCHANGE_INFO_URL)
+            r.raise_for_status()
+            return r.json()
+
+    def refresh(self, force: bool = False) -> None:
+        if not force and not self._expired():
             return
-        info = futures_exchange_info_safe(force_refresh=force)
-        self._raw = info or {}
-        self._index = {s["symbol"]: s for s in self._raw.get("symbols", [])}
-        # בנה סט של Quotes מתוך הרשימה בפועל
-        quotes = set()
-        for s in self._raw.get("symbols", []):
+        if self.market == "futures":
+            info = futures_exchange_info_safe(force_refresh=True)
+        else:
+            info = self._fetch_spot_exchange_info()
+
+        # בניית אינדקס
+        index: Dict[str, Dict[str, Any]] = {}
+        quotes: Set[str] = set()
+        for s in (info.get("symbols") or []):
+            sym = str(s.get("symbol") or "").upper()
+            if not sym:
+                continue
+            status = s.get("status")
+            # בספוט לעיתים יש סימבולים לא פעילים – נסנן
+            if status and status not in ("TRADING", "PENDING_TRADING"):
+                continue
+            index[sym] = s
             q = s.get("quoteAsset")
             if q:
-                quotes.add(q)
+                quotes.add(str(q).upper())
+
+        self._raw = info
+        self._index = index
         if quotes:
             self._quotes = quotes
-        self._last = now
+        self._ts = time.time()
+        logger.info(f"[SymbolsCache] refreshed market={self.market} count={len(self._index)} quotes={len(self._quotes)}")
 
-    # API ציבורי
+    # API
     def ensure_fresh(self, force: bool = False) -> None:
-        self._refresh(force=force)
+        if force or self._expired():
+            self.refresh(force=True)
 
-    def list_symbols(self, only_trading: bool = True) -> List[str]:
+    def get_all(self) -> Set[str]:
         self.ensure_fresh()
-        out: List[str] = []
-        for s in self._raw.get("symbols", []):
-            if only_trading and s.get("status") != "TRADING":
-                continue
-            out.append(s["symbol"])
-        return out
+        return set(self._index.keys())
 
-    def quotes(self) -> set[str]:
+    def exists(self, symbol: str) -> bool:
         self.ensure_fresh()
-        return set(self._quotes)
+        return str(symbol).upper() in self._index
 
     def get(self, symbol: str) -> Optional[Dict[str, Any]]:
         self.ensure_fresh()
-        return self._index.get(symbol.upper())
+        return self._index.get(str(symbol).upper())
 
-    def valid(self, symbol: str) -> bool:
-        return self.get(symbol) is not None
+    def quotes(self) -> Set[str]:
+        self.ensure_fresh()
+        return set(self._quotes)
 
     def filters(self, symbol: str) -> Dict[str, Any]:
         s = self.get(symbol)
@@ -80,21 +136,22 @@ class SymbolsCache:
             raise ValueError(f"Unknown symbol: {symbol}")
         return {f["filterType"]: f for f in s.get("filters", [])}
 
+    # עזרים שכיחים לפילטרים
     def tick_size(self, symbol: str) -> float:
-        f = self.filters(symbol).get("PRICE_FILTER", {})
-        return float(f.get("tickSize", "0.00000001"))
+        pf = self.filters(symbol).get("PRICE_FILTER", {})
+        return float(pf.get("tickSize", "0.00000001"))
 
     def step_size(self, symbol: str) -> float:
-        f = self.filters(symbol).get("LOT_SIZE", {})
-        return float(f.get("stepSize", "0.00000001"))
+        lf = self.filters(symbol).get("LOT_SIZE", {})
+        return float(lf.get("stepSize", "0.00000001"))
 
     def min_qty(self, symbol: str) -> float:
-        f = self.filters(symbol).get("LOT_SIZE", {})
-        return float(f.get("minQty", "0"))
+        lf = self.filters(symbol).get("LOT_SIZE", {})
+        return float(lf.get("minQty", "0"))
 
     def min_notional(self, symbol: str) -> float:
-        f = self.filters(symbol).get("NOTIONAL") or self.filters(symbol).get("MIN_NOTIONAL") or {}
-        return float(f.get("minNotional", "0"))
+        nf = self.filters(symbol).get("NOTIONAL") or self.filters(symbol).get("MIN_NOTIONAL") or {}
+        return float(nf.get("minNotional", "0"))
 
     def snap_price(self, symbol: str, price: float) -> float:
         tick = self.tick_size(symbol)
@@ -108,37 +165,94 @@ class SymbolsCache:
             return qty
         return (int(qty / step)) * step
 
-    def suggest(self, base: str, quote: str = DEFAULT_QUOTE, limit: int = 5) -> List[str]:
+    def suggest(self, base: str, quote: str = DEFAULT_QUOTE, limit: int = 6) -> List[str]:
         """
-        מחזיר סימבולים אפשריים לפי base+quote (לדוג' "BTC"+"USDT" → ["BTCUSDT"])
-        עם התאמות קלות כמו 1000SHIBUSDT וכו'.
+        החזרת הצעות לסימבולים דומים (לפי base ו־quote).
         """
         self.ensure_fresh()
-        base_u = base.upper()
-        quote_u = quote.upper()
-        hits = []
-        for sym, s in self._index.items():
-            if s.get("status") != "TRADING":
-                continue
+        base_u = str(base).upper()
+        quote_u = str(quote).upper()
+        out: List[str] = []
+        for sym, meta in self._index.items():
             if not sym.endswith(quote_u):
                 continue
+            st = meta.get("status")
+            if st and st not in ("TRADING", "PENDING_TRADING"):
+                continue
             if sym.startswith(base_u) or base_u in sym:
-                hits.append(sym)
-        hits.sort()
-        return hits[:limit]
+                out.append(sym)
+        out.sort()
+        return out[:limit]
 
 
-# Singleton cache חשוף לשימוש מיידי
-SYMBOLS = SymbolsCache()
+# ──────────────────────────────────────────────────────────────────────────────
+# Public helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def parse_symbol_parts(symbol: str, cache: Optional[SymbolsCache] = None) -> Tuple[str, Optional[str]]:
+    """
+    מפצל 'BTCUSDT' ל־('BTC','USDT') לפי quotes ידועים.
+    אם לא נמצא quote, מחזיר (SYMBOL, None).
+    """
+    s = str(symbol or "").upper()
+    if not s:
+        return "", None
+    c = cache or SymbolsCache("futures")
+    quotes = sorted(c.quotes(), key=lambda q: -len(q))  # הארוכים קודם (לדוג' 'USDT' לפני 'USD')
+    for q in quotes:
+        if s.endswith(q):
+            return s[: -len(q)], q
+    return s, None
 
 
-_sep_re = re.compile(r"[^A-Z0-9]+")
+def normalize_symbol(
+    symbol: str,
+    market: str = "futures",
+    cache: Optional[SymbolsCache] = None,
+) -> str:
+    """
+    מנרמל קלט משתמש לסימבול תקני של Binance:
+    - מסיר מפרידים (/ - _ רווחים)
+    - משלים quote דיפולטי אם הוזן רק base (לדוג' 'BTC' -> 'BTCUSDT')
+    - מאמת קיום ב־exchangeInfo. זורק ValueError אם לא קיים.
+    """
+    if not symbol or not str(symbol).strip():
+        raise ValueError("symbol is empty")
 
-def _split_tokens(text: str) -> List[str]:
-    text = text.strip().upper()
-    # החלף מפרידים נפוצים עבור "BTC/USDT", "btc-usdt", "btc usdt"
-    text = _sep_re.sub(" ", text)
-    parts = [p for p in text.split() if p]()
+    mkt = "spot" if str(market).lower() == "spot" else "futures"
+    c = cache or SymbolsCache(mkt)
+
+    raw = _sanitize_symbol(symbol)
+    if not raw:
+        raise ValueError("symbol is empty")
+
+    # אם כבר קיים במדויק
+    if c.exists(raw):
+        return raw
+
+    # אם המשתמש הזין "BTC USDT" וכדו', ה־_sanitize כבר חיבר → raw='BTCUSDT'.
+    # אם עדיין לא קיים, ננסה פענוח בסיס+קווט או הוספת קווט דיפולטי:
+    base, q = parse_symbol_parts(raw, c)
+    if q is None:
+        candidate = f"{base}{DEFAULT_QUOTE}"
+        if c.exists(candidate):
+            return candidate
+
+    # הצעות אפשריות (עוזר ל־ValueError אינפורמטיבי)
+    suggestions = c.suggest(base or raw, q or DEFAULT_QUOTE, limit=6)
+    raise ValueError(
+        f"Symbol '{symbol}' not found in {mkt} exchangeInfo. "
+        f"Try: {', '.join(suggestions) if suggestions else 'check symbol/market'}"
+    )
+
+
+__all__ = [
+    "SymbolsCache",
+    "normalize_symbol",
+    "parse_symbol_parts",
+    "DEFAULT_QUOTE",
+    "SYMBOLS_TTL_SEC",
+]
+
 
 
 
