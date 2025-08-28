@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 
 import os
@@ -12,9 +13,9 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Env / Local .env
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 IS_CLOUD = bool(
     os.getenv("RENDER")
     or os.getenv("RENDER_SERVICE_ID")
@@ -38,9 +39,9 @@ def _parse_csv(s: str) -> List[str]:
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Config & Logging
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 from utils import config as cfg
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
@@ -50,9 +51,9 @@ from utils.rate_limit import RateLimitMiddleware
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # FastAPI app
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
@@ -83,36 +84,40 @@ app.add_middleware(
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ───────────────────────────────────────────────────────────────
-# Authorization Middleware
-# ───────────────────────────────────────────────────────────────
-EXPECTED_TOKENS = {
-    t.strip()
-    for t in [
-        os.getenv("API_BEARER_TOKEN"),
-        os.getenv("API_BEARER_TOKEN_ALT"),
-    ]
-    if t and t.strip()
+# ──────────────────────────────────────────────────────────────────────────────
+# Authorization Middleware (Bearer Token Validation)
+# ──────────────────────────────────────────────────────────────────────────────
+TOKENS = {
+    os.getenv("API_BEARER_TOKEN", "").strip(),
+    os.getenv("API_BEARER_TOKEN_ALT", "").strip(),
 }
+TOKENS = {t for t in TOKENS if t}  # הסרת ריקים
+ALLOW_ALL = _to_bool(os.getenv("SECURITY_ALLOW_ALL", "0"), False)
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    # נתיבים חופשיים
-    if request.url.path in {"/", "/health", "/health/live"} or request.url.path.startswith("/static"):
+    # דלג על סטטיים ובריאות
+    if (
+        request.url.path.startswith("/static")
+        or request.url.path.startswith("/health")
+        or request.url.path == "/"
+    ):
         return await call_next(request)
 
-    # Authorization: Bearer
-    auth_header = request.headers.get("Authorization", "")
-    token = auth_header.replace("Bearer", "").strip() if auth_header.startswith("Bearer") else None
+    if ALLOW_ALL:
+        return await call_next(request)
 
-    if not token or token not in EXPECTED_TOKENS:
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer", "").strip() if auth_header.lower().startswith("bearer") else None
+
+    if token not in TOKENS:
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
     return await call_next(request)
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Routers
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
         mod = __import__(module_path, fromlist=[attr])
@@ -141,12 +146,14 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.debug", "router"),
 ]
 
-for mod, attr in CORE_ROUTERS + EXTRA_ROUTERS:
+for mod, attr in CORE_ROUTERS:
+    _include_router(mod, attr)
+for mod, attr in EXTRA_ROUTERS:
     _include_router(mod, attr)
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Health & Root
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -159,9 +166,9 @@ async def health():
 async def health_live():
     return {"ok": True, "status": "live"}
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Exception handler
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({
@@ -174,9 +181,9 @@ async def handle_exception(request: Request, exc: Exception):
     })
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Startup log
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
     logger.info({
@@ -187,9 +194,9 @@ async def startup_event():
         "config": dump_config_sanitized(),
     })
 
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Uvicorn entry
-# ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
@@ -199,6 +206,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
