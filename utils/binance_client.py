@@ -8,18 +8,23 @@ import json
 import math
 import hashlib
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
+from threading import Event, Thread
 
 import httpx
+from httpx import Limits
 
 logger = logging.getLogger("algogpt.binance")
 
 # ============ ENV & Config ============
 def _clean_env(s: Optional[str]) -> str:
-    """Remove whitespace/newlines/tabs and strip edges."""
+    """
+    Remove CR/LF/TAB and surrounding quotes/spaces. Binance keys must be one line, 64/64.
+    """
     if not s:
         return ""
-    return "".join(c for c in s if c not in "\r\n\t ").strip()
+    s = s.strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
+    return s
 
 BINANCE_API_KEY = _clean_env(os.getenv("BINANCE_API_KEY"))
 BINANCE_API_SECRET = _clean_env(os.getenv("BINANCE_API_SECRET"))
@@ -32,13 +37,14 @@ FAPI_BASE = (
 ).rstrip("/")
 
 HTTP_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
-RECV_WINDOW = int(float(os.getenv("BINANCE_RECV_WINDOW", "10000")))
+RECV_WINDOW = int(float(os.getenv("BINANCE_RECV_WINDOW", "20000")))
 MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))  # seconds
 
 SUPPRESS_WARN = os.getenv("SUPPRESS_BINANCE_WARNINGS", "1").lower() in ("1", "true", "yes")
 if SUPPRESS_WARN:
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 # =============== HTTP Client Wrap ===============
 class _BinanceFutures:
@@ -48,6 +54,7 @@ class _BinanceFutures:
       - Timestamp drift handling (-1021) via time sync
       - Retries with backoff (429/418/5xx)
       - Public & signed helpers
+      - Basic symbol filters normalization (price/qty/notional)
     """
 
     def __init__(self) -> None:
@@ -60,10 +67,16 @@ class _BinanceFutures:
         self.backoff_base = BACKOFF_BASE
         self._time_offset_ms = 0  # server_time - local_time
         self._exchange_info_cache: Optional[Dict[str, Any]] = None
-        self._client = httpx.Client(timeout=self.timeout, http2=False)
 
-        if not self.api_key or not self.api_secret:
-            logger.warning("[Binance] API keys missing – signed endpoints will fail.")
+        self._client = httpx.Client(
+            timeout=self.timeout,
+            http2=False,
+            limits=Limits(max_keepalive_connections=20, max_connections=50),
+        )
+
+        # Key length sanity (do not raise to allow public endpoints in degraded mode)
+        if (self.api_key and len(self.api_key) != 64) or (self.api_secret and len(self.api_secret) != 64):
+            logger.error("[Binance] API keys invalid length (must be 64/64).")
 
     # ---- Utilities ----
     def _now_ms(self) -> int:
@@ -135,11 +148,13 @@ class _BinanceFutures:
             try:
                 r = self._client.request(method.upper(), full_url, headers=self._headers())
 
+                # Backoff on rate-limit/ban and 5xx
                 if r.status_code in (418, 429) or r.status_code >= 500:
                     logger.warning(f"[Binance] signed {method} {path} rate/5xx ({r.status_code}): {r.text[:200]}")
                     time.sleep(self._backoff(attempt))
                     continue
 
+                # Handle timestamp drift (-1021) by syncing time and retrying
                 if r.status_code == 400:
                     try:
                         data = r.json()
@@ -164,6 +179,7 @@ class _BinanceFutures:
                     f"[Binance] signed {method} {path} failed {e.response.status_code}: {json.dumps(err)[:300]}"
                 )
                 if 400 <= e.response.status_code < 500:
+                    # Most likely -2015 invalid key/IP/permissions or signature issues: bubble up
                     raise
                 time.sleep(self._backoff(attempt))
 
@@ -173,7 +189,7 @@ class _BinanceFutures:
 
         raise RuntimeError(f"[Binance] signed {method} {path} exhausted retries")
 
-    # ========= Endpoints =========
+    # ========= Public Endpoints =========
     def ping(self) -> bool:
         try:
             self._public_get("fapi/v1/ping")
@@ -211,15 +227,16 @@ class _BinanceFutures:
                 return s
         return None
 
-    def position_risk(self) -> list[dict]:
+    # ========= Signed Account Endpoints =========
+    def position_risk(self) -> List[dict]:
         try:
             res = self._signed("GET", "fapi/v2/positionRisk")
             return res if isinstance(res, list) else []
         except Exception as e:
-            logger.error(f"[Binance] futures_open_positions failed: {e}")
+            logger.error(f"[Binance] position_risk failed: {e}")
             return []
 
-    def balance(self) -> list[dict]:
+    def balance(self) -> List[dict]:
         try:
             res = self._signed("GET", "fapi/v2/balance")
             return res if isinstance(res, list) else []
@@ -233,6 +250,12 @@ class _BinanceFutures:
         if not info:
             raise ValueError(f"Symbol {symbol} not found in exchangeInfo")
         return {f["filterType"]: f for f in info.get("filters", [])}
+
+    @staticmethod
+    def _snap(val: float, step_: float) -> float:
+        if step_ <= 0:
+            return val
+        return math.floor(val / step_) * step_
 
     def _normalize_px_qty(
         self, symbol: str, price: Optional[float], quantity: float
@@ -248,18 +271,13 @@ class _BinanceFutures:
         pf = fs.get("PRICE_FILTER", {})
         tick = float(pf.get("tickSize", "0.00000001"))
 
-        def snap(val: float, step_: float) -> float:
-            if step_ <= 0:
-                return val
-            return math.floor(val / step_) * step_
-
-        q = snap(float(quantity), step)
+        q = self._snap(float(quantity), step)
         if q < min_qty:
             raise ValueError(f"Quantity {q} < minQty {min_qty} for {symbol}")
 
         p = None
         if price is not None:
-            p = snap(float(price), tick)
+            p = self._snap(float(price), tick)
             if p <= 0:
                 raise ValueError("Price must be > 0")
 
@@ -435,11 +453,86 @@ class _BinanceFutures:
     def signed_delete(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         return self._signed("DELETE", path, params)
 
+    # ----- User Data Stream (Futures) -----
+    def user_stream_start(self) -> str:
+        """Create a listenKey for futures user data stream."""
+        url = f"{self.base}/fapi/v1/listenKey"
+        r = self._client.post(url, headers=self._headers())
+        r.raise_for_status()
+        lk = r.json().get("listenKey")
+        if not lk:
+            raise RuntimeError("Failed to obtain listenKey")
+        logger.info(f"[Binance] listenKey created: {lk[:8]}... (masked)")
+        return lk
+
+    def user_stream_keepalive(self, listen_key: str) -> None:
+        """Keep the listenKey alive (call at least once every 30 minutes)."""
+        url = f"{self.base}/fapi/v1/listenKey"
+        r = self._client.put(url, headers=self._headers(), params={"listenKey": listen_key})
+        if r.status_code == 200:
+            logger.debug("[Binance] listenKey keepalive OK")
+        else:
+            logger.warning(f"[Binance] listenKey keepalive status {r.status_code}: {r.text[:200]}")
+
+    def user_stream_close(self, listen_key: str) -> None:
+        """Close the listenKey (cleanup)."""
+        url = f"{self.base}/fapi/v1/listenKey"
+        r = self._client.delete(url, headers=self._headers(), params={"listenKey": listen_key})
+        if r.status_code == 200:
+            logger.info("[Binance] listenKey closed")
+        else:
+            logger.warning(f"[Binance] listenKey close status {r.status_code}: {r.text[:200]}")
+
 
 # Singleton
 _CLIENT = _BinanceFutures()
 
-# ======================== Backward-compatible APIs ========================
+# Background keepalive management for listenKey
+_listen_key: Optional[str] = None
+_lk_thread_stop = Event()
+_lk_thread: Optional[Thread] = None
+
+def start_user_stream_keepalive(period_sec: int = 1800) -> str:
+    """
+    Start user-stream (listenKey) and keep it alive in background.
+    period_sec=1800 (30m). Binance דורשת רענון < 60m.
+    """
+    global _listen_key, _lk_thread, _lk_thread_stop
+    if _listen_key:
+        return _listen_key
+    _listen_key = _CLIENT.user_stream_start()
+
+    def _loop():
+        while not _lk_thread_stop.wait(timeout=period_sec):
+            try:
+                _CLIENT.user_stream_keepalive(_listen_key)
+            except Exception as e:
+                logger.warning(f"[Binance] listenKey keepalive error: {e}")
+
+    _lk_thread_stop.clear()
+    _lk_thread = Thread(target=_loop, name="binance-listenKey-keepalive", daemon=True)
+    _lk_thread.start()
+    return _listen_key
+
+def stop_user_stream():
+    """Stop background keepalive and close the listenKey."""
+    global _listen_key, _lk_thread, _lk_thread_stop
+    try:
+        _lk_thread_stop.set()
+        if _lk_thread and _lk_thread.is_alive():
+            _lk_thread.join(timeout=5)
+        if _listen_key:
+            try:
+                _CLIENT.user_stream_close(_listen_key)
+            except Exception as e:
+                logger.warning(f"[Binance] close listenKey error: {e}")
+    finally:
+        _listen_key = None
+        _lk_thread = None
+        _lk_thread_stop.clear()
+
+
+# ======================== Public Wrappers ========================
 def fapi_ping() -> bool:
     return _CLIENT.ping()
 
@@ -457,10 +550,10 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
     return _CLIENT.symbol_info(symbol, force_refresh=force_refresh)
 
-def futures_open_positions() -> list[dict]:
+def futures_open_positions() -> List[dict]:
     return _CLIENT.position_risk()
 
-def futures_balance() -> list[dict]:
+def futures_balance() -> List[dict]:
     return _CLIENT.balance()
 
 # Account/mode wrappers
