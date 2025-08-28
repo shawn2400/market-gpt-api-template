@@ -51,7 +51,7 @@ from utils import config as cfg
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
-from utils.rate_limit import RateLimitMiddleware
+# from utils.rate_limit import RateLimitMiddleware  # אם נדרש
 
 # Binance helpers
 from utils.binance_client import (
@@ -65,6 +65,25 @@ from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Filesystem prep (מניעת PermissionError על static/logs)
+# ──────────────────────────────────────────────────────────────────────────────
+def _ensure_dir(path: str) -> bool:
+    p = Path(path)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        return True
+    except PermissionError:
+        logger.warning({"event": "mkdir_permission_denied", "dir": path})
+        return False
+    except Exception as e:
+        logger.warning({"event": "mkdir_failed", "dir": path, "error": str(e)})
+        return False
+
+# ודא קיימות; אם אין הרשאה – לא ניפול
+static_ok = _ensure_dir("static")
+logs_ok = _ensure_dir("logs")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FastAPI app
@@ -98,9 +117,14 @@ app.add_middleware(
 # Rate limit (אם בשימוש)
 # app.add_middleware(RateLimitMiddleware, ...)
 
-# Static
-Path("static").mkdir(parents=True, exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Static mount (אל תתרסק אם אין הרשאה/תיקייה)
+try:
+    if static_ok and os.access("static", os.R_OK):
+        app.mount("/static", StaticFiles(directory="static"), name="static")
+    else:
+        logger.warning({"event": "static_mount_skipped", "reason": "no_access_or_not_ok"})
+except Exception as e:
+    logger.warning({"event": "static_mount_failed", "error": str(e)})
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Authorization Middleware (Bearer Token Validation)
@@ -122,7 +146,7 @@ async def validate_token(request: Request, call_next):
     ):
         return await call_next(request)
 
-    if ALLOW_ALL:
+    if ALLOW_ALL or not TOKENS:
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization", "")
@@ -319,6 +343,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
