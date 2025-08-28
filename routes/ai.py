@@ -1,9 +1,10 @@
 # routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
+
+import os
 from fastapi import APIRouter, Depends, Body, Query, HTTPException
 from pydantic import BaseModel, Field
-import os
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
@@ -12,22 +13,22 @@ from utils.indicators import prepare_indicators_for_backtest
 from utils.get_klines import aget_klines  # async wrapper
 
 try:
-    from utils.ai_analysis import analyze_with_ai
+    from utils.ai_analysis import analyze_with_ai  # אופציונלי
 except Exception:
     analyze_with_ai = None  # type: ignore
 
-# ✅ נוסיף prefix "/ai"
+# ✅ Prefix "/ai"
 router = APIRouter(
     prefix="/ai",
     tags=["AI"],
-    dependencies=[Depends(require_api_key)]
+    dependencies=[Depends(require_api_key)],
 )
 
 Side = Literal["LONG", "SHORT"]
 
-# -------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Models
-# -------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 class QualityRequest(BaseModel):
     symbol: str
     side: Side
@@ -48,9 +49,9 @@ class AnalyzeRequest(BaseModel):
     symbol: str = Field(..., description="Trading pair symbol, e.g. BTCUSDT")
     interval: str = Field("15m", description="Kline interval, e.g. 15m,1h,4h")
 
-# -------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# -------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
     return {
         "mode_requested": getattr(anchor, "mode_requested", None),
@@ -63,13 +64,13 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
 
 def _fallback_text(row: Dict[str, Any], symbol: str, interval: str) -> str:
     ema_bias = "long" if row.get("ema21", 0) > row.get("ema50", 0) else "short"
-    rsi = row.get("rsi", 50.0)
-    adx = row.get("adx", 15.0)
+    rsi = float(row.get("rsi", 50.0))
+    adx = float(row.get("adx", 15.0))
     return f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}"
 
-# -------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Routes
-# -------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 @router.get("/ping")
 async def ping():
     return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
@@ -117,6 +118,7 @@ async def _do_ai_analyze(symbol: str, interval: str):
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
             raise HTTPException(status_code=502, detail="No klines data returned")
+
         indicators = prepare_indicators_for_backtest(df)
         if indicators is None or len(indicators) == 0:
             raise HTTPException(status_code=502, detail="Indicators preparation failed")
@@ -172,6 +174,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
