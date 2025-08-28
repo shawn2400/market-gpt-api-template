@@ -9,21 +9,23 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-# --- Env ---
+# --- Env detect ---
 IS_CLOUD = bool(
-    os.getenv("RENDER") or
-    os.getenv("RENDER_SERVICE_ID") or
-    os.getenv("DYNO") or
-    os.getenv("K_SERVICE")
+    os.getenv("RENDER")
+    or os.getenv("RENDER_SERVICE_ID")
+    or os.getenv("DYNO")
+    or os.getenv("K_SERVICE")
 )
 if not IS_CLOUD:
     from dotenv import load_dotenv
     load_dotenv(override=False)
 
+
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
 
 LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
 
@@ -34,7 +36,7 @@ from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.rate_limit import RateLimitMiddleware
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.7")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
 
 # --- Logging ---
 logger = setup_json_logging()
@@ -47,11 +49,19 @@ app = FastAPI(
     description="AlgoGPT — מסחר אלגוריתמי בזמן אמת"
 )
 
+# Middlewares
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
 app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
 
+# Static
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -89,13 +99,16 @@ app.include_router(debug_router)
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
 
+
 @app.get("/health", tags=["Health"])
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
 
+
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"ok": True, "status": "live"}
+
 
 # --- Exception handler ---
 @app.exception_handler(Exception)
@@ -103,10 +116,13 @@ async def handle_exception(request: Request, exc: Exception):
     logger.error({
         "event": "exception",
         "error": str(exc),
+        "type": exc.__class__.__name__,
+        "args": getattr(exc, "args", []),
         "path": request.url.path,
         "time": datetime.now(timezone.utc).isoformat()
     })
     return JSONResponse({"detail": str(exc)}, status_code=500)
+
 
 # --- Startup log ---
 @app.on_event("startup")
@@ -119,9 +135,11 @@ async def startup_event():
         "config": dump_config_sanitized()
     })
 
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+
 
 
 
