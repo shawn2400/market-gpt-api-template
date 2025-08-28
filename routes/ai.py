@@ -53,16 +53,14 @@ def _mk_anchor_dict(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
-def _fallback_text(row: Dict[str, Any], symbol: str, interval: str) -> str:
-    ema_bias = "long" if row.get("ema21", 0) > row.get("ema50", 0) else "short"
+def _fallback_text(row: Dict[str, Any], symbol: str, interval: str, reason: str = "") -> str:
+    ema_bias = "long" if row.get("ema_21", 0) > row.get("ema_50", 0) else "short"
     rsi = row.get("rsi", 50.0)
     adx = row.get("adx", 15.0)
-    return f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}"
+    extra = f" ({reason})" if reason else ""
+    return f"[Fallback] {symbol} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}{extra}"
 
 def _load_klines_and_indicators():
-    """
-    מייבא רק כשצריך. אם משהו נכשל (pandas וכד'), מחזיר שגיאה טקסטואלית במקום להפיל ראוטר.
-    """
     try:
         from utils.get_klines import aget_klines  # async
         from utils.indicators import prepare_indicators_for_backtest
@@ -125,7 +123,6 @@ async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
 async def _do_ai_analyze(symbol: str, interval: str):
     aget_klines, prepare_indicators_for_backtest, imp_err = _load_klines_and_indicators()
     if imp_err:
-        # אין תלותים -> החזר הודעת Fallback ידידותית
         return {
             "symbol": symbol.upper(),
             "interval": interval,
@@ -136,35 +133,56 @@ async def _do_ai_analyze(symbol: str, interval: str):
     try:
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
-            raise HTTPException(status_code=502, detail="No klines data returned")
+            return {
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "analysis": "[Fallback] no klines data returned",
+                "fallback": True,
+            }
 
         indicators = prepare_indicators_for_backtest(df)
         if indicators is None or len(indicators) == 0:
-            raise HTTPException(status_code=502, detail="Indicators preparation failed")
+            return {
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "analysis": "[Fallback] indicators preparation failed",
+                "fallback": True,
+            }
 
         last_row = indicators.iloc[-1].to_dict()
 
         analyze_with_ai, ai_err = _load_ai_analysis()
         if analyze_with_ai and not ai_err:
-            res = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
-            return {
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "analysis": res.get("analysis", ""),
-                "fallback": not res.get("ok", False),
-            }
+            try:
+                res = await analyze_with_ai({"symbol": symbol.upper(), **last_row})
+                return {
+                    "symbol": symbol.upper(),
+                    "interval": interval,
+                    "analysis": res.get("analysis", ""),
+                    "fallback": not res.get("ok", False),
+                }
+            except Exception as e:
+                return {
+                    "symbol": symbol.upper(),
+                    "interval": interval,
+                    "analysis": _fallback_text(last_row, symbol.upper(), interval, str(e)),
+                    "fallback": True,
+                }
         else:
             return {
                 "symbol": symbol.upper(),
                 "interval": interval,
-                "analysis": _fallback_text(last_row, symbol.upper(), interval),
+                "analysis": _fallback_text(last_row, symbol.upper(), interval, ai_err or "AI not available"),
                 "fallback": True,
             }
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI analyze failed: {e}")
+        return {
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "analysis": f"[Fallback] AI analyze failed: {e}",
+            "fallback": True,
+        }
 
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
@@ -187,21 +205,29 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
             last = indicators.iloc[-1].to_dict()
             analyze_with_ai, ai_err = _load_ai_analysis()
             if analyze_with_ai and not ai_err:
-                res = await analyze_with_ai({"symbol": s, **last})
-                result.append({
-                    "symbol": s,
-                    "analysis": res.get("analysis", ""),
-                    "fallback": not res.get("ok", False),
-                })
+                try:
+                    res = await analyze_with_ai({"symbol": s, **last})
+                    result.append({
+                        "symbol": s,
+                        "analysis": res.get("analysis", ""),
+                        "fallback": not res.get("ok", False),
+                    })
+                except Exception as e:
+                    result.append({
+                        "symbol": s,
+                        "analysis": _fallback_text(last, s, interval, str(e)),
+                        "fallback": True,
+                    })
             else:
                 result.append({
                     "symbol": s,
-                    "analysis": _fallback_text(last, s, interval),
+                    "analysis": _fallback_text(last, s, interval, ai_err or "AI not available"),
                     "fallback": True,
                 })
         except Exception as e:
             result.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": result}
+
 
 
 
