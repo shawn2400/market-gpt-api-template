@@ -1,15 +1,21 @@
 # main.py
 from __future__ import annotations
-import os, logging
+
+import os
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import List, Tuple
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-# --- Env detect ---
+# ──────────────────────────────────────────────────────────────────────────────
+# Env / Local .env
+# ──────────────────────────────────────────────────────────────────────────────
 IS_CLOUD = bool(
     os.getenv("RENDER")
     or os.getenv("RENDER_SERVICE_ID")
@@ -17,100 +23,129 @@ IS_CLOUD = bool(
     or os.getenv("K_SERVICE")
 )
 if not IS_CLOUD:
-    from dotenv import load_dotenv
-    load_dotenv(override=False)
-
+    try:
+        from dotenv import load_dotenv  # type: ignore
+        load_dotenv(override=False)
+    except Exception:
+        pass
 
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
+def _parse_csv(s: str) -> List[str]:
+    return [x.strip() for x in (s or "").split(",") if x.strip()]
 
-LIGHT_MODE = _to_bool(os.getenv("LIGHT_MODE", "0"))
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
 
-# --- Config ---
+# ──────────────────────────────────────────────────────────────────────────────
+# Config & Logging
+# ──────────────────────────────────────────────────────────────────────────────
 from utils import config as cfg
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.rate_limit import RateLimitMiddleware
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
-
-# --- Logging ---
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-# --- FastAPI ---
+# ──────────────────────────────────────────────────────────────────────────────
+# FastAPI app
+# ──────────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת"
+    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת",
 )
 
-# Middlewares
-app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", 5_242_880)))
+# Response size cap (ברירת מחדל ~5MB)
+app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
+
+# GZip for large responses
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# CORS (נשלט ENV)
+CORS_ALLOWED = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"))
+if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
+    # לפי התקן, אי אפשר "*" עם credentials; ננטרל credentials כדי למנוע בעיות בדפדפנים
+    CORS_ALLOW_CREDENTIALS = False
+allow_origins = ["*"] if CORS_ALLOWED == "*" else _parse_csv(CORS_ALLOWED)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
-app.add_middleware(RateLimitMiddleware, limit=60, window=60, endpoint_limits={})
+
+# Global rate limit (קליל, נשלט ENV)
+RATE_LIMIT_GLOBAL = int(os.getenv("RATE_LIMIT_GLOBAL", "60"))   # בקשות לדקה
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))   # חלון בשניות
+app.add_middleware(
+    RateLimitMiddleware,
+    limit=RATE_LIMIT_GLOBAL,
+    window=RATE_LIMIT_WINDOW,
+    endpoint_limits={},  # ניתן להזריק מפה פר-Route אם תרצה
+)
 
 # Static
 Path("static").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Routers ---
-from routes.ai import router as ai_router
-from routes.trade import router as trade_router
-from routes.market import router as market_router
-from routes.binance_status import router as binance_status_router
-import routes.executor as executor_router
+# ──────────────────────────────────────────────────────────────────────────────
+# Routers – טעינה בטוחה (מודול שבור לא מפיל את האפליקציה)
+# ──────────────────────────────────────────────────────────────────────────────
+def _include_router(module_path: str, attr: str = "router") -> None:
+    try:
+        mod = __import__(module_path, fromlist=[attr])
+        router = getattr(mod, attr)
+        app.include_router(router)
+        logger.info({"event": "router_registered", "router": module_path})
+    except Exception as e:
+        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
-from routes.market_extra import router as market_extra_router
-from routes.executor_extra import router as executor_extra_router
-from routes.anchor_extra import router as anchor_extra_router
-from routes.ws_stream import router as ws_stream_router
-from routes.grid import router as grid_router
-from routes.debug import router as debug_router
+CORE_ROUTERS: List[Tuple[str, str]] = [
+    ("routes.trade", "router"),
+    ("routes.market", "router"),
+    ("routes.binance_status", "router"),
+    ("routes.ai", "router"),
+    ("routes.executor", "router"),           # מייצא router ברמת מודול
+]
+EXTRA_ROUTERS: List[Tuple[str, str]] = [
+    ("routes.market_extra", "router"),
+    ("routes.executor_extra", "router"),
+    ("routes.anchor_extra", "router"),
+    ("routes.ws_stream", "router"),
+    ("routes.grid", "router"),
+    ("routes.debug", "router"),
+]
 
-# Register routers
-app.include_router(trade_router)
-app.include_router(market_router)
-app.include_router(binance_status_router)
-app.include_router(ai_router)
-app.include_router(executor_router.router)
+for mod, attr in CORE_ROUTERS:
+    _include_router(mod, attr)
+for mod, attr in EXTRA_ROUTERS:
+    _include_router(mod, attr)
 
-# Extra routers
-app.include_router(market_extra_router)
-app.include_router(executor_extra_router)
-app.include_router(anchor_extra_router)
-app.include_router(ws_stream_router)
-app.include_router(grid_router)
-app.include_router(debug_router)
-
-# --- Health ---
+# ──────────────────────────────────────────────────────────────────────────────
+# Health & Root
+# ──────────────────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
-
 
 @app.get("/health", tags=["Health"])
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
 
-
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"ok": True, "status": "live"}
 
-
-# --- Exception handler ---
+# ──────────────────────────────────────────────────────────────────────────────
+# Exception handler (JSON + לוג)
+# ──────────────────────────────────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({
@@ -119,12 +154,13 @@ async def handle_exception(request: Request, exc: Exception):
         "type": exc.__class__.__name__,
         "args": getattr(exc, "args", []),
         "path": request.url.path,
-        "time": datetime.now(timezone.utc).isoformat()
+        "time": datetime.now(timezone.utc).isoformat(),
     })
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-
-# --- Startup log ---
+# ──────────────────────────────────────────────────────────────────────────────
+# Startup log
+# ──────────────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
     logger.info({
@@ -132,13 +168,22 @@ async def startup_event():
         "APP_VERSION": APP_VERSION,
         "BINANCE_KEY_LEN": len(cfg.BINANCE_API_KEY or ""),
         "OPENAI_KEY_LEN": len(cfg.OPENAI_API_KEY or ""),
-        "config": dump_config_sanitized()
+        "config": dump_config_sanitized(),
     })
 
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Uvicorn entry (local dev)
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+    uvicorn.run(
+        "main:app",
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "8000")),
+        reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
+        log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
+    )
+
 
 
 
