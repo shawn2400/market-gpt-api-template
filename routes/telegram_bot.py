@@ -2,9 +2,8 @@
 from __future__ import annotations
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import os, json, asyncio, uuid
-
 import httpx
 
 from utils.auth import require_api_key
@@ -14,7 +13,13 @@ from utils.eta import per_minute_move_estimate
 from utils.get_klines import get_klines
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ai_analysis import analyze_with_ai
-from utils.liquidity import estimate_slippage  # ✅ חדש
+from utils.liquidity import estimate_slippage
+
+from utils.runtime_prefs import (
+    set_mute, clear_mute, mute_remaining_sec,
+    set_near_pct_override, get_near_pct_override,
+    set_trade_quiet,
+)
 
 router = APIRouter(prefix="/telegram", tags=["Telegram"], dependencies=[Depends(require_api_key)])
 
@@ -48,9 +53,7 @@ async def _load_trade_by_id(tid: str) -> Optional[Dict[str, Any]]:
     return None
 
 def _mk_slbe_keyboard(trade_id: str) -> dict:
-    return {"inline_keyboard": [[
-        {"text": "🔒 SL→BE", "callback_data": f"slbe:{trade_id}"},
-    ]]}
+    return {"inline_keyboard": [[{"text": "🔒 SL→BE", "callback_data": f"slbe:{trade_id}"}]]}
 
 def _mk_tp_presets_keyboard(trade_id: str) -> dict:
     return {
@@ -81,6 +84,7 @@ async def webhook(request: Request):
         chat_id = msg["chat"]["id"]
         mid = msg.get("message_id")
 
+        # ---------- HELP ----------
         if text.startswith("/start"):
             return await send_message("🤖 AlgoGPT Bot מוכן. שלח /help לקבלת הוראות.")
         if text.startswith("/help"):
@@ -89,12 +93,15 @@ async def webhook(request: Request):
                 "/propose BTCUSDT 15m LONG 10 65000 64500 66170 67400 68800 72.5\n"
                 "/auto_on | /auto_off\n"
                 "/approve <id> | /reject <id>\n"
-                "/tp_scale <id> 50 30 20\n"
-                "/sl_be <id>\n"
+                "/tp_scale <id> 50 30 20  |  /sl_be <id>\n"
                 "/liquidity <symbol> <notional_usd> <side>\n"
-                "/risk <trade-id>  — RR/Kelly/Lev Cap על הטרייד\n"
+                "/risk <trade-id>\n"
+                "/mute <minutes> | /unmute | /set_near <pct>\n"
+                "/quiet_on <id> | /quiet_off <id>\n"
+                "/summary [N]  — סיכום טריידים פעילים (ברירת מחדל N=15)\n"
             )
 
+        # ---------- AUTO ----------
         if text.startswith("/auto_on"):
             os.environ["TRADE_AUTO_SUGGEST"] = "1"
             return await send_message("🟢 Auto-Suggest הופעל.")
@@ -102,15 +109,16 @@ async def webhook(request: Request):
             os.environ["TRADE_AUTO_SUGGEST"] = "0"
             return await send_message("🔴 Auto-Suggest כובה.")
 
+        # ---------- APPROVE/REJECT ----------
         if text.startswith("/approve "):
             tid = text.split(maxsplit=1)[1].strip()
             return await _approve_trade_id(tid, chat_id, mid)
-
         if text.startswith("/reject "):
             tid = text.split(maxsplit=1)[1].strip()
             PENDING.pop(tid, None)
             return await send_message(f"❌ טרייד {tid} נדחה")
 
+        # ---------- TP SCALE / SL->BE ----------
         if text.startswith("/tp_scale "):
             try:
                 _, tid, p1, p2, p3 = text.split()
@@ -142,8 +150,8 @@ async def webhook(request: Request):
             except Exception as e:
                 return await send_message(f"❌ שימוש: /sl_be <id>\n({e})")
 
+        # ---------- LIQUIDITY ----------
         if text.startswith("/liquidity "):
-            # /liquidity BTCUSDT 10000 LONG
             try:
                 _, sym, notional, side = text.split()
                 notional = float(notional)
@@ -159,8 +167,8 @@ async def webhook(request: Request):
             except Exception as e:
                 return await send_message(f"❌ שימוש: /liquidity <symbol> <notional_usd> <side>\n({e})")
 
+        # ---------- RISK ----------
         if text.startswith("/risk "):
-            # /risk <trade-id>
             try:
                 _, tid = text.split(maxsplit=1)
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -183,6 +191,79 @@ async def webhook(request: Request):
             except Exception as e:
                 return await send_message(f"❌ שימוש: /risk <trade-id>\n({e})")
 
+        # ---------- MUTE / NEAR ----------
+        if text.startswith("/mute "):
+            try:
+                _, mins = text.split(maxsplit=1)
+                mins = max(1, int(mins))
+                set_mute(mins)
+                return await send_message(f"🔕 הושתק ל-{mins} דק׳ (נותר {mute_remaining_sec()}ש׳).")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /mute <minutes>\n({e})")
+
+        if text.startswith("/unmute"):
+            clear_mute()
+            return await send_message("🔔 התראות הופעלו.")
+
+        if text.startswith("/set_near "):
+            try:
+                _, pct = text.split(maxsplit=1)
+                pct = float(pct)
+                set_near_pct_override(pct)
+                return await send_message(f"📏 near-pct נקבע ל-{pct:.2f}%")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /set_near <pct>\n({e})")
+
+        # ---------- QUIET per trade ----------
+        if text.startswith("/quiet_on "):
+            try:
+                _, tid = text.split(maxsplit=1)
+                set_trade_quiet(tid, True)
+                return await send_message(f"😶 near-alerts כובו לטרייד #{tid}")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /quiet_on <id>\n({e})")
+
+        if text.startswith("/quiet_off "):
+            try:
+                _, tid = text.split(maxsplit=1)
+                set_trade_quiet(tid, False)
+                return await send_message(f"🔊 near-alerts הופעלו לטרייד #{tid}")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /quiet_off <id>\n({e})")
+
+        # ---------- SUMMARY ----------
+        if text.startswith("/summary"):
+            try:
+                parts = text.split()
+                limit = int(parts[1]) if len(parts) > 1 else 15
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.get(ALERTS_ACTIVE_URL)
+                    r.raise_for_status()
+                    items = r.json().get("items", [])
+                # דירוג לפי הכי קרוב ל-TP1/SL
+                def dist(it):
+                    nowp = float(it.get("current_price") or 0)
+                    tp1 = it.get("tp1"); tp1 = float(tp1) if tp1 else None
+                    sl  = it.get("sl");  sl  = float(sl)  if sl  else None
+                    d1 = abs(nowp - tp1)/tp1 if (nowp and tp1) else 9e9
+                    ds = abs(nowp - sl)/sl   if (nowp and sl)  else 9e9
+                    return min(d1, ds)
+                items = sorted(items, key=dist)[:limit]
+                lines: List[str] = ["📋 *Active Summary*"]
+                for it in items:
+                    sym = it.get("symbol","")
+                    side = it.get("side","")
+                    nowp = float(it.get("current_price") or 0)
+                    tp1  = it.get("tp1"); tp1 = float(tp1) if tp1 else None
+                    sl   = it.get("sl");  sl  = float(sl)  if sl  else None
+                    d1 = f"{abs(nowp-tp1)/tp1*100:.2f}%" if (nowp and tp1) else "—"
+                    ds = f"{abs(nowp-sl)/sl*100:.2f}%"   if (nowp and sl)  else "—"
+                    lines.append(f"- {sym} {side}: Now `{nowp:.6f}` | ΔTP1 {d1} | ΔSL {ds}")
+                return await send_message("\n".join(lines))
+            except Exception as e:
+                return await send_message(f"❌ שגיאה ב-/summary: {e}")
+
+        # ---------- PROPOSE (ידני) ----------
         if text.startswith("/propose"):
             try:
                 parts = text.split()
@@ -219,6 +300,7 @@ async def webhook(request: Request):
 
         return await send_message("שלח /help לקבלת פורמט.")
 
+    # ---------- CALLBACKS ----------
     if "callback_query" in update:
         cq = update["callback_query"]
         data = cq.get("data","")
@@ -265,7 +347,6 @@ async def webhook(request: Request):
             return await edit_message(chat_id, mid, text, kb)
 
         if data.startswith("tppreset:"):
-            # tppreset:<id>:a:b:c
             try:
                 _, tid, a, b, c = data.split(":")
                 p = [float(a), float(b), float(c)]
@@ -297,6 +378,7 @@ async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
         return await edit_message(chat_id, message_id, txt, kb)
     else:
         return await send_message(txt, kb)
+
 
 
 
