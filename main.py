@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 
 import os
@@ -13,6 +14,9 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Env / Local .env
+# ──────────────────────────────────────────────────────────────────────────────
 IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
 if not IS_CLOUD:
     try:
@@ -34,11 +38,15 @@ def _clean_key(s: str | None) -> str:
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Config & Logging
+# ──────────────────────────────────────────────────────────────────────────────
 from utils import config as cfg
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 
+# Binance helpers
 from utils.binance_client import (
     fapi_ping, futures_balance, futures_mark_price,
     start_user_stream_keepalive, stop_user_stream,
@@ -48,6 +56,9 @@ from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Filesystem prep (don’t crash on RO FS)
+# ──────────────────────────────────────────────────────────────────────────────
 def _ensure_dir(path: str) -> bool:
     p = Path(path)
     try:
@@ -61,13 +72,19 @@ def _ensure_dir(path: str) -> bool:
         return False
 
 static_ok = _ensure_dir("static")
-logs_ok = _ensure_dir("logs")
+_ = _ensure_dir("logs")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# FastAPI app
+# ──────────────────────────────────────────────────────────────────────────────
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
 
+# Response size cap (~5MB default)
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
+# GZip for large responses
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# CORS
 CORS_ALLOWED = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
 if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
@@ -81,6 +98,7 @@ app.add_middleware(
     allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
 
+# Static (skip if RO/no access)
 try:
     if static_ok and os.access("static", os.R_OK):
         app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -89,6 +107,9 @@ try:
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Authorization Middleware (Bearer Token Validation)
+# ──────────────────────────────────────────────────────────────────────────────
 TOKENS = {t for t in {
     os.getenv("API_BEARER_TOKEN", "").strip(),
     os.getenv("API_BEARER_TOKEN_ALT", "").strip(),
@@ -97,16 +118,23 @@ ALLOW_ALL = _to_bool(os.getenv("SECURITY_ALLOW_ALL", "0"), False)
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    if request.url.path.startswith("/static") or request.url.path.startswith("/health") or request.url.path == "/":
+    open_paths_prefix = ("/static", "/health", "/docs", "/redoc")
+    open_exact = ("/", "/openapi.json")
+    if request.url.path in open_exact or any(request.url.path.startswith(p) for p in open_paths_prefix):
         return await call_next(request)
+
     if ALLOW_ALL or not TOKENS:
         return await call_next(request)
+
     auth_header = request.headers.get("Authorization", "")
     token = auth_header.replace("Bearer", "").strip() if auth_header.lower().startswith("bearer") else None
     if token not in TOKENS:
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Routers
+# ──────────────────────────────────────────────────────────────────────────────
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
         mod = __import__(module_path, fromlist=[attr])
@@ -138,6 +166,9 @@ for mod, attr in CORE_ROUTERS:
 for mod, attr in EXTRA_ROUTERS:
     _include_router(mod, attr)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Root & Basic Health
+# ──────────────────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -150,17 +181,23 @@ async def health():
 async def health_live():
     return {"ok": True, "status": "live"}
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Full Health
+# ──────────────────────────────────────────────────────────────────────────────
 @app.get("/health_full", tags=["Health"])
 async def health_full():
+    # key lengths after cleaning (to catch stray quotes/newlines)
     k = _clean_key(os.getenv("BINANCE_API_KEY")); s = _clean_key(os.getenv("BINANCE_API_SECRET"))
     key_len = len(k); sec_len = len(s)
 
+    # public ping
     try:
         ping_ok = bool(fapi_ping())
     except Exception as e:
         ping_ok = False
         logger.warning({"event": "health_ping_error", "error": str(e)})
 
+    # signed account
     try:
         bal = futures_balance()
         account_ok = isinstance(bal, list)
@@ -168,6 +205,7 @@ async def health_full():
         account_ok = False
         logger.warning({"event": "health_account_error", "error": str(e)})
 
+    # listenKey background
     try:
         lk = start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
         listen_key_ok = bool(lk)
@@ -175,6 +213,7 @@ async def health_full():
         listen_key_ok = False
         logger.warning({"event": "health_listenkey_error", "error": str(e)})
 
+    # sample prices
     symbols = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
     prices: Dict[str, Any] = {}
     for sym in symbols:
@@ -197,6 +236,9 @@ async def health_full():
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Exception handler
+# ──────────────────────────────────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({
@@ -209,6 +251,9 @@ async def handle_exception(request: Request, exc: Exception):
     })
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Startup / Shutdown
+# ──────────────────────────────────────────────────────────────────────────────
 _price_task: Optional[asyncio.Task] = None
 
 @app.on_event("startup")
@@ -221,18 +266,22 @@ async def startup_event():
         "OPENAI_KEY_LEN": len((os.getenv("OPENAI_API_KEY") or "").strip()),
         "config": dump_config_sanitized(),
     })
+    # 1) start listenKey keepalive
     try:
         start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
         logger.info({"event": "listen_key_keepalive_started"})
     except Exception as e:
         logger.warning({"event": "listen_key_keepalive_failed", "error": str(e)})
 
+    # 2) price updater (WS primary + REST fallback)
     syms = [s.strip().upper() for s in os.getenv("SYMS", os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT")).split(",") if s.strip()]
     ws_keepalive = int(os.getenv("WS_KEEPALIVE_SEC", "25"))
     rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
     if syms:
         try:
-            _price_task = asyncio.create_task(auto_price_updater(syms, ws_interval_keepalive=ws_keepalive, rest_interval_sec=rest_every))
+            _price_task = asyncio.create_task(
+                auto_price_updater(syms, ws_interval_keepalive=ws_keepalive, rest_interval_sec=rest_every)
+            )
             logger.info({"event": "price_updater_started", "symbols": syms, "ws_keepalive": ws_keepalive, "rest_every": rest_every})
         except Exception as e:
             logger.warning({"event": "price_updater_failed_start", "error": str(e)})
@@ -252,6 +301,9 @@ async def shutdown_event():
             pass
         _price_task = None
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Uvicorn entry (local run)
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
@@ -261,6 +313,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
