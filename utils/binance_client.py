@@ -2,707 +2,322 @@
 from __future__ import annotations
 
 import os
-import time
 import hmac
 import json
 import math
-import hashlib
+import time
+import threading
 import logging
-import random
-from typing import Any, Dict, Optional, Tuple, List
-from threading import Event, Thread
+from typing import Any, Dict, Optional
 
 import httpx
-from httpx import Limits, ProxyError, ReadTimeout, ConnectTimeout, TransportError
+from hashlib import sha256
 
-logger = logging.getLogger("algogpt.binance")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Exceptions מפורשות כדי לאבחן מהר upstream
-# ──────────────────────────────────────────────────────────────────────────────
-class BinanceAuthError(RuntimeError):
-    """-2015 Invalid API-key, IP, or permissions / 401/403"""
-    pass
-
-class BinanceSignatureError(RuntimeError):
-    """-1022 Signature invalid"""
-    pass
-
-class BinanceTimestampError(RuntimeError):
-    """-1021 Timestamp out of recvWindow"""
-    pass
-
+logger = logging.getLogger("algogpt.binance.client")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ENV & Config
+# Config / ENV
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _clean_env(s: Optional[str]) -> str:
-    """מסיר CR/LF/TAB ומרכאות/רווחים בקצוות. מפתחות Binance חייבים להיות שורה אחת (64/64)."""
-    if not s:
-        return ""
-    return s.strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
+    return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
-BINANCE_API_KEY = _clean_env(os.getenv("BINANCE_API_KEY"))
-BINANCE_API_SECRET = _clean_env(os.getenv("BINANCE_API_SECRET"))
+API_KEY     = _clean_env(os.getenv("BINANCE_API_KEY"))
+API_SECRET  = _clean_env(os.getenv("BINANCE_API_SECRET"))
+BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com").rstrip("/")
+RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "45000"))
 
-USE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
-FAPI_BASE = (
-    os.getenv("BINANCE_FUTURES_HTTP_BASE")  # אופציונלי: פרוקסי/סטאב
-    or os.getenv("BINANCE_FAPI_BASE")
-    or ("https://testnet.binancefuture.com" if USE_TESTNET else "https://fapi.binance.com")
-).rstrip("/")
-
-HTTP_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
-RECV_WINDOW = int(float(os.getenv("BINANCE_RECV_WINDOW", "20000")))
-MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
-BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))  # שניות
-SUPPRESS_WARN = os.getenv("SUPPRESS_BINANCE_WARNINGS", "1").lower() in ("1", "true", "yes")
-
-# פרוקסי (אופציונלי): BINANCE_HTTP_PROXY=http://user:pass@host:port
-PROXY = os.getenv("BINANCE_HTTP_PROXY", "").strip() or None
-
-if SUPPRESS_WARN:
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-
+DEFAULT_QTY_STEP  = float(os.getenv("DEFAULT_QTY_STEP",  "0.001"))
+DEFAULT_PRICE_TICK= float(os.getenv("DEFAULT_PRICE_TICK","0.1"))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# קליינט
+# HTTP client (keep-alive)
 # ──────────────────────────────────────────────────────────────────────────────
-class _BinanceFutures:
-    """
-    Binance Futures REST client (sync) מוקשח:
-      - HMAC-SHA256 signing
-      - טיפול -1021 (סנכרון זמן) ורטריי
-      - רטריי עם backoff+ג'יטר ל-429/418/5xx/Transport
-      - פילטרים (PRICE/Lot/Notional) לנירמול מחיר/כמות
-      - ניהול listenKey (יצירה/keepalive/סגירה)
-      - לוגים מפורטים (כולל code/msg/base/testnet)
-    """
 
-    def __init__(self) -> None:
-        self.api_key = BINANCE_API_KEY
-        self.api_secret = BINANCE_API_SECRET
-        self.base = FAPI_BASE
-        self.timeout = HTTP_TIMEOUT
-        self.recv_window = RECV_WINDOW
-        self.max_retries = MAX_RETRIES
-        self.backoff_base = BACKOFF_BASE
-        self._time_offset_ms = 0  # server_time - local_time
-        self._exchange_info_cache: Optional[Dict[str, Any]] = None
+_HEADERS = {
+    "X-MBX-APIKEY": API_KEY,
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+    "User-Agent": "AlgoGPT/2 binance-client",
+}
 
-        limits = Limits(max_keepalive_connections=32, max_connections=64)
-        kwargs: Dict[str, Any] = dict(timeout=self.timeout, http2=False, limits=limits)
-        if PROXY:
-            kwargs["proxies"] = PROXY
+_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(10.0),
+    headers=_HEADERS,
+    limits=httpx.Limits(max_keepalive_connections=32, max_connections=64),
+    http2=False,
+)
 
-        self._client = httpx.Client(**kwargs)
+def _ts_ms() -> int:
+    return int(time.time() * 1000)
 
-        # בדיקת אורך מפתחות (לא נרים חריגה כדי לאפשר public endpoints)
-        if (self.api_key and len(self.api_key) != 64) or (self.api_secret and len(self.api_secret) != 64):
-            logger.error("[Binance] API keys invalid length (must be 64/64).")
+def _sign(qs: str) -> str:
+    return hmac.new(API_SECRET.encode(), qs.encode(), sha256).hexdigest()
 
-        logger.info({
-            "event": "binance_client_init",
-            "base": self.base,
-            "testnet": USE_TESTNET,
-            "recv_window": self.recv_window,
-            "timeout": self.timeout,
-            "has_key": bool(self.api_key),
-        })
+def _request(
+    method: str,
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    signed: bool = False,
+) -> httpx.Response:
+    url = f"{BASE}{path}"
+    params = dict(params or {})
 
-    # --- Utilities ---
-    def _now_ms(self) -> int:
-        return int(time.time() * 1000)
+    if signed:
+        params.setdefault("timestamp", _ts_ms())
+        params.setdefault("recvWindow", RECV_WINDOW)
+        # בחתימה העתיק: סדר פרמטרים לפי urlencode של httpx (שומר על סדר ההכנסה)
+        # אך כדי להיות דטרמיניסטיים, נסדר ידנית:
+        items = []
+        for k, v in params.items():
+            items.append(f"{k}={v}")
+        qs = "&".join(items)
+        sig = _sign(qs)
+        params["signature"] = sig
 
-    def _server_time_ms(self) -> int:
-        r = self._client.get(f"{self.base}/fapi/v1/time")
-        r.raise_for_status()
-        return int(r.json()["serverTime"])
+    r = _CLIENT.request(method.upper(), url, params=params)
+    # טיפול סטטוסים/שגיאות
+    if r.status_code == 200:
+        return r
 
-    def _sync_time(self) -> None:
-        try:
-            server_ms = self._server_time_ms()
-            local_ms = self._now_ms()
-            self._time_offset_ms = server_ms - local_ms
-            logger.info(f"[Binance] Time synced. Offset={self._time_offset_ms} ms")
-        except Exception as e:
-            logger.error(f"[Binance] Time sync failed: {e}")
-
-    def _headers(self) -> Dict[str, str]:
-        return {"X-MBX-APIKEY": self.api_key} if self.api_key else {}
-
-    def _sign(self, params: Dict[str, Any]) -> Tuple[str, str]:
-        # Binance דורש חתימה על query-string ממויין
-        items = [f"{k}={params[k]}" for k in sorted(params.keys())]
-        query = "&".join(items)
-        signature = hmac.new(
-            self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-        return query, signature
-
-    def _sleep_backoff(self, attempt: int) -> None:
-        # backoff אקספוננציאלי + ג'יטר קטן
-        delay = min(self.backoff_base * (2 ** attempt), 4.5)
-        delay *= (0.85 + 0.3 * random.random())
-        time.sleep(delay)
-
-    # --- Core Requestors ---
-    def _public_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        url = f"{self.base}/{path.lstrip('/')}"
-        for attempt in range(self.max_retries):
+    # Backoff מינימלי לפי Retry-After (למעלה השכבות הגבוהות כבר עושות ריווח)
+    if r.status_code in (418, 429, 500, 502, 503, 504):
+        ra = r.headers.get("Retry-After")
+        if ra:
             try:
-                r = self._client.get(url, params=params or {})
-                r.raise_for_status()
-                return r.json()
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                body = e.response.text
-                logger.error(f"[Binance] public GET {path} failed ({status}): {body[:300]}")
-                if status >= 500:
-                    self._sleep_backoff(attempt)
-                    continue
-                raise
-            except (ProxyError, ReadTimeout, ConnectTimeout, TransportError) as e:
-                logger.warning(f"[Binance] public GET transport error: {e}")
-                self._sleep_backoff(attempt)
-            except Exception as e:
-                logger.error(f"[Binance] public GET {path} exception: {e}")
-                self._sleep_backoff(attempt)
-        raise RuntimeError(f"[Binance] public GET {path} exhausted retries")
+                time.sleep(min(10.0, float(ra)))
+            except Exception:
+                time.sleep(1.0)
 
-    def _signed(self, method: str, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        if not self.api_key or not self.api_secret:
-            raise RuntimeError("Binance API keys missing")
-
-        params = dict(params or {})
-        params.setdefault("timestamp", self._now_ms() + self._time_offset_ms)
-        params.setdefault("recvWindow", self.recv_window)
-
-        url = f"{self.base}/{path.lstrip('/')}"
-        for attempt in range(self.max_retries):
-            query, sig = self._sign(params)
-            full_url = f"{url}?{query}&signature={sig}"
-            try:
-                r = self._client.request(method.upper(), full_url, headers=self._headers())
-
-                # Backoff on 429/418/5xx
-                if r.status_code in (418, 429) or r.status_code >= 500:
-                    logger.warning(f"[Binance] signed {method} {path} rate/5xx ({r.status_code}): {r.text[:300]}")
-                    self._sleep_backoff(attempt)
-                    continue
-
-                # טיפול ספציפי בקודי Binance
-                if r.status_code >= 400:
-                    # ננסה לפענח json
-                    try:
-                        data = r.json()
-                        code = data.get("code")
-                        msg = data.get("msg")
-                    except Exception:
-                        code, msg = None, r.text
-
-                    # -1021: Timestamp drift → sync time & retry
-                    if code == -1021:
-                        logger.warning("[Binance] -1021 (timestamp). Syncing time and retrying...")
-                        self._sync_time()
-                        params["timestamp"] = self._now_ms() + self._time_offset_ms
-                        self._sleep_backoff(attempt)
-                        continue
-
-                    # -1022: Signature invalid
-                    if code == -1022:
-                        logger.error({"event": "binance_sig_error", "code": code, "msg": msg, "path": path})
-                        raise BinanceSignatureError(f"{code}: {msg}")
-
-                    # -2015: Invalid API-key/IP/permissions
-                    if code == -2015 or r.status_code in (401, 403):
-                        logger.error({
-                            "event": "binance_auth_error",
-                            "status": r.status_code,
-                            "code": code,
-                            "msg": msg,
-                            "base": self.base,
-                            "testnet": USE_TESTNET,
-                        })
-                        raise BinanceAuthError(f"{code}: {msg}")
-
-                r.raise_for_status()
-                return r.json()
-
-            except httpx.HTTPStatusError as e:
-                # 4xx: נעצור; 5xx: ננסה שוב
-                try:
-                    err = e.response.json()
-                except Exception:
-                    err = {"raw": e.response.text}
-                logger.error(
-                    f"[Binance] signed {method} {path} failed {e.response.status_code}: {json.dumps(err)[:500]}"
-                )
-                if 400 <= e.response.status_code < 500:
-                    raise
-                self._sleep_backoff(attempt)
-
-            except (ProxyError, ReadTimeout, ConnectTimeout, TransportError) as e:
-                logger.warning(f"[Binance] signed transport error: {e}")
-                self._sleep_backoff(attempt)
-
-            except Exception as e:
-                logger.error(f"[Binance] signed {method} {path} exception: {e}")
-                self._sleep_backoff(attempt)
-
-        raise RuntimeError(f"[Binance] signed {method} {path} exhausted retries")
-
-    # ─────────── Public Endpoints ───────────
-    def ping(self) -> bool:
-        try:
-            self._public_get("fapi/v1/ping")
-            return True
-        except Exception as e:
-            logger.error(f"[Binance] fapi_ping failed: {e}")
-            return False
-
-    def server_time(self) -> int:
-        return self._server_time_ms()
-
-    def premium_index(self, symbol: str) -> Dict[str, Any]:
-        return self._public_get("fapi/v1/premiumIndex", {"symbol": symbol.upper()})
-
-    def mark_price(self, symbol: str) -> Optional[float]:
-        try:
-            data = self.premium_index(symbol)
-            mp = data.get("markPrice")
-            if mp is not None:
-                return float(mp)
-        except Exception as e:
-            logger.error(f"[Binance] mark_price error {symbol}: {e}")
-        return None
-
-    def exchange_info(self, force_refresh: bool = False) -> Dict[str, Any]:
-        if self._exchange_info_cache is not None and not force_refresh:
-            return self._exchange_info_cache
-        self._exchange_info_cache = self._public_get("fapi/v1/exchangeInfo")
-        return self._exchange_info_cache
-
-    def symbol_info(self, symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-        info = self.exchange_info(force_refresh=force_refresh)
-        for s in info.get("symbols", []):
-            if s.get("symbol") == symbol.upper():
-                return s
-        return None
-
-    # ─────────── Signed Account Endpoints ───────────
-    def position_risk(self) -> List[dict]:
-        try:
-            res = self._signed("GET", "fapi/v2/positionRisk")
-            return res if isinstance(res, list) else []
-        except Exception as e:
-            logger.error(f"[Binance] position_risk failed: {e}")
-            return []
-
-    def balance(self) -> List[dict]:
-        try:
-            res = self._signed("GET", "fapi/v2/balance")
-            return res if isinstance(res, list) else []
-        except Exception as e:
-            logger.error(f"[Binance] balance failed: {e}")
-            return []
-
-    # ─────────── Filters / Normalization ───────────
-    def _symbol_filters(self, symbol: str) -> Dict[str, Any]:
-        info = self.symbol_info(symbol, force_refresh=False)
-        if not info:
-            raise ValueError(f"Symbol {symbol} not found in exchangeInfo")
-        return {f["filterType"]: f for f in info.get("filters", [])}
-
-    @staticmethod
-    def _snap(val: float, step_: float) -> float:
-        if step_ <= 0:
-            return val
-        return math.floor(val / step_) * step_
-
-    def _normalize_px_qty(
-        self, symbol: str, price: Optional[float], quantity: float
-    ) -> Tuple[Optional[float], float]:
-        fs = self._symbol_filters(symbol)
-        lot = fs.get("LOT_SIZE", {})
-        step = float(lot.get("stepSize", "0.00000001"))
-        min_qty = float(lot.get("minQty", "0"))
-
-        notional = fs.get("MIN_NOTIONAL") or fs.get("NOTIONAL") or {}
-        min_notional = float(notional.get("minNotional", "0")) if notional else 0.0
-
-        pf = fs.get("PRICE_FILTER", {})
-        tick = float(pf.get("tickSize", "0.00000001"))
-
-        q = self._snap(float(quantity), step)
-        if q < min_qty:
-            raise ValueError(f"Quantity {q} < minQty {min_qty} for {symbol}")
-
-        p = None
-        if price is not None:
-            p = self._snap(float(price), tick)
-            if p <= 0:
-                raise ValueError("Price must be > 0")
-
-        if min_notional and p is not None and p * q < min_notional:
-            raise ValueError(f"Order notional {p*q:.8f} < minNotional {min_notional} for {symbol}")
-
-        return p, q
-
-    # ─────────── Account/Mode ───────────
-    def set_position_mode(self, hedge: bool) -> Any:
-        return self.signed_post("fapi/v1/positionSide/dual", {"dualSidePosition": str(hedge).lower()})
-
-    def set_margin_type(self, symbol: str, margin_type: str = "ISOLATED") -> Any:
-        mt = margin_type.upper()
-        if mt not in ("ISOLATED", "CROSSED"):
-            raise ValueError("margin_type must be ISOLATED or CROSSED")
-        return self.signed_post("fapi/v1/marginType", {"symbol": symbol.upper(), "marginType": mt})
-
-    def set_leverage(self, symbol: str, leverage: int) -> Any:
-        lev = int(leverage)
-        if not (1 <= lev <= 125):
-            raise ValueError("leverage must be 1..125")
-        return self.signed_post("fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": lev})
-
-    # ─────────── Orders ───────────
-    def place_limit_order(
-        self,
-        symbol: str,
-        side: str,                 # "BUY" / "SELL"
-        quantity: float,
-        price: float,
-        *,
-        post_only: bool = True,    # GTX
-        reduce_only: bool = False,
-        position_side: Optional[str] = None,  # "LONG"/"SHORT" when Hedge
-        new_client_order_id: Optional[str] = None,
-        time_in_force: Optional[str] = None,  # overrides post_only if given
-    ) -> Dict[str, Any]:
-        symbol = symbol.upper()
-        side = side.upper()
-        if side not in ("BUY", "SELL"):
-            raise ValueError("side must be BUY or SELL")
-
-        p, q = self._normalize_px_qty(symbol, price, quantity)
-        tif = time_in_force or ("GTX" if post_only else "GTC")
-
-        params = {
-            "symbol": symbol,
-            "side": side,
-            "type": "LIMIT",
-            "timeInForce": tif,
-            "quantity": f"{q:.20f}",
-            "price": f"{p:.20f}",
-            "reduceOnly": str(bool(reduce_only)).lower(),
-            "recvWindow": self.recv_window,
-        }
-        if position_side:
-            ps = position_side.upper()
-            if ps not in ("LONG", "SHORT", "BOTH"):
-                raise ValueError("position_side must be LONG/SHORT/BOTH")
-            params["positionSide"] = ps
-        if new_client_order_id:
-            params["newClientOrderId"] = new_client_order_id[:36]
-
-        return self.signed_post("fapi/v1/order", params)
-
-    def place_stop_limit(
-        self,
-        symbol: str,
-        side: str,
-        quantity: float,
-        stop_price: float,
-        limit_price: float,
-        *,
-        working_type: str = "MARK_PRICE",
-        reduce_only: bool = False,
-        position_side: Optional[str] = None,
-        post_only: bool = True,
-        price_protect: bool = True,
-        new_client_order_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        symbol = symbol.upper()
-        side = side.upper()
-        p_limit, q = self._normalize_px_qty(symbol, limit_price, quantity)
-        p_stop, _ = self._normalize_px_qty(symbol, stop_price, q)
-
-        params = {
-            "symbol": symbol,
-            "side": side,
-            "type": "STOP",
-            "timeInForce": "GTX" if post_only else "GTC",
-            "quantity": f"{q:.20f}",
-            "price": f"{p_limit:.20f}",
-            "stopPrice": f"{p_stop:.20f}",
-            "workingType": working_type,
-            "priceProtect": str(bool(price_protect)).lower(),
-            "reduceOnly": str(bool(reduce_only)).lower(),
-            "recvWindow": self.recv_window,
-        }
-        if position_side:
-            params["positionSide"] = position_side.upper()
-        if new_client_order_id:
-            params["newClientOrderId"] = new_client_order_id[:36]
-
-        return self.signed_post("fapi/v1/order", params)
-
-    def place_stop_market(
-        self,
-        symbol: str,
-        side: str,
-        quantity: float,
-        stop_price: float,
-        *,
-        working_type: str = "MARK_PRICE",
-        reduce_only: bool = False,
-        position_side: Optional[str] = None,
-        price_protect: bool = True,
-        new_client_order_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        symbol = symbol.upper()
-        side = side.upper()
-        _, q = self._normalize_px_qty(symbol, None, quantity)
-        p_stop, _ = self._normalize_px_qty(symbol, stop_price, q)
-
-        params = {
-            "symbol": symbol,
-            "side": side,
-            "type": "STOP_MARKET",
-            "stopPrice": f"{p_stop:.20f}",
-            "workingType": working_type,
-            "priceProtect": str(bool(price_protect)).lower(),
-            "reduceOnly": str(bool(reduce_only)).lower(),
-            "quantity": f"{q:.20f}",
-            "recvWindow": self.recv_window,
-        }
-        if position_side:
-            params["positionSide"] = position_side.upper()
-        if new_client_order_id:
-            params["newClientOrderId"] = new_client_order_id[:36]
-
-        return self.signed_post("fapi/v1/order", params)
-
-    def cancel_order(self, symbol: str, order_id: Optional[int] = None, client_oid: Optional[str] = None) -> Dict[str, Any]:
-        if not order_id and not client_oid:
-            raise ValueError("Provide order_id or client_oid")
-        params = {"symbol": symbol.upper()}
-        if order_id:
-            params["orderId"] = int(order_id)
-        if client_oid:
-            params["origClientOrderId"] = client_oid
-        return self.signed_delete("fapi/v1/order", params)
-
-    def cancel_all(self, symbol: str) -> Dict[str, Any]:
-        return self.signed_delete("fapi/v1/allOpenOrders", {"symbol": symbol.upper()})
-
-    def get_order(self, symbol: str, order_id: Optional[int] = None, client_oid: Optional[str] = None) -> Dict[str, Any]:
-        if not order_id and not client_oid:
-            raise ValueError("Provide order_id or client_oid")
-        params = {"symbol": symbol.upper()}
-        if order_id:
-            params["orderId"] = int(order_id)
-        if client_oid:
-            params["origClientOrderId"] = client_oid
-        return self.signed_get("fapi/v1/order", params)
-
-    # ---- generic signed wrappers ----
-    def signed_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        return self._signed("GET", path, params)
-
-    def signed_post(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        # Binance מצפה שגם POST יגיעו כ-query עם חתימה, ללא body
-        return self._signed("POST", path, params)
-
-    def signed_delete(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        return self._signed("DELETE", path, params)
-
-    # ─────────── User Data Stream (Futures) ───────────
-    def user_stream_start(self) -> str:
-        """יצירת listenKey ל־Futures."""
-        url = f"{self.base}/fapi/v1/listenKey"
-        r = self._client.post(url, headers=self._headers())
-        r.raise_for_status()
-        lk = r.json().get("listenKey")
-        if not lk:
-            raise RuntimeError("Failed to obtain listenKey")
-        logger.info(f"[Binance] listenKey created: {lk[:8]}... (masked)")
-        return lk
-
-    def user_stream_keepalive(self, listen_key: str) -> None:
-        """רענון listenKey (לפחות פעם ב־30 דק')."""
-        url = f"{self.base}/fapi/v1/listenKey"
-        r = self._client.put(url, headers=self._headers(), params={"listenKey": listen_key})
-        if r.status_code == 200:
-            logger.debug("[Binance] listenKey keepalive OK")
-        else:
-            logger.warning(f"[Binance] listenKey keepalive status {r.status_code}: {r.text[:200]}")
-
-    def user_stream_close(self, listen_key: str) -> None:
-        """סגירת listenKey (ניקיון)."""
-        url = f"{self.base}/fapi/v1/listenKey"
-        r = self._client.delete(url, headers=self._headers(), params={"listenKey": listen_key})
-        if r.status_code == 200:
-            logger.info("[Binance] listenKey closed")
-        else:
-            logger.warning(f"[Binance] listenKey close status {r.status_code}: {r.text[:200]}")
-
-    def close(self) -> None:
-        try:
-            self._client.close()
-        except Exception:
-            pass
-
-
-# Singleton
-_CLIENT = _BinanceFutures()
-
-# ─────────── Background keepalive management for listenKey ───────────
-_listen_key: Optional[str] = None
-_lk_thread_stop = Event()
-_lk_thread: Optional[Thread] = None
-
-def start_user_stream_keepalive(period_sec: int = 1800) -> str:
-    """
-    Start user-stream (listenKey) and keep it alive ברקע.
-    period_sec=1800 (30m). Binance דורשת רענון < 60m.
-    """
-    global _listen_key, _lk_thread, _lk_thread_stop
-    if _listen_key:
-        return _listen_key
-    _listen_key = _CLIENT.user_stream_start()
-
-    def _loop():
-        while not _lk_thread_stop.wait(timeout=period_sec):
-            try:
-                _CLIENT.user_stream_keepalive(_listen_key)
-            except Exception as e:
-                logger.warning(f"[Binance] listenKey keepalive error: {e}")
-
-    _lk_thread_stop.clear()
-    _lk_thread = Thread(target=_loop, name="binance-listenKey-keepalive", daemon=True)
-    _lk_thread.start()
-    return _listen_key
-
-def stop_user_stream():
-    """עצירת keepalive וסגירת listenKey."""
-    global _listen_key, _lk_thread, _lk_thread_stop
     try:
-        _lk_thread_stop.set()
-        if _lk_thread and _lk_thread.is_alive():
-            _lk_thread.join(timeout=5)
-        if _listen_key:
-            try:
-                _CLIENT.user_stream_close(_listen_key)
-            except Exception as e:
-                logger.warning(f"[Binance] close listenKey error: {e}")
-    finally:
-        _listen_key = None
-        _lk_thread = None
-        _lk_thread_stop.clear()
+        data = r.json()
+    except Exception:
+        r.raise_for_status()
+        return r
 
+    code = data.get("code")
+    msg  = data.get("msg")
+    # זרוק עם פרטים — השכבה הקוראת תציג שגיאה נקייה ללקוח
+    raise RuntimeError(f"Binance error {code}: {msg}")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Public Wrappers (שומרים על API חיצוני זהה)
+# Public: Ping / Price / Filters / Leverage / Positions
 # ──────────────────────────────────────────────────────────────────────────────
+
 def fapi_ping() -> bool:
-    return _CLIENT.ping()
+    r = _request("GET", "/fapi/v1/ping", signed=False)
+    return r.status_code == 200
 
 def futures_mark_price(symbol: str) -> Optional[float]:
-    return _CLIENT.mark_price(symbol)
+    s = (symbol or "").strip().upper()
+    if not s:
+        return None
+    r = _request("GET", "/fapi/v1/premiumIndex", params={"symbol": s}, signed=False)
+    try:
+        j = r.json()
+        # חלק מהיישומים מחזירים "markPrice" כמחרוזת
+        px = float(j.get("markPrice") or j.get("price"))
+        return px if px > 0 else None
+    except Exception as e:
+        logger.error(f"[mark_price] parse failed for {s}: {e}")
+        return None
 
-_futures_exchange_info_cache_shadow: Optional[Dict[str, Any]] = None
-def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
-    global _futures_exchange_info_cache_shadow
-    if _futures_exchange_info_cache_shadow is not None and not force_refresh:
-        return _futures_exchange_info_cache_shadow
-    _futures_exchange_info_cache_shadow = _CLIENT.exchange_info(force_refresh=force_refresh)
-    return _futures_exchange_info_cache_shadow
+def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
+    s = (symbol or "").strip().upper()
+    lev = max(1, min(125, int(leverage)))
+    r = _request("POST", "/fapi/v1/leverage", params={"symbol": s, "leverage": lev}, signed=True)
+    return r.json()
 
-def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
-    return _CLIENT.symbol_info(symbol, force_refresh=force_refresh)
+def futures_open_positions() -> Optional[list]:
+    # positionRisk מחזיר לכל הסימבולים; אפשר גם לסנן ב-client
+    r = _request("GET", "/fapi/v2/positionRisk", signed=True)
+    try:
+        return r.json()
+    except Exception:
+        return None
 
-def futures_open_positions() -> List[dict]:
-    return _CLIENT.position_risk()
+def get_symbol_filters(symbol: str) -> Dict[str, Any]:
+    """
+    מחלץ tickSize/stepSize מה-ExchangeInfo ל-Futures.
+    מחזיר מילון שטוח: {"tickSize": ..., "stepSize": ...}
+    """
+    s = (symbol or "").strip().upper()
+    r = _request("GET", "/fapi/v1/exchangeInfo", params={"symbol": s}, signed=False)
+    data = r.json()
+    syms = data.get("symbols") or []
+    if not syms:
+        return {"tickSize": DEFAULT_PRICE_TICK, "stepSize": DEFAULT_QTY_STEP}
+    filters = syms[0].get("filters") or []
+    out = {"tickSize": DEFAULT_PRICE_TICK, "stepSize": DEFAULT_QTY_STEP}
+    for f in filters:
+        ftype = f.get("filterType")
+        if ftype == "PRICE_FILTER":
+            try:
+                out["tickSize"] = float(f.get("tickSize") or DEFAULT_PRICE_TICK)
+            except Exception:
+                pass
+        elif ftype in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+            try:
+                out["stepSize"] = float(f.get("stepSize") or DEFAULT_QTY_STEP)
+            except Exception:
+                pass
+    return out
 
-def futures_balance() -> List[dict]:
-    return _CLIENT.balance()
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers: rounding
+# ──────────────────────────────────────────────────────────────────────────────
 
-# Account/mode wrappers
-def set_position_mode(hedge: bool) -> Any:
-    return _CLIENT.set_position_mode(hedge)
+def _floor_to_step(x: float, step: float) -> float:
+    if step <= 0:
+        return x
+    return math.floor(x / step) * step
 
-def set_margin_type(symbol: str, margin_type: str = "ISOLATED") -> Any:
-    return _CLIENT.set_margin_type(symbol, margin_type)
+def _floor_to_tick(px: float, tick: float) -> float:
+    if tick <= 0:
+        return px
+    return math.floor(px / tick) * tick
 
-def set_leverage(symbol: str, leverage: int) -> Any:
-    return _CLIENT.set_leverage(symbol, leverage)
+# ──────────────────────────────────────────────────────────────────────────────
+# Orders (LIMIT GTX / IOC / FOK / reduceOnly / positionSide)
+# ──────────────────────────────────────────────────────────────────────────────
 
-# Order wrappers
 def place_limit_order(
-    symbol: str, side: str, quantity: float, price: float, *,
-    post_only: bool = True, reduce_only: bool = False,
-    position_side: Optional[str] = None, new_client_order_id: Optional[str] = None,
-    time_in_force: Optional[str] = None,
+    *,
+    symbol: str,
+    side: str,                # "BUY"/"SELL"
+    quantity: float,
+    price: float,
+    post_only: bool = False,  # True => TIF=GTX
+    reduce_only: bool = False,
+    position_side: Optional[str] = None,  # None/"LONG"/"SHORT" (Dual/Hedge Mode)
+    time_in_force: Optional[str] = None,  # None/GTC/IOC/FOK/GTX
+    new_order_resp_type: str = "RESULT",  # RESULT/ACK/FULL
+    client_order_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _CLIENT.place_limit_order(
-        symbol, side, quantity, price,
-        post_only=post_only, reduce_only=reduce_only,
-        position_side=position_side, new_client_order_id=new_client_order_id,
-        time_in_force=time_in_force,
-    )
+    """
+    מיפוי מדויק ל-Binance USD-M Futures:
+    - type=LIMIT
+    - timeInForce: GTX (Post-Only), או IOC/FOK/GTC.
+    - reduceOnly: bool
+    - positionSide: נשלח רק אם סופק (Hedge Mode).
+    """
 
-def place_stop_limit(
-    symbol: str, side: str, quantity: float, stop_price: float, limit_price: float, *,
-    working_type: str = "MARK_PRICE", reduce_only: bool = False,
-    position_side: Optional[str] = None, post_only: bool = True,
-    price_protect: bool = True, new_client_order_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    return _CLIENT.place_stop_limit(
-        symbol, side, quantity, stop_price, limit_price,
-        working_type=working_type, reduce_only=reduce_only,
-        position_side=position_side, post_only=post_only,
-        price_protect=price_protect, new_client_order_id=new_client_order_id,
-    )
+    sym  = (symbol or "").strip().upper()
+    sdir = (side   or "").strip().upper()
+    if sdir not in ("BUY", "SELL"):
+        raise ValueError("side must be BUY or SELL")
 
-def place_stop_market(
-    symbol: str, side: str, quantity: float, stop_price: float, *,
-    working_type: str = "MARK_PRICE", reduce_only: bool = False,
-    position_side: Optional[str] = None, price_protect: bool = True,
-    new_client_order_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    return _CLIENT.place_stop_market(
-        symbol, side, quantity, stop_price,
-        working_type=working_type, reduce_only=reduce_only,
-        position_side=position_side, price_protect=price_protect,
-        new_client_order_id=new_client_order_id,
-    )
+    # עיגול לפי פילטרים (עם Fallback)
+    try:
+        filt = get_symbol_filters(sym)
+        tick = float(filt.get("tickSize", DEFAULT_PRICE_TICK))
+        step = float(filt.get("stepSize", DEFAULT_QTY_STEP))
+    except Exception:
+        tick, step = DEFAULT_PRICE_TICK, DEFAULT_QTY_STEP
 
-def cancel_order(symbol: str, order_id: Optional[int] = None, client_oid: Optional[str] = None) -> Dict[str, Any]:
-    return _CLIENT.cancel_order(symbol, order_id, client_oid)
+    qty   = max(_floor_to_step(float(quantity), step), step)
+    px    = max(_floor_to_tick(float(price), tick), tick)
 
-def cancel_all(symbol: str) -> Dict[str, Any]:
-    return _CLIENT.cancel_all(symbol)
+    # GTX (Post-Only) גובר על TIF שהגיע מבחוץ
+    tif: str
+    if post_only:
+        tif = "GTX"
+    else:
+        tif = (time_in_force or "GTC").strip().upper()
+        if tif not in ("GTC", "IOC", "FOK", "GTX"):
+            tif = "GTC"
 
-def get_order(symbol: str, order_id: Optional[int] = None, client_oid: Optional[str] = None) -> Dict[str, Any]:
-    return _CLIENT.get_order(symbol, order_id, client_oid)
+    params: Dict[str, Any] = {
+        "symbol": sym,
+        "side": sdir,
+        "type": "LIMIT",
+        "quantity": qty,
+        "price": px,
+        "timeInForce": tif,
+        "newOrderRespType": new_order_resp_type,
+    }
 
+    # reduceOnly זמין ב-Futures LIMIT
+    if reduce_only:
+        params["reduceOnly"] = "true"
+
+    # positionSide — רק אם באמת צריך (Hedge Mode)
+    if position_side:
+        ps = position_side.strip().upper()
+        if ps in ("LONG", "SHORT", "BOTH"):
+            # במצב BOTH עדיף לא לשלוח בכלל; נשאיר רק LONG/SHORT
+            if ps != "BOTH":
+                params["positionSide"] = ps
+
+    if client_order_id:
+        params["newClientOrderId"] = client_order_id
+
+    r = _request("POST", "/fapi/v1/order", params=params, signed=True)
+    try:
+        return r.json()
+    except Exception as e:
+        # אם לא JSON — נזרוק כטקסט
+        raise RuntimeError(f"order response parse failed: {e}; raw={r.text}")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Self-checks (ריצה ידנית: python -m utils.binance_client)
+# User Data Stream (listenKey keepalive)
 # ──────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    print("Ping:", fapi_ping())
-    try:
-        print("Server time:", _CLIENT.server_time())
-    except Exception as e:
-        print("Server time error:", e)
 
+_listen_key: Optional[str] = None
+_keepalive_thread: Optional[threading.Thread] = None
+_keepalive_stop = threading.Event()
+
+def start_user_stream_keepalive(period_sec: int = 1800) -> Optional[str]:
+    """
+    מייצר listenKey ושומר חי באמצעות thread שמבצע PUT כל period_sec.
+    בטוח להפעלה מספר פעמים (idempotent).
+    """
+    global _listen_key, _keepalive_thread
+
+    # אם כבר רץ — החזר את המפתח הנוכחי
+    if _keepalive_thread and _keepalive_thread.is_alive() and _listen_key:
+        return _listen_key
+
+    # צור מפתח חדש
     try:
-        bal = futures_balance()
-        print("Balance sample:", bal[:1])
+        r = _request("POST", "/fapi/v1/listenKey", signed=False)
+        lk = r.json().get("listenKey")
+        if not lk:
+            raise RuntimeError("listenKey missing in response")
+        _listen_key = lk
     except Exception as e:
-        print("Balance error:", e)
+        logger.error(f"[listenKey] create failed: {e}")
+        return None
+
+    _keepalive_stop.clear()
+
+    def _run():
+        # keepalive עד שנבקש לעצור
+        while not _keepalive_stop.is_set():
+            try:
+                time.sleep(max(60, period_sec - 60))  # ריפוד קטן לפני פקיעת 60ד'
+                _request("PUT", "/fapi/v1/listenKey", params={"listenKey": _listen_key}, signed=False)
+                logger.debug({"event": "listenKey_keepalive"})
+            except Exception as e:
+                logger.warning({"event": "listenKey_keepalive_error", "error": str(e)})
+                time.sleep(10)
+
+    _keepalive_thread = threading.Thread(target=_run, name="binance-listenkey-keepalive", daemon=True)
+    _keepalive_thread.start()
+    return _listen_key
+
+def stop_user_stream() -> None:
+    global _listen_key, _keepalive_thread
+    _keepalive_stop.set()
+    try:
+        if _listen_key:
+            _request("DELETE", "/fapi/v1/listenKey", params={"listenKey": _listen_key}, signed=False)
+    except Exception as e:
+        logger.warning({"event": "listenKey_delete_error", "error": str(e)})
+    _listen_key = None
+    _keepalive_thread = None
+
 
 
 
