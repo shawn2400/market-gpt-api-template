@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import random
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -10,50 +12,84 @@ from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, EMAIndicator
 from ta.volatility import AverageTrueRange
 
-BINANCE_FAPI = "https://fapi.binance.com"
+BINANCE_FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com")
 
+# ניהול עומסים ורשת
 _RETRY_STATUSES = {418, 429, 500, 502, 503, 504}
+_MAX_CONCURRENCY = int(os.getenv("HTTP_MAX_CONCURRENCY", "8"))
+_SEM = asyncio.Semaphore(_MAX_CONCURRENCY)
+
 _HDRS = {
     "User-Agent": "AlgoGPT/2 scanner",
     "Accept": "application/json",
     "Accept-Encoding": "gzip",
 }
 
+_CLIENT: Optional[httpx.AsyncClient] = None
+
+async def _get_client() -> httpx.AsyncClient:
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = httpx.AsyncClient(
+            timeout=httpx.Timeout(8.0),
+            headers=_HDRS,
+            limits=httpx.Limits(max_keepalive_connections=32, max_connections=64),
+            http2=False,  # Binance FAPI יציב ב-HTTP/1.1
+        )
+    return _CLIENT
 
 async def _http_get_json(
     url: str,
     params: Dict[str, Any] | None = None,
-    tries: int = 4,
+    tries: int = 5,
     timeout: float = 8.0,
-):
+) -> Any:
     last_err: Optional[Exception] = None
     for attempt in range(tries):
         try:
-            async with httpx.AsyncClient(timeout=timeout, headers=_HDRS) as x:
-                r = await x.get(url, params=params)
+            async with _SEM:
+                client = await _get_client()
+                r = await client.get(url, params=params, timeout=timeout)
+
             if r.status_code == 200:
                 return r.json()
+
+            # קצב/עומס: כבדו Retry-After ו-X-MBX-USED-WEIGHT-1M אם קיים
             if r.status_code in _RETRY_STATUSES:
-                delay = min(5.0, 0.6 * (2 ** attempt))
-                await asyncio.sleep(delay)
+                retry_after = r.headers.get("Retry-After")
+                used_weight = r.headers.get("X-MBX-USED-WEIGHT-1M") or r.headers.get("X-MBX-USED-WEIGHT")
+                base = 0.6 * (2 ** attempt) + random.uniform(0.0, 0.3)
+                if retry_after:
+                    delay = max(float(retry_after), base)
+                elif used_weight:
+                    try:
+                        w = int(used_weight)
+                        # אם קרובים לתקרה (1200) — נרווח עוד קצת
+                        delay = base + (0.001 * max(0, w - 1000))
+                    except Exception:
+                        delay = base
+                else:
+                    delay = base
+                await asyncio.sleep(min(10.0, delay))
                 continue
+
             r.raise_for_status()
+
         except Exception as e:
             last_err = e
-            delay = min(5.0, 0.6 * (2 ** attempt))
+            delay = min(10.0, 0.6 * (2 ** attempt) + random.uniform(0.0, 0.3))
             await asyncio.sleep(delay)
             continue
+
     if last_err:
         raise last_err
     raise RuntimeError("binance http unknown error")
-
 
 async def _fetch_klines(symbol: str, interval: str, limit: int = 200) -> List[list]:
     url = f"{BINANCE_FAPI}/fapi/v1/klines"
     return await _http_get_json(
         url, params={"symbol": symbol, "interval": interval, "limit": int(limit)}
     )
-
 
 async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> pd.DataFrame:
     raw = await _fetch_klines(symbol.upper(), interval=interval, limit=max(50, int(limit)))
@@ -63,9 +99,7 @@ async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> p
         "open_time","open","high","low","close","volume",
         "close_time","qav","trades","taker_base","taker_quote","ignore",
     ]
-    df = pd.DataFrame(raw, columns=cols)[
-        ["open_time","open","high","low","close","volume"]
-    ].copy()
+    df = pd.DataFrame(raw, columns=cols)[["open_time","open","high","low","close","volume"]].copy()
     for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df.dropna(inplace=True)
@@ -74,14 +108,12 @@ async def fetch_ohlcv(symbol: str, interval: str = "15m", limit: int = 150) -> p
     df.set_index("timestamp", inplace=True)
     return df
 
-
 def _clamp(v: float, lo: float, hi: float) -> float:
     try:
         v = float(v)
     except Exception:
         v = lo
     return max(lo, min(hi, v))
-
 
 async def analyze_symbol(
     symbol: str,
@@ -192,17 +224,13 @@ async def analyze_symbol(
     out = {**generic, **extras}
     return out
 
-
 async def scan_all(
     symbols: List[str],
     *,
     timeframe: str = "15m",
     limit: int = 150,
 ) -> List[Dict[str, Any]]:
-    tasks = [
-        analyze_symbol(s, timeframe=timeframe, limit=limit)
-        for s in symbols if (s or "").strip()
-    ]
+    tasks = [analyze_symbol(s, timeframe=timeframe, limit=limit) for s in symbols if (s or "").strip()]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     out: List[Dict[str, Any]] = []
     for r in results:
@@ -210,6 +238,7 @@ async def scan_all(
             continue
         out.append(r)
     return out
+
 
 
 
