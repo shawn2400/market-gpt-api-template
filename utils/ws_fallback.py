@@ -37,7 +37,7 @@ async def auto_price_updater(
     ws_interval_keepalive: int = 25,
     rest_interval_sec: int = 15,
 ) -> None:
-    """WS משולב כמקור ראשי; REST מרוכז כ־fallback."""
+    """WS כמקור ראשי + REST fallback מחזורי."""
     syms = [s.upper() for s in symbols if isinstance(s, str) and s.strip()]
     if not syms:
         logger.warning({"event": "price_updater_empty_symbols"})
