@@ -1,5 +1,3 @@
-# החלף את כל הקובץ utils/binance_client.py בגרסה הזו:
-cat > utils/binance_client.py <<'PY'
 from __future__ import annotations
 
 import os
@@ -117,10 +115,7 @@ def futures_open_positions() -> Optional[list]:
         return None
 
 def futures_balance() -> list:
-    """
-    USD-M Futures wallet balances.
-    משמש ב-/health_full כדי לוודא גישה חתומה לחשבון.
-    """
+    """USD-M Futures wallet balances (used by /health_full)."""
     try:
         data = _request("GET", "/fapi/v2/balance", signed=True).json()
         return data if isinstance(data, list) else []
@@ -257,7 +252,7 @@ def stop_user_stream() -> None:
         logger.warning({"event":"listenKey_delete_error","error":str(e)})
     _listen_key = None
     _keepalive_thread = None
-PY
+
 
 
 
