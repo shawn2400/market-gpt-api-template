@@ -1,4 +1,3 @@
-# utils/ws_fallback.py
 from __future__ import annotations
 
 import asyncio
@@ -13,27 +12,22 @@ import httpx
 LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 logger = logging.getLogger("algogpt.ws")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Public API
-# ──────────────────────────────────────────────────────────────────────────────
-
 def update_price(symbol: str, price: float) -> None:
-    """עדכון מחיר טרי ב־Cache (שימוש פנימי/חיצוני)"""
-    if symbol and price:
-        try:
-            p = float(price)
-            if p > 0:
-                LAST_PRICE_CACHE[symbol.upper()] = {"price": p, "ts": time.time()}
-        except Exception:
-            return
+    if not symbol:
+        return
+    try:
+        p = float(price)
+    except Exception:
+        return
+    if p <= 0:
+        return
+    LAST_PRICE_CACHE[symbol.upper()] = {"price": p, "ts": time.time()}
 
 def get_price(symbol: str) -> Optional[float]:
-    """מחזיר מחיר עדכני אם יש"""
     item = LAST_PRICE_CACHE.get(symbol.upper())
     return float(item["price"]) if item and "price" in item else None
 
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
-    """בודק אם המחיר ב־Cache עדיין טרי"""
     info = LAST_PRICE_CACHE.get(symbol.upper())
     return bool(info and (time.time() - info.get("ts", 0.0)) <= max_age_sec)
 
@@ -43,11 +37,7 @@ async def auto_price_updater(
     ws_interval_keepalive: int = 25,
     rest_interval_sec: int = 15,
 ) -> None:
-    """
-    מעדכן מחירים אוטומטית:
-    1) נסיון קבוע דרך WebSocket משולב (markPrice@1s לכל הסימבולים בבת אחת)
-    2) אם WS נופל או לא זמין, מבצע Fallback ל־REST *מרוכז* (קריאה אחת לכל הסימבולים)
-    """
+    """WS משולב כמקור ראשי; REST מרוכז כ־fallback."""
     syms = [s.upper() for s in symbols if isinstance(s, str) and s.strip()]
     if not syms:
         logger.warning({"event": "price_updater_empty_symbols"})
@@ -55,24 +45,20 @@ async def auto_price_updater(
 
     ws_task = None
     rest_task = None
-
     try:
         while True:
-            # נסיון WS
             try:
                 if rest_task and not rest_task.done():
                     rest_task.cancel()
                 ws_task = asyncio.create_task(_ws_price_stream(syms, ping_interval=ws_interval_keepalive))
-                await ws_task  # אם נופל - נמשיך ל־fallback
+                await ws_task
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error({"event": "ws_stream_error", "error": str(e)})
 
-            # Fallback: REST מרוכז עד שנצליח WS שוב
             try:
                 rest_task = asyncio.create_task(_rest_price_refresher_loop(syms, period=rest_interval_sec))
-                # המתנה קצרה לפני ניסיון WS נוסף (עם backoff)
                 backoff = min(60, 5 + random.uniform(0, 3))
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:
@@ -85,17 +71,8 @@ async def auto_price_updater(
             if t and not t.done():
                 t.cancel()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Internals: WebSocket combined stream (preferred)
-# ──────────────────────────────────────────────────────────────────────────────
-
 async def _ws_price_stream(symbols: List[str], *, ping_interval: int = 25) -> None:
-    """
-    מאזין ל־combined-stream של markPrice@1s עבור כל הסימבולים.
-    דוגמת הודעה:
-      {"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate","E":...,"s":"BTCUSDT","p":"110000.01",...}}
-    """
-    import websockets  # דורש חבילה websockets (async)
+    import websockets  # type: ignore
 
     streams = "/".join(f"{s.lower()}@markPrice@1s" for s in symbols)
     url = f"wss://fstream.binance.com/stream?streams={streams}"
@@ -105,15 +82,10 @@ async def _ws_price_stream(symbols: List[str], *, ping_interval: int = 25) -> No
         try:
             logger.info({"event": "ws_connecting", "url": url, "symbols": len(symbols)})
             async with websockets.connect(
-                url,
-                ping_interval=ping_interval,
-                ping_timeout=10,
-                close_timeout=5,
-                max_size=1_000_000,
+                url, ping_interval=ping_interval, ping_timeout=10, close_timeout=5, max_size=1_000_000
             ) as ws:
-                backoff = 1.5  # reset backoff אחרי חיבור מוצלח
+                backoff = 1.5
                 last_ping = time.time()
-
                 while True:
                     try:
                         msg = await asyncio.wait_for(ws.recv(), timeout=ping_interval + 5)
@@ -126,40 +98,27 @@ async def _ws_price_stream(symbols: List[str], *, ping_interval: int = 25) -> No
                                 update_price(sym, float(price))
                             except Exception:
                                 pass
-
-                        # keepalive (חלק מהספריה עושה ping לבד, זה רק לוג/שוליים)
                         if (time.time() - last_ping) >= ping_interval:
                             try:
-                                await ws.ping()  # no-op אם כבר נשלח ע"י הספריה
+                                await ws.ping()
                             except Exception:
                                 pass
                             last_ping = time.time()
-
                     except asyncio.TimeoutError:
-                        # אין הודעות זמן מה — ננסה ping
                         try:
                             await ws.ping()
                             last_ping = time.time()
                         except Exception:
                             logger.warning({"event": "ws_ping_failed"})
-                            break  # יצא מהלולאה ויתבצע reconnect
-
+                            break
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.error({"event": "ws_connect_error", "error": str(e)})
             await asyncio.sleep(backoff + random.uniform(0, 0.8))
-            backoff = min(backoff * 2, 60.0)  # exponential backoff לפני ניסיון חיבור חוזר
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Internals: REST fallback (single bulk call)
-# ──────────────────────────────────────────────────────────────────────────────
+            backoff = min(backoff * 2, 60.0)
 
 async def _rest_price_refresher_loop(symbols: List[str], *, period: int = 15) -> None:
-    """
-    מבצע כל period שניות קריאה אחת ל־/fapi/v1/premiumIndex (כל הסימבולים),
-    ומעדכן את ה־Cache רק עבור הסימבולים שביקשנו.
-    """
     target = set(s.upper() for s in symbols)
     async with httpx.AsyncClient(timeout=8.0, headers={
         "User-Agent": "AlgoGPT/2 price-fallback",
