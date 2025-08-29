@@ -1,4 +1,5 @@
-# utils/binance_client.py
+# החלף את כל הקובץ utils/binance_client.py בגרסה הזו:
+cat > utils/binance_client.py <<'PY'
 from __future__ import annotations
 
 import os
@@ -13,6 +14,10 @@ import httpx
 from hashlib import sha256
 
 logger = logging.getLogger("algogpt.binance.client")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENV / Config
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _clean_env(s: Optional[str]) -> str:
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
@@ -66,6 +71,10 @@ def _request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None,
         return r
     raise RuntimeError(f"Binance error {data.get('code')}: {data.get('msg')}")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Public: Ping / Price / Filters / Leverage / Positions / Balance
+# ──────────────────────────────────────────────────────────────────────────────
+
 def fapi_ping() -> bool:
     return _request("GET", "/fapi/v1/ping").status_code == 200
 
@@ -107,11 +116,30 @@ def futures_open_positions() -> Optional[list]:
     except Exception:
         return None
 
+def futures_balance() -> list:
+    """
+    USD-M Futures wallet balances.
+    משמש ב-/health_full כדי לוודא גישה חתומה לחשבון.
+    """
+    try:
+        data = _request("GET", "/fapi/v2/balance", signed=True).json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Rounding helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _floor_to_step(x: float, step: float) -> float:
     return x if step <= 0 else (math.floor(x / step) * step)
 
 def _floor_to_tick(px: float, tick: float) -> float:
     return px if tick <= 0 else (math.floor(px / tick) * tick)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Orders (LIMIT GTX / IOC / FOK / reduceOnly / positionSide)
+# ──────────────────────────────────────────────────────────────────────────────
 
 def place_limit_order(
     *,
@@ -165,7 +193,8 @@ def place_limit_order(
 
     return _request("POST", "/fapi/v1/order", params=params, signed=True).json()
 
-# ---- Orders Management (Wrappers) ----
+# ─── Orders Management (Wrappers) ─────────────────────────────────────────────
+
 def get_order(symbol: str, order_id: Optional[int] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
     if not order_id and not client_id:
         raise ValueError("must provide order_id or client_id")
@@ -187,7 +216,8 @@ def get_open_orders(symbol: Optional[str] = None) -> list:
     if symbol: params["symbol"] = symbol.upper()
     return _request("GET", "/fapi/v1/openOrders", params=params, signed=True).json()
 
-# ---- User Stream (listenKey keepalive) ----
+# ─── User Data Stream (listenKey keepalive) ───────────────────────────────────
+
 _listen_key: Optional[str] = None
 _keepalive_thread: Optional[threading.Thread] = None
 _keepalive_stop = threading.Event()
@@ -227,6 +257,8 @@ def stop_user_stream() -> None:
         logger.warning({"event":"listenKey_delete_error","error":str(e)})
     _listen_key = None
     _keepalive_thread = None
+PY
+
 
 
 
