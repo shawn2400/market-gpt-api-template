@@ -1,89 +1,118 @@
 # utils/orders_manager.py
 from __future__ import annotations
 
-import os
-import json
-import time
-import uuid
-import threading
-from typing import Any, Dict, List
+import os, json, time, uuid, logging
+from typing import List, Optional, Dict, Any
 
-_REDIS_URL = os.getenv("REDIS_URL", "").strip()
-_REDIS = None
-if _REDIS_URL:
+logger = logging.getLogger("algogpt.orders")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Redis (אופציונלי) + Fallback לזיכרון
+# ──────────────────────────────────────────────────────────────────────────────
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+_R = None
+if REDIS_URL:
     try:
         import redis  # type: ignore
-        _REDIS = redis.from_url(_REDIS_URL, decode_responses=True)
-        try:
-            _REDIS.ping()
-        except Exception:
-            _REDIS = None
-    except Exception:
-        _REDIS = None
+        _R = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        _R.ping()
+        logger.info("[Orders] Redis backend: %s", REDIS_URL)
+    except Exception as e:
+        _R = None
+        logger.info("[Orders] Redis unavailable → using in-memory (%s)", e)
 
-_LOCK = threading.Lock()
-_MEM_ORDERS: List[Dict[str, Any]] = []
+_LIST_KEY = "algogpt:orders"
+_ORDERS: List[Dict[str, Any]] = []  # fallback in-memory (שומר עד 1000 אחרונות)
 
-_ORDERS_KEY = os.getenv("ORDERS_KEY", "algogpt:orders")
-_MAX_ORDERS = int(os.getenv("ORDERS_MAX", "200"))
-
-_ACTIVE_STATUSES = {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "OPEN", "PENDING"}
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Internal helpers
+# ──────────────────────────────────────────────────────────────────────────────
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-def _f(x: Any, default: float = 0.0) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-def _normalize(order: Dict[str, Any]) -> Dict[str, Any]:
-    o = dict(order or {})
-    o.setdefault("id", o.get("orderId") or o.get("clientOrderId") or str(uuid.uuid4()))
-    o.setdefault("symbol", "")
-    o.setdefault("side", "")
-    o.setdefault("qty", _f(o.get("quantity") or o.get("qty"), 0.0))
-    o.setdefault("price", _f(o.get("price") or o.get("entry"), 0.0))
-    o.setdefault("status", str(o.get("status") or o.get("state") or (o.get("simulated") and "SIMULATED") or "NEW"))
-    o.setdefault("created_at", o.get("created_at") or _now_iso())
-    return o
-
-def record_order(order: Dict[str, Any]) -> None:
-    o = _normalize(order)
-    if _REDIS is not None:
-        pip = _REDIS.pipeline()
-        pip.lpush(_ORDERS_KEY, json.dumps(o, ensure_ascii=False))
-        pip.ltrim(_ORDERS_KEY, 0, _MAX_ORDERS - 1)
+def _persist(order: Dict[str, Any]) -> None:
+    """שומר הזמנה ל־Redis אם אפשר, אחרת למערך בזיכרון."""
+    if _R:
         try:
-            pip.execute()
+            _R.lpush(_LIST_KEY, json.dumps(order))
+            _R.ltrim(_LIST_KEY, 0, 999)  # נשמור עד 1000 רשומות
             return
-        except Exception:
-            pass
-    with _LOCK:
-        _MEM_ORDERS.insert(0, o)
-        del _MEM_ORDERS[_MAX_ORDERS:]
+        except Exception as e:
+            logger.warning({"event": "orders_redis_write_failed", "error": str(e)})
+    # fallback
+    _ORDERS.insert(0, order)
+    del _ORDERS[1000:]
 
-def get_orders(limit: int = 50) -> List[Dict[str, Any]]:
-    limit = max(1, min(limit, _MAX_ORDERS))
-    if _REDIS is not None:
+def _load_all() -> List[Dict[str, Any]]:
+    """טוען את כל ההזמנות (עד 1000) מ־Redis+Memory, עם הסרת כפולים לפי id ושמירה על סדר."""
+    out: List[Dict[str, Any]] = []
+    if _R:
         try:
-            raw = _REDIS.lrange(_ORDERS_KEY, 0, limit - 1)
-            out: List[Dict[str, Any]] = []
-            for r in raw:
-                try:
-                    out.append(json.loads(r))
-                except Exception:
-                    pass
-            return out
-        except Exception:
-            pass
-    with _LOCK:
-        return [dict(o) for o in _MEM_ORDERS[:limit]]
+            vals = _R.lrange(_LIST_KEY, 0, 999) or []
+            out.extend(json.loads(v) for v in vals)
+        except Exception as e:
+            logger.warning({"event": "orders_redis_read_failed", "error": str(e)})
+    # הוספת המקומיות (אולי יש חדשות שטרם סונכרנו ל־Redis)
+    out.extend(_ORDERS)
+    # דה־דופליקציה לפי id
+    seen = set()
+    unique: List[Dict[str, Any]] = []
+    for o in out:
+        oid = str(o.get("id") or "")
+        if oid and oid not in seen:
+            seen.add(oid)
+            unique.append(o)
+    return unique
 
-def get_active_orders() -> List[Dict[str, Any]]:
-    orders = get_orders(limit=_MAX_ORDERS)
-    return [o for o in orders if str(o.get("status", "")).upper() in _ACTIVE_STATUSES]
+# ──────────────────────────────────────────────────────────────────────────────
+# Public API
+# ──────────────────────────────────────────────────────────────────────────────
+def add_order_local(
+    *,
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float,
+    status: str = "NEW",
+    simulated: bool = False,
+    order_id: Optional[str] = None,
+    client_order_id: Optional[str] = None,
+    exchange: str = "BINANCE_FUTURES",
+) -> Dict[str, Any]:
+    """יוצר רשומת הזמנה לוגית (כולל dry_run) ושומר אותה בהיסטוריה."""
+    oid = order_id or f"loc-{uuid.uuid4().hex[:12]}"
+    item = {
+        "id": oid,
+        "symbol": symbol.upper().strip(),
+        "side": side.upper().strip(),
+        "qty": float(qty),
+        "price": float(price),
+        "status": status,  # NEW / PARTIALLY_FILLED / FILLED / CANCELED
+        "simulated": bool(simulated),
+        "clientOrderId": client_order_id,
+        "exchange": exchange,
+        "created_at": _now_iso(),
+    }
+    _persist(item)
+    return item
+
+def get_orders(*, limit: int = 50, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    items = _load_all()
+    if symbol:
+        s = symbol.upper().strip()
+        items = [o for o in items if (o.get("symbol") or "").upper() == s]
+    return items[: max(1, min(200, int(limit)))]
+
+def get_active_orders(*, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """מסנן רק מצבים פתוחים/פעילים."""
+    active_states = {"NEW", "PARTIALLY_FILLED", "PENDING", "ACCEPTED"}
+    items = _load_all()
+    items = [o for o in items if str(o.get("status") or "").upper() in active_states]
+    if symbol:
+        s = symbol.upper().strip()
+        items = [o for o in items if (o.get("symbol") or "").upper() == s]
+    return items[:200]
+
 
 
 
