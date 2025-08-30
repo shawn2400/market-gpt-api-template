@@ -3,65 +3,57 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Dict, Any
 
-from utils.binance_client import (
-    futures_mark_price, get_symbol_filters, place_limit_order, set_leverage
-)
-from utils.orders_manager import append_simulated_order, append_real_order
+from utils.binance_client import futures_mark_price, get_symbol_filters, _floor_to_step, _floor_to_tick  # type: ignore
+from utils.orders_manager import save_simulated_order
 
 router = APIRouter(prefix="/trade", tags=["Trade"])
 
 class TradeRequest(BaseModel):
-    symbol: str
-    side: Literal["BUY", "SELL"]
-    budget: float = Field(..., gt=0, description="תקציב ב-USDT")
+    symbol: str = Field(..., description="למשל BTCUSDT")
+    side: str = Field(..., pattern="^(?i)(buy|sell)$")
+    budget: float = Field(..., gt=0)
     leverage: int = Field(10, ge=1, le=125)
-    price: Optional[float] = Field(None, gt=0, description="מחיר Limit; אם ריק נשתמש במחיר Mark")
+    dry_run: bool = True
     post_only: bool = False
-    reduce_only: bool = False
-    position_side: Optional[Literal["LONG", "SHORT"]] = None
-    time_in_force: Optional[Literal["GTC", "IOC", "FOK", "GTX"]] = None
-    dry_run: bool = False
-    client_order_id: Optional[str] = None
 
-@router.post("/execute")
-async def execute(req: TradeRequest) -> Dict[str, Any]:
-    sym = req.symbol.upper()
-    px = req.price or (futures_mark_price(sym) or 0.0)
-    if px <= 0:
-        return {"ok": False, "error": "price_unavailable"}
+class TradeResponse(BaseModel):
+    ok: bool
+    symbol: str
+    side: str
+    qty: float
+    entry: float
+    leverage: int
+    error: Optional[str] = None
+    order: Optional[Dict[str, Any]] = None
 
-    f = get_symbol_filters(sym)
-    step = float(f.get("stepSize", 0.001))
+@router.post("/execute", response_model=TradeResponse)
+async def trade_execute(req: TradeRequest) -> TradeResponse:
+    sym = req.symbol.strip().upper()
+    side = req.side.strip().upper()
 
-    # qty ≈ (budget * leverage) / price  → רצפה ל-step
-    qty = max(((req.budget * req.leverage) / px) // step * step, step)
+    price = futures_mark_price(sym) or 0.0
+    if price <= 0:
+        return TradeResponse(ok=False, symbol=sym, side=side, qty=0.0, entry=0.0, leverage=req.leverage,
+                             error="mark price unavailable")
 
+    filters = get_symbol_filters(sym)
+    step = float(filters.get("stepSize", 0.001))
+    tick = float(filters.get("tickSize", 0.1))
+
+    # חישוב כמות לפי תקציב
+    raw_qty = max(1e-12, float(req.budget) / float(price))
+    qty = max(_floor_to_step(raw_qty, step), step)
+    entry = _floor_to_tick(price, tick)
+
+    saved = None
     if req.dry_run:
-        rec = append_simulated_order(symbol=sym, side=req.side, qty=qty, price=px, tif=(req.time_in_force or "GTC"))
-        return {
-            "ok": True, "mode": "dry_run", "symbol": sym, "side": req.side,
-            "qty": qty, "entry": px, "leverage": req.leverage, "recorded": rec, "error": None
-        }
+        saved = save_simulated_order(symbol=sym, side=side, qty=qty, price=entry, status="SIMULATED")
 
-    try:
-        # set leverage best-effort (לא קריטי אם נופל)
-        try:
-            set_leverage(sym, req.leverage)
-        except Exception:
-            pass
-
-        resp = place_limit_order(
-            symbol=sym, side=req.side, quantity=qty, price=px,
-            post_only=req.post_only, reduce_only=req.reduce_only,
-            position_side=req.position_side, time_in_force=req.time_in_force,
-            client_order_id=req.client_order_id, new_order_resp_type="RESULT",
-        )
-        rec = append_real_order(resp)
-        return {"ok": True, "mode": "live", "symbol": sym, "side": req.side, "qty": qty, "entry": px, "binance": resp, "recorded": rec}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "symbol": sym, "side": req.side, "qty": qty, "entry": px}
+    return TradeResponse(
+        ok=True, symbol=sym, side=side, qty=qty, entry=entry, leverage=req.leverage, error=None, order=saved
+    )
 
 
 
