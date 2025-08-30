@@ -97,7 +97,7 @@ def _request(
 
 def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
     """
-    Public ping קשיח לרייט־לימיט/טיימאאוט; מנסה גם /time כ־fallback.
+    Public ping מוקשח לרייט־לימיט/טיימאאוט; מנסה גם /time כ־fallback.
     לעולם לא זורק חריגה — מחזיר True/False בלבד.
     """
     for i in range(max(1, tries)):
@@ -107,9 +107,7 @@ def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
                 return True
         except Exception:
             pass
-        # backoff מדורג
         time.sleep(min(2.0, 0.4 * (2 ** i)))
-    # ניסיון אחרון: /time
     try:
         r = _CLIENT.get(f"{BASE}/fapi/v1/time", timeout=per_try_timeout)
         return (r.status_code == 200) and ("serverTime" in r.text)
@@ -294,6 +292,22 @@ def get_open_orders(symbol: Optional[str] = None) -> list:
     if symbol: params["symbol"] = symbol.upper()
     return _request("GET", "/fapi/v1/openOrders", params=params, signed=True).json()
 
+def cancel_all_open_orders(symbol: str) -> dict:
+    """מבטל את כל ההזמנות הפתוחות לסימבול."""
+    sym = (symbol or "").strip().upper()
+    return _request("DELETE", "/fapi/v1/allOpenOrders", params={"symbol": sym}, signed=True).json()
+
+def all_orders(symbol: str, limit: int = 50, start_time: Optional[int] = None, end_time: Optional[int] = None) -> list:
+    """
+    היסטוריית הזמנות לסימבול. limit קטן כברירת מחדל כדי לא להעמיס.
+    ניתן להעביר start_time/end_time (ms) לחלון.
+    """
+    sym = (symbol or "").strip().upper()
+    params: Dict[str, Any] = {"symbol": sym, "limit": max(1, min(1000, int(limit)))}
+    if start_time: params["startTime"] = int(start_time)
+    if end_time: params["endTime"] = int(end_time)
+    return _request("GET", "/fapi/v1/allOrders", params=params, signed=True).json()
+
 # ─── User Data Stream (listenKey keepalive) ───────────────────────────────────
 
 _listen_key: Optional[str] = None
@@ -309,6 +323,7 @@ def start_user_stream_keepalive(period_sec: int = 1800) -> Optional[str]:
         if not lk:
             raise RuntimeError("listenKey missing")
         _listen_key = lk
+        logger.info("[Binance] listenKey created: %s... (masked)", (lk or "")[:8])
     except Exception as e:
         logger.error(f"[listenKey] create failed: {e}")
         return None
@@ -338,6 +353,7 @@ def stop_user_stream() -> None:
         logger.warning({"event": "listenKey_delete_error", "error": str(e)})
     _listen_key = None
     _keepalive_thread = None
+
 
 
 
