@@ -15,8 +15,14 @@ from utils.orders_manager import record_order
 logger = logging.getLogger("algogpt.binance.trader")
 
 def _calc_entry_price(side: str, mark: float) -> float:
-    # BUY מעט מתחת, SELL מעט מעל כדי לא לחצות ספר (Post-Only)
-    return mark * (0.998 if side == "BUY" else 1.002)
+    """
+    בוחר מחיר Limit שמבטיח Post-Only (לא יחצה את הספר).
+    BUY → מעט מתחת ל-Mark, SELL → מעט מעל.
+    """
+    if side == "BUY":
+        return mark * 0.998  # ~0.2% מתחת ל-Mark
+    else:
+        return mark * 1.002  # ~0.2% מעל ה-Mark
 
 async def binance_futures_trade(
     symbol: str,
@@ -25,6 +31,13 @@ async def binance_futures_trade(
     leverage: int = 10,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
+    """
+    הזמנה ל-Binance Futures.
+    - Limit Post-Only (GTX) כברירת מחדל.
+    - שינוי מינוף לפני שליחה (best-effort).
+    - qty = budget / mark.
+    - רישום ל-orders_manager גם ב-dry-run (status=SIMULATED).
+    """
     symbol = symbol.upper().strip()
     side = side.upper().strip()
     if side not in ("BUY", "SELL"):
@@ -38,12 +51,20 @@ async def binance_futures_trade(
     entry_price = _calc_entry_price(side, mark)
 
     if dry_run:
-        logger.info(f"[DRY RUN] {side} {symbol} budget={budget} qty≈{qty:.8f} lev={leverage} limit={entry_price:.8f}")
-        # נשמור ללוג אם מוגדר ORDERS_RECORD_DRYRUN=1
+        # רישום הזמנה מדומה (לא פעילה באמת מול Binance)
+        oid = f"DRY-{int(time.time()*1000)}"
         record_order(
-            symbol=symbol, side=side, qty=qty, price=entry_price,
-            status="DRY_RUN", dry_run=True, extra={"leverage": leverage, "mark": mark}
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            price=entry_price,
+            status="SIMULATED",
+            order_id=oid,
+            client_id=None,
+            dry_run=True,
+            tif="GTX",
         )
+        logger.info(f"[DRY RUN] {side} {symbol} budget={budget} qty≈{qty:.8f} lev={leverage} limit={entry_price:.8f}")
         return {
             "symbol": symbol,
             "side": side,
@@ -51,54 +72,60 @@ async def binance_futures_trade(
             "entry": entry_price,
             "leverage": leverage,
             "dry_run": True,
-            "error": None,
         }
 
-    # שינוי מינוף (לא מפילים על כישלון)
+    # שינוי מינוף (best-effort)
     try:
         set_leverage(symbol, leverage)
     except Exception as e:
         logger.error(f"[Leverage] failed for {symbol}: {e}")
 
-    order = place_limit_order(
+    # שליחת LIMIT GTX (Post-Only)
+    resp = place_limit_order(
         symbol=symbol,
         side=side,
         quantity=qty,
         price=entry_price,
         post_only=True,          # GTX
         reduce_only=False,
-        position_side=None,      # Hedge? -> LONG/SHORT
-        time_in_force=None,      # GTX
+        position_side=None,
+        time_in_force=None,      # GTX יתועד כ-timeInForce
+    )
+
+    # רישום ב-local orders log
+    order_id: Optional[str] = str(resp.get("orderId")) if "orderId" in resp else None
+    client_id: Optional[str] = resp.get("clientOrderId") or resp.get("newClientOrderId")
+    status = (resp.get("status") or "NEW").upper()
+    tif = (resp.get("timeInForce") or "GTX").upper()
+
+    record_order(
+        symbol=symbol,
+        side=side,
+        qty=float(resp.get("origQty") or qty),
+        price=float(resp.get("price") or entry_price),
+        status=status,
+        order_id=order_id or f"LOC-{int(time.time()*1000)}",
+        client_id=client_id,
+        dry_run=False,
+        tif=tif,
     )
 
     out = {
         "symbol": symbol,
         "side": side,
-        "qty": qty,
-        "entry": entry_price,
+        "qty": float(resp.get("origQty") or qty),
+        "entry": float(resp.get("price") or entry_price),
         "leverage": leverage,
-        "order": {k: order.get(k) for k in ("orderId", "clientOrderId", "status", "price", "origQty")},
-        "error": None,
+        "order": {k: resp.get(k) for k in ("orderId", "clientOrderId", "status", "price", "origQty", "timeInForce")},
     }
-
-    try:
-        record_order(
-            order_id=order.get("orderId"),
-            client_id=order.get("clientOrderId"),
-            symbol=symbol,
-            side=side,
-            qty=float(order.get("origQty") or qty),
-            price=float(order.get("price") or entry_price),
-            status=str(order.get("status") or "NEW"),
-            extra={"leverage": leverage, "mark": mark, "tif": "GTX"},
-        )
-    except Exception as e:
-        logger.warning(f"[Orders] record failed: {e}")
-
     logger.info(f"[New LIMIT GTX] {out}")
     return out
 
 def force_close_position(symbol: str) -> Dict[str, Any]:
+    """
+    סגירת פוזיציה קיימת ב-Reduce-Only עם LIMIT+IOC אגרסיבי (ללא Market).
+    LONG → SELL IOC נמוך מה-Mark; SHORT → BUY IOC גבוה מה-Mark.
+    """
     symbol = symbol.upper().strip()
     positions = futures_open_positions() or []
     pos = next((p for p in positions if p.get("symbol") == symbol), None)
@@ -114,12 +141,14 @@ def force_close_position(symbol: str) -> Dict[str, Any]:
         raise RuntimeError(f"Mark price unavailable for {symbol}")
 
     if amt > 0:
-        side = "SELL"; limit_px = mark * 0.98
+        side = "SELL"
+        limit_px = mark * 0.98
     else:
-        side = "BUY";  limit_px = mark * 1.02
+        side = "BUY"
+        limit_px = mark * 1.02
 
     from utils.binance_client import place_limit_order as _place
-    r = _place(
+    resp = _place(
         symbol=symbol,
         side=side,
         quantity=abs(amt),
@@ -129,22 +158,14 @@ def force_close_position(symbol: str) -> Dict[str, Any]:
         position_side=None,
         time_in_force="IOC",
     )
-    try:
-        record_order(
-            order_id=r.get("orderId"),
-            client_id=r.get("clientOrderId"),
-            symbol=symbol,
-            side=side,
-            qty=float(abs(amt)),
-            price=float(limit_px),
-            status=str(r.get("status") or "NEW"),
-            extra={"reduce_only": True, "tif": "IOC", "mark": mark},
-        )
-    except Exception:
-        pass
+    return {
+        "symbol": symbol,
+        "closedAmt": amt,
+        "side": side,
+        "orderId": resp.get("orderId"),
+        "status": resp.get("status"),
+    }
 
-    logger.info(f"[Force Close IOC] {symbol} amt={amt} -> {side} limit={limit_px} resp={r.get('orderId')}")
-    return {"symbol": symbol, "closedAmt": amt, "side": side, "orderId": r.get("orderId"), "status": r.get("status")}
 
 
 
