@@ -6,18 +6,14 @@ import json
 import time
 import uuid
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Storage backend: Redis (אם קיים) → אחרת in-memory עם נעילה
-# ──────────────────────────────────────────────────────────────────────────────
 _REDIS_URL = os.getenv("REDIS_URL", "").strip()
 _REDIS = None
 if _REDIS_URL:
     try:
         import redis  # type: ignore
         _REDIS = redis.from_url(_REDIS_URL, decode_responses=True)
-        # בדיקה קלה: לא להפיל אם אין Redis זמין
         try:
             _REDIS.ping()
         except Exception:
@@ -25,44 +21,35 @@ if _REDIS_URL:
     except Exception:
         _REDIS = None
 
-# in-memory fallback
 _LOCK = threading.Lock()
 _MEM_ORDERS: List[Dict[str, Any]] = []
 
 _ORDERS_KEY = os.getenv("ORDERS_KEY", "algogpt:orders")
 _MAX_ORDERS = int(os.getenv("ORDERS_MAX", "200"))
 
-_ACTIVE_STATUSES = {
-    "NEW", "PENDING_NEW", "PARTIALLY_FILLED", "OPEN", "PENDING"
-}
+_ACTIVE_STATUSES = {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "OPEN", "PENDING"}
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-def _norm_float(x: Any, default: float = 0.0) -> float:
+def _f(x: Any, default: float = 0.0) -> float:
     try:
         return float(x)
     except Exception:
         return default
 
 def _normalize(order: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    מוודא שההזמנה כוללת שדות בסיסיים לאחסון ותצוגה.
-    """
     o = dict(order or {})
     o.setdefault("id", o.get("orderId") or o.get("clientOrderId") or str(uuid.uuid4()))
     o.setdefault("symbol", "")
     o.setdefault("side", "")
-    o.setdefault("qty", _norm_float(o.get("quantity") or o.get("qty"), 0.0))
-    o.setdefault("price", _norm_float(o.get("price") or o.get("entry"), 0.0))
-    o.setdefault("status", str(o.get("status") or o.get("state") or o.get("simulated") and "SIMULATED" or "NEW"))
+    o.setdefault("qty", _f(o.get("quantity") or o.get("qty"), 0.0))
+    o.setdefault("price", _f(o.get("price") or o.get("entry"), 0.0))
+    o.setdefault("status", str(o.get("status") or o.get("state") or (o.get("simulated") and "SIMULATED") or "NEW"))
     o.setdefault("created_at", o.get("created_at") or _now_iso())
     return o
 
 def record_order(order: Dict[str, Any]) -> None:
-    """
-    רושם הזמנה להיסטוריה (עד ORDERS_MAX, ברירת מחדל 200).
-    """
     o = _normalize(order)
     if _REDIS is not None:
         pip = _REDIS.pipeline()
@@ -72,17 +59,12 @@ def record_order(order: Dict[str, Any]) -> None:
             pip.execute()
             return
         except Exception:
-            # נופל חזרה ל־in-memory אם Redis לא זמין כרגע
             pass
-
     with _LOCK:
         _MEM_ORDERS.insert(0, o)
         del _MEM_ORDERS[_MAX_ORDERS:]
 
 def get_orders(limit: int = 50) -> List[Dict[str, Any]]:
-    """
-    מחזיר היסטוריה (עד limit).
-    """
     limit = max(1, min(limit, _MAX_ORDERS))
     if _REDIS is not None:
         try:
@@ -96,16 +78,12 @@ def get_orders(limit: int = 50) -> List[Dict[str, Any]]:
             return out
         except Exception:
             pass
-
     with _LOCK:
         return [dict(o) for o in _MEM_ORDERS[:limit]]
 
 def get_active_orders() -> List[Dict[str, Any]]:
-    """
-    מסנן מתוך ההיסטוריה את ההזמנות במצב "פתוח/פעיל".
-    (פשוט ומהיר; ל-200 פריטים זה קליל).
-    """
     orders = get_orders(limit=_MAX_ORDERS)
     return [o for o in orders if str(o.get("status", "")).upper() in _ACTIVE_STATUSES]
+
 
 
