@@ -1,102 +1,111 @@
 # utils/orders_manager.py
 from __future__ import annotations
 
-import os, json, time, uuid, logging
-from typing import List, Optional, Dict, Any
+import os, json, time, uuid, threading
+from typing import Optional, List, Dict, Any
 
-logger = logging.getLogger("algogpt.orders")
+try:
+    import redis  # type: ignore
+except Exception:
+    redis = None  # optional
 
-# Redis (אופציונלי) + Fallback לזיכרון
-REDIS_URL = os.getenv("REDIS_URL", "").strip()
-_R = None
-if REDIS_URL:
-    try:
-        import redis  # type: ignore
-        _R = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        _R.ping()
-        logger.info("[Orders] Redis backend: %s", REDIS_URL)
-    except Exception as e:
-        _R = None
-        logger.info("[Orders] Redis unavailable → in-memory (%s)", e)
+REDIS_URL = os.getenv("REDIS_URL")
+_USE_REDIS = bool(REDIS_URL and redis is not None)
 
-_LIST_KEY = "algogpt:orders"
-_ORDERS: List[Dict[str, Any]] = []  # fallback in-memory (עד 1000 אחרונות)
+_LOCK = threading.RLock()
+_MEM_HISTORY: List[Dict[str, Any]] = []
 
 def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
 
-def _persist(order: Dict[str, Any]) -> None:
-    if _R:
-        try:
-            _R.lpush(_LIST_KEY, json.dumps(order))
-            _R.ltrim(_LIST_KEY, 0, 999)
-            return
-        except Exception as e:
-            logger.warning({"event": "orders_redis_write_failed", "error": str(e)})
-    _ORDERS.insert(0, order)
-    del _ORDERS[1000:]
+def _redis_client():
+    if not _USE_REDIS:
+        return None
+    return redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
-def _load_all() -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    if _R:
-        try:
-            vals = _R.lrange(_LIST_KEY, 0, 999) or []
-            out.extend(json.loads(v) for v in vals)
-        except Exception as e:
-            logger.warning({"event": "orders_redis_read_failed", "error": str(e)})
-    out.extend(_ORDERS)
-    seen = set()
-    unique: List[Dict[str, Any]] = []
-    for o in out:
-        oid = str(o.get("id") or "")
-        if oid and oid not in seen:
-            seen.add(oid)
-            unique.append(o)
-    return unique
+_HISTORY_KEY = "orders:history"  # RPUSH JSON dicts (newest at tail)
 
-def add_order_local(
-    *,
-    symbol: str,
-    side: str,
-    qty: float,
-    price: float,
-    status: str = "NEW",
-    simulated: bool = False,
-    order_id: Optional[str] = None,
-    client_order_id: Optional[str] = None,
-    exchange: str = "BINANCE_FUTURES",
-) -> Dict[str, Any]:
-    oid = order_id or f"loc-{uuid.uuid4().hex[:12]}"
+_TERMINAL = {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH", "SIMULATED_CLOSED"}
+
+def _push(item: Dict[str, Any]) -> None:
+    if _USE_REDIS:
+        r = _redis_client()
+        r.rpush(_HISTORY_KEY, json.dumps(item))
+        r.ltrim(_HISTORY_KEY, -2000, -1)  # keep last N
+    else:
+        with _LOCK:
+            _MEM_HISTORY.append(item)
+            if len(_MEM_HISTORY) > 2000:
+                del _MEM_HISTORY[:-2000]
+
+def _read_all() -> List[Dict[str, Any]]:
+    if _USE_REDIS:
+        r = _redis_client()
+        vals = r.lrange(_HISTORY_KEY, 0, -1)
+        return [json.loads(v) for v in vals]
+    else:
+        with _LOCK:
+            return list(_MEM_HISTORY)
+
+def append_simulated_order(*, symbol: str, side: str, qty: float, price: float, tif: str = "GTC") -> Dict[str, Any]:
+    oid = f"sim-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
     item = {
         "id": oid,
-        "symbol": symbol.upper().strip(),
-        "side": side.upper().strip(),
+        "symbol": symbol.upper(),
+        "side": side.upper(),
         "qty": float(qty),
         "price": float(price),
-        "status": status,  # NEW / PARTIALLY_FILLED / FILLED / CANCELED
-        "simulated": bool(simulated),
-        "clientOrderId": client_order_id,
-        "exchange": exchange,
+        "status": "SIMULATED",
+        "tif": tif,
+        "source": "dry_run",
         "created_at": _now_iso(),
     }
-    _persist(item)
+    _push(item)
     return item
 
-def get_orders(*, limit: int = 50, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    items = _load_all()
-    if symbol:
-        s = symbol.upper().strip()
-        items = [o for o in items if (o.get("symbol") or "").upper() == s]
-    return items[: max(1, min(200, int(limit)))]
+def append_real_order(resp: Dict[str, Any]) -> Dict[str, Any]:
+    # Accepts Binance response of /fapi/v1/order (RESULT/ACK/FULL)
+    item = {
+        "id": str(resp.get("orderId") or resp.get("clientOrderId") or f"ord-{uuid.uuid4().hex[:8]}"),
+        "symbol": (resp.get("symbol") or "").upper(),
+        "side": (resp.get("side") or "").upper(),
+        "qty": float(resp.get("origQty") or resp.get("executedQty") or 0.0),
+        "price": float(resp.get("price") or 0.0),
+        "status": (resp.get("status") or "NEW"),
+        "tif": resp.get("timeInForce") or "GTC",
+        "source": "binance",
+        "created_at": _now_iso(),
+    }
+    _push(item)
+    return item
 
-def get_active_orders(*, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    active_states = {"NEW", "PARTIALLY_FILLED", "PENDING", "ACCEPTED"}
-    items = _load_all()
-    items = [o for o in items if str(o.get("status") or "").upper() in active_states]
+def get_orders(limit: int = 50, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    items = _read_all()
     if symbol:
-        s = symbol.upper().strip()
-        items = [o for o in items if (o.get("symbol") or "").upper() == s]
-    return items[:200]
+        s = symbol.upper()
+        items = [it for it in items if it.get("symbol") == s]
+    # history newest last -> return last 'limit'
+    return items[-limit:] if limit and limit > 0 else items
+
+def get_active_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    items = _read_all()
+    if symbol:
+        s = symbol.upper()
+        items = [it for it in items if it.get("symbol") == s]
+    items = [it for it in items if str(it.get("status") or "").upper() not in _TERMINAL]
+    return items
+
+def clear_history() -> int:
+    if _USE_REDIS:
+        r = _redis_client()
+        n = r.llen(_HISTORY_KEY)
+        r.delete(_HISTORY_KEY)
+        return int(n or 0)
+    else:
+        with _LOCK:
+            n = len(_MEM_HISTORY)
+            _MEM_HISTORY.clear()
+            return n
 
 
 
