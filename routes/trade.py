@@ -1,99 +1,68 @@
 # routes/trade.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import Optional, Literal, Dict, Any
 
-from utils.trade_manager import get_open_trades, get_trade_history, add_trade
-from utils.auth import require_api_key
-from utils.binance_trader import binance_futures_trade
-from utils.orders_manager import add_order_local  # ← חדש
-
-router = APIRouter(
-    prefix="/trade",
-    tags=["Trade"],
-    dependencies=[Depends(require_api_key)]
+from utils.binance_client import (
+    futures_mark_price, get_symbol_filters, place_limit_order, set_leverage
 )
+from utils.orders_manager import append_simulated_order, append_real_order
 
-class TradeModel(BaseModel):
-    id: str
+router = APIRouter(prefix="/trade", tags=["Trade"])
+
+class TradeRequest(BaseModel):
     symbol: str
-    side: str
-    entry_price: float
-    qty: float
-    pnl: float
-    status: str
-    opened_at: str
-
-class TradesSummary(BaseModel):
-    ok: bool = True
-    total: int
-    returned: int
-    items: List[TradeModel] = Field(default_factory=list)
-
-@router.get("/open", response_model=TradesSummary)
-async def list_open_trades():
-    trades = get_open_trades()
-    items = [TradeModel(**t) for t in trades]
-    return TradesSummary(total=len(trades), returned=len(items), items=items)
-
-@router.get("/history", response_model=TradesSummary)
-async def trade_history(limit: int = 50):
-    trades = get_trade_history(limit=limit)
-    items = [TradeModel(**t) for t in trades[:limit]]
-    return TradesSummary(total=len(trades), returned=len(items), items=items)
-
-class ExecuteTradeRequest(BaseModel):
-    symbol: str
-    side: str
-    budget: float
-    leverage: int = 10
+    side: Literal["BUY", "SELL"]
+    budget: float = Field(..., gt=0, description="תקציב ב-USDT")
+    leverage: int = Field(10, ge=1, le=125)
+    price: Optional[float] = Field(None, gt=0, description="מחיר Limit; אם ריק נשתמש במחיר Mark")
+    post_only: bool = False
+    reduce_only: bool = False
+    position_side: Optional[Literal["LONG", "SHORT"]] = None
+    time_in_force: Optional[Literal["GTC", "IOC", "FOK", "GTX"]] = None
     dry_run: bool = False
+    client_order_id: Optional[str] = None
 
-class ExecuteTradeResponse(BaseModel):
-    ok: bool
-    symbol: str
-    side: str
-    qty: Optional[float] = None
-    entry: Optional[float] = None
-    leverage: Optional[int] = None
-    error: Optional[str] = None
-    order: Optional[Dict[str, Any]] = None
+@router.post("/execute")
+async def execute(req: TradeRequest) -> Dict[str, Any]:
+    sym = req.symbol.upper()
+    px = req.price or (futures_mark_price(sym) or 0.0)
+    if px <= 0:
+        return {"ok": False, "error": "price_unavailable"}
 
-@router.post("/execute", response_model=ExecuteTradeResponse)
-async def execute_trade(req: ExecuteTradeRequest):
+    f = get_symbol_filters(sym)
+    step = float(f.get("stepSize", 0.001))
+
+    # qty ≈ (budget * leverage) / price  → רצפה ל-step
+    qty = max(((req.budget * req.leverage) / px) // step * step, step)
+
+    if req.dry_run:
+        rec = append_simulated_order(symbol=sym, side=req.side, qty=qty, price=px, tif=(req.time_in_force or "GTC"))
+        return {
+            "ok": True, "mode": "dry_run", "symbol": sym, "side": req.side,
+            "qty": qty, "entry": px, "leverage": req.leverage, "recorded": rec, "error": None
+        }
+
     try:
-        result: Dict[str, Any] = await binance_futures_trade(
-            symbol=req.symbol,
-            side=req.side,
-            budget=req.budget,
-            leverage=req.leverage,
-            dry_run=req.dry_run,
-        )
-
-        # רישום Orders (גם ב־dry_run)
+        # set leverage best-effort (לא קריטי אם נופל)
         try:
-            order_info = result.get("order") or {}
-            add_order_local(
-                symbol=req.symbol,
-                side=req.side,
-                qty=float(result.get("qty") or 0.0),
-                price=float(result.get("entry") or 0.0),
-                status=(order_info.get("status") or "NEW"),
-                simulated=bool(req.dry_run),
-                order_id=str(order_info.get("orderId") or "") or None,
-                client_order_id=order_info.get("clientOrderId"),
-            )
+            set_leverage(sym, req.leverage)
         except Exception:
             pass
 
-        # רישום למסד הטריידים (קיים אצלך)
-        if not req.dry_run:
-            add_trade(req.symbol, req.side, result["entry"], result["qty"])
-
-        return ExecuteTradeResponse(ok=True, **result)
+        resp = place_limit_order(
+            symbol=sym, side=req.side, quantity=qty, price=px,
+            post_only=req.post_only, reduce_only=req.reduce_only,
+            position_side=req.position_side, time_in_force=req.time_in_force,
+            client_order_id=req.client_order_id, new_order_resp_type="RESULT",
+        )
+        rec = append_real_order(resp)
+        return {"ok": True, "mode": "live", "symbol": sym, "side": req.side, "qty": qty, "entry": px, "binance": resp, "recorded": rec}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Trade execution failed: {e}")
+        return {"ok": False, "error": str(e), "symbol": sym, "side": req.side, "qty": qty, "entry": px}
+
 
 
 
