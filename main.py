@@ -30,10 +30,12 @@ def _to_bool(v: str | None, default: bool = False) -> bool:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
-def _parse_csv(s: str) -> List[str]:
-    return [x.strip() for x in (s or "").split(",") if x.strip()]
+def _parse_csv(s: str | None) -> List[str]:
+    s = s or ""
+    return [x.strip() for x in s.split(",") if x.strip()]
 
 def _clean_key(s: str | None) -> str:
+    # מסיר מרכאות/שבירות שורה/טאבים ורווחי קצה
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
@@ -85,7 +87,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # CORS
-CORS_ALLOWED = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+CORS_ALLOWED = (os.getenv("CORS_ALLOW_ORIGINS", "*") or "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
 if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
     CORS_ALLOW_CREDENTIALS = False
@@ -108,7 +110,7 @@ except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Authorization (Bearer)
+# Authorization (Bearer / X-API-Key)
 # ──────────────────────────────────────────────────────────────────────────────
 def _split_tokens(val: str | None) -> list[str]:
     if not val:
@@ -116,13 +118,20 @@ def _split_tokens(val: str | None) -> list[str]:
     s = val.replace("\n", ",").replace(";", ",")
     return [t.strip() for t in s.split(",") if t.strip()]
 
-TOKENS = {
-    *[t for t in {
-        os.getenv("API_BEARER_TOKEN", "").strip(),
-        os.getenv("API_BEARER_TOKEN_ALT", "").strip(),
-    } if t],
-    * _split_tokens(os.getenv("ALGOGPT_TOKENS")),
-}
+def _load_tokens() -> set[str]:
+    raw = [
+        os.getenv("API_BEARER_TOKEN"),
+        os.getenv("API_BEARER_TOKEN_ALT"),
+        *_split_tokens(os.getenv("ALGOGPT_TOKENS")),
+    ]
+    toks: set[str] = set()
+    for t in raw:
+        ct = _clean_key(t)
+        if ct:
+            toks.add(ct)
+    return toks
+
+TOKENS = _load_tokens()
 ALLOW_ALL = _to_bool(os.getenv("SECURITY_ALLOW_ALL", "0"), False)
 logger.info({"event": "auth_tokens_loaded", "count": len(TOKENS), "allow_all": ALLOW_ALL})
 
@@ -141,7 +150,7 @@ async def validate_token(request: Request, call_next):
     if auth_header.lower().startswith("bearer "):
         token = auth_header.split(" ", 1)[1].strip()
     if not token:
-        token = request.headers.get("X-API-Key", "").strip() or None
+        token = (request.headers.get("X-API-Key") or "").strip() or None
 
     if token not in TOKENS:
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
@@ -318,6 +327,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
