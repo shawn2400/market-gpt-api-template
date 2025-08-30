@@ -32,7 +32,7 @@ class OrdersSummary(BaseModel):
 @router.get("/history", response_model=OrdersSummary)
 async def list_orders(
     symbol: str | None = Query(None, description="סינון לפי סימבול (אופציונלי)"),
-    limit: int = Query(50, ge=1, le=200, description="כמה להזיז להיסטוריה (ברירת מחדל 50)"),
+    limit: int = Query(50, ge=1, le=200, description="ברירת מחדל 50, מקסימום 200"),
 ):
     orders = get_orders(limit=limit)
     if symbol:
@@ -46,6 +46,7 @@ async def list_active():
     orders = get_active_orders()
     items = [OrderModel(**o) for o in orders]
     return OrdersSummary(total=len(items), returned=len(items), items=items)
+
 
 
 
