@@ -14,21 +14,17 @@ import httpx
 
 logger = logging.getLogger("algogpt.binance.client")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV / Config
-# ──────────────────────────────────────────────────────────────────────────────
-
 def _clean_env(s: Optional[str]) -> str:
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
 API_KEY     = _clean_env(os.getenv("BINANCE_API_KEY"))
 API_SECRET  = _clean_env(os.getenv("BINANCE_API_SECRET"))
 BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com").rstrip("/")
-RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
+RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "45000"))
 
 DEFAULT_QTY_STEP   = float(os.getenv("DEFAULT_QTY_STEP",  "0.001"))
 DEFAULT_PRICE_TICK = float(os.getenv("DEFAULT_PRICE_TICK","0.1"))
-EXINFO_TTL_SEC     = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))  # 15 דקות
+EXINFO_TTL_SEC     = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))
 HTTP_TIMEOUT_SEC   = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 
 _HEADERS = {
@@ -50,56 +46,33 @@ def _ts_ms() -> int:
 def _sign(qs: str) -> str:
     return hmac.new(API_SECRET.encode(), qs.encode(), sha256).hexdigest()
 
-def _request(
-    method: str,
-    path: str,
-    *,
-    params: Optional[Dict[str, Any]] = None,
-    signed: bool = False,
-    timeout: Optional[float] = None,
-) -> httpx.Response:
-    """
-    קריאת HTTP ל-Futures. אם signed=True מוסיף timestamp/recvWindow/חתימה.
-    בונה את ה-query-string בדיוק בסדר ההכנסה (dict שומר סדר בפייתון 3.7+).
-    """
+def _request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None, signed: bool = False, timeout: Optional[float] = None) -> httpx.Response:
     url = f"{BASE}{path}"
     params = dict(params or {})
     if signed:
         params.setdefault("timestamp", _ts_ms())
         params.setdefault("recvWindow", RECV_WINDOW)
-        # חתימה
-        items = [f"{k}={params[k]}" for k in params.keys()]
+        items = [f"{k}={params[k]}" for k in params.keys()]  # keep insertion order
         sig = _sign("&".join(items))
         params["signature"] = sig
 
     r = _CLIENT.request(method.upper(), url, params=params, timeout=timeout or HTTP_TIMEOUT_SEC)
-
     if r.status_code == 200:
         return r
 
-    # backoff קצר לשגיאות זמניות/Rate-limit
     if r.status_code in (418, 429, 500, 502, 503, 504):
         ra = r.headers.get("Retry-After")
         time.sleep(min(10.0, float(ra)) if ra else 1.0)
 
-    # ננסה להעלות שגיאה עם פרטי Binance
     try:
         data = r.json()
     except Exception:
         r.raise_for_status()
         return r
-
     raise RuntimeError(f"Binance error {data.get('code')}: {data.get('msg')}")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Public: Ping / Price
-# ──────────────────────────────────────────────────────────────────────────────
-
+# ─── Public: Ping / Price ─────────────────────────────────────────────────────
 def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
-    """
-    Public ping מוקשח לרייט־לימיט/טיימאאוט; מנסה גם /time כ־fallback.
-    לעולם לא זורק חריגה — מחזיר True/False בלבד.
-    """
     for i in range(max(1, tries)):
         try:
             r = _CLIENT.get(f"{BASE}/fapi/v1/ping", timeout=per_try_timeout)
@@ -123,23 +96,14 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception:
         return None
 
-# ──────────────────────────────────────────────────────────────────────────────
-# exchangeInfo (עם Cache) + get_symbol_info
-# ──────────────────────────────────────────────────────────────────────────────
-
+# ─── exchangeInfo cache + filters ─────────────────────────────────────────────
 _EX_INFO_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 _EX_INFO_LOCK = threading.Lock()
 
 def _fetch_exchange_info_full() -> dict:
-    """exchangeInfo מלא (ללא פרמטר symbol) — לרשימות סימבולים."""
-    r = _request("GET", "/fapi/v1/exchangeInfo")
-    return r.json()
+    return _request("GET", "/fapi/v1/exchangeInfo").json()
 
 def futures_exchange_info_safe(force_refresh: bool = False) -> dict:
-    """
-    exchangeInfo עם Cache פנימי ל־EXINFO_TTL_SEC.
-    force_refresh=True מרענן מהשרת.
-    """
     now = time.time()
     with _EX_INFO_LOCK:
         if (not force_refresh) and _EX_INFO_CACHE.get("data") and (now - _EX_INFO_CACHE["ts"] < EXINFO_TTL_SEC):
@@ -150,17 +114,12 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> dict:
         return data
 
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
-    """מאתר אובייקט סימבול מתוך exchangeInfo. מחזיר None אם לא נמצא."""
     info = futures_exchange_info_safe(force_refresh=force_refresh)
     sym = (symbol or "").upper()
     for s in info.get("symbols", []):
         if (s.get("symbol") or "").upper() == sym:
             return s
     return None
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Filters / Leverage / Positions / Balance
-# ──────────────────────────────────────────────────────────────────────────────
 
 def get_symbol_filters(symbol: str) -> Dict[str, Any]:
     s = (symbol or "").strip().upper()
@@ -184,6 +143,7 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
                 pass
     return out
 
+# ─── Leverage / Positions / Balance ───────────────────────────────────────────
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     s = (symbol or "").strip().upper()
     lev = max(1, min(125, int(leverage)))
@@ -196,39 +156,25 @@ def futures_open_positions() -> Optional[list]:
         return None
 
 def futures_balance() -> list:
-    """USD-M Futures wallet balances (משמש ל-/health_full)."""
     try:
         data = _request("GET", "/fapi/v2/balance", signed=True).json()
         return data if isinstance(data, list) else []
     except Exception:
         return []
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Rounding helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
+# ─── Rounding helpers ─────────────────────────────────────────────────────────
 def _floor_to_step(x: float, step: float) -> float:
     return x if step <= 0 else (math.floor(x / step) * step)
 
 def _floor_to_tick(px: float, tick: float) -> float:
     return px if tick <= 0 else (math.floor(px / tick) * tick)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Orders (LIMIT GTX / IOC / FOK / reduceOnly / positionSide)
-# ──────────────────────────────────────────────────────────────────────────────
-
+# ─── Orders (LIMIT GTX/IOC/FOK, reduceOnly, positionSide) ─────────────────────
 def place_limit_order(
-    *,
-    symbol: str,
-    side: str,                # BUY/SELL
-    quantity: float,
-    price: float,
-    post_only: bool = False,  # GTX
-    reduce_only: bool = False,
-    position_side: Optional[str] = None,  # LONG/SHORT (Hedge) או None
-    time_in_force: Optional[str] = None,  # GTC/IOC/FOK/GTX (GTX גובר אם post_only=True)
-    new_order_resp_type: str = "RESULT",
-    client_order_id: Optional[str] = None,
+    *, symbol: str, side: str, quantity: float, price: float,
+    post_only: bool = False, reduce_only: bool = False,
+    position_side: Optional[str] = None, time_in_force: Optional[str] = None,
+    new_order_resp_type: str = "RESULT", client_order_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     sym  = (symbol or "").strip().upper()
     sdir = (side   or "").strip().upper()
@@ -250,12 +196,8 @@ def place_limit_order(
         tif = "GTC"
 
     params: Dict[str, Any] = {
-        "symbol": sym,
-        "side": sdir,
-        "type": "LIMIT",
-        "quantity": qty,
-        "price": px,
-        "timeInForce": tif,
+        "symbol": sym, "side": sdir, "type": "LIMIT",
+        "quantity": qty, "price": px, "timeInForce": tif,
         "newOrderRespType": new_order_resp_type,
     }
     if reduce_only:
@@ -269,8 +211,7 @@ def place_limit_order(
 
     return _request("POST", "/fapi/v1/order", params=params, signed=True).json()
 
-# ─── Orders Management (Wrappers) ─────────────────────────────────────────────
-
+# ─── Orders Management (wrappers) ─────────────────────────────────────────────
 def get_order(symbol: str, order_id: Optional[int] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
     if not order_id and not client_id:
         raise ValueError("must provide order_id or client_id")
@@ -292,24 +233,7 @@ def get_open_orders(symbol: Optional[str] = None) -> list:
     if symbol: params["symbol"] = symbol.upper()
     return _request("GET", "/fapi/v1/openOrders", params=params, signed=True).json()
 
-def cancel_all_open_orders(symbol: str) -> dict:
-    """מבטל את כל ההזמנות הפתוחות לסימבול."""
-    sym = (symbol or "").strip().upper()
-    return _request("DELETE", "/fapi/v1/allOpenOrders", params={"symbol": sym}, signed=True).json()
-
-def all_orders(symbol: str, limit: int = 50, start_time: Optional[int] = None, end_time: Optional[int] = None) -> list:
-    """
-    היסטוריית הזמנות לסימבול. limit קטן כברירת מחדל כדי לא להעמיס.
-    ניתן להעביר start_time/end_time (ms) לחלון.
-    """
-    sym = (symbol or "").strip().upper()
-    params: Dict[str, Any] = {"symbol": sym, "limit": max(1, min(1000, int(limit)))}
-    if start_time: params["startTime"] = int(start_time)
-    if end_time: params["endTime"] = int(end_time)
-    return _request("GET", "/fapi/v1/allOrders", params=params, signed=True).json()
-
-# ─── User Data Stream (listenKey keepalive) ───────────────────────────────────
-
+# ─── User Data Stream keepalive ───────────────────────────────────────────────
 _listen_key: Optional[str] = None
 _keepalive_thread: Optional[threading.Thread] = None
 _keepalive_stop = threading.Event()
@@ -323,7 +247,6 @@ def start_user_stream_keepalive(period_sec: int = 1800) -> Optional[str]:
         if not lk:
             raise RuntimeError("listenKey missing")
         _listen_key = lk
-        logger.info("[Binance] listenKey created: %s... (masked)", (lk or "")[:8])
     except Exception as e:
         logger.error(f"[listenKey] create failed: {e}")
         return None
@@ -353,6 +276,7 @@ def stop_user_stream() -> None:
         logger.warning({"event": "listenKey_delete_error", "error": str(e)})
     _listen_key = None
     _keepalive_thread = None
+
 
 
 
