@@ -1,11 +1,18 @@
 # routes/orders.py
 from __future__ import annotations
-from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field
-from typing import List, Optional
-from utils.orders_manager import get_orders, get_active_orders
 
-router = APIRouter(prefix="/orders", tags=["Orders"])
+from fastapi import APIRouter, Query, Depends
+from pydantic import BaseModel, Field
+from typing import List
+
+from utils.orders_manager import get_orders, get_active_orders
+from utils.auth import require_api_key
+
+router = APIRouter(
+    prefix="/orders",
+    tags=["Orders"],
+    dependencies=[Depends(require_api_key)],
+)
 
 class OrderModel(BaseModel):
     id: str
@@ -15,9 +22,6 @@ class OrderModel(BaseModel):
     price: float
     status: str
     created_at: str
-    client_id: Optional[str] = None
-    dry_run: bool = False
-    tif: Optional[str] = None
 
 class OrdersSummary(BaseModel):
     ok: bool = True
@@ -25,28 +29,24 @@ class OrdersSummary(BaseModel):
     returned: int
     items: List[OrderModel] = Field(default_factory=list)
 
-@router.get("/", response_model=OrdersSummary)
-async def list_orders(
-    limit: int = Query(50, ge=1, le=200),
-    symbol: Optional[str] = Query(None, description="סינון לפי סימבול, למשל BTCUSDT"),
-):
-    items = get_orders(limit=limit, symbol=symbol)
-    return OrdersSummary(total=len(items), returned=len(items), items=[OrderModel(**o) for o in items])
-
 @router.get("/history", response_model=OrdersSummary)
-async def list_history(
-    limit: int = Query(50, ge=1, le=200),
-    symbol: Optional[str] = Query(None, description="סינון לפי סימבול, אופציונלי"),
+async def list_orders(
+    symbol: str | None = Query(None, description="סינון לפי סימבול (אופציונלי)"),
+    limit: int = Query(50, ge=1, le=200, description="כמה להזיז להיסטוריה (ברירת מחדל 50)"),
 ):
-    items = get_orders(limit=limit, symbol=symbol)
-    return OrdersSummary(total=len(items), returned=len(items), items=[OrderModel(**o) for o in items])
+    orders = get_orders(limit=limit)
+    if symbol:
+        s = symbol.strip().upper()
+        orders = [o for o in orders if (o.get("symbol") or "").upper() == s]
+    items = [OrderModel(**o) for o in orders[:limit]]
+    return OrdersSummary(total=len(items), returned=len(items), items=items)
 
 @router.get("/open", response_model=OrdersSummary)
-async def list_open_orders(
-    symbol: Optional[str] = Query(None, description="סינון לפי סימבול, אופציונלי")
-):
-    items = get_active_orders(symbol=symbol)
-    return OrdersSummary(total=len(items), returned=len(items), items=[OrderModel(**o) for o in items])
+async def list_active():
+    orders = get_active_orders()
+    items = [OrderModel(**o) for o in orders]
+    return OrdersSummary(total=len(items), returned=len(items), items=items)
+
 
 
 
