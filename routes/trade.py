@@ -15,7 +15,6 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)]
 )
 
-# --- Models ---
 class TradeModel(BaseModel):
     id: str
     symbol: str
@@ -32,7 +31,6 @@ class TradesSummary(BaseModel):
     returned: int
     items: List[TradeModel] = Field(default_factory=list)
 
-# --- Endpoints ---
 @router.get("/open", response_model=TradesSummary)
 async def list_open_trades():
     trades = get_open_trades()
@@ -45,7 +43,6 @@ async def trade_history(limit: int = 50):
     items = [TradeModel(**t) for t in trades[:limit]]
     return TradesSummary(total=len(trades), returned=len(items), items=items)
 
-# --- Execute Trade ---
 class ExecuteTradeRequest(BaseModel):
     symbol: str
     side: str
@@ -61,11 +58,10 @@ class ExecuteTradeResponse(BaseModel):
     entry: Optional[float] = None
     leverage: Optional[int] = None
     error: Optional[str] = None
-    order: Optional[Dict[str, Any]] = None  # ← נחזיר גם מזהה הזמנה אם יש
+    order: Optional[Dict[str, Any]] = None
 
 @router.post("/execute", response_model=ExecuteTradeResponse)
 async def execute_trade(req: ExecuteTradeRequest):
-    """ביצוע טרייד בפועל או Dry-Run (כולל רישום הזמנה בהיסטוריית Orders)."""
     try:
         result: Dict[str, Any] = await binance_futures_trade(
             symbol=req.symbol,
@@ -88,17 +84,17 @@ async def execute_trade(req: ExecuteTradeRequest):
                 order_id=str(order_info.get("orderId") or "") or None,
                 client_order_id=order_info.get("clientOrderId"),
             )
-        except Exception as e:
-            # לא נפיל את ה־API אם הרישום נכשל
+        except Exception:
             pass
 
-        # רישום למסד הטריידים (קיים במערכת שלך)
+        # רישום למסד הטריידים (קיים אצלך)
         if not req.dry_run:
             add_trade(req.symbol, req.side, result["entry"], result["qty"])
 
         return ExecuteTradeResponse(ok=True, **result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trade execution failed: {e}")
+
 
 
 
