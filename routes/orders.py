@@ -1,6 +1,5 @@
 # routes/orders.py
 from __future__ import annotations
-
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -15,6 +14,7 @@ class OrderModel(BaseModel):
     qty: float
     price: float
     status: str
+    leverage: Optional[int] = None
     created_at: str
 
 class OrdersSummary(BaseModel):
@@ -24,26 +24,21 @@ class OrdersSummary(BaseModel):
     items: List[OrderModel] = Field(default_factory=list)
 
 @router.get("/history", response_model=OrdersSummary)
-async def orders_history(
-    symbol: Optional[str] = Query(None, description="אופציונלי: סינון לפי סימבול, למשל BTCUSDT"),
+async def list_orders(
+    symbol: Optional[str] = Query(None, description="סימבול אופציונלי לסינון"),
     limit: int = Query(50, ge=1, le=200, description="כמה להחזיר (ברירת מחדל 50, מקסימום 200)"),
 ):
     items = [OrderModel(**o) for o in get_orders(limit=limit, symbol=symbol)]
     return OrdersSummary(total=len(items), returned=len(items), items=items)
 
 @router.get("/open", response_model=OrdersSummary)
-async def orders_open(
-    symbol: Optional[str] = Query(None, description="אופציונלי: סינון לפי סימבול, למשל BTCUSDT"),
+async def list_active_orders(
+    symbol: Optional[str] = Query(None, description="סימבול אופציונלי לסינון"),
+    limit: int = Query(200, ge=1, le=200, description="כמה להחזיר (מקסימום 200)"),
 ):
-    items = [OrderModel(**o) for o in get_active_orders(symbol=symbol)]
+    items = [OrderModel(**o) for o in get_active_orders(limit=limit, symbol=symbol)]
     return OrdersSummary(total=len(items), returned=len(items), items=items)
 
-@router.get("/last", response_model=OrdersSummary)
-async def orders_last(
-    limit: int = Query(5, ge=1, le=50, description="ברירת מחדל 5"),
-):
-    items = [OrderModel(**o) for o in get_orders(limit=limit)]
-    return OrdersSummary(total=len(items), returned=len(items), items=items)
 
 
 
