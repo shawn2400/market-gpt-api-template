@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  version: 2.15.0
-  description: |
-    AlgoGPT — מערכת מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
+  version: "2.15.8"
+  description: >
+    AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
     כולל: Scan / AI / Trades / Grid / Risk / Indicators / Anchor / Executor / WS.
-    ⚠️ רוב ה־endpoints דורשים Bearer Token (חוץ מ־/health).
+    ⚠️ רוב ה־endpoints דורשים Bearer Token (חוץ מ־/, /health, /health/live, /health_full).
 
 servers:
   - url: https://algogpt-docker.onrender.com
@@ -14,25 +14,24 @@ servers:
 tags:
   - name: Config
   - name: Health
-  - name: Grid
-  - name: Scan
   - name: AI
   - name: Trades
-  - name: Indicators
-  - name: Anchor
   - name: Orders
-  - name: Executor
   - name: Price
   - name: Market
+  - name: Anchor
+  - name: Executor
+  - name: Grid
   - name: Utils
   - name: Debug
 
+# כל ה־paths מוגנים ב־Bearer כברירת מחדל, אלא אם security ריק []
 security:
-  - HTTPBearer: []
+  - bearerAuth: []
 
 components:
   securitySchemes:
-    HTTPBearer:
+    bearerAuth:
       type: http
       scheme: bearer
 
@@ -47,38 +46,62 @@ components:
     BasicStatus:
       type: object
       properties:
-        status: { type: string, example: ok }
-        version: { type: string, example: 2.15.0 }
-        mode: { type: string, example: normal }
+        ok:      { type: boolean, example: true }
+        status:  { type: string,  example: ok }
+        version: { type: string,  example: 2.15.8 }
 
     GenericResponse:
       type: object
-      description: "Generic flexible response schema"
+      additionalProperties: true
       properties:
         ok: { type: boolean, example: true }
-        message: { type: string, example: Operation completed successfully }
-      additionalProperties: true
 
     TradeRequest:
       type: object
       required: [symbol, side, budget]
       properties:
-        symbol: { type: string, example: BTCUSDT }
-        side: { type: string, enum: [BUY, SELL], example: BUY }
-        budget: { type: number, example: 50 }
+        symbol:   { type: string, example: BTCUSDT }
+        side:     { type: string, enum: [BUY, SELL], example: BUY }
+        budget:   { type: number, example: 50 }
         leverage: { type: integer, example: 10 }
-        dry_run: { type: boolean, example: true }
+        dry_run:  { type: boolean, default: false }
 
     TradeResponse:
       type: object
       properties:
-        ok: { type: boolean }
-        symbol: { type: string }
-        side: { type: string }
-        qty: { type: number }
-        entry: { type: number }
-        leverage: { type: integer }
-        error: { type: string }
+        ok:       { type: boolean, example: true }
+        symbol:   { type: string,  example: BTCUSDT }
+        side:     { type: string,  example: BUY }
+        qty:      { type: number,  example: 0.001 }
+        entry:    { type: number,  example: 108500.1 }
+        leverage: { type: integer, example: 10 }
+        # order ו-error אופציונליים (אם אין — פשוט לא יוחזרו)
+        order:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+
+    OrderModel:
+      type: object
+      properties:
+        id:         { type: string, example: "sim-1725041000-001" }
+        symbol:     { type: string, example: "BTCUSDT" }
+        side:       { type: string, example: "BUY" }
+        qty:        { type: number, example: 0.001 }
+        price:      { type: number, example: 108350.2 }
+        status:     { type: string, example: "FILLED" }
+        created_at: { type: string, example: "2025-08-30T20:40:10Z" }
+
+    OrdersSummary:
+      type: object
+      properties:
+        ok:       { type: boolean, example: true }
+        total:    { type: integer, example: 1 }
+        returned: { type: integer, example: 1 }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/OrderModel" }
 
 paths:
   /:
@@ -86,7 +109,7 @@ paths:
       tags: [Config]
       summary: Root server status
       operationId: getRootStatus
-      security: []
+      security: []   # public
       responses:
         "200":
           description: ok
@@ -99,7 +122,7 @@ paths:
       tags: [Health]
       summary: Health check
       operationId: getHealth
-      security: []
+      security: []   # public
       responses:
         "200":
           description: ok
@@ -112,7 +135,7 @@ paths:
       tags: [Health]
       summary: Live health check
       operationId: getHealthLive
-      security: []
+      security: []   # public
       responses:
         "200":
           description: ok
@@ -121,13 +144,15 @@ paths:
               schema:
                 type: object
                 properties:
+                  ok: { type: boolean, example: true }
                   status: { type: string, example: live }
 
-  /grid/status:
+  /health_full:
     get:
-      tags: [Grid]
-      summary: Grid status list
-      operationId: getGridStatus
+      tags: [Health]
+      summary: Full connectivity & prices
+      operationId: getHealthFull
+      security: []   # public
       responses:
         "200":
           description: ok
@@ -135,41 +160,26 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
 
-  /grid/active:
+  /ai/ping:
     get:
-      tags: [Grid]
-      summary: Active grids only
-      operationId: getGridActive
+      tags: [AI]
+      summary: Ping AI (requires bearer)
+      operationId: getAiPing
       responses:
         "200":
           description: ok
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /grid/start:
-    post:
-      tags: [Grid]
-      summary: Start grid trading
-      operationId: postGridStart
-      responses:
-        "200":
-          description: ok
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  model: { type: string, example: gpt-4o }
+        "401":
+          description: Invalid API key
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /grid/stop:
-    post:
-      tags: [Grid]
-      summary: Stop grid trading
-      operationId: postGridStop
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
+              schema: { $ref: "#/components/schemas/Error" }
 
   /trade/open:
     get:
@@ -188,6 +198,15 @@ paths:
       tags: [Trades]
       summary: Get trade history
       operationId: getTradeHistory
+      parameters:
+        - in: query
+          name: symbol
+          required: false
+          schema: { type: string, example: BTCUSDT }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
       responses:
         "200":
           description: ok
@@ -198,7 +217,7 @@ paths:
   /trade/execute:
     post:
       tags: [Trades]
-      summary: Execute a trade
+      summary: Execute a trade (use dry_run=true for simulation)
       operationId: postTradeExecute
       requestBody:
         required: true
@@ -211,6 +230,68 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TradeResponse" }
+
+  /orders/open:
+    get:
+      tags: [Orders]
+      summary: Open orders
+      operationId: getOrdersOpen
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrdersSummary" }
+
+  /orders/history:
+    get:
+      tags: [Orders]
+      summary: Orders history
+      operationId: getOrdersHistory
+      parameters:
+        - in: query
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrdersSummary" }
+
+  /price/{symbol}:
+    get:
+      tags: [Price]
+      summary: Get latest price for symbol
+      operationId: getPriceLatest
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /market/tickers:
+    get:
+      tags: [Market]
+      summary: Get top market tickers
+      operationId: getMarketTickers
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
 
   /anchor/history:
     get:
@@ -229,35 +310,6 @@ paths:
       tags: [Anchor]
       summary: Live anchor evaluation
       operationId: getAnchorLive
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /price/{symbol}:
-    get:
-      tags: [Price]
-      summary: Get latest price for symbol
-      operationId: getPrice
-      parameters:
-        - in: path
-          name: symbol
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
-
-  /market/tickers:
-    get:
-      tags: [Market]
-      summary: Get top market tickers
-      operationId: getMarketTickers
       responses:
         "200":
           description: ok
@@ -334,7 +386,55 @@ paths:
         - in: query
           name: symbol
           required: true
-          schema: { type: string }
+          schema: { type: string, example: BTCUSDT }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /grid/status:
+    get:
+      tags: [Grid]
+      summary: Grid status list
+      operationId: getGridStatus
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /grid/active:
+    get:
+      tags: [Grid]
+      summary: Active grids only
+      operationId: getGridActive
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /grid/start:
+    post:
+      tags: [Grid]
+      summary: Start grid trading
+      operationId: postGridStart
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericResponse" }
+
+  /grid/stop:
+    post:
+      tags: [Grid]
+      summary: Stop grid trading
+      operationId: postGridStop
       responses:
         "200":
           description: ok
@@ -357,7 +457,7 @@ paths:
   /debug/health:
     get:
       tags: [Debug]
-      summary: Get recent logs (only if not LIGHT_MODE)
+      summary: Recent logs snapshot (if not LIGHT_MODE)
       operationId: getDebugHealth
       responses:
         "200":
@@ -366,17 +466,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GenericResponse" }
 
-  /ws/stream:
-    get:
-      tags: [Websocket]
-      summary: WS stream endpoint
-      operationId: getWsStream
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericResponse" }
 
 
 
