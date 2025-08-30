@@ -3,23 +3,17 @@
   "info": {
     "title": "AlgoGPT API",
     "version": "2.15.8",
-    "description": "AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot). כולל: Scan / AI / Trades / Grid / Risk / Indicators / Anchor / Executor / WS. ⚠️ רוב ה־endpoints דורשים Bearer Token (חוץ מ־/, /health, /health/live, /health_full)."
+    "description": "AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot). כולל: Scan / AI / Trades / Grid / Risk / Indicators / Anchor / Executor / WS. ⚠️ רוב ה-endpoints דורשים Bearer Token (חוץ מ-/, /health, /health/live, /health_full)."
   },
   "servers": [
-    {
-      "url": "https://algogpt-docker.onrender.com",
-      "description": "Production"
-    }
+    { "url": "https://algogpt-docker.onrender.com", "description": "Production" }
   ],
   "tags": [
     { "name": "Config" }, { "name": "Health" }, { "name": "AI" }, { "name": "Trades" },
-    { "name": "Orders" }, { "name": "Price" }, { "name": "Market" },
-    { "name": "Anchor" }, { "name": "Executor" }, { "name": "Grid" },
-    { "name": "Utils" }, { "name": "Debug" }
+    { "name": "Orders" }, { "name": "Price" }, { "name": "Market" }, { "name": "Anchor" },
+    { "name": "Executor" }, { "name": "Grid" }, { "name": "Utils" }, { "name": "Debug" }
   ],
-  "security": [
-    { "bearerAuth": [] }
-  ],
+  "security": [ { "bearerAuth": [] } ],
   "components": {
     "securitySchemes": {
       "bearerAuth": { "type": "http", "scheme": "bearer" }
@@ -27,9 +21,7 @@
     "schemas": {
       "Error": {
         "type": "object",
-        "properties": {
-          "detail": { "type": "string", "example": "Unauthorized" }
-        }
+        "properties": { "detail": { "type": "string", "example": "Unauthorized" } }
       },
       "BasicStatus": {
         "type": "object",
@@ -41,10 +33,8 @@
       },
       "GenericResponse": {
         "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "ok": { "type": "boolean", "example": true }
-        }
+        "properties": { "ok": { "type": "boolean", "example": true } },
+        "additionalProperties": true
       },
       "TradeRequest": {
         "type": "object",
@@ -89,10 +79,104 @@
           "ok": { "type": "boolean", "example": true },
           "total": { "type": "integer", "example": 1 },
           "returned": { "type": "integer", "example": 1 },
-          "items": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/OrderModel" }
-          }
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OrderModel" } }
+        }
+      },
+      "ExecutorStatus": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "example": true },
+          "running": { "type": "boolean", "example": true },
+          "workers": { "type": "integer", "example": 1 },
+          "queue_depth": { "type": "integer", "example": 0 },
+          "last_tick": { "type": "string", "example": "2025-08-30T21:10:00Z" },
+          "version": { "type": "string", "example": "2.15.8" },
+          "ws_connected": { "type": "boolean", "example": true },
+          "mode": { "type": "string", "example": "normal" }
+        },
+        "additionalProperties": true
+      },
+      "ExecutorSymbol": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string", "example": "BTCUSDT" },
+          "enabled": { "type": "boolean", "example": true },
+          "interval": { "type": "string", "example": "15m" },
+          "market": { "type": "string", "example": "futures" },
+          "quality_score": { "type": "number", "example": 8.1 }
+        },
+        "additionalProperties": true
+      },
+      "ExecutorSymbolsResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "example": true },
+          "total": { "type": "integer", "example": 3 },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorSymbol" } }
+        }
+      },
+      "ExecutorLogEntry": {
+        "type": "object",
+        "properties": {
+          "ts": { "type": "string", "example": "2025-08-30T21:12:34Z" },
+          "level": { "type": "string", "example": "INFO" },
+          "message": { "type": "string", "example": "price updater started" },
+          "context": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "ExecutorLogsResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "example": true },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorLogEntry" } },
+          "next": { "type": "string", "nullable": true }
+        }
+      },
+      "ExecutorTrade": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "trade-abc123" },
+          "symbol": { "type": "string", "example": "BTCUSDT" },
+          "side": { "type": "string", "example": "BUY" },
+          "qty": { "type": "number", "example": 0.001 },
+          "entry": { "type": "number", "example": 108500.0 },
+          "exit": { "type": "number", "nullable": true, "example": 108800.0 },
+          "pnl": { "type": "number", "nullable": true, "example": 0.5 },
+          "status": { "type": "string", "example": "CLOSED" },
+          "opened_at": { "type": "string", "example": "2025-08-30T21:15:00Z" },
+          "closed_at": { "type": "string", "nullable": true, "example": "2025-08-30T21:30:00Z" }
+        },
+        "additionalProperties": true
+      },
+      "ExecutorTradesResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "example": true },
+          "total": { "type": "integer", "example": 10 },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorTrade" } }
+        }
+      },
+      "ExecutorPosition": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string", "example": "BTCUSDT" },
+          "positionSide": { "type": "string", "example": "LONG" },
+          "qty": { "type": "number", "example": 0.001 },
+          "entryPrice": { "type": "number", "example": 108400.0 },
+          "markPrice": { "type": "number", "example": 108560.0 },
+          "leverage": { "type": "integer", "example": 10 },
+          "unrealizedPnl": { "type": "number", "example": 0.23 },
+          "marginType": { "type": "string", "example": "ISOLATED" },
+          "isolatedWallet": { "type": "number", "example": 12.5 }
+        },
+        "additionalProperties": true
+      },
+      "ExecutorPositionsResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "example": true },
+          "total": { "type": "integer", "example": 1 },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorPosition" } }
         }
       }
     }
@@ -129,17 +213,7 @@
         "responses": {
           "200": {
             "description": "ok",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": { "type": "boolean", "example": true },
-                    "status": { "type": "string", "example": "live" }
-                  }
-                }
-              }
-            }
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean", "example": true }, "status": { "type": "string", "example": "live" } } } } }
           }
         }
       }
@@ -161,26 +235,8 @@
         "summary": "Ping AI (requires bearer)",
         "operationId": "getAiPing",
         "responses": {
-          "200": {
-            "description": "ok",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": { "type": "boolean", "example": true },
-                    "model": { "type": "string", "example": "gpt-4o" }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Invalid API key",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
-            }
-          }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean", "example": true }, "model": { "type": "string", "example": "gpt-4o" } } } } } },
+          "401": { "description": "Invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
         }
       }
     },
@@ -213,10 +269,7 @@
         "tags": ["Trades"],
         "summary": "Execute a trade (use dry_run=true for simulation)",
         "operationId": "postTradeExecute",
-        "requestBody": {
-          "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradeRequest" } } }
-        },
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradeRequest" } } } },
         "responses": {
           "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradeResponse" } } } }
         }
@@ -295,7 +348,7 @@
         "summary": "Executor status",
         "operationId": "getExecutorStatus",
         "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorStatus" } } } }
         }
       }
     },
@@ -305,7 +358,7 @@
         "summary": "Executor symbols",
         "operationId": "getExecutorSymbols",
         "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorSymbolsResponse" } } } }
         }
       }
     },
@@ -315,7 +368,7 @@
         "summary": "Executor logs",
         "operationId": "getExecutorLogs",
         "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorLogsResponse" } } } }
         }
       }
     },
@@ -325,7 +378,7 @@
         "summary": "Executor trades",
         "operationId": "getExecutorTrades",
         "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorTradesResponse" } } } }
         }
       }
     },
@@ -335,7 +388,7 @@
         "summary": "Executor open positions",
         "operationId": "getExecutorOpenPositions",
         "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorPositionsResponse" } } } }
         }
       }
     },
@@ -377,9 +430,7 @@
         "tags": ["Grid"],
         "summary": "Start grid trading",
         "operationId": "postGridStart",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
+        "responses": { "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } } }
       }
     },
     "/grid/stop": {
@@ -387,9 +438,7 @@
         "tags": ["Grid"],
         "summary": "Stop grid trading",
         "operationId": "postGridStop",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
+        "responses": { "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } } }
       }
     },
     "/utils/ping": {
@@ -414,6 +463,7 @@
     }
   }
 }
+
 
 
 
