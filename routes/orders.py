@@ -1,18 +1,11 @@
 # routes/orders.py
 from __future__ import annotations
-
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
-from typing import List
-
+from typing import List, Optional
 from utils.orders_manager import get_orders, get_active_orders
-from utils.auth import require_api_key
 
-router = APIRouter(
-    prefix="/orders",
-    tags=["Orders"],
-    dependencies=[Depends(require_api_key)],
-)
+router = APIRouter(prefix="/orders", tags=["Orders"])
 
 class OrderModel(BaseModel):
     id: str
@@ -22,6 +15,9 @@ class OrderModel(BaseModel):
     price: float
     status: str
     created_at: str
+    simulated: bool = False
+    clientOrderId: Optional[str] = None
+    exchange: Optional[str] = None
 
 class OrdersSummary(BaseModel):
     ok: bool = True
@@ -29,23 +25,20 @@ class OrdersSummary(BaseModel):
     returned: int
     items: List[OrderModel] = Field(default_factory=list)
 
-@router.get("/history", response_model=OrdersSummary)
-async def list_orders(
-    symbol: str | None = Query(None, description="סינון לפי סימבול (אופציונלי)"),
-    limit: int = Query(50, ge=1, le=200, description="ברירת מחדל 50, מקסימום 200"),
-):
-    orders = get_orders(limit=limit)
-    if symbol:
-        s = symbol.strip().upper()
-        orders = [o for o in orders if (o.get("symbol") or "").upper() == s]
-    items = [OrderModel(**o) for o in orders[:limit]]
+@router.get("/open", response_model=OrdersSummary)
+async def list_open_orders(symbol: Optional[str] = Query(None, description="אופציונלי: סינון לפי סימבול")):
+    items = [OrderModel(**o) for o in get_active_orders(symbol=symbol)]
     return OrdersSummary(total=len(items), returned=len(items), items=items)
 
-@router.get("/open", response_model=OrdersSummary)
-async def list_active():
-    orders = get_active_orders()
-    items = [OrderModel(**o) for o in orders]
+@router.get("/history", response_model=OrdersSummary)
+async def list_orders_history(
+    symbol: Optional[str] = Query(None, description="אופציונלי: סינון לפי סימבול"),
+    limit: int = Query(50, ge=1, le=200, description="כמה להחזיר (ברירת מחדל 50, מקס' 200)"),
+):
+    raw = get_orders(limit=limit, symbol=symbol)
+    items = [OrderModel(**o) for o in raw]
     return OrdersSummary(total=len(items), returned=len(items), items=items)
+
 
 
 
