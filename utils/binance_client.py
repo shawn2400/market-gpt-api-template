@@ -29,6 +29,7 @@ RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
 DEFAULT_QTY_STEP   = float(os.getenv("DEFAULT_QTY_STEP",  "0.001"))
 DEFAULT_PRICE_TICK = float(os.getenv("DEFAULT_PRICE_TICK","0.1"))
 EXINFO_TTL_SEC     = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))  # 15 דקות
+HTTP_TIMEOUT_SEC   = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 
 _HEADERS = {
     "X-MBX-APIKEY": API_KEY,
@@ -37,7 +38,7 @@ _HEADERS = {
     "User-Agent": "AlgoGPT/2 binance-client",
 }
 _CLIENT = httpx.Client(
-    timeout=httpx.Timeout(10.0),
+    timeout=httpx.Timeout(HTTP_TIMEOUT_SEC),
     headers=_HEADERS,
     limits=httpx.Limits(max_keepalive_connections=32, max_connections=64),
     http2=False,
@@ -49,22 +50,29 @@ def _ts_ms() -> int:
 def _sign(qs: str) -> str:
     return hmac.new(API_SECRET.encode(), qs.encode(), sha256).hexdigest()
 
-def _request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None, signed: bool = False) -> httpx.Response:
+def _request(
+    method: str,
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    signed: bool = False,
+    timeout: Optional[float] = None,
+) -> httpx.Response:
     """
-    מבצע קריאת HTTP לסביבות Futures. כאשר signed=True מוסיף timestamp/recvWindow/חתימה.
-    הערה: אנחנו בונים את מחרוזת החתימה באותו סדר שיישלח בפועל (dict שומר סדר הוספה בפייתון 3.7+).
+    קריאת HTTP ל-Futures. אם signed=True מוסיף timestamp/recvWindow/חתימה.
+    בונה את ה-query-string בדיוק בסדר ההכנסה (dict שומר סדר בפייתון 3.7+).
     """
     url = f"{BASE}{path}"
     params = dict(params or {})
     if signed:
         params.setdefault("timestamp", _ts_ms())
         params.setdefault("recvWindow", RECV_WINDOW)
-        # בנה query-string וחתום
+        # חתימה
         items = [f"{k}={params[k]}" for k in params.keys()]
         sig = _sign("&".join(items))
         params["signature"] = sig
 
-    r = _CLIENT.request(method.upper(), url, params=params)
+    r = _CLIENT.request(method.upper(), url, params=params, timeout=timeout or HTTP_TIMEOUT_SEC)
 
     if r.status_code == 200:
         return r
@@ -87,8 +95,26 @@ def _request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None,
 # Public: Ping / Price
 # ──────────────────────────────────────────────────────────────────────────────
 
-def fapi_ping() -> bool:
-    return _request("GET", "/fapi/v1/ping").status_code == 200
+def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
+    """
+    Public ping קשיח לרייט־לימיט/טיימאאוט; מנסה גם /time כ־fallback.
+    לעולם לא זורק חריגה — מחזיר True/False בלבד.
+    """
+    for i in range(max(1, tries)):
+        try:
+            r = _CLIENT.get(f"{BASE}/fapi/v1/ping", timeout=per_try_timeout)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        # backoff מדורג
+        time.sleep(min(2.0, 0.4 * (2 ** i)))
+    # ניסיון אחרון: /time
+    try:
+        r = _CLIENT.get(f"{BASE}/fapi/v1/time", timeout=per_try_timeout)
+        return (r.status_code == 200) and ("serverTime" in r.text)
+    except Exception:
+        return False
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     s = (symbol or "").strip().upper()
@@ -107,16 +133,14 @@ _EX_INFO_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 _EX_INFO_LOCK = threading.Lock()
 
 def _fetch_exchange_info_full() -> dict:
-    """
-    מביא exchangeInfo מלא (ללא פרמטר symbol כדי לאפשר רשימת כל הסימבולים ל-/executor/symbols).
-    """
+    """exchangeInfo מלא (ללא פרמטר symbol) — לרשימות סימבולים."""
     r = _request("GET", "/fapi/v1/exchangeInfo")
     return r.json()
 
 def futures_exchange_info_safe(force_refresh: bool = False) -> dict:
     """
-    מחזיר exchangeInfo עם Cache פנימי ל־EXINFO_TTL_SEC.
-    force_refresh=True עוקף cache ומרענן מהשרת.
+    exchangeInfo עם Cache פנימי ל־EXINFO_TTL_SEC.
+    force_refresh=True מרענן מהשרת.
     """
     now = time.time()
     with _EX_INFO_LOCK:
@@ -128,9 +152,7 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> dict:
         return data
 
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
-    """
-    מאתר אובייקט סימבול מתוך exchangeInfo. מחזיר None אם לא נמצא.
-    """
+    """מאתר אובייקט סימבול מתוך exchangeInfo. מחזיר None אם לא נמצא."""
     info = futures_exchange_info_safe(force_refresh=force_refresh)
     sym = (symbol or "").upper()
     for s in info.get("symbols", []):
@@ -176,7 +198,7 @@ def futures_open_positions() -> Optional[list]:
         return None
 
 def futures_balance() -> list:
-    """USD-M Futures wallet balances (used by /health_full)."""
+    """USD-M Futures wallet balances (משמש ל-/health_full)."""
     try:
         data = _request("GET", "/fapi/v2/balance", signed=True).json()
         return data if isinstance(data, list) else []
@@ -316,6 +338,7 @@ def stop_user_stream() -> None:
         logger.warning({"event": "listenKey_delete_error", "error": str(e)})
     _listen_key = None
     _keepalive_thread = None
+
 
 
 
