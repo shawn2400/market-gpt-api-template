@@ -8,7 +8,7 @@ import threading
 import logging
 from typing import Any, Dict, Optional
 from hashlib import sha256
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 import httpx
 
@@ -27,7 +27,7 @@ BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.c
 RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
 HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 
-# ברירות מחדל (fallback) אם לא נצליח להביא filters
+# ברירות מחדל (fallback) אם לא נצליח להביא filters – כשמורים כמחרוזות לשמירת דיוק הספרות
 DEFAULT_QTY_STEP_STR   = os.getenv("DEFAULT_QTY_STEP",  "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK","0.1")
 
@@ -72,10 +72,12 @@ def _request(
     if r.status_code == 200:
         return r
 
+    # Backoff קצר לשגיאות זמניות / Rate-limit
     if r.status_code in (418, 429, 500, 502, 503, 504):
         ra = r.headers.get("Retry-After")
         time.sleep(min(10.0, float(ra)) if ra else 1.0)
 
+    # נסה להעלות שגיאה עם פרטי Binance
     try:
         data = r.json()
     except Exception:
@@ -89,6 +91,7 @@ def _request(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
+    """Ping עמיד — מנסה גם /time כגיבוי. לא זורק חריגות (True/False בלבד)."""
     for i in range(max(1, tries)):
         try:
             r = _CLIENT.get(f"{BASE}/fapi/v1/ping", timeout=per_try_timeout)
@@ -178,20 +181,17 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
     return out
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Decimal helpers (floor-to-step/tick and fixed-string formatting)
+# Decimal helpers (align to multiples and stringify without scientific notation)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _floor_to_step_dec(x: float | str, step_str: str) -> Decimal:
-    d = Decimal(str(x))
+def _quantize_multiple(x: float | str, step_str: str, rounding=ROUND_DOWN) -> Decimal:
+    """מעגן את x למספר שלם של step בעזרת rounding נתון (למשל BUY=DOWN, SELL=UP)."""
+    q = Decimal(str(x))
     step = Decimal(step_str)
-    # floor ל-multiples של step (חיובי)
-    q = (d // step) * step
-    # בטיחות – כימות לאותה סקאלה כדי למנוע ייצוג אקספוננטי
-    try:
-        q = q.quantize(step, rounding=ROUND_DOWN)
-    except Exception:
-        pass
-    return q
+    # כמה יחידות step יש ב-q
+    mult = (q / step).to_integral_value(rounding=rounding)
+    val = (mult * step).quantize(step, rounding=ROUND_DOWN)
+    return val
 
 def _to_plain_str(d: Decimal) -> str:
     # פורמט "f" מונע scientific notation
@@ -246,8 +246,13 @@ def place_limit_order(
     step_str = f.get("stepSizeStr", DEFAULT_QTY_STEP_STR)
     tick_str = f.get("tickSizeStr", DEFAULT_PRICE_TICK_STR)
 
-    qty_dec = _floor_to_step_dec(quantity, step_str)
-    px_dec  = _floor_to_step_dec(price,    tick_str)
+    # כמות – תמיד כלפי מטה
+    qty_dec = _quantize_multiple(quantity, step_str, rounding=ROUND_DOWN)
+    # מחיר – BUY מטה, SELL מעלה (שומר על כוונת המשתמש וגם חוקי הטיק)
+    if sdir == "SELL":
+        px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_UP)
+    else:
+        px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_DOWN)
 
     qty_str = _to_plain_str(qty_dec)
     px_str  = _to_plain_str(px_dec)
@@ -343,6 +348,7 @@ def stop_user_stream() -> None:
         logger.warning({"event": "listenKey_delete_error", "error": str(e)})
     _listen_key = None
     _keepalive_thread = None
+
 
 
 
