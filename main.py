@@ -190,7 +190,7 @@ async def health_full():
     k = _clean_key(os.getenv("BINANCE_API_KEY")); s = _clean_key(os.getenv("BINANCE_API_SECRET"))
     key_len = len(k); sec_len = len(s)
 
-    # public ping
+    # public ping (טלמטרי בלבד)
     try:
         ping_ok = bool(fapi_ping())
     except Exception as e:
@@ -222,8 +222,9 @@ async def health_full():
             "price": get_price(sym),
         }
 
+    # ✅ ok לא תלוי ב-ping ציבורי
     return {
-        "ok": bool(ping_ok and (key_len == 64) and (sec_len == 64) and account_ok),
+        "ok": bool((key_len == 64) and (sec_len == 64) and account_ok),
         "version": APP_VERSION,
         "binance": {
             "key_len": key_len,
@@ -313,6 +314,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
