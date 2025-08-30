@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import os
 import hmac
-import math
 import time
 import threading
 import logging
 from typing import Any, Dict, Optional
 from hashlib import sha256
+from decimal import Decimal, ROUND_DOWN
 
 import httpx
 
 logger = logging.getLogger("algogpt.binance.client")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENV / Config
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _clean_env(s: Optional[str]) -> str:
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
@@ -20,12 +24,12 @@ def _clean_env(s: Optional[str]) -> str:
 API_KEY     = _clean_env(os.getenv("BINANCE_API_KEY"))
 API_SECRET  = _clean_env(os.getenv("BINANCE_API_SECRET"))
 BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com").rstrip("/")
-RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "45000"))
+RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
+HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 
-DEFAULT_QTY_STEP   = float(os.getenv("DEFAULT_QTY_STEP",  "0.001"))
-DEFAULT_PRICE_TICK = float(os.getenv("DEFAULT_PRICE_TICK","0.1"))
-EXINFO_TTL_SEC     = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))
-HTTP_TIMEOUT_SEC   = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
+# ברירות מחדל (fallback) אם לא נצליח להביא filters
+DEFAULT_QTY_STEP_STR   = os.getenv("DEFAULT_QTY_STEP",  "0.001")
+DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK","0.1")
 
 _HEADERS = {
     "X-MBX-APIKEY": API_KEY,
@@ -46,17 +50,25 @@ def _ts_ms() -> int:
 def _sign(qs: str) -> str:
     return hmac.new(API_SECRET.encode(), qs.encode(), sha256).hexdigest()
 
-def _request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None, signed: bool = False, timeout: Optional[float] = None) -> httpx.Response:
+def _request(
+    method: str,
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    signed: bool = False,
+    timeout: Optional[float] = None,
+) -> httpx.Response:
     url = f"{BASE}{path}"
     params = dict(params or {})
     if signed:
         params.setdefault("timestamp", _ts_ms())
         params.setdefault("recvWindow", RECV_WINDOW)
-        items = [f"{k}={params[k]}" for k in params.keys()]  # keep insertion order
-        sig = _sign("&".join(items))
-        params["signature"] = sig
+        # שמירת סדר פרמטרים, ואז חתימה
+        items = [f"{k}={params[k]}" for k in params.keys()]
+        params["signature"] = _sign("&".join(items))
 
     r = _CLIENT.request(method.upper(), url, params=params, timeout=timeout or HTTP_TIMEOUT_SEC)
+
     if r.status_code == 200:
         return r
 
@@ -69,9 +81,13 @@ def _request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None,
     except Exception:
         r.raise_for_status()
         return r
+
     raise RuntimeError(f"Binance error {data.get('code')}: {data.get('msg')}")
 
-# ─── Public: Ping / Price ─────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Public: Ping / Price
+# ──────────────────────────────────────────────────────────────────────────────
+
 def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
     for i in range(max(1, tries)):
         try:
@@ -96,7 +112,10 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception:
         return None
 
-# ─── exchangeInfo cache + filters ─────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# exchangeInfo (Cache) + get_symbol_info / filters
+# ──────────────────────────────────────────────────────────────────────────────
+
 _EX_INFO_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 _EX_INFO_LOCK = threading.Lock()
 
@@ -104,13 +123,14 @@ def _fetch_exchange_info_full() -> dict:
     return _request("GET", "/fapi/v1/exchangeInfo").json()
 
 def futures_exchange_info_safe(force_refresh: bool = False) -> dict:
-    now = time.time()
+    import time as _t
+    now = _t.time()
+    ttl = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))
     with _EX_INFO_LOCK:
-        if (not force_refresh) and _EX_INFO_CACHE.get("data") and (now - _EX_INFO_CACHE["ts"] < EXINFO_TTL_SEC):
+        if (not force_refresh) and _EX_INFO_CACHE.get("data") and (now - _EX_INFO_CACHE["ts"] < ttl):
             return _EX_INFO_CACHE["data"]
         data = _fetch_exchange_info_full()
-        _EX_INFO_CACHE["ts"] = now
-        _EX_INFO_CACHE["data"] = data
+        _EX_INFO_CACHE.update({"ts": now, "data": data})
         return data
 
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
@@ -121,29 +141,66 @@ def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
             return s
     return None
 
+def _decimals_from_step_str(step: str) -> int:
+    s = (step or "").strip()
+    if "e" in s.lower():  # לא צפוי מבינאנס, אבל ליתר ביטחון
+        d = Decimal(s)
+        tup = d.as_tuple()
+        return max(0, -tup.exponent)
+    if "." not in s:
+        return 0
+    s = s.rstrip("0")
+    return len(s.split(".")[1]) if "." in s else 0
+
 def get_symbol_filters(symbol: str) -> Dict[str, Any]:
     s = (symbol or "").strip().upper()
     data = _request("GET", "/fapi/v1/exchangeInfo", params={"symbol": s}).json()
     syms = data.get("symbols") or []
+    out = {
+        "tickSizeStr": DEFAULT_PRICE_TICK_STR,
+        "stepSizeStr": DEFAULT_QTY_STEP_STR,
+        "tickDecimals": _decimals_from_step_str(DEFAULT_PRICE_TICK_STR),
+        "stepDecimals": _decimals_from_step_str(DEFAULT_QTY_STEP_STR),
+    }
     if not syms:
-        return {"tickSize": DEFAULT_PRICE_TICK, "stepSize": DEFAULT_QTY_STEP}
+        return out
     filters = syms[0].get("filters") or []
-    out = {"tickSize": DEFAULT_PRICE_TICK, "stepSize": DEFAULT_QTY_STEP}
     for f in filters:
         t = f.get("filterType")
         if t == "PRICE_FILTER":
-            try:
-                out["tickSize"] = float(f.get("tickSize") or DEFAULT_PRICE_TICK)
-            except Exception:
-                pass
+            ts = (f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
+            out["tickSizeStr"] = ts
+            out["tickDecimals"] = _decimals_from_step_str(ts)
         elif t in ("LOT_SIZE", "MARKET_LOT_SIZE"):
-            try:
-                out["stepSize"] = float(f.get("stepSize") or DEFAULT_QTY_STEP)
-            except Exception:
-                pass
+            ss = (f.get("stepSize") or DEFAULT_QTY_STEP_STR)
+            out["stepSizeStr"] = ss
+            out["stepDecimals"] = _decimals_from_step_str(ss)
     return out
 
-# ─── Leverage / Positions / Balance ───────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Decimal helpers (floor-to-step/tick and fixed-string formatting)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _floor_to_step_dec(x: float | str, step_str: str) -> Decimal:
+    d = Decimal(str(x))
+    step = Decimal(step_str)
+    # floor ל-multiples של step (חיובי)
+    q = (d // step) * step
+    # בטיחות – כימות לאותה סקאלה כדי למנוע ייצוג אקספוננטי
+    try:
+        q = q.quantize(step, rounding=ROUND_DOWN)
+    except Exception:
+        pass
+    return q
+
+def _to_plain_str(d: Decimal) -> str:
+    # פורמט "f" מונע scientific notation
+    return format(d, "f")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Signed endpoints: leverage/positions/balance
+# ──────────────────────────────────────────────────────────────────────────────
+
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     s = (symbol or "").strip().upper()
     lev = max(1, min(125, int(leverage)))
@@ -162,42 +219,50 @@ def futures_balance() -> list:
     except Exception:
         return []
 
-# ─── Rounding helpers ─────────────────────────────────────────────────────────
-def _floor_to_step(x: float, step: float) -> float:
-    return x if step <= 0 else (math.floor(x / step) * step)
+# ──────────────────────────────────────────────────────────────────────────────
+# Orders (LIMIT GTX / IOC / FOK / reduceOnly / positionSide)
+# ──────────────────────────────────────────────────────────────────────────────
 
-def _floor_to_tick(px: float, tick: float) -> float:
-    return px if tick <= 0 else (math.floor(px / tick) * tick)
-
-# ─── Orders (LIMIT GTX/IOC/FOK, reduceOnly, positionSide) ─────────────────────
 def place_limit_order(
-    *, symbol: str, side: str, quantity: float, price: float,
-    post_only: bool = False, reduce_only: bool = False,
-    position_side: Optional[str] = None, time_in_force: Optional[str] = None,
-    new_order_resp_type: str = "RESULT", client_order_id: Optional[str] = None,
+    *,
+    symbol: str,
+    side: str,                # BUY/SELL
+    quantity: float,
+    price: float,
+    post_only: bool = False,  # GTX
+    reduce_only: bool = False,
+    position_side: Optional[str] = None,  # LONG/SHORT (Hedge) או None
+    time_in_force: Optional[str] = None,  # GTC/IOC/FOK/GTX
+    new_order_resp_type: str = "RESULT",
+    client_order_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     sym  = (symbol or "").strip().upper()
     sdir = (side   or "").strip().upper()
     if sdir not in ("BUY", "SELL"):
         raise ValueError("side must be BUY or SELL")
 
-    try:
-        f = get_symbol_filters(sym)
-        tick = float(f.get("tickSize", DEFAULT_PRICE_TICK))
-        step = float(f.get("stepSize", DEFAULT_QTY_STEP))
-    except Exception:
-        tick, step = DEFAULT_PRICE_TICK, DEFAULT_QTY_STEP
+    # קבל filters + עיגון כמות/מחיר למחרוזות מדויקות
+    f = get_symbol_filters(sym)
+    step_str = f.get("stepSizeStr", DEFAULT_QTY_STEP_STR)
+    tick_str = f.get("tickSizeStr", DEFAULT_PRICE_TICK_STR)
 
-    qty = max(_floor_to_step(float(quantity), step), step)
-    px  = max(_floor_to_tick(float(price), tick), tick)
+    qty_dec = _floor_to_step_dec(quantity, step_str)
+    px_dec  = _floor_to_step_dec(price,    tick_str)
+
+    qty_str = _to_plain_str(qty_dec)
+    px_str  = _to_plain_str(px_dec)
 
     tif = "GTX" if post_only else (time_in_force or "GTC").strip().upper()
     if tif not in ("GTC", "IOC", "FOK", "GTX"):
         tif = "GTC"
 
     params: Dict[str, Any] = {
-        "symbol": sym, "side": sdir, "type": "LIMIT",
-        "quantity": qty, "price": px, "timeInForce": tif,
+        "symbol": sym,
+        "side": sdir,
+        "type": "LIMIT",
+        "quantity": qty_str,   # ← מחרוזת!
+        "price": px_str,       # ← מחרוזת!
+        "timeInForce": tif,
         "newOrderRespType": new_order_resp_type,
     }
     if reduce_only:
@@ -211,7 +276,8 @@ def place_limit_order(
 
     return _request("POST", "/fapi/v1/order", params=params, signed=True).json()
 
-# ─── Orders Management (wrappers) ─────────────────────────────────────────────
+# ─── Orders Management (Wrappers) ─────────────────────────────────────────────
+
 def get_order(symbol: str, order_id: Optional[int] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
     if not order_id and not client_id:
         raise ValueError("must provide order_id or client_id")
@@ -233,7 +299,8 @@ def get_open_orders(symbol: Optional[str] = None) -> list:
     if symbol: params["symbol"] = symbol.upper()
     return _request("GET", "/fapi/v1/openOrders", params=params, signed=True).json()
 
-# ─── User Data Stream keepalive ───────────────────────────────────────────────
+# ─── User Data Stream (listenKey keepalive) ───────────────────────────────────
+
 _listen_key: Optional[str] = None
 _keepalive_thread: Optional[threading.Thread] = None
 _keepalive_stop = threading.Event()
@@ -276,6 +343,7 @@ def stop_user_stream() -> None:
         logger.warning({"event": "listenKey_delete_error", "error": str(e)})
     _listen_key = None
     _keepalive_thread = None
+
 
 
 
