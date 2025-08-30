@@ -48,7 +48,7 @@ from utils.json_logger import setup_json_logging
 
 # Binance helpers
 from utils.binance_client import (
-    fapi_ping, futures_balance, futures_mark_price,
+    fapi_ping, futures_balance,
     start_user_stream_keepalive, stop_user_stream,
 )
 from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
@@ -108,13 +108,23 @@ except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Authorization Middleware (Bearer Token Validation)
+# Authorization (Bearer)
 # ──────────────────────────────────────────────────────────────────────────────
-TOKENS = {t for t in {
-    os.getenv("API_BEARER_TOKEN", "").strip(),
-    os.getenv("API_BEARER_TOKEN_ALT", "").strip(),
-} if t}
+def _split_tokens(val: str | None) -> list[str]:
+    if not val:
+        return []
+    s = val.replace("\n", ",").replace(";", ",")
+    return [t.strip() for t in s.split(",") if t.strip()]
+
+TOKENS = {
+    *[t for t in {
+        os.getenv("API_BEARER_TOKEN", "").strip(),
+        os.getenv("API_BEARER_TOKEN_ALT", "").strip(),
+    } if t],
+    * _split_tokens(os.getenv("ALGOGPT_TOKENS")),
+}
 ALLOW_ALL = _to_bool(os.getenv("SECURITY_ALLOW_ALL", "0"), False)
+logger.info({"event": "auth_tokens_loaded", "count": len(TOKENS), "allow_all": ALLOW_ALL})
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
@@ -127,7 +137,12 @@ async def validate_token(request: Request, call_next):
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization", "")
-    token = auth_header.replace("Bearer", "").strip() if auth_header.lower().startswith("bearer") else None
+    token = None
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+    if not token:
+        token = request.headers.get("X-API-Key", "").strip() or None
+
     if token not in TOKENS:
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
@@ -149,7 +164,7 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.market", "router"),
     ("routes.binance_status", "router"),
     ("routes.executor", "router"),
-    ("routes.orders", "router"),   # ← NEW: Orders API
+    ("routes.orders", "router"),
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     CORE_ROUTERS.append(("routes.ai", "router"))
@@ -168,7 +183,7 @@ for mod, attr in EXTRA_ROUTERS:
     _include_router(mod, attr)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Root & Basic Health
+# Root & Health
 # ──────────────────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Config"])
 async def root_status():
@@ -182,23 +197,17 @@ async def health():
 async def health_live():
     return {"ok": True, "status": "live"}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Full Health
-# ──────────────────────────────────────────────────────────────────────────────
 @app.get("/health_full", tags=["Health"])
 async def health_full():
-    # key lengths after cleaning (to catch stray quotes/newlines)
     k = _clean_key(os.getenv("BINANCE_API_KEY")); s = _clean_key(os.getenv("BINANCE_API_SECRET"))
     key_len = len(k); sec_len = len(s)
 
-    # public ping (טלמטרי בלבד)
     try:
         ping_ok = bool(fapi_ping())
     except Exception as e:
         ping_ok = False
         logger.warning({"event": "health_ping_error", "error": str(e)})
 
-    # signed account
     try:
         bal = futures_balance()
         account_ok = isinstance(bal, list)
@@ -206,7 +215,6 @@ async def health_full():
         account_ok = False
         logger.warning({"event": "health_account_error", "error": str(e)})
 
-    # listenKey background
     try:
         lk = start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
         listen_key_ok = bool(lk)
@@ -214,7 +222,6 @@ async def health_full():
         listen_key_ok = False
         logger.warning({"event": "health_listenkey_error", "error": str(e)})
 
-    # sample prices
     symbols = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
     prices: Dict[str, Any] = {}
     for sym in symbols:
@@ -223,7 +230,6 @@ async def health_full():
             "price": get_price(sym),
         }
 
-    # ✅ ok לא תלוי ב-ping ציבורי
     return {
         "ok": bool((key_len == 64) and (sec_len == 64) and account_ok),
         "version": APP_VERSION,
@@ -246,8 +252,10 @@ async def handle_exception(request: Request, exc: Exception):
     logger.error({
         "event": "exception",
         "error": str(exc),
-        "type": exc.__class__.__name__},
-    )
+        "type": exc.__class__.__name__,
+        "path": request.url.path,
+        "time": datetime.now(timezone.utc).isoformat(),
+    })
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -265,14 +273,12 @@ async def startup_event():
         "OPENAI_KEY_LEN": len((os.getenv("OPENAI_API_KEY") or "").strip()),
         "config": dump_config_sanitized(),
     })
-    # 1) start listenKey keepalive
     try:
         start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
         logger.info({"event": "listen_key_keepalive_started"})
     except Exception as e:
         logger.warning({"event": "listen_key_keepalive_failed", "error": str(e)})
 
-    # 2) price updater (WS primary + REST fallback)
     syms = [s.strip().upper() for s in os.getenv("SYMS", os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT")).split(",") if s.strip()]
     ws_keepalive = int(os.getenv("WS_KEEPALIVE_SEC", "25"))
     rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
@@ -312,6 +318,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
