@@ -149,6 +149,7 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.market", "router"),
     ("routes.binance_status", "router"),
     ("routes.executor", "router"),
+    ("routes.orders", "router"),   # ← NEW: Orders API
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     CORE_ROUTERS.append(("routes.ai", "router"))
@@ -245,11 +246,8 @@ async def handle_exception(request: Request, exc: Exception):
     logger.error({
         "event": "exception",
         "error": str(exc),
-        "type": exc.__class__.__name__,
-        "args": getattr(exc, "args", []),
-        "path": request.url.path,
-        "time": datetime.now(timezone.utc).isoformat(),
-    })
+        "type": exc.__class__.__name__},
+    )
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 # ──────────────────────────────────────────────────────────────────────────────
