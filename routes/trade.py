@@ -16,7 +16,6 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)]
 )
 
-# --- Models ---
 class TradeModel(BaseModel):
     id: str
     symbol: str
@@ -33,7 +32,6 @@ class TradesSummary(BaseModel):
     returned: int
     items: List[TradeModel] = Field(default_factory=list)
 
-# --- Endpoints ---
 @router.get("/open", response_model=TradesSummary)
 async def list_open_trades():
     trades = get_open_trades()
@@ -46,7 +44,6 @@ async def trade_history(limit: int = 50):
     items = [TradeModel(**t) for t in trades[:limit]]
     return TradesSummary(total=len(trades), returned=len(items), items=items)
 
-# --- Execute Trade ---
 class ExecuteTradeRequest(BaseModel):
     symbol: str
     side: str
@@ -65,11 +62,6 @@ class ExecuteTradeResponse(BaseModel):
 
 @router.post("/execute", response_model=ExecuteTradeResponse)
 async def execute_trade(req: ExecuteTradeRequest):
-    """
-    ביצוע טרייד בפועל או Dry-Run.
-    גם ב-dry_run נרשום הזמנה ל-/orders/history (SIMULATED),
-    כדי שתראה היסטוריה מייד.
-    """
     try:
         result: Dict[str, Any] = await binance_futures_trade(
             symbol=req.symbol,
@@ -79,7 +71,7 @@ async def execute_trade(req: ExecuteTradeRequest):
             dry_run=req.dry_run,
         )
 
-        # רישום ל-/orders/history (כולל dry_run)
+        # רישום היסטוריה להזמנות (כולל dry-run כסימולציה)
         created_at = datetime.now(timezone.utc).isoformat()
         order_payload = {
             "symbol": req.symbol.upper(),
@@ -89,7 +81,6 @@ async def execute_trade(req: ExecuteTradeRequest):
             "status": "SIMULATED" if req.dry_run else (result.get("order", {}).get("status") or "NEW"),
             "created_at": created_at,
         }
-        # אם יש מזהים אמיתיים מהבורסה – נשמר
         if isinstance(result.get("order"), dict):
             o = result["order"]
             if o.get("orderId"):
@@ -98,13 +89,13 @@ async def execute_trade(req: ExecuteTradeRequest):
                 order_payload["clientOrderId"] = o["clientOrderId"]
         record_order(order_payload)
 
-        # רישום למסך הטריידים (המקורי) – רק כאשר זה לא dry_run, כבעבר
         if not req.dry_run:
             add_trade(req.symbol, req.side, result["entry"], result["qty"])
 
         return ExecuteTradeResponse(ok=True, **result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trade execution failed: {e}")
+
 
 
 
