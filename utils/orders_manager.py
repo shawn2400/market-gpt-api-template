@@ -6,9 +6,7 @@ from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger("algogpt.orders")
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Redis (אופציונלי) + Fallback לזיכרון
-# ──────────────────────────────────────────────────────────────────────────────
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 _R = None
 if REDIS_URL:
@@ -19,32 +17,26 @@ if REDIS_URL:
         logger.info("[Orders] Redis backend: %s", REDIS_URL)
     except Exception as e:
         _R = None
-        logger.info("[Orders] Redis unavailable → using in-memory (%s)", e)
+        logger.info("[Orders] Redis unavailable → in-memory (%s)", e)
 
 _LIST_KEY = "algogpt:orders"
-_ORDERS: List[Dict[str, Any]] = []  # fallback in-memory (שומר עד 1000 אחרונות)
+_ORDERS: List[Dict[str, Any]] = []  # fallback in-memory (עד 1000 אחרונות)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Internal helpers
-# ──────────────────────────────────────────────────────────────────────────────
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 def _persist(order: Dict[str, Any]) -> None:
-    """שומר הזמנה ל־Redis אם אפשר, אחרת למערך בזיכרון."""
     if _R:
         try:
             _R.lpush(_LIST_KEY, json.dumps(order))
-            _R.ltrim(_LIST_KEY, 0, 999)  # נשמור עד 1000 רשומות
+            _R.ltrim(_LIST_KEY, 0, 999)
             return
         except Exception as e:
             logger.warning({"event": "orders_redis_write_failed", "error": str(e)})
-    # fallback
     _ORDERS.insert(0, order)
     del _ORDERS[1000:]
 
 def _load_all() -> List[Dict[str, Any]]:
-    """טוען את כל ההזמנות (עד 1000) מ־Redis+Memory, עם הסרת כפולים לפי id ושמירה על סדר."""
     out: List[Dict[str, Any]] = []
     if _R:
         try:
@@ -52,9 +44,7 @@ def _load_all() -> List[Dict[str, Any]]:
             out.extend(json.loads(v) for v in vals)
         except Exception as e:
             logger.warning({"event": "orders_redis_read_failed", "error": str(e)})
-    # הוספת המקומיות (אולי יש חדשות שטרם סונכרנו ל־Redis)
     out.extend(_ORDERS)
-    # דה־דופליקציה לפי id
     seen = set()
     unique: List[Dict[str, Any]] = []
     for o in out:
@@ -64,9 +54,6 @@ def _load_all() -> List[Dict[str, Any]]:
             unique.append(o)
     return unique
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Public API
-# ──────────────────────────────────────────────────────────────────────────────
 def add_order_local(
     *,
     symbol: str,
@@ -79,7 +66,6 @@ def add_order_local(
     client_order_id: Optional[str] = None,
     exchange: str = "BINANCE_FUTURES",
 ) -> Dict[str, Any]:
-    """יוצר רשומת הזמנה לוגית (כולל dry_run) ושומר אותה בהיסטוריה."""
     oid = order_id or f"loc-{uuid.uuid4().hex[:12]}"
     item = {
         "id": oid,
@@ -104,7 +90,6 @@ def get_orders(*, limit: int = 50, symbol: Optional[str] = None) -> List[Dict[st
     return items[: max(1, min(200, int(limit)))]
 
 def get_active_orders(*, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    """מסנן רק מצבים פתוחים/פעילים."""
     active_states = {"NEW", "PARTIALLY_FILLED", "PENDING", "ACCEPTED"}
     items = _load_all()
     items = [o for o in items if str(o.get("status") or "").upper() in active_states]
@@ -112,6 +97,7 @@ def get_active_orders(*, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         s = symbol.upper().strip()
         items = [o for o in items if (o.get("symbol") or "").upper() == s]
     return items[:200]
+
 
 
 
