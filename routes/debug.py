@@ -2,13 +2,14 @@
 from __future__ import annotations
 from fastapi import APIRouter, Query
 from typing import Dict, Any
-import os, platform, time
+import os, platform, time, logging
 
 try:
     import psutil  # אופציונלי
 except Exception:
     psutil = None  # type: ignore
 
+log = logging.getLogger("algogpt.debug")
 router = APIRouter(prefix="/debug", tags=["Debug"])
 
 def _tokens_from_env_masked() -> list[str]:
@@ -30,11 +31,15 @@ def _tokens_from_env_masked() -> list[str]:
         masked.append("***" if len(t) <= 6 else f"{t[:3]}…{t[-3:]}")
     return masked
 
-@router.get("", include_in_schema=False)  # מאפשר /debug ללא הופעה כפולה ב־OpenAPI
+# תומך גם /debug וגם /debug/
+@router.get("", include_in_schema=False)
 @router.get("/")
-def debug_router(
-    op: str = Query("ping", pattern="^(ping|health|tokens|refresh)$")  # ← pattern תואם v2
-) -> Dict[str, Any]:
+def debug_router(op: str = Query("ping")) -> Dict[str, Any]:
+    # מסנן ערכים לא חוקיים ידנית (בלי תלות בגרסת pydantic)
+    allowed = {"ping", "health", "tokens", "refresh"}
+    if op not in allowed:
+        return {"ok": False, "detail": "Unknown op"}
+
     if op == "ping":
         return {"ok": True, "pong": "ok"}
 
@@ -66,10 +71,9 @@ def debug_router(
         return {"ok": True, "count": len(toks), "tokens_masked": toks}
 
     if op == "refresh":
-        # אין ריפרש דינמי – טעינת טוקנים נעשית בסטארטאפ; נדרש ריסטארט פרוסס
+        # אין ריפרש דינמי – טעינת טוקנים נעשית בסטארטאפ; נדרש ריסטארט תהליך
         return {"ok": False, "detail": "Token refresh requires process restart."}
 
-    return {"ok": False, "detail": "Unknown op"}
 
 
 
