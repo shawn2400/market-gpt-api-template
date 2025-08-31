@@ -17,16 +17,14 @@ def _truthy(v: str | None) -> bool:
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
 def _split_tokens(val: str) -> Set[str]:
-    # תומך בהפרדה בפסיקים/נקודה־פסיק/שבירת שורה
+    # תומך בפסיקים/נקודה־פסיק/שבירת שורה
     raw = val.replace("\n", ",").replace(";", ",").split(",")
     return {p.strip() for p in raw if p and p.strip()}
 
 def _mask_token(t: str) -> str:
     if not t:
         return ""
-    if len(t) <= 6:
-        return "***"
-    return f"{t[:3]}…{t[-3:]}"
+    return "***" if len(t) <= 6 else f"{t[:3]}…{t[-3:]}"
 
 def _const_eq(a: str, b: str) -> bool:
     try:
@@ -64,7 +62,10 @@ def _load_tokens_from_env() -> Set[str]:
         v = (os.getenv(k) or "").strip()
         if not v:
             continue
-        tokens |= _split_tokens(v) if ("," in v or ";" in v or "\n" in v) else {v}
+        if ("," in v) or (";" in v) or ("\n" in v):
+            tokens |= _split_tokens(v)
+        else:
+            tokens.add(v)
     return {t for t in tokens if t}
 
 def _init_store() -> None:
@@ -99,7 +100,7 @@ def allow_all() -> bool:
     with _TOKENS_LOCK:
         return _ALLOW_ALL
 
-def _any_token_matches(candidate: Optional[str]) -> bool:
+def token_matches(candidate: Optional[str]) -> bool:
     if not candidate:
         return False
     with _TOKENS_LOCK:
@@ -134,7 +135,7 @@ async def require_api_key(
     if allow_all():
         return
     token = extract_token(request, authorization, x_api_key)
-    if not _any_token_matches(token):
+    if not token_matches(token):
         logger.warning("[Auth] invalid token=%s", (token[:6] + "...") if token else None)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -148,6 +149,7 @@ __all__ = [
     "get_loaded_tokens",
     "extract_token",
     "allow_all",
+    "token_matches",
 ]
 
 
