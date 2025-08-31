@@ -55,6 +55,9 @@ from utils.binance_client import (
 )
 from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
+# אימות – מקור יחיד
+from utils.auth import extract_token, allow_all, token_matches
+
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
@@ -110,31 +113,8 @@ except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Authorization (Bearer / X-API-Key / ?api_key)
+# Authorization middleware (Bearer / X-API-Key / ?api_key) – מבוסס utils.auth
 # ──────────────────────────────────────────────────────────────────────────────
-def _split_tokens(val: str | None) -> list[str]:
-    if not val:
-        return []
-    s = val.replace("\n", ",").replace(";", ",")
-    return [t.strip() for t in s.split(",") if t.strip()]
-
-def _load_tokens() -> set[str]:
-    raw = [
-        os.getenv("API_BEARER_TOKEN"),
-        os.getenv("API_BEARER_TOKEN_ALT"),
-        *_split_tokens(os.getenv("ALGOGPT_TOKENS")),
-    ]
-    toks: set[str] = set()
-    for t in raw:
-        ct = _clean_key(t)
-        if ct:
-            toks.add(ct)
-    return toks
-
-TOKENS = _load_tokens()
-ALLOW_ALL = _to_bool(os.getenv("SECURITY_ALLOW_ALL", "0"), False)
-logger.info({"event": "auth_tokens_loaded", "count": len(TOKENS), "allow_all": ALLOW_ALL})
-
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     # מסלולים ציבוריים מפורשים
@@ -153,22 +133,19 @@ async def validate_token(request: Request, call_next):
     if path in PUBLIC_PATHS or path.startswith("/static/"):
         return await call_next(request)
 
-    # מצב פתוח או אין טוקנים → לא לאכוף
-    if ALLOW_ALL or not TOKENS:
+    # מצב פתוח → לא לאכוף
+    if allow_all():
         return await call_next(request)
 
     # אימות Bearer / X-API-Key / ?api_key
     auth_header = request.headers.get("Authorization", "")
-    token = None
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header.split(" ", 1)[1].strip()
-    if not token:
-        token = (request.headers.get("X-API-Key") or "").strip() or None
-    if not token:
-        qp = request.query_params.get("api_key")
-        token = qp.strip() if qp else None
+    token = extract_token(
+        request,
+        authorization=auth_header,
+        x_api_key=request.headers.get("X-API-Key"),
+    )
 
-    if token not in TOKENS:
+    if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
@@ -201,7 +178,7 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.anchor_extra", "router"),
     ("routes.ws_stream", "router"),
     ("routes.grid", "router"),
-    ("routes.debug", "router"),
+    ("routes.debug", "router"),        # /debug (מאובטח)
     ("routes.indicators", "router"),   # /indicators
 ]
 for mod, attr in CORE_ROUTERS:
