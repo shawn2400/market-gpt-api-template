@@ -6,7 +6,7 @@ import os, platform, time
 
 try:
     import psutil  # optional
-except Exception:  # psutil may be missing
+except Exception:
     psutil = None  # type: ignore
 
 router = APIRouter(prefix="/debug", tags=["Debug"])
@@ -24,13 +24,9 @@ def _tokens_from_env() -> list[str]:
             toks.extend(_split_tokens(v))
         elif v:
             toks.append(v.strip())
-    # מסכה קלה להצגה (לא חושפים ערכים מלאים)
     masked = []
     for t in toks:
-        if len(t) <= 6:
-            masked.append("***")
-        else:
-            masked.append(f"{t[:3]}…{t[-3:]}")
+        masked.append("***" if len(t) <= 6 else f"{t[:3]}…{t[-3:]}")
     return masked
 
 @router.get("/")
@@ -65,8 +61,8 @@ def debug_router(op: str = Query("ping", pattern="^(ping|health|tokens|refresh)$
         return {"ok": True, "count": len(_tokens_from_env()), "tokens_masked": _tokens_from_env()}
 
     if op == "refresh":
-        # אין ריענון דינמי של הטוקנים במידלוור בלי ריסטארט; מסמנים זאת בבירור.
         return {"ok": False, "detail": "Token refresh requires process restart (middleware loads tokens at startup)."}
+
 
 
 
