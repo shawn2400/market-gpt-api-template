@@ -1,104 +1,73 @@
 # routes/debug.py
 from __future__ import annotations
-from typing import Dict, Any, List
+from fastapi import APIRouter, Query
+from typing import Dict, Any
 import os, platform, time
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+try:
+    import psutil  # optional
+except Exception:  # psutil may be missing
+    psutil = None  # type: ignore
 
-# נדרשת רק בדיקת הרשאות, בלי get_loaded_tokens/refresh_tokens_from_env
-from utils.auth import require_api_key
+router = APIRouter(prefix="/debug", tags=["Debug"])
 
-router = APIRouter(
-    prefix="/debug",
-    tags=["Debug"],
-    dependencies=[Depends(require_api_key)],
-)
+def _tokens_from_env() -> list[str]:
+    def _split_tokens(val: str | None) -> list[str]:
+        if not val:
+            return []
+        s = val.replace("\n", ",").replace(";", ",")
+        return [t.strip() for t in s.split(",") if t.strip()]
+    toks = []
+    for key in ("API_BEARER_TOKEN", "API_BEARER_TOKEN_ALT", "ALGOGPT_TOKENS"):
+        v = os.getenv(key)
+        if key == "ALGOGPT_TOKENS":
+            toks.extend(_split_tokens(v))
+        elif v:
+            toks.append(v.strip())
+    # מסכה קלה להצגה (לא חושפים ערכים מלאים)
+    masked = []
+    for t in toks:
+        if len(t) <= 6:
+            masked.append("***")
+        else:
+            masked.append(f"{t[:3]}…{t[-3:]}")
+    return masked
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def _get_sys_stats() -> Dict[str, Any]:
-    """סטטיסטיקות מערכת — psutil אופציונלי. אם לא מותקן, מחזירים None."""
-    out: Dict[str, Any] = {"cpu_percent": None, "memory": None}
-    try:
-        import psutil  # type: ignore
-        vm = psutil.virtual_memory()
-        out["cpu_percent"] = psutil.cpu_percent(interval=0.1)
-        out["memory"] = {
-            "total_mb": round(vm.total / 1048576, 2),
-            "used_mb": round(vm.used / 1048576, 2),
-            "free_mb": round(vm.available / 1048576, 2),
-            "percent": vm.percent,
-        }
-    except Exception:
-        # psutil לא קיים או כשל — משאירים None כדי לא להפיל את ה־API
-        pass
-    return out
-
-def _split_tokens(val: str | None) -> List[str]:
-    if not val:
-        return []
-    s = val.replace("\n", ",").replace(";", ",")
-    return [t.strip() for t in s.split(",") if t.strip()]
-
-def _clean_key(s: str | None) -> str:
-    return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
-
-def _load_tokens_from_env_like_main() -> List[str]:
-    """שחזור לוגיקת טעינת טוקנים כפי שנעשית ב-main.py (לקריאה בלבד)."""
-    raw = [
-        os.getenv("API_BEARER_TOKEN"),
-        os.getenv("API_BEARER_TOKEN_ALT"),
-        *_split_tokens(os.getenv("ALGOGPT_TOKENS")),
-    ]
-    toks: List[str] = []
-    for t in raw:
-        ct = _clean_key(t)
-        if ct:
-            toks.append(ct)
-    return toks
-
-def _mask_token(token: str) -> str:
-    """מסכה לא גרסה מלאה של טוקן (Privacy)."""
-    if len(token) <= 8:
-        return "*" * max(0, len(token) - 2) + token[-2:]
-    return f"{token[:4]}...{token[-4:]}"
-
-@router.get("", summary="Debug multiplexer (single operation)")
-def debug(op: str = Query("ping", pattern="^(ping|health|tokens)$")) -> Dict[str, Any]:
-    """
-    נקודת דיבוג רב-מצבית (op) כדי לשמור על פעולה אחת ב־OpenAPI:
-      - op=ping   → בדיקת זמינות
-      - op=health → מידע מערכת בסיסי (psutil אופציונלי)
-      - op=tokens → ספירת טוקנים + מסכות (נקרא ישירות מה-ENV; לא משנה את מה שנטען ב-startup)
-    """
+@router.get("/")
+def debug_router(op: str = Query("ping", pattern="^(ping|health|tokens|refresh)$")) -> Dict[str, Any]:
     if op == "ping":
-        return {"ok": True, "ts": time.time()}
+        return {"ok": True, "pong": "ok"}
 
     if op == "health":
-        base = {
+        mem = {}
+        cpu_percent = None
+        if psutil:
+            vm = psutil.virtual_memory()
+            mem = {
+                "total_mb": round(vm.total / (1024 * 1024), 2),
+                "used_mb": round(vm.used / (1024 * 1024), 2),
+                "free_mb": round(vm.available / (1024 * 1024), 2),
+                "percent": vm.percent,
+            }
+            cpu_percent = psutil.cpu_percent(interval=0.3)
+        else:
+            mem = {"note": "psutil not installed"}
+        return {
             "ok": True,
             "env": os.getenv("ENV", "production"),
             "platform": platform.platform(),
-            "time": _now_iso(),
+            "time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+            "cpu_percent": cpu_percent,
+            "memory": mem,
         }
-        base.update(_get_sys_stats())
-        return base
 
     if op == "tokens":
-        toks = _load_tokens_from_env_like_main()
-        return {
-            "ok": True,
-            "count": len(toks),
-            # לא מציגים טוקנים גולמיים — רק מסכה "XXXX...YYYY"
-            "tokens_masked": [_mask_token(t) for t in toks],
-            "note": "הטוקנים כאן נקראים מה-ENV לצורך תצוגה בלבד. "
-                    "ה־middleware משתמש בסט שנטען בזמן ה־startup; שינוי טוקנים דורש ריסטארט.",
-        }
+        return {"ok": True, "count": len(_tokens_from_env()), "tokens_masked": _tokens_from_env()}
 
-    # מקרה שלא יתפוס בגלל ה-regex, אבל נשאיר לטובת יציבות
-    return {"ok": False, "error": "unknown op"}
+    if op == "refresh":
+        # אין ריענון דינמי של הטוקנים במידלוור בלי ריסטארט; מסמנים זאת בבירור.
+        return {"ok": False, "detail": "Token refresh requires process restart (middleware loads tokens at startup)."}
+
 
 
 
