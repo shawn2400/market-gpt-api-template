@@ -35,7 +35,7 @@ def _parse_csv(s: str | None) -> List[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 
 def _clean_key(s: str | None) -> str:
-    # מסיר מרכאות/שבירות שורה/טאבים ורווחי קצה
+    # הסרת מרכאות/שבירות שורה/טאבים ורווחי קצה
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
@@ -43,7 +43,7 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
 # ──────────────────────────────────────────────────────────────────────────────
 # Config & Logging
 # ──────────────────────────────────────────────────────────────────────────────
-from utils import config as cfg
+from utils import config as cfg  # noqa: F401 (טעינה צדית)
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
@@ -110,7 +110,7 @@ except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Authorization (Bearer / X-API-Key)
+# Authorization (Bearer / X-API-Key / ?api_key)
 # ──────────────────────────────────────────────────────────────────────────────
 def _split_tokens(val: str | None) -> list[str]:
     if not val:
@@ -137,7 +137,7 @@ logger.info({"event": "auth_tokens_loaded", "count": len(TOKENS), "allow_all": A
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    # פותחים מפורשות את המסלולים הציבוריים
+    # מסלולים ציבוריים מפורשים
     PUBLIC_PATHS = {
         "/", "/openapi.json",
         "/health", "/health/live", "/health_full",
@@ -149,7 +149,7 @@ async def validate_token(request: Request, call_next):
     if request.method.upper() == "OPTIONS":
         return await call_next(request)
 
-    # סטטיק תמיד פתוח
+    # /static תמיד פתוח
     if path in PUBLIC_PATHS or path.startswith("/static/"):
         return await call_next(request)
 
@@ -338,13 +338,17 @@ async def shutdown_event():
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+    # חשוב: לא להשתמש במשתנה הסביבה "HOST" כדי לא להתנגש עם משתנה בדיקות ב-shell
+    bind_host = os.getenv("BIND_HOST", "0.0.0.0")
+    bind_port = int(os.getenv("BIND_PORT", os.getenv("PORT", "8000")))
     uvicorn.run(
         "main:app",
-        host=os.getenv("HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", "8000")),
+        host=bind_host,
+        port=bind_port,
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
