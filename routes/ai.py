@@ -14,7 +14,8 @@ from utils.quality_score import compute_quality
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.binance_client import futures_mark_price
 
-router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
+# שים לב: ללא prefix כאן! (ה-prefix /ai יתווסף ב-main.py)
+router = APIRouter(tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
 
@@ -176,13 +177,11 @@ async def _do_ai_analyze(symbol: str, interval: str):
     except Exception as e:
         return {"symbol": symbol.upper(), "interval": interval, "analysis": _quick_analysis_text(symbol, interval, f"analyze failed: {e}"), "fallback": True}
 
-# סריקה מלאה (מנסה אינדיקטורים; נופל חינני ל־Quick)
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
     results: List[Dict[str, Any]] = []
     aget_klines, prep, imp_err = _load_klines_and_indicators()
     if imp_err:
-        # נפילה חיננית: החזר Quick עבור כל סימבול
         out: List[Dict[str, Any]] = []
         for s in [x.strip().upper() for x in symbols.split(",") if x.strip()]:
             out.append({"symbol": s, "analysis": _quick_analysis_text(s, interval, f"deps unavailable: {imp_err}"), "fallback": True})
@@ -206,7 +205,11 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
             if analyze_with_ai and not ai_err:
                 try:
                     res = await analyze_with_ai({"symbol": s, **last})
-                    results.append({"symbol": s, "analysis": res.get("analysis", "") or _quick_analysis_text(s, interval, "AI returned empty"), "fallback": not res.get("ok", False)})
+                    results.append({
+                        "symbol": s,
+                        "analysis": res.get("analysis", "") or _quick_analysis_text(s, interval, "AI returned empty"),
+                        "fallback": not res.get("ok", False)
+                    })
                 except Exception as e:
                     results.append({"symbol": s, "analysis": _quick_analysis_text(s, interval, str(e)), "fallback": True})
             else:
@@ -216,7 +219,7 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
 
     return {"interval": interval, "results": results}
 
-# אליאס תאימות לאחור: קל ומהיר (מחזיר 200 תמיד; לא טוען אינדיקטורים)
+# אליאס תאימות לאחור: קל ומהיר (לא טוען אינדיקטורים)
 @router.get("/manual_scan")
 async def ai_manual_scan_compat(
     symbol: Optional[str] = Query(None, description="Single symbol (e.g. BTCUSDT)"),
@@ -225,7 +228,6 @@ async def ai_manual_scan_compat(
     max_price_age_sec: int = Query(120),
     mode: Optional[str] = Query(None, description="Kept for backward-compat; ignored"),
 ):
-    # איחוד קלט
     syms: List[str] = []
     if symbols and symbols.strip():
         syms.extend([x.strip().upper() for x in symbols.split(",") if x.strip()])
@@ -243,6 +245,7 @@ async def ai_manual_scan_compat(
         out.append({"symbol": s, "price": px, "fresh": fresh, "analysis": analysis, "fallback": True})
 
     return {"interval": interval, "results": out}
+
 
 
 
