@@ -1,4 +1,3 @@
-# routes/market.py
 from __future__ import annotations
 from fastapi import APIRouter, Query, HTTPException, Depends
 from utils.auth import require_api_key
@@ -8,15 +7,10 @@ from utils.binance_client import (
     futures_exchange_info_safe,
 )
 
-router = APIRouter(
-    prefix="/market",
-    tags=["Market"],
-    dependencies=[Depends(require_api_key)]
-)
+router = APIRouter(prefix="/market", tags=["Market"], dependencies=[Depends(require_api_key)])
 
 @router.get("/mark-price")
 def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
-    """Return current Futures Mark Price for a symbol."""
     try:
         price = futures_mark_price(symbol)
         if price is None:
@@ -28,11 +22,7 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
         raise HTTPException(status_code=500, detail=f"Failed to fetch mark price: {e}")
 
 @router.get("/symbol-info")
-def symbol_info(
-    symbol: str = Query(..., min_length=6, max_length=20),
-    force_refresh: int = Query(0, ge=0, le=1),
-):
-    """Full exchange info for a single symbol (tickSize, stepSize, etc.)."""
+def symbol_info(symbol: str = Query(..., min_length=6, max_length=20), force_refresh: int = Query(0, ge=0, le=1)):
     try:
         info = get_symbol_info(symbol, force_refresh=bool(force_refresh))
         if not info:
@@ -45,7 +35,6 @@ def symbol_info(
 
 @router.get("/exchange-info")
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
-    """Full Futures exchangeInfo snapshot (cached)."""
     try:
         data = futures_exchange_info_safe(force_refresh=bool(force_refresh))
         if not data or "symbols" not in data:
@@ -55,6 +44,7 @@ def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
+
 
 
 
