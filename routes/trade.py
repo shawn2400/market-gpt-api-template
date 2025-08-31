@@ -1,46 +1,27 @@
 # routes/trade.py
 from __future__ import annotations
-
-import os, math, logging
+from fastapi import APIRouter, Depends, Body, HTTPException
+from pydantic import BaseModel, Field
+from decimal import Decimal
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-
+from utils.auth import require_api_key
+from utils.ws_fallback import get_price
 from utils.binance_client import (
     futures_mark_price,
     get_symbol_filters,
-    place_limit_order,
     set_leverage,
+    place_limit_order,
 )
-from utils.orders_manager import record_simulated_order, record_order
 
-router = APIRouter(prefix="/trade", tags=["Trade"])
-log = logging.getLogger("algogpt.trade")
-
-def _to_bool(v: str | None, default: bool = False) -> bool:
-    if v is None:
-        return default
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
-
-def _floor_to_step(x: float, step: float) -> float:
-    return x if step <= 0 else (math.floor(x / step) * step)
-
-def _floor_to_tick(px: float, tick: float) -> float:
-    return px if tick <= 0 else (math.floor(px / tick) * tick)
-
-MIN_NOTIONAL_USDT = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
+router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_api_key)])
 
 class TradeRequest(BaseModel):
-    symbol: str = Field(..., description="למשל BTCUSDT")
-    side: str = Field(..., description="BUY או SELL")
-    budget: float = Field(..., gt=0, description="תקציב USDT (מרג'ין)")
-    leverage: Optional[int] = Field(10, ge=1, le=125)
-    price: Optional[float] = Field(None, description="מחיר כניסה אופציונלי; אם ריק נשתמש ב-Mark Price")
-    dry_run: bool = Field(True, description="ברירת מחדל DRY-RUN")
-    post_only: bool = Field(False, description="אם True נשתמש ב-GTX (Post Only)")
-    reduce_only: bool = Field(False, description="להזמנת ReduceOnly")
-    position_side: Optional[str] = Field(None, description="Hedge Mode: LONG/SHORT (לא חובה)")
+    symbol: str
+    side: str = Field(..., pattern="^(BUY|SELL)$")
+    budget: float = Field(..., gt=0)
+    leverage: int = Field(10, ge=1, le=125)
+    dry_run: bool = False
 
 class TradeResponse(BaseModel):
     ok: bool
@@ -48,100 +29,70 @@ class TradeResponse(BaseModel):
     side: str
     qty: float
     entry: float
-    leverage: Optional[int] = None
+    leverage: int
     order: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
+def _d(x) -> Decimal:
+    return Decimal(str(x))
+
 @router.post("/execute", response_model=TradeResponse)
-async def execute_trade(req: TradeRequest):
-    sym = req.symbol.strip().upper()
-    sdir = req.side.strip().upper()
-    if sdir not in ("BUY", "SELL"):
-        raise HTTPException(400, "side must be BUY or SELL")
+def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
+    sym = payload.symbol.strip().upper()
+    side = payload.side.strip().upper()
 
-    # פילטרים (stepSize/tickSize)
-    try:
-        f = get_symbol_filters(sym)
-        tick = float(f.get("tickSize", 0.1))
-        step = float(f.get("stepSize", 0.001))
-    except Exception as e:
-        log.warning({"event": "filters_fallback", "error": str(e)})
-        tick, step = 0.1, 0.001
-
-    # מחיר כניסה: נתעדף Mark Price אם לא סופק
-    px = None
-    if req.price and req.price > 0:
-        px = float(req.price)
-    else:
-        px = futures_mark_price(sym)
+    # מחיר כניסה: Mark Price (fallback ל-cache)
+    px = futures_mark_price(sym) or get_price(sym)
     if not px or px <= 0:
-        return TradeResponse(
-            ok=False, symbol=sym, side=sdir, qty=0.0, entry=0.0, leverage=req.leverage,
-            error="mark price unavailable"
-        )
-    entry = _floor_to_tick(px, tick)
+        raise HTTPException(status_code=503, detail=f"Price unavailable for {sym}")
+    entry = float(px)
 
-    # חישוב כמות: כמו בלוגים שלך — על בסיס budget בלבד, מינימום step
-    # אם budget קטן מדי, נרים ל-step
-    qty_raw = req.budget / entry
-    qty = max(_floor_to_step(qty_raw, step), step)
+    # פילטרים: tickSize/stepSize → עיגון דיוק למניעת -1111
+    f = get_symbol_filters(sym)
+    step_str = f.get("stepSizeStr", "0.001")
+    tick_str = f.get("tickSizeStr", "0.1")
 
-    # דרישת מינימום נומינלית (אופציונלי)
-    if (qty * entry) < max(0.0, MIN_NOTIONAL_USDT):
-        # עדיין נרשום DRY-RUN עם הכמות המינימלית, כדי שתראה בהיסטוריה
-        qty = step
+    # חישוב כמות לפי תקציב ולוורידג'
+    notional = payload.budget * payload.leverage
+    qty = _d(notional) / _d(entry)
 
-    if req.dry_run:
-        # רישום להיסטוריה כ-SIMULATED
-        try:
-            record_simulated_order(symbol=sym, side=sdir, qty=qty, price=entry, leverage=req.leverage)
-        except Exception as e:
-            log.warning({"event": "record_simulated_failed", "error": str(e)})
-        return TradeResponse(ok=True, symbol=sym, side=sdir, qty=qty, entry=entry, leverage=req.leverage, error=None)
+    # רצפה ל-step (מסתמך על binance_client ל-FLOOR ול-quantize)
+    from utils.binance_client import _floor_to_step_dec, _to_plain_str  # קיימים אצלך
+    qty_dec = _floor_to_step_dec(qty, step_str)
+    px_dec  = _floor_to_step_dec(entry, tick_str)
+    qty_f   = float(qty_dec)
+    px_f    = float(px_dec)
 
-    # מסחר חי?
-    if not _to_bool(os.getenv("EXECUTE_TRADES", "0"), False):
-        return TradeResponse(
-            ok=False, symbol=sym, side=sdir, qty=qty, entry=entry, leverage=req.leverage,
-            error="live trading disabled (EXECUTE_TRADES=0)"
-        )
+    if qty_f <= 0:
+        return TradeResponse(ok=False, symbol=sym, side=side, qty=0.0, entry=px_f, leverage=payload.leverage,
+                             error="Calculated quantity is zero after step rounding")
 
-    # סט לֶוֶורֵג' (לא חובה אבל מומלץ)
+    # סט לוורידג' (שקט אם נכשל)
     try:
-        if req.leverage:
-            set_leverage(sym, int(req.leverage))
-    except Exception as e:
-        log.warning({"event": "set_leverage_failed", "symbol": sym, "error": str(e)})
+        set_leverage(sym, payload.leverage)
+    except Exception:
+        pass
 
-    # שליחת הזמנה LIMIT (GTX אם post_only=True)
+    if payload.dry_run:
+        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None)
+
+    # הזמנה LIMIT-IOC (מתנהגת כ-MARKET עם דיוק תקין)
     try:
         order = place_limit_order(
             symbol=sym,
-            side=sdir,
-            quantity=qty,
-            price=entry,
-            post_only=bool(req.post_only),
-            reduce_only=bool(req.reduce_only),
-            position_side=(req.position_side or None),
-            time_in_force=None,  # ייקבע ל-GTC או GTX בפונקציה
+            side=side,
+            quantity=qty_f,
+            price=px_f,
+            time_in_force="IOC",
+            post_only=False,
+            reduce_only=False,
+            position_side=None,
             new_order_resp_type="RESULT",
         )
-        # כתיבה להיסטוריה כ-"NEW"/"OPEN"
-        try:
-            status = str(order.get("status") or "NEW")
-            client_id = order.get("clientOrderId") or None
-            record_order(
-                symbol=sym, side=sdir, qty=qty, price=entry,
-                leverage=req.leverage, status=status, client_order_id=client_id
-            )
-        except Exception:
-            pass
-
-        return TradeResponse(ok=True, symbol=sym, side=sdir, qty=qty, entry=entry, leverage=req.leverage, order=order)
+        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=order)
     except Exception as e:
-        return TradeResponse(
-            ok=False, symbol=sym, side=sdir, qty=qty, entry=entry, leverage=req.leverage, error=str(e)
-        )
+        return TradeResponse(ok=False, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None, error=str(e))
+
 
 
 
