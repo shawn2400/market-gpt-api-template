@@ -378,6 +378,51 @@ def stop_user_stream() -> None:
     _listen_key = None
     _keepalive_thread = None
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Back-compat shims (older code imports).  שומר תאימות לקוד קיים.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _floor_to_step_dec(x: float | str, step_str: str):
+    """Quantize quantity DOWN to the exchange step size (Decimal)."""
+    return _quantize_multiple(x, step_str, rounding=ROUND_DOWN)
+
+def _ceil_to_tick_dec(x: float | str, tick_str: str):
+    """Quantize price UP to the exchange tick size (Decimal)."""
+    return _quantize_multiple(x, tick_str, rounding=ROUND_UP)
+
+def _floor_to_tick_dec(x: float | str, tick_str: str):
+    """Quantize price DOWN to the exchange tick size (Decimal)."""
+    return _quantize_multiple(x, tick_str, rounding=ROUND_DOWN)
+
+# אליאסים נפוצים היסטורית
+to_decimal_str = _to_plain_str
+_to_decimal_str = _to_plain_str
+
+# יצוא ציבורי מוצהר (לא חובה, עוזר לעריכה סטטית)
+__all__ = [
+    "fapi_ping",
+    "futures_mark_price",
+    "futures_exchange_info_safe",
+    "get_symbol_info",
+    "get_symbol_filters",
+    "set_leverage",
+    "futures_open_positions",
+    "futures_balance",
+    "place_limit_order",
+    "get_order",
+    "cancel_order",
+    "get_open_orders",
+    "start_user_stream_keepalive",
+    "stop_user_stream",
+    # helpers / shims
+    "_quantize_multiple",
+    "_to_plain_str",
+    "_floor_to_step_dec",
+    "_ceil_to_tick_dec",
+    "_floor_to_tick_dec",
+]
+
+
 
 
 
