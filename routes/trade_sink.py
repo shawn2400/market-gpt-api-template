@@ -32,10 +32,13 @@ if USE_REDIS_TRADES and not RED:
 
 # ====== Models ======
 class TradeIn(BaseModel):
+    # מזהה טרייד חיצוני (מהבוט/וורקר)
     trade_id: str = Field(..., min_length=4, max_length=64)
+
+    # סוג טרייד
     trade_type: str = Field(..., pattern="^(FUTURES|SPOT|GRID)$")
     symbol: str
-    side: Optional[str] = None
+    side: Optional[str] = None            # FUTURES/SPOT (LONG/SHORT; ב-SPOT רק LONG)
     current_price: float
 
     # FUTURES/SPOT
@@ -51,7 +54,7 @@ class TradeIn(BaseModel):
     notional_usd: Optional[float] = None
     qty: Optional[float] = None
 
-    # ETA (אופציונלי)
+    # ETA (אופציונלי, לפי worker/bot)
     eta_sl: Optional[str] = None
     eta_tp1: Optional[str] = None
     eta_tp2: Optional[str] = None
@@ -66,7 +69,7 @@ class TradeIn(BaseModel):
     grid_side: Optional[str] = None
 
     # misc
-    tp_scale: Optional[str] = None
+    tp_scale: Optional[str] = None        # JSON [50,30,20]
     chat_id: int | str | None = None
 
     # הקשר ולידציה
@@ -246,7 +249,7 @@ async def trade_ingest(
                                   market=(payload.market or "futures"))
     if not val["ok"]:
         # חוסם בפרודקשן לפי VALIDATOR_STRICT=1 (ראה .env)
-        return {"ok": False, "errors": val["errors"], "warnings": val["warnings"]}
+        return {"ok": False, "errors": val["errors"], "warnings": val["warnings"]}, 422
 
     rec = payload.model_dump()
     rec.update({
@@ -359,6 +362,7 @@ async def analysis_ingest(
         r = await client.post(f"{TELEGRAM_API}/sendMessage", json=body)
         r.raise_for_status()
         return {"ok": True}
+
 
 
 
