@@ -23,7 +23,7 @@ class PriceResponse(BaseModel):
     ok: bool
     symbol: Optional[str] = None
     price: Optional[float] = None
-    source: Optional[str] = None   # redis/cache/binance_futures_client/binance_fapi/binance_spot
+    source: Optional[str] = None
     ts: Optional[float] = None
     error: Optional[str] = None
 
@@ -118,6 +118,7 @@ async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSD
         return PriceResponse(ok=True, symbol=sym, price=float(spot), source="binance_spot", ts=time.time())
 
     raise HTTPException(status_code=502, detail="Unable to fetch price for symbol")
+
 
 
 
