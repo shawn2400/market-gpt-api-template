@@ -3,110 +3,134 @@ from __future__ import annotations
 import os
 from typing import Dict, Any, Optional
 
-TOP10 = set((os.getenv("TOP10_SYMBOLS","BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,TRXUSDT,TONUSDT,LTCUSDT")
-             .upper().replace(" ","")).split(","))
+# --------- ENV thresholds (override via .env) ---------
+RR_MIN_LOW  = float(os.getenv("RR_MIN_LOW",  "1.50"))
+RR_MIN_MID  = float(os.getenv("RR_MIN_MID",  "1.60"))
+RR_MIN_HIGH = float(os.getenv("RR_MIN_HIGH", "1.80"))
 
-MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10","1.6"))
-MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT","1.9"))
+LEV_MAX_LOW  = int(os.getenv("LEV_MAX_LOW",  "25"))
+LEV_MAX_MID  = int(os.getenv("LEV_MAX_MID",  "20"))
+LEV_MAX_HIGH = int(os.getenv("LEV_MAX_HIGH", "15"))
 
-# תקרות מינוף לפי משטר תנודתיות
-LEV_CAP_LOW  = int(os.getenv("LEV_CAP_VOL_LOW","25"))
-LEV_CAP_MID  = int(os.getenv("LEV_CAP_VOL_MID","15"))
-LEV_CAP_HIGH = int(os.getenv("LEV_CAP_VOL_HIGH","8"))
+ENTRY_GAP_MAX_PCT = float(os.getenv("ENTRY_GAP_MAX_PCT", "1.50"))  # מרחק מקסימלי מהמחיר (%)
+MIN_STOP_PCT      = float(os.getenv("MIN_STOP_PCT", "0.05"))       # 0.05% מגודל המחיר – כדי להימנע מ־risk=0
 
-# מרחק כניסה מקס' מהמחיר (לא לרדוף)
-MAX_ENTRY_GAP_PCT = float(os.getenv("MAX_ENTRY_GAP_PCT","0.35"))  # אחוז
-
-# Kelly “קצוץ”
-KELLY_CAP = float(os.getenv("KELLY_CAP","0.15"))  # לעולם לא מעל 15% מההון לטרייד
-KELLY_MIN = float(os.getenv("KELLY_MIN","0.01"))  # מינ' 1%
-
-def min_rr_required(symbol: str) -> float:
-    return MIN_RR_TOP10 if symbol.upper() in TOP10 else MIN_RR_ALT
-
-def leverage_cap(vol_regime: str) -> int:
-    v = (vol_regime or "mid").lower()
-    if v == "low":
-        return LEV_CAP_LOW
-    if v == "high":
-        return LEV_CAP_HIGH
-    return LEV_CAP_MID
-
-def entry_gap_ok(current_price: float, entry: float) -> bool:
-    if not current_price or not entry:
-        return True
-    gap = abs(entry - current_price) / current_price * 100.0
-    return gap <= MAX_ENTRY_GAP_PCT
-
-def kelly_suggestion(success_pct: float, rr: float) -> float:
-    """
-    Kelly משוער: f* = p - (1-p)/b  (b≈RR)
-    תחימה ל-[KELLY_MIN, KELLY_CAP], ולפי הגיון: אם f* שלילי → קח מינ׳ קבוע קטן.
-    """
+def _f(x) -> Optional[float]:
     try:
-        p = float(success_pct)/100.0
-        b = float(rr)
-        if b <= 0:
-            return KELLY_MIN
-        f = p - (1.0 - p)/b
-        f = max(KELLY_MIN, min(KELLY_CAP, f))
-        return f
+        v = float(x)
+        if v == v:
+            return v
     except Exception:
-        return KELLY_MIN
+        pass
+    return None
 
-def ensure_tp_sl_with_atr(side: str, price: float, atr: Optional[float], entry: Optional[float], sl: Optional[float], tp: Optional[float]) -> Dict[str, float]:
-    """
-    אם חסר SL/TP – משלים כללים בסיסיים לפי ATR×1.5 סטופ ו-2R יעד.
-    """
-    if atr is None or atr <= 0 or not price:
-        return {"entry": entry or price, "sl": sl or price, "tp": tp or price}
-    entry_eff = entry or price
-    risk = 1.5 * atr
-    if side.upper() == "LONG":
-        sl_eff = sl if sl else (entry_eff - risk)
-        tp_eff = tp if tp else (entry_eff + 2*risk)
-    else:
-        sl_eff = sl if sl else (entry_eff + risk)
-        tp_eff = tp if tp else (entry_eff - 2*risk)
-    return {"entry": entry_eff, "sl": sl_eff, "tp": tp_eff}
-
-def rr_from_levels(side: str, entry: float, sl: float, tp: float) -> Optional[float]:
-    try:
-        risk = abs(entry - sl)
-        reward = abs(tp - entry)
-        if risk <= 0:
-            return None
-        rr = reward / risk
-        return round(rr, 2)
-    except Exception:
+def rr_from_levels(entry: float, sl: float, tp1: float) -> Optional[float]:
+    """ מחשב RR בסיסי בין entry-sl ל־tp1-entry """
+    e = _f(entry); s = _f(sl); t = _f(tp1)
+    if e is None or s is None or t is None:
         return None
+    risk = abs(e - s)
+    reward = abs(t - e)
+    if risk <= 0:
+        return None
+    return reward / risk
 
-def gate_trade(symbol: str, side: str, price: float, entry: float, sl: float, tp: float,
-               vol_regime: str, success_pct: Optional[float] = None, leverage: Optional[int] = None) -> Dict[str, Any]:
+def entry_gap_ok(current_price: float, entry: float, *, max_gap_pct: float = None) -> bool:
+    """ אל תרדוף – מרחק כניסה מהמחיר לא יחרוג מהסף. """
+    cp = _f(current_price); e = _f(entry)
+    if cp is None or e is None or cp <= 0:
+        return False
+    mx = float(max_gap_pct if max_gap_pct is not None else ENTRY_GAP_MAX_PCT)
+    gap = abs(e - cp) / cp * 100.0
+    return gap <= mx
+
+def _min_rr_for_vol(vol_regime: str) -> float:
+    v = (vol_regime or "mid").lower()
+    if v.startswith("low"):
+        return RR_MIN_LOW
+    if v.startswith("high"):
+        return RR_MIN_HIGH
+    return RR_MIN_MID
+
+def _max_lev_for_vol(vol_regime: str) -> int:
+    v = (vol_regime or "mid").lower()
+    if v.startswith("low"):
+        return LEV_MAX_LOW
+    if v.startswith("high"):
+        return LEV_MAX_HIGH
+    return LEV_MAX_MID
+
+def gate_trade(
+    symbol: str,
+    side: str,
+    current_price: float,
+    entry: float,
+    sl: float,
+    tp1: float,
+    *,
+    vol_regime: str = "mid",
+    success_pct: Optional[float] = None,
+    leverage: Optional[int] = None,
+) -> Dict[str, Any]:
     """
-    גייטינג כללי: RR מינימלי, רודף-מחיר, תקרת מינוף לפי vol_regime. מחזיר dict עם ok/reasons.
+    ולידציה קשיחה/רכה להצעת טרייד:
+      - חוקי כיוונים (SL/TP ביחס ל־entry)
+      - RR מזערי לפי vol_regime
+      - מינוף מירבי לפי vol_regime
+      - entry לא רחוק מדי מהמחיר
     """
-    out = {"ok": True, "reasons": [], "caps": {}}
-    rr = rr_from_levels(side, entry, sl, tp)
-    rr_min = min_rr_required(symbol)
-    if rr is None or rr < rr_min:
-        out["ok"] = False
-        out["reasons"].append(f"rr<{rr_min}")
-    if not entry_gap_ok(price, entry):
-        out["ok"] = False
-        out["reasons"].append("entry_gap")
+    errors: list[str] = []
+    warns: list[str]  = []
 
-    lev_cap = leverage_cap(vol_regime)
-    out["caps"]["lev_cap"] = lev_cap
-    if leverage and leverage > lev_cap:
-        out["ok"] = False
-        out["reasons"].append(f"lev>{lev_cap}")
+    s = (side or "").upper()
+    e = _f(entry); sL = _f(sl); t1 = _f(tp1); cp = _f(current_price)
+    if s not in ("LONG","SHORT"):
+        errors.append("invalid side")
+        return {"ok": False, "errors": errors, "warnings": warns}
 
-    if success_pct is not None and rr is not None:
-        f = kelly_suggestion(success_pct, rr)
-        out["suggested_budget_frac"] = f
+    if e is None or sL is None or t1 is None:
+        errors.append("missing numeric fields: entry/sl/tp1")
+        return {"ok": False, "errors": errors, "warnings": warns}
 
-    out["rr"] = rr
-    out["rr_min"] = rr_min
-    out["vol_regime"] = vol_regime
-    return out
+    if cp is not None and not entry_gap_ok(cp, e):
+        warns.append("entry far from current price")
+
+    # מינימום מרחק סטופ (מונע risk=0)
+    if cp:
+        min_stop = abs(cp) * (MIN_STOP_PCT / 100.0)
+        if abs(e - sL) < min_stop:
+            errors.append(f"stop too tight (<{MIN_STOP_PCT:.3f}% of price)")
+
+    # בדיקת הגיון SL/TP לפי צד
+    if s == "LONG":
+        if sL >= e:
+            errors.append("SL must be below entry for LONG")
+        if t1 <= e:
+            errors.append("TP1 must be above entry for LONG")
+    else:
+        if sL <= e:
+            errors.append("SL must be above entry for SHORT")
+        if t1 >= e:
+            errors.append("TP1 must be below entry for SHORT")
+
+    # RR מזערי
+    rr = rr_from_levels(e, sL, t1)
+    min_rr = _min_rr_for_vol(vol_regime)
+    if rr is None:
+        errors.append("invalid RR")
+    elif rr < min_rr:
+        errors.append(f"RR too low (<{min_rr:.2f})")
+
+    # מינוף מירבי
+    if leverage is not None:
+        lev = int(leverage)
+        max_lev = _max_lev_for_vol(vol_regime)
+        if lev < 1 or lev > max_lev:
+            errors.append(f"leverage out of bounds for {vol_regime} (<= {max_lev}x)")
+
+    # הערת הצלחה – אזהרה בלבד (הסף הקשיח מטופל חיצונית ע״י ה־worker)
+    if success_pct is not None and (success_pct < 0 or success_pct > 100):
+        warns.append("success_pct should be within 0..100")
+
+    return {"ok": len(errors) == 0, "errors": errors, "warnings": warns}
+
