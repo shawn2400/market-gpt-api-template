@@ -1,3 +1,4 @@
+# routes/market.py
 from __future__ import annotations
 from fastapi import APIRouter, Query, HTTPException, Depends
 from utils.auth import require_api_key
@@ -10,7 +11,7 @@ from utils.binance_client import (
 router = APIRouter(prefix="/market", tags=["Market"], dependencies=[Depends(require_api_key)])
 
 @router.get("/mark-price")
-def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
+def mark_price(symbol: str = Query(..., min_length=3, max_length=20)):
     try:
         price = futures_mark_price(symbol)
         if price is None:
@@ -22,7 +23,7 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)):
         raise HTTPException(status_code=500, detail=f"Failed to fetch mark price: {e}")
 
 @router.get("/symbol-info")
-def symbol_info(symbol: str = Query(..., min_length=6, max_length=20), force_refresh: int = Query(0, ge=0, le=1)):
+def symbol_info(symbol: str = Query(..., min_length=3, max_length=20), force_refresh: int = Query(0, ge=0, le=1)):
     try:
         info = get_symbol_info(symbol, force_refresh=bool(force_refresh))
         if not info:
@@ -44,6 +45,7 @@ def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
+
 
 
 
