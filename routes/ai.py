@@ -1,3 +1,4 @@
+# routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
 from fastapi import APIRouter, Depends, Body, Query
@@ -8,6 +9,7 @@ from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
 from utils.quality import compute_quality
 from utils.ws_fallback import get_price, is_price_fresh
+from utils.binance_client import futures_mark_price
 
 router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
 
@@ -43,13 +45,22 @@ def _mk_anchor(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
-def _fallback_text(row: Dict[str, Any], symbol: str, interval: str, reason: str = "") -> str:
-    ema_bias = "long" if row.get("ema_21", 0) > row.get("ema_50", 0) else "short"
-    rsi = row.get("rsi", 50.0); adx = row.get("adx", 15.0)
-    extra = f" ({reason})" if reason else ""
-    s = symbol.upper(); px = get_price(s); fresh = is_price_fresh(s, max_age_sec=10)
-    price_note = f", mark={px}" if px and fresh else ""
-    return f"[Fallback] {s} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}{price_note}{extra}"
+def _fallback_price(symbol: str) -> Optional[float]:
+    s = symbol.strip().upper()
+    px = futures_mark_price(s)
+    if px and px > 0:
+        return px
+    px = get_price(s)
+    if px and is_price_fresh(s, max_age_sec=60):
+        return float(px)
+    return None
+
+def _quick_analysis_text(symbol: str, interval: str, reason: str = "") -> str:
+    px = _fallback_price(symbol)
+    extra = f" (reason: {reason})" if reason else ""
+    if px:
+        return f"[Quick] {symbol.upper()} {interval}: price≈{px}{extra}"
+    return f"[Quick] {symbol.upper()} {interval}: price unavailable{extra}"
 
 def _load_klines_and_indicators():
     try:
@@ -78,8 +89,8 @@ async def ai_health():
 @router.get("/price")
 async def ai_price(symbol: str = Query(..., description="e.g. BTCUSDT")):
     s = symbol.strip().upper()
-    px = get_price(s)
-    return {"symbol": s, "price": px, "fresh": is_price_fresh(s, max_age_sec=10)}
+    px = _fallback_price(s)
+    return {"symbol": s, "price": px, "fresh": bool(px)}
 
 @router.post("/quality", response_model=QualityResponse)
 async def ai_quality(payload: QualityRequest = Body(...)):
@@ -108,26 +119,28 @@ async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
 async def _do_ai_analyze(symbol: str, interval: str):
     aget_klines, prep, imp_err = _load_klines_and_indicators()
     if imp_err:
-        return {"symbol": symbol.upper(), "interval": interval, "analysis": f"[Fallback] dependencies unavailable: {imp_err}", "fallback": True}
+        return {"symbol": symbol.upper(), "interval": interval, "analysis": _quick_analysis_text(symbol, interval, imp_err), "fallback": True}
     try:
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
-            return {"symbol": symbol.upper(), "interval": interval, "analysis": "[Fallback] no klines data returned", "fallback": True}
+            return {"symbol": symbol.upper(), "interval": interval, "analysis": _quick_analysis_text(symbol, interval, "no klines"), "fallback": True}
         indicators = prep(df)
         if indicators is None or len(indicators) == 0:
-            return {"symbol": symbol.upper(), "interval": interval, "analysis": "[Fallback] indicators preparation failed", "fallback": True}
+            return {"symbol": symbol.upper(), "interval": interval, "analysis": _quick_analysis_text(symbol, interval, "indicators failed"), "fallback": True}
         last = indicators.iloc[-1].to_dict()
         analyze_with_ai, ai_err = _load_ai_analysis()
         if analyze_with_ai and not ai_err:
             try:
                 res = await analyze_with_ai({"symbol": symbol.upper(), **last})
-                return {"symbol": symbol.upper(), "interval": interval, "analysis": res.get("analysis", ""), "fallback": not res.get("ok", False)}
+                ok = bool(res.get("ok"))
+                text = res.get("analysis") or _quick_analysis_text(symbol, interval, "AI returned empty")
+                return {"symbol": symbol.upper(), "interval": interval, "analysis": text, "fallback": not ok}
             except Exception as e:
-                return {"symbol": symbol.upper(), "interval": interval, "analysis": _fallback_text(last, symbol, interval, str(e)), "fallback": True}
+                return {"symbol": symbol.upper(), "interval": interval, "analysis": _quick_analysis_text(symbol, interval, str(e)), "fallback": True}
         else:
-            return {"symbol": symbol.upper(), "interval": interval, "analysis": _fallback_text(last, symbol, interval, ai_err or "AI not available"), "fallback": True}
+            return {"symbol": symbol.upper(), "interval": interval, "analysis": _quick_analysis_text(symbol, interval, ai_err or "AI not available"), "fallback": True}
     except Exception as e:
-        return {"symbol": symbol.upper(), "interval": interval, "analysis": f"[Fallback] AI analyze failed: {e}", "fallback": True}
+        return {"symbol": symbol.upper(), "interval": interval, "analysis": _quick_analysis_text(symbol, interval, f"analyze failed: {e}"), "fallback": True}
 
 @router.get("/manual-scan")
 async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
@@ -150,12 +163,13 @@ async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")
                     res = await analyze_with_ai({"symbol": s, **last})
                     out.append({"symbol": s, "analysis": res.get("analysis", ""), "fallback": not res.get("ok", False)})
                 except Exception as e:
-                    out.append({"symbol": s, "analysis": _fallback_text(last, s, interval, str(e)), "fallback": True})
+                    out.append({"symbol": s, "analysis": _quick_analysis_text(s, interval, str(e)), "fallback": True})
             else:
-                out.append({"symbol": s, "analysis": _fallback_text(last, s, interval, ai_err or "AI not available"), "fallback": True})
+                out.append({"symbol": s, "analysis": _quick_analysis_text(s, interval, ai_err or "AI not available"), "fallback": True})
         except Exception as e:
             out.append({"symbol": s, "error": str(e)})
     return {"interval": interval, "results": out}
+
 
 
 
