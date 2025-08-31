@@ -1,91 +1,82 @@
 # utils/alerts.py
 from __future__ import annotations
-import os, asyncio, re
-import httpx
-from typing import Optional, Dict, Any
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+from typing import Any, Dict, List, Optional
 
-def _escape_md(text: str) -> str:
-    # הגנה בסיסית ל-parse_mode=Markdown
-    return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
+from telegram.constants import ParseMode
 
-async def _tg_post(method: str, json: Dict[str, Any], timeout: float = 10.0) -> Dict[str, Any]:
-    if not TELEGRAM_BOT_TOKEN:
-        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN missing"}
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        # רטריז קל נגד שיבושי רשת
-        last_err: Optional[Exception] = None
-        for _ in range(3):
-            try:
-                r = await client.post(url, json=json)
-                r.raise_for_status()
-                obj = r.json()
-                return obj if isinstance(obj, dict) else {"ok": False, "error": "bad json"}
-            except Exception as e:
-                last_err = e
-                await asyncio.sleep(0.6)
-        return {"ok": False, "error": str(last_err)}
+from utils.runtime_prefs import TelePrefs
 
-async def telegram_get_me() -> Dict[str, Any]:
-    if not TELEGRAM_BOT_TOKEN:
-        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN missing"}
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
-    async with httpx.AsyncClient(timeout=10.0) as client:
+tprefs = TelePrefs()
+
+
+async def should_suppress_alert(symbol: str, trade_id: Optional[str]) -> bool:
+    """
+    שער השתקה: מחזיר True אם הסימבול/טרייד מושתקים ב-TTL.
+    """
+    if symbol and await tprefs.is_snoozed_symbol(symbol):
+        return True
+    if trade_id and await tprefs.is_snoozed_trade(trade_id):
+        return True
+    return False
+
+
+async def send_alert_or_bundle(bot, chat_id: int, payload: Dict[str, Any]) -> None:
+    """
+    שיגור התראה בודדת או הכנסת לאצווה (bundle).
+    payload: {"type":"near_tp","symbol":"BTCUSDT","trade_id":"abc","text":"...","short":"..."}
+    """
+    if await should_suppress_alert(payload.get("symbol", ""), payload.get("trade_id")):
+        return
+
+    bundle_sec = await tprefs.get_bundle_window(chat_id)
+    if bundle_sec > 0:
+        await tprefs.bundle_enqueue(chat_id, payload)
+        return
+
+    await bot.send_message(chat_id=chat_id, text=payload["text"])
+
+
+async def bundle_tick(bot, chat_id: int) -> None:
+    """
+    רוקן את תור ה-bundle ושלח הודעה מרוכזת אחת. לקרוא מלולאת ה-watchdog הקיימת.
+    """
+    items = await tprefs.bundle_flush(chat_id, max_items=200)
+    if not items:
+        return
+
+    lines: List[str] = []
+    for it in items:
+        sym = it.get("symbol", "?")
+        typ = it.get("type", "event")
+        tip = it.get("short", "")
+        lines.append(f"• [{typ}] {sym} {tip}".strip())
+
+    text = "📦 *Bundled alerts*\n" + "\n".join(lines)
+    await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+
+
+async def update_pinned_summary(bot, chat_id: int, summary_text: str) -> None:
+    """
+    עדכון הודעת סיכום מוצמדת ע"י edit; יצירה + pin אם אין.
+    """
+    if not await tprefs.is_pin_summary(chat_id):
+        return
+
+    msg_id = await tprefs.get_pin_message_id(chat_id)
+    if msg_id is None:
+        msg = await bot.send_message(chat_id=chat_id, text=summary_text, parse_mode=ParseMode.MARKDOWN)
+        await tprefs.set_pin_message_id(chat_id, msg.message_id)
         try:
-            r = await client.get(url)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+            await bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
+        except Exception:
+            pass
+        return
 
-async def telegram_send_chat_action(action: str = "typing") -> Dict[str, Any]:
-    if not TELEGRAM_CHAT_ID:
-        return {"ok": False, "error": "TELEGRAM_CHAT_ID missing"}
-    return await _tg_post("sendChatAction", {"chat_id": TELEGRAM_CHAT_ID, "action": action})
+    try:
+        await bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=summary_text, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        # אם ההודעה נמחקה/פגה – צור חדשה ושמור message_id
+        msg = await bot.send_message(chat_id=chat_id, text=summary_text, parse_mode=ParseMode.MARKDOWN)
+        await tprefs.set_pin_message_id(chat_id, msg.message_id)
 
-async def send_telegram_alert(
-    message: str,
-    parse_mode: str = "Markdown",
-    disable_web_page_preview: bool = True,
-) -> Dict[str, Any]:
-    if not TELEGRAM_CHAT_ID:
-        return {"ok": False, "error": "TELEGRAM_CHAT_ID missing"}
-
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": _escape_md(message) if parse_mode == "Markdown" else str(message),
-        "parse_mode": parse_mode,
-        "disable_web_page_preview": disable_web_page_preview,
-    }
-
-    # ניסיון ראשון ב-Markdown; אם נכשל עם 400, ננסה בלי parse_mode
-    resp = await _tg_post("sendMessage", payload)
-    if not resp.get("ok") and "Bad Request" in str(resp.get("error", "")):
-        payload.pop("parse_mode", None)
-        resp = await _tg_post("sendMessage", payload)
-    return resp
-
-def format_trade_alert(
-    symbol: str, side: str, entry: float, sl: float, tp1: float, tp2: float,
-    size_usd: float, note: str = "", quality: Optional[float] = None, success_pct: Optional[float] = None
-) -> str:
-    # פורמט “קצר” לפי ה-SOP שלך
-    parts = [
-        "קצר",
-        f"{'כניסה' if side.upper()=='LONG' else 'Short'}",
-        side.upper(),
-        f"{entry:.4f}",
-        f"SL {sl:.4f}",
-        f"TP1 {tp1:.4f}/TP2 {tp2:.4f}",
-        f"${size_usd:.0f}",
-        (note or "אימות 5m/15m"),
-    ]
-    head = " | ".join(parts)
-    tail = ""
-    if quality is not None or success_pct is not None:
-        tail = f"\nQuality: {quality:.2f} | Success: {success_pct:.1f}%" if (quality is not None and success_pct is not None) else \
-               f"\nQuality: {quality:.2f}" if quality is not None else f"\nSuccess: {success_pct:.1f}%"
-    return f"{head}{tail}"
