@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
-from utils.quality_score import compute_quality  # שם מתוקן
+from utils.quality_score import compute_quality
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.binance_client import futures_mark_price
 
@@ -21,6 +21,18 @@ router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_
 # ──────────────────────────────────────────────────────────────────────────────
 
 Side = Literal["LONG", "SHORT"]
+
+
+class HealthResponse(BaseModel):
+    ok: bool
+    model: str
+    reason: Optional[str] = None
+
+
+class PriceResponse(BaseModel):
+    symbol: str
+    price: Optional[float]
+    fresh: bool
 
 
 class QualityRequest(BaseModel):
@@ -44,6 +56,34 @@ class QualityResponse(BaseModel):
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(..., description="Trading pair symbol, e.g. BTCUSDT")
     interval: str = Field("15m", description="Kline interval, e.g. 15m,1h,4h")
+
+
+class AnalyzeResponse(BaseModel):
+    symbol: str
+    interval: str
+    analysis: str
+    fallback: bool
+
+
+class ManualScanResult(BaseModel):
+    symbol: str
+    analysis: Optional[str] = None
+    fallback: Optional[bool] = None
+    error: Optional[str] = None
+
+
+class ManualScanFullResponse(BaseModel):
+    interval: str
+    results: List[ManualScanResult]
+
+
+class ManualScanLegacyResponse(BaseModel):
+    symbol: str
+    interval: str
+    fresh: bool
+    analysis: str
+    fallback: bool = True
+    price: Optional[float] = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -96,9 +136,7 @@ def _quick_analysis_text(symbol: str, interval: str, reason: str = "") -> str:
 
 
 def _load_klines_and_indicators():
-    """
-    Tries to import klines & indicators. If not available, returns error string (for graceful fallback).
-    """
+    """Try to import klines & indicators. If not available, return error string (for graceful fallback)."""
     try:
         from utils.get_klines import aget_klines
         from utils.indicators import prepare_indicators_for_backtest
@@ -108,9 +146,7 @@ def _load_klines_and_indicators():
 
 
 def _load_ai_analysis():
-    """
-    Optional AI analysis hook (utils.ai_analysis.analyze_with_ai). If missing, we fallback.
-    """
+    """Optional AI hook (utils.ai_analysis.analyze_with_ai)."""
     try:
         from utils.ai_analysis import analyze_with_ai  # async function expected
         return analyze_with_ai, None
@@ -127,17 +163,17 @@ async def ping():
     return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
 
 
-@router.get("/health")
+@router.get("/health", response_model=HealthResponse)
 async def ai_health():
     ok = bool((os.getenv("OPENAI_API_KEY") or "").strip())
-    return {"ok": ok, "model": os.getenv("OPENAI_MODEL", "gpt-4o"), "reason": None if ok else "Missing OPENAI_API_KEY"}
+    return HealthResponse(ok=ok, model=os.getenv("OPENAI_MODEL", "gpt-4o"), reason=None if ok else "Missing OPENAI_API_KEY")
 
 
-@router.get("/price")
+@router.get("/price", response_model=PriceResponse)
 async def ai_price(symbol: str = Query(..., description="e.g. BTCUSDT")):
     s = symbol.strip().upper()
     price, fresh = await _best_price(s)
-    return {"symbol": s, "price": price, "fresh": fresh}
+    return PriceResponse(symbol=s, price=price, fresh=fresh)
 
 
 @router.post("/quality", response_model=QualityResponse)
@@ -162,7 +198,7 @@ async def ai_quality(payload: QualityRequest = Body(...)):
     )
 
 
-@router.get("/analyze")
+@router.get("/analyze", response_model=AnalyzeResponse)
 async def ai_analyze_get(
     symbol: str = Query(..., description="e.g. BTCUSDT"),
     interval: str = Query("15m", description="Kline interval"),
@@ -170,38 +206,36 @@ async def ai_analyze_get(
     return await _do_ai_analyze(symbol, interval)
 
 
-@router.post("/analyze")
+@router.post("/analyze", response_model=AnalyzeResponse)
 async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
     return await _do_ai_analyze(payload.symbol, payload.interval)
 
 
-async def _do_ai_analyze(symbol: str, interval: str):
+async def _do_ai_analyze(symbol: str, interval: str) -> AnalyzeResponse:
     aget_klines, prep, imp_err = _load_klines_and_indicators()
     if imp_err:
-        return {
-            "symbol": symbol.upper(),
-            "interval": interval,
-            "analysis": _quick_analysis_text(symbol, interval, imp_err),
-            "fallback": True,
-        }
+        return AnalyzeResponse(
+            symbol=symbol.upper(),
+            interval=interval,
+            analysis=_quick_analysis_text(symbol, interval, imp_err),
+            fallback=True,
+        )
     try:
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
-            return {
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "analysis": _quick_analysis_text(symbol, interval, "no klines"),
-                "fallback": True,
-            }
+            return AnalyzeResponse(
+                symbol=symbol.upper(), interval=interval,
+                analysis=_quick_analysis_text(symbol, interval, "no klines"),
+                fallback=True,
+            )
 
         indicators = prep(df)
         if indicators is None or len(indicators) == 0:
-            return {
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "analysis": _quick_analysis_text(symbol, interval, "indicators failed"),
-                "fallback": True,
-            }
+            return AnalyzeResponse(
+                symbol=symbol.upper(), interval=interval,
+                analysis=_quick_analysis_text(symbol, interval, "indicators failed"),
+                fallback=True,
+            )
 
         last = indicators.iloc[-1].to_dict()
 
@@ -211,54 +245,55 @@ async def _do_ai_analyze(symbol: str, interval: str):
                 res = await analyze_with_ai({"symbol": symbol.upper(), **last})
                 ok = bool(res.get("ok"))
                 text = res.get("analysis") or _quick_analysis_text(symbol, interval, "AI returned empty")
-                return {"symbol": symbol.upper(), "interval": interval, "analysis": text, "fallback": not ok}
+                return AnalyzeResponse(symbol=symbol.upper(), interval=interval, analysis=text, fallback=not ok)
             except Exception as e:
-                return {
-                    "symbol": symbol.upper(),
-                    "interval": interval,
-                    "analysis": _quick_analysis_text(symbol, interval, str(e)),
-                    "fallback": True,
-                }
+                return AnalyzeResponse(
+                    symbol=symbol.upper(), interval=interval,
+                    analysis=_quick_analysis_text(symbol, interval, str(e)),
+                    fallback=True,
+                )
         else:
-            return {
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "analysis": _quick_analysis_text(symbol, interval, ai_err or "AI not available"),
-                "fallback": True,
-            }
+            return AnalyzeResponse(
+                symbol=symbol.upper(), interval=interval,
+                analysis=_quick_analysis_text(symbol, interval, ai_err or "AI not available"),
+                fallback=True,
+            )
     except Exception as e:
-        return {
-            "symbol": symbol.upper(),
-            "interval": interval,
-            "analysis": _quick_analysis_text(symbol, interval, f"analyze failed: {e}"),
-            "fallback": True,
-        }
+        return AnalyzeResponse(
+            symbol=symbol.upper(), interval=interval,
+            analysis=_quick_analysis_text(symbol, interval, f"analyze failed: {e}"),
+            fallback=True,
+        )
 
 
-@router.get("/manual-scan", summary="Full manual scan (multi-symbol) with graceful AI/indicators fallback")
+@router.get(
+    "/manual-scan",
+    response_model=ManualScanFullResponse,
+    summary="Full manual scan (multi-symbol) with graceful AI/indicators fallback",
+)
 async def ai_manual_scan(
     symbols: str = Query(..., description="Comma-separated list, e.g. BTCUSDT,ETHUSDT"),
     interval: str = Query("15m", description="Kline interval"),
 ):
     """
-    Preferred endpoint. Tries indicators + optional AI. Always returns 200 with per-symbol results,
-    falling back to quick text if dependencies are missing.
+    מסלול “מלא” — מנסה אינדיקטורים ו־AI אם זמינים, ותמיד מחזיר 200 עם תוצאה פר־סימבול.
+    אם התלויות לא זמינות, נחזור ל־quick text לכל סימבול.
     """
-    results: List[Dict[str, Any]] = []
+    results: List[ManualScanResult] = []
     aget_klines, prep, imp_err = _load_klines_and_indicators()
     if imp_err:
-        return {"interval": interval, "results": [{"error": f"dependencies unavailable: {imp_err}"}]}
+        return ManualScanFullResponse(interval=interval, results=[ManualScanResult(symbol="*", error=f"dependencies unavailable: {imp_err}")])
 
     for s in [x.strip().upper() for x in symbols.split(",") if x.strip()]:
         try:
             df = await aget_klines(s, interval, limit=200, market_type="futures")
             if df is None or len(df) == 0:
-                results.append({"symbol": s, "error": "No klines data returned"})
+                results.append(ManualScanResult(symbol=s, error="No klines data returned"))
                 continue
 
             indicators = prep(df)
             if indicators is None or len(indicators) == 0:
-                results.append({"symbol": s, "error": "Indicators preparation failed"})
+                results.append(ManualScanResult(symbol=s, error="Indicators preparation failed"))
                 continue
 
             last = indicators.iloc[-1].to_dict()
@@ -267,33 +302,15 @@ async def ai_manual_scan(
             if analyze_with_ai and not ai_err:
                 try:
                     res = await analyze_with_ai({"symbol": s, **last})
-                    results.append(
-                        {
-                            "symbol": s,
-                            "analysis": res.get("analysis", ""),
-                            "fallback": not res.get("ok", False),
-                        }
-                    )
+                    results.append(ManualScanResult(symbol=s, analysis=res.get("analysis", ""), fallback=not res.get("ok", False)))
                 except Exception as e:
-                    results.append(
-                        {
-                            "symbol": s,
-                            "analysis": _quick_analysis_text(s, interval, str(e)),
-                            "fallback": True,
-                        }
-                    )
+                    results.append(ManualScanResult(symbol=s, analysis=_quick_analysis_text(s, interval, str(e)), fallback=True))
             else:
-                results.append(
-                    {
-                        "symbol": s,
-                        "analysis": _quick_analysis_text(s, interval, ai_err or "AI not available"),
-                        "fallback": True,
-                    }
-                )
+                results.append(ManualScanResult(symbol=s, analysis=_quick_analysis_text(s, interval, ai_err or "AI not available"), fallback=True))
         except Exception as e:
-            results.append({"symbol": s, "error": str(e)})
+            results.append(ManualScanResult(symbol=s, error=str(e)))
 
-    return {"interval": interval, "results": results}
+    return ManualScanFullResponse(interval=interval, results=results)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -302,10 +319,11 @@ async def ai_manual_scan(
 
 @router.get(
     "/manual_scan",
+    response_model=ManualScanLegacyResponse,
     summary="Alias (legacy) — quick fallback scan for a single symbol",
     description=(
         "תאימות לאחור ללקוחות ישנים: מחזיר ניתוח מהיר בלבד (מחיר + fresh) "
-        "ואינו מפעיל את תהליך האנליזה המלא. פרמטרים כמו mode/max_price_age_sec נשמרים אך אינם משפיעים בפועל."
+        "ואינו מפעיל את תהליך האנליזה המלא."
     ),
 )
 async def ai_manual_scan_compat(
@@ -316,15 +334,9 @@ async def ai_manual_scan_compat(
 ):
     s = symbol.strip().upper()
     price, fresh = await _best_price(s)
-    # טקסט קצר וברור המייצג את fallback הקל
     text = f"[Quick] {s} {interval}: price≈{price if price is not None else '?'} (fresh={fresh}) mode={mode}; max_age={max_price_age_sec}s"
-    return {
-        "symbol": s,
-        "interval": interval,
-        "fresh": fresh,
-        "analysis": text,
-        "fallback": True,  # תמיד True כאן — זה ניתוח קל/מהיר
-    }
+    return ManualScanLegacyResponse(symbol=s, interval=interval, fresh=fresh, analysis=text, price=price)
+
 
 
 
