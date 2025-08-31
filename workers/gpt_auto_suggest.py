@@ -57,13 +57,21 @@ async def _fetch_context_batch(symbols: List[str], interval: str = DEFAULT_INTER
         LOGGER.warning("CONTEXT_URL not set – worker running without context (reduced gating).")
         return {}
     payload = {"symbols": symbols, "interval": interval, "compact": True}
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload)
-        r.raise_for_status()
-        out = {}
-        for it in r.json().get("items", []):
-            out[it["symbol"]] = it
-        return out
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload)
+            r.raise_for_status()
+            out = {}
+            data = r.json() if r.headers.get("content-type","").lower().startswith("application/json") else {}
+            for it in (data.get("items") or []):
+                try:
+                    out[str(it["symbol"]).upper()] = it
+                except Exception:
+                    continue
+            return out
+    except Exception as e:
+        LOGGER.warning("context fetch failed: %s", e)
+        return {}
 
 def _cooldown_key(symbol: str, ttype: str) -> str:
     return f"algogpt:cooldown:{ttype}:{symbol.upper()}"
@@ -74,19 +82,25 @@ def _dedup_key(h: str) -> str:
 def _pass_cooldown(symbol: str, ttype: str) -> bool:
     if RED:
         k = _cooldown_key(symbol, ttype)
-        if RED.get(k):
-            return False
-        RED.setex(k, COOLDOWN_SEC, "1")
-        return True
+        try:
+            if RED.get(k):
+                return False
+            RED.setex(k, COOLDOWN_SEC, "1")
+            return True
+        except Exception:
+            return True
     return True
 
 def _pass_dedup(h: str) -> bool:
     if RED:
         k = _dedup_key(h)
-        if RED.get(k):
-            return False
-        RED.setex(k, DEDUP_TTL_SEC, "1")
-        return True
+        try:
+            if RED.get(k):
+                return False
+            RED.setex(k, DEDUP_TTL_SEC, "1")
+            return True
+        except Exception:
+            return True
     return True
 
 # ---------------- GPT ----------------
@@ -116,8 +130,33 @@ def _build_user_ctx(symbol: str, ctx: Dict[str, Any]) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 def _parse_json_safe(text: str) -> Optional[Dict[str, Any]]:
-    try: return json.loads(text)
-    except Exception: return None
+    try:
+        return json.loads(text)
+    except Exception:
+        # נסה לנקות טקסט מסביב אם המודל הוסיף הסברים
+        try:
+            start = text.find("{"); end = text.rfind("}")
+            if 0 <= start < end:
+                return json.loads(text[start:end+1])
+        except Exception:
+            pass
+        return None
+
+def _to_float(x) -> Optional[float]:
+    try:
+        v = float(x)
+        if v == v and v not in (float("inf"), float("-inf")):
+            return v
+    except Exception:
+        pass
+    return None
+
+def _to_int(x, default=None) -> Optional[int]:
+    try:
+        v = int(x)
+        return max(1, min(125, v))
+    except Exception:
+        return default
 
 async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
     if not OPENAI_API_KEY:
@@ -134,10 +173,10 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
             max_tokens=300,
             response_format={"type":"json_object"},
         )
-        content = resp.choices[0].message.content
+        content = resp.choices[0].message.content or ""
         data = _parse_json_safe(content) or {}
         side = str(data.get("side","")).upper()
-        if for_spot and side != "LONG":  # הגנת SPOT
+        if for_spot and side != "LONG":
             side = "LONG"
         prop = {
             "symbol": symbol,
@@ -149,45 +188,35 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
             "tp3": _to_float(data.get("tp3")),
             "leverage": (1 if for_spot else _to_int(data.get("leverage"), default=10)),
             "success_pct": _to_float(data.get("success_pct")),
-            "reason": data.get("reason") or "",
+            "reason": (data.get("reason") or "").strip(),
         }
-        if prop["side"] not in ("LONG","SHORT"):
-            return None
-        # חובה: entry/sl/tp1
-        if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
-            return None
+        # חובה: שדות בסיס + צד תקין
+        if prop["side"] not in ("LONG","SHORT"): return None
+        if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None: return None
+        if for_spot: prop["leverage"] = 1
         return prop
     except Exception as e:
         LOGGER.warning("gpt error %s", e)
         return None
-
-def _to_float(x) -> Optional[float]:
-    try:
-        v = float(x)
-        if v == v and v not in (float("inf"), float("-inf")):
-            return v
-    except Exception:
-        pass
-    return None
-
-def _to_int(x, default=None) -> Optional[int]:
-    try: return int(x)
-    except Exception: return default
 
 # ---------------- Emit ----------------
 async def _emit(payload: Dict[str, Any]) -> bool:
     if not WEBHOOK_HMAC_SECRET:
         LOGGER.error("WEBHOOK_HMAC_SECRET not set")
         return False
-    body, headers = build_signed_outbound(
-        WEBHOOK_HMAC_SECRET, payload,
-        idempotency_key=generate_idempotency_key(),
-        extra_headers={"Content-Type":"application/json"},
-    )
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(ALERT_INGEST_URL, content=body, headers=headers)
-        r.raise_for_status()
-        return True
+    try:
+        body, headers = build_signed_outbound(
+            WEBHOOK_HMAC_SECRET, payload,
+            idempotency_key=generate_idempotency_key(),
+            extra_headers={"Content-Type":"application/json"},
+        )
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(ALERT_INGEST_URL, content=body, headers=headers)
+            r.raise_for_status()
+            return True
+    except Exception as e:
+        LOGGER.warning("emit failed: %s", e)
+        return False
 
 # ---------------- Per-type pipelines ----------------
 async def propose_futures(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -367,6 +396,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
