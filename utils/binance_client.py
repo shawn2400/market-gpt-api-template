@@ -27,7 +27,7 @@ BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.c
 RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
 HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 
-# ברירות מחדל (fallback) אם לא נצליח להביא filters – כשמורים כמחרוזות לשמירת דיוק הספרות
+# ברירות מחדל (fallback) אם לא נצליח להביא filters – כאותיות לשמירת דיוק
 DEFAULT_QTY_STEP_STR   = os.getenv("DEFAULT_QTY_STEP",  "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK","0.1")
 
@@ -107,13 +107,44 @@ def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
         return False
 
 def futures_mark_price(symbol: str) -> Optional[float]:
+    """
+    Mark Price עם נפילות-חן:
+    1) /fapi/v1/premiumIndex (markPrice)
+    2) /fapi/v1/ticker/price   (fallback – לא mark, אבל עדיף מכלום)
+    3) cache פנימי (ws_fallback) אם טרי
+    """
     s = (symbol or "").strip().upper()
-    j = _request("GET", "/fapi/v1/premiumIndex", params={"symbol": s}).json()
+    last_err: Optional[Exception] = None
+
+    # 1) premiumIndex
     try:
-        px = float(j.get("markPrice") or j.get("price"))
-        return px if px > 0 else None
+        j = _request("GET", "/fapi/v1/premiumIndex", params={"symbol": s}).json()
+        px = float(j.get("markPrice") or 0)
+        if px > 0:
+            return px
+    except Exception as e:
+        last_err = e
+
+    # 2) ticker/price
+    try:
+        j2 = _request("GET", "/fapi/v1/ticker/price", params={"symbol": s}).json()
+        px2 = float(j2.get("price") or 0)
+        if px2 > 0:
+            return px2
+    except Exception as e2:
+        last_err = e2
+
+    # 3) cache פנימי
+    try:
+        from utils.ws_fallback import get_price, is_price_fresh
+        px3 = get_price(s)
+        if px3 and is_price_fresh(s, max_age_sec=30):
+            return float(px3)
     except Exception:
-        return None
+        pass
+
+    logger.warning({"event": "mark_price_unavailable", "symbol": s, "error": str(last_err) if last_err else None})
+    return None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # exchangeInfo (Cache) + get_symbol_info / filters
@@ -146,7 +177,7 @@ def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
 
 def _decimals_from_step_str(step: str) -> int:
     s = (step or "").strip()
-    if "e" in s.lower():  # לא צפוי מבינאנס, אבל ליתר ביטחון
+    if "e" in s.lower():
         d = Decimal(s)
         tup = d.as_tuple()
         return max(0, -tup.exponent)
@@ -188,13 +219,11 @@ def _quantize_multiple(x: float | str, step_str: str, rounding=ROUND_DOWN) -> De
     """מעגן את x למספר שלם של step בעזרת rounding נתון (למשל BUY=DOWN, SELL=UP)."""
     q = Decimal(str(x))
     step = Decimal(step_str)
-    # כמה יחידות step יש ב-q
     mult = (q / step).to_integral_value(rounding=rounding)
     val = (mult * step).quantize(step, rounding=ROUND_DOWN)
     return val
 
 def _to_plain_str(d: Decimal) -> str:
-    # פורמט "f" מונע scientific notation
     return format(d, "f")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -348,6 +377,7 @@ def stop_user_stream() -> None:
         logger.warning({"event": "listenKey_delete_error", "error": str(e)})
     _listen_key = None
     _keepalive_thread = None
+
 
 
 
