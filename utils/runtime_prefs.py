@@ -1,87 +1,95 @@
 # utils/runtime_prefs.py
 from __future__ import annotations
-import os, time
-from typing import Optional
-from utils.redis_client import redis_client as RED
+import json
+import time
+from typing import Any, Dict, List, Optional
 
-# Keys
-KEY_MUTE_UNTIL       = "algogpt:prefs:mute_until"
-KEY_NEAR_OVERRIDE    = "algogpt:prefs:near_pct_override"
-KEY_GRID_ALERTS      = "algogpt:prefs:grid_alerts_enabled"   # "1"/"0"
-KEY_TRADE_QUIET_FMT  = "algogpt:prefs:trade_quiet:{tid}"     # "1"/"0"
+from .redis_client import get_redis
 
-def _now() -> int:
-    return int(time.time())
 
-# -------- Mute (global) --------
-def set_mute(minutes: int) -> None:
-    until = _now() + max(0, int(minutes)) * 60
-    if RED:
-        RED.set(KEY_MUTE_UNTIL, str(until))
-    else:
-        globals()["_MUTE_UNTIL"] = until
+class TelePrefs:
+    """
+    העדפות טלגרם "דל-עומס" ב-Redis.
 
-def clear_mute() -> None:
-    if RED:
-        RED.delete(KEY_MUTE_UNTIL)
-    else:
-        globals()["_MUTE_UNTIL"] = 0
+    keyspace:
+      tprefs:{chat}:pin_summary         -> "on"/"off"
+      tprefs:{chat}:pin_message_id      -> int
+      tprefs:{chat}:bundle_window       -> int seconds
+      bundle:{chat}                     -> list of JSON (LPUSH/RPOP)
+      snooze:trade:{trade_id}           -> "1" (TTL)
+      snooze:symbol:{symbol}            -> "1" (TTL)
+      watchdog:last_beat                -> ts (float)
+      watchdog:bundle_stats:{chat}      -> hash {"queued":int, "last_flush":ts}
+    """
 
-def is_muted() -> bool:
-    if RED:
-        v = RED.get(KEY_MUTE_UNTIL)
-        return bool(v and int(v) > _now())
-    return bool(globals().get("_MUTE_UNTIL", 0) > _now())
+    def __init__(self) -> None:
+        # מצופה ש-get_redis() מחזיר redis.asyncio.Redis עם decode_responses=True
+        self.r = get_redis()
 
-def mute_remaining_sec() -> int:
-    if RED:
-        v = RED.get(KEY_MUTE_UNTIL)
-        if not v: return 0
-        rem = int(v) - _now()
-        return rem if rem > 0 else 0
-    rem = globals().get("_MUTE_UNTIL", 0) - _now()
-    return rem if rem > 0 else 0
+    # ---------- Pin Summary ----------
+    async def set_pin_summary(self, chat_id: int, on: bool) -> None:
+        await self.r.set(f"tprefs:{chat_id}:pin_summary", "on" if on else "off")
 
-# -------- Near override --------
-def set_near_pct_override(pct: float | None) -> None:
-    if pct is None:
-        if RED: RED.delete(KEY_NEAR_OVERRIDE)
-        else: globals().pop("_NEAR_OVERRIDE", None)
-        return
-    pct = max(0.01, float(pct))
-    if RED:
-        RED.set(KEY_NEAR_OVERRIDE, f"{pct:.6f}")
-    else:
-        globals()["_NEAR_OVERRIDE"] = pct
+    async def is_pin_summary(self, chat_id: int) -> bool:
+        return (await self.r.get(f"tprefs:{chat_id}:pin_summary")) == "on"
 
-def get_near_pct_override() -> Optional[float]:
-    if RED:
-        v = RED.get(KEY_NEAR_OVERRIDE)
+    async def set_pin_message_id(self, chat_id: int, message_id: Optional[int]) -> None:
+        key = f"tprefs:{chat_id}:pin_message_id"
+        if message_id is None:
+            await self.r.delete(key)
+        else:
+            await self.r.set(key, int(message_id))
+
+    async def get_pin_message_id(self, chat_id: int) -> Optional[int]:
+        v = await self.r.get(f"tprefs:{chat_id}:pin_message_id")
+        return int(v) if v is not None else None
+
+    # ---------- Bundling ----------
+    async def set_bundle_window(self, chat_id: int, seconds: int) -> None:
+        await self.r.set(f"tprefs:{chat_id}:bundle_window", max(0, int(seconds)))
+
+    async def get_bundle_window(self, chat_id: int) -> int:
+        v = await self.r.get(f"tprefs:{chat_id}:bundle_window")
+        return int(v) if v is not None else 0
+
+    async def bundle_enqueue(self, chat_id: int, event: Dict[str, Any]) -> None:
+        key = f"bundle:{chat_id}"
+        await self.r.lpush(key, json.dumps(event))
+        await self.r.hincrby(f"watchdog:bundle_stats:{chat_id}", "queued", 1)
+
+    async def bundle_flush(self, chat_id: int, max_items: int = 200) -> List[Dict[str, Any]]:
+        key = f"bundle:{chat_id}"
+        out: List[Dict[str, Any]] = []
+        for _ in range(max_items):
+            raw = await self.r.rpop(key)
+            if raw is None:
+                break
+            try:
+                out.append(json.loads(raw))
+            except Exception:
+                # בליעת אירוע פגום
+                pass
+        await self.r.hset(f"watchdog:bundle_stats:{chat_id}", mapping={"last_flush": time.time()})
+        return out
+
+    # ---------- Snooze ----------
+    async def snooze_trade(self, trade_id: str, minutes: int) -> None:
+        await self.r.set(f"snooze:trade:{trade_id}", "1", ex=max(1, int(minutes)) * 60)
+
+    async def snooze_symbol(self, symbol: str, minutes: int) -> None:
+        await self.r.set(f"snooze:symbol:{symbol.upper()}", "1", ex=max(1, int(minutes)) * 60)
+
+    async def is_snoozed_trade(self, trade_id: str) -> bool:
+        return (await self.r.exists(f"snooze:trade:{trade_id}")) == 1
+
+    async def is_snoozed_symbol(self, symbol: str) -> bool:
+        return (await self.r.exists(f"snooze:symbol:{symbol.upper()}")) == 1
+
+    # ---------- Watchdog beat ----------
+    async def set_watchdog_beat(self) -> None:
+        await self.r.set("watchdog:last_beat", time.time())
+
+    async def get_watchdog_beat(self) -> Optional[float]:
+        v = await self.r.get("watchdog:last_beat")
         return float(v) if v else None
-    return globals().get("_NEAR_OVERRIDE")
 
-# -------- GRID alerts on/off --------
-def set_grid_alerts_enabled(value: bool) -> None:
-    val = "1" if value else "0"
-    if RED: RED.set(KEY_GRID_ALERTS, val)
-    else: globals()["_GRID_ALERTS"] = val
-
-def is_grid_alerts_enabled() -> bool:
-    if RED:
-        v = RED.get(KEY_GRID_ALERTS)
-        return (v or "1") == "1"  # ברירת מחדל: פעיל
-    return (globals().get("_GRID_ALERTS", "1") == "1")
-
-# -------- Trade quiet (no near) --------
-def set_trade_quiet(trade_id: str, value: bool) -> None:
-    key = KEY_TRADE_QUIET_FMT.format(tid=trade_id)
-    val = "1" if value else "0"
-    if RED: RED.set(key, val)
-    else: globals()[key] = val
-
-def is_trade_quiet(trade_id: str) -> bool:
-    key = KEY_TRADE_QUIET_FMT.format(tid=trade_id)
-    if RED:
-        v = RED.get(key)
-        return (v or "0") == "1"
-    return (globals().get(key, "0") == "1")
