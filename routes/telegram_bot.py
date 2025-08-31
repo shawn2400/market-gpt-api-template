@@ -14,12 +14,16 @@ from utils.get_klines import get_klines
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ai_analysis import analyze_with_ai
 from utils.liquidity import estimate_slippage
+from utils.trade_validator import validate_proposal  # ← Pre-flight
 
 from utils.runtime_prefs import (
     set_mute, clear_mute, mute_remaining_sec,
     set_near_pct_override, get_near_pct_override,
     set_trade_quiet,
 )
+
+# HMAC outbound לבקשות ל-sink
+from utils.hmac_utils import build_signed_outbound, generate_idempotency_key
 
 router = APIRouter(prefix="/telegram", tags=["Telegram"], dependencies=[Depends(require_api_key)])
 
@@ -28,7 +32,10 @@ PENDING: Dict[str, Dict[str, Any]] = {}
 ALERTS_ACTIVE_URL = os.getenv("ALERTS_ACTIVE_URL", "http://127.0.0.1:8000/alerts/trades/active").strip()
 ALERTS_UPDATE_URL = os.getenv("ALERTS_UPDATE_URL", "http://127.0.0.1:8000/alerts/trades/update").strip()
 ALERTS_ANALYSIS_URL = os.getenv("ALERTS_ANALYSIS_URL", "http://127.0.0.1:8000/alerts/analysis").strip()
+ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", "http://127.0.0.1:8000/alerts/trade-ingest").strip()
+
 RISK_QUICK_URL = os.getenv("RISK_QUICK_URL", "http://127.0.0.1:8000/risk/quick").strip()
+WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
 
 DEFAULT_INTERVAL = os.getenv("DEFAULT_INTERVAL", "15m")
 DEFAULT_MARKET = os.getenv("DEFAULT_MARKET", "futures")
@@ -240,7 +247,6 @@ async def webhook(request: Request):
                     r = await client.get(ALERTS_ACTIVE_URL)
                     r.raise_for_status()
                     items = r.json().get("items", [])
-                # דירוג לפי הכי קרוב ל-TP1/SL
                 def dist(it):
                     nowp = float(it.get("current_price") or 0)
                     tp1 = it.get("tp1"); tp1 = float(tp1) if tp1 else None
@@ -277,10 +283,23 @@ async def webhook(request: Request):
                     symbol=symbol.upper(), side=side.upper(), current_price=price,
                     leverage=lev, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, success_pct=succ
                 )
+
+                # Pre-flight וולידציה לפני הצגה
+                val = await validate_proposal(tp.dict(), interval=interval or DEFAULT_INTERVAL, market=DEFAULT_MARKET)
+                if not val["ok"]:
+                    return await send_message(
+                        "❌ הוולידציה נכשלה:\n" +
+                        "\n".join(f"- {e}" for e in val["errors"]) +
+                        (("\n\n⚠️ " + "\n⚠️ ".join(val["warnings"])) if val["warnings"] else "")
+                    )
+
                 eta = build_eta(tp, per_min_move=vol_per_min)
                 tid = uuid.uuid4().hex[:8]
                 PENDING[tid] = {"tp": tp.dict(), "eta": eta.dict(), "interval": interval}
-                txt = summarize(tp, eta, why="הוזן ידנית ע״י המשתמש")
+
+                txt = summarize(tp, eta, why="Pre-Flight: OK")
+                if val["warnings"]:
+                    txt += "\n\n⚠️ Warnings:\n" + "\n".join(f"- {w}" for w in val["warnings"])
                 kb = {
                     "inline_keyboard":[
                         [
@@ -369,15 +388,54 @@ async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
     item = PENDING.get(tid)
     if not item:
         return await send_message(f"⚠️ טרייד {tid} לא קיים/פג תוקף")
+
     tp = TradeProposal(**item["tp"])
-    exec_trades = (os.getenv("EXECUTE_TRADES","false").lower() in ("1","true","yes"))
-    details = ("🔐 מצב הדמיה/ידני (לא נשלח לבינאנס)\n" if not exec_trades else "🚀 מבצע הזמנה בבינאנס...\n")
-    txt = summarize(tp, build_eta(tp, per_min_move=0), why=details)
-    kb = _mk_slbe_keyboard(tid)
-    if message_id:
-        return await edit_message(chat_id, message_id, txt, kb)
-    else:
-        return await send_message(txt, kb)
+    # ולידציה אחרונה לפני ingest
+    val = await validate_proposal(tp.dict(), interval=item.get("interval") or DEFAULT_INTERVAL, market=DEFAULT_MARKET)
+    if not val["ok"]:
+        return await edit_message(chat_id, message_id, "❌ הוולידציה נכשלה:\n" + "\n".join(f"- {e}" for e in val["errors"]))
+
+    # הכנה ל-ingest חתום ל-/alerts/trade-ingest
+    trade_type = "FUTURES" if DEFAULT_MARKET.lower().startswith("future") else "SPOT"
+    payload = {
+        "trade_id": tid,
+        "trade_type": trade_type,
+        "symbol": tp.symbol,
+        "side": tp.side,                       # LONG/SHORT
+        "current_price": tp.current_price,
+        "entry": tp.entry, "sl": tp.sl,
+        "tp1": tp.tp1, "tp2": tp.tp2, "tp3": tp.tp3,
+        "leverage": tp.leverage,
+        "success_pct": tp.success_pct,
+        "reason": "approved via telegram",
+        "chat_id": chat_id,
+        "interval": item.get("interval") or DEFAULT_INTERVAL,
+        "market": DEFAULT_MARKET,
+    }
+    body, headers = build_signed_outbound(
+        WEBHOOK_HMAC_SECRET,
+        payload,
+        idempotency_key=generate_idempotency_key()
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.post(ALERTS_INGEST_URL, content=body, headers=headers)
+            if r.status_code == 422:
+                data = r.json() if r.headers.get("content-type","").startswith("application/json") else {}
+                errs = data.get("errors") or ["validator_failed"]
+                warns= data.get("warnings") or []
+                txt = "❌ Pre-Flight @ sink:\n" + "\n".join(f"- {e}" for e in errs)
+                if warns:
+                    txt += "\n\n⚠️ " + "\n⚠️ ".join(warns)
+                return await edit_message(chat_id, message_id, txt)
+            r.raise_for_status()
+            # הצלחה — ננקה מה-PENDING ונעדכן הודעה
+            PENDING.pop(tid, None)
+            return await edit_message(chat_id, message_id, f"✅ טרייד #{tid} נשלח ל־sink ופורסם לטלגרם.")
+    except Exception as e:
+        return await edit_message(chat_id, message_id, f"❌ ingest failed: {e}")
+
 
 
 
