@@ -1,7 +1,4 @@
 # routes/indicators.py
-# =========================
-# REST API לאינדיקטורים טכניים
-# =========================
 from __future__ import annotations
 from typing import Optional, List
 import os, requests, pandas as pd, time
@@ -18,7 +15,6 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)]
 )
 
-# --- Rate limit ---
 _rl_state = {}
 def _rl(ip: str, limit=20, window=60):
     now = time.time()
@@ -101,6 +97,8 @@ async def get_indicators_symbol(
         return IndicatorsResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
         return IndicatorsResponse(ok=False, count_total=1, returned=0, signals=[], error=str(e))
+
+
 
 
 
