@@ -9,13 +9,11 @@ import pandas as pd
 
 from utils.symbols import normalize_symbol
 
-# Endpoints
 BINANCE_FAPI = "https://fapi.binance.com"
 BINANCE_SPOT = "https://api.binance.com"
 
-# Cache של סמלים לא-תקינים (כדי לא לבזבז קריאות)
-_INVALID_TTL = 900  # 15 דקות
-_invalid_cache: Dict[str, float] = {}  # key: "<market>:<SYMBOL>" -> ts_expire
+_INVALID_TTL = 900
+_invalid_cache: Dict[str, float] = {}
 
 def _cache_key(market: str, symbol: str) -> str:
     return f"{market}:{symbol.upper()}"
@@ -46,18 +44,7 @@ def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
     df["timestamp"] = df["close_time"]
     return df
 
-def get_klines(
-    symbol: str,
-    interval: str,
-    limit: int = 150,
-    market_type: str = "futures",
-) -> Optional[pd.DataFrame]:
-    """
-    שליפת klines (סינכרונית).
-    הערות:
-    - כברירת מחדל מתבסס על Futures. עבור Spot נעשה נרמול מינימלי.
-    - אם הסימבול לא חוקי/לא קיים — נשמר ב-Invalid Cache ל-15 דקות.
-    """
+def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     market = "spot" if str(market_type).lower() == "spot" else "futures"
     sym_in = (symbol or "").upper().strip()
     if not sym_in:
@@ -66,14 +53,11 @@ def get_klines(
     if _is_invalid(market, sym_in):
         return None
 
-    # Normalization:
-    # Futures: נשתמש ב-normalize_symbol (מבוסס exchangeInfo של Futures)
-    # Spot: נשאיר Uppercase בלבד (אין לנו cache/normalize ל-spot כאן), ונסמוך על השגיאה מה-API אם לא קיים.
     try:
         if market == "futures":
-            norm = normalize_symbol(sym_in)  # משתמש ב-SYMBOLS cache של Futures
+            norm = normalize_symbol(sym_in)
         else:
-            norm = sym_in  # עבור Spot — בלי normalize חכם
+            norm = sym_in
     except Exception:
         _mark_invalid(market, sym_in)
         raise
@@ -99,13 +83,7 @@ def get_klines(
         return None
     return df
 
-# עטיפה אסינכרונית נוחה
-async def aget_klines(
-    symbol: str,
-    interval: str,
-    limit: int = 150,
-    market_type: str = "futures",
-) -> Optional[pd.DataFrame]:
+async def aget_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     return await asyncio.to_thread(get_klines, symbol, interval, limit, market_type)
 
 
