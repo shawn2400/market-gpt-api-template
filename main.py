@@ -174,6 +174,7 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.binance_status", "router"),
     ("routes.executor", "router"),
     ("routes.orders", "router"),
+    ("routes.price", "router"),        # ← חדש: /price
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     CORE_ROUTERS.append(("routes.ai", "router"))
@@ -185,6 +186,7 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.ws_stream", "router"),
     ("routes.grid", "router"),
     ("routes.debug", "router"),
+    ("routes.indicators", "router"),   # ← חדש: /indicators
 ]
 for mod, attr in CORE_ROUTERS:
     _include_router(mod, attr)
@@ -327,6 +329,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
