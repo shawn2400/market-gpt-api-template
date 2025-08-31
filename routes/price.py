@@ -14,7 +14,9 @@ except Exception:
     redis_client = None  # type: ignore
 
 logger = logging.getLogger("algogpt.price")
-router = APIRouter(tags=["Price"])
+
+# ✅ חשוב: prefix כדי לא להתנגש עם "/" של ה־app הראשי
+router = APIRouter(prefix="/price", tags=["Price"])
 
 BIN_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 BIN_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
@@ -23,11 +25,11 @@ class PriceResponse(BaseModel):
     ok: bool
     symbol: Optional[str] = None
     price: Optional[float] = None
-    source: Optional[str] = None
+    source: Optional[str] = None   # redis/cache/binance_futures_client/binance_fapi/binance_spot
     ts: Optional[float] = None
     error: Optional[str] = None
 
-@router.get("/", response_model=PriceResponse, operation_id="getPriceHint")
+@router.get("/", response_model=PriceResponse, operation_id="getPriceHint", summary="Hint endpoint")
 async def get_price_hint() -> PriceResponse:
     return PriceResponse(ok=True, error='Use /price/{symbol} (e.g., /price/BTCUSDT)')
 
@@ -79,7 +81,7 @@ async def _binance_spot_price(symbol: str) -> Optional[float]:
         except Exception:
             return None
 
-@router.get("/{symbol}", response_model=PriceResponse, operation_id="getPriceSymbol")
+@router.get("/{symbol}", response_model=PriceResponse, operation_id="getPriceSymbol", summary="Get latest price (multi-source fallback)")
 async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSDT")) -> PriceResponse:
     sym = symbol.upper().strip()
 
@@ -118,6 +120,7 @@ async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSD
         return PriceResponse(ok=True, symbol=sym, price=float(spot), source="binance_spot", ts=time.time())
 
     raise HTTPException(status_code=502, detail="Unable to fetch price for symbol")
+
 
 
 
