@@ -1,6 +1,7 @@
+# routes/ai.py
 from __future__ import annotations
 from typing import Optional, Literal, Dict, Any, List
-from fastapi import APIRouter, Depends, Body, Query, HTTPException
+from fastapi import APIRouter, Depends, Body, Query
 from pydantic import BaseModel, Field
 import os
 
@@ -52,9 +53,10 @@ def _fallback_text(row: Dict[str, Any], symbol: str, interval: str, reason: str 
     rsi = row.get("rsi", 50.0)
     adx = row.get("adx", 15.0)
     extra = f" ({reason})" if reason else ""
-    px = get_price(symbol.upper()); fresh = is_price_fresh(symbol.upper(), max_age_sec=10)
+    sx = symbol.upper()
+    px = get_price(sx); fresh = is_price_fresh(sx, max_age_sec=10)
     price_note = f", mark={px}" if px and fresh else ""
-    return f"[Fallback] {symbol.upper()} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}{price_note}{extra}"
+    return f"[Fallback] {sx} {interval}: bias={ema_bias}, rsi={rsi:.1f}, adx={adx:.1f}{price_note}{extra}"
 
 def _load_klines_and_indicators():
     try:
