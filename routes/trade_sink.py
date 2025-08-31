@@ -15,7 +15,7 @@ except Exception:
 # --- HMAC / Redis / Validator ---
 from utils.hmac_utils import verify_hmac, idem_seen
 from utils.redis_client import redis_client as RED
-from utils.trade_validator import validate_proposal
+from utils.trade_validator import validate_proposal  # ודא שהקובץ קיים
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
 
@@ -32,13 +32,10 @@ if USE_REDIS_TRADES and not RED:
 
 # ====== Models ======
 class TradeIn(BaseModel):
-    # מזהה טרייד חיצוני (מהבוט/וורקר)
     trade_id: str = Field(..., min_length=4, max_length=64)
-
-    # סוג טרייד
     trade_type: str = Field(..., pattern="^(FUTURES|SPOT|GRID)$")
     symbol: str
-    side: Optional[str] = None            # FUTURES/SPOT (LONG/SHORT; ב-SPOT רק LONG)
+    side: Optional[str] = None
     current_price: float
 
     # FUTURES/SPOT
@@ -54,7 +51,7 @@ class TradeIn(BaseModel):
     notional_usd: Optional[float] = None
     qty: Optional[float] = None
 
-    # ETA (אופציונלי, לפי worker/bot)
+    # ETA (אופציונלי)
     eta_sl: Optional[str] = None
     eta_tp1: Optional[str] = None
     eta_tp2: Optional[str] = None
@@ -69,7 +66,7 @@ class TradeIn(BaseModel):
     grid_side: Optional[str] = None
 
     # misc
-    tp_scale: Optional[str] = None        # JSON [50,30,20]
+    tp_scale: Optional[str] = None
     chat_id: int | str | None = None
 
     # הקשר ולידציה
@@ -86,29 +83,22 @@ class TradeOut(BaseModel):
 _TRADES: Dict[str, Dict[str, Any]] = {}
 
 def _decode_map(d: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize Redis hgetall result (str->native), keep as strings where unknown."""
     out: Dict[str, Any] = {}
     for k, v in (d or {}).items():
-        if isinstance(v, bytes):
-            v = v.decode("utf-8", "ignore")
-        if isinstance(k, bytes):
-            k = k.decode("utf-8", "ignore")
-        # try to cast json for lists/dicts
-        if isinstance(v, str) and v and v[0] in "[{":
+        if isinstance(v, bytes): v = v.decode("utf-8", "ignore")
+        if isinstance(k, bytes): k = k.decode("utf-8", "ignore")
+        if isinstance(v, str) and v and v[0] in "[{]":
             try:
-                out[k] = json.loads(v)
-                continue
+                out[k] = json.loads(v); continue
             except Exception:
                 pass
-        # try float/int
         try:
             if v is None:
                 out[k] = v
             elif str(v).isdigit():
                 out[k] = int(v)
             else:
-                out[k] = float(v)
-                continue
+                out[k] = float(v); continue
         except Exception:
             out[k] = v
     return out
@@ -217,13 +207,14 @@ async def trade_ingest(
     payload: TradeIn = Body(...),
     x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
     x_signature: Optional[str] = Header(default=None, convert_underscores=False),
+    x_timestamp: Optional[str] = Header(default=None, convert_underscores=False),
 ):
     if not BOT:
         raise HTTPException(500, "TELEGRAM_BOT_TOKEN not configured")
 
     # --- HMAC verify + idempotency dedup ---
     raw = json.dumps(payload.model_dump(), separators=(",", ":"), ensure_ascii=False).encode()
-    if not verify_hmac(x_signature, raw):
+    if not verify_hmac(x_signature, raw, x_timestamp):
         raise HTTPException(401, "Invalid signature")
     if x_idempotency_key and idem_seen(x_idempotency_key):
         rec = _get_trade(payload.trade_id) or {}
@@ -247,8 +238,8 @@ async def trade_ingest(
     val = await validate_proposal(proposal, interval=(payload.interval or "15m"),
                                   market=(payload.market or "futures"))
     if not val["ok"]:
-        # חוסם בפרודקשן לפי VALIDATOR_STRICT=1 (ראה .env)
-        return {"ok": False, "errors": val["errors"], "warnings": val["warnings"]}, 422
+        # חשוב: לא להחזיר dict שובר סכמה – לזרוק 422
+        raise HTTPException(status_code=422, detail={"errors": val["errors"], "warnings": val["warnings"]})
 
     rec = payload.model_dump()
     rec.update({
@@ -290,7 +281,6 @@ async def trade_ingest(
         try:
             r.raise_for_status()
         except httpx.HTTPStatusError as e:
-            # במקרה של כשל — לא לשמור ל-store כדי לא להשאיר "יתום"
             raise HTTPException(e.response.status_code, f"telegram_send_error: {e.response.text}") from e
         resp = r.json()
         msg = resp.get("result", {})
@@ -333,9 +323,10 @@ async def analysis_ingest(
     payload: AnalysisIn = Body(...),
     x_idempotency_key: Optional[str] = Header(default=None, convert_underscores=False),
     x_signature: Optional[str] = Header(default=None, convert_underscores=False),
+    x_timestamp: Optional[str] = Header(default=None, convert_underscores=False),
 ):
     raw = json.dumps(payload.model_dump(), separators=(",", ":"), ensure_ascii=False).encode()
-    if not verify_hmac(x_signature, raw):
+    if not verify_hmac(x_signature, raw, x_timestamp):
         raise HTTPException(401, "Invalid signature")
     if x_idempotency_key and idem_seen(x_idempotency_key):
         return {"ok": True, "status": "duplicate_ignored"}
@@ -360,6 +351,7 @@ async def analysis_ingest(
         r = await client.post(f"{TELEGRAM_API}/sendMessage", json=body)
         r.raise_for_status()
         return {"ok": True}
+
 
 
 
