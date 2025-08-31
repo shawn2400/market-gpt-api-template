@@ -1,136 +1,169 @@
 # utils/risk_rules.py
 from __future__ import annotations
+from typing import Dict, Any, Optional, Tuple
 import os
-from typing import Dict, Any, Optional
+import math
 
-# --------- ENV thresholds (override via .env) ---------
-RR_MIN_LOW  = float(os.getenv("RR_MIN_LOW",  "1.50"))
-RR_MIN_MID  = float(os.getenv("RR_MIN_MID",  "1.60"))
-RR_MIN_HIGH = float(os.getenv("RR_MIN_HIGH", "1.80"))
+from utils.watchlist_utils import get_symbol_prefs
 
-LEV_MAX_LOW  = int(os.getenv("LEV_MAX_LOW",  "25"))
-LEV_MAX_MID  = int(os.getenv("LEV_MAX_MID",  "20"))
-LEV_MAX_HIGH = int(os.getenv("LEV_MAX_HIGH", "15"))
+# ספי דיפולט (ניתן לכוון ב-ENV)
+ENTRY_GAP_MAX_PCT      = float(os.getenv("ENTRY_GAP_MAX_PCT", "0.80"))    # אחוז מקס' פער Entry מול price
+ENTRY_GAP_WARN_PCT     = float(os.getenv("ENTRY_GAP_WARN_PCT", "0.50"))
+RR_MIN_LOW_VOL         = float(os.getenv("RR_MIN_LOW_VOL",  "1.5"))
+RR_MIN_MID_VOL         = float(os.getenv("RR_MIN_MID_VOL",  "1.6"))
+RR_MIN_HIGH_VOL        = float(os.getenv("RR_MIN_HIGH_VOL", "1.8"))
+LEV_HARD_CAP           = int(os.getenv("LEV_HARD_CAP", "50"))             # Hard cap כללי אם אין Pref ספציפי
+SUCCESS_WARN_PCT       = float(os.getenv("SUCCESS_WARN_PCT", "60"))
 
-ENTRY_GAP_MAX_PCT = float(os.getenv("ENTRY_GAP_MAX_PCT", "1.50"))  # מרחק מקסימלי מהמחיר (%)
-MIN_STOP_PCT      = float(os.getenv("MIN_STOP_PCT", "0.05"))       # 0.05% מגודל המחיר – כדי להימנע מ־risk=0
-
-def _f(x) -> Optional[float]:
+def _abs(x) -> float:
     try:
-        v = float(x)
-        if v == v:
-            return v
+        return abs(float(x))
     except Exception:
-        pass
-    return None
+        return float("nan")
 
 def rr_from_levels(entry: float, sl: float, tp1: float) -> Optional[float]:
-    """ מחשב RR בסיסי בין entry-sl ל־tp1-entry """
-    e = _f(entry); s = _f(sl); t = _f(tp1)
-    if e is None or s is None or t is None:
+    """
+    מחשב RR (reward:risk) בסיסי מ-entry/sl/tp1.
+    """
+    try:
+        entry = float(entry); sl = float(sl); tp1 = float(tp1)
+        risk = abs(entry - sl)
+        reward = abs(tp1 - entry)
+        if risk <= 0:
+            return None
+        return reward / risk
+    except Exception:
         return None
-    risk = abs(e - s)
-    reward = abs(t - e)
-    if risk <= 0:
-        return None
-    return reward / risk
 
-def entry_gap_ok(current_price: float, entry: float, *, max_gap_pct: float = None) -> bool:
-    """ אל תרדוף – מרחק כניסה מהמחיר לא יחרוג מהסף. """
-    cp = _f(current_price); e = _f(entry)
-    if cp is None or e is None or cp <= 0:
+def entry_gap_ok(price: Optional[float], entry: Optional[float], max_gap_pct: Optional[float] = None) -> bool:
+    """
+    בודק שה-entry לא רחוק מדי מהמחיר הנוכחי.
+    """
+    if price is None or entry is None:
         return False
-    mx = float(max_gap_pct if max_gap_pct is not None else ENTRY_GAP_MAX_PCT)
-    gap = abs(e - cp) / cp * 100.0
-    return gap <= mx
+    try:
+        price = float(price); entry = float(entry)
+        if price <= 0:
+            return False
+        thr = float(max_gap_pct if max_gap_pct is not None else ENTRY_GAP_MAX_PCT)
+        gap = abs(entry - price) / price * 100.0
+        return gap <= thr
+    except Exception:
+        return False
 
-def _min_rr_for_vol(vol_regime: str) -> float:
+def _rr_threshold(vol_regime: str, symbol: str) -> float:
+    """
+    סף RR מינימלי לפי vol_regime והעדפות פר-סימבול (אם קיימות).
+    """
+    prefs = get_symbol_prefs(symbol)
+    base_min = prefs.get("min_rr", None)
+    if isinstance(base_min, (int, float)):
+        return float(base_min)
+
     v = (vol_regime or "mid").lower()
     if v.startswith("low"):
-        return RR_MIN_LOW
+        return RR_MIN_LOW_VOL
     if v.startswith("high"):
-        return RR_MIN_HIGH
-    return RR_MIN_MID
+        return RR_MIN_HIGH_VOL
+    return RR_MIN_MID_VOL
 
-def _max_lev_for_vol(vol_regime: str) -> int:
-    v = (vol_regime or "mid").lower()
-    if v.startswith("low"):
-        return LEV_MAX_LOW
-    if v.startswith("high"):
-        return LEV_MAX_HIGH
-    return LEV_MAX_MID
+def _lev_cap(symbol: str) -> int:
+    prefs = get_symbol_prefs(symbol)
+    m = prefs.get("max_leverage", None)
+    try:
+        m = int(m) if m is not None else LEV_HARD_CAP
+    except Exception:
+        m = LEV_HARD_CAP
+    return max(1, int(m))
+
+def _side_ok(side: str) -> bool:
+    s = (side or "").upper()
+    return s in ("LONG", "SHORT")
+
+def _levels_monotonic(side: str, entry: float, sl: float, tp1: float) -> bool:
+    """
+    LONG:  sl < entry < tp1
+    SHORT: sl > entry > tp1
+    """
+    if side.upper() == "LONG":
+        return sl < entry < tp1
+    return sl > entry > tp1
 
 def gate_trade(
     symbol: str,
     side: str,
-    current_price: float,
-    entry: float,
-    sl: float,
-    tp1: float,
+    price: Optional[float],
+    entry: Optional[float],
+    sl: Optional[float],
+    tp1: Optional[float],
     *,
     vol_regime: str = "mid",
     success_pct: Optional[float] = None,
     leverage: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    ולידציה קשיחה/רכה להצעת טרייד:
-      - חוקי כיוונים (SL/TP ביחס ל־entry)
-      - RR מזערי לפי vol_regime
-      - מינוף מירבי לפי vol_regime
-      - entry לא רחוק מדי מהמחיר
+    שער ולידציה/סינון טרייד לפני שיגור:
+      - תקינות כיוונית (sl/entry/tp1)
+      - מרחק כניסה מול price
+      - RR מול סף לפי vol_regime/Prefs
+      - מינוף מול Prefs וסף קשיח
     """
     errors: list[str] = []
-    warns: list[str]  = []
+    warnings: list[str] = []
 
-    s = (side or "").upper()
-    e = _f(entry); sL = _f(sl); t1 = _f(tp1); cp = _f(current_price)
-    if s not in ("LONG","SHORT"):
+    if not _side_ok(side):
         errors.append("invalid side")
-        return {"ok": False, "errors": errors, "warnings": warns}
+        return {"ok": False, "errors": errors, "warnings": warnings}
 
-    if e is None or sL is None or t1 is None:
-        errors.append("missing numeric fields: entry/sl/tp1")
-        return {"ok": False, "errors": errors, "warnings": warns}
+    if entry is None or sl is None or tp1 is None:
+        errors.append("missing required levels (entry/sl/tp1)")
+        return {"ok": False, "errors": errors, "warnings": warnings}
 
-    if cp is not None and not entry_gap_ok(cp, e):
-        warns.append("entry far from current price")
+    try:
+        e = float(entry); s = float(sl); t1 = float(tp1)
+    except Exception:
+        errors.append("bad numeric levels")
+        return {"ok": False, "errors": errors, "warnings": warnings}
 
-    # מינימום מרחק סטופ (מונע risk=0)
-    if cp:
-        min_stop = abs(cp) * (MIN_STOP_PCT / 100.0)
-        if abs(e - sL) < min_stop:
-            errors.append(f"stop too tight (<{MIN_STOP_PCT:.3f}% of price)")
+    if not _levels_monotonic(side, e, s, t1):
+        errors.append("levels order invalid for side")
+        return {"ok": False, "errors": errors, "warnings": warnings}
 
-    # בדיקת הגיון SL/TP לפי צד
-    if s == "LONG":
-        if sL >= e:
-            errors.append("SL must be below entry for LONG")
-        if t1 <= e:
-            errors.append("TP1 must be above entry for LONG")
+    # Entry gap vs current price
+    if price is None:
+        warnings.append("missing current price; skip entry gap check")
     else:
-        if sL <= e:
-            errors.append("SL must be above entry for SHORT")
-        if t1 >= e:
-            errors.append("TP1 must be below entry for SHORT")
+        if not entry_gap_ok(price, e, ENTRY_GAP_MAX_PCT):
+            errors.append(f"entry too far from price (> {ENTRY_GAP_MAX_PCT:.2f}%)")
+        else:
+            gap = abs(e - float(price)) / float(price) * 100.0
+            if gap > ENTRY_GAP_WARN_PCT:
+                warnings.append(f"entry somewhat far from price (~{gap:.2f}%)")
 
-    # RR מזערי
-    rr = rr_from_levels(e, sL, t1)
-    min_rr = _min_rr_for_vol(vol_regime)
+    # RR threshold
+    rr = rr_from_levels(e, s, t1)
     if rr is None:
-        errors.append("invalid RR")
-    elif rr < min_rr:
-        errors.append(f"RR too low (<{min_rr:.2f})")
+        errors.append("rr can't be computed")
+    else:
+        rr_min = _rr_threshold(vol_regime, symbol)
+        if rr < rr_min:
+            errors.append(f"rr too low: {rr:.2f} < {rr_min:.2f}")
 
-    # מינוף מירבי
+    # Leverage cap
     if leverage is not None:
-        lev = int(leverage)
-        max_lev = _max_lev_for_vol(vol_regime)
-        if lev < 1 or lev > max_lev:
-            errors.append(f"leverage out of bounds for {vol_regime} (<= {max_lev}x)")
+        lev_cap = _lev_cap(symbol)
+        if leverage > lev_cap:
+            errors.append(f"leverage {leverage} exceeds cap {lev_cap}")
+        elif leverage > 0.8 * lev_cap:
+            warnings.append(f"high leverage near cap (>{0.8*lev_cap:.0f})")
 
-    # הערת הצלחה – אזהרה בלבד (הסף הקשיח מטופל חיצונית ע״י ה־worker)
-    if success_pct is not None and (success_pct < 0 or success_pct > 100):
-        warns.append("success_pct should be within 0..100")
+        # Hard cap כלל-מערכתי
+        if leverage > LEV_HARD_CAP:
+            errors.append(f"leverage {leverage} exceeds hard cap {LEV_HARD_CAP}")
 
-    return {"ok": len(errors) == 0, "errors": errors, "warnings": warns}
+    # Success pct (רק אזהרה; הסף הקשיח נאכף ע"י הוורקר)
+    if success_pct is not None and success_pct < SUCCESS_WARN_PCT:
+        warnings.append(f"low success_pct ~{success_pct:.1f}%")
+
+    return {"ok": len(errors) == 0, "errors": errors, "warnings": warnings}
 
