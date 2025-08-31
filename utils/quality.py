@@ -1,9 +1,6 @@
+# utils/quality.py
 from __future__ import annotations
-"""
-מודול quality – מחשב ציון איכות (Quality Score) לטרייד.
-משמש ב־routes/trade ו־routes/risk.
-"""
-import os, math, json
+import json, math, os
 from typing import Optional, Dict, Any, Literal
 from utils.anchor import AnchorDecision
 
@@ -26,7 +23,8 @@ def _empirical_win_rate(history: list[dict], symbol: str, side: Side, limit: int
     rows = rows[-limit:] if len(rows) > limit else rows
     if not rows:
         return None
-    wins, total = 0, 0
+    wins = 0
+    total = 0
     for r in rows:
         status = (r.get("status") or r.get("result",{}).get("status") or "").lower()
         pnl = r.get("pnl") or r.get("result",{}).get("pnl")
@@ -57,7 +55,6 @@ def compute_quality(
     components: Dict[str, Any] = {}
     score = 5.0
 
-    # RR
     rr = None
     if entry and sl and tp:
         risk = abs(entry - sl)
@@ -69,12 +66,10 @@ def compute_quality(
             elif rr < 1.0: score -= 1.0
     components["rr"] = rr
 
-    # Leverage preference
     if leverage <= 10: score += 0.5
     elif leverage >= 30: score -= 0.8
     components["leverage"] = leverage
 
-    # ATR sanity
     if atr and entry and sl:
         stop_dist = abs(entry - sl)
         atr_mult = (stop_dist / atr) if atr > 0 else None
@@ -83,31 +78,27 @@ def compute_quality(
             if atr_mult < 1.0: score -= 0.7
             elif atr_mult >= 1.5: score += 0.3
 
-    # Anchor alignment – FIX: normalize bias to UPPER
-    bias = str(getattr(anchor, "bias", "NEUTRAL")).upper()
-    components["anchor"] = {"bias": bias, "score": getattr(anchor, "score", 50.0), "mode": getattr(anchor, "mode_applied", "off")}
-
-    if bias != "NEUTRAL":
-        aligned = (side == "LONG" and bias == "BULLISH") or (side == "SHORT" and bias == "BEARISH")
+    if anchor.bias == "NEUTRAL":
+        pass
+    else:
+        aligned = (side=="LONG" and anchor.bias=="BULLISH") or (side=="SHORT" and anchor.bias=="BEARISH")
         if aligned:
-            bonus = min(1.2, max(0.2, float(getattr(anchor, "score", 50.0))/100.0 * 1.2))
+            bonus = min(1.2, max(0.2, anchor.score/100.0*1.2))
             score += bonus
             components["anchor_alignment"] = f"aligned(+{bonus:.2f})"
         else:
-            penalty = min(1.8, max(0.4, float(getattr(anchor, "score", 50.0))/100.0 * 1.8))
+            penalty = min(1.8, max(0.4, anchor.score/100.0*1.8))
             score -= penalty
             components["anchor_alignment"] = f"conflict(-{penalty:.2f})"
+    components["anchor"] = {"bias": anchor.bias, "score": anchor.score, "mode": anchor.mode_applied}
 
-    # clamp 0..10
     score = max(0.0, min(10.0, score))
     components["raw_score"] = score
 
-    # model success
     x = (score - 5.0) / 1.6
     p_model = _sigmoid(x)
     success_pct_model = p_model * 100.0
 
-    # empirical blend
     if trades_log_path is None:
         trades_log_path = os.getenv("TRADES_LOG_PATH", "data/trades_log.json")
     hist = _safe_load_history(trades_log_path)
