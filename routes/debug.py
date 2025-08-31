@@ -1,45 +1,25 @@
 # routes/debug.py
 from __future__ import annotations
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from typing import Dict, Any
-import os, platform, time, logging
+import os, platform, time
 
 try:
-    import psutil  # אופציונלי
+    import psutil  # optional
 except Exception:
     psutil = None  # type: ignore
 
-log = logging.getLogger("algogpt.debug")
-router = APIRouter(prefix="/debug", tags=["Debug"])
+from utils.auth import require_api_key, get_loaded_tokens, refresh_tokens_from_env
 
-def _tokens_from_env_masked() -> list[str]:
-    def _split(val: str | None) -> list[str]:
-        if not val:
-            return []
-        s = val.replace("\n", ",").replace(";", ",")
-        return [t.strip() for t in s.split(",") if t.strip()]
-    toks: list[str] = []
-    if os.getenv("API_BEARER_TOKEN"):
-        toks.append(os.getenv("API_BEARER_TOKEN", "").strip())
-    if os.getenv("API_BEARER_TOKEN_ALT"):
-        toks.append(os.getenv("API_BEARER_TOKEN_ALT", "").strip())
-    toks.extend(_split(os.getenv("ALGOGPT_TOKENS")))
-    masked: list[str] = []
-    for t in toks:
-        if not t:
-            continue
-        masked.append("***" if len(t) <= 6 else f"{t[:3]}…{t[-3:]}")
-    return masked
+router = APIRouter(prefix="/debug", tags=["Debug"], dependencies=[Depends(require_api_key)])
 
 # תומך גם /debug וגם /debug/
-@router.get("", include_in_schema=False)
+@router.get("")
 @router.get("/")
-def debug_router(op: str = Query("ping")) -> Dict[str, Any]:
-    # מסנן ערכים לא חוקיים ידנית (בלי תלות בגרסת pydantic)
-    allowed = {"ping", "health", "tokens", "refresh"}
-    if op not in allowed:
-        return {"ok": False, "detail": "Unknown op"}
-
+def debug_router(
+    # FastAPI/Pydantic v2 → pattern; (אם אתה על v1, Query(..., regex=) גם יעבוד אבל pattern עדכני)
+    op: str = Query("ping", pattern="^(ping|health|tokens|refresh)$")
+) -> Dict[str, Any]:
     if op == "ping":
         return {"ok": True, "pong": "ok"}
 
@@ -67,12 +47,14 @@ def debug_router(op: str = Query("ping")) -> Dict[str, Any]:
         }
 
     if op == "tokens":
-        toks = _tokens_from_env_masked()
-        return {"ok": True, "count": len(toks), "tokens_masked": toks}
+        return {"ok": True, "count": len(get_loaded_tokens(mask=True)), "tokens_masked": get_loaded_tokens(mask=True)}
 
     if op == "refresh":
-        # אין ריפרש דינמי – טעינת טוקנים נעשית בסטארטאפ; נדרש ריסטארט תהליך
-        return {"ok": False, "detail": "Token refresh requires process restart."}
+        count = refresh_tokens_from_env()
+        return {"ok": True, "detail": "Tokens reloaded from environment.", "count": count}
+
+    return {"ok": False, "detail": "Unknown op"}
+
 
 
 
