@@ -137,20 +137,36 @@ logger.info({"event": "auth_tokens_loaded", "count": len(TOKENS), "allow_all": A
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    open_paths_prefix = ("/static", "/health", "/docs", "/redoc")
-    open_exact = ("/", "/openapi.json")
-    if request.url.path in open_exact or any(request.url.path.startswith(p) for p in open_paths_prefix):
+    # פותחים מפורשות את המסלולים הציבוריים
+    PUBLIC_PATHS = {
+        "/", "/openapi.json",
+        "/health", "/health/live", "/health_full",
+        "/docs", "/redoc",
+    }
+    path = request.url.path
+
+    # לא לחסום preflight
+    if request.method.upper() == "OPTIONS":
         return await call_next(request)
 
+    # סטטיק תמיד פתוח
+    if path in PUBLIC_PATHS or path.startswith("/static/"):
+        return await call_next(request)
+
+    # מצב פתוח או אין טוקנים → לא לאכוף
     if ALLOW_ALL or not TOKENS:
         return await call_next(request)
 
+    # אימות Bearer / X-API-Key / ?api_key
     auth_header = request.headers.get("Authorization", "")
     token = None
     if auth_header.lower().startswith("bearer "):
         token = auth_header.split(" ", 1)[1].strip()
     if not token:
         token = (request.headers.get("X-API-Key") or "").strip() or None
+    if not token:
+        qp = request.query_params.get("api_key")
+        token = qp.strip() if qp else None
 
     if token not in TOKENS:
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
@@ -174,7 +190,7 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.binance_status", "router"),
     ("routes.executor", "router"),
     ("routes.orders", "router"),
-    ("routes.price", "router"),        # ← חדש: /price
+    ("routes.price", "router"),        # /price
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     CORE_ROUTERS.append(("routes.ai", "router"))
@@ -186,7 +202,7 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.ws_stream", "router"),
     ("routes.grid", "router"),
     ("routes.debug", "router"),
-    ("routes.indicators", "router"),   # ← חדש: /indicators
+    ("routes.indicators", "router"),   # /indicators
 ]
 for mod, attr in CORE_ROUTERS:
     _include_router(mod, attr)
@@ -329,6 +345,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
