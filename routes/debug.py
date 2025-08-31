@@ -18,13 +18,11 @@ def _tokens_from_env_masked() -> list[str]:
         s = val.replace("\n", ",").replace(";", ",")
         return [t.strip() for t in s.split(",") if t.strip()]
     toks: list[str] = []
-    # תומך בשלוש הדרכים לטעינת טוקנים
     if os.getenv("API_BEARER_TOKEN"):
         toks.append(os.getenv("API_BEARER_TOKEN", "").strip())
     if os.getenv("API_BEARER_TOKEN_ALT"):
         toks.append(os.getenv("API_BEARER_TOKEN_ALT", "").strip())
     toks.extend(_split(os.getenv("ALGOGPT_TOKENS")))
-    # מסכה חלקית
     masked: list[str] = []
     for t in toks:
         if not t:
@@ -32,11 +30,10 @@ def _tokens_from_env_masked() -> list[str]:
         masked.append("***" if len(t) <= 6 else f"{t[:3]}…{t[-3:]}")
     return masked
 
-# תומך גם /debug וגם /debug/
-@router.get("")
+@router.get("", include_in_schema=False)  # מאפשר /debug ללא הופעה כפולה ב־OpenAPI
 @router.get("/")
 def debug_router(
-    op: str = Query("ping", regex="^(ping|health|tokens|refresh)$")  # NOTE: regex (תואם Pydantic v1)
+    op: str = Query("ping", pattern="^(ping|health|tokens|refresh)$")  # ← pattern תואם v2
 ) -> Dict[str, Any]:
     if op == "ping":
         return {"ok": True, "pong": "ok"}
@@ -65,13 +62,13 @@ def debug_router(
         }
 
     if op == "tokens":
-        return {"ok": True, "count": len(_tokens_from_env_masked()), "tokens_masked": _tokens_from_env_masked()}
+        toks = _tokens_from_env_masked()
+        return {"ok": True, "count": len(toks), "tokens_masked": toks}
 
     if op == "refresh":
         # אין ריפרש דינמי – טעינת טוקנים נעשית בסטארטאפ; נדרש ריסטארט פרוסס
         return {"ok": False, "detail": "Token refresh requires process restart."}
 
-    # לא אמור להגיע לכאן (regex מגביל), אבל לשקט:
     return {"ok": False, "detail": "Unknown op"}
 
 
