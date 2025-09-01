@@ -27,7 +27,7 @@ BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.c
 RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
 HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 
-# ברירות מחדל (fallback) אם לא נצליח להביא filters – כאותיות לשמירת דיוק
+# ברירות מחדל (fallback) אם לא נצליח להביא filters – אותיות לשמירת דיוק
 DEFAULT_QTY_STEP_STR   = os.getenv("DEFAULT_QTY_STEP",  "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK","0.1")
 
@@ -187,6 +187,11 @@ def _decimals_from_step_str(step: str) -> int:
     return len(s.split(".")[1]) if "." in s else 0
 
 def get_symbol_filters(symbol: str) -> Dict[str, Any]:
+    """
+    מחזיר:
+      - tickSizeStr, stepSizeStr + מספר ספרות (לנוחות לוגים)
+      - minQtyStr (אם קיים), minNotionalStr (אם קיים)
+    """
     s = (symbol or "").strip().upper()
     data = _request("GET", "/fapi/v1/exchangeInfo", params={"symbol": s}).json()
     syms = data.get("symbols") or []
@@ -195,6 +200,8 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
         "stepSizeStr": DEFAULT_QTY_STEP_STR,
         "tickDecimals": _decimals_from_step_str(DEFAULT_PRICE_TICK_STR),
         "stepDecimals": _decimals_from_step_str(DEFAULT_QTY_STEP_STR),
+        "minQtyStr": None,
+        "minNotionalStr": None,
     }
     if not syms:
         return out
@@ -209,6 +216,13 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
             ss = (f.get("stepSize") or DEFAULT_QTY_STEP_STR)
             out["stepSizeStr"] = ss
             out["stepDecimals"] = _decimals_from_step_str(ss)
+            # לעיתים futures מחזיר גם minQty ב־LOT_SIZE
+            if f.get("minQty") is not None:
+                out["minQtyStr"] = str(f.get("minQty"))
+        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+            mn = f.get("notional") or f.get("minNotional")
+            if mn is not None:
+                out["minNotionalStr"] = str(mn)
     return out
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -219,12 +233,14 @@ def _quantize_multiple(x: float | str, step_str: str, rounding=ROUND_DOWN) -> De
     """מעגן את x למספר שלם של step בעזרת rounding נתון (למשל BUY=DOWN, SELL=UP)."""
     q = Decimal(str(x))
     step = Decimal(step_str)
+    if step == 0:
+        return q
     mult = (q / step).to_integral_value(rounding=rounding)
     val = (mult * step).quantize(step, rounding=ROUND_DOWN)
     return val
 
 def _to_plain_str(d: Decimal) -> str:
-    return format(d, "f")
+    return format(d, "f").rstrip("0").rstrip(".") if "." in format(d, "f") else format(d, "f")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Signed endpoints: leverage/positions/balance
@@ -265,23 +281,49 @@ def place_limit_order(
     new_order_resp_type: str = "RESULT",
     client_order_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """
+    מיישר כמות/מחיר לפי step/tick; אוכף minQty ו־MIN_NOTIONAL (אם קיימים ב־exchangeInfo).
+    מוודא ש־quantity/price נשלחים כמחרוזות ללא פורמט מדעי.
+    """
     sym  = (symbol or "").strip().upper()
     sdir = (side   or "").strip().upper()
     if sdir not in ("BUY", "SELL"):
         raise ValueError("side must be BUY or SELL")
 
-    # קבל filters + עיגון כמות/מחיר למחרוזות מדויקות
+    # קבל filters
     f = get_symbol_filters(sym)
     step_str = f.get("stepSizeStr", DEFAULT_QTY_STEP_STR)
     tick_str = f.get("tickSizeStr", DEFAULT_PRICE_TICK_STR)
+    min_qty_str = f.get("minQtyStr")
+    min_notional_str = f.get("minNotionalStr")
 
-    # כמות – תמיד כלפי מטה
+    # עיגון כמות למחלקת ה־step (תמיד DOWN)
     qty_dec = _quantize_multiple(quantity, step_str, rounding=ROUND_DOWN)
-    # מחיר – BUY מטה, SELL מעלה (שומר על כוונת המשתמש וגם חוקי הטיק)
+    # מחיר – BUY למטה, SELL למעלה
     if sdir == "SELL":
         px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_UP)
     else:
         px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_DOWN)
+
+    # אכיפת minQty אם קיים
+    if min_qty_str:
+        min_qty = Decimal(min_qty_str)
+        if qty_dec < min_qty:
+            # העלה למינימום (ceiling ל־step)
+            target = (min_qty / Decimal(step_str)).to_integral_value(rounding=ROUND_UP) * Decimal(step_str)
+            qty_dec = _quantize_multiple(target, step_str, rounding=ROUND_UP)
+
+    # אכיפת MIN_NOTIONAL אם קיים ויש גם price
+    if min_notional_str:
+        mn = Decimal(min_notional_str)
+        notional = (px_dec * qty_dec)
+        if notional < mn and px_dec > 0:
+            target_qty = (mn / px_dec)
+            # ceiling ל־step כדי להגיע/לחרוג בקטן מהמינימום
+            qty_dec = _quantize_multiple(target_qty, step_str, rounding=ROUND_UP)
+
+    if qty_dec <= 0:
+        raise RuntimeError("Calculated quantity is zero after precision/min rules")
 
     qty_str = _to_plain_str(qty_dec)
     px_str  = _to_plain_str(px_dec)
@@ -421,6 +463,7 @@ __all__ = [
     "_ceil_to_tick_dec",
     "_floor_to_tick_dec",
 ]
+
 
 
 
