@@ -2,9 +2,9 @@ openapi: 3.1.0
 info:
   title: AlgoGPT API
   version: 2.15.8
-  description: |
+  description: >
     AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
-    ברירת המחדל: נדרש Bearer. נקודות ציבוריות: / , /health , /health/live , /health_full , /price/{symbol}.
+    ברירת המחדל: נדרש Bearer. נקודות ציבוריות: / , /health , /health/live , /health_full , /price/{symbol} , /telegram/webhook.
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
@@ -19,16 +19,14 @@ tags:
   - name: Executor
   - name: Grid
   - name: Indicators
-
+  - name: Telegram
 security:
   - bearerAuth: []
-
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-
   schemas:
     Error:
       type: object
@@ -319,7 +317,81 @@ components:
         result:
           type: object
           additionalProperties: true
-        error: { type: string }
+        error:
+          type: string
+
+    # ----- Telegram-specific -----
+    TelegramMessage:
+      type: object
+      description: Minimal subset of Telegram message
+      properties:
+        message_id: { type: integer, example: 6 }
+        date: { type: integer, example: 1756734763 }
+        text: { type: string, example: "/start" }
+        chat:
+          type: object
+          properties:
+            id: { type: integer, example: 449087907 }
+            type: { type: string, example: private }
+          additionalProperties: true
+        from:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    TelegramCallbackQuery:
+      type: object
+      description: Minimal subset of Telegram callback query
+      properties:
+        id: { type: string, example: "1234567890" }
+        from:
+          type: object
+          additionalProperties: true
+        data: { type: string, example: "approve:abcd1234" }
+        message:
+          $ref: "#/components/schemas/TelegramMessage"
+      additionalProperties: true
+
+    TelegramUpdate:
+      type: object
+      description: Raw Telegram update object
+      properties:
+        update_id:
+          type: integer
+          example: 308383011
+        message:
+          $ref: "#/components/schemas/TelegramMessage"
+        callback_query:
+          $ref: "#/components/schemas/TelegramCallbackQuery"
+      additionalProperties: true
+
+    TelegramWebhookSetRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: https://algogpt-docker.onrender.com/telegram/webhook
+
+    TelegramGenericResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        result:
+          type: object
+          additionalProperties: true
+        description:
+          type: string
+          example: Webhook was set
+
+    GenericOk:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        error:
+          type: string
+          nullable: true
 
 paths:
   /:
@@ -477,7 +549,7 @@ paths:
       operationId: getPriceSymbol
       summary: Get latest price with multi-source fallback
       tags: [Price]
-      security: []   # ציבורי
+      security: []
       parameters:
         - in: path
           name: symbol
@@ -561,11 +633,7 @@ paths:
         - in: query
           name: limit
           required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 200
-            default: 50
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
       responses:
         "200":
           description: OK
@@ -601,6 +669,52 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HealthResponse" }
+
+  /telegram/set-webhook:
+    post:
+      operationId: telegram_setWebhook
+      summary: Set Telegram webhook URL (requires Bearer)
+      tags: [Telegram]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TelegramWebhookSetRequest" }
+      responses:
+        "200":
+          description: Telegram API response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramGenericResponse" }
+        "400":
+          description: Missing TELEGRAM_BOT_TOKEN or TELEGRAM_WEBHOOK_SECRET
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /telegram/webhook:
+    post:
+      operationId: telegram_webhook
+      summary: Telegram webhook receiver (public; validated by secret header)
+      tags: [Telegram]
+      security: []   # public endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TelegramUpdate" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericOk" }
+
 
 
 
