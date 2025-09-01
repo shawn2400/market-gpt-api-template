@@ -56,9 +56,9 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     min_qty = f.get("minQty")
     min_notional = f.get("minNotional") or 5.0  # ברירת מחדל אם אין
 
-    # חישוב כמות לפי תקציב×לבורג'
-    notional = payload.budget * payload.leverage
-    qty_raw = _d(notional) / _d(entry)
+    # חישוב כמות לפי תקציב×מינוף
+    allowed_notional = float(payload.budget) * float(payload.leverage)  # התקציב המקסימלי בדולרים
+    qty_raw = _d(allowed_notional) / _d(entry)
 
     # עיגון כמות/מחיר לפי step/tick
     qty_dec = _quantize_multiple(qty_raw, step_str, rounding=ROUND_DOWN)
@@ -67,32 +67,46 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     else:
         px_dec = _quantize_multiple(entry, tick_str, rounding=ROUND_DOWN)
 
-    # אכיפת minQty
+    # אכיפת minQty (אם מוגדר)
     if isinstance(min_qty, (int, float)) and min_qty is not None:
         min_qty_dec = _quantize_multiple(Decimal(str(min_qty)), step_str, rounding=ROUND_UP)
         if qty_dec < min_qty_dec:
-            # אם הכמות המינימלית גדולה ממה שהתקציב מאפשר → נחזיר שגיאה עם רמז
+            # אם minQty חורג מהתקציב המותר (אחרי tick/step) — נחזיר רמז
             need_notional = float(min_qty_dec * px_dec)
-            need_budget = need_notional / max(1, payload.leverage)
+            if need_notional > allowed_notional + 1e-9:
+                need_budget = need_notional / max(1, payload.leverage)
+                return TradeResponse(
+                    ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
+                    leverage=payload.leverage, order=None,
+                    error="Quantity below minQty and increases notional beyond budget.",
+                    hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×)."
+                )
+            # אחרת — נרים ל-minQty
+            qty_dec = min_qty_dec
+
+    # עמידה ב-MIN_NOTIONAL — ננסה להעלות כמות כל עוד לא חורגים מהתקציב×מינוף
+    final_notional = float(qty_dec * px_dec)
+    if final_notional + 1e-9 < float(min_notional):
+        needed_qty = _d(min_notional) / _d(px_dec)
+        needed_qty_dec = _quantize_multiple(needed_qty, step_str, rounding=ROUND_UP)
+        needed_notional = float(needed_qty_dec * px_dec)
+
+        # גם את תקרת הכמות לפי התקציב×מינוף נכמת לפי step
+        max_qty_by_budget = _quantize_multiple(_d(allowed_notional) / _d(px_dec), step_str, rounding=ROUND_DOWN)
+
+        if needed_qty_dec <= max_qty_by_budget:
+            # אפשר להעלות את הכמות בלי לחרוג מהתקציב
+            qty_dec = needed_qty_dec
+            final_notional = float(qty_dec * px_dec)
+        else:
+            # דורש תקציב גבוה יותר
+            need_budget = float(needed_notional) / max(1, payload.leverage)
             return TradeResponse(
                 ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
                 leverage=payload.leverage, order=None,
-                error="Quantity below minQty after precision rounding.",
+                error=f"MIN_NOTIONAL not met (have {final_notional:.8f} < need {min_notional:.8f}).",
                 hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×)."
             )
-        # אחרת נרים ל-minQty
-        qty_dec = min_qty_dec if qty_dec < min_qty_dec else qty_dec
-
-    # בדיקת MIN_NOTIONAL
-    final_notional = float(qty_dec * px_dec)
-    if final_notional < float(min_notional):
-        need_budget = float(min_notional) / max(1, payload.leverage)
-        return TradeResponse(
-            ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
-            leverage=payload.leverage, order=None,
-            error=f"MIN_NOTIONAL not met (have {final_notional:.8f} < need {min_notional:.8f}).",
-            hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×)."
-        )
 
     qty_f = float(qty_dec)
     px_f  = float(px_dec)
