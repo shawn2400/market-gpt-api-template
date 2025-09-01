@@ -4,11 +4,10 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List, Tuple
 import os, json, asyncio, uuid, time, hashlib
+
 import httpx
 
-# מאובטח רק למסלולים הרגישים (לא ל-webhook)
 from utils.auth import require_api_key
-
 from utils.telegram_api import send_message, edit_message
 from utils.trade_models import TradeProposal, build_eta, summarize
 from utils.eta import per_minute_move_estimate
@@ -21,15 +20,20 @@ from utils.trade_validator import validate_proposal
 from utils.runtime_prefs import (
     set_mute, clear_mute, mute_remaining_sec,
     set_near_pct_override, get_near_pct_override,
-    set_trade_quiet,
+    set_trade_quiet, TelePrefs
 )
-from utils.runtime_prefs import TelePrefs
+TPREFS = TelePrefs()
 
 from utils.hmac_utils import build_signed_outbound, generate_idempotency_key, sign_payload
 
-TPREFS = TelePrefs()
+# ──────────────────────────────────────────────────────────────────────────────
+# Routers: public (webhook) + secure (set-webhook)
+# ──────────────────────────────────────────────────────────────────────────────
+router_public = APIRouter(prefix="/telegram", tags=["Telegram"])  # ללא require_api_key
+router = APIRouter(prefix="/telegram", tags=["Telegram"], dependencies=[Depends(require_api_key)])
 
-# ───────────────── Config ─────────────────
+PENDING: Dict[str, Dict[str, Any]] = {}
+
 ALERTS_ACTIVE_URL = os.getenv("ALERTS_ACTIVE_URL", "http://127.0.0.1:8000/alerts/trades/active").strip()
 ALERTS_UPDATE_URL = os.getenv("ALERTS_UPDATE_URL", "http://127.0.0.1:8000/alerts/trades/update").strip()
 ALERTS_ANALYSIS_URL = os.getenv("ALERTS_ANALYSIS_URL", "http://127.0.0.1:8000/alerts/analysis").strip()
@@ -41,20 +45,13 @@ WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
 DEFAULT_INTERVAL = os.getenv("DEFAULT_INTERVAL", "15m")
 DEFAULT_MARKET = os.getenv("DEFAULT_MARKET", "futures")
 
-# ───────────────── Routers ─────────────────
-# ציבורי: webhook (ללא API key)
-router_public = APIRouter(prefix="/telegram", tags=["Telegram"])
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()  # ← חשוב
 
-# מאובטח: set-webhook (כן API key)
-router = APIRouter(prefix="/telegram", tags=["Telegram"], dependencies=[Depends(require_api_key)])
-
-# ───────────────── Models ─────────────────
+# --------- Models ----------
 class WebhookSet(BaseModel):
     url: str
 
-# ───────────────── Helpers ─────────────────
-PENDING: Dict[str, Dict[str, Any]] = {}
-
+# --------- Helpers ----------
 async def _load_trade_by_id(tid: str) -> Optional[Dict[str, Any]]:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -70,6 +67,9 @@ async def _load_trade_by_id(tid: str) -> Optional[Dict[str, Any]]:
         d = PENDING[tid]
         return {"trade_id": tid, **d.get("tp", {})}
     return None
+
+def _mk_slbe_keyboard(trade_id: str) -> dict:
+    return {"inline_keyboard": [[{"text": "🔒 SL→BE", "callback_data": f"slbe:{trade_id}"}]]}
 
 def _mk_tp_presets_keyboard(trade_id: str) -> dict:
     return {
@@ -122,21 +122,36 @@ def _summary_sig(items: List[Dict[str, Any]]) -> str:
     except Exception:
         return "🔐 sig: —"
 
-# ───────────────── Secure route (Bearer) ─────────────────
+# ───────── Secure route: set webhook (Bearer required) ─────────
 @router.post("/set-webhook")
 async def set_webhook(cfg: WebhookSet):
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         raise HTTPException(400, "missing TELEGRAM_BOT_TOKEN")
+    secret = TELEGRAM_WEBHOOK_SECRET
+    if not secret:
+        raise HTTPException(400, "missing TELEGRAM_WEBHOOK_SECRET")
+
     api = f"https://api.telegram.org/bot{token}/setWebhook"
+    payload = {"url": cfg.url, "secret_token": secret}
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(api, json={"url": cfg.url})
-        r.raise_for_status()
+        r = await client.post(api, json=payload)
+        try:
+            r.raise_for_status()
+        except Exception as e:
+            raise HTTPException(r.status_code, f"telegram setWebhook failed: {e}; resp={r.text}")
         return r.json()
 
-# ───────────────── Public route (no Bearer) ─────────────────
+# ───────── Public route: webhook receiver (validates secret header) ─────────
 @router_public.post("/webhook")
 async def webhook(request: Request):
+    # אימות כותרת מהטלגרם
+    if TELEGRAM_WEBHOOK_SECRET:
+        got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not got or got.strip() != TELEGRAM_WEBHOOK_SECRET:
+            # לא נחשוף יותר מדי לוגיקה
+            return {"ok": False, "error": "unauthorized"}
+
     update = await request.json()
 
     if "message" in update:
@@ -145,7 +160,7 @@ async def webhook(request: Request):
         chat_id = msg["chat"]["id"]
         mid = msg.get("message_id")
 
-        # HELP
+        # ---------- HELP ----------
         if text.startswith("/start"):
             return await send_message("🤖 AlgoGPT Bot מוכן. שלח /help לקבלת הוראות.")
         if text.startswith("/help"):
@@ -165,79 +180,82 @@ async def webhook(request: Request):
                 "/size <trade_id> <risk_pct>\n"
             )
 
-        # pin/bundle/snooze/size וכו' (כמו אצלך)
-        # ……… (השארתי את כל הבלוק שלך כמו שהוא, רק הזזתי לרוטר הציבורי) ………
+        # ---------- LIGHT EXTENSIONS ----------
+        if text.startswith("/pin_summary"):
+            parts = text.split()
+            if len(parts) != 2 or parts[1].lower() not in ("on", "off"):
+                return await send_message("שימוש: /pin_summary on|off")
+            on = (parts[1].lower() == "on")
+            await TPREFS.set_pin_summary(chat_id, on)
+            if not on:
+                await TPREFS.set_pin_message_id(chat_id, None)
+            else:
+                resp = await send_message("📌 סיכום מוצמד יופיע כאן. המערכת תעדכן ב־edit.")
+                try:
+                    if isinstance(resp, dict) and resp.get("message_id"):
+                        await TPREFS.set_pin_message_id(chat_id, int(resp["message_id"]))
+                except Exception:
+                    pass
+            return await send_message(f"pin_summary: {'ON' if on else 'OFF'}")
 
-        # ====== כל הקוד מהשאלה שלך נשמר זהה מכאן והלאה ======
-        # LIGHT EXTENSIONS … (pin_summary, bundle, snooze, snooze_sym, size)
-        # AUTO … (auto_on, auto_off)
-        # APPROVE/REJECT … (approve, reject)
-        # TP SCALE / SL->BE … (tp_scale, sl_be)
-        # LIQUIDITY … (/liquidity)
-        # RISK … (/risk)
-        # MUTE/UNMUTE/SET_NEAR … (/mute, /unmute, /set_near)
-        # QUIET … (/quiet_on, /quiet_off)
-        # SUMMARY … (/summary)
-        # PROPOSE … (/propose)
-        # CALLBACKS … (approve:, reject:, adjust:, slbe:, tpask:, tppreset:)
-        # ולבסוף return {"ok": True}
-        # ====== העתקת בדיוק את הקוד מההודעה שלך (לא חוזר עליו כאן לקיצור) ======
+        if text.startswith("/bundle"):
+            parts = text.split()
+            if len(parts) == 1:
+                sec = await TPREFS.get_bundle_window(chat_id)
+                return await send_message(f"bundle={sec}s  (שימוש: /bundle <seconds>, 0=כבוי)")
+            try:
+                sec = max(0, int(parts[1]))
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /bundle <seconds>\n({e})")
+            await TPREFS.set_bundle_window(chat_id, sec)
+            return await send_message(f"Bundling {'ON' if sec>0 else 'OFF'} ({sec}s)")
 
-    if "callback_query" in update:
-        # … ה־callbacks המדויקים שלך (כמו בשאלה) …
-        return {"ok": True}
+        if text.startswith("/snooze "):
+            try:
+                _, mins, tid = text.split(maxsplit=2)
+                mins = int(mins)
+                await TPREFS.snooze_trade(tid, mins)
+                return await send_message(f"🔕 Snooze לטרייד {tid} ל-{mins} דק׳ הופעל.")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /snooze <minutes> <trade_id>\n({e})")
 
-    return {"ok": True}
+        if text.startswith("/snooze_sym "):
+            try:
+                _, sym, mins = text.split(maxsplit=2)
+                mins = int(mins)
+                await TPREFS.snooze_symbol(sym, mins)
+                return await send_message(f"🔕 Snooze לסימבול {sym.upper()} ל-{mins} דק׳ הופעל.")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /snooze_sym <symbol> <minutes>\n({e})")
 
-# שאר הפונקציה _approve_trade_id נשארת זהה (כמו אצלך)
-async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
-    item = PENDING.get(tid)
-    if not item:
-        return await send_message(f"⚠️ טרייד {tid} לא קיים/פג תוקף")
+        if text.startswith("/size "):
+            try:
+                _, tid, rpct = text.split(maxsplit=2)
+                rpct = float(rpct)
+                rec = await _load_trade_by_id(tid)
+                if not rec:
+                    return await send_message(f"לא נמצא טרייד id={tid}")
+                entry = float(rec["entry"])
+                sl    = float(rec["sl"])
+                lev   = int(rec.get("leverage", 10))
+                budget= float(rec.get("budget", 30.0))
+                qty, notion, margin = _calc_size(entry, sl, lev, budget, rpct)
+                txt = (
+                    f"🧮 *Position Size*\n"
+                    f"ID: `{tid}` | {rec.get('symbol','?')}\n"
+                    f"Risk: {rpct:.2f}% מתוך Budget={_fmt_usd(budget)}\n"
+                    f"Entry={entry:.6f}  SL={sl:.6f}  Lev=x{lev}\n"
+                    f"*Qty*={qty:.6f}\n"
+                    f"Notional≈{_fmt_usd(notion)} | Margin≈{_fmt_usd(margin)}"
+                )
+                return await send_message(txt)
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /size <trade_id> <risk_pct>\n({e})")
 
-    tp = TradeProposal(**item["tp"])
-    val = await validate_proposal(tp.dict(), interval=item.get("interval") or DEFAULT_INTERVAL, market=DEFAULT_MARKET)
-    if not val["ok"]:
-        return await edit_message(chat_id, message_id, "❌ הוולידציה נכשלה:\n" + "\n".join(f"- {e}" for e in val["errors"]))
+        # ---------- AUTO ----------
+        if text.startswith("/auto_on"):
+            os.environ["TRADE_AUTO
 
-    trade_type = "FUTURES" if DEFAULT_MARKET.lower().startswith("future") else "SPOT"
-    payload = {
-        "trade_id": tid,
-        "trade_type": trade_type,
-        "symbol": tp.symbol,
-        "side": tp.side,
-        "current_price": tp.current_price,
-        "entry": tp.entry, "sl": tp.sl,
-        "tp1": tp.tp1, "tp2": tp.tp2, "tp3": tp.tp3,
-        "leverage": tp.leverage,
-        "success_pct": tp.success_pct,
-        "reason": "approved via telegram",
-        "chat_id": chat_id,
-        "interval": item.get("interval") or DEFAULT_INTERVAL,
-        "market": DEFAULT_MARKET,
-    }
-    body, headers = build_signed_outbound(
-        WEBHOOK_HMAC_SECRET,
-        payload,
-        idempotency_key=generate_idempotency_key()
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=12) as client:
-            r = await client.post(ALERTS_INGEST_URL, content=body, headers=headers)
-            if r.status_code == 422:
-                data = r.json() if r.headers.get("content-type","").startswith("application/json") else {}
-                errs = data.get("errors") or ["validator_failed"]
-                warns= data.get("warnings") or []
-                txt = "❌ Pre-Flight @ sink:\n" + "\n".join(f"- {e}" for e in errs)
-                if warns:
-                    txt += "\n\n⚠️ " + "\n⚠️ ".join(warns)
-                return await edit_message(chat_id, message_id, txt)
-            r.raise_for_status()
-            PENDING.pop(tid, None)
-            return await edit_message(chat_id, message_id, f"✅ טרייד #{tid} נשלח ל־sink ופורסם לטלגרם.")
-    except Exception as e:
-        return await edit_message(chat_id, message_id, f"❌ ingest failed: {e}")
 
 
 
