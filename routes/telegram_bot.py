@@ -144,6 +144,7 @@ async def set_webhook(cfg: WebhookSet):
 # ───────── Public route: webhook receiver (validates secret header) ─────────
 @router_public.post("/webhook")
 async def webhook(request: Request):
+    # validate Telegram secret header (if configured)
     if TELEGRAM_WEBHOOK_SECRET:
         got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
         if not got or got.strip() != TELEGRAM_WEBHOOK_SECRET:
@@ -158,6 +159,7 @@ async def webhook(request: Request):
         chat_id = msg["chat"]["id"]
         mid = msg.get("message_id")
 
+        # HELP/START
         if text.startswith("/start"):
             return await send_message("🤖 AlgoGPT Bot מוכן. שלח /help לקבלת הוראות.")
         if text.startswith("/help"):
@@ -327,7 +329,8 @@ async def webhook(request: Request):
                     return await send_message("❌ risk: not ok")
                 rr = data.get("rr"); rr_s = f"{rr:.2f}" if rr else "—"
                 k = data.get("kelly_fraction"); k_s = f"{k*100:.1f}%" if k is not None else "—"
-                lev = data.get("leverage_cap") or "—"
+                lev = data.get("leverage_cap") or "—
+"
                 msg = (
                     f"🛡️ *Risk* #{tid}\n"
                     f"{data['symbol']} {data['side']}\n"
@@ -606,6 +609,7 @@ async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
             return await edit_message(chat_id, message_id, f"✅ טרייד #{tid} נשלח ל־sink ופורסם לטלגרם.")
     except Exception as e:
         return await edit_message(chat_id, message_id, f"❌ ingest failed: {e}")
+
 
 
 
