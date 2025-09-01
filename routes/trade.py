@@ -12,6 +12,10 @@ from utils.binance_client import (
     get_symbol_filters,
     set_leverage,
     place_limit_order,
+    _floor_to_step_dec,
+    _floor_to_tick_dec,
+    _ceil_to_tick_dec,
+    _to_plain_str,
 )
 
 router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_api_key)])
@@ -47,25 +51,30 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
         raise HTTPException(status_code=503, detail=f"Price unavailable for {sym}")
     entry = float(px)
 
-    # פילטרים: tickSize/stepSize → עיגון דיוק למניעת -1111
+    # פילטרים: tickSize/stepSize כדי לדעת איך להציג בדוח (העגינה בפועל תתבצע שוב ב-binance_client)
     f = get_symbol_filters(sym)
     step_str = f.get("stepSizeStr", "0.001")
     tick_str = f.get("tickSizeStr", "0.1")
 
-    # חישוב כמות לפי תקציב ולוורידג'
+    # חישוב כמות לפי תקציב ולוורידג' (לפני עיגון סופי)
     notional = payload.budget * payload.leverage
-    qty = _d(notional) / _d(entry)
+    raw_qty = _d(notional) / _d(entry)
 
-    # רצפה ל-step (מסתמך על binance_client ל-FLOOR ול-quantize)
-    from utils.binance_client import _floor_to_step_dec, _to_plain_str  # קיימים אצלך
-    qty_dec = _floor_to_step_dec(qty, step_str)
-    px_dec  = _floor_to_step_dec(entry, tick_str)
-    qty_f   = float(qty_dec)
-    px_f    = float(px_dec)
+    # לעדכון התשובה למשתמש (dry run/echo) נעשה עיגון ידידותי לתצוגה:
+    qty_dec_preview = _floor_to_step_dec(raw_qty, step_str)
+    if side == "SELL":
+        px_dec_preview = _ceil_to_tick_dec(entry, tick_str)
+    else:
+        px_dec_preview = _floor_to_tick_dec(entry, tick_str)
 
-    if qty_f <= 0:
-        return TradeResponse(ok=False, symbol=sym, side=side, qty=0.0, entry=px_f, leverage=payload.leverage,
-                             error="Calculated quantity is zero after step rounding")
+    qty_f_preview = float(qty_dec_preview)
+    px_f_preview  = float(px_dec_preview)
+
+    if qty_f_preview <= 0:
+        return TradeResponse(
+            ok=False, symbol=sym, side=side, qty=0.0, entry=px_f_preview, leverage=payload.leverage,
+            error="Calculated quantity is zero after step rounding"
+        )
 
     # סט לוורידג' (שקט אם נכשל)
     try:
@@ -74,25 +83,29 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
         pass
 
     if payload.dry_run:
-        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None)
+        # לא שולחים הזמנה – רק מחזירים איך זה יראה לאחר עיגון ראשוני
+        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f_preview, entry=px_f_preview,
+                             leverage=payload.leverage, order=None)
 
-    # הזמנה LIMIT-IOC (מתנהגת כ-MARKET עם דיוק תקין)
+    # הזמנה LIMIT-IOC (מתנהגת כ-MARKET עם דיוק תקין) — העיגון המחמיר קורה בתוך place_limit_order
     try:
         order = place_limit_order(
             symbol=sym,
             side=side,
-            quantity=qty_f,
-            price=px_f,
+            quantity=float(raw_qty),  # נעביר את ה־raw; place_limit_order יכפה step/minNotional וכו'
+            price=float(entry),
             time_in_force="IOC",
             post_only=False,
             reduce_only=False,
             position_side=None,
             new_order_resp_type="RESULT",
         )
-        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=order)
+        # מחזירים את הערכים כפי שחישבנו בתצוגה – ההזמנה בפועל עשויה להיות בכמות מעט שונה אם הופעל MIN_NOTIONAL
+        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f_preview, entry=px_f_preview,
+                             leverage=payload.leverage, order=order)
     except Exception as e:
-        return TradeResponse(ok=False, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None, error=str(e))
-
+        return TradeResponse(ok=False, symbol=sym, side=side, qty=qty_f_preview, entry=px_f_preview,
+                             leverage=payload.leverage, order=None, error=str(e))
 
 
 
