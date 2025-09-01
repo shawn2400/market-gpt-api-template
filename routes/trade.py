@@ -14,6 +14,7 @@ from utils.binance_client import (
     place_limit_order,
     _quantize_multiple,
 )
+from utils.sltp import calc_sl_tp_for_symbol  # ← חישוב ועיגון SL/TP לפי tick של הסימבול
 
 router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_api_key)])
 
@@ -23,6 +24,11 @@ class TradeRequest(BaseModel):
     budget: float = Field(..., gt=0)
     leverage: int = Field(10, ge=1, le=125)
     dry_run: bool = False
+    # אופציונלי: SL/TP כאחוז (<1) או מחיר מוחלט (>=1); ATR לפולבק
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    atr: Optional[float] = None
+    atr_mult: float = 1.5
 
 class TradeResponse(BaseModel):
     ok: bool
@@ -34,6 +40,9 @@ class TradeResponse(BaseModel):
     order: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     hint: Optional[str] = None
+    # חדש: מחזירים SL/TP אחרי עיגון tick לפי הסימבול
+    sl_price: Optional[float] = None
+    tp_price: Optional[float] = None
 
 def _d(x) -> Decimal:
     return Decimal(str(x))
@@ -56,9 +65,9 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     min_qty = f.get("minQty")
     min_notional = f.get("minNotional") or 5.0  # ברירת מחדל אם אין
 
-    # חישוב כמות לפי תקציב×מינוף
-    allowed_notional = float(payload.budget) * float(payload.leverage)  # התקציב המקסימלי בדולרים
-    qty_raw = _d(allowed_notional) / _d(entry)
+    # חישוב כמות לפי תקציב×ליבורג'
+    notional = payload.budget * payload.leverage
+    qty_raw = _d(notional) / _d(entry)
 
     # עיגון כמות/מחיר לפי step/tick
     qty_dec = _quantize_multiple(qty_raw, step_str, rounding=ROUND_DOWN)
@@ -67,54 +76,59 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     else:
         px_dec = _quantize_multiple(entry, tick_str, rounding=ROUND_DOWN)
 
-    # אכיפת minQty (אם מוגדר)
+    # אכיפת minQty
     if isinstance(min_qty, (int, float)) and min_qty is not None:
         min_qty_dec = _quantize_multiple(Decimal(str(min_qty)), step_str, rounding=ROUND_UP)
         if qty_dec < min_qty_dec:
-            # אם minQty חורג מהתקציב המותר (אחרי tick/step) — נחזיר רמז
+            # אם התקציב לא מספיק למינימום בורסה — נחזיר רמז מפורש
             need_notional = float(min_qty_dec * px_dec)
-            if need_notional > allowed_notional + 1e-9:
-                need_budget = need_notional / max(1, payload.leverage)
-                return TradeResponse(
-                    ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
-                    leverage=payload.leverage, order=None,
-                    error="Quantity below minQty and increases notional beyond budget.",
-                    hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×)."
-                )
-            # אחרת — נרים ל-minQty
-            qty_dec = min_qty_dec
-
-    # עמידה ב-MIN_NOTIONAL — ננסה להעלות כמות כל עוד לא חורגים מהתקציב×מינוף
-    final_notional = float(qty_dec * px_dec)
-    if final_notional + 1e-9 < float(min_notional):
-        needed_qty = _d(min_notional) / _d(px_dec)
-        needed_qty_dec = _quantize_multiple(needed_qty, step_str, rounding=ROUND_UP)
-        needed_notional = float(needed_qty_dec * px_dec)
-
-        # גם את תקרת הכמות לפי התקציב×מינוף נכמת לפי step
-        max_qty_by_budget = _quantize_multiple(_d(allowed_notional) / _d(px_dec), step_str, rounding=ROUND_DOWN)
-
-        if needed_qty_dec <= max_qty_by_budget:
-            # אפשר להעלות את הכמות בלי לחרוג מהתקציב
-            qty_dec = needed_qty_dec
-            final_notional = float(qty_dec * px_dec)
-        else:
-            # דורש תקציב גבוה יותר
-            need_budget = float(needed_notional) / max(1, payload.leverage)
+            need_budget = need_notional / max(1, payload.leverage)
             return TradeResponse(
                 ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
                 leverage=payload.leverage, order=None,
-                error=f"MIN_NOTIONAL not met (have {final_notional:.8f} < need {min_notional:.8f}).",
-                hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×)."
+                error="Quantity below minQty after precision rounding.",
+                hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×).",
+                sl_price=None, tp_price=None
             )
+        # אחרת נרים ל-minQty
+        qty_dec = min_qty_dec if qty_dec < min_qty_dec else qty_dec
+
+    # בדיקת MIN_NOTIONAL
+    final_notional = float(qty_dec * px_dec)
+    if final_notional < float(min_notional):
+        need_budget = float(min_notional) / max(1, payload.leverage)
+        return TradeResponse(
+            ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
+            leverage=payload.leverage, order=None,
+            error=f"MIN_NOTIONAL not met (have {final_notional:.8f} < need {min_notional:.8f}).",
+            hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×).",
+            sl_price=None, tp_price=None
+        )
 
     qty_f = float(qty_dec)
     px_f  = float(px_dec)
 
+    # --- חישוב SL/TP מעוגנים לפי tick של הסימבול (אם נמסרו פרמטרים או ATR) ---
+    sl_price, tp_price = None, None
+    try:
+        sl_price, tp_price = calc_sl_tp_for_symbol(
+            symbol=sym,
+            entry=px_f,
+            side=("LONG" if side == "BUY" else "SHORT"),
+            sl=payload.sl,
+            tp=payload.tp,
+            atr=payload.atr,
+            atr_mult=payload.atr_mult,
+        )
+    except Exception:
+        # לא מפיל את הטרייד אם SL/TP לא חושבו — פשוט נשאיר None
+        sl_price, tp_price = None, None
+
     if qty_f <= 0:
         return TradeResponse(
             ok=False, symbol=sym, side=side, qty=0.0, entry=px_f, leverage=payload.leverage,
-            error="Calculated quantity is zero after step rounding"
+            error="Calculated quantity is zero after step rounding",
+            sl_price=sl_price, tp_price=tp_price
         )
 
     # סט לוורידג' (שקט אם נכשל)
@@ -123,10 +137,14 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     except Exception:
         pass
 
+    # Dry-run — מחזירים גם SL/TP המחושבים
     if payload.dry_run:
-        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None)
+        return TradeResponse(
+            ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None,
+            sl_price=sl_price, tp_price=tp_price
+        )
 
-    # הזמנת LIMIT-IOC (כמו Market אך מדויקת)
+    # הזמנת LIMIT-IOC (כמו Market אך מדויקת) לפתיחת פוזיציה
     try:
         order = place_limit_order(
             symbol=sym,
@@ -139,11 +157,15 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
             position_side=None,
             new_order_resp_type="RESULT",
         )
-        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=order)
+        return TradeResponse(
+            ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=order,
+            sl_price=sl_price, tp_price=tp_price
+        )
     except Exception as e:
         return TradeResponse(
             ok=False, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage,
-            order=None, error=str(e)
+            order=None, error=str(e),
+            sl_price=sl_price, tp_price=tp_price
         )
 
 
