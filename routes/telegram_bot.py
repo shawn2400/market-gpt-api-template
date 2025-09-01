@@ -328,13 +328,13 @@ async def webhook(request: Request):
                     data = r.json()
                 if not data.get("ok"):
                     return await send_message("❌ risk: not ok")
-                rr = data.get("rr"); rr_s = f"{rr:.2f}" if rr else "—"
+                rr = data.get("rr"); rr_s = f"{rr:.2f}" if rr is not None else "—"
                 k = data.get("kelly_fraction"); k_s = f"{k*100:.1f}%" if k is not None else "—"
                 lev = data.get("leverage_cap") or "—"
                 msg = (
                     f"🛡️ *Risk* #{tid}\n"
-                    f"{data['symbol']} {data['side']}\n"
-                    f"Entry: `{data['entry']:.6f}`  SL: `{data['sl']:.6f}`  TP1: `{(data['tp1'] or 0):.6f}`\n"
+                    f"{data.get('symbol','?')} {data.get('side','?')}\n"
+                    f"Entry: `{(data.get('entry') or 0):.6f}`  SL: `{(data.get('sl') or 0):.6f}`  TP1: `{(data.get('tp1') or 0):.6f}`\n"
                     f"RR≈ *{rr_s}*  |  Kelly≈ *{k_s}*  |  Lev Cap≈ *x{lev}*\n"
                     f"Success: ~{(data.get('success_pct') or 0):.1f}%"
                 )
@@ -445,53 +445,6 @@ async def webhook(request: Request):
 
             except Exception as e:
                 return await send_message(f"❌ שגיאה ב-/summary: {e}")
-
-        # ---- PROPOSE (ידני)
-        if text.startswith("/propose"):
-            try:
-                parts = text.split()
-                symbol, interval, side, lev, entry, sl, tp1, tp2, tp3, succ = parts[1:11]
-                lev = int(lev); entry=float(entry); sl=float(sl); tp1=float(tp1)
-                tp2=float(tp2); tp3=float(tp3); succ=float(succ)
-                df = await get_klines(symbol, interval=interval or DEFAULT_INTERVAL, limit=50, market=DEFAULT_MARKET)
-                price = float(df["close"].iloc[-1])
-                vol_per_min = per_minute_move_estimate(df) / (15 if "15" in (interval or "15m") else 1)
-                tp = TradeProposal(
-                    symbol=symbol.upper(), side=side.upper(), current_price=price,
-                    leverage=lev, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, success_pct=succ
-                )
-
-                val = await validate_proposal(tp.dict(), interval=interval or DEFAULT_INTERVAL, market=DEFAULT_MARKET)
-                if not val["ok"]:
-                    return await send_message(
-                        "❌ הוולידציה נכשלה:\n" +
-                        "\n".join(f"- {e}" for e in val["errors"]) +
-                        (("\n\n⚠️ " + "\n⚠️ ".join(val["warnings"])) if val["warnings"] else "")
-                    )
-
-                eta = build_eta(tp, per_min_move=vol_per_min)
-                tid = uuid.uuid4().hex[:8]
-                PENDING[tid] = {"tp": tp.dict(), "eta": eta.dict(), "interval": interval}
-
-                txt = summarize(tp, eta, why="Pre-Flight: OK")
-                if val["warnings"]:
-                    txt += "\n\n⚠️ Warnings:\n" + "\n".join(f"- {w}" for w in val["warnings"])
-                kb = {
-                    "inline_keyboard":[
-                        [
-                            {"text":"✅ אשר","callback_data":f"approve:{tid}"},
-                            {"text":"✏️ כוונן","callback_data":f"adjust:{tid}"},
-                            {"text":"🛑 דחה","callback_data":f"reject:{tid}"}
-                        ],
-                        [
-                            {"text":"🔒 SL→BE","callback_data":f"slbe:{tid}"},
-                            {"text":"📊 TP Presets","callback_data":f"tpask:{tid}"}
-                        ]
-                    ]
-                }
-                return await send_message(txt, kb)
-            except Exception as e:
-                return await send_message(f"❌ קלט לא תקין: {e}")
 
         # default
         return await send_message("שלח /help לקבלת פורמט.")
@@ -609,6 +562,7 @@ async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
             return await edit_message(chat_id, message_id, f"✅ טרייד #{tid} נשלח ל־sink ופורסם לטלגרם.")
     except Exception as e:
         return await edit_message(chat_id, message_id, f"❌ ingest failed: {e}")
+
 
 
 
