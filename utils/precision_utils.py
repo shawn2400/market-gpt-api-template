@@ -46,8 +46,8 @@ def refresh_exchange_info() -> None:
 def _find_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     ei = _ensure_ex_info()
     su = (symbol or "").upper()
-    for s in ei.get("symbols", []) or []:
-        if s.get("symbol") == su:
+    for s in (ei.get("symbols") or []):
+        if (s.get("symbol") or "").upper() == su:
             return s
     return None
 
@@ -78,15 +78,23 @@ def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     # Floor למכפלה הקרובה כדי למנוע דחיית הזמנות בבינאנס
     return (value // step) * step
 
+def _decimal_step_round_up(value: Decimal, step: Decimal) -> Decimal:
+    """Ceil למכפלת step (למשל SELL מול tick)."""
+    if step <= 0:
+        return value
+    # טריק Ceil: floor((x + step - ε)/step) * step
+    eps = Decimal("1e-18")
+    return ((value + step - eps) // step) * step
+
 def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
     """
     מעגל מחיר ל־tickSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
-    אם לא נמצא tickSize – מעגל רק לפי pricePrecision.
+    אם לא נמצא tickSize – מעגל רק לפי pricePrecision. (Floor)
     """
     info = _find_symbol_info(symbol) or {}
     price_precision = info.get("pricePrecision")
     tick_size = "0"
-    for f in info.get("filters", []) or []:
+    for f in (info.get("filters") or []):
         if f.get("filterType") == "PRICE_FILTER":
             tick_size = f.get("tickSize", "0")
             break
@@ -104,6 +112,35 @@ def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
 
     return float(dec), s
 
+def apply_price_tick_side(price: float, symbol: str, side: str) -> Tuple[float, str]:
+    """
+    כמו apply_price_tick אך מאפשר BUY=DOWN / SELL=UP.
+    """
+    info = _find_symbol_info(symbol) or {}
+    price_precision = info.get("pricePrecision")
+    tick_size = "0"
+    for f in (info.get("filters") or []):
+        if f.get("filterType") == "PRICE_FILTER":
+            tick_size = f.get("tickSize", "0")
+            break
+
+    v = Decimal(str(price))
+    t = Decimal(str(tick_size)) if tick_size else Decimal("0")
+    s_up = (str(side or "").upper() == "SELL")
+
+    if t > 0:
+        dec = _decimal_step_round_up(v, t) if s_up else _decimal_step_round(v, t)
+    else:
+        dec = v
+
+    if isinstance(price_precision, int) and price_precision >= 0:
+        q = Decimal(1).scaleb(-price_precision)
+        s = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
+    else:
+        s = format(dec.normalize(), "f")
+
+    return float(dec), s
+
 def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
     """
     מעגל כמות ל־stepSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
@@ -112,10 +149,17 @@ def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
     info = _find_symbol_info(symbol) or {}
     qty_precision = info.get("quantityPrecision")
     step_size = "0"
-    for f in info.get("filters", []) or []:
+
+    # קודם נעדיף LOT_SIZE; אם לא קיים — MARKET_LOT_SIZE
+    for f in (info.get("filters") or []):
         if f.get("filterType") == "LOT_SIZE":
             step_size = f.get("stepSize", "0")
             break
+    else:
+        for f in (info.get("filters") or []):
+            if f.get("filterType") == "MARKET_LOT_SIZE":
+                step_size = f.get("stepSize", "0")
+                break
 
     v = Decimal(str(qty))
     s = Decimal(str(step_size)) if step_size else Decimal("0")
@@ -140,13 +184,16 @@ def _symbol_filters(symbol: str) -> Dict[str, Any]:
     min_qty = None
     min_notional = None
 
-    for f in info.get("filters", []) or []:
+    for f in (info.get("filters") or []):
         t = f.get("filterType")
         if t == "PRICE_FILTER":
             tick_size = f.get("tickSize")
         elif t == "LOT_SIZE":
-            step_size = f.get("stepSize")
-            min_qty = f.get("minQty")
+            step_size = f.get("stepSize") or step_size
+            min_qty = f.get("minQty") if f.get("minQty") is not None else min_qty
+        elif t == "MARKET_LOT_SIZE":
+            # לעתים יש רק MARKET_LOT_SIZE; נשתמש בו כ-fallback ל-stepSize
+            step_size = step_size or f.get("stepSize")
         elif t in ("MIN_NOTIONAL", "NOTIONAL"):
             mn = f.get("notional") or f.get("minNotional") or f.get("minNotionalValue")
             if mn is not None:
@@ -233,6 +280,7 @@ __all__ = [
     "get_precision_info",
     "round_to_precision",
     "apply_price_tick",
+    "apply_price_tick_side",
     "apply_qty_step",
     "calc_quantity_from_budget",
 ]
