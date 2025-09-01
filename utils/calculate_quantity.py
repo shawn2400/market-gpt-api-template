@@ -3,6 +3,7 @@
 
 import logging
 from typing import Dict, Optional
+from decimal import Decimal
 
 # --- ניסיון להשתמש במימוש הישן (אם קיים) ---
 _has_core = True
@@ -18,7 +19,6 @@ except Exception as e:
     logging.warning("[calculate_quantity] quantity_utils core not available, will use precision_utils fallback: %s", e)
 
 # --- פולבקים דרך precision_utils ---
-from decimal import Decimal
 try:
     from utils.precision_utils import (
         get_precision_info as _get_precision_info_px,
@@ -68,19 +68,23 @@ def round_step(value: float, step: float) -> float:
         return float(value)
 
 
-def round_tick(price: float, tick_size: float) -> float:
+def round_tick(price: float, tick_size: float, *, symbol: Optional[str] = None) -> float:
     """
-    עיגול למטה ל-tick_size. אם יש core נשתמש בו; אחרת פולבק דרך precision_utils.apply_price_tick.
+    עיגול למטה ל-tick_size.
+    אם יש core נשתמש בו; אחרת פולבק דרך precision_utils.apply_price_tick (דורש symbol לשימוש בפילטרים).
     """
     if _has_core:
         try:
             return _round_tick_core(price, tick_size)
         except Exception as e:
             logging.warning("[calculate_quantity] core.round_tick failed, fallback: %s", e)
-    if _apply_price_tick_px:
-        # apply_price_tick מחזיר (float_dec, str_fmt)
-        v, _ = _apply_price_tick_px(price, "__GENERIC__")
+
+    # אם יש לנו precision_utils, עדיף לתת לו את הסימבול (לא "__GENERIC__")
+    if _apply_price_tick_px and symbol:
+        v, _ = _apply_price_tick_px(price, symbol)
         return float(v)
+
+    # פולבק מתמטי פשוט
     try:
         v = Decimal(str(price))
         t = Decimal(str(tick_size))
@@ -124,6 +128,7 @@ def calculate_quantity(symbol: str, entry_price: float, leverage: float, budget_
     except Exception as e:
         logging.error(f"[calculate_quantity] ❌ שגיאה בחישוב כמות עבור {symbol}: {e}")
         return 0.0
+
 
 
 
