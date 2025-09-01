@@ -20,3 +20,4 @@ def tickers(symbols: str = Query(..., description="Comma separated list, e.g. BT
         out.append({"symbol": sym, "markPrice": price})
     return out
 
+
