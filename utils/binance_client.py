@@ -32,6 +32,10 @@ DEFAULT_QTY_STEP_STR   = os.getenv("DEFAULT_QTY_STEP",  "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK","0.1")
 DEFAULT_MIN_NOTIONAL   = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
+# טריגר ברירת מחדל לפקודות מותנות
+WORKING_TYPE  = (os.getenv("BINANCE_WORKING_TYPE") or "MARK_PRICE").strip().upper()  # MARK_PRICE / CONTRACT_PRICE
+PRICE_PROTECT = str(os.getenv("BINANCE_PRICE_PROTECT", "false")).lower() in ("1", "true", "yes", "on")
+
 _HEADERS = {
     "X-MBX-APIKEY": API_KEY,
     "Accept": "application/json",
@@ -171,17 +175,9 @@ def _decimals_from_step_str(step: str) -> int:
 def get_symbol_filters(symbol: str) -> Dict[str, Any]:
     """
     נסיון בטוח להביא פילטרים עבור סימבול:
-      1) /exchangeInfo?symbol=SYMBOL (היעד המדויק)
+      1) /exchangeInfo?symbol=SYMBOL
       2) cache של exchangeInfo מלא
       3) fallback קשיח לערכי ברירת מחדל
-    מחזיר:
-      {
-        "tickSizeStr", "stepSizeStr",
-        "tickDecimals", "stepDecimals",
-        "minQty", "minNotional",
-        "pricePrecision", "quantityPrecision",
-        "is_valid"
-      }
     """
     s = (symbol or "").strip().upper()
     out = {
@@ -292,7 +288,7 @@ def _to_plain_str(d: Decimal) -> str:
     return format(d, "f")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Signed endpoints
+# Signed endpoints (open/close/balance)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
@@ -314,7 +310,7 @@ def futures_balance() -> list:
         return []
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Orders (LIMIT GTX / IOC / FOK / reduceOnly / positionSide)
+# Place LIMIT order (open position)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def place_limit_order(
@@ -388,6 +384,98 @@ def place_limit_order(
         params["newClientOrderId"] = client_order_id
 
     return _request("POST", "/fapi/v1/order", params=params, signed=True).json()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Conditional (BRACKET) orders: STOP_MARKET / TAKE_PROFIT_MARKET
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _align_trigger_price(desired: float, tick_str: str, side: str, *, is_stop: bool) -> Decimal:
+    """
+    Rounding direction chosen to be conservative:
+      - STOP for SELL (long SL below): round DOWN
+      - STOP for BUY  (short SL above): round UP
+      - TP   for SELL (long TP above):  round UP
+      - TP   for BUY  (short TP below): round DOWN
+    """
+    sdir = (side or "").upper()
+    if is_stop:
+        rnd = ROUND_DOWN if sdir == "SELL" else ROUND_UP
+    else:
+        rnd = ROUND_UP if sdir == "SELL" else ROUND_DOWN
+    return _quantize_multiple(desired, tick_str, rounding=rnd)
+
+def _place_conditional_market(
+    *,
+    order_type: str,          # "STOP_MARKET" | "TAKE_PROFIT_MARKET"
+    symbol: str,
+    side: str,                # BUY/SELL
+    stop_price: float,
+    quantity: Optional[float] = None,     # אם None → closePosition=true
+    reduce_only: bool = True,
+    position_side: Optional[str] = None,  # LONG/SHORT
+    working_type: Optional[str] = None,   # MARK_PRICE / CONTRACT_PRICE
+    price_protect: Optional[bool] = None,
+    new_order_resp_type: str = "RESULT",
+    client_order_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    sym  = (symbol or "").strip().upper()
+    sdir = (side   or "").strip().upper()
+    if sdir not in ("BUY", "SELL"):
+        raise ValueError("side must be BUY or SELL")
+
+    f = get_symbol_filters(sym)
+    step_str = f.get("stepSizeStr", DEFAULT_QTY_STEP_STR)
+    tick_str = f.get("tickSizeStr", DEFAULT_PRICE_TICK_STR)
+
+    # יישור מחירי טריגר ל-tick לפי הכיוון/סוג
+    is_stop = (order_type == "STOP_MARKET")
+    stop_dec = _align_trigger_price(float(stop_price), tick_str, sdir, is_stop=is_stop)
+    stop_str = _to_plain_str(stop_dec)
+
+    params: Dict[str, Any] = {
+        "symbol": sym,
+        "side": sdir,
+        "type": order_type,
+        "stopPrice": stop_str,
+        "newOrderRespType": new_order_resp_type,
+        "workingType": (working_type or WORKING_TYPE),
+    }
+
+    if price_protect is None:
+        if PRICE_PROTECT:
+            params["priceProtect"] = "true"
+    else:
+        if price_protect:
+            params["priceProtect"] = "true"
+
+    if position_side:
+        ps = position_side.strip().upper()
+        if ps in ("LONG", "SHORT"):
+            params["positionSide"] = ps
+
+    if quantity is None:
+        # סגור את כל הפוזיציה בכיוון הנגדי כשהטריגר יופעל
+        params["closePosition"] = "true"
+    else:
+        qty_dec = _quantize_multiple(quantity, step_str, rounding=ROUND_DOWN)
+        params["quantity"] = _to_plain_str(qty_dec)
+        if reduce_only:
+            params["reduceOnly"] = "true"
+
+    if client_order_id:
+        params["newClientOrderId"] = client_order_id
+
+    return _request("POST", "/fapi/v1/order", params=params, signed=True).json()
+
+def place_stop_market_order(**kwargs) -> Dict[str, Any]:
+    kwargs = dict(kwargs)
+    kwargs["order_type"] = "STOP_MARKET"
+    return _place_conditional_market(**kwargs)
+
+def place_take_profit_market(**kwargs) -> Dict[str, Any]:
+    kwargs = dict(kwargs)
+    kwargs["order_type"] = "TAKE_PROFIT_MARKET"
+    return _place_conditional_market(**kwargs)
 
 # ─── Orders Management (Wrappers) ─────────────────────────────────────────────
 
@@ -483,6 +571,8 @@ __all__ = [
     "futures_open_positions",
     "futures_balance",
     "place_limit_order",
+    "place_stop_market_order",
+    "place_take_profit_market",
     "get_order",
     "cancel_order",
     "get_open_orders",
@@ -494,6 +584,7 @@ __all__ = [
     "_ceil_to_tick_dec",
     "_floor_to_tick_dec",
 ]
+
 
 
 
