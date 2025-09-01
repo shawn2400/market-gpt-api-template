@@ -148,7 +148,8 @@ async def webhook(request: Request):
     if TELEGRAM_WEBHOOK_SECRET:
         got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
         if not got or got.strip() != TELEGRAM_WEBHOOK_SECRET:
-            return {"ok": False, "error": "unauthorized"}
+            # קשיחות: 403 אמיתי ולא סתם {"ok": False}
+            raise HTTPException(status_code=403, detail="unauthorized")
 
     update = await request.json()
 
@@ -329,8 +330,7 @@ async def webhook(request: Request):
                     return await send_message("❌ risk: not ok")
                 rr = data.get("rr"); rr_s = f"{rr:.2f}" if rr else "—"
                 k = data.get("kelly_fraction"); k_s = f"{k*100:.1f}%" if k is not None else "—"
-                lev = data.get("leverage_cap") or "—
-"
+                lev = data.get("leverage_cap") or "—"
                 msg = (
                     f"🛡️ *Risk* #{tid}\n"
                     f"{data['symbol']} {data['side']}\n"
@@ -382,7 +382,7 @@ async def webhook(request: Request):
             except Exception as e:
                 return await send_message(f"❌ שימוש: /quiet_off <id>\n({e})")
 
-        # ---- SUMMARY (עם חתימה + עריכת pin אם קיים) ----
+        # ---- SUMMARY
         if text.startswith("/summary"):
             try:
                 parts = text.split()
@@ -446,7 +446,7 @@ async def webhook(request: Request):
             except Exception as e:
                 return await send_message(f"❌ שגיאה ב-/summary: {e}")
 
-        # ---- PROPOSE (ידני) ----
+        # ---- PROPOSE (ידני)
         if text.startswith("/propose"):
             try:
                 parts = text.split()
@@ -609,6 +609,7 @@ async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
             return await edit_message(chat_id, message_id, f"✅ טרייד #{tid} נשלח ל־sink ופורסם לטלגרם.")
     except Exception as e:
         return await edit_message(chat_id, message_id, f"❌ ingest failed: {e}")
+
 
 
 
