@@ -23,7 +23,6 @@ class TelePrefs:
     """
 
     def __init__(self) -> None:
-        # מצופה ש-get_redis() מחזיר redis.asyncio.Redis עם decode_responses=True
         self.r = get_redis()
 
     # ---------- Pin Summary ----------
@@ -67,7 +66,6 @@ class TelePrefs:
             try:
                 out.append(json.loads(raw))
             except Exception:
-                # בליעת אירוע פגום
                 pass
         await self.r.hset(f"watchdog:bundle_stats:{chat_id}", mapping={"last_flush": time.time()})
         return out
@@ -92,4 +90,5 @@ class TelePrefs:
     async def get_watchdog_beat(self) -> Optional[float]:
         v = await self.r.get("watchdog:last_beat")
         return float(v) if v else None
+
 
