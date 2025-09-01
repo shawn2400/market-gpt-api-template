@@ -1,468 +1,701 @@
-{
-  "openapi": "3.1.0",
-  "info": {
-    "title": "AlgoGPT API",
-    "version": "2.15.8",
-    "description": "AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot). כולל: Scan / AI / Trades / Grid / Risk / Indicators / Anchor / Executor / WS. ⚠️ רוב ה-endpoints דורשים Bearer Token (חוץ מ-/, /health, /health/live, /health_full)."
-  },
-  "servers": [
-    { "url": "https://algogpt-docker.onrender.com", "description": "Production" }
-  ],
-  "tags": [
-    { "name": "Config" }, { "name": "Health" }, { "name": "AI" }, { "name": "Trades" },
-    { "name": "Orders" }, { "name": "Price" }, { "name": "Market" }, { "name": "Anchor" },
-    { "name": "Executor" }, { "name": "Grid" }, { "name": "Utils" }, { "name": "Debug" }
-  ],
-  "security": [ { "bearerAuth": [] } ],
-  "components": {
-    "securitySchemes": {
-      "bearerAuth": { "type": "http", "scheme": "bearer" }
-    },
-    "schemas": {
-      "Error": {
-        "type": "object",
-        "properties": { "detail": { "type": "string", "example": "Unauthorized" } }
-      },
-      "BasicStatus": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "status": { "type": "string", "example": "ok" },
-          "version": { "type": "string", "example": "2.15.8" }
-        }
-      },
-      "GenericResponse": {
-        "type": "object",
-        "properties": { "ok": { "type": "boolean", "example": true } },
-        "additionalProperties": true
-      },
-      "TradeRequest": {
-        "type": "object",
-        "required": ["symbol", "side", "budget"],
-        "properties": {
-          "symbol": { "type": "string", "example": "BTCUSDT" },
-          "side": { "type": "string", "enum": ["BUY", "SELL"], "example": "BUY" },
-          "budget": { "type": "number", "example": 50 },
-          "leverage": { "type": "integer", "example": 10 },
-          "dry_run": { "type": "boolean", "default": false }
-        }
-      },
-      "TradeResponse": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "symbol": { "type": "string", "example": "BTCUSDT" },
-          "side": { "type": "string", "example": "BUY" },
-          "qty": { "type": "number", "example": 0.001 },
-          "entry": { "type": "number", "example": 108500.1 },
-          "leverage": { "type": "integer", "example": 10 },
-          "order": { "type": "object", "additionalProperties": true },
-          "error": { "type": "string" }
-        },
-        "additionalProperties": true
-      },
-      "OrderModel": {
-        "type": "object",
-        "properties": {
-          "id": { "type": "string", "example": "sim-1725041000-001" },
-          "symbol": { "type": "string", "example": "BTCUSDT" },
-          "side": { "type": "string", "example": "BUY" },
-          "qty": { "type": "number", "example": 0.001 },
-          "price": { "type": "number", "example": 108350.2 },
-          "status": { "type": "string", "example": "FILLED" },
-          "created_at": { "type": "string", "example": "2025-08-30T20:40:10Z" }
-        }
-      },
-      "OrdersSummary": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "total": { "type": "integer", "example": 1 },
-          "returned": { "type": "integer", "example": 1 },
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OrderModel" } }
-        }
-      },
-      "ExecutorStatus": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "running": { "type": "boolean", "example": true },
-          "workers": { "type": "integer", "example": 1 },
-          "queue_depth": { "type": "integer", "example": 0 },
-          "last_tick": { "type": "string", "example": "2025-08-30T21:10:00Z" },
-          "version": { "type": "string", "example": "2.15.8" },
-          "ws_connected": { "type": "boolean", "example": true },
-          "mode": { "type": "string", "example": "normal" }
-        },
-        "additionalProperties": true
-      },
-      "ExecutorSymbol": {
-        "type": "object",
-        "properties": {
-          "symbol": { "type": "string", "example": "BTCUSDT" },
-          "enabled": { "type": "boolean", "example": true },
-          "interval": { "type": "string", "example": "15m" },
-          "market": { "type": "string", "example": "futures" },
-          "quality_score": { "type": "number", "example": 8.1 }
-        },
-        "additionalProperties": true
-      },
-      "ExecutorSymbolsResponse": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "total": { "type": "integer", "example": 3 },
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorSymbol" } }
-        }
-      },
-      "ExecutorLogEntry": {
-        "type": "object",
-        "properties": {
-          "ts": { "type": "string", "example": "2025-08-30T21:12:34Z" },
-          "level": { "type": "string", "example": "INFO" },
-          "message": { "type": "string", "example": "price updater started" },
-          "context": { "type": "object", "additionalProperties": true }
-        }
-      },
-      "ExecutorLogsResponse": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorLogEntry" } },
-          "next": { "type": "string", "nullable": true }
-        }
-      },
-      "ExecutorTrade": {
-        "type": "object",
-        "properties": {
-          "id": { "type": "string", "example": "trade-abc123" },
-          "symbol": { "type": "string", "example": "BTCUSDT" },
-          "side": { "type": "string", "example": "BUY" },
-          "qty": { "type": "number", "example": 0.001 },
-          "entry": { "type": "number", "example": 108500.0 },
-          "exit": { "type": "number", "nullable": true, "example": 108800.0 },
-          "pnl": { "type": "number", "nullable": true, "example": 0.5 },
-          "status": { "type": "string", "example": "CLOSED" },
-          "opened_at": { "type": "string", "example": "2025-08-30T21:15:00Z" },
-          "closed_at": { "type": "string", "nullable": true, "example": "2025-08-30T21:30:00Z" }
-        },
-        "additionalProperties": true
-      },
-      "ExecutorTradesResponse": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "total": { "type": "integer", "example": 10 },
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorTrade" } }
-        }
-      },
-      "ExecutorPosition": {
-        "type": "object",
-        "properties": {
-          "symbol": { "type": "string", "example": "BTCUSDT" },
-          "positionSide": { "type": "string", "example": "LONG" },
-          "qty": { "type": "number", "example": 0.001 },
-          "entryPrice": { "type": "number", "example": 108400.0 },
-          "markPrice": { "type": "number", "example": 108560.0 },
-          "leverage": { "type": "integer", "example": 10 },
-          "unrealizedPnl": { "type": "number", "example": 0.23 },
-          "marginType": { "type": "string", "example": "ISOLATED" },
-          "isolatedWallet": { "type": "number", "example": 12.5 }
-        },
-        "additionalProperties": true
-      },
-      "ExecutorPositionsResponse": {
-        "type": "object",
-        "properties": {
-          "ok": { "type": "boolean", "example": true },
-          "total": { "type": "integer", "example": 1 },
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/ExecutorPosition" } }
-        }
-      }
-    }
-  },
-  "paths": {
-    "/": {
-      "get": {
-        "tags": ["Config"],
-        "summary": "Root server status",
-        "operationId": "getRootStatus",
-        "security": [],
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BasicStatus" } } } }
-        }
-      }
-    },
-    "/health": {
-      "get": {
-        "tags": ["Health"],
-        "summary": "Health check",
-        "operationId": "getHealth",
-        "security": [],
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BasicStatus" } } } }
-        }
-      }
-    },
-    "/health/live": {
-      "get": {
-        "tags": ["Health"],
-        "summary": "Live health check",
-        "operationId": "getHealthLive",
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "ok",
-            "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean", "example": true }, "status": { "type": "string", "example": "live" } } } } }
-          }
-        }
-      }
-    },
-    "/health_full": {
-      "get": {
-        "tags": ["Health"],
-        "summary": "Full connectivity & prices",
-        "operationId": "getHealthFull",
-        "security": [],
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/ai/ping": {
-      "get": {
-        "tags": ["AI"],
-        "summary": "Ping AI (requires bearer)",
-        "operationId": "getAiPing",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean", "example": true }, "model": { "type": "string", "example": "gpt-4o" } } } } } },
-          "401": { "description": "Invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
-        }
-      }
-    },
-    "/trade/open": {
-      "get": {
-        "tags": ["Trades"],
-        "summary": "Get open trades",
-        "operationId": "getOpenTrades",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/trade/history": {
-      "get": {
-        "tags": ["Trades"],
-        "summary": "Get trade history",
-        "operationId": "getTradeHistory",
-        "parameters": [
-          { "in": "query", "name": "symbol", "required": false, "schema": { "type": "string", "example": "BTCUSDT" } },
-          { "in": "query", "name": "limit", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } }
-        ],
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/trade/execute": {
-      "post": {
-        "tags": ["Trades"],
-        "summary": "Execute a trade (use dry_run=true for simulation)",
-        "operationId": "postTradeExecute",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradeRequest" } } } },
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradeResponse" } } } }
-        }
-      }
-    },
-    "/orders/open": {
-      "get": {
-        "tags": ["Orders"],
-        "summary": "Open orders",
-        "operationId": "getOrdersOpen",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrdersSummary" } } } }
-        }
-      }
-    },
-    "/orders/history": {
-      "get": {
-        "tags": ["Orders"],
-        "summary": "Orders history",
-        "operationId": "getOrdersHistory",
-        "parameters": [
-          { "in": "query", "name": "symbol", "required": true, "schema": { "type": "string", "example": "BTCUSDT" } },
-          { "in": "query", "name": "limit", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } }
-        ],
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrdersSummary" } } } }
-        }
-      }
-    },
-    "/price/{symbol}": {
-      "get": {
-        "tags": ["Price"],
-        "summary": "Get latest price for symbol",
-        "operationId": "getPriceLatest",
-        "parameters": [
-          { "in": "path", "name": "symbol", "required": true, "schema": { "type": "string", "example": "BTCUSDT" } }
-        ],
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/market/tickers": {
-      "get": {
-        "tags": ["Market"],
-        "summary": "Get top market tickers",
-        "operationId": "getMarketTickers",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/anchor/history": {
-      "get": {
-        "tags": ["Anchor"],
-        "summary": "Anchor snapshot history",
-        "operationId": "getAnchorHistory",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/anchor/live": {
-      "get": {
-        "tags": ["Anchor"],
-        "summary": "Live anchor evaluation",
-        "operationId": "getAnchorLive",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/executor/status": {
-      "get": {
-        "tags": ["Executor"],
-        "summary": "Executor status",
-        "operationId": "getExecutorStatus",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorStatus" } } } }
-        }
-      }
-    },
-    "/executor/symbols": {
-      "get": {
-        "tags": ["Executor"],
-        "summary": "Executor symbols",
-        "operationId": "getExecutorSymbols",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorSymbolsResponse" } } } }
-        }
-      }
-    },
-    "/executor/logs": {
-      "get": {
-        "tags": ["Executor"],
-        "summary": "Executor logs",
-        "operationId": "getExecutorLogs",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorLogsResponse" } } } }
-        }
-      }
-    },
-    "/executor/trades": {
-      "get": {
-        "tags": ["Executor"],
-        "summary": "Executor trades",
-        "operationId": "getExecutorTrades",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorTradesResponse" } } } }
-        }
-      }
-    },
-    "/executor/open_positions": {
-      "get": {
-        "tags": ["Executor"],
-        "summary": "Executor open positions",
-        "operationId": "getExecutorOpenPositions",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutorPositionsResponse" } } } }
-        }
-      }
-    },
-    "/executor/force_close": {
-      "post": {
-        "tags": ["Executor"],
-        "summary": "Force close position",
-        "operationId": "postExecutorForceClose",
-        "parameters": [
-          { "in": "query", "name": "symbol", "required": true, "schema": { "type": "string", "example": "BTCUSDT" } }
-        ],
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/grid/status": {
-      "get": {
-        "tags": ["Grid"],
-        "summary": "Grid status list",
-        "operationId": "getGridStatus",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/grid/active": {
-      "get": {
-        "tags": ["Grid"],
-        "summary": "Active grids only",
-        "operationId": "getGridActive",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/grid/start": {
-      "post": {
-        "tags": ["Grid"],
-        "summary": "Start grid trading",
-        "operationId": "postGridStart",
-        "responses": { "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } } }
-      }
-    },
-    "/grid/stop": {
-      "post": {
-        "tags": ["Grid"],
-        "summary": "Stop grid trading",
-        "operationId": "postGridStop",
-        "responses": { "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } } }
-      }
-    },
-    "/utils/ping": {
-      "get": {
-        "tags": ["Utils"],
-        "summary": "Ping server",
-        "operationId": "getUtilsPing",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    },
-    "/debug/health": {
-      "get": {
-        "tags": ["Debug"],
-        "summary": "Recent logs snapshot (if not LIGHT_MODE)",
-        "operationId": "getDebugHealth",
-        "responses": {
-          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericResponse" } } } }
-        }
-      }
-    }
-  }
-}
+openapi: 3.1.0
+info:
+  title: AlgoGPT API
+  version: 2.15.8
+  description: |
+    AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot).
+    ברירת המחדל: נדרש Bearer. נקודות ציבוריות: / , /health , /health/live , /health_full.
+servers:
+  - url: https://algogpt-docker.onrender.com
+    description: Production
+tags:
+  - name: Config
+  - name: Health
+  - name: AI
+  - name: Market
+  - name: Price
+  - name: Trades
+  - name: Orders
+  - name: Executor
+  - name: Grid
+  - name: Indicators
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: Invalid API key
+    BasicStatus:
+      type: object
+      required:
+        - ok
+        - status
+        - version
+      properties:
+        ok:
+          type: boolean
+          example: true
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: 2.15.8
+    HealthFull:
+      type: object
+      required:
+        - ok
+        - version
+        - binance
+        - prices
+        - time
+      properties:
+        ok:
+          type: boolean
+          example: true
+        version:
+          type: string
+          example: 2.15.8
+        binance:
+          type: object
+          properties:
+            key_len:
+              type: integer
+              example: 64
+            secret_len:
+              type: integer
+              example: 64
+            fapi_time_ok:
+              type: boolean
+              example: true
+            account_ok:
+              type: boolean
+              example: true
+            listenKey_ok:
+              type: boolean
+              example: true
+        prices:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              fresh:
+                type: boolean
+              price:
+                type: number
+        time:
+          type: string
+          example: 2025-08-30T22:49:11.854Z
+    TradeRequest:
+      type: object
+      required:
+        - symbol
+        - side
+        - budget
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          enum:
+            - BUY
+            - SELL
+          example: BUY
+        budget:
+          type: number
+          example: 50
+        leverage:
+          type: integer
+          example: 10
+        dry_run:
+          type: boolean
+          default: false
+    TradeResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        ok:
+          type: boolean
+          example: true
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          example: BUY
+        qty:
+          type: number
+          example: 0.001
+        entry:
+          type: number
+          example: 108500.1
+        leverage:
+          type: integer
+          example: 10
+        error:
+          type: string
+          example: ""
+    OrderModel:
+      type: object
+      properties:
+        id:
+          type: string
+          example: sim-1725041000-001
+        symbol:
+          type: string
+          example: BTCUSDT
+        side:
+          type: string
+          example: BUY
+        qty:
+          type: number
+          example: 0.001
+        price:
+          type: number
+          example: 108350.2
+        status:
+          type: string
+          example: FILLED
+        leverage:
+          type: integer
+          example: 10
+        created_at:
+          type: string
+          example: 2025-08-30T20:40:10Z
+    OrdersSummary:
+      type: object
+      required:
+        - ok
+        - total
+        - returned
+        - items
+      properties:
+        ok:
+          type: boolean
+          example: true
+        total:
+          type: integer
+          example: 1
+        returned:
+          type: integer
+          example: 1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderModel"
+    AnalyzeRequest:
+      type: object
+      required:
+        - symbol
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        interval:
+          type: string
+          example: 15m
+          default: 15m
+    AnalyzeResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+          example: BTCUSDT
+        interval:
+          type: string
+          example: 15m
+        analysis:
+          type: string
+          example: "[Quick] BTCUSDT 15m: bias long"
+        fallback:
+          type: boolean
+          example: false
+    PriceResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        symbol:
+          type: string
+          example: BTCUSDT
+        price:
+          type: number
+          example: 108500
+        source:
+          type: string
+          example: binance_fapi
+        ts:
+          type: number
+          example: 1693430000.12
+        error:
+          type: string
+          example: ""
+    PositionModel:
+      type: object
+      properties:
+        symbol:
+          type: string
+        positionAmt:
+          type: string
+        entryPrice:
+          type: string
+        breakEvenPrice:
+          type: string
+        markPrice:
+          type: string
+        unRealizedProfit:
+          type: string
+        liquidationPrice:
+          type: string
+        leverage:
+          type: string
+        marginType:
+          type: string
+        positionSide:
+          type: string
+        isolated:
+          type: boolean
+        updateTime:
+          type: integer
+    BalanceModel:
+      type: object
+      properties:
+        accountAlias:
+          type: string
+        asset:
+          type: string
+        balance:
+          type: string
+        crossWalletBalance:
+          type: string
+        crossUnPnl:
+          type: string
+        availableBalance:
+          type: string
+        maxWithdrawAmount:
+          type: string
+        updateTime:
+          type: integer
+    PositionsResponse:
+      type: object
+      required:
+        - ok
+        - total
+        - items
+      properties:
+        ok:
+          type: boolean
+          example: true
+        total:
+          type: integer
+          example: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PositionModel"
+    BalancesResponse:
+      type: object
+      required:
+        - ok
+        - total
+        - items
+      properties:
+        ok:
+          type: boolean
+          example: true
+        total:
+          type: integer
+          example: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BalanceModel"
+    SymbolsResponse:
+      type: object
+      required:
+        - ok
+        - total
+        - items
+      properties:
+        ok:
+          type: boolean
+          example: true
+        total:
+          type: integer
+          example: 200
+        items:
+          type: array
+          items:
+            type: string
+            example: BTCUSDT
+    SymbolInfoResponse:
+      type: object
+      required:
+        - ok
+        - symbol
+        - info
+      properties:
+        ok:
+          type: boolean
+          example: true
+        symbol:
+          type: string
+          example: BTCUSDT
+        info:
+          type: object
+          additionalProperties: true
+    MarkPriceResponse:
+      type: object
+      required:
+        - ok
+        - symbol
+        - mark_price
+      properties:
+        ok:
+          type: boolean
+          example: true
+        symbol:
+          type: string
+          example: BTCUSDT
+        mark_price:
+          type: number
+          example: 108500.1
+    ExchangeInfoResponse:
+      type: object
+      required:
+        - ok
+        - symbols_count
+        - raw
+      properties:
+        ok:
+          type: boolean
+          example: true
+        symbols_count:
+          type: integer
+          example: 200
+        raw:
+          type: object
+          additionalProperties: true
+    StatusResponse:
+      type: object
+      required:
+        - ok
+        - executor
+        - endpoints
+      properties:
+        ok:
+          type: boolean
+          example: true
+        executor:
+          type: string
+          example: running
+        endpoints:
+          type: object
+          additionalProperties:
+            type: string
+    HealthResponse:
+      type: object
+      required:
+        - ok
+        - binance_ping
+        - signed_balance_ok
+        - mark_price_ok
+        - details
+        - cached
+        - ttl_seconds
+      properties:
+        ok:
+          type: boolean
+        binance_ping:
+          type: boolean
+        signed_balance_ok:
+          type: boolean
+        mark_price_ok:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+        cached:
+          type: boolean
+        ttl_seconds:
+          type: integer
+    RPCRequest:
+      type: object
+      required:
+        - target
+      properties:
+        target:
+          type: string
+          enum:
+            - ai.ping
+            - ai.health
+            - ai.price
+            - ai.analyze
+            - ai.manual_scan
+            - ai.quality
+            - market.mark_price
+            - market.symbol_info
+            - market.exchange_info
+            - price.get
+            - trade.execute
+            - orders.open
+            - orders.history
+            - executor.ping
+            - executor.positions
+            - executor.balance
+            - executor.symbols
+            - executor.symbol_info
+            - executor.mark_price
+            - executor.exchange_info
+            - executor.trades
+            - executor.status
+            - executor.health
+            - grid.status
+            - grid.active
+            - indicators.sample
+            - indicators.by_symbol
+        params:
+          type: object
+          additionalProperties: true
+    RPCResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+        result:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+paths:
+  /:
+    get:
+      operationId: getRootStatus
+      summary: Root server status
+      tags:
+        - Config
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BasicStatus"
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      tags:
+        - Health
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BasicStatus"
+  /health/live:
+    get:
+      operationId: getHealthLive
+      summary: Live health check
+      tags:
+        - Health
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  status:
+                    type: string
+                    example: live
+  /health_full:
+    get:
+      operationId: getHealthFull
+      summary: Full connectivity & prices
+      tags:
+        - Health
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthFull"
+  /rpc:
+    post:
+      operationId: postRPC
+      summary: Multiplexed RPC for all features
+      tags:
+        - AI
+        - Market
+        - Price
+        - Trades
+        - Orders
+        - Executor
+        - Grid
+        - Indicators
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RPCRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RPCResponse"
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /price/{symbol}:
+    get:
+      operationId: getPriceSymbol
+      summary: Get latest price with multi-source fallback
+      tags:
+        - Price
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema:
+            type: string
+            example: BTCUSDT
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceResponse"
+        "502":
+          description: Upstream error
+  /trade/execute:
+    post:
+      operationId: postTradeExecute
+      summary: Execute a trade (use dry_run=true for simulation)
+      tags:
+        - Trades
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradeRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeResponse"
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /orders/open:
+    get:
+      operationId: getOrdersOpen
+      summary: Open orders
+      tags:
+        - Orders
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrdersSummary"
+  /orders/history:
+    get:
+      operationId: getOrdersHistory
+      summary: Orders history
+      tags:
+        - Orders
+      parameters:
+        - in: query
+          name: symbol
+          required: false
+          schema:
+            type: string
+            example: BTCUSDT
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrdersSummary"
+  /executor/status:
+    get:
+      operationId: getExecutorStatus
+      summary: Executor status
+      tags:
+        - Executor
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+  /executor/health:
+    get:
+      operationId: getExecutorHealth
+      summary: Lightweight health (ping+balance+mark)
+      tags:
+        - Executor
+      parameters:
+        - in: query
+          name: symbol
+          required: false
+          schema:
+            type: string
+            example: BTCUSDT
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
 
 
 
