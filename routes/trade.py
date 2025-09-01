@@ -12,9 +12,11 @@ from utils.binance_client import (
     get_symbol_filters,
     set_leverage,
     place_limit_order,
+    place_stop_market_order,
+    place_take_profit_market,
     _quantize_multiple,
 )
-from utils.sltp import calc_sl_tp_for_symbol  # ← חישוב ועיגון SL/TP לפי tick של הסימבול
+from utils.sltp import calc_sl_tp_for_symbol  # מחשב ומעגן SL/TP לפי tick
 
 router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_api_key)])
 
@@ -24,7 +26,11 @@ class TradeRequest(BaseModel):
     budget: float = Field(..., gt=0)
     leverage: int = Field(10, ge=1, le=125)
     dry_run: bool = False
-    # אופציונלי: SL/TP כאחוז (<1) או מחיר מוחלט (>=1); ATR לפולבק
+    # ברקט אופציונלי
+    bracket: bool = False
+    exit_qty: Optional[float] = None   # אם לא צוין → נשתמש בכמות הפתיחה
+    position_side: Optional[str] = Field(None, pattern="^(LONG|SHORT)$")  # אם עובדים במצב Hedge
+    # SL/TP/ATR
     sl: Optional[float] = None
     tp: Optional[float] = None
     atr: Optional[float] = None
@@ -40,9 +46,10 @@ class TradeResponse(BaseModel):
     order: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     hint: Optional[str] = None
-    # חדש: מחזירים SL/TP אחרי עיגון tick לפי הסימבול
     sl_price: Optional[float] = None
     tp_price: Optional[float] = None
+    sl_order: Optional[Dict[str, Any]] = None
+    tp_order: Optional[Dict[str, Any]] = None
 
 def _d(x) -> Decimal:
     return Decimal(str(x))
@@ -65,7 +72,7 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     min_qty = f.get("minQty")
     min_notional = f.get("minNotional") or 5.0  # ברירת מחדל אם אין
 
-    # חישוב כמות לפי תקציב×ליבורג'
+    # חישוב כמות לפי תקציב×לבורג'
     notional = payload.budget * payload.leverage
     qty_raw = _d(notional) / _d(entry)
 
@@ -80,7 +87,6 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     if isinstance(min_qty, (int, float)) and min_qty is not None:
         min_qty_dec = _quantize_multiple(Decimal(str(min_qty)), step_str, rounding=ROUND_UP)
         if qty_dec < min_qty_dec:
-            # אם התקציב לא מספיק למינימום בורסה — נחזיר רמז מפורש
             need_notional = float(min_qty_dec * px_dec)
             need_budget = need_notional / max(1, payload.leverage)
             return TradeResponse(
@@ -90,7 +96,7 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
                 hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×).",
                 sl_price=None, tp_price=None
             )
-        # אחרת נרים ל-minQty
+        # הרמה ל-minQty
         qty_dec = min_qty_dec if qty_dec < min_qty_dec else qty_dec
 
     # בדיקת MIN_NOTIONAL
@@ -108,7 +114,7 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     qty_f = float(qty_dec)
     px_f  = float(px_dec)
 
-    # --- חישוב SL/TP מעוגנים לפי tick של הסימבול (אם נמסרו פרמטרים או ATR) ---
+    # --- SL/TP מחושבים ומעוגנים ל-tick של הסימבול ---
     sl_price, tp_price = None, None
     try:
         sl_price, tp_price = calc_sl_tp_for_symbol(
@@ -121,7 +127,6 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
             atr_mult=payload.atr_mult,
         )
     except Exception:
-        # לא מפיל את הטרייד אם SL/TP לא חושבו — פשוט נשאיר None
         sl_price, tp_price = None, None
 
     if qty_f <= 0:
@@ -137,14 +142,14 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
     except Exception:
         pass
 
-    # Dry-run — מחזירים גם SL/TP המחושבים
+    # Dry-run בלבד
     if payload.dry_run:
         return TradeResponse(
             ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None,
             sl_price=sl_price, tp_price=tp_price
         )
 
-    # הזמנת LIMIT-IOC (כמו Market אך מדויקת) לפתיחת פוזיציה
+    # הזמנת LIMIT-IOC לפתיחת פוזיציה (כמו Market אך מדויקת)
     try:
         order = place_limit_order(
             symbol=sym,
@@ -154,12 +159,8 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
             time_in_force="IOC",
             post_only=False,
             reduce_only=False,
-            position_side=None,
+            position_side=payload.position_side,
             new_order_resp_type="RESULT",
-        )
-        return TradeResponse(
-            ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=order,
-            sl_price=sl_price, tp_price=tp_price
         )
     except Exception as e:
         return TradeResponse(
@@ -167,6 +168,62 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
             order=None, error=str(e),
             sl_price=sl_price, tp_price=tp_price
         )
+
+    sl_order_resp: Optional[Dict[str, Any]] = None
+    tp_order_resp: Optional[Dict[str, Any]] = None
+
+    # BRACKET (אופציונלי): פקודות יציאה מותנות reduceOnly
+    if payload.bracket:
+        exit_side = "SELL" if side == "BUY" else "BUY"
+        exit_qty  = float(payload.exit_qty) if payload.exit_qty is not None else qty_f
+
+        # SL
+        if sl_price is not None:
+            try:
+                sl_order_resp = place_stop_market_order(
+                    symbol=sym,
+                    side=exit_side,
+                    stop_price=float(sl_price),
+                    quantity=exit_qty,                 # אם תרצה closePosition מלא – העבר quantity=None
+                    reduce_only=True,
+                    position_side=payload.position_side,
+                    working_type=None,                 # נשתמש ב-WORKING_TYPE מה־env (MARK_PRICE ברירת מחדל)
+                    price_protect=None,                # מ-env
+                    new_order_resp_type="RESULT",
+                )
+            except Exception as e:
+                sl_order_resp = {"error": str(e)}
+
+        # TP
+        if tp_price is not None:
+            try:
+                tp_order_resp = place_take_profit_market(
+                    symbol=sym,
+                    side=exit_side,
+                    stop_price=float(tp_price),
+                    quantity=exit_qty,
+                    reduce_only=True,
+                    position_side=payload.position_side,
+                    working_type=None,
+                    price_protect=None,
+                    new_order_resp_type="RESULT",
+                )
+            except Exception as e:
+                tp_order_resp = {"error": str(e)}
+
+    return TradeResponse(
+        ok=True,
+        symbol=sym,
+        side=side,
+        qty=qty_f,
+        entry=px_f,
+        leverage=payload.leverage,
+        order=order,
+        sl_price=sl_price,
+        tp_price=tp_price,
+        sl_order=sl_order_resp,
+        tp_order=tp_order_resp,
+    )
 
 
 
