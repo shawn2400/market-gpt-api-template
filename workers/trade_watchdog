@@ -6,12 +6,23 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# אין כאן FastAPI Router. זה worker נפרד שמריץ loop.
-# תריץ אותו כתהליך רקע/סרביס:  python -m workers.trade_watchdog
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(override=False)
+except Exception:
+    pass
 
 ALERTS_BASE   = os.getenv("ALERTS_BASE", "http://localhost:8000").rstrip("/")
 API_BEARER    = os.getenv("API_BEARER_TOKEN","")
-HMAC_SECRET   = (os.getenv("HMAC_SECRET","")).encode()
+
+# הסוד: ננסה בכמה שמות סטנדרטיים
+_HMAC_RAW = (
+    os.getenv("ANALYTICS_HMAC_SECRET")
+    or os.getenv("WEBHOOK_HMAC_SECRET")
+    or os.getenv("HMAC_SECRET")
+    or ""
+)
+HMAC_SECRET = _HMAC_RAW.encode() if _HMAC_RAW else b""
 
 CONTEXT_BATCH_URL = os.getenv("CONTEXT_BATCH_URL","").strip()
 CONTEXT_URL       = os.getenv("CONTEXT_URL","").strip()
@@ -23,6 +34,7 @@ NEAR_PCT_BASE       = float(os.getenv("NEAR_PCT_BASE","0.35"))
 COOLDOWN_ALERT_SEC  = int(os.getenv("COOLDOWN_ALERT_SEC","90"))
 PRICE_DELTA_MIN_PCT = float(os.getenv("PRICE_DELTA_MIN_PCT","0.05"))
 TZ_NAME = os.getenv("TZ","Asia/Jerusalem")
+
 HOT_HOURS   = [int(x) for x in os.getenv("HOT_HOURS","16,17,18,19,20,21,22,23,0,1").split(",") if x.strip().isdigit()]
 CALM_HOURS  = [int(x) for x in os.getenv("CALM_HOURS","4,5,6,7,8,9").split(",") if x.strip().isdigit()]
 NEAR_MULT_HOT  = float(os.getenv("NEAR_MULT_HOT","0.8"))
@@ -41,22 +53,29 @@ _zone_notified: Dict[str, bool] = {}
 _grid_hits: Dict[str, List[int]] = {}  # trade_id -> indices of hit lines
 
 def _hmac_hex(body: bytes) -> str:
-    if not HMAC_SECRET: return ""
+    if not HMAC_SECRET:
+        return ""
     import hmac, hashlib
     return hmac.new(HMAC_SECRET, body, hashlib.sha256).hexdigest()
 
-def _now() -> float: return time.time()
-def _local_hour() -> int: return datetime.now(ZoneInfo(TZ_NAME)).hour
+def _now() -> float: 
+    return time.time()
+
+def _local_hour() -> int:
+    return datetime.now(ZoneInfo(TZ_NAME)).hour
 
 def _near_pct_runtime() -> float:
     hr = _local_hour()
-    if hr in HOT_HOURS: return NEAR_PCT_BASE * NEAR_MULT_HOT
-    if hr in CALM_HOURS: return NEAR_PCT_BASE * NEAR_MULT_CALM
+    if hr in HOT_HOURS: 
+        return NEAR_PCT_BASE * NEAR_MULT_HOT
+    if hr in CALM_HOURS: 
+        return NEAR_PCT_BASE * NEAR_MULT_CALM
     return NEAR_PCT_BASE
 
 def _cooldown(key: str, sec: int) -> bool:
     ts = _last_event_ts.get(key, 0)
-    if _now() - ts < sec: return False
+    if _now() - ts < sec: 
+        return False
     _last_event_ts[key] = _now()
     return True
 
@@ -68,7 +87,8 @@ def _fmt(x) -> str:
         return "—"
 
 def _percent(a: float, b: float) -> float:
-    if b == 0: return 0.0
+    if b == 0: 
+        return 0.0
     return 100.0 * (a - b) / b
 
 async def get_active_trades() -> List[Dict[str, Any]]:
@@ -82,15 +102,21 @@ async def get_active_trades() -> List[Dict[str, Any]]:
 async def send_analysis(chat_id: str|int, text: str, reply_to: Optional[int]=None, silent: bool=True):
     body = {"text": text, "chat_id": chat_id, "reply_to_message_id": reply_to, "silent": silent}
     raw = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
-    headers = {"Authorization": f"Bearer {API_BEARER}", "Content-Type":"application/json", "X-Idempotency-Key": f"wd-{int(_now())}"}
+    headers = {
+        "Authorization": f"Bearer {API_BEARER}",
+        "Content-Type":"application/json",
+        "X-Idempotency-Key": f"wd-{int(_now())}-{hash(text)%9999}"
+    }
     sig = _hmac_hex(raw)
-    if sig: headers["X-Signature"] = sig
+    if sig:
+        headers["X-Signature"] = sig
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(f"{ALERTS_BASE}/alerts/analysis", content=raw, headers=headers)
         r.raise_for_status()
 
 async def fetch_ctx_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-    if not CONTEXT_BATCH_URL: return {}
+    if not CONTEXT_BATCH_URL:
+        return {}
     csv = ",".join(symbols)
     url = CONTEXT_BATCH_URL.replace("{csv}", csv)
     headers = {"Authorization": f"Bearer {CONTEXT_TOKEN}"} if CONTEXT_TOKEN else {}
@@ -101,7 +127,8 @@ async def fetch_ctx_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
         out = {}
         for it in data.get("items", []):
             sym = (it.get("symbol") or "").upper()
-            if sym: out[sym] = it
+            if sym: 
+                out[sym] = it
         return out
 
 @dataclass
@@ -113,8 +140,9 @@ class Levels:
     tp3: Optional[float]
 
 def _nearest_target(levels: Levels, price: float) -> tuple[str, float]:
+    def dist_pct(a,b): 
+        return abs(a-b)/b * 100.0 if b>0 else 999.0
     candidates: List[tuple[str,float]] = []
-    def dist_pct(a,b): return abs(a-b)/b * 100.0 if b>0 else 999.0
     if levels.tp1: candidates.append(("tp1", dist_pct(levels.tp1, price)))
     if levels.tp2: candidates.append(("tp2", dist_pct(levels.tp2, price)))
     if levels.tp3: candidates.append(("tp3", dist_pct(levels.tp3, price)))
@@ -123,8 +151,10 @@ def _nearest_target(levels: Levels, price: float) -> tuple[str, float]:
     return candidates[0] if candidates else ("", 999.0)
 
 def _trend_label(filters: Dict[str, Any]) -> str:
-    if filters.get("trending_up"): return "UP"
-    if filters.get("trending_down"): return "DOWN"
+    if filters.get("trending_up"): 
+        return "UP"
+    if filters.get("trending_down"): 
+        return "DOWN"
     return "NONE"
 
 def _grid_lines(rec: Dict[str, Any]) -> List[float]:
@@ -145,19 +175,165 @@ def _grid_lines(rec: Dict[str, Any]) -> List[float]:
     return []
 
 async def loop_watchdog():
-    # ... (לוגיקה כפי שהייתה — לא שיניתי פונקציונליות)
     while True:
         try:
-            # קוד ה-Watchdog כפי ששלחת (ללא שינוי מהותי)
-            pass
+            trades = await get_active_trades()
+            if not trades:
+                await asyncio.sleep(POLL_SECONDS)
+                continue
+
+            symbols = sorted({ str(t["symbol"]).upper() for t in trades })
+            if "BTCUSDT" not in symbols: symbols.append("BTCUSDT")
+            if "ETHUSDT" not in symbols: symbols.append("ETHUSDT")
+
+            ctx_map = await fetch_ctx_batch(symbols)
+            near_pct = _near_pct_runtime()
+
+            # Anchor (BTC)
+            btc = ctx_map.get("BTCUSDT", {}) or {}
+            btc_f = (btc.get("filters") or {}) if isinstance(btc, dict) else {}
+            btc_trend = "UP" if btc_f.get("trending_up") else ("DOWN" if btc_f.get("trending_down") else "NONE")
+            cnt = _anchor_state.get("BTCUSDT", 0)
+            if btc_trend == "UP":   cnt = cnt + 1 if cnt >= 0 else 1
+            elif btc_trend == "DOWN": cnt = cnt - 1 if cnt <= 0 else -1
+            else: cnt = 0
+            _anchor_state["BTCUSDT"] = cnt
+
+            for rec in trades:
+                sym = str(rec["symbol"]).upper()
+                chat_id = rec.get("chat_id")
+                mid = rec.get("message_id")
+                ttype = str(rec.get("trade_type","FUTURES")).upper()
+
+                ctx = ctx_map.get(sym) or {}
+                price = float(ctx.get("price") or rec.get("current_price") or 0.0)
+                if price <= 0:
+                    continue
+
+                prev = _last_price.get(sym)
+                if prev is not None and abs(_percent(price, prev)) < PRICE_DELTA_MIN_PCT:
+                    pass
+                _last_price[sym] = price
+
+                filters = (ctx.get("filters") or {}) if isinstance(ctx, dict) else {}
+                cur_trend = _trend_label(filters)
+                last_tr = _last_trend.get(sym, "NONE")
+                if cur_trend != last_tr:
+                    _last_trend[sym] = cur_trend
+                    key = f"{rec['trade_id']}:trend:{cur_trend}"
+                    if _cooldown(key, COOLDOWN_ALERT_SEC):
+                        await send_analysis(chat_id, f"📈 שינוי מגמה ב־*{sym}*: `{last_tr}` → `{cur_trend}` (Now `{_fmt(price)}`)", reply_to=mid, silent=True)
+
+                # Anchor flip guard (FUTURES בלבד)
+                if ttype == "FUTURES" and ANCHOR_FLIP_WARN_COUNT > 0 and rec.get("side"):
+                    side = str(rec["side"]).upper()
+                    if side == "LONG" and cnt <= -ANCHOR_FLIP_WARN_COUNT:
+                        if _cooldown(f"{rec['trade_id']}:anchor:bear", COOLDOWN_ALERT_SEC*2):
+                            await send_analysis(chat_id, f"⚠️ *BTC Anchor* BEAR ({abs(cnt)} רצופים). LONG ב־{sym} — זהירות.", reply_to=mid, silent=True)
+                    if side == "SHORT" and cnt >= ANCHOR_FLIP_WARN_COUNT:
+                        if _cooldown(f"{rec['trade_id']}:anchor:bull", COOLDOWN_ALERT_SEC*2):
+                            await send_analysis(chat_id, f"⚠️ *BTC Anchor* BULL ({abs(cnt)} רצופים). SHORT ב־{sym} — זהירות.", reply_to=mid, silent=True)
+
+                # FUTURES/SPOT
+                if ttype in ("FUTURES","SPOT"):
+                    lv = Levels(
+                        entry=float(rec.get("entry") or 0.0),
+                        sl=float(rec.get("sl") or 0.0),
+                        tp1=float(rec.get("tp1") or 0.0),
+                        tp2=float(rec.get("tp2") or 0.0) if rec.get("tp2") else None,
+                        tp3=float(rec.get("tp3") or 0.0) if rec.get("tp3") else None,
+                    )
+
+                    # כניסה לאזור
+                    if ENTRY_ZONE_ALERT and lv.entry and ENTRY_ZONE_PCT > 0:
+                        band = ENTRY_ZONE_PCT/100.0 * lv.entry
+                        in_zone = (lv.entry - band <= price <= lv.entry + band)
+                        zkey = f"{rec['trade_id']}:zone"
+                        if in_zone and not _zone_notified.get(zkey, False):
+                            _zone_notified[zkey] = True
+                            await send_analysis(chat_id, f"🎯 *{sym}* נכנס לאזור *כניסה* סביב `{_fmt(lv.entry)}` (±{ENTRY_ZONE_PCT:.2f}%)", reply_to=mid, silent=False)
+
+                    # קרבה ליעד
+                    tgt_name, tgt_dist = _nearest_target(lv, price)
+                    if tgt_name and tgt_dist <= near_pct:
+                        key = f"{rec['trade_id']}:near:{tgt_name}"
+                        if _cooldown(key, COOLDOWN_ALERT_SEC):
+                            d = f"{tgt_dist:.2f}%"
+                            ttxt = f"⏳ *{sym}* קרוב ל־*{tgt_name.upper()}* ({d}). Now `{_fmt(price)}`"
+                            if btc_f.get('trending_up'): ttxt += " | BTC:↑"
+                            elif btc_f.get('trending_down'): ttxt += " | BTC:↓"
+                            await send_analysis(chat_id, ttxt, reply_to=mid, silent=True)
+
+                    # חציות
+                    def crossed(level: float, kind: str) -> bool:
+                        if level <= 0: return False
+                        hit = (price >= level) if level >= lv.entry else (price <= level)
+                        if not hit: return False
+                        key = f"{rec['trade_id']}:hit:{kind}"
+                        return _cooldown(key, COOLDOWN_ALERT_SEC)
+
+                    if lv.tp1 and crossed(lv.tp1, "tp1"):
+                        await send_analysis(chat_id, f"✅ *{sym}* הגיע *TP1* @ `{_fmt(lv.tp1)}` (Now `{_fmt(price)}`) — שקול SL→BE.", reply_to=mid, silent=False)
+                    if lv.tp2 and crossed(lv.tp2, "tp2"):
+                        await send_analysis(chat_id, f"✅ *{sym}* הגיע *TP2* @ `{_fmt(lv.tp2)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+                    if lv.tp3 and crossed(lv.tp3, "tp3"):
+                        await send_analysis(chat_id, f"✅ *{sym}* הגיע *TP3* @ `{_fmt(lv.tp3)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+                    if lv.sl and crossed(lv.sl, "sl"):
+                        await send_analysis(chat_id, f"❌ *{sym}* פגע *SL* @ `{_fmt(lv.sl)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+
+                # GRID
+                else:
+                    lines = []
+                    try:
+                        if rec.get("grid_lines"):
+                            lines = [float(x) for x in json.loads(rec["grid_lines"])]
+                    except Exception:
+                        pass
+
+                    if not lines:
+                        try:
+                            gmin = float(rec.get("grid_min") or 0)
+                            gmax = float(rec.get("grid_max") or 0)
+                            L    = int(rec.get("grid_levels") or 0)
+                            if gmin > 0 and gmax > 0 and L >= 2:
+                                step = (gmax - gmin) / (L - 1)
+                                lines = [gmin + i * step for i in range(L)]
+                        except Exception:
+                            pass
+
+                    if not lines:
+                        continue
+
+                    hit_idx: List[int] = _grid_hits.get(rec["trade_id"], [])
+                    for i, level in enumerate(lines):
+                        dist = abs(price - level) / (level or price) * 100.0 if level else 999.0
+                        if dist <= _near_pct_runtime():
+                            key = f"{rec['trade_id']}:grid:near:{i}"
+                            if _cooldown(key, COOLDOWN_ALERT_SEC):
+                                await send_analysis(chat_id, f"📶 *{sym}* קרוב לקו גריד #{i+1} @ `{_fmt(level)}` (Δ≈{dist:.2f}%)", reply_to=mid, silent=True)
+                        hit = (level and _last_price.get(sym) and ((price >= level and _last_price[sym] < level) or (price <= level and _last_price[sym] > level)))
+                        if hit and i not in hit_idx:
+                            hit_idx.append(i)
+                            await send_analysis(chat_id, f"🧩 *{sym}* פגע *GRID #{i+1}* @ `{_fmt(level)}` (Now `{_fmt(price)}`)", reply_to=mid, silent=False)
+                    _grid_hits[rec["trade_id"]] = hit_idx
+
+                # Heartbeat
+                last_hb = _last_heartbeat.get(rec["trade_id"], 0)
+                if _now() - last_hb >= HEARTBEAT_MINUTES*60:
+                    _last_heartbeat[rec["trade_id"]] = _now()
+                    hb = f"📬 *Heartbeat* #{rec['trade_id']} — *{sym}* Now `{_fmt(price)}` | סוג `{ttype}` | מגמה `{cur_trend}` | חלון: {_near_pct_runtime():.2f}%"
+                    await send_analysis(chat_id, hb, reply_to=mid, silent=True)
+
         except Exception as e:
             print("[watchdog] error:", e)
 
         await asyncio.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":
-    if not API_BEARER: raise SystemExit("API_BEARER_TOKEN missing")
+    if not API_BEARER:
+        raise SystemExit("API_BEARER_TOKEN missing")
     asyncio.run(loop_watchdog())
+
 
 
 
