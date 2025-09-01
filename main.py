@@ -113,7 +113,7 @@ except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Authorization middleware (Bearer / X-API-Key / ?api_key) – מבוסס utils.auth
+# Authorization middleware (Bearer / X-API-Key / ?api_key)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
@@ -123,14 +123,17 @@ async def validate_token(request: Request, call_next):
         "/health", "/health/live", "/health_full",
         "/docs", "/redoc",
     }
+    # Prefixes ציבוריים (כאן: /price כולו ציבורי)
+    PUBLIC_PREFIXES = ["/price"]
+
     path = request.url.path
 
     # לא לחסום preflight
     if request.method.upper() == "OPTIONS":
         return await call_next(request)
 
-    # /static תמיד פתוח
-    if path in PUBLIC_PATHS or path.startswith("/static/"):
+    # סטטיק/שקוף
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES) or path.startswith("/static/"):
         return await call_next(request)
 
     # מצב פתוח → לא לאכוף
@@ -168,6 +171,7 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.executor", "router"),
     ("routes.orders", "router"),
     ("routes.price", "router"),        # /price
+    ("routes.rpc", "router"),          # /rpc  ← חדש
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     CORE_ROUTERS.append(("routes.ai", "router"))
@@ -325,6 +329,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
