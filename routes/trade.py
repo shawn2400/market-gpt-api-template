@@ -2,7 +2,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, Body, HTTPException
 from pydantic import BaseModel, Field
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Optional, Dict, Any
 
 from utils.auth import require_api_key
@@ -12,10 +12,7 @@ from utils.binance_client import (
     get_symbol_filters,
     set_leverage,
     place_limit_order,
-    _floor_to_step_dec,
-    _floor_to_tick_dec,
-    _ceil_to_tick_dec,
-    _to_plain_str,
+    _quantize_multiple,
 )
 
 router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_api_key)])
@@ -36,6 +33,7 @@ class TradeResponse(BaseModel):
     leverage: int
     order: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    hint: Optional[str] = None
 
 def _d(x) -> Decimal:
     return Decimal(str(x))
@@ -51,28 +49,57 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
         raise HTTPException(status_code=503, detail=f"Price unavailable for {sym}")
     entry = float(px)
 
-    # פילטרים: tickSize/stepSize כדי לדעת איך להציג בדוח (העגינה בפועל תתבצע שוב ב-binance_client)
+    # פילטרים בטוחים
     f = get_symbol_filters(sym)
     step_str = f.get("stepSizeStr", "0.001")
     tick_str = f.get("tickSizeStr", "0.1")
+    min_qty = f.get("minQty")
+    min_notional = f.get("minNotional") or 5.0  # ברירת מחדל אם אין
 
-    # חישוב כמות לפי תקציב ולוורידג' (לפני עיגון סופי)
+    # חישוב כמות לפי תקציב×לבורג'
     notional = payload.budget * payload.leverage
-    raw_qty = _d(notional) / _d(entry)
+    qty_raw = _d(notional) / _d(entry)
 
-    # לעדכון התשובה למשתמש (dry run/echo) נעשה עיגון ידידותי לתצוגה:
-    qty_dec_preview = _floor_to_step_dec(raw_qty, step_str)
+    # עיגון כמות/מחיר לפי step/tick
+    qty_dec = _quantize_multiple(qty_raw, step_str, rounding=ROUND_DOWN)
     if side == "SELL":
-        px_dec_preview = _ceil_to_tick_dec(entry, tick_str)
+        px_dec = _quantize_multiple(entry, tick_str, rounding=ROUND_UP)
     else:
-        px_dec_preview = _floor_to_tick_dec(entry, tick_str)
+        px_dec = _quantize_multiple(entry, tick_str, rounding=ROUND_DOWN)
 
-    qty_f_preview = float(qty_dec_preview)
-    px_f_preview  = float(px_dec_preview)
+    # אכיפת minQty
+    if isinstance(min_qty, (int, float)) and min_qty is not None:
+        min_qty_dec = _quantize_multiple(Decimal(str(min_qty)), step_str, rounding=ROUND_UP)
+        if qty_dec < min_qty_dec:
+            # אם הכמות המינימלית גדולה ממה שהתקציב מאפשר → נחזיר שגיאה עם רמז
+            need_notional = float(min_qty_dec * px_dec)
+            need_budget = need_notional / max(1, payload.leverage)
+            return TradeResponse(
+                ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
+                leverage=payload.leverage, order=None,
+                error="Quantity below minQty after precision rounding.",
+                hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×)."
+            )
+        # אחרת נרים ל-minQty
+        qty_dec = min_qty_dec if qty_dec < min_qty_dec else qty_dec
 
-    if qty_f_preview <= 0:
+    # בדיקת MIN_NOTIONAL
+    final_notional = float(qty_dec * px_dec)
+    if final_notional < float(min_notional):
+        need_budget = float(min_notional) / max(1, payload.leverage)
         return TradeResponse(
-            ok=False, symbol=sym, side=side, qty=0.0, entry=px_f_preview, leverage=payload.leverage,
+            ok=False, symbol=sym, side=side, qty=float(qty_dec), entry=float(px_dec),
+            leverage=payload.leverage, order=None,
+            error=f"MIN_NOTIONAL not met (have {final_notional:.8f} < need {min_notional:.8f}).",
+            hint=f"Increase budget to ≥ ~{need_budget:.6f} USDT (at leverage {payload.leverage}×)."
+        )
+
+    qty_f = float(qty_dec)
+    px_f  = float(px_dec)
+
+    if qty_f <= 0:
+        return TradeResponse(
+            ok=False, symbol=sym, side=side, qty=0.0, entry=px_f, leverage=payload.leverage,
             error="Calculated quantity is zero after step rounding"
         )
 
@@ -83,29 +110,28 @@ def execute_trade(payload: TradeRequest = Body(...)) -> TradeResponse:
         pass
 
     if payload.dry_run:
-        # לא שולחים הזמנה – רק מחזירים איך זה יראה לאחר עיגון ראשוני
-        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f_preview, entry=px_f_preview,
-                             leverage=payload.leverage, order=None)
+        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=None)
 
-    # הזמנה LIMIT-IOC (מתנהגת כ-MARKET עם דיוק תקין) — העיגון המחמיר קורה בתוך place_limit_order
+    # הזמנת LIMIT-IOC (כמו Market אך מדויקת)
     try:
         order = place_limit_order(
             symbol=sym,
             side=side,
-            quantity=float(raw_qty),  # נעביר את ה־raw; place_limit_order יכפה step/minNotional וכו'
-            price=float(entry),
+            quantity=qty_f,
+            price=px_f,
             time_in_force="IOC",
             post_only=False,
             reduce_only=False,
             position_side=None,
             new_order_resp_type="RESULT",
         )
-        # מחזירים את הערכים כפי שחישבנו בתצוגה – ההזמנה בפועל עשויה להיות בכמות מעט שונה אם הופעל MIN_NOTIONAL
-        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f_preview, entry=px_f_preview,
-                             leverage=payload.leverage, order=order)
+        return TradeResponse(ok=True, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage, order=order)
     except Exception as e:
-        return TradeResponse(ok=False, symbol=sym, side=side, qty=qty_f_preview, entry=px_f_preview,
-                             leverage=payload.leverage, order=None, error=str(e))
+        return TradeResponse(
+            ok=False, symbol=sym, side=side, qty=qty_f, entry=px_f, leverage=payload.leverage,
+            order=None, error=str(e)
+        )
+
 
 
 
