@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import asyncio
-from typing import Optional, Literal, Dict, Any, List, Tuple
+from typing import Optional, Literal, Dict, Any, List
 
 from fastapi import APIRouter, Depends, Body, Query
 from pydantic import BaseModel, Field
@@ -14,16 +14,14 @@ from utils.quality_score import compute_quality
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.binance_client import futures_mark_price
 
-# חשוב: אצלך main.py עושה include_router(router) ללא prefix,
-# לכן כאן שומרים prefix="/ai" כדי שכל הנתיבים יחשפו תחת /ai/...
 router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Schemas
-# ──────────────────────────────────────────────────────────────────────────────
 
+# =======================
+# Models
+# =======================
 class QualityRequest(BaseModel):
     symbol: str
     side: Side
@@ -34,20 +32,22 @@ class QualityRequest(BaseModel):
     budget: float = Field(100.0, gt=0)
     atr: Optional[float] = Field(None, gt=0)
 
+
 class QualityResponse(BaseModel):
     quality_score: float
     success_pct: float
     anchor: Dict[str, Any]
     components: Dict[str, Any]
 
+
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(..., description="Trading pair symbol, e.g. BTCUSDT")
     interval: str = Field("15m", description="Kline interval, e.g. 15m,1h,4h")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
+# =======================
+# Helpers
+# =======================
 def _mk_anchor(anchor: AnchorDecision) -> Dict[str, Any]:
     return {
         "mode_requested": getattr(anchor, "mode_requested", None),
@@ -58,33 +58,37 @@ def _mk_anchor(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
-def _cache_price(symbol: str, max_age_sec: int = 60) -> Tuple[Optional[float], bool]:
+
+def _cache_price(symbol: str) -> Optional[float]:
     s = symbol.strip().upper()
     px = get_price(s)
-    fresh = bool(px) and is_price_fresh(s, max_age_sec=max_age_sec)
-    return (float(px) if px else None), fresh
+    if px and is_price_fresh(s, max_age_sec=60):
+        return float(px)
+    return None
 
-async def _best_price(symbol: str, max_age_sec: int = 60) -> Tuple[Optional[float], bool]:
+
+async def _best_price(symbol: str) -> tuple[Optional[float], bool]:
     s = symbol.strip().upper()
-    px, fresh = _cache_price(s, max_age_sec=max_age_sec)
-    if fresh and px is not None:
-        return px, True
-    # fallback ל־REST mark price (בת’רד כדי לא לחסום event loop)
+    px = get_price(s)
+    fresh = bool(px) and is_price_fresh(s, max_age_sec=60)
+    if fresh:
+        return float(px), True
     try:
         mp = await asyncio.to_thread(futures_mark_price, s)
         if mp and mp > 0:
             return float(mp), True
     except Exception:
         pass
-    return px, False
+    return (float(px) if px else None), False
+
 
 def _quick_analysis_text(symbol: str, interval: str, reason: str = "") -> str:
-    px, fresh = _cache_price(symbol)
+    px = _cache_price(symbol)
     extra = f" (reason: {reason})" if reason else ""
-    fresh_tag = "fresh" if fresh else "stale"
-    if px is not None:
-        return f"[Quick] {symbol.upper()} {interval}: price≈{px} ({fresh_tag}){extra}"
+    if px:
+        return f"[Quick] {symbol.upper()} {interval}: price≈{px}{extra}"
     return f"[Quick] {symbol.upper()} {interval}: price unavailable{extra}"
+
 
 def _load_klines_and_indicators():
     try:
@@ -94,20 +98,23 @@ def _load_klines_and_indicators():
     except Exception as e:
         return None, None, str(e)
 
+
 def _load_ai_analysis():
     try:
-        from utils.ai_analysis import analyze_with_ai  # אופציונלי
+        # Optional: external GPT-based analysis
+        from utils.ai_analysis import analyze_with_ai
         return analyze_with_ai, None
     except Exception as e:
         return None, str(e)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Endpoints
-# ──────────────────────────────────────────────────────────────────────────────
 
+# =======================
+# Endpoints
+# =======================
 @router.get("/ping")
 async def ping():
     return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
+
 
 @router.get("/health")
 async def ai_health():
@@ -118,11 +125,13 @@ async def ai_health():
         "reason": None if ok else "Missing OPENAI_API_KEY",
     }
 
+
 @router.get("/price")
 async def ai_price(symbol: str = Query(..., description="e.g. BTCUSDT")):
     s = symbol.strip().upper()
     price, fresh = await _best_price(s)
     return {"symbol": s, "price": price, "fresh": fresh}
+
 
 @router.post("/quality", response_model=QualityResponse)
 async def ai_quality(payload: QualityRequest = Body(...)):
@@ -145,13 +154,16 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         anchor=_mk_anchor(anchor),
     )
 
+
 @router.get("/analyze")
 async def ai_analyze_get(symbol: str = Query(...), interval: str = Query("15m")):
     return await _do_ai_analyze(symbol, interval)
 
+
 @router.post("/analyze")
 async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
     return await _do_ai_analyze(payload.symbol, payload.interval)
+
 
 async def _do_ai_analyze(symbol: str, interval: str):
     aget_klines, prep, imp_err = _load_klines_and_indicators()
@@ -159,7 +171,7 @@ async def _do_ai_analyze(symbol: str, interval: str):
         return {
             "symbol": symbol.upper(),
             "interval": interval,
-            "analysis": _quick_analysis_text(symbol, interval, f"deps unavailable: {imp_err}"),
+            "analysis": _quick_analysis_text(symbol, interval, imp_err),
             "fallback": True,
         }
     try:
@@ -206,57 +218,39 @@ async def _do_ai_analyze(symbol: str, interval: str):
             return {
                 "symbol": symbol.upper(),
                 "interval": interval,
-                "analysis": _quick_analysis_text(symbol, interval, ai_err or "AI not available"),
+                "analysis": _quick_analysis_text(
+                    symbol, interval, ai_err or "AI not available"
+                ),
                 "fallback": True,
             }
     except Exception as e:
         return {
             "symbol": symbol.upper(),
             "interval": interval,
-            "analysis": _quick_analysis_text(symbol, interval, f"analyze failed: {e}"),
+            "analysis": _quick_analysis_text(
+                symbol, interval, f"analyze failed: {e}"
+            ),
             "fallback": True,
         }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Scans
-# ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/manual-scan")
-async def ai_manual_scan(
-    symbols: str = Query(..., description="Comma-separated, e.g. BTCUSDT,ETHUSDT"),
-    interval: str = Query("15m"),
-):
-    """
-    Scan מלא (מנסה אינדיקטורים; נופל חינני ל-Quick).
-    """
+async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
     results: List[Dict[str, Any]] = []
     aget_klines, prep, imp_err = _load_klines_and_indicators()
     if imp_err:
-        out: List[Dict[str, Any]] = []
-        for s in [x.strip().upper() for x in symbols.split(",") if x.strip()]:
-            out.append(
-                {
-                    "symbol": s,
-                    "analysis": _quick_analysis_text(s, interval, f"deps unavailable: {imp_err}"),
-                    "fallback": True,
-                }
-            )
-        return {"interval": interval, "results": out}
+        return {"interval": interval, "results": [{"error": f"dependencies unavailable: {imp_err}"}]}
 
     for s in [x.strip().upper() for x in symbols.split(",") if x.strip()]:
         try:
             df = await aget_klines(s, interval, limit=200, market_type="futures")
             if df is None or len(df) == 0:
-                results.append(
-                    {"symbol": s, "analysis": _quick_analysis_text(s, interval, "no klines"), "fallback": True}
-                )
+                results.append({"symbol": s, "error": "No klines data returned"})
                 continue
 
             indicators = prep(df)
             if indicators is None or len(indicators) == 0:
-                results.append(
-                    {"symbol": s, "analysis": _quick_analysis_text(s, interval, "indicators failed"), "fallback": True}
-                )
+                results.append({"symbol": s, "error": "Indicators preparation failed"})
                 continue
 
             last = indicators.iloc[-1].to_dict()
@@ -265,56 +259,47 @@ async def ai_manual_scan(
             if analyze_with_ai and not ai_err:
                 try:
                     res = await analyze_with_ai({"symbol": s, **last})
-                    results.append(
-                        {
-                            "symbol": s,
-                            "analysis": res.get("analysis", "")
-                            or _quick_analysis_text(s, interval, "AI returned empty"),
-                            "fallback": not res.get("ok", False),
-                        }
-                    )
-                except Exception as e:
-                    results.append(
-                        {"symbol": s, "analysis": _quick_analysis_text(s, interval, str(e)), "fallback": True}
-                    )
-            else:
-                results.append(
-                    {
+                    results.append({
                         "symbol": s,
-                        "analysis": _quick_analysis_text(s, interval, ai_err or "AI not available"),
+                        "analysis": res.get("analysis", ""),
+                        "fallback": not res.get("ok", False),
+                    })
+                except Exception as e:
+                    results.append({
+                        "symbol": s,
+                        "analysis": _quick_analysis_text(s, interval, str(e)),
                         "fallback": True,
-                    }
-                )
+                    })
+            else:
+                results.append({
+                    "symbol": s,
+                    "analysis": _quick_analysis_text(s, interval, ai_err or "AI not available"),
+                    "fallback": True,
+                })
         except Exception as e:
-            results.append(
-                {"symbol": s, "analysis": _quick_analysis_text(s, interval, f"error: {e}"), "fallback": True}
-            )
+            results.append({"symbol": s, "error": str(e)})
 
     return {"interval": interval, "results": results}
 
-# Alias תאימות לאחור: קו־תחתון -> קורא לפונקציה הראשית ללא redirect/שינוי כותרות
-@router.get("/manual_scan")
+
+# ===== Backward-compat alias: /ai/manual_scan (underscore) =====
+@router.get("/manual_scan", include_in_schema=False)
 async def ai_manual_scan_alias(
-    symbols: Optional[str] = Query(None, description="Comma-separated, e.g. BTCUSDT,ETHUSDT"),
+    symbols: Optional[str] = Query(None, description="Comma-separated symbols (preferred)"),
+    symbol: Optional[str] = Query(None, description="Single symbol (legacy)"),
     interval: str = Query("15m"),
-    # פרמטרים היסטוריים (לא בשימוש; שמורים לחתימה יציבה)
-    symbol: Optional[str] = Query(None, description="Single symbol (ignored; use 'symbols')"),
-    max_price_age_sec: int = Query(120, description="Ignored here; for backward-compat only"),
-    mode: Optional[str] = Query(None, description="Ignored; backward-compat"),
+    mode: Optional[str] = Query(None, description="ignored (legacy)"),
+    max_price_age_sec: Optional[int] = Query(None, description="ignored (legacy)"),
 ):
-    # איחוד קלט כמו בגרסאות ישנות
-    syms: List[str] = []
-    if symbols and symbols.strip():
-        syms.extend([x.strip().upper() for x in symbols.split(",") if x.strip()])
-    if symbol and symbol.strip():
-        syms.append(symbol.strip().upper())
-    symbols_joined = ",".join(sorted(set(s for s in syms if s))) if syms else ""
+    """
+    Backward-compatibility for clients still calling /ai/manual_scan.
+    Accepts both 'symbols' and legacy 'symbol'. Extra legacy params are ignored.
+    """
+    syms = (symbols or symbol or "").strip()
+    if not syms:
+        return {"interval": interval, "results": [{"error": "symbols required"}]}
+    return await ai_manual_scan(symbols=syms, interval=interval)
 
-    if not symbols_joined:
-        return {"interval": interval, "results": [{"error": "No symbols provided"}]}
-
-    # קריאה ישירה לפונקציה הראשית כדי לשמר התנהגות זהה
-    return await ai_manual_scan(symbols=symbols_joined, interval=interval)
 
 
 
