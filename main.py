@@ -14,9 +14,6 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Env / Local .env
-# ──────────────────────────────────────────────────────────────────────────────
 IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
 if not IS_CLOUD:
     try:
@@ -35,35 +32,26 @@ def _parse_csv(s: str | None) -> List[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 
 def _clean_key(s: str | None) -> str:
-    # הסרת מרכאות/שבירות שורה/טאבים ורווחי קצה
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Config & Logging
-# ──────────────────────────────────────────────────────────────────────────────
-from utils import config as cfg  # noqa: F401 (טעינה צדית)
+from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 
-# Binance helpers
 from utils.binance_client import (
     fapi_ping, futures_balance,
     start_user_stream_keepalive, stop_user_stream,
 )
 from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
-# אימות – מקור יחיד
 from utils.auth import extract_token, allow_all, token_matches
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Filesystem prep (don’t crash on RO FS)
-# ──────────────────────────────────────────────────────────────────────────────
 def _ensure_dir(path: str) -> bool:
     p = Path(path)
     try:
@@ -79,17 +67,11 @@ def _ensure_dir(path: str) -> bool:
 static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# FastAPI app
-# ──────────────────────────────────────────────────────────────────────────────
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
 
-# Response size cap (~5MB default)
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
-# GZip for large responses
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# CORS
 CORS_ALLOWED = (os.getenv("CORS_ALLOW_ORIGINS", "*") or "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
 if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
@@ -103,7 +85,6 @@ app.add_middleware(
     allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
 
-# Static (skip if RO/no access)
 try:
     if static_ok and os.access("static", os.R_OK):
         app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -112,49 +93,36 @@ try:
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Authorization middleware (Bearer / X-API-Key / ?api_key)
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------- Auth middleware ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    # מסלולים ציבוריים מפורשים
     PUBLIC_PATHS = {
         "/", "/openapi.json",
         "/health", "/health/live", "/health_full",
         "/docs", "/redoc",
+        "/telegram/webhook",  # ← חשוב: webhook של טלגרם פתוח אבל מאומת ע"י secret_token
     }
-    # Prefixes ציבוריים (כאן: /price כולו ציבורי)
-    PUBLIC_PREFIXES = ["/price"]
+    PUBLIC_PREFIXES = ["/price", "/static/"]
 
     path = request.url.path
-
-    # לא לחסום preflight
     if request.method.upper() == "OPTIONS":
         return await call_next(request)
-
-    # סטטיק/שקוף
-    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES) or path.startswith("/static/"):
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
-
-    # מצב פתוח → לא לאכוף
     if allow_all():
         return await call_next(request)
 
-    # אימות Bearer / X-API-Key / ?api_key
     auth_header = request.headers.get("Authorization", "")
     token = extract_token(
         request,
         authorization=auth_header,
         x_api_key=request.headers.get("X-API-Key"),
     )
-
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Routers
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------- Routers ----------
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
         mod = __import__(module_path, fromlist=[attr])
@@ -170,8 +138,8 @@ CORE_ROUTERS: List[Tuple[str, str]] = [
     ("routes.binance_status", "router"),
     ("routes.executor", "router"),
     ("routes.orders", "router"),
-    ("routes.price", "router"),        # /price
-    ("routes.rpc", "router"),          # /rpc  ← חדש
+    ("routes.price", "router"),
+    ("routes.rpc", "router"),
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     CORE_ROUTERS.append(("routes.ai", "router"))
@@ -182,17 +150,16 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.anchor_extra", "router"),
     ("routes.ws_stream", "router"),
     ("routes.grid", "router"),
-    ("routes.debug", "router"),        # /debug (מאובטח)
-    ("routes.indicators", "router"),   # /indicators
+    ("routes.debug", "router"),
+    ("routes.indicators", "router"),
+    ("routes.telegram_bot", "router"),  # ← נרשם כאן
 ]
 for mod, attr in CORE_ROUTERS:
     _include_router(mod, attr)
 for mod, attr in EXTRA_ROUTERS:
     _include_router(mod, attr)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Root & Health
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------- Root & Health ----------
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -207,6 +174,9 @@ async def health_live():
 
 @app.get("/health_full", tags=["Health"])
 async def health_full():
+    from utils.ws_fallback import is_price_fresh, get_price
+    from utils.binance_client import fapi_ping, futures_balance, start_user_stream_keepalive
+
     k = _clean_key(os.getenv("BINANCE_API_KEY")); s = _clean_key(os.getenv("BINANCE_API_SECRET"))
     key_len = len(k); sec_len = len(s)
 
@@ -252,9 +222,6 @@ async def health_full():
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Exception handler
-# ──────────────────────────────────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({
@@ -266,9 +233,6 @@ async def handle_exception(request: Request, exc: Exception):
     })
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Startup / Shutdown
-# ──────────────────────────────────────────────────────────────────────────────
 _price_task: Optional[asyncio.Task] = None
 
 @app.on_event("startup")
@@ -314,12 +278,8 @@ async def shutdown_event():
             pass
         _price_task = None
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Uvicorn entry (local run)
-# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    # חשוב: לא להשתמש במשתנה הסביבה "HOST" כדי לא להתנגש עם משתנה בדיקות ב-shell
     bind_host = os.getenv("BIND_HOST", "0.0.0.0")
     bind_port = int(os.getenv("BIND_PORT", os.getenv("PORT", "8000")))
     uvicorn.run(
@@ -329,6 +289,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
