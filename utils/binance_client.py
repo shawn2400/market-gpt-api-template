@@ -8,7 +8,7 @@ import threading
 import logging
 from typing import Any, Dict, Optional
 from hashlib import sha256
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, InvalidOperation
 
 import httpx
 
@@ -27,9 +27,10 @@ BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.c
 RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
 HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 
-# ברירות מחדל (fallback) אם לא נצליח להביא filters – אותיות לשמירת דיוק
+# ברירות מחדל בטוחות אם לא הצלחנו להביא filters
 DEFAULT_QTY_STEP_STR   = os.getenv("DEFAULT_QTY_STEP",  "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK","0.1")
+DEFAULT_MIN_NOTIONAL   = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
 _HEADERS = {
     "X-MBX-APIKEY": API_KEY,
@@ -63,7 +64,7 @@ def _request(
     if signed:
         params.setdefault("timestamp", _ts_ms())
         params.setdefault("recvWindow", RECV_WINDOW)
-        # שמירת סדר פרמטרים, ואז חתימה
+        # חתימה — שמירה על סדר הוספת הפרמטרים
         items = [f"{k}={params[k]}" for k in params.keys()]
         params["signature"] = _sign("&".join(items))
 
@@ -72,12 +73,12 @@ def _request(
     if r.status_code == 200:
         return r
 
-    # Backoff קצר לשגיאות זמניות / Rate-limit
+    # Backoff קצר
     if r.status_code in (418, 429, 500, 502, 503, 504):
         ra = r.headers.get("Retry-After")
         time.sleep(min(10.0, float(ra)) if ra else 1.0)
 
-    # נסה להעלות שגיאה עם פרטי Binance
+    # העשר שגיאת Binance
     try:
         data = r.json()
     except Exception:
@@ -91,7 +92,6 @@ def _request(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
-    """Ping עמיד — מנסה גם /time כגיבוי. לא זורק חריגות (True/False בלבד)."""
     for i in range(max(1, tries)):
         try:
             r = _CLIENT.get(f"{BASE}/fapi/v1/ping", timeout=per_try_timeout)
@@ -107,16 +107,8 @@ def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
         return False
 
 def futures_mark_price(symbol: str) -> Optional[float]:
-    """
-    Mark Price עם נפילות-חן:
-    1) /fapi/v1/premiumIndex (markPrice)
-    2) /fapi/v1/ticker/price   (fallback – לא mark, אבל עדיף מכלום)
-    3) cache פנימי (ws_fallback) אם טרי
-    """
     s = (symbol or "").strip().upper()
     last_err: Optional[Exception] = None
-
-    # 1) premiumIndex
     try:
         j = _request("GET", "/fapi/v1/premiumIndex", params={"symbol": s}).json()
         px = float(j.get("markPrice") or 0)
@@ -125,7 +117,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         last_err = e
 
-    # 2) ticker/price
     try:
         j2 = _request("GET", "/fapi/v1/ticker/price", params={"symbol": s}).json()
         px2 = float(j2.get("price") or 0)
@@ -134,7 +125,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e2:
         last_err = e2
 
-    # 3) cache פנימי
     try:
         from utils.ws_fallback import get_price, is_price_fresh
         px3 = get_price(s)
@@ -147,7 +137,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     return None
 
 # ──────────────────────────────────────────────────────────────────────────────
-# exchangeInfo (Cache) + get_symbol_info / filters
+# exchangeInfo (Cache) + filters
 # ──────────────────────────────────────────────────────────────────────────────
 
 _EX_INFO_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
@@ -167,14 +157,6 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> dict:
         _EX_INFO_CACHE.update({"ts": now, "data": data})
         return data
 
-def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[dict]:
-    info = futures_exchange_info_safe(force_refresh=force_refresh)
-    sym = (symbol or "").upper()
-    for s in info.get("symbols", []):
-        if (s.get("symbol") or "").upper() == sym:
-            return s
-    return None
-
 def _decimals_from_step_str(step: str) -> int:
     s = (step or "").strip()
     if "e" in s.lower():
@@ -188,62 +170,129 @@ def _decimals_from_step_str(step: str) -> int:
 
 def get_symbol_filters(symbol: str) -> Dict[str, Any]:
     """
+    נסיון בטוח להביא פילטרים עבור סימבול:
+      1) /exchangeInfo?symbol=SYMBOL (היעד המדויק)
+      2) cache של exchangeInfo מלא
+      3) fallback קשיח לערכי ברירת מחדל
     מחזיר:
-      - tickSizeStr, stepSizeStr + מספר ספרות (לנוחות לוגים)
-      - minQtyStr (אם קיים), minNotionalStr (אם קיים)
+      {
+        "tickSizeStr", "stepSizeStr",
+        "tickDecimals", "stepDecimals",
+        "minQty", "minNotional",
+        "pricePrecision", "quantityPrecision",
+        "is_valid"
+      }
     """
     s = (symbol or "").strip().upper()
-    data = _request("GET", "/fapi/v1/exchangeInfo", params={"symbol": s}).json()
-    syms = data.get("symbols") or []
     out = {
         "tickSizeStr": DEFAULT_PRICE_TICK_STR,
         "stepSizeStr": DEFAULT_QTY_STEP_STR,
         "tickDecimals": _decimals_from_step_str(DEFAULT_PRICE_TICK_STR),
         "stepDecimals": _decimals_from_step_str(DEFAULT_QTY_STEP_STR),
-        "minQtyStr": None,
-        "minNotionalStr": None,
+        "minQty": None,
+        "minNotional": None,
+        "pricePrecision": None,
+        "quantityPrecision": None,
+        "is_valid": False,
     }
-    if not syms:
-        return out
-    filters = syms[0].get("filters") or []
-    for f in filters:
-        t = f.get("filterType")
-        if t == "PRICE_FILTER":
-            ts = (f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
-            out["tickSizeStr"] = ts
-            out["tickDecimals"] = _decimals_from_step_str(ts)
-        elif t in ("LOT_SIZE", "MARKET_LOT_SIZE"):
-            ss = (f.get("stepSize") or DEFAULT_QTY_STEP_STR)
-            out["stepSizeStr"] = ss
-            out["stepDecimals"] = _decimals_from_step_str(ss)
-            # לעיתים futures מחזיר גם minQty ב־LOT_SIZE
-            if f.get("minQty") is not None:
-                out["minQtyStr"] = str(f.get("minQty"))
-        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-            mn = f.get("notional") or f.get("minNotional")
-            if mn is not None:
-                out["minNotionalStr"] = str(mn)
+    # 1) לפי סימבול
+    try:
+        data = _request("GET", "/fapi/v1/exchangeInfo", params={"symbol": s}).json()
+        syms = data.get("symbols") or []
+        if syms:
+            info = syms[0]
+            out["pricePrecision"]    = info.get("pricePrecision")
+            out["quantityPrecision"] = info.get("quantityPrecision")
+            for f in (info.get("filters") or []):
+                t = f.get("filterType")
+                if t == "PRICE_FILTER":
+                    ts = f.get("tickSize") or DEFAULT_PRICE_TICK_STR
+                    out["tickSizeStr"]  = ts
+                    out["tickDecimals"] = _decimals_from_step_str(ts)
+                elif t in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+                    ss = f.get("stepSize") or DEFAULT_QTY_STEP_STR
+                    out["stepSizeStr"]  = ss
+                    out["stepDecimals"] = _decimals_from_step_str(ss)
+                    try:
+                        out["minQty"] = float(f.get("minQty")) if f.get("minQty") is not None else None
+                    except Exception:
+                        out["minQty"] = None
+                elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+                    try:
+                        out["minNotional"] = float(
+                            f.get("notional")
+                            or f.get("minNotional")
+                            or DEFAULT_MIN_NOTIONAL
+                        )
+                    except Exception:
+                        out["minNotional"] = DEFAULT_MIN_NOTIONAL
+            out["is_valid"] = True
+            return out
+    except Exception as e:
+        logger.warning({"event": "exchange_info_symbol_failed", "symbol": s, "error": str(e)})
+
+    # 2) מה־cache המלא
+    try:
+        all_info = futures_exchange_info_safe()
+        for info in (all_info.get("symbols") or []):
+            if (info.get("symbol") or "").upper() == s:
+                out["pricePrecision"]    = info.get("pricePrecision")
+                out["quantityPrecision"] = info.get("quantityPrecision")
+                for f in (info.get("filters") or []):
+                    t = f.get("filterType")
+                    if t == "PRICE_FILTER":
+                        ts = f.get("tickSize") or DEFAULT_PRICE_TICK_STR
+                        out["tickSizeStr"]  = ts
+                        out["tickDecimals"] = _decimals_from_step_str(ts)
+                    elif t in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+                        ss = f.get("stepSize") or DEFAULT_QTY_STEP_STR
+                        out["stepSizeStr"]  = ss
+                        out["stepDecimals"] = _decimals_from_step_str(ss)
+                        try:
+                            out["minQty"] = float(f.get("minQty")) if f.get("minQty") is not None else None
+                        except Exception:
+                            out["minQty"] = None
+                    elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+                        try:
+                            out["minNotional"] = float(
+                                f.get("notional")
+                                or f.get("minNotional")
+                                or DEFAULT_MIN_NOTIONAL
+                            )
+                        except Exception:
+                            out["minNotional"] = DEFAULT_MIN_NOTIONAL
+                out["is_valid"] = True
+                return out
+    except Exception as e:
+        logger.warning({"event": "exchange_info_cache_failed", "symbol": s, "error": str(e)})
+
+    # 3) fallback קשיח — עדיין ניתן לבצע, אבל יש סכנה ל-MIN_NOTIONAL
+    out["minNotional"] = DEFAULT_MIN_NOTIONAL
     return out
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Decimal helpers (align to multiples and stringify without scientific notation)
+# Decimal helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _quantize_multiple(x: float | str, step_str: str, rounding=ROUND_DOWN) -> Decimal:
-    """מעגן את x למספר שלם של step בעזרת rounding נתון (למשל BUY=DOWN, SELL=UP)."""
-    q = Decimal(str(x))
-    step = Decimal(step_str)
-    if step == 0:
-        return q
-    mult = (q / step).to_integral_value(rounding=rounding)
-    val = (mult * step).quantize(step, rounding=ROUND_DOWN)
-    return val
+def _quantize_multiple(x: float | str | Decimal, step_str: str, rounding=ROUND_DOWN) -> Decimal:
+    """מעגן את x למספר שלם של step (Decimal). תומך גם ב-'1e-3'."""
+    try:
+        q = Decimal(str(x)) if not isinstance(x, Decimal) else x
+        step = Decimal(step_str)
+        mult = (q / step).to_integral_value(rounding=rounding)
+        val = (mult * step).quantize(step, rounding=ROUND_DOWN)
+        return val
+    except (InvalidOperation, ValueError):
+        # חזרה ל-default אם קלט לא תקין
+        q = Decimal("0")
+        step = Decimal(step_str if step_str else "1")
+        return (q / step).to_integral_value(rounding=rounding) * step
 
 def _to_plain_str(d: Decimal) -> str:
-    return format(d, "f").rstrip("0").rstrip(".") if "." in format(d, "f") else format(d, "f")
+    return format(d, "f")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Signed endpoints: leverage/positions/balance
+# Signed endpoints
 # ──────────────────────────────────────────────────────────────────────────────
 
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
@@ -281,49 +330,37 @@ def place_limit_order(
     new_order_resp_type: str = "RESULT",
     client_order_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    מיישר כמות/מחיר לפי step/tick; אוכף minQty ו־MIN_NOTIONAL (אם קיימים ב־exchangeInfo).
-    מוודא ש־quantity/price נשלחים כמחרוזות ללא פורמט מדעי.
-    """
     sym  = (symbol or "").strip().upper()
     sdir = (side   or "").strip().upper()
     if sdir not in ("BUY", "SELL"):
         raise ValueError("side must be BUY or SELL")
 
-    # קבל filters
+    # קבל filters + עיגון דיוק
     f = get_symbol_filters(sym)
     step_str = f.get("stepSizeStr", DEFAULT_QTY_STEP_STR)
     tick_str = f.get("tickSizeStr", DEFAULT_PRICE_TICK_STR)
-    min_qty_str = f.get("minQtyStr")
-    min_notional_str = f.get("minNotionalStr")
 
-    # עיגון כמות למחלקת ה־step (תמיד DOWN)
     qty_dec = _quantize_multiple(quantity, step_str, rounding=ROUND_DOWN)
-    # מחיר – BUY למטה, SELL למעלה
     if sdir == "SELL":
         px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_UP)
     else:
         px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_DOWN)
 
-    # אכיפת minQty אם קיים
-    if min_qty_str:
-        min_qty = Decimal(min_qty_str)
-        if qty_dec < min_qty:
-            # העלה למינימום (ceiling ל־step)
-            target = (min_qty / Decimal(step_str)).to_integral_value(rounding=ROUND_UP) * Decimal(step_str)
-            qty_dec = _quantize_multiple(target, step_str, rounding=ROUND_UP)
+    # minQty
+    min_qty = f.get("minQty")
+    if isinstance(min_qty, (float, int)) and min_qty is not None:
+        min_qty_dec = _quantize_multiple(Decimal(str(min_qty)), step_str, rounding=ROUND_UP)
+        if qty_dec < min_qty_dec:
+            qty_dec = min_qty_dec
 
-    # אכיפת MIN_NOTIONAL אם קיים ויש גם price
-    if min_notional_str:
-        mn = Decimal(min_notional_str)
-        notional = (px_dec * qty_dec)
-        if notional < mn and px_dec > 0:
-            target_qty = (mn / px_dec)
-            # ceiling ל־step כדי להגיע/לחרוג בקטן מהמינימום
-            qty_dec = _quantize_multiple(target_qty, step_str, rounding=ROUND_UP)
-
-    if qty_dec <= 0:
-        raise RuntimeError("Calculated quantity is zero after precision/min rules")
+    # MIN_NOTIONAL
+    min_notional = f.get("minNotional") or DEFAULT_MIN_NOTIONAL
+    notional = float(qty_dec * px_dec)
+    if notional < float(min_notional):
+        raise RuntimeError(
+            f"MIN_NOTIONAL not met: notional={notional:.8f} < required={min_notional:.8f}. "
+            f"Increase budget or leverage."
+        )
 
     qty_str = _to_plain_str(qty_dec)
     px_str  = _to_plain_str(px_dec)
@@ -336,8 +373,8 @@ def place_limit_order(
         "symbol": sym,
         "side": sdir,
         "type": "LIMIT",
-        "quantity": qty_str,   # ← מחרוזת!
-        "price": px_str,       # ← מחרוזת!
+        "quantity": qty_str,   # ← מחרוזת
+        "price": px_str,       # ← מחרוזת
         "timeInForce": tif,
         "newOrderRespType": new_order_resp_type,
     }
@@ -375,7 +412,7 @@ def get_open_orders(symbol: Optional[str] = None) -> list:
     if symbol: params["symbol"] = symbol.upper()
     return _request("GET", "/fapi/v1/openOrders", params=params, signed=True).json()
 
-# ─── User Data Stream (listenKey keepalive) ───────────────────────────────────
+# ─── User Data Stream ─────────────────────────────────────────────────────────
 
 _listen_key: Optional[str] = None
 _keepalive_thread: Optional[threading.Thread] = None
@@ -421,31 +458,26 @@ def stop_user_stream() -> None:
     _keepalive_thread = None
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Back-compat shims (older code imports).  שומר תאימות לקוד קיים.
+# Back-compat exports
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _floor_to_step_dec(x: float | str, step_str: str):
-    """Quantize quantity DOWN to the exchange step size (Decimal)."""
     return _quantize_multiple(x, step_str, rounding=ROUND_DOWN)
 
 def _ceil_to_tick_dec(x: float | str, tick_str: str):
-    """Quantize price UP to the exchange tick size (Decimal)."""
     return _quantize_multiple(x, tick_str, rounding=ROUND_UP)
 
 def _floor_to_tick_dec(x: float | str, tick_str: str):
-    """Quantize price DOWN to the exchange tick size (Decimal)."""
     return _quantize_multiple(x, tick_str, rounding=ROUND_DOWN)
 
-# אליאסים נפוצים היסטורית
+# אליאסים היסטוריים
 to_decimal_str = _to_plain_str
 _to_decimal_str = _to_plain_str
 
-# יצוא ציבורי מוצהר (לא חובה, עוזר לעריכה סטטית)
 __all__ = [
     "fapi_ping",
     "futures_mark_price",
     "futures_exchange_info_safe",
-    "get_symbol_info",
     "get_symbol_filters",
     "set_leverage",
     "futures_open_positions",
@@ -456,13 +488,13 @@ __all__ = [
     "get_open_orders",
     "start_user_stream_keepalive",
     "stop_user_stream",
-    # helpers / shims
     "_quantize_multiple",
     "_to_plain_str",
     "_floor_to_step_dec",
     "_ceil_to_tick_dec",
     "_floor_to_tick_dec",
 ]
+
 
 
 
