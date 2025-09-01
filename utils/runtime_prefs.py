@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from .redis_client import get_redis
 
@@ -20,14 +20,20 @@ class TelePrefs:
       snooze:symbol:{symbol}            -> "1" (TTL)
       watchdog:last_beat                -> ts (float)
       watchdog:bundle_stats:{chat}      -> hash {"queued":int, "last_flush":ts}
+      tprefs:pin_chats                  -> SET of chat_ids שבהם pin_summary=on
     """
 
     def __init__(self) -> None:
+        # מצופה ש-get_redis() מחזיר redis.asyncio.Redis עם decode_responses=True
         self.r = get_redis()
 
     # ---------- Pin Summary ----------
     async def set_pin_summary(self, chat_id: int, on: bool) -> None:
         await self.r.set(f"tprefs:{chat_id}:pin_summary", "on" if on else "off")
+        if on:
+            await self.r.sadd("tprefs:pin_chats", int(chat_id))
+        else:
+            await self.r.srem("tprefs:pin_chats", int(chat_id))
 
     async def is_pin_summary(self, chat_id: int) -> bool:
         return (await self.r.get(f"tprefs:{chat_id}:pin_summary")) == "on"
@@ -42,6 +48,16 @@ class TelePrefs:
     async def get_pin_message_id(self, chat_id: int) -> Optional[int]:
         v = await self.r.get(f"tprefs:{chat_id}:pin_message_id")
         return int(v) if v is not None else None
+
+    async def list_pin_chats(self) -> Set[int]:
+        members = await self.r.smembers("tprefs:pin_chats")
+        out: Set[int] = set()
+        for m in members or []:
+            try:
+                out.add(int(m))
+            except Exception:
+                pass
+        return out
 
     # ---------- Bundling ----------
     async def set_bundle_window(self, chat_id: int, seconds: int) -> None:
@@ -66,6 +82,7 @@ class TelePrefs:
             try:
                 out.append(json.loads(raw))
             except Exception:
+                # בליעת אירוע פגום
                 pass
         await self.r.hset(f"watchdog:bundle_stats:{chat_id}", mapping={"last_flush": time.time()})
         return out
@@ -90,5 +107,6 @@ class TelePrefs:
     async def get_watchdog_beat(self) -> Optional[float]:
         v = await self.r.get("watchdog:last_beat")
         return float(v) if v else None
+
 
 
