@@ -1,6 +1,6 @@
 # utils/indicators_ext.py
 from __future__ import annotations
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import pandas as pd
 import httpx
 import math, os
@@ -14,7 +14,6 @@ def _safe_float(x) -> float:
     except Exception: return math.nan
 
 def compute_vwap(df: pd.DataFrame) -> float:
-    # Typical price = (H+L+C)/3
     tp = (df["high"] + df["low"] + df["close"]) / 3.0
     vwap = (tp * df["volume"]).sum() / max(1e-12, df["volume"].sum())
     return float(vwap)
@@ -29,7 +28,6 @@ def compute_obv(df: pd.DataFrame) -> float:
     return float(obv)
 
 def compute_cvd_from_trades(symbol: str, limit: int = 1000) -> float:
-    # aggTrades: m == isBuyerMaker (True -> SELL aggression), False -> BUY aggression
     symbol = symbol.upper().strip()
     with httpx.Client(timeout=6.0) as c:
         r = c.get(f"{_FAPI}/fapi/v1/aggTrades", params={"symbol": symbol, "limit": max(1, min(1000, limit))})
@@ -38,9 +36,9 @@ def compute_cvd_from_trades(symbol: str, limit: int = 1000) -> float:
     cvd = 0.0
     for t in trades:
         q = _safe_float(t.get("q"))
-        if t.get("m"):  # SELL
+        if t.get("m"):  # SELL aggression
             cvd -= q
-        else:           # BUY
+        else:           # BUY aggression
             cvd += q
     return float(cvd)
 
@@ -57,6 +55,7 @@ def advanced_indicators(symbol: str, interval: str = "15m", limit: int = 200, ma
         except Exception as e:
             out["cvd_error"] = str(e)
     return out
+
 
 
 
