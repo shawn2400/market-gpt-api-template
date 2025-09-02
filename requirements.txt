@@ -7,6 +7,8 @@ gunicorn==22.0.0
 python-binance==1.0.19
 httpx==0.27.0
 websockets==12.0
+# (אופציונלי) aiohttp משמש מתחת למכסה מנוע ב-python-binance בחלק מהקריאות
+# aiohttp==3.9.5
 
 # Data / Math
 pandas==2.2.2
@@ -32,6 +34,13 @@ prometheus-client==0.20.0
 
 # Tests
 pytest==8.2.2
+
+# ---------- אופציונלי לביצועים בסביבת פרודקשן ----------
+# uvicorn[standard] יתקין uvloop ו-httptools להאצת שרת ה-HTTP:
+# uvloop==0.19.0
+# httptools==0.6.1
+# ל-redis מהיר יותר בפרודקשן אפשר להוסיף:
+# hiredis==3.0.0
 
 
 
