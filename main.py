@@ -167,6 +167,8 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.precision", "router"),
     ("routes.alerts", "router"),
     ("routes.reconcile", "router"),
+    # --- NEW: AI scheduler router
+    ("routes.scheduler_ai", "router"),
 ]
 for mod, attr in CORE_ROUTERS: _include_router(mod, attr)
 for mod, attr in EXTRA_ROUTERS: _include_router(mod, attr)
@@ -301,7 +303,6 @@ async def api_start_executor():
         start_executor()
         return {"ok": True, "msg": "executor started"}
     except Exception as e:
-        logger.exception("start-executor failed")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 @app.post("/stop-executor", tags=["Executor"])
@@ -310,7 +311,6 @@ async def api_stop_executor():
         stop_executor()
         return {"ok": True, "msg": "executor stopping"}
     except Exception as e:
-        logger.exception("stop-executor failed")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 @app.post("/manage-once", tags=["Manager"])
@@ -319,7 +319,6 @@ async def api_manage_once():
         await manage_open_trades()
         return {"ok": True, "msg": "managed once"}
     except Exception as e:
-        logger.exception("manage-once failed")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 if __name__ == "__main__":
@@ -333,6 +332,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
