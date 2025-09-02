@@ -68,3 +68,4 @@ async def manage_open_trades():
     except Exception as e:
         logger.error(f"[manage] Error during trade management: {e}")
 
+
