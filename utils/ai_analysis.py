@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import json
-import math
 import asyncio
 from typing import Dict, Any, Optional
 
@@ -16,25 +15,18 @@ OPENAI_BASE_URL = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30.0"))
 OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "4"))
 
-# סמאפור להגבלת עומס פנימי
 _sema = asyncio.Semaphore(max(1, OPENAI_MAX_CONCURRENCY))
 
-# Backoff בסיסי
 def _backoff(attempt: int) -> float:
     return min(0.6 * (2 ** attempt), 5.0)
 
 def _build_prompt(features: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    בונה פרומפט מינימלי: המטרה – ניתוח טכני קצר, ממוקד, ללא המלצה מחייבת.
-    """
     symbol = features.get("symbol", "UNKNOWN")
-    # תעבור על שדות שכיחים אם קיימים
     keys = [
         "close", "open", "high", "low", "volume",
         "ema21", "ema50", "rsi", "macd", "macd_signal", "macd_hist",
         "adx", "atr",
     ]
-    # בנה תקציר מאונדקס
     parts = []
     for k in keys:
         v = features.get(k)
@@ -58,7 +50,6 @@ def _build_prompt(features: Dict[str, Any]) -> Dict[str, Any]:
     )
     user = f"Symbol: {symbol}\nFeatures: {summary}\nTask: Provide concise technical analysis."
 
-    # chat.completions payload
     return {
         "model": OPENAI_MODEL,
         "messages": [
@@ -76,7 +67,6 @@ async def _post_with_retries(url: str, headers: Dict[str, str], payload: Dict[st
             timeout = httpx.Timeout(OPENAI_TIMEOUT_SECONDS)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 r = await client.post(url, headers=headers, json=payload)
-                # 429/5xx → ננסה שוב עם backoff
                 if r.status_code in (429, 500, 502, 503, 504):
                     last_err = f"{r.status_code}: {r.text[:300]}"
                     await asyncio.sleep(_backoff(attempt))
@@ -89,7 +79,6 @@ async def _post_with_retries(url: str, headers: Dict[str, str], payload: Dict[st
                 last_err = json.dumps(data)[:300]
             except Exception:
                 last_err = e.response.text[:300]
-            # 4xx אחרים – אין טעם להמשיך
             if 400 <= e.response.status_code < 500 and e.response.status_code != 429:
                 break
         except Exception as e:
@@ -98,10 +87,6 @@ async def _post_with_retries(url: str, headers: Dict[str, str], payload: Dict[st
     raise RuntimeError(f"OpenAI request failed after retries: {last_err}")
 
 async def analyze_with_ai(features: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    קלט: מילון של פיצ'רים (שורה אחרונה של אינדיקטורים + symbol)
-    פלט: {"ok": bool, "analysis": str}
-    """
     if not OPENAI_API_KEY:
         return {"ok": False, "analysis": "[AI disabled] Missing OPENAI_API_KEY."}
 
@@ -115,7 +100,6 @@ async def analyze_with_ai(features: Dict[str, Any]) -> Dict[str, Any]:
     async with _sema:
         data = await _post_with_retries(url, headers, payload)
 
-    # חילוץ הטקסט בבטחה
     text = ""
     try:
         text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
@@ -125,6 +109,7 @@ async def analyze_with_ai(features: Dict[str, Any]) -> Dict[str, Any]:
     if not text:
         return {"ok": False, "analysis": "[AI error] Empty response."}
     return {"ok": True, "analysis": text}
+
 
 
 
