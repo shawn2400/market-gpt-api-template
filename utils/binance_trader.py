@@ -10,19 +10,22 @@ from utils.binance_client import (
     place_limit_order,
     futures_open_positions,
 )
+from utils.precision_utils import (
+    apply_price_tick_side,
+    apply_qty_step,
+    calc_quantity_from_budget,
+)
 from utils.orders_manager import record_order
 
 logger = logging.getLogger("algogpt.binance.trader")
 
-def _calc_entry_price(side: str, mark: float) -> float:
+def _target_limit_from_mark(side: str, mark: float) -> float:
     """
-    בוחר מחיר Limit שמבטיח Post-Only (לא יחצה את הספר).
+    בוחר מחיר Limit שמקדם ביצוע מיידי (IOC) או Maker (GTX) בלי לדחוף את הספר חזק.
     BUY → מעט מתחת ל-Mark, SELL → מעט מעל.
     """
-    if side == "BUY":
-        return mark * 0.998  # ~0.2% מתחת ל-Mark
-    else:
-        return mark * 1.002  # ~0.2% מעל ה-Mark
+    side = side.upper()
+    return (mark * 0.998) if side == "BUY" else (mark * 1.002)
 
 async def binance_futures_trade(
     symbol: str,
@@ -33,9 +36,9 @@ async def binance_futures_trade(
 ) -> Dict[str, Any]:
     """
     הזמנה ל-Binance Futures.
-    - Limit Post-Only (GTX) כברירת מחדל.
+    - Limit GTX (Post-Only) כברירת מחדל — ניתן לשנות ל-IOC אם תרצה.
     - שינוי מינוף לפני שליחה (best-effort).
-    - qty = budget / mark.
+    - qty נבחרת ע"פ budget×leverage + אכיפת MIN_NOTIONAL ו-stepSize.
     - רישום ל-orders_manager גם ב-dry-run (status=SIMULATED).
     """
     symbol = symbol.upper().strip()
@@ -44,32 +47,38 @@ async def binance_futures_trade(
         raise ValueError("side must be BUY or SELL")
 
     mark = futures_mark_price(symbol)
-    if mark is None:
+    if mark is None or mark <= 0:
         raise RuntimeError(f"Mark price unavailable for {symbol}")
 
-    qty = budget / mark
-    entry_price = _calc_entry_price(side, mark)
+    # מחיר יעד → יישור tick לפי כיוון
+    raw_limit = _target_limit_from_mark(side, mark)
+    limit_px, _ = apply_price_tick_side(raw_limit, symbol, side)
+
+    # כמות בטוחה לפי budget×leverage (מבטיח עמידה במינימוםים)
+    q = calc_quantity_from_budget(symbol, price=limit_px, budget_usd=float(budget), leverage=float(leverage))
+    if not q.get("ok"):
+        raise RuntimeError(f"quantity calc failed: {q.get('reason')} (need ≥ notional {q.get('min_notional')})")
+    qty = float(q["qty"])
 
     if dry_run:
-        # רישום הזמנה מדומה (לא פעילה באמת מול Binance)
         oid = f"DRY-{int(time.time()*1000)}"
         record_order(
             symbol=symbol,
             side=side,
             qty=qty,
-            price=entry_price,
+            price=limit_px,
             status="SIMULATED",
             order_id=oid,
             client_id=None,
             dry_run=True,
             tif="GTX",
         )
-        logger.info(f"[DRY RUN] {side} {symbol} budget={budget} qty≈{qty:.8f} lev={leverage} limit={entry_price:.8f}")
+        logger.info(f"[DRY RUN] {side} {symbol} budget={budget} qty≈{qty:.8f} lev={leverage} limit={limit_px:.8f}")
         return {
             "symbol": symbol,
             "side": side,
             "qty": qty,
-            "entry": entry_price,
+            "entry": limit_px,
             "leverage": leverage,
             "dry_run": True,
         }
@@ -80,12 +89,12 @@ async def binance_futures_trade(
     except Exception as e:
         logger.error(f"[Leverage] failed for {symbol}: {e}")
 
-    # שליחת LIMIT GTX (Post-Only)
+    # שליחת LIMIT GTX (Post-Only) — Precision כבר מיושר, והלקוח יבצע עיגון נוסף כביטחון
     resp = place_limit_order(
         symbol=symbol,
         side=side,
         quantity=qty,
-        price=entry_price,
+        price=limit_px,
         post_only=True,          # GTX
         reduce_only=False,
         position_side=None,
@@ -102,7 +111,7 @@ async def binance_futures_trade(
         symbol=symbol,
         side=side,
         qty=float(resp.get("origQty") or qty),
-        price=float(resp.get("price") or entry_price),
+        price=float(resp.get("price") or limit_px),
         status=status,
         order_id=order_id or f"LOC-{int(time.time()*1000)}",
         client_id=client_id,
@@ -114,7 +123,7 @@ async def binance_futures_trade(
         "symbol": symbol,
         "side": side,
         "qty": float(resp.get("origQty") or qty),
-        "entry": float(resp.get("price") or entry_price),
+        "entry": float(resp.get("price") or limit_px),
         "leverage": leverage,
         "order": {k: resp.get(k) for k in ("orderId", "clientOrderId", "status", "price", "origQty", "timeInForce")},
     }
@@ -124,7 +133,8 @@ async def binance_futures_trade(
 def force_close_position(symbol: str) -> Dict[str, Any]:
     """
     סגירת פוזיציה קיימת ב-Reduce-Only עם LIMIT+IOC אגרסיבי (ללא Market).
-    LONG → SELL IOC נמוך מה-Mark; SHORT → BUY IOC גבוה מה-Mark.
+    LONG → SELL IOC מתחת ל-Mark; SHORT → BUY IOC מעל ה-Mark.
+    מיושר Precision לפני שליחה (step/tick).
     """
     symbol = symbol.upper().strip()
     positions = futures_open_positions() or []
@@ -137,21 +147,24 @@ def force_close_position(symbol: str) -> Dict[str, Any]:
         return {"symbol": symbol, "closedAmt": 0.0, "message": "no open amount"}
 
     mark = futures_mark_price(symbol)
-    if mark is None:
+    if mark is None or mark <= 0:
         raise RuntimeError(f"Mark price unavailable for {symbol}")
 
     if amt > 0:
         side = "SELL"
-        limit_px = mark * 0.98
+        raw_px = mark * 0.98
     else:
         side = "BUY"
-        limit_px = mark * 1.02
+        raw_px = mark * 1.02
+
+    limit_px, _ = apply_price_tick_side(raw_px, symbol, side)
+    qty, _ = apply_qty_step(abs(amt), symbol)
 
     from utils.binance_client import place_limit_order as _place
     resp = _place(
         symbol=symbol,
         side=side,
-        quantity=abs(amt),
+        quantity=qty,
         price=limit_px,
         post_only=False,
         reduce_only=True,
