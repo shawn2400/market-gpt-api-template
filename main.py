@@ -49,8 +49,16 @@ from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
 from utils.auth import extract_token, allow_all, token_matches
 
-# חדש:
-from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
+# חדש: user-data consumer עם Fallback שקט אם חסר המודול
+try:
+    from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
+except Exception:
+    async def start_user_stream_consumer():  # type: ignore
+        return None
+    async def stop_user_stream_consumer():  # type: ignore
+        return None
+
+# מנהל טריידים חי + אקסקיוטר
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor, is_executor_running
 
@@ -98,6 +106,7 @@ try:
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
+# ---------- Auth ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
@@ -120,6 +129,7 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
+# ---------- Routers ----------
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
         mod = __import__(module_path, fromlist=[attr])
@@ -160,6 +170,7 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
 for mod, attr in CORE_ROUTERS: _include_router(mod, attr)
 for mod, attr in EXTRA_ROUTERS: _include_router(mod, attr)
 
+# ---------- Root & Health ----------
 @app.get("/", tags=["Config"])
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -248,12 +259,12 @@ async def startup_event():
     rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
     if syms:
         try:
-            _price_task = asyncio.create_task(auto_price_updater(syms, ws_interval_keepalive=ws_keepalive, rest_interval_sec=rest_every))
+            _price_task = asyncio.create_task(auto_price_updater(syms, ws_interval_keepalive=ws_keepalove, rest_interval_sec=rest_every))
             logger.info({"event": "price_updater_started", "symbols": syms, "ws_keepalive": ws_keepalive, "rest_every": rest_every})
         except Exception as e:
             logger.warning({"event": "price_updater_failed_start", "error": str(e)})
 
-    # ⬇️ user-data stream consumer
+    # user-data stream consumer (אדיש אם Fallback)
     try:
         await start_user_stream_consumer()
         logger.info({"event":"user_stream_consumer_started"})
@@ -281,6 +292,7 @@ async def shutdown_event():
         except Exception: pass
         _manager_task = None
 
+# --------- Exec / Manage ----------
 @app.post("/start-executor", tags=["Executor"])
 async def api_start_executor():
     try:
