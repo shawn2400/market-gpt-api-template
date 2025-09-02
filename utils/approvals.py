@@ -228,3 +228,4 @@ def can_auto_forward(tp: Dict[str, Any]) -> bool:
     res = preflight_proposal(tp)
     return bool(res.get("ok", False))
 
+
