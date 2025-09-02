@@ -16,6 +16,10 @@ _TG_REC   = (os.getenv("TG_NOTIFY_RECONCILE","1").strip().lower() in ("1","true"
 _TG_GRID  = (os.getenv("TG_NOTIFY_GRID","1").strip().lower() in ("1","true","yes","on"))
 _TG_MNGR  = (os.getenv("TG_NOTIFY_MANAGER","0").strip().lower() in ("1","true","yes","on"))
 
+DEFAULT_TIMEOUT = float(os.getenv("TELEGRAM_HTTP_TIMEOUT", "10"))
+MAX_RETRIES = int(os.getenv("TELEGRAM_MAX_RETRIES", "3"))
+TELEGRAM_MSG_LIMIT = 4096
+
 def _api_base() -> str:
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
@@ -26,29 +30,55 @@ def _ensure_chat_id() -> str:
         raise RuntimeError("ADMIN_CHAT_ID/TELEGRAM_CHAT_ID is not set")
     return ADMIN_CHAT_ID
 
-async def _post(method: str, data: Dict[str, Any]) -> Dict[str, Any]:
+async def _post_json_with_retries(method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     url = f"{_api_base()}/{method}"
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.post(url, data=data)
+    last_err: Optional[str] = None
+    backoff = 0.6
+    for attempt in range(MAX_RETRIES + 1):
         try:
-            js = r.json()
-        except Exception:
-            js = {"ok": False, "status_code": r.status_code, "text": r.text}
-        if not js.get("ok", False):
-            logger.warning({"event": "tg_api_error", "method": method, "status": r.status_code, "resp": js})
-        return js
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                r = await client.post(url, json=payload)
+                if r.status_code == 429:
+                    try:
+                        ra = float(r.headers.get("Retry-After", "1.0"))
+                    except Exception:
+                        ra = backoff
+                    await asyncio.sleep(max(0.2, ra))
+                    backoff = min(backoff * 1.8, 5.0)
+                    continue
+                if r.status_code >= 500:
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 1.8, 5.0)
+                    continue
+                try:
+                    js = r.json()
+                except Exception:
+                    js = {"ok": False, "status_code": r.status_code, "text": r.text}
+                if not js.get("ok", False):
+                    logger.warning({"event": "tg_api_error", "method": method, "status": r.status_code, "resp": js})
+                return js
+        except Exception as e:
+            last_err = str(e)
+            if attempt >= MAX_RETRIES:
+                return {"ok": False, "error": last_err or "request_failed"}
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 1.8, 5.0)
+    return {"ok": False, "error": last_err or "request_failed"}
 
 async def telegram_get_me() -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(f"{_api_base()}/getMe")
-        try:
-            return r.json()
-        except Exception:
-            return {"ok": False, "status_code": r.status_code, "text": r.text}
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            r = await client.get(f"{_api_base()}/getMe")
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": False, "status_code": r.status_code, "text": r.text}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 async def telegram_send_chat_action(action: str = "typing") -> Dict[str, Any]:
     chat_id = _ensure_chat_id()
-    return await _post("sendChatAction", {"chat_id": chat_id, "action": action})
+    return await _post_json_with_retries("sendChatAction", {"chat_id": chat_id, "action": action})
 
 def _coerce_side(side: str) -> str:
     s = (side or "").strip().upper()
@@ -86,6 +116,9 @@ def format_trade_alert(
         f"• Size ≈ ${size_usd:.2f}"
         f"{q_str}{s_str}{n_str}"
     )
+    # חיתוך עדין אם עברנו את מגבלת טלגרם (ליתר ביטחון)
+    if len(txt) > TELEGRAM_MSG_LIMIT:
+        txt = txt[:TELEGRAM_MSG_LIMIT - 3] + "..."
     return txt
 
 async def send_telegram_alert(
@@ -94,14 +127,33 @@ async def send_telegram_alert(
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
     chat_id = _ensure_chat_id()
-    data = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": parse_mode,
-        "disable_web_page_preview": "true" if disable_preview else "false",
-        "disable_notification": "false",
-    }
-    return await _post("sendMessage", data)
+    # פיצול אם ארוך מדי
+    def _split(text: str) -> list[str]:
+        if len(text) <= TELEGRAM_MSG_LIMIT:
+            return [text]
+        out: list[str] = []
+        start = 0
+        while start < len(text):
+            out.append(message[start:start + TELEGRAM_MSG_LIMIT])
+            start += TELEGRAM_MSG_LIMIT
+        return out
+
+    parts = _split(message)
+    last: Dict[str, Any] = {}
+    for idx, part in enumerate(parts):
+        data = {
+            "chat_id": chat_id,
+            "text": part,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": bool(disable_preview),
+            "disable_notification": False,
+        }
+        last = await _post_json_with_retries("sendMessage", data)
+        if not last.get("ok") and "error" in last:
+            return last
+    if len(parts) > 1:
+        last["parts_sent"] = len(parts)
+    return last
 
 def _fire_and_forget(coro):
     try:
