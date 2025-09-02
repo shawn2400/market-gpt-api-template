@@ -34,7 +34,7 @@ def _parse_csv(s: str | None) -> List[str]:
 def _clean_key(s: str | None) -> str:
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.15.8")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.16.0")
 
 from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
@@ -154,6 +154,10 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.indicators", "router"),
     ("routes.telegram_bot", "router"),         # מאובטח: /telegram/set-webhook
     ("routes.telegram_bot", "router_public"),  # ציבורי:  /telegram/webhook
+    ("routes.orderbook", "router"),            # עומק/לחץ ספר פקודות
+    ("routes.metrics_extra", "router"),        # Long/Short Ratio, Delta Volume, Funding Heatmap
+    ("routes.indicators_extra", "router"),     # VWAP / OBV / CVD
+    ("routes.precision", "router"),            # Quantize מחיר/כמות למניעת דחייה
 ]
 for mod, attr in CORE_ROUTERS:
     _include_router(mod, attr)
@@ -290,6 +294,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
