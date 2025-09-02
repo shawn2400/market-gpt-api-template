@@ -1,48 +1,70 @@
 # utils/trade_manager.py
-import time
-import json
-from typing import List, Dict
-from utils.redis_client import redis_client
 
-TRADES_KEY = "trades:all"
+import time, logging, asyncio
+from utils import ws_fallback
+from utils.indicators import atr, macd, adx
+from utils.binance_client import modify_stop_loss, modify_take_profit, get_open_positions, get_klines_df
+from utils.config import ALLOW_MANAGE_OPEN_TRADES
 
-def _load_trades() -> List[Dict]:
-    if not redis_client:
-        return []
-    try:
-        raw = redis_client.get(TRADES_KEY)
-        return json.loads(raw) if raw else []
-    except Exception:
-        return []
+logger = logging.getLogger("algogpt.trade_manager")
 
-def _save_trades(trades: List[Dict]) -> None:
-    if not redis_client:
+
+async def manage_open_trades():
+    if not ALLOW_MANAGE_OPEN_TRADES:
+        logger.info("[manage] ❌ ALLOW_MANAGE_OPEN_TRADES is False – skipping")
         return
+
+    logger.info("[manage] ✨ Starting management of open trades...")
     try:
-        redis_client.set(TRADES_KEY, json.dumps(trades), ex=86400)
-    except Exception:
-        pass
+        positions = get_open_positions()
+        for pos in positions:
+            sym = pos.get("symbol")
+            qty = float(pos.get("positionAmt") or 0)
+            entry = float(pos.get("entryPrice") or 0)
+            side = "LONG" if qty > 0 else "SHORT"
+            price = ws_fallback.get_price(sym) or float(pos.get("markPrice") or 0)
+            if price <= 0 or entry <= 0:
+                continue
 
-def get_open_trades() -> List[Dict]:
-    trades = _load_trades()
-    return [t for t in trades if t.get("status") == "OPEN"]
+            df = get_klines_df(sym, interval="5m", limit=50)
+            if df is None or df.empty:
+                continue
 
-def get_trade_history(limit: int = 50) -> List[Dict]:
-    trades = _load_trades()
-    return list(reversed([t for t in trades if t.get("status") != "OPEN"]))[:limit]
+            current_atr = atr(df)[-1]
+            current_adx = adx(df)[-1]
+            macd_line, macd_signal, _ = macd(df["close"])
+            macd_now = macd_line.iloc[-1] - macd_signal.iloc[-1]
 
-def add_trade(symbol: str, side: str, entry_price: float, qty: float) -> Dict:
-    trade = {
-        "id": str(int(time.time() * 1000)),
-        "symbol": symbol.upper(),
-        "side": side.upper(),
-        "entry_price": entry_price,
-        "qty": qty,
-        "pnl": 0.0,
-        "status": "OPEN",
-        "opened_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    trades = _load_trades()
-    trades.append(trade)
-    _save_trades(trades)
-    return trade
+            profit_pct = abs((price - entry) / entry) * 100
+
+            # === Breakeven SL ===
+            if profit_pct >= 1.5 and (macd_now > 0 or current_adx > 20):
+                new_sl = entry
+                logger.info(f"[manage][{sym}] Moving SL to BE: {new_sl}")
+                modify_stop_loss(sym, side, new_sl, qty)
+
+            # === Trailing SL ===
+            trail_sl = None
+            if side == "LONG":
+                recent_low = df["low"].iloc[-3:].min()
+                trail_sl = recent_low - 0.6 * current_atr
+            else:
+                recent_high = df["high"].iloc[-3:].max()
+                trail_sl = recent_high + 0.6 * current_atr
+
+            if trail_sl:
+                logger.info(f"[manage][{sym}] Trailing SL to: {trail_sl}")
+                modify_stop_loss(sym, side, trail_sl, qty)
+
+            # === Dynamic TP ===
+            if current_adx > 25 and macd_now > 0:
+                if side == "LONG":
+                    new_tp = price + 4.5 * current_atr
+                else:
+                    new_tp = price - 4.5 * current_atr
+                logger.info(f"[manage][{sym}] Momentum TP update: {new_tp}")
+                modify_take_profit(sym, side, new_tp, qty)
+
+    except Exception as e:
+        logger.error(f"[manage] Error during trade management: {e}")
+
