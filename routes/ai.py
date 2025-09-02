@@ -5,8 +5,9 @@ import os
 import asyncio
 from typing import Optional, Literal, Dict, Any, List
 
-from fastapi import APIRouter, Depends, Body, Query
+from fastapi import APIRouter, Depends, Body, Query, HTTPException
 from pydantic import BaseModel, Field
+import httpx
 
 from utils.auth import require_api_key
 from utils.anchor import evaluate_anchor, AnchorDecision
@@ -14,10 +15,13 @@ from utils.quality_score import compute_quality
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.binance_client import futures_mark_price
 
+# Early approvals / filter
+from utils.ai_analysis import analyze_with_ai, analyze_with_ai_and_filter
+from utils.approvals import preflight_proposal
+
 router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
-
 
 # =======================
 # Models
@@ -32,18 +36,36 @@ class QualityRequest(BaseModel):
     budget: float = Field(100.0, gt=0)
     atr: Optional[float] = Field(None, gt=0)
 
-
 class QualityResponse(BaseModel):
     quality_score: float
     success_pct: float
     anchor: Dict[str, Any]
     components: Dict[str, Any]
 
-
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(..., description="Trading pair symbol, e.g. BTCUSDT")
     interval: str = Field("15m", description="Kline interval, e.g. 15m,1h,4h")
 
+class SuggestRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=list)
+    interval: str = Field(default_factory=lambda: os.getenv("DEFAULT_INTERVAL", "15m"))
+    market: str = Field(default_factory=lambda: os.getenv("DEFAULT_MARKET", "futures"))
+    max_items: int = Field(10, ge=1, le=50)
+    include_rejected: bool = True
+
+class QueueMode(str):
+    TELEGRAM = "telegram"
+    SINK = "sink"
+
+class SuggestQueueRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=list)
+    interval: str = Field(default_factory=lambda: os.getenv("DEFAULT_INTERVAL", "15m"))
+    market: str = Field(default_factory=lambda: os.getenv("DEFAULT_MARKET", "futures"))
+    max_items: int = Field(10, ge=1, le=50)
+    mode: Literal["telegram","sink"] = Field(default="telegram")
+    # override env flags:
+    queue_to_telegram: Optional[bool] = None
+    auto_execute_sink: Optional[bool] = None
 
 # =======================
 # Helpers
@@ -58,14 +80,12 @@ def _mk_anchor(anchor: AnchorDecision) -> Dict[str, Any]:
         "reason": getattr(anchor, "reason", None),
     }
 
-
 def _cache_price(symbol: str) -> Optional[float]:
     s = symbol.strip().upper()
     px = get_price(s)
     if px and is_price_fresh(s, max_age_sec=60):
         return float(px)
     return None
-
 
 async def _best_price(symbol: str) -> tuple[Optional[float], bool]:
     s = symbol.strip().upper()
@@ -81,14 +101,12 @@ async def _best_price(symbol: str) -> tuple[Optional[float], bool]:
         pass
     return (float(px) if px else None), False
 
-
 def _quick_analysis_text(symbol: str, interval: str, reason: str = "") -> str:
     px = _cache_price(symbol)
     extra = f" (reason: {reason})" if reason else ""
     if px:
         return f"[Quick] {symbol.upper()} {interval}: price≈{px}{extra}"
     return f"[Quick] {symbol.upper()} {interval}: price unavailable{extra}"
-
 
 def _load_klines_and_indicators():
     try:
@@ -98,15 +116,11 @@ def _load_klines_and_indicators():
     except Exception as e:
         return None, None, str(e)
 
+def _bearer() -> str:
+    return f"Bearer {os.getenv('API_BEARER_TOKEN','').strip()}"
 
-def _load_ai_analysis():
-    try:
-        # Optional: external GPT-based analysis
-        from utils.ai_analysis import analyze_with_ai
-        return analyze_with_ai, None
-    except Exception as e:
-        return None, str(e)
-
+TELEGRAM_ADD_PENDING_URL = "/telegram/pending/add"
+ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", "http://127.0.0.1:8000/alerts/trade-ingest").strip()
 
 # =======================
 # Endpoints
@@ -115,16 +129,11 @@ def _load_ai_analysis():
 async def ping():
     return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
 
-
 @router.get("/health")
 async def ai_health():
     ok = bool((os.getenv("OPENAI_API_KEY") or "").strip())
-    return {
-        "ok": ok,
-        "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
-        "reason": None if ok else "Missing OPENAI_API_KEY",
-    }
-
+    return {"ok": ok, "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+            "reason": None if ok else "Missing OPENAI_API_KEY"}
 
 @router.get("/price")
 async def ai_price(symbol: str = Query(..., description="e.g. BTCUSDT")):
@@ -132,20 +141,14 @@ async def ai_price(symbol: str = Query(..., description="e.g. BTCUSDT")):
     price, fresh = await _best_price(s)
     return {"symbol": s, "price": price, "fresh": fresh}
 
-
 @router.post("/quality", response_model=QualityResponse)
 async def ai_quality(payload: QualityRequest = Body(...)):
     anchor = evaluate_anchor(payload.side)
     q = compute_quality(
-        symbol=payload.symbol,
-        side=payload.side,
-        entry=payload.entry,
-        sl=payload.sl,
-        tp=payload.tp,
-        leverage=payload.leverage,
-        budget=payload.budget,
-        anchor=anchor,
-        atr=payload.atr,
+        symbol=payload.symbol, side=payload.side,
+        entry=payload.entry, sl=payload.sl, tp=payload.tp,
+        leverage=payload.leverage, budget=payload.budget,
+        anchor=anchor, atr=payload.atr,
     )
     return QualityResponse(
         quality_score=float(q.get("quality_score", 0.0)),
@@ -154,151 +157,122 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         anchor=_mk_anchor(anchor),
     )
 
-
 @router.get("/analyze")
 async def ai_analyze_get(symbol: str = Query(...), interval: str = Query("15m")):
     return await _do_ai_analyze(symbol, interval)
-
 
 @router.post("/analyze")
 async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
     return await _do_ai_analyze(payload.symbol, payload.interval)
 
-
 async def _do_ai_analyze(symbol: str, interval: str):
     aget_klines, prep, imp_err = _load_klines_and_indicators()
     if imp_err:
-        return {
-            "symbol": symbol.upper(),
-            "interval": interval,
-            "analysis": _quick_analysis_text(symbol, interval, imp_err),
-            "fallback": True,
-        }
+        return {"symbol": symbol.upper(), "interval": interval,
+                "analysis": _quick_analysis_text(symbol, interval, imp_err),
+                "fallback": True}
     try:
         df = await aget_klines(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
-            return {
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "analysis": _quick_analysis_text(symbol, interval, "no klines"),
-                "fallback": True,
-            }
+            return {"symbol": symbol.upper(), "interval": interval,
+                    "analysis": _quick_analysis_text(symbol, interval, "no klines"),
+                    "fallback": True}
         indicators = prep(df)
         if indicators is None or len(indicators) == 0:
-            return {
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "analysis": _quick_analysis_text(symbol, interval, "indicators failed"),
-                "fallback": True,
-            }
+            return {"symbol": symbol.upper(), "interval": interval,
+                    "analysis": _quick_analysis_text(symbol, interval, "indicators failed"),
+                    "fallback": True}
         last = indicators.iloc[-1].to_dict()
 
-        analyze_with_ai, ai_err = _load_ai_analysis()
-        if analyze_with_ai and not ai_err:
-            try:
-                res = await analyze_with_ai({"symbol": symbol.upper(), **last})
-                ok = bool(res.get("ok"))
-                text = res.get("analysis") or _quick_analysis_text(
-                    symbol, interval, "AI returned empty"
-                )
-                return {
-                    "symbol": symbol.upper(),
-                    "interval": interval,
-                    "analysis": text,
-                    "fallback": not ok,
-                }
-            except Exception as e:
-                return {
-                    "symbol": symbol.upper(),
-                    "interval": interval,
-                    "analysis": _quick_analysis_text(symbol, interval, str(e)),
-                    "fallback": True,
-                }
-        else:
-            return {
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "analysis": _quick_analysis_text(
-                    symbol, interval, ai_err or "AI not available"
-                ),
-                "fallback": True,
-            }
+        # OpenAI (טקסט) – לא מסנן טריידים; זו אנליזה בלבד
+        res = await analyze_with_ai({"symbol": symbol.upper(), **last})
+        ok = bool(res.get("ok"))
+        text = res.get("analysis") or _quick_analysis_text(symbol, interval, "AI returned empty")
+        return {"symbol": symbol.upper(), "interval": interval, "analysis": text, "fallback": not ok}
     except Exception as e:
-        return {
-            "symbol": symbol.upper(),
-            "interval": interval,
-            "analysis": _quick_analysis_text(
-                symbol, interval, f"analyze failed: {e}"
-            ),
-            "fallback": True,
-        }
+        return {"symbol": symbol.upper(), "interval": interval,
+                "analysis": _quick_analysis_text(symbol, interval, f"analyze failed: {e}"),
+                "fallback": True}
 
+# ---- SUGGEST (Candidates + Early Approvals) ----
+@router.post("/suggest")
+async def suggest(req: SuggestRequest):
+    run_early = str(os.getenv("APPROVAL_EARLY_AI","1")).lower() in ("1","true","yes","on")
+    res = await analyze_with_ai_and_filter(
+        symbols=[s.upper() for s in req.symbols],
+        interval=req.interval, market=req.market,
+        max_items=req.max_items, run_early_approvals=run_early,
+    )
+    out = {"ok": True, "interval": req.interval, "market": req.market, "accepted": res["accepted"]}
+    if req.include_rejected:
+        out["rejected"] = res["rejected"]
+    return out
 
-@router.get("/manual-scan")
-async def ai_manual_scan(symbols: str = Query(...), interval: str = Query("15m")):
-    results: List[Dict[str, Any]] = []
-    aget_klines, prep, imp_err = _load_klines_and_indicators()
-    if imp_err:
-        return {"interval": interval, "results": [{"error": f"dependencies unavailable: {imp_err}"}]}
+# ---- SUGGEST & QUEUE (to Telegram PENDING or to sink) ----
+@router.post("/suggest_and_queue")
+async def suggest_and_queue(req: SuggestQueueRequest):
+    # הפקה
+    run_early = str(os.getenv("APPROVAL_EARLY_AI","1")).lower() in ("1","true","yes","on")
+    res = await analyze_with_ai_and_filter(
+        symbols=[s.upper() for s in req.symbols],
+        interval=req.interval, market=req.market,
+        max_items=req.max_items, run_early_approvals=run_early,
+    )
+    accepted = res["accepted"]
 
-    for s in [x.strip().upper() for x in symbols.split(",") if x.strip()]:
-        try:
-            df = await aget_klines(s, interval, limit=200, market_type="futures")
-            if df is None or len(df) == 0:
-                results.append({"symbol": s, "error": "No klines data returned"})
-                continue
+    if not accepted:
+        return {"ok": True, "queued": 0, "mode": req.mode, "accepted": []}
 
-            indicators = prep(df)
-            if indicators is None or len(indicators) == 0:
-                results.append({"symbol": s, "error": "Indicators preparation failed"})
-                continue
+    # קונפיג יעד
+    env_to_tg = str(os.getenv("AI_QUEUE_TO_TELEGRAM","1")).lower() in ("1","true","yes","on")
+    env_auto  = str(os.getenv("AI_QUEUE_AUTO_EXECUTE","0")).lower() in ("1","true","yes","on")
+    to_telegram = req.queue_to_telegram if req.queue_to_telegram is not None else env_to_tg
+    auto_exec   = req.auto_execute_sink if req.auto_execute_sink is not None else env_auto
 
-            last = indicators.iloc[-1].to_dict()
+    # דחיפה
+    queued: List[Dict[str, Any]] = []
+    headers = {"Authorization": _bearer(), "Accept": "application/json"}
 
-            analyze_with_ai, ai_err = _load_ai_analysis()
-            if analyze_with_ai and not ai_err:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for c in accepted:
+            payload = {**c}
+            if to_telegram and req.mode == "telegram":
+                # דחיפה ל-PENDING של הטלגרם + שליחת הודעה עם כפתורים
+                url = TELEGRAM_ADD_PENDING_URL  # local path; נשתמש ב-root באותו שרת
                 try:
-                    res = await analyze_with_ai({"symbol": s, **last})
-                    results.append({
-                        "symbol": s,
-                        "analysis": res.get("analysis", ""),
-                        "fallback": not res.get("ok", False),
-                    })
+                    r = await client.post(url, json={"tp": payload, "interval": req.interval, "market": req.market}, headers=headers)
+                    r.raise_for_status()
+                    queued.append({"symbol": c["symbol"], "side": c["side"], "target": "telegram"})
                 except Exception as e:
-                    results.append({
-                        "symbol": s,
-                        "analysis": _quick_analysis_text(s, interval, str(e)),
-                        "fallback": True,
-                    })
-            else:
-                results.append({
-                    "symbol": s,
-                    "analysis": _quick_analysis_text(s, interval, ai_err or "AI not available"),
-                    "fallback": True,
-                })
-        except Exception as e:
-            results.append({"symbol": s, "error": str(e)})
+                    queued.append({"symbol": c["symbol"], "side": c["side"], "target": "telegram", "error": str(e)})
+            if auto_exec or req.mode == "sink":
+                # שילוח ישיר ל-sink (אוטו-ביצוע/פרסום)
+                try:
+                    # preflight (קשיח): אם נופל – לא שולחים
+                    pf = preflight_proposal({**payload, "interval": req.interval})
+                    if not pf.get("ok", False):
+                        queued.append({"symbol": c["symbol"], "side": c["side"], "target": "sink", "error": "preflight_failed", "errors": pf.get("errors",[])})
+                        continue
+                    rr_body = {  # sink payload אחיד
+                        "trade_id": None,  # יתמלא ב-sink
+                        "trade_type": "FUTURES" if req.market.lower().startswith("future") else "SPOT",
+                        "symbol": c["symbol"], "side": c["side"],
+                        "current_price": c.get("current_price"),
+                        "entry": c["entry"], "sl": c["sl"],
+                        "tp1": c["tp1"], "tp2": c.get("tp2"), "tp3": c.get("tp3"),
+                        "leverage": c.get("leverage", 10),
+                        "success_pct": c.get("success_pct"),
+                        "reason": "auto-exec via /ai/suggest_and_queue",
+                        "interval": req.interval, "market": req.market,
+                    }
+                    r = await client.post(ALERTS_INGEST_URL, json=rr_body, headers={"Accept":"application/json"})
+                    r.raise_for_status()
+                    queued.append({"symbol": c["symbol"], "side": c["side"], "target": "sink"})
+                except Exception as e:
+                    queued.append({"symbol": c["symbol"], "side": c["side"], "target": "sink", "error": str(e)})
 
-    return {"interval": interval, "results": results}
+    return {"ok": True, "mode": req.mode, "queued": len([q for q in queued if "error" not in q]), "details": queued}
 
-
-# ===== Backward-compat alias: /ai/manual_scan (underscore) =====
-@router.get("/manual_scan", include_in_schema=False)
-async def ai_manual_scan_alias(
-    symbols: Optional[str] = Query(None, description="Comma-separated symbols (preferred)"),
-    symbol: Optional[str] = Query(None, description="Single symbol (legacy)"),
-    interval: str = Query("15m"),
-    mode: Optional[str] = Query(None, description="ignored (legacy)"),
-    max_price_age_sec: Optional[int] = Query(None, description="ignored (legacy)"),
-):
-    """
-    Backward-compatibility for clients still calling /ai/manual_scan.
-    Accepts both 'symbols' and legacy 'symbol'. Extra legacy params are ignored.
-    """
-    syms = (symbols or symbol or "").strip()
-    if not syms:
-        return {"interval": interval, "results": [{"error": "symbols required"}]}
-    return await ai_manual_scan(symbols=syms, interval=interval)
 
 
 
