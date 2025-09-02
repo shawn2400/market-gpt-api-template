@@ -1,73 +1,72 @@
 import asyncio
 import os
-from dotenv import load_dotenv
+import time
+
 from utils.multi_tf_scanner import multi_tf_scan_with_ai
 from utils.trade_executor import execute_trade_live
-from utils.trade_manager import manage_open_trades
+from utils.trade_storage import save_trade_payload
 from utils.watchlist_utils import load_watchlist
-from utils.config import (
-    AUTO_RUN,
-    SCAN_INTERVAL,
-    MIN_QUALITY_SCORE,
-    MAX_TRADE_BUDGET,
-    EXECUTE_TRADES,
-    ALLOW_MANAGE_OPEN_TRADES,
-)
+from utils.ai_analysis import predict_optimal_sl_tp
 
-load_dotenv()
+AUTO_RUN = os.getenv("AUTO_RUN", "false").lower() == "true"
+MIN_SCORE = float(os.getenv("MIN_QUALITY_SCORE", 8.5))
+MAX_TRADE_BUDGET = float(os.getenv("MAX_TRADE_BUDGET", 100))
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", 60))
 
-# ניהול תקציב ריאלי לפי טריידים פתוחים
-from utils.trade_storage import load_open_trades
 
-def get_total_allocated_budget():
-    open_trades = load_open_trades()
-    return sum(t.get("budget", 0) for t in open_trades)
-
-async def auto_executor():
+async def auto_executor_loop():
     if not AUTO_RUN:
-        print("⚠️ AUTO_RUN כבוי בקובץ הסביבה.")
+        print("[AutoExecutor] Skipped – AUTO_RUN is disabled.")
         return
 
+    print("[AutoExecutor] Started ✓")
+    symbols = load_watchlist()
     while True:
         try:
-            print("🚀 מריץ סריקה חכמה...")
-            watchlist = load_watchlist()
-            results = await multi_tf_scan_with_ai(watchlist)
+            print("[AutoExecutor] Scanning watchlist...", flush=True)
+            results = await multi_tf_scan_with_ai(symbols)
 
-            for trade in results:
-                symbol = trade["symbol"]
-                score = trade.get("score", 0)
-                budget = trade.get("budget", MAX_TRADE_BUDGET)
-                direction = trade.get("direction", "LONG")
-
-                allocated = get_total_allocated_budget()
-                if allocated + budget > MAX_TRADE_BUDGET:
-                    print(f"⛔ אין מספיק תקציב לטרייד ב־{symbol} | בשימוש: {allocated}$")
+            for result in results:
+                if result.get("score", 0) < MIN_SCORE:
                     continue
 
-                if score < MIN_QUALITY_SCORE:
-                    print(f"⛔ טרייד ב־{symbol} לא עבר את הסף ({score} < {MIN_QUALITY_SCORE})")
-                    continue
+                symbol = result["symbol"]
+                direction = result["direction"]
+                interval = result.get("interval", "15m")
 
-                if EXECUTE_TRADES:
-                    print(f"📈 פותח טרייד חכם ב־{symbol} עם תקציב {budget}$")
-                    await execute_trade_live(symbol, direction, budget)
-                else:
-                    print(f"🧪 DRY RUN | הדמיית טרייד ב־{symbol}")
+                sl, tp = await predict_optimal_sl_tp(symbol, interval, direction)
+                
+                payload = {
+                    "symbol": symbol,
+                    "side": direction,
+                    "budget": MAX_TRADE_BUDGET,
+                    "sl": sl,
+                    "tp": tp,
+                    "leverage": None,
+                    "interval": interval,
+                    "dry_run": False
+                }
 
-            # ניהול חי מלא אם מופעל
-            if ALLOW_MANAGE_OPEN_TRADES:
-                await manage_open_trades()
+                response = await execute_trade_live(payload)
+                save_trade_payload(payload, response)
+
+                print(f"[AutoExecutor] Executed {symbol} {direction} with SL={sl} TP={tp}")
 
         except Exception as e:
-            print(f"❌ שגיאה במנהל האוטומטי: {e}")
+            print(f"[AutoExecutor] Error: {e}", flush=True)
 
-        print(f"⌛ ממתין {SCAN_INTERVAL} שניות עד לסריקה הבאה...\n")
         await asyncio.sleep(SCAN_INTERVAL)
 
-# להפעלה חיצונית
-if __name__ == "__main__":
-    asyncio.run(auto_executor())
+
+def start_auto_executor():
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(auto_executor_loop())
+        else:
+            loop.run_until_complete(auto_executor_loop())
+    except RuntimeError:
+        asyncio.run(auto_executor_loop())
 
 
 
