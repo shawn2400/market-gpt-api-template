@@ -3,9 +3,13 @@ from __future__ import annotations
 from typing import Optional
 from fastapi import APIRouter, Depends, Body
 from pydantic import BaseModel, Field
+
 from utils.auth import require_api_key
 from utils.alerts import (
-    send_telegram_alert, telegram_get_me, telegram_send_chat_action, format_trade_alert
+    send_telegram_alert,
+    telegram_get_me,
+    telegram_send_chat_action,
+    format_trade_alert,
 )
 
 router = APIRouter(
@@ -60,3 +64,4 @@ async def trade_alert(req: TradeAlert = Body(...)):
     )
     res = await send_telegram_alert(text)
     return {"ok": bool(res.get("ok")), "response": res, "text": text}
+
