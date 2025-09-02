@@ -4,6 +4,7 @@ import os
 import asyncio
 from typing import Optional, Dict, Any
 import logging
+
 import httpx
 
 logger = logging.getLogger("algogpt.alerts")
@@ -11,10 +12,9 @@ logger = logging.getLogger("algogpt.alerts")
 TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 ADMIN_CHAT_ID = (os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or "").strip()
 
-# toggles
-_TG_REC   = (os.getenv("TG_NOTIFY_RECONCILE","1") or "1").lower() in ("1","true","yes","on")
-_TG_GRID  = (os.getenv("TG_NOTIFY_GRID","1") or "1").lower() in ("1","true","yes","on")
-_TG_MNGR  = (os.getenv("TG_NOTIFY_MANAGER","0") or "0").lower() in ("1","true","yes","on")
+_TG_REC   = (os.getenv("TG_NOTIFY_RECONCILE","1").strip().lower() in ("1","true","yes","on"))
+_TG_GRID  = (os.getenv("TG_NOTIFY_GRID","1").strip().lower() in ("1","true","yes","on"))
+_TG_MNGR  = (os.getenv("TG_NOTIFY_MANAGER","0").strip().lower() in ("1","true","yes","on"))
 
 def _api_base() -> str:
     if not TELEGRAM_BOT_TOKEN:
@@ -103,8 +103,7 @@ async def send_telegram_alert(
     }
     return await _post("sendMessage", data)
 
-# fire-and-forget helpers
-def _faf(coro):
+def _fire_and_forget(coro):
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -112,19 +111,30 @@ def _faf(coro):
     except Exception:
         pass
 
-def tg_info(text: str): _faf(send_telegram_alert(f"ℹ️ {text}"))
-def tg_warn(text: str): _faf(send_telegram_alert(f"⚠️ {text}"))
-def tg_ok(text: str):   _faf(send_telegram_alert(f"✅ {text}"))
-def tg_err(text: str):  _faf(send_telegram_alert(f"❌ {text}"))
+def tg_info(text: str) -> None:
+    _fire_and_forget(send_telegram_alert(f"ℹ️ {text}"))
 
-def tg_rec(text: str):
-    if _TG_REC: _faf(send_telegram_alert(text))
+def tg_warn(text: str) -> None:
+    _fire_and_forget(send_telegram_alert(f"⚠️ {text}"))
 
-def tg_grid(text: str):
-    if _TG_GRID: _faf(send_telegram_alert(text))
+def tg_ok(text: str) -> None:
+    _fire_and_forget(send_telegram_alert(f"✅ {text}"))
 
-def tg_mngr(text: str):
-    if _TG_MNGR: _faf(send_telegram_alert(text))
+def tg_err(text: str) -> None:
+    _fire_and_forget(send_telegram_alert(f"❌ {text}"))
+
+def tg_rec(text: str) -> None:
+    if _TG_REC:
+        _fire_and_forget(send_telegram_alert(text))
+
+def tg_grid(text: str) -> None:
+    if _TG_GRID:
+        _fire_and_forget(send_telegram_alert(text))
+
+def tg_mngr(text: str) -> None:
+    if _TG_MNGR:
+        _fire_and_forget(send_telegram_alert(text))
+
 
 
 
