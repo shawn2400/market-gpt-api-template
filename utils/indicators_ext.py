@@ -1,4 +1,4 @@
-# utils/indicators_extra.py
+# utils/indicators_ext.py
 from __future__ import annotations
 from typing import Dict, Any, Optional
 import pandas as pd
