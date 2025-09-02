@@ -49,7 +49,7 @@ from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
 from utils.auth import extract_token, allow_all, token_matches
 
-# חדש: user-data consumer עם Fallback שקט אם חסר המודול
+# user-data consumer (Fallback שקט אם חסר המודול)
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
 except Exception:
@@ -166,6 +166,7 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.indicators_extra", "router"),
     ("routes.precision", "router"),
     ("routes.alerts", "router"),
+    ("routes.reconcile", "router"),  # ← חדש
 ]
 for mod, attr in CORE_ROUTERS: _include_router(mod, attr)
 for mod, attr in EXTRA_ROUTERS: _include_router(mod, attr)
@@ -259,7 +260,13 @@ async def startup_event():
     rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
     if syms:
         try:
-            _price_task = asyncio.create_task(auto_price_updater(syms, ws_interval_keepalive=ws_keepalove, rest_interval_sec=rest_every))
+            _price_task = asyncio.create_task(
+                auto_price_updater(
+                    syms,
+                    ws_interval_keepalive=ws_keepalive,   # ← תוקן typo
+                    rest_interval_sec=rest_every
+                )
+            )
             logger.info({"event": "price_updater_started", "symbols": syms, "ws_keepalive": ws_keepalive, "rest_every": rest_every})
         except Exception as e:
             logger.warning({"event": "price_updater_failed_start", "error": str(e)})
@@ -270,6 +277,22 @@ async def startup_event():
         logger.info({"event":"user_stream_consumer_started"})
     except Exception as e:
         logger.warning({"event":"user_stream_consumer_failed_start","error":str(e)})
+
+    # reconcile עדין אחרי ריסטארט
+    try:
+        from utils.reconcile import reconcile_after_restart
+        asyncio.create_task(reconcile_after_restart(sleep_first=2.0))
+        logger.info({"event":"startup_reconcile_scheduled"})
+    except Exception as e:
+        logger.warning({"event":"startup_reconcile_schedule_failed","error":str(e)})
+
+    # AUTO_RUN לאקסקיוטר
+    if _to_bool(os.getenv("AUTO_RUN","false"), False):
+        try:
+            start_executor()
+            logger.info({"event":"auto_executor_started"})
+        except Exception as e:
+            logger.warning({"event":"auto_executor_start_failed","error":str(e)})
 
 @app.on_event("shutdown")
 async def shutdown_event():
