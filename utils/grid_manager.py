@@ -9,13 +9,10 @@ from utils import config as cfg
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.precision_utils import apply_price_tick_side
-from utils.alerts import tg_grid  # ← חדש
+from utils.alerts import tg_grid
 
 logger = logging.getLogger("algogpt.grid")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV / tuning
-# ──────────────────────────────────────────────────────────────────────────────
 def _as_bool(s: Optional[str], default=False) -> bool:
     return str(s).strip().lower() in {"1","true","yes","on"} if s is not None else default
 def _as_float(s: Optional[str], default: float) -> float:
@@ -33,12 +30,11 @@ SPLIT_3              = _as_float(os.getenv("GRID_SPLIT_3","0.34"), 0.34)
 TRAIL_ATR_MULT       = _as_float(os.getenv("TRAIL_ATR_MULT", str(getattr(cfg, "STOP_LOSS_ATR_MULTIPLIER", 1.5))), getattr(cfg, "STOP_LOSS_ATR_MULTIPLIER", 1.5))
 BE_ARM_PCT           = _as_float(os.getenv("BE_ARM_PCT","1.6"), 1.6)
 
-STREAM_TP_BE         = _as_bool(os.getenv("STREAM_TP_BE","true"), True)   # TP1→SL@BE
+STREAM_TP_BE         = _as_bool(os.getenv("STREAM_TP_BE","true"), True)
 TP_LOCK_STAGE2_ATR   = _as_float(os.getenv("TP_LOCK_STAGE2_ATR","0.5"), 0.5)
 
 MANAGER_COOLDOWN_SEC = int(os.getenv("MANAGER_COOLDOWN_SEC","45") or 45)
 
-# Redis (אופציונלי)
 REDIS_URL = os.getenv("REDIS_URL") or ""
 NS = (os.getenv("REDIS_NAMESPACING") or "algogpt:v2").strip()
 RKEY = f"{NS}:grid"
@@ -50,12 +46,8 @@ try:
 except Exception:
     _redis = None
 
-# זיכרון פנימי (fallback)
-_mem: Dict[str, Dict[str, Any]] = {}  # key = symbol
+_mem: Dict[str, Dict[str, Any]] = {}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Binance helpers
-# ──────────────────────────────────────────────────────────────────────────────
 from utils.binance_client import (
     futures_position_risk,
     place_stop_market,
@@ -66,9 +58,6 @@ from utils.binance_client import (
     cancel_open_orders,
 )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Store / Load (Redis + fallback)
-# ──────────────────────────────────────────────────────────────────────────────
 def _save_state(sym: str, st: Dict[str, Any]) -> None:
     st = dict(st or {})
     st["ts"] = time.time()
@@ -100,9 +89,6 @@ def _del_state(sym: str) -> None:
     except Exception:
         pass
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Precision helpers
-# ──────────────────────────────────────────────────────────────────────────────
 def _align(symbol: str, px: float, close_side: str) -> float:
     qpx, _ = apply_price_tick_side(px, symbol, close_side)
     return float(qpx)
@@ -128,9 +114,6 @@ def _fresh_mark(symbol: str) -> Optional[float]:
     except Exception:
         return None
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Targets computation
-# ──────────────────────────────────────────────────────────────────────────────
 def compute_targets(entry: float, atr: float, side: str) -> Tuple[float,float,float,float]:
     if atr <= 0 or entry <= 0: raise ValueError("bad entry/atr")
     s = side.upper()
@@ -146,15 +129,11 @@ def compute_targets(entry: float, atr: float, side: str) -> Tuple[float,float,fl
         sl0 = entry + TRAIL_ATR_MULT*atr
     return (float(tp1), float(tp2), float(tp3), float(sl0))
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Core: place grid (3×TP reduce-only) + base SL
-# ──────────────────────────────────────────────────────────────────────────────
 async def start_grid_for_position(symbol: str, *, use_indicators: bool=True) -> Dict[str, Any]:
     if not GRID_ENABLE:
         return {"ok": False, "error": "GRID_ENABLE=false"}
     symbol = symbol.upper().strip()
 
-    # position
     pos = None
     try:
         for p in futures_position_risk() or []:
@@ -175,7 +154,6 @@ async def start_grid_for_position(symbol: str, *, use_indicators: bool=True) -> 
     if qty_total <= 0 or entry <= 0:
         return {"ok": False, "error": "bad_qty_or_entry"}
 
-    # ATR
     atr = 0.0
     if use_indicators:
         try:
@@ -246,7 +224,6 @@ async def start_grid_for_position(symbol: str, *, use_indicators: bool=True) -> 
     }
     _save_state(symbol, state)
 
-    # ← הודעת "חימוש" לגריד
     try:
         if qty_total > 0:
             tg_grid(
@@ -260,9 +237,6 @@ async def start_grid_for_position(symbol: str, *, use_indicators: bool=True) -> 
     ok = (placed["tp1"] or q1==0) and (placed["tp2"] or q2==0) and (placed["tp3"] or q3==0)
     return {"ok": bool(ok), "state": state, "errors": errors}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# User-Data Stream hook
-# ──────────────────────────────────────────────────────────────────────────────
 def on_user_stream_event(evt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         if not evt or str(evt.get("e","")) != "ORDER_TRADE_UPDATE":
@@ -312,7 +286,6 @@ def on_user_stream_event(evt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             except Exception:
                 pass
             _del_state(symbol)
-            # הודעה על סיום גריד
             try: tg_grid(f"{symbol} • TP3 hit → grid done (remaining orders cancelled)")
             except Exception: pass
             return {"symbol":symbol,"stage":stage,"action":"grid_done"}
@@ -333,7 +306,6 @@ def on_user_stream_event(evt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 qty_total = float(st["qty_total"] or 0.0)
                 place_stop_market(symbol, close_side, float(new_sl), float(qty_total), reduce_only=True)
 
-                # הודעות TP1/TP2
                 try:
                     if stage == 1 and STREAM_TP_BE:
                         tg_grid(f"{symbol} • TP1 hit → SL→BE @ {float(new_sl):.6f}")
@@ -355,9 +327,6 @@ def on_user_stream_event(evt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         logger.error({"event":"grid_stream_handler_failed","error":str(e)})
         return {"error": str(e)}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Recon / cancel / ensure
-# ──────────────────────────────────────────────────────────────────────────────
 async def reconcile(symbol: str) -> Dict[str, Any]:
     symbol = symbol.upper().strip()
     st = _load_state(symbol)
