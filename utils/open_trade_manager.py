@@ -1,7 +1,7 @@
 # utils/open_trade_manager.py
 from __future__ import annotations
 import os, time, asyncio, logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 import requests
 import pandas as pd
@@ -12,13 +12,21 @@ from utils.ws_fallback import get_price, is_price_fresh
 from utils.precision_utils import apply_price_tick_side
 from utils.binance_client import (
     futures_mark_price,
-    place_stop_market,
+    place_stop_market_order as _place_stop_market_order,  # alias פנימי
     place_take_profit_market,
     get_open_orders, cancel_order, cancel_open_orders,
-    futures_position_risk
+    futures_position_risk,
 )
 
 logger = logging.getLogger("algogpt.open_trade_manager")
+
+# חשיפת alias בשם ההיסטורי שבו שאר הקוד משתמש
+def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float,
+                      reduce_only: bool = True, client_order_id: Optional[str] = None) -> Dict[str, Any]:
+    return _place_stop_market_order(
+        symbol=symbol, side=side, stop_price=stop_price, quantity=quantity,
+        reduce_only=reduce_only, client_order_id=client_order_id
+    )
 
 # ===== ENV =====
 def _as_bool(s: Optional[str], default=False) -> bool:
@@ -31,21 +39,20 @@ def _as_int(s: Optional[str], default: int) -> int:
     except: return default
 
 # Chop / Momentum
-CHOP_DETECT_ENABLE   = _as_bool(os.getenv("CHOP_DETECT_ENABLE","true"), True)
-CHOP_ADX_MAX         = _as_float(os.getenv("CHOP_ADX_MAX","18"), 18.0)
+CHOP_DETECT_ENABLE     = _as_bool(os.getenv("CHOP_DETECT_ENABLE","true"), True)
+CHOP_ADX_MAX           = _as_float(os.getenv("CHOP_ADX_MAX","18"), 18.0)
 CHOP_MACD_HIST_ABS_MAX = _as_float(os.getenv("CHOP_MACD_HIST_ABS_MAX","0.05"), 0.05)
 CHOP_BB_WIDTH_PCT_MAX  = _as_float(os.getenv("CHOP_BB_WIDTH_PCT_MAX","0.9"), 0.9)
-CHOP_MIN_BARS        = _as_int(os.getenv("CHOP_MIN_BARS","6"), 6)
-CHOP_TIME_LIMIT_MIN  = _as_int(os.getenv("CHOP_TIME_LIMIT_MIN","45"), 45)
-CHOP_ACTION          = (os.getenv("CHOP_ACTION","to_breakeven") or "to_breakeven").strip()  # to_breakeven|partial_exit|full_exit
-CHOP_PARTIAL_PCT     = _as_float(os.getenv("CHOP_PARTIAL_PCT","0.33"), 0.33)
+CHOP_MIN_BARS          = _as_int(os.getenv("CHOP_MIN_BARS","6"), 6)
+CHOP_TIME_LIMIT_MIN    = _as_int(os.getenv("CHOP_TIME_LIMIT_MIN","45"), 45)
+CHOP_ACTION            = (os.getenv("CHOP_ACTION","to_breakeven") or "to_breakeven").strip()
+CHOP_PARTIAL_PCT       = _as_float(os.getenv("CHOP_PARTIAL_PCT","0.33"), 0.33)
 
 # Breakeven & Trailing
-BE_ARM_PCT           = _as_float(os.getenv("BE_ARM_PCT","1.6"), 1.6)  # % מהכניסה
-TRAIL_ATR_MULT       = _as_float(os.getenv("TRAIL_ATR_MULT", str(cfg.STOP_LOSS_ATR_MULTIPLIER)), cfg.STOP_LOSS_ATR_MULTIPLIER)
+BE_ARM_PCT       = _as_float(os.getenv("BE_ARM_PCT","1.6"), 1.6)
+TRAIL_ATR_MULT   = _as_float(os.getenv("TRAIL_ATR_MULT", str(getattr(cfg, "STOP_LOSS_ATR_MULTIPLIER", 1.5))), 1.5)
 
-# Momentum lock & TP shift
-MOMENTUM_LOCK_MIN_BARS = _as_int(os.getenv("MOMENTUM_LOCK_MIN_BARS","3"), 3)
+# Momentum lock & TP widen
 MOMENTUM_TP_SHIFT_ATR  = _as_float(os.getenv("MOMENTUM_TP_SHIFT","0.5"), 0.5)
 
 # Cooldown / noise control
@@ -53,20 +60,19 @@ MANAGER_COOLDOWN_SEC = _as_int(os.getenv("MANAGER_COOLDOWN_SEC","45"), 45)
 MIN_TP_SL_DIFF_PCT   = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT","0.15"), 0.15)
 
 # Grid TP config
-GRID_ENABLE          = _as_bool(os.getenv("GRID_ENABLE","true"), True)
-GRID_TP1_ATR         = _as_float(os.getenv("GRID_TP1_ATR","1.0"), 1.0)
-GRID_TP2_ATR         = _as_float(os.getenv("GRID_TP2_ATR","1.8"), 1.8)
-GRID_TP3_ATR         = _as_float(os.getenv("GRID_TP3_ATR","2.6"), 2.6)
-GRID_SPLIT_1         = _as_float(os.getenv("GRID_SPLIT_1","0.33"), 0.33)
-GRID_SPLIT_2         = _as_float(os.getenv("GRID_SPLIT_2","0.33"), 0.33)
-GRID_SPLIT_3         = _as_float(os.getenv("GRID_SPLIT_3","0.34"), 0.34)
+GRID_ENABLE  = _as_bool(os.getenv("GRID_ENABLE","true"), True)
+GRID_TP1_ATR = _as_float(os.getenv("GRID_TP1_ATR","1.0"), 1.0)
+GRID_TP2_ATR = _as_float(os.getenv("GRID_TP2_ATR","1.8"), 1.8)
+GRID_TP3_ATR = _as_float(os.getenv("GRID_TP3_ATR","2.6"), 2.6)
+GRID_SPLIT_1 = _as_float(os.getenv("GRID_SPLIT_1","0.33"), 0.33)
+GRID_SPLIT_2 = _as_float(os.getenv("GRID_SPLIT_2","0.33"), 0.33)
+GRID_SPLIT_3 = _as_float(os.getenv("GRID_SPLIT_3","0.34"), 0.34)
 
-FUTURES_BASE = cfg.BINANCE_FUTURES_HTTP_BASE
-KL_INTERVAL  = os.getenv("MANAGER_SCAN_INTERVAL", cfg.DEFAULT_INTERVAL)  # 15m
+FUTURES_BASE = getattr(cfg, "BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+KL_INTERVAL  = os.getenv("MANAGER_SCAN_INTERVAL", getattr(cfg, "DEFAULT_INTERVAL", "15m"))
 KL_LIMIT     = _as_int(os.getenv("MANAGER_SCAN_LIMIT","200"), 200)
 
 _last_touch: Dict[str, float] = {}
-_lock_momentum_until: Dict[str, int] = {}
 
 def _fresh_price(symbol: str) -> Optional[float]:
     if is_price_fresh(symbol, max_age_sec=int(os.getenv("PRICE_MAX_AGE_SEC","10"))):
@@ -120,7 +126,7 @@ async def _klines_df(symbol: str) -> pd.DataFrame:
 
 def _ensure_grid_orders(sym: str, side_u: str, entry: float, atr: float, qty: float) -> Optional[str]:
     """
-    אם אין TP Reduce-Only פתוחים – יצור 3 TP כ-TAKE_PROFIT_MARKET עם clientOrderId מסומן.
+    אם אין TP Reduce-Only פתוחים – יצירת 3×TP MARKER עם clientOrderId מסומן.
     """
     try:
         oo = get_open_orders(sym) or []
@@ -135,7 +141,7 @@ def _ensure_grid_orders(sym: str, side_u: str, entry: float, atr: float, qty: fl
     sgn = 1.0 if side_u in ("BUY","LONG") else -1.0
     targets = [entry + sgn*GRID_TP1_ATR*atr, entry + sgn*GRID_TP2_ATR*atr, entry + sgn*GRID_TP3_ATR*atr]
     splits  = [GRID_SPLIT_1, GRID_SPLIT_2, GRID_SPLIT_3]
-    labels  = ["TP1_RO", "TP2_RO", "TP3_RO"]
+    labels  = ["GRID_TP1_RO", "GRID_TP2_RO", "GRID_TP3_RO"]
 
     changed = []
     for i in range(3):
@@ -144,11 +150,9 @@ def _ensure_grid_orders(sym: str, side_u: str, entry: float, atr: float, qty: fl
         q = max(0.0, qty * pct)
         px, _ = apply_price_tick_side(tgt, sym, close_side)
         try:
-            # ננסה להעביר label דרך clientOrderId אם הפונקציה תומכת
             place_take_profit_market(sym, close_side, float(px), float(q), reduce_only=True, client_order_id=lab)
             changed.append(lab)
         except TypeError:
-            # חתימה ללא client_order_id
             place_take_profit_market(sym, close_side, float(px), float(q), reduce_only=True)
             changed.append(lab)
         except Exception as e:
@@ -176,7 +180,6 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
     side_u = side.upper()
     close_side = _side_to_close(side_u)
 
-    # cooldown
     last = _last_touch.get(sym, 0.0)
     if (time.time() - last) < MANAGER_COOLDOWN_SEC:
         return {"symbol": sym, "skipped": "cooldown"}
@@ -206,7 +209,7 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
         except Exception as e:
             logger.warning({"event":"grid_ensure_error","symbol":sym,"err":str(e)})
 
-    # BE / Trail SL
+    # SL → BE/Trail
     if side_u in ("BUY","LONG"):
         trail_sl_raw = px - (TRAIL_ATR_MULT * atr)
         be_px = max(entry, trail_sl_raw)
@@ -216,13 +219,13 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
         be_px = min(entry, trail_sl_raw)
         desired_sl, _ = apply_price_tick_side(be_px, sym, close_side)
 
-    # Momentum → מרחיק TP (במידה ואין TP ל-grid)
+    # TP הרחבה מבוקרת (אם אין Grid TP לכל הכמות)
     sgn = 1.0 if side_u in ("BUY","LONG") else -1.0
     base_tp = entry + sgn * 2.0 * atr
     tp_shift = (MOMENTUM_TP_SHIFT_ATR * atr) if _momentum_ok(side_u, row) else 0.0
     desired_tp, _ = apply_price_tick_side(base_tp + tp_shift, sym, close_side)
 
-    # Chop handling
+    # Chop handling (קיצור חיים בדשדוש)
     is_chop = _chop_now(tail)
     pnl_pct = _pct(entry, px) if side_u in ("BUY","LONG") else _pct(px, entry)
     chop_action_taken = None
@@ -231,7 +234,6 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
             desired_sl, _ = apply_price_tick_side(entry, sym, close_side)
             chop_action_taken = "SL->BE"
         elif CHOP_ACTION == "partial_exit" and pnl_pct >= 0.0:
-            # לקרב TP לחלק מהכמות – אם grid פעיל, כבר יש חלקים; אחרת, נניח TP קרוב על כל הכמות
             near_tp, _ = apply_price_tick_side(entry + (sgn*0.5*atr), sym, close_side)
             try:
                 place_take_profit_market(sym, close_side, float(near_tp), float(qty*CHOP_PARTIAL_PCT), reduce_only=True)
@@ -246,14 +248,13 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
             except Exception as e:
                 logger.warning({"event":"full_exit_failed","symbol":sym,"err":str(e)})
 
-    # הצמדת SL/TP (רק אם ALLOW_MANAGE_OPEN_TRADES=true)
     if not _as_bool(os.getenv("ALLOW_MANAGE_OPEN_TRADES","true"), True):
         return {"symbol": sym, "skipped": "ALLOW_MANAGE_OPEN_TRADES=false"}
 
     changed = False
     errors: List[str] = []
 
-    # עדכון SL (מוחק קודם SL RO אם יש)
+    # הזמנות קיימות
     try:
         oo = get_open_orders(sym) or []
     except Exception:
@@ -269,7 +270,7 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
         elif ty.startswith("TAKE_PROFIT"):
             tp_orders.append(o)
 
-    # move SL
+    # הזזת SL (idempotent: מבטל ואז מציב)
     try:
         if sl_order_id:
             cancel_order(sym, sl_order_id)
@@ -278,7 +279,7 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
     except Exception as e:
         errors.append(f"sl_update_failed:{e}")
 
-    # אם אין Grid פעיל – נצמיד TP גלובלי (לכל הכמות)
+    # TP גלובלי רק אם אין Grid פעיל
     if GRID_ENABLE is False and not tp_orders:
         try:
             place_take_profit_market(sym, close_side, float(desired_tp), float(qty), reduce_only=True)
@@ -308,6 +309,7 @@ async def manage_open_trades() -> Dict[str, Any]:
             details.append({"symbol": p.get("symbol","?"), "error": str(e)})
     changed = sum(1 for d in details if d.get("changed"))
     return {"ok": True, "managed": len(details), "changed": changed, "details": details}
+
 
 
 
