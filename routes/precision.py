@@ -28,13 +28,12 @@ def api_price_tick(
     price: float = Query(..., description="raw price"),
     side: Optional[str] = Query(None, description="BUY/SELL (אם לא הועבר → floor רגיל)"),
 ) -> Dict[str, Any]:
-    """עיגון מחיר ל-tickSize (עם BUY=down / SELL=up אם side הועבר)"""
+    """עיגון מחיר ל-tickSize (BUY=down / SELL=up אם side קיים)"""
     s = (side or "").upper().strip()
     if s in ("BUY", "SELL"):
         dec, s_fmt = apply_price_tick_side(price, symbol, s)
     else:
-        # בלי כיוון – נשתמש בביצה של BUY (floor)
-        dec, s_fmt = apply_price_tick_side(price, symbol, "BUY")
+        dec, s_fmt = apply_price_tick_side(price, symbol, "BUY")  # floor רגיל
     return {"ok": True, "symbol": symbol.upper(), "side": s or None, "in": price, "out": dec, "out_str": s_fmt}
 
 @router.get("/qty_from_budget")
@@ -49,6 +48,7 @@ def api_qty_from_budget(
     """
     res = calc_quantity_from_budget(symbol, price=price, budget_usd=budget, leverage=leverage)
     return {"ok": bool(res.get("ok")), "symbol": symbol.upper(), **res}
+
 
 
 
