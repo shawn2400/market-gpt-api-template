@@ -1,265 +1,3 @@
-# utils/auto\_executor.py
-
-```python
-from __future__ import annotations
-import asyncio
-import logging
-import os
-import time
-from collections import deque
-from typing import Optional, Dict, Any
-
-import pandas as pd
-
-from utils import config as cfg
-from utils.indicators import prepare_indicators_for_backtest
-from utils.binance_client import get_klines_df
-from utils.anchor import evaluate_anchor
-from utils.trade_executor import execute_trade_live
-from utils.ws_fallback import get_price as ws_get_price
-
-logger = logging.getLogger("algogpt.autoexec")
-
-EXECUTOR_RUNNING = False
-EXECUTOR_LAST_TS: Optional[float] = None
-EXECUTOR_LOGS: deque[dict] = deque(maxlen=300)
-
-INTERVAL = os.getenv("DEFAULT_INTERVAL", getattr(cfg, "DEFAULT_INTERVAL", "15m"))
-SCAN_INTERVAL = getattr(cfg, "SCAN_INTERVAL", 60)
-MAX_TRADES_PER_TICK = int(os.getenv("MAX_TRADES_PER_TICK", "1"))
-SYMBOL_COOLDOWN_SEC = int(os.getenv("SYMBOL_COOLDOWN_SEC", "600"))
-
-# סף איכות – נלקח מה-ENV דרך cfg; מומלץ להגדיר ל-8.5
-QUALITY_THRESHOLD = max(0.0, float(os.getenv("MIN_QUALITY_SCORE", str(getattr(cfg, "MIN_QUALITY_SCORE", 8.5)))))
-
-_last_trade_ts: Dict[str, float] = {}
-
-
-def _log(event: str, level: str = "INFO", **kw):
-    rec = {"event": event, **kw, "ts": time.time(), "level": level}
-    EXECUTOR_LOGS.append(rec)
-    getattr(logger, level.lower(), logger.info)(rec)
-
-
-def _decide_side(row: Dict[str, Any]) -> Optional[str]:
-    e21, e50 = row.get("ema_21"), row.get("ema_50")
-    if e21 is None or e50 is None:
-        return None
-    if e21 > e50:
-        return "LONG"
-    if e21 < e50:
-        return "SHORT"
-    return None
-
-
-def _quality_score(row: Dict[str, Any], side: str) -> float:
-    """ציון 0–10 שמרני: טרנד + מומנטום + תנודתיות בריאה."""
-    score = 0.0
-    # טרנד
-    if side == "LONG" and row.get("ema_21", 0) > row.get("ema_50", 0):
-        score += 3.0
-    if side == "SHORT" and row.get("ema_21", 0) < row.get("ema_50", 0):
-        score += 3.0
-    # מומנטום (MACD hist)
-    hist = float(row.get("macd_hist") or 0.0)
-    if (side == "LONG" and hist > 0) or (side == "SHORT" and hist < 0):
-        score += 2.0
-    # ADX (עוצמת מגמה)
-    adx_v = float(row.get("adx") or 0.0)
-    if adx_v >= 25:
-        score += 2.5
-    elif adx_v >= 20:
-        score += 1.5
-    # RSI: הימנעות מקיצון
-    rsi_v = float(row.get("rsi") or 50.0)
-    if 42 <= rsi_v <= 68:
-        score += 1.0
-    # נרשם ציון סופי [0,10]
-    return max(0.0, min(10.0, score))
-
-
-def _pick_leverage(adx_v: float) -> int:
-    # מינוף דינמי שמרני לפי חוזק מגמה (ADX)
-    base = 7
-    if adx_v >= 30:
-        base = 15
-    elif adx_v >= 25:
-        base = 12
-    elif adx_v >= 20:
-        base = 9
-    return int(max(getattr(cfg, "MIN_LEVERAGE", 5), min(base, getattr(cfg, "MAX_LEVERAGE", 35))))
-
-
-def _derive_sl_tp(entry: float, atr_v: float, side: str, adx_v: float) -> tuple[float, float]:
-    # SL לפי ATR×multiplier; TP דינמי: חזק → רחב יותר
-    sl_mult = float(getattr(cfg, "STOP_LOSS_ATR_MULTIPLIER", 1.5))
-    tp_mult = 3.5 if adx_v >= 25 else 2.5
-    if side == "LONG":
-        sl = entry - sl_mult * atr_v
-        tp = entry + tp_mult * atr_v
-    else:
-        sl = entry + sl_mult * atr_v
-        tp = entry - tp_mult * atr_v
-    return float(sl), float(tp)
-
-
-async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
-    try:
-        # Cooldown פר-סימבול
-        last = _last_trade_ts.get(symbol, 0.0)
-        if (time.time() - last) < SYMBOL_COOLDOWN_SEC:
-            _log("cooldown_skip", symbol=symbol)
-            return None
-
-        # נרות וּאינדים
-        df: pd.DataFrame = get_klines_df(symbol, interval=INTERVAL, limit=200)
-        if df is None or df.empty:
-            _log("no_klines", symbol=symbol, level="WARNING")
-            return None
-        ind = prepare_indicators_for_backtest(df)
-        if ind.empty:
-            _log("indicators_empty", symbol=symbol, level="WARNING")
-            return None
-        row = ind.iloc[-1].to_dict()
-
-        side = _decide_side(row)
-        if not side:
-            _log("no_side", symbol=symbol)
-            return None
-
-        # Anchor (BTC sentiment) – מחסום מאקרו
-        anchor = evaluate_anchor(side)
-        if not getattr(anchor, "allow", True):
-            _log("anchor_block", symbol=symbol, anchor=anchor.__dict__)
-            return None
-
-        # איכות
-        q = _quality_score(row, side)
-        if q < QUALITY_THRESHOLD:
-            _log("quality_below_threshold", symbol=symbol, score=q, thr=QUALITY_THRESHOLD)
-            return None
-
-        entry = float(row.get("close") or df["close"].iloc[-1])
-        atr_v = float(row.get("atr") or 0.0)
-        adx_v = float(row.get("adx") or 0.0)
-        if entry <= 0 or atr_v <= 0:
-            _log("bad_entry_atr", symbol=symbol, entry=entry, atr=atr_v, level="WARNING")
-            return None
-
-        sl, tp = _derive_sl_tp(entry, atr_v, side, adx_v)
-        lev = _pick_leverage(adx_v)
-
-        return {
-            "symbol": symbol,
-            "side": side,
-            "entry": entry,
-            "sl": sl,
-            "tp": tp,
-            "leverage": lev,
-            "score": q,
-            "adx": adx_v,
-            "atr": atr_v,
-        }
-    except Exception as e:
-        _log("scan_error", symbol=symbol, error=str(e), level="ERROR")
-        return None
-
-
-async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    dry = not getattr(cfg, "EXECUTE_TRADES", False)
-    resp = await execute_trade_live(
-        symbol=plan["symbol"],
-        side=plan["side"],
-        budget=float(getattr(cfg, "MAX_TRADE_BUDGET", 100.0)),
-        leverage=int(plan["leverage"]),
-        entry=float(plan["entry"]),
-        sl=float(plan["sl"]),
-        tp=float(plan["tp"]),
-        dry_run=dry,
-    )
-    ok = bool(resp.get("ok"))
-    if ok:
-        _last_trade_ts[plan["symbol"]] = time.time()
-    return resp
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# לולאת האקסקיוטר
-# ──────────────────────────────────────────────────────────────────────────────
-async def auto_scan_and_trade():
-    global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
-    EXECUTOR_RUNNING = True
-    try:
-        watchlist = [s.upper() for s in getattr(cfg, "WATCHLIST", ["BTCUSDT","ETHUSDT"]) if isinstance(s, str)]
-        if "BTCUSDT" not in watchlist:
-            watchlist.insert(0, "BTCUSDT")
-
-        while EXECUTOR_RUNNING:
-            EXECUTOR_LAST_TS = time.time()
-            _log("tick_start", list=watchlist)
-
-            # לסריקה, נעצור במס' טריידים מקסימלי בטיק
-            sent = 0
-            for sym in watchlist:
-                if sent >= MAX_TRADES_PER_TICK:
-                    break
-                plan = await _scan_symbol(sym)
-                if not plan:
-                    continue
-                resp = await _execute_plan(plan)
-                _log("trade_attempt", symbol=sym, plan=plan, resp_ok=bool(resp.get("ok")))
-                if resp.get("ok"):
-                    sent += 1
-
-            # קריאת ניהול חי (אם מופעלת בקונפיג)
-            try:
-                from utils.open_trade_manager import manage_open_trades
-                if getattr(cfg, "ALLOW_MANAGE_OPEN_TRADES", True):
-                    await manage_open_trades(loop=False)
-            except Exception as e:
-                _log("manage_call_error", error=str(e), level="WARNING")
-
-            await asyncio.sleep(SCAN_INTERVAL)
-    finally:
-        EXECUTOR_RUNNING = False
-        EXECUTOR_LAST_TS = None
-        _log("executor_stopped")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# API להפעלה/עצירה מבחוץ
-# ──────────────────────────────────────────────────────────────────────────────
-def is_executor_running() -> bool:
-    return EXECUTOR_RUNNING
-
-
-def start_executor():
-    global EXECUTOR_RUNNING
-    if EXECUTOR_RUNNING:
-        _log("executor_already_running")
-        return
-    _log("executor_starting")
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        loop.create_task(auto_scan_and_trade())
-    else:
-        loop.run_until_complete(auto_scan_and_trade())
-
-
-def stop_executor():
-    global EXECUTOR_RUNNING
-    if EXECUTOR_RUNNING:
-        EXECUTOR_RUNNING = False
-        _log("executor_stopping")
-    else:
-        _log("executor_not_running")
-```
-
----
-
-# main.py (מעודכן להוספת ניהול חי של טריידים)
-
-```python
 # main.py
 from __future__ import annotations
 
@@ -311,7 +49,8 @@ from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
 from utils.auth import extract_token, allow_all, token_matches
 
-# ⬇️ חדש: ייבוא מנהל הטריידים החי והאקסקיוטר
+# חדש:
+from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor, is_executor_running
 
@@ -359,17 +98,15 @@ try:
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
-# ---------- Auth middleware ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
         "/", "/openapi.json",
         "/health", "/health/live", "/health_full",
         "/docs", "/redoc",
-        "/telegram/webhook",  # webhook ציבורי; מאומת בכותרת
+        "/telegram/webhook",
     }
     PUBLIC_PREFIXES = ["/price", "/static/"]
-
     path = request.url.path
     if request.method.upper() == "OPTIONS":
         return await call_next(request)
@@ -377,18 +114,12 @@ async def validate_token(request: Request, call_next):
         return await call_next(request)
     if allow_all():
         return await call_next(request)
-
-    auth_header = request.headers.get("Authorization", "")
-    token = extract_token(
-        request,
-        authorization=auth_header,
-        x_api_key=request.headers.get("X-API-Key"),
-    )
+    token = extract_token(request, authorization=request.headers.get("Authorization",""),
+                          x_api_key=request.headers.get("X-API-Key"))
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ---------- Routers ----------
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
         mod = __import__(module_path, fromlist=[attr])
@@ -418,33 +149,30 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.grid", "router"),
     ("routes.debug", "router"),
     ("routes.indicators", "router"),
-    ("routes.telegram_bot", "router"),         # מאובטח: /telegram/set-webhook
-    ("routes.telegram_bot", "router_public"),  # ציבורי:  /telegram/webhook
-    ("routes.orderbook", "router"),            # עומק/לחץ ספר פקודות
-    ("routes.metrics_extra", "router"),        # Long/Short Ratio, Delta Volume, Funding Heatmap
-    ("routes.indicators_extra", "router"),     # VWAP / OBV / CVD
-    ("routes.precision", "router"),            # Quantize
-    ("routes.alerts", "router"),               # התראות
+    ("routes.telegram_bot", "router"),
+    ("routes.telegram_bot", "router_public"),
+    ("routes.orderbook", "router"),
+    ("routes.metrics_extra", "router"),
+    ("routes.indicators_extra", "router"),
+    ("routes.precision", "router"),
+    ("routes.alerts", "router"),
 ]
-for mod, attr in CORE_ROUTERS:
-    _include_router(mod, attr)
-for mod, attr in EXTRA_ROUTERS:
-    _include_router(mod, attr)
+for mod, attr in CORE_ROUTERS: _include_router(mod, attr)
+for mod, attr in EXTRA_ROUTERS: _include_router(mod, attr)
 
-# ---------- Root & Health ----------
-@app.get("/", tags=["Config"]) 
+@app.get("/", tags=["Config"])
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
 
-@app.get("/health", tags=["Health"]) 
+@app.get("/health", tags=["Health"])
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
 
-@app.get("/health/live", tags=["Health"]) 
+@app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"ok": True, "status": "live"}
 
-@app.get("/health_full", tags=["Health"]) 
+@app.get("/health_full", tags=["Health"])
 async def health_full():
     from utils.ws_fallback import is_price_fresh, get_price
     from utils.binance_client import fapi_ping, futures_balance, start_user_stream_keepalive
@@ -473,23 +201,14 @@ async def health_full():
         logger.warning({"event": "health_listenkey_error", "error": str(e)})
 
     symbols = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
-    prices: Dict[str, Any] = {}
-    for sym in symbols:
-        prices[sym] = {
-            "fresh": is_price_fresh(sym, max_age_sec=int(os.getenv("HEALTH_PRICE_MAX_AGE", "30"))),
-            "price": get_price(sym),
-        }
+    prices: Dict[str, Any] = {sym: {"fresh": is_price_fresh(sym, max_age_sec=int(os.getenv("HEALTH_PRICE_MAX_AGE", "30"))),
+                                     "price": get_price(sym)} for sym in symbols}
 
     return {
         "ok": bool((key_len == 64) and (sec_len == 64) and account_ok),
         "version": APP_VERSION,
-        "binance": {
-            "key_len": key_len,
-            "secret_len": sec_len,
-            "fapi_time_ok": ping_ok,
-            "account_ok": account_ok,
-            "listenKey_ok": listen_key_ok,
-        },
+        "binance": {"key_len": key_len, "secret_len": sec_len, "fapi_time_ok": ping_ok,
+                    "account_ok": account_ok, "listenKey_ok": listen_key_ok},
         "prices": prices,
         "time": datetime.now(timezone.utc).isoformat(),
     }
@@ -506,7 +225,7 @@ async def handle_exception(request: Request, exc: Exception):
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 _price_task: Optional[asyncio.Task] = None
-_manager_task: Optional[asyncio.Task] = None  # ⬅️ חדש
+_manager_task: Optional[asyncio.Task] = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -529,35 +248,39 @@ async def startup_event():
     rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
     if syms:
         try:
-            _price_task = asyncio.create_task(
-                auto_price_updater(syms, ws_interval_keepalive=ws_keepalive, rest_interval_sec=rest_every)
-            )
+            _price_task = asyncio.create_task(auto_price_updater(syms, ws_interval_keepalive=ws_keepalive, rest_interval_sec=rest_every))
             logger.info({"event": "price_updater_started", "symbols": syms, "ws_keepalive": ws_keepalive, "rest_every": rest_every})
         except Exception as e:
             logger.warning({"event": "price_updater_failed_start", "error": str(e)})
 
+    # ⬇️ user-data stream consumer
+    try:
+        await start_user_stream_consumer()
+        logger.info({"event":"user_stream_consumer_started"})
+    except Exception as e:
+        logger.warning({"event":"user_stream_consumer_failed_start","error":str(e)})
+
 @app.on_event("shutdown")
 async def shutdown_event():
     global _price_task, _manager_task
+    try:
+        await stop_user_stream_consumer()
+    except Exception as e:
+        logger.warning({"event":"user_stream_consumer_stop_error","error":str(e)})
     try:
         stop_user_stream()
         logger.info({"event": "listen_key_keepalive_stopped"})
     except Exception as e:
         logger.warning({"event": "listen_key_keepalive_stop_error", "error": str(e)})
     if _price_task:
-        try:
-            _price_task.cancel()
-        except Exception:
-            pass
+        try: _price_task.cancel()
+        except Exception: pass
         _price_task = None
     if _manager_task:
-        try:
-            _manager_task.cancel()
-        except Exception:
-            pass
+        try: _manager_task.cancel()
+        except Exception: pass
         _manager_task = None
 
-# ⬇️ אנדפוינטים חדשים לבקרת האוטומציה (ללא עומס כברירת מחדל)
 @app.post("/start-executor", tags=["Executor"])
 async def api_start_executor():
     try:
@@ -579,38 +302,10 @@ async def api_stop_executor():
 @app.post("/manage-once", tags=["Manager"])
 async def api_manage_once():
     try:
-        await manage_open_trades(loop=False)
+        await manage_open_trades()
         return {"ok": True, "msg": "managed once"}
     except Exception as e:
         logger.exception("manage-once failed")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-@app.post("/start-manager", tags=["Manager"])
-async def api_start_manager(interval: Optional[int] = None):
-    global _manager_task
-    if _manager_task and not _manager_task.done():
-        return JSONResponse({"ok": False, "error": "manager already running"}, status_code=409)
-
-    async def _bg():
-        await manage_open_trades(loop=True, interval=interval)
-
-    try:
-        _manager_task = asyncio.create_task(_bg())
-        return {"ok": True, "msg": "manager started", "interval": interval or getattr(cfg, "PRICE_MONITOR_INTERVAL", 30)}
-    except Exception as e:
-        logger.exception("start-manager failed")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-@app.post("/stop-manager", tags=["Manager"])
-async def api_stop_manager():
-    global _manager_task
-    try:
-        if _manager_task and not _manager_task.done():
-            _manager_task.cancel()
-            _manager_task = None
-        return {"ok": True, "msg": "manager stopped"}
-    except Exception as e:
-        logger.exception("stop-manager failed")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 if __name__ == "__main__":
@@ -624,7 +319,8 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
-```
+
+
 
 
 
