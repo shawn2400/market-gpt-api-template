@@ -8,7 +8,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Set, Optional
 
-from utils.alerts import tg_rec  # ← חדש
+from utils.alerts import tg_rec
 
 logger = logging.getLogger("algogpt.reconcile")
 
@@ -90,7 +90,6 @@ async def reconcile_symbol(symbol: str) -> Dict[str, Any]:
         ok = bool(res.get("ok", True))
         restored = res.get("restored")
         errors = res.get("errors") if isinstance(res.get("errors"), list) else []
-        # חיווי קצר לטלגרם
         try:
             if ok:
                 tg_rec(f"Reconcile • {s} • ok (restored={restored})")
@@ -151,7 +150,6 @@ async def reconcile_after_restart(*, sleep_first: float = 0.0) -> Dict[str, Any]
     except Exception as e:
         logger.warning({"event":"cleanup_orphan_failed","error":str(e)})
 
-    # סיכום לטלגרם
     try:
         ok_cnt = sum(1 for r in results if r.get("ok"))
         err_cnt = sum(1 for r in results if not r.get("ok"))
