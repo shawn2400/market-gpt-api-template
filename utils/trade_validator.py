@@ -1,9 +1,16 @@
 # utils/trade_validator.py
 from __future__ import annotations
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 import os
+import math
 
-from utils.risk_rules import gate_trade, rr_from_levels, entry_gap_ok
+from utils.risk_rules import (
+    gate_trade,
+    rr_from_levels,
+    entry_gap_ok,
+    ENTRY_GAP_MAX_PCT,
+    ENTRY_GAP_WARN_PCT,
+)
 
 # =========================
 # Defaults / Tunables
@@ -32,9 +39,9 @@ def _is_directional_payload(p: Dict[str, Any]) -> bool:
 def _to_float(x: Any) -> Optional[float]:
     try:
         v = float(x)
-        if v == float("inf") or v == float("-inf"):
-            return None
-        return v
+        if math.isfinite(v):
+            return v
+        return None
     except Exception:
         return None
 
@@ -63,7 +70,7 @@ async def validate_proposal(
       2) הצעה לא-כיוונית/GRID:
          - לא נחסום; נחזיר ok=True + אזהרה רכה.
 
-    מחזיר:
+    פלט:
       {
         "ok": bool,
         "errors": List[str],
@@ -158,7 +165,8 @@ async def validate_proposal(
     # --------- בדיקות רכות משלימות (warnings בלבד) ---------
     # 1) RR בסיסי מה־levels – הצגת אזהרה אם נמוך מסף ידידותי
     try:
-        rr_val = rr_from_levels(side, entry, sl, tp1)  # סוגר בעצמו לונג/שורט
+        # NOTE: rr_from_levels(entry, sl, tp1) — אינו תלוי side (יחס מוחלט של Reward/Risk)
+        rr_val = rr_from_levels(entry, sl, tp1)
         meta["rr_basic"] = rr_val
         if rr_val is not None and rr_val < RR_WARN_THRESHOLD:
             warnings.append(f"RR is modest (~{rr_val:.2f} < {RR_WARN_THRESHOLD:.2f})")
@@ -167,22 +175,28 @@ async def validate_proposal(
         pass
 
     # 2) מרחק כניסה מהמחיר הנוכחי – אם יש price
-    if price is not None and price > 0:
+    if price is not None and price > 0 and entry is not None:
         try:
-            eg_ok, eg_pct = entry_gap_ok(symbol, side, price, entry)
+            # entry_gap_ok(price, entry [, max_gap_pct]) → bool
+            eg_ok = entry_gap_ok(price, entry, ENTRY_GAP_MAX_PCT)
+            eg_pct = abs(entry - price) / price * 100.0
             meta["entry_gap_pct_local"] = eg_pct
-            if not eg_ok:
-                # לא חוסם – gate_trade כבר קבע אם זה חמור
-                warnings.append(f"entry far from current (~{eg_pct:.3f}%)")
+            if eg_ok:
+                if eg_pct > ENTRY_GAP_WARN_PCT:
+                    warnings.append(f"entry somewhat far from current (~{eg_pct:.2f}%)")
+            else:
+                # לא חוסם כאן; gate_trade כבר קבע אם זה חמור
+                warnings.append(f"entry far from current (~{eg_pct:.2f}%)")
         except Exception:
             pass
 
         # 3) סטופ צמוד מדי למחיר הנוכחי (רק אינדיקטור)
         try:
-            stop_gap_pct = abs(entry - sl) / price * 100.0
-            meta["stop_gap_pct"] = stop_gap_pct
-            if stop_gap_pct < 0.15:
-                warnings.append(f"stop very tight (~{stop_gap_pct:.3f}%)")
+            stop_gap_pct = abs(entry - sl) / price * 100.0 if sl is not None else None
+            if stop_gap_pct is not None:
+                meta["stop_gap_pct"] = stop_gap_pct
+                if stop_gap_pct < 0.15:
+                    warnings.append(f"stop very tight (~{stop_gap_pct:.3f}%)")
         except Exception:
             pass
 
@@ -200,6 +214,7 @@ async def validate_proposal(
             **meta,
         },
     }
+
 
 
 
