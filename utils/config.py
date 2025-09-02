@@ -6,23 +6,23 @@ from typing import List
 # Helpers
 # ---------------------------
 def _as_bool(val: str | None, default: bool = False) -> bool:
-    if val is None: 
+    if val is None:
         return default
     return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
 def _as_int(val: str | None, default: int, min_v: int|None=None, max_v: int|None=None) -> int:
-    try: 
+    try:
         x = int(str(val).strip()) if val else default
-    except: 
+    except:
         x = default
     if min_v is not None and x < min_v: x = min_v
     if max_v is not None and x > max_v: x = max_v
     return x
 
 def _as_float(val: str | None, default: float, min_v: float|None=None, max_v: float|None=None) -> float:
-    try: 
+    try:
         x = float(str(val).strip()) if val else default
-    except: 
+    except:
         x = default
     if min_v is not None and x < min_v: x = min_v
     if max_v is not None and x > max_v: x = max_v
@@ -55,7 +55,7 @@ def _norm_intervals(items: List[str], fallback: List[str]) -> List[str]:
     for it in items:
         if _INTERVAL_RE.match(str(it).strip()):
             out.append(it.strip())
-        else: 
+        else:
             logging.warning(f"[CONFIG] Ignoring invalid interval '{it}'")
     return out or fallback
 
@@ -90,7 +90,8 @@ AUTO_RUN=_as_bool(os.getenv("AUTO_RUN"),False)
 MIN_LEVERAGE=_as_int(os.getenv("MIN_LEVERAGE"),5,1,125)
 MAX_LEVERAGE=_as_int(os.getenv("MAX_LEVERAGE"),35,MIN_LEVERAGE,125)
 MAX_TRADE_BUDGET=_as_float(os.getenv("MAX_TRADE_BUDGET"),100,1,1_000_000)
-MIN_QUALITY_SCORE=_as_float(os.getenv("MIN_QUALITY_SCORE"),6,0,10)
+# ברירת מחדל הועלתה ל-8.5 כדי להקשיח סינון אם אין .env
+MIN_QUALITY_SCORE=_as_float(os.getenv("MIN_QUALITY_SCORE"),8.5,0,10)
 SCAN_INTERVAL=_as_int(os.getenv("SCAN_INTERVAL"),60,10,3600)
 MIN_VOLUME=_as_float(os.getenv("MIN_VOLUME"),1_000_000,0,1e12)
 TRENDING_ONLY=_as_bool(os.getenv("TRENDING_ONLY"),False)
@@ -119,6 +120,9 @@ if BINANCE_MARGIN_TYPE_DEFAULT not in {"ISOLATED","CROSSED"}:
     logging.warning(f"[CONFIG] invalid margin {BINANCE_MARGIN_TYPE_DEFAULT}, forcing ISOLATED")
     BINANCE_MARGIN_TYPE_DEFAULT="ISOLATED"
 
+# Live management (חדש)
+ALLOW_MANAGE_OPEN_TRADES=_as_bool(os.getenv("ALLOW_MANAGE_OPEN_TRADES"), True)
+
 # OpenAI
 OPENAI_API_KEY=_clean_env("OPENAI_API_KEY")
 OPENAI_MODEL=_clean_env("OPENAI_MODEL") or "gpt-4o"
@@ -135,7 +139,7 @@ PRICE_MONITOR_DISABLE=_as_bool(os.getenv("PRICE_MONITOR_DISABLE"),False)
 
 # Logging
 LOG_LEVEL=(os.getenv("LOG_LEVEL") or "INFO").strip().upper()
-if LOG_LEVEL not in {"CRITICAL","ERROR","WARNING","INFO","DEBUG"}: 
+if LOG_LEVEL not in {"CRITICAL","ERROR","WARNING","INFO","DEBUG"}:
     LOG_LEVEL="INFO"
 
 # ---------------------------
@@ -147,7 +151,7 @@ def _validate_urls():
     _require_url("BINANCE_WS_BASE",BINANCE_WS_BASE,("wss://",))
     _require_url("BINANCE_FUTURES_WS_BASE",BINANCE_FUTURES_WS_BASE,("wss://",))
     for alt in BINANCE_FAPI_ALTS:
-        if not alt.startswith("https://"): 
+        if not alt.startswith("https://"):
             raise RuntimeError(f"❌ bad alt {alt}")
 
 def _validate_keys():
@@ -159,11 +163,11 @@ def _validate_keys():
         logging.warning("⚠️ ENABLE_AI_ROUTES=true but no OPENAI_API_KEY → AI disabled")
 
 def _validate_semantics():
-    if MIN_LEVERAGE>MAX_LEVERAGE: 
+    if MIN_LEVERAGE>MAX_LEVERAGE:
         raise RuntimeError("❌ MIN>MAX leverage")
-    if not INDICATOR_INTERVALS: 
+    if not INDICATOR_INTERVALS:
         raise RuntimeError("❌ No valid intervals")
-    if not WATCHLIST: 
+    if not WATCHLIST:
         raise RuntimeError("❌ Empty watchlist")
 
 def check_config():
@@ -178,14 +182,17 @@ def dump_config_sanitized()->dict:
         "watchlist":WATCHLIST,
         "intervals":INDICATOR_INTERVALS,
         "auto_run":AUTO_RUN,
+        "min_quality":MIN_QUALITY_SCORE,
         "max_leverage":MAX_LEVERAGE,
         "budget":MAX_TRADE_BUDGET,
         "exec_trades":EXECUTE_TRADES,
+        "allow_live_manage": ALLOW_MANAGE_OPEN_TRADES,
         "enable_ai":ENABLE_AI_ROUTES,
         "model":OPENAI_MODEL,
         "binance_key_len": len(BINANCE_API_KEY),
         "openai_key_len": len(OPENAI_API_KEY),
     }
+
 
 
 
