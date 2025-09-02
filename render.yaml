@@ -2,8 +2,7 @@ services:
   - type: web
     name: algogpt-docker
     runtime: docker
-    # כאן תשנה ל־pro/pro plus/pro max בהתאם למנוי
-    plan: pro  
+    plan: pro
     autoDeploy: false
     pullRequestPreviewsEnabled: false
 
@@ -13,41 +12,56 @@ services:
     dockerContext: .
 
     envVars:
-      # Render מזריק PORT אוטומטית; Dockerfile שלנו מקבע ל־10000
+      # Render מזריק PORT אוטומטית; אנחנו עוגנים ל-10000
       - key: PORT
         value: "10000"
 
-      # Workers דינמיים — 0 = auto לפי CPU (2*CPU+1)
-      # Starter (1 CPU) → 3 workers
-      # Pro Plus (4 CPU) → 9 workers
-      # Pro Max (4 CPU / 16GB) → עדיין 9 workers
-      # Pro Ultra (8 CPU / 32GB) → 17 workers
+      # כדי למנוע כפילויות של משימות רקע — שמור וורקר יחיד
       - key: WORKERS
-        value: "0"
+        value: "1"
 
-      # לוגים
       - key: LOG_LEVEL
         value: "INFO"
 
-      # CORS — בפרודקשן כדאי לשים whitelist של דומיינים מורשים
+      # CORS — בפרודקשן רצוי whitelist
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
       # גרסת האפליקציה
       - key: ALGOGPT_VERSION
-        value: "2.14.6"
+        value: "2.16.0"
 
       # WS / Price Monitor flags
       - key: WS_UPDATE_INTERVAL
         value: "15"
       - key: PRICE_MONITOR_INTERVAL
-        value: "30"
+        value: "60"   # ניהול חי כל 60ש'
       - key: PRICE_WS_FRESH_TTL
         value: "20"
       - key: PRICE_MONITOR_DISABLE
         value: "0"
 
-      # 🔑 מפתחות רגישים — להגדיר ב־Dashboard כ "Synced"
+      # ספים חשובים למסחר
+      - key: MIN_QUALITY_SCORE
+        value: "8.5"
+      - key: MAX_TRADES_PER_TICK
+        value: "1"
+      - key: SYMBOL_COOLDOWN_SEC
+        value: "600"
+      - key: DEFAULT_INTERVAL
+        value: "15m"
+      - key: WATCHLIST
+        value: "BTCUSDT,ETHUSDT,SOLUSDT"
+      - key: INDICATOR_INTERVALS
+        value: "15m,1h"
+      - key: ALLOW_MANAGE_OPEN_TRADES
+        value: "true"
+      - key: EXECUTE_TRADES
+        value: "true"
+      - key: BINANCE_MARGIN_TYPE_DEFAULT
+        value: "ISOLATED"
+
+      # 🔑 סודות — להגדיר ידנית ב-Render כ Synced=false ולהזין בדאשבורד
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -56,15 +70,18 @@ services:
         sync: false
       - key: API_BEARER_TOKEN
         sync: false
-
-      # Redis (בפרודקשן אמיתי רצוי לשים Redis חיצוני, לא dummy)
       - key: REDIS_URL
-        value: "redis://localhost:6379"
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
 
     disk:
       name: tmp
       mountPath: /tmp
       sizeGB: 1
+
 
 
 
