@@ -1,58 +1,62 @@
+# utils/indicators_extra.py
 from __future__ import annotations
+from typing import Dict, Any, Optional
 import pandas as pd
-from ta.trend import EMAIndicator, ADXIndicator
-from ta.momentum import StochasticOscillator
-from utils.indicators import prepare_indicators_for_backtest
+import httpx
+import math, os
 
-def add_extended_indicators(
-    df: pd.DataFrame,
-    *, ema_fast: int = 21, ema_slow: int = 50, adx_len: int = 14,
-    st_period: int = 10, st_factor: float = 3.0,
-    ichimoku_conv: int = 9, ichimoku_base: int = 26, ichimoku_span_b: int = 52,
-    ms_lookback: int = 5, ms_pivot_span: int = 3,
-) -> pd.DataFrame:
-    base = prepare_indicators_for_backtest(df)
-    if base.empty:
-        return base
+from utils.get_klines import get_klines as _get_klines_sync
 
-    close = base["close"]; high = base["high"]; low = base["low"]
+_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 
-    base["ema_fast"] = EMAIndicator(close, window=int(ema_fast)).ema_indicator()
-    base["ema_slow"] = EMAIndicator(close, window=int(ema_slow)).ema_indicator()
-    base["adx"] = ADXIndicator(high=high, low=low, close=close, window=int(adx_len)).adx()
+def _safe_float(x) -> float:
+    try: return float(x)
+    except Exception: return math.nan
 
-    stoch = StochasticOscillator(high=high, low=low, close=close, window=14, smooth_window=3)
-    base["stoch_k"] = stoch.stoch()
-    base["stoch_d"] = stoch.stoch_signal()
+def compute_vwap(df: pd.DataFrame) -> float:
+    # Typical price = (H+L+C)/3
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    vwap = (tp * df["volume"]).sum() / max(1e-12, df["volume"].sum())
+    return float(vwap)
 
-    base["trending"] = (base["adx"] > 20) & (abs(base["ema_fast"] - base["ema_slow"]) / base["close"] > 0.002)
-    base["trend_dir"] = pd.Series("FLAT", index=base.index)
-    base.loc[base["ema_fast"] > base["ema_slow"], "trend_dir"] = "UP"
-    base.loc[base["ema_fast"] < base["ema_slow"], "trend_dir"] = "DOWN"
+def compute_obv(df: pd.DataFrame) -> float:
+    close = df["close"].values
+    vol = df["volume"].values
+    obv = 0.0
+    for i in range(1, len(close)):
+        if close[i] > close[i-1]: obv += vol[i]
+        elif close[i] < close[i-1]: obv -= vol[i]
+    return float(obv)
 
-    base["ichimoku_state"] = "NEUTRAL"
-    base["ms_trend"] = base["trend_dir"]
-    base["supertrend"] = base["ema_fast"]  # placeholder
+def compute_cvd_from_trades(symbol: str, limit: int = 1000) -> float:
+    # aggTrades: m == isBuyerMaker (True -> SELL aggression), False -> BUY aggression
+    symbol = symbol.upper().strip()
+    with httpx.Client(timeout=6.0) as c:
+        r = c.get(f"{_FAPI}/fapi/v1/aggTrades", params={"symbol": symbol, "limit": max(1, min(1000, limit))})
+        r.raise_for_status()
+        trades = r.json()
+    cvd = 0.0
+    for t in trades:
+        q = _safe_float(t.get("q"))
+        if t.get("m"):  # SELL
+            cvd -= q
+        else:           # BUY
+            cvd += q
+    return float(cvd)
 
-    return base
-
-def extended_score_last_row(row: pd.Series) -> tuple[float, str, int, str]:
-    adx = float(row.get("adx") or 0.0)
-    ema_fast = float(row.get("ema_fast") or 0.0)
-    ema_slow = float(row.get("ema_slow") or 0.0)
-    dir_ = str(row.get("trend_dir") or "FLAT")
-    trending = bool(row.get("trending") is True)
-
-    sep = abs(ema_fast - ema_slow) / max(1e-9, float(row.get("close") or 1.0))
-    score = 10.0 * min(1.0, (adx / 40.0) * (sep / 0.01 + 0.2))
-
-    side = "LONG" if ema_fast >= ema_slow else "SHORT"
-    if not trending:
-        score *= 0.6
-
-    conf = int(max(0, min(100, adx * 2)))
-    reason = f"{dir_} ema_fast={ema_fast:.4f} ema_slow={ema_slow:.4f} adx={adx:.1f}"
-    return round(score, 2), side, conf, reason
+def advanced_indicators(symbol: str, interval: str = "15m", limit: int = 200, market: str = "futures", with_cvd: bool = False) -> Dict[str, Any]:
+    df = _get_klines_sync(symbol, interval=interval, limit=max(50, min(1500, int(limit))), market_type=market)
+    if df is None or len(df) < 10:
+        return {"ok": False, "error": "klines_unavailable", "symbol": symbol.upper(), "interval": interval}
+    vwap = compute_vwap(df)
+    obv = compute_obv(df)
+    out = {"ok": True, "symbol": symbol.upper(), "interval": interval, "limit": limit, "vwap": vwap, "obv": obv}
+    if with_cvd:
+        try:
+            out["cvd"] = compute_cvd_from_trades(symbol)
+        except Exception as e:
+            out["cvd_error"] = str(e)
+    return out
 
 
 
