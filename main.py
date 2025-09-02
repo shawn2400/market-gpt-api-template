@@ -158,6 +158,7 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.metrics_extra", "router"),        # Long/Short Ratio, Delta Volume, Funding Heatmap
     ("routes.indicators_extra", "router"),     # VWAP / OBV / CVD (מייבא מ-utils.indicators_ext)
     ("routes.precision", "router"),            # Quantize מחיר/כמות למניעת דחייה
+    ("routes.alerts", "router"),               # ← נוספה כדי להפעיל את API ההתראות
 ]
 for mod, attr in CORE_ROUTERS:
     _include_router(mod, attr)
@@ -294,6 +295,7 @@ if __name__ == "__main__":
         reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
     )
+
 
 
 
