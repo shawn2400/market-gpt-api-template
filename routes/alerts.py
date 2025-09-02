@@ -9,6 +9,7 @@ from utils.auth import require_api_key
 from utils.alerts import send_telegram_alert, telegram_get_me, telegram_send_chat_action, format_trade_alert
 from utils.hmac_utils import verify_inbound
 from utils.approvals import preflight_proposal
+from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
 
@@ -114,7 +115,11 @@ async def trade_ingest(
         "interval": data.get("interval"),
     })
     if SINK_ENFORCE_APPROVALS and not pre["ok"]:
-        return {"ok": False, "errors": pre["errors"], "warnings": pre.get("warnings", [])}, 422
+        # חשוב: להחזיר 422 אמיתי
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "errors": pre["errors"], "warnings": pre.get("warnings", [])},
+        )
 
     tid = str(data.get("trade_id") or "")
     if not tid:
@@ -152,6 +157,7 @@ async def trade_ingest(
 @router.get("/analysis")
 async def analysis(symbol: Optional[str] = None):
     return {"ok": True, "symbol": symbol, "note": "analysis endpoint stub"}
+
 
 
 
