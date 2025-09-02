@@ -166,7 +166,7 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.indicators_extra", "router"),
     ("routes.precision", "router"),
     ("routes.alerts", "router"),
-    ("routes.reconcile", "router"),  # ⬅️ נוסף
+    ("routes.reconcile", "router"),
 ]
 for mod, attr in CORE_ROUTERS: _include_router(mod, attr)
 for mod, attr in EXTRA_ROUTERS: _include_router(mod, attr)
@@ -260,7 +260,6 @@ async def startup_event():
     rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
     if syms:
         try:
-            # ⬅️ תוקן: ws_interval_keepalive=ws_keepalive (לא ws_keepalove)
             _price_task = asyncio.create_task(
                 auto_price_updater(syms, ws_interval_keepalive=ws_keepalive, rest_interval_sec=rest_every)
             )
@@ -268,7 +267,6 @@ async def startup_event():
         except Exception as e:
             logger.warning({"event": "price_updater_failed_start", "error": str(e)})
 
-    # user-data stream consumer
     try:
         await start_user_stream_consumer()
         logger.info({"event":"user_stream_consumer_started"})
