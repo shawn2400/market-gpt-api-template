@@ -56,6 +56,22 @@ async def edit_message(
         r = await client.post(f"{BASE}/editMessageText", json=payload)
         return r.json()
 
+async def get_me() -> Dict[str, Any]:
+    if not TOKEN:
+        return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(f"{BASE}/getMe")
+        return r.json()
+
+async def send_chat_action(action: str = "typing", chat_id: Optional[int|str] = None) -> Dict[str, Any]:
+    if not TOKEN:
+        return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
+    payload = {"chat_id": _chat_default(chat_id), "action": action}
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(f"{BASE}/sendChatAction", json=payload)
+        return r.json()
+
+
 
 
 
