@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException
 from utils.auth import require_api_key
-from utils.indicators_extra import advanced_indicators
+from utils.indicators_ext import advanced_indicators  # ← שונה לשם המודול אצלך
 
 router = APIRouter(prefix="/indicators", tags=["IndicatorsExtra"], dependencies=[Depends(require_api_key)])
 
@@ -26,3 +26,4 @@ def api_adv(
 ) -> Dict[str, Any]:
     if not _allow(request.client.host): raise HTTPException(429, "Rate limit exceeded")
     return advanced_indicators(symbol, interval=interval, limit=limit, market=market, with_cvd=with_cvd)
+
