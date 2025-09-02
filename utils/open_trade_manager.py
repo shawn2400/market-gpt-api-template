@@ -1,364 +1,455 @@
-# utils/open\_trade\_manager.py
-
-```python
+# utils/open_trade_manager.py
 from __future__ import annotations
-import asyncio
-import time
-import logging
-from typing import Dict, Optional
+import os, time, asyncio, logging
+from typing import Dict, Any, List, Optional, Tuple
 
+import requests
 import pandas as pd
 
 from utils import config as cfg
-from utils.indicators import atr, adx, macd
+from utils.indicators import prepare_indicators_for_backtest
+from utils.ws_fallback import get_price, is_price_fresh
+from utils.precision_utils import apply_price_tick_side
 from utils.binance_client import (
-    get_open_positions,           # → List[dict] of futures positions
-    get_klines_df,                # → pd.DataFrame with columns: open, high, low, close, volume
-    futures_mark_price,           # → float
-    modify_stop_loss,             # (symbol, close_side, price, qty, reduce_only=True)
-    modify_take_profit,           # (symbol, close_side, price, qty, reduce_only=True)
+    futures_mark_price,
+    place_stop_market,
+    place_take_profit_market,
 )
-from utils.ws_fallback import get_price as ws_get_price
-from utils.redis_client import redis_client
 
 logger = logging.getLogger("algogpt.open_trade_manager")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Runtime knobs (safe defaults; can be overridden via ENV in cfg if desired)
-# ──────────────────────────────────────────────────────────────────────────────
-MANAGE_DEFAULT_INTERVAL_SEC = 60             # ניהול כל 60 שניות
-PER_SYMBOL_COOLDOWN_SEC      = 30            # כל סימבול לא יותר מפעם ב‑30 שניות
-MIN_BE_PROFIT_PCT            = 1.5           # Breakeven רק מעל רווח זה
-ADX_MIN_FOR_BE               = 20            # או MACD>0
-ADX_FOR_TP_EXPAND            = 25            # להגדלת TP
-TRAIL_ATR_MULT               = 0.6           # SL = swing ± 0.6×ATR
-TRAIL_GUARD_ATR              = 0.2           # לא להצמיד SL קרוב מ‑0.2×ATR למחיר
-TP_MOMENTUM_ATR_MULT         = 4.5           # הגדלת TP = מחיר ± 4.5×ATR
+# ---------------------------
+# ENV tuning (ללא שינוי ב-config.py)
+# ---------------------------
+def _as_bool(s: Optional[str], default=False) -> bool:
+    return str(s).strip().lower() in {"1","true","yes","on"} if s is not None else default
+def _as_float(s: Optional[str], default: float) -> float:
+    try: return float(str(s).strip())
+    except: return default
+def _as_int(s: Optional[str], default: int) -> int:
+    try: return int(str(s).strip())
+    except: return default
 
-# אחסון מצב מינימלי ב‑Redis כדי להבטיח "הידוק בלבד"
-REDIS_SL_KEY = "algogpt:manage:last_sl:{}"   # symbol → last sl we set
-REDIS_TP_KEY = "algogpt:manage:last_tp:{}"   # symbol → last tp we set
+# Chop / Momentum
+CHOP_DETECT_ENABLE   = _as_bool(os.getenv("CHOP_DETECT_ENABLE","true"), True)
+CHOP_ADX_MAX         = _as_float(os.getenv("CHOP_ADX_MAX","18"), 18.0)
+CHOP_MACD_HIST_ABS_MAX = _as_float(os.getenv("CHOP_MACD_HIST_ABS_MAX","0.05"), 0.05)
+CHOP_BB_WIDTH_PCT_MAX  = _as_float(os.getenv("CHOP_BB_WIDTH_PCT_MAX","0.9"), 0.9)
+CHOP_MIN_BARS        = _as_int(os.getenv("CHOP_MIN_BARS","6"), 6)
+CHOP_TIME_LIMIT_MIN  = _as_int(os.getenv("CHOP_TIME_LIMIT_MIN","45"), 45)
+CHOP_ACTION          = (os.getenv("CHOP_ACTION","to_breakeven") or "to_breakeven").strip()  # to_breakeven|partial_exit|full_exit
+CHOP_PARTIAL_PCT     = _as_float(os.getenv("CHOP_PARTIAL_PCT","0.33"), 0.33)
 
-_last_check_ts: Dict[str, float] = {}
+# Breakeven & Trailing
+BE_ARM_PCT           = _as_float(os.getenv("BE_ARM_PCT","1.6"), 1.6)  # % מהכניסה
+TRAIL_ATR_MULT       = _as_float(os.getenv("TRAIL_ATR_MULT", str(cfg.STOP_LOSS_ATR_MULTIPLIER)), cfg.STOP_LOSS_ATR_MULTIPLIER)
 
+# Momentum lock & TP shift
+MOMENTUM_LOCK_MIN_BARS = _as_int(os.getenv("MOMENTUM_LOCK_MIN_BARS","3"), 3)
+MOMENTUM_TP_SHIFT_ATR  = _as_float(os.getenv("MOMENTUM_TP_SHIFT","0.5"), 0.5) # הסטת TP ב*ATR
 
-def _close_side(side: str) -> str:
-    su = (side or "").upper()
-    return "SELL" if su in ("LONG", "BUY") else "BUY"
+# Cooldown / noise control
+MANAGER_COOLDOWN_SEC = _as_int(os.getenv("MANAGER_COOLDOWN_SEC","45"), 45)
+MIN_TP_SL_DIFF_TICKS = _as_int(os.getenv("MIN_TP_SL_DIFF_TICKS","2"), 2)  # לא משנים אם ההבדל קטן מ-2 טיקים
+MIN_TP_SL_DIFF_PCT   = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT","0.15"), 0.15)  # וגם לא משנים אם <0.15%
 
+# Klines
+FUTURES_BASE = cfg.BINANCE_FUTURES_HTTP_BASE
+KL_INTERVAL  = os.getenv("MANAGER_SCAN_INTERVAL", cfg.DEFAULT_INTERVAL)  # 15m
+KL_LIMIT     = _as_int(os.getenv("MANAGER_SCAN_LIMIT","200"), 200)
 
-def _profit_pct(side: str, entry: float, price: float) -> float:
-    if entry <= 0 or price <= 0:
-        return 0.0
-    if (side or "").upper() in ("LONG", "BUY"):
-        return (price - entry) / entry * 100.0
-    return (entry - price) / entry * 100.0
+# Executor state
+_MANAGER_RUNNING: bool = False
+_manager_task: Optional[asyncio.Task] = None
+_last_touch: Dict[str, float] = {}         # per-symbol cooldown
+_lock_momentum_until: Dict[str, int] = {}  # per-symbol bar countdown
 
-
-def _redis_get_float(key: str) -> Optional[float]:
+# Optional API (cancel/get orders) — לא בטוח קיים אצלך → Fallback בטוח
+def _get_open_orders_or_none(symbol: str) -> Optional[List[Dict[str, Any]]]:
     try:
-        raw = redis_client.get(key) if redis_client else None
-        return float(raw) if raw is not None else None
+        from utils.binance_client import get_open_orders
+        return get_open_orders(symbol)
     except Exception:
         return None
 
-
-def _redis_set_float(key: str, val: float, ttl: int = 7 * 24 * 3600) -> None:
+def _cancel_order_safe(symbol: str, order_id: Optional[int]) -> bool:
+    if not order_id:
+        return False
     try:
-        if not redis_client:
-            return
-        redis_client.setex(key, ttl, str(float(val)))
+        from utils.binance_client import cancel_order
+        cancel_order(symbol, order_id)
+        return True
+    except Exception:
+        try:
+            from utils.binance_client import cancel_open_orders
+            cancel_open_orders(symbol)
+            return True
+        except Exception as e:
+            logger.warning({"event":"cancel_order_unavailable", "symbol":symbol, "err": str(e)})
+            return False
+
+# ---------------------------
+# Helpers
+# ---------------------------
+def _fresh_price(symbol: str) -> Optional[float]:
+    if is_price_fresh(symbol, max_age_sec=int(os.getenv("PRICE_MAX_AGE_SEC","10"))):
+        return get_price(symbol)
+    try:
+        return float(futures_mark_price(symbol) or 0.0)
+    except Exception:
+        return None
+
+def _align_price(symbol: str, price: float, side_for_tick: str) -> float:
+    px, _ = apply_price_tick_side(price, symbol, side_for_tick)
+    return float(px)
+
+def _pct(from_px: float, to_px: float) -> float:
+    if not from_px: return 0.0
+    return (to_px/from_px - 1.0) * 100.0
+
+def _enough_move(curr: float, target: float, tick: float, pct_gate: float) -> bool:
+    if curr <= 0 or target <= 0: return True
+    diff = abs(target - curr)
+    return (diff >= (tick * MIN_TP_SL_DIFF_TICKS)) and (abs((target/curr - 1.0)*100.0) >= pct_gate)
+
+def _now() -> float:
+    return time.time()
+
+async def _klines_df(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    url = f"{FUTURES_BASE}/fapi/v1/klines"
+    r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=10)
+    r.raise_for_status()
+    arr = r.json()
+    cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
+    df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
+    for c in ("open","high","low","close","volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+def _bb_width_pct(row: Dict[str, Any]) -> float:
+    mid = float(row.get("bb_mid") or 0.0)
+    up  = float(row.get("bb_upper") or 0.0)
+    lo  = float(row.get("bb_lower") or 0.0)
+    if mid <= 0 or up <= 0 or lo <= 0: return 0.0
+    return (up - lo) / mid * 100.0
+
+def _momentum_ok(side: str, row: Dict[str, Any]) -> bool:
+    adx = float(row.get("adx") or 0.0)
+    macd_hist = float(row.get("macd_hist") or 0.0)
+    if side.upper() in ("BUY","LONG"):
+        return (adx >= 25.0) and (macd_hist > 0.0)
+    else:
+        return (adx >= 25.0) and (macd_hist < 0.0)
+
+def _chop_now(window: List[Dict[str, Any]]) -> bool:
+    if not CHOP_DETECT_ENABLE: return False
+    if len(window) < CHOP_MIN_BARS: return False
+    last = window[-CHOP_MIN_BARS:]
+    adx_ok = all(float(r.get("adx") or 0.0) < CHOP_ADX_MAX for r in last)
+    macd_ok = all(abs(float(r.get("macd_hist") or 0.0)) <= CHOP_MACD_HIST_ABS_MAX for r in last)
+    bb_ok = all(_bb_width_pct(r) <= CHOP_BB_WIDTH_PCT_MAX for r in last)
+    return bool(adx_ok and macd_ok and bb_ok)
+
+def _side_to_close(side: str) -> str:
+    return "SELL" if side.upper() in ("BUY","LONG") else "BUY"
+
+# Position fetch — primary: Binance API (אם קיים), fallback: trade_manager Redis
+def _fetch_positions() -> List[Dict[str, Any]]:
+    # נסה utils.binance_client.futures_position_risk()
+    try:
+        from utils.binance_client import futures_position_risk
+        pos = futures_position_risk() or []
+        # Normalize
+        out=[]
+        for p in pos:
+            try:
+                amt = float(p.get("positionAmt") or 0.0)
+                if abs(amt) <= 0: continue
+                sym = str(p.get("symbol") or "").upper()
+                entry = float(p.get("entryPrice") or 0.0)
+                lev = float(p.get("leverage") or 1.0)
+                side = "LONG" if amt > 0 else "SHORT"
+                u = {
+                    "symbol": sym,
+                    "side": side,
+                    "qty": abs(amt),
+                    "entry": entry,
+                    "leverage": lev,
+                    "unrealizedPnl": float(p.get("unRealizedProfit") or 0.0),
+                    "updateTime": int(p.get("updateTime") or 0),
+                    "notional": abs(float(p.get("notional") or amt*entry)),
+                }
+                out.append(u)
+            except Exception:
+                continue
+        return out
     except Exception:
         pass
 
-
-async def _manage_symbol(sym: str, side: str, entry: float, qty: float) -> None:
-    """ניהול סמבול בודד: BE / Trailing SL / TP Expand. שמרני, ללא עומס.
-    Preconditions: qty != 0, entry > 0.
-    """
-    now = time.time()
-    last = _last_check_ts.get(sym, 0.0)
-    if (now - last) < PER_SYMBOL_COOLDOWN_SEC:
-        return
-
-    # מקור מחיר: WS (מהיר) → fallback Binance mark price
-    price = ws_get_price(sym) or futures_mark_price(sym)
-    if not price or price <= 0:
-        return
-
-    # נתוני נרות ל‑5m
-    df: pd.DataFrame = get_klines_df(sym, interval="5m", limit=120)
-    if df is None or df.empty or df.shape[0] < 30:
-        return
-
-    # אינדיקטורים
-    atr_series = atr(df, 14)
-    adx_series = adx(df, 14)
-    macd_line, macd_signal, macd_hist = macd(df["close"])  # macd_line - signal = hist
-
-    current_atr = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
-    current_adx = float(adx_series.iloc[-1]) if not adx_series.empty else 0.0
-    macd_now = float(macd_line.iloc[-1] - macd_signal.iloc[-1]) if not macd_line.empty else 0.0
-
-    if current_atr <= 0:
-        return
-
-    profit = _profit_pct(side, entry, price)
-    close_side = _close_side(side)
-
-    # שליפה/שמירה של ערכי SL/TP שנשלחו בעבר כדי להבטיח הידוק בלבד
-    last_sl_key = REDIS_SL_KEY.format(sym)
-    last_tp_key = REDIS_TP_KEY.format(sym)
-    last_sl = _redis_get_float(last_sl_key)
-    last_tp = _redis_get_float(last_tp_key)
-
-    # ── 1) Breakeven SL ───────────────────────────────────────────────────────
-    be_candidate: Optional[float] = None
-    if profit >= MIN_BE_PROFIT_PCT and (macd_now > 0.0 or current_adx >= ADX_MIN_FOR_BE):
-        be_candidate = entry  # שמרני: בדיוק מחיר כניסה
-
-    # ── 2) Trailing SL (swing ± 0.6×ATR) ─────────────────────────────────────
-    trail_candidate: Optional[float] = None
-    if (side or "").upper() in ("LONG", "BUY"):
-        recent_low = float(df["low"].iloc[-3: ].min())
-        trail_candidate = max(be_candidate or -1e18, recent_low - TRAIL_ATR_MULT * current_atr)
-        # Guard: לא להצמיד קרוב מדי למחיר
-        trail_candidate = min(trail_candidate, price - TRAIL_GUARD_ATR * current_atr)
-        # Guard: לא להדק אחורה
-        if last_sl is not None:
-            trail_candidate = max(trail_candidate, last_sl)
-    else:  # SHORT
-        recent_high = float(df["high"].iloc[-3: ].max())
-        trail_candidate = min(be_candidate or 1e18, recent_high + TRAIL_ATR_MULT * current_atr)
-        trail_candidate = max(trail_candidate, price + TRAIL_GUARD_ATR * current_atr)
-        if last_sl is not None:
-            trail_candidate = min(trail_candidate, last_sl)
-
-    # קביעת SL יעד סופי
-    new_sl: Optional[float] = None
-    if be_candidate is not None:
-        new_sl = be_candidate
-    if trail_candidate is not None:
-        # ב‑LONG נרצה SL גבוה יותר; ב‑SHORT SL נמוך יותר
-        if (side or "").upper() in ("LONG", "BUY"):
-            new_sl = max(new_sl or -1e18, trail_candidate)
-        else:
-            new_sl = min(new_sl or 1e18, trail_candidate)
-
-    # ── 3) Dynamic TP (momentum expansion) ───────────────────────────────────
-    new_tp: Optional[float] = None
-    if current_adx >= ADX_FOR_TP_EXPAND and macd_now > 0.0:
-        if (side or "").upper() in ("LONG", "BUY"):
-            new_tp = price + TP_MOMENTUM_ATR_MULT * current_atr
-            # הגדלת TP רק מעלה
-            if last_tp is not None:
-                new_tp = max(new_tp, last_tp)
-        else:
-            new_tp = price - TP_MOMENTUM_ATR_MULT * current_atr
-            if last_tp is not None:
-                new_tp = min(new_tp, last_tp)
-
-    # ── 4) שליחת עדכונים לבורסה (רק אם ALLOW_MANAGE_OPEN_TRADES=True) ──────
-    if not cfg.ALLOW_MANAGE_OPEN_TRADES:
-        logger.debug("[manage] skipped – ALLOW_MANAGE_OPEN_TRADES is False")
-        _last_check_ts[sym] = now
-        return
-
-    updates = []
+    # Fallback: Redis-based open trades
     try:
-        abs_qty = abs(float(qty))
-        if abs_qty <= 0:
-            _last_check_ts[sym] = now
-            return
+        from utils.trade_manager import get_open_trades
+        raw = get_open_trades()
+        out=[]
+        for t in (raw or []):
+            out.append({
+                "symbol": t.get("symbol","").upper(),
+                "side": t.get("side","").upper(),
+                "qty": float(t.get("qty") or 0.0),
+                "entry": float(t.get("entry_price") or 0.0),
+                "leverage": float(t.get("leverage") or cfg.MIN_LEVERAGE),
+                "unrealizedPnl": 0.0,
+                "updateTime": 0,
+                "notional": float(t.get("qty") or 0.0) * float(t.get("entry_price") or 0.0),
+            })
+        return out
+    except Exception as e:
+        logger.warning({"event":"fetch_positions_fallback_failed", "err": str(e)})
+        return []
 
-        # Update SL (הידוק בלבד)
-        if new_sl is not None:
-            do_update_sl = False
-            if (side or "").upper() in ("LONG", "BUY"):
-                do_update_sl = (last_sl is None) or (new_sl > (last_sl + 1e-9))
-                # אל תצמיד מעל המחיר
-                if new_sl >= price:
-                    do_update_sl = False
-            else:
-                do_update_sl = (last_sl is None) or (new_sl < (last_sl - 1e-9))
-                if new_sl <= price:
-                    do_update_sl = False
+# ---------------------------
+# Core management (single symbol)
+# ---------------------------
+async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[str, Any]:
+    """מחשב ATR/ADX/MACD, מזהה דשדוש/מומנטום, מזיז SL/TP בבטחה (Reduce-Only)."""
+    side_u = side.upper()
+    close_side = _side_to_close(side_u)
 
-            if do_update_sl:
-                try:
-                    modify_stop_loss(sym, _close_side(side), float(new_sl), float(abs_qty), reduce_only=True)
-                    _redis_set_float(last_sl_key, float(new_sl))
-                    updates.append({"sl": new_sl})
-                except Exception as e:
-                    logger.error({"event": "sl_update_failed", "symbol": sym, "error": str(e)})
+    # Cooldown per symbol
+    last = _last_touch.get(sym, 0.0)
+    if (_now() - last) < MANAGER_COOLDOWN_SEC:
+        return {"symbol": sym, "skipped": "cooldown"}
 
-        # Update TP (הרחבה בלבד)
-        if new_tp is not None:
-            do_update_tp = False
-            if (side or "").upper() in ("LONG", "BUY"):
-                do_update_tp = (last_tp is None) or (new_tp > (last_tp + 1e-9))
-            else:
-                do_update_tp = (last_tp is None) or (new_tp < (last_tp - 1e-9))
+    # Price
+    px = _fresh_price(sym)
+    if not px or px <= 0.0:
+        return {"symbol": sym, "skipped": "no_price"}
 
-            if do_update_tp:
-                try:
-                    modify_take_profit(sym, _close_side(side), float(new_tp), float(abs_qty), reduce_only=True)
-                    _redis_set_float(last_tp_key, float(new_tp))
-                    updates.append({"tp": new_tp})
-                except Exception as e:
-                    logger.error({"event": "tp_update_failed", "symbol": sym, "error": str(e)})
+    # Indicators (klines)
+    try:
+        df = await _klines_df(sym, KL_INTERVAL, KL_LIMIT)
+        ind = prepare_indicators_for_backtest(df)
+        if ind.empty: return {"symbol": sym, "skipped": "no_indicators"}
+        # נשמור סגמנט אחרון לעבודה
+        tail: List[Dict[str, Any]] = [ind.iloc[i].to_dict() for i in range(max(0, len(ind)-50), len(ind))]
+        row = tail[-1]
+        atr = float(row.get("atr") or 0.0)
+        adx = float(row.get("adx") or 0.0)
+        macd_hist = float(row.get("macd_hist") or 0.0)
+    except Exception as e:
+        return {"symbol": sym, "error": f"indicators_failed: {e}"}
 
-        if updates:
-            logger.info({"event": "managed", "symbol": sym, "updates": updates, "price": price, "profit_pct": round(profit,2)})
-    finally:
-        _last_check_ts[sym] = now
+    if atr <= 0.0:
+        return {"symbol": sym, "skipped": "atr_zero"}
 
+    # Compute BE/Trail/TP candidates
+    be_arm_px = entry * (1.0 + (BE_ARM_PCT/100.0)) if side_u in ("BUY","LONG") else entry * (1.0 - (BE_ARM_PCT/100.0))
+    # ATR trailing around current price
+    if side_u in ("BUY","LONG"):
+        trail_sl_raw = px - (TRAIL_ATR_MULT * atr)
+        be_px = max(entry, trail_sl_raw)  # לא נרד מתחת לכניסה אם BE כבר אפשרי
+        trail_sl = _align_price(sym, be_px, "SELL")
+        # TP shift אם מומנטום חזק
+        tp_shift = MOMENTUM_TP_SHIFT_ATR * atr if _momentum_ok(side_u, row) else 0.0
+    else:
+        trail_sl_raw = px + (TRAIL_ATR_MULT * atr)
+        be_px = min(entry, trail_sl_raw)
+        trail_sl = _align_price(sym, be_px, "BUY")
+        tp_shift = -MOMENTUM_TP_SHIFT_ATR * atr if _momentum_ok(side_u, row) else 0.0
 
-async def manage_open_trades(*, loop: bool = False, interval: Optional[int] = None) -> None:
-    """מנהל את כל הטריידים הפתוחים מול Binance API – ללא עומס, ביד‑הדוק.
-    אם loop=True ירוץ ברקע בלולאה; אחרת – מעבר אחד.
-    """
-    if interval is None:
-        interval = int(getattr(cfg, "PRICE_MONITOR_INTERVAL", MANAGE_DEFAULT_INTERVAL_SEC))
-        if interval <= 0:
-            interval = MANAGE_DEFAULT_INTERVAL_SEC
+    # Chop detection window
+    is_chop = _chop_now(tail)
+    # Profit % now
+    pnl_pct = _pct(entry, px) if side_u in ("BUY","LONG") else _pct(px, entry)
 
-    async def _once():
+    # Decide SL & TP
+    desired_sl = trail_sl
+    # TP: אם יש shift חיובי, נרחיק TP; אחרת נשאיר/לא נגע אם אין שינוי
+    # If אין לנו TP נוכחי, נשים מטרה שמרנית: entry ± 2*ATR
+    base_tp = (entry + 2*atr) if side_u in ("BUY","LONG") else (entry - 2*atr)
+    desired_tp = base_tp + tp_shift
+    desired_tp = _align_price(sym, desired_tp, close_side)
+
+    # Chop strategy
+    chop_action_taken = None
+    minutes_alive = 0
+    try:
+        # אם יש updateTime בפוזיציה, נחשב זמן חיים מקורב
+        minutes_alive = max(0, int((_now() - (row.get("close_time", _now())/1000 if isinstance(row.get("close_time"), (int,float)) else _now()))/60))
+    except Exception:
+        pass
+
+    if is_chop:
+        if CHOP_ACTION == "to_breakeven" and pnl_pct >= 0.0:
+            desired_sl = _align_price(sym, entry, close_side)
+            chop_action_taken = "SL->BE"
+        elif CHOP_ACTION == "partial_exit" and pnl_pct >= 0.0 and minutes_alive >= CHOP_TIME_LIMIT_MIN:
+            # נבצע partial exit ע"י הזזת TP קרוב (למשל entry ± 0.5*ATR) על חלק מהכמות
+            desired_tp = _align_price(sym, (entry + (0.5*atr if side_u in ("BUY","LONG") else -0.5*atr)), close_side)
+            # בפועל, נשתמש בכמות קטנה יותר אם יש פונקציית הזמנה גמישה
+            chop_action_taken = f"partial_exit~{int(CHOP_PARTIAL_PCT*100)}%"
+        elif CHOP_ACTION == "full_exit" and minutes_alive >= CHOP_TIME_LIMIT_MIN:
+            # TP קרוב למידית יציאה
+            desired_tp = _align_price(sym, (entry + (0.15*atr if side_u in ("BUY","LONG") else -0.15*atr)), close_side)
+            chop_action_taken = "force_exit"
+
+    # Breakeven arm אם המחיר עבר BE_ARM_PCT
+    if (side_u in ("BUY","LONG") and px >= be_arm_px) or (side_u in ("SELL","SHORT") and px <= be_arm_px):
+        desired_sl = max(desired_sl, entry) if side_u in ("BUY","LONG") else min(desired_sl, entry)
+
+    # Momentum lock (לא סוגרים מוקדם)
+    lock_key = f"{sym}:{side_u}"
+    if _momentum_ok(side_u, row):
+        # ננעל לכמות נרות
+        _lock_momentum_until[lock_key] = max(_lock_momentum_until.get(lock_key, 0), MOMENTUM_LOCK_MIN_BARS)
+    else:
+        # אם יש נעילה — נוריד ב-1 כל קריאה (כל נר ≈ Interval; כאן אנחנו בודקים כל X שניות → עדיין נותן “חמצן”)
+        if _lock_momentum_until.get(lock_key, 0) > 0:
+            _lock_momentum_until[lock_key] -= 1
+
+    # אם נעול מומנטום — אל תקרב SL מעבר ל-trailing המחושב (לא נסגור מוקדם יותר)
+    # (כבר מטופל לוגית ע"י בחירה מחמירה של desired_sl, אבל נשמור guard)
+    # ---------- Sync to Binance ----------
+    # נביא הזמנות פתוחות (אם יש API) כדי לעדכן רק אם צריך
+    open_orders = _get_open_orders_or_none(sym)
+    current_sl = None
+    current_tp = None
+    sl_order_id = None
+    tp_order_id = None
+
+    try:
+        if open_orders:
+            for o in open_orders:
+                ty = str(o.get("type","")).upper()
+                ro = bool(o.get("reduceOnly") or (str(o.get("reduceOnly","")).lower()=="true"))
+                sp = float(o.get("stopPrice") or o.get("price") or 0.0)
+                oid = o.get("orderId")
+                if not ro:  # אנחנו לא נוגעים בפקודות שאינן Reduce-Only
+                    continue
+                if ty in ("STOP_MARKET","STOP","STOP_LOSS","STOP_LOSS_LIMIT"):
+                    current_sl, sl_order_id = sp, oid
+                elif ty in ("TAKE_PROFIT_MARKET","TAKE_PROFIT","TAKE_PROFIT_LIMIT"):
+                    current_tp, tp_order_id = sp, oid
+    except Exception:
+        pass
+
+    # Decide if to update
+    # Tick: נחלץ מטיק דרך apply_price_tick_side (הפונקציה מחזירה גם סטייה, אבל מספיק לנו לקוונט את היעד)
+    # בשביל gate נוסף — נשתמש בסף אחוזי קטן כדי למנוע churn.
+    need_sl = (current_sl is None) or _enough_move(float(current_sl or 0.0), desired_sl, tick=abs(desired_sl - _align_price(sym, desired_sl + 1e-9, close_side)), pct_gate=MIN_TP_SL_DIFF_PCT)
+    need_tp = (current_tp is None) or _enough_move(float(current_tp or 0.0), desired_tp, tick=abs(desired_tp - _align_price(sym, desired_tp + 1e-9, close_side)), pct_gate=MIN_TP_SL_DIFF_PCT)
+
+    changed = False
+    errors: List[str] = []
+
+    if not _as_bool(os.getenv("ALLOW_MANAGE_OPEN_TRADES","true"), True):
+        return {"symbol": sym, "skipped": "ALLOW_MANAGE_OPEN_TRADES=false"}
+
+    # עדכון SL
+    if need_sl:
         try:
-            # משיכת פוזיציות פתוחות בלבד
-            positions = get_open_positions() or []
-            for p in positions:
-                try:
-                    sym = str(p.get("symbol") or "").upper()
-                    qty = float(p.get("positionAmt") or 0.0)
-                    if abs(qty) <= 0.0:
-                        continue
-                    entry = float(p.get("entryPrice") or 0.0)
-                    side = "LONG" if qty > 0 else "SHORT"
-                    await _manage_symbol(sym, side, entry, qty)
-                except Exception as e:
-                    logger.error({"event": "manage_symbol_error", "error": str(e), "pos": p})
+            # ננסה לבטל SL קודם (אם יש API), כדי למנוע כפילויות
+            if sl_order_id:
+                _cancel_order_safe(sym, sl_order_id)
+            place_stop_market(sym, close_side, float(desired_sl), float(qty), reduce_only=True)
+            changed = True
         except Exception as e:
-            logger.error({"event": "manage_once_error", "error": str(e)})
+            errors.append(f"sl_update_failed:{e}")
 
-    if not loop:
-        await _once()
+    # עדכון TP
+    if need_tp:
+        try:
+            if tp_order_id:
+                _cancel_order_safe(sym, tp_order_id)
+            place_take_profit_market(sym, close_side, float(desired_tp), float(qty), reduce_only=True)
+            changed = True
+        except Exception as e:
+            errors.append(f"tp_update_failed:{e}")
+
+    _last_touch[sym] = _now()
+    return {
+        "symbol": sym,
+        "side": side_u,
+        "entry": entry,
+        "price": px,
+        "pnl_pct": round(pnl_pct, 4),
+        "adx": round(adx, 3),
+        "macd_hist": round(macd_hist, 5),
+        "atr": round(atr, 6),
+        "is_chop": bool(is_chop),
+        "desired_sl": desired_sl,
+        "desired_tp": desired_tp,
+        "changed": changed,
+        "chop_action": chop_action_taken,
+        "errors": errors,
+    }
+
+# ---------------------------
+# Public API
+# ---------------------------
+async def manage_open_trades() -> Dict[str, Any]:
+    """
+    עובר על כל הפוזיציות הפתוחות ומבצע ניהול חי:
+    - SL → BE / Trailing ATR
+    - TP → Shift עם מומנטום
+    - Chop → BE/Partial/Exit לפי פרמטרים
+    שומר על קירור, מפחית עומס, משנה רק כשיש סטייה משמעותית.
+    """
+    positions = _fetch_positions()
+    if not positions:
+        return {"ok": True, "managed": 0, "details": [], "note": "no_positions"}
+
+    details=[]
+    for p in positions:
+        try:
+            sym = p["symbol"].upper()
+            side = p["side"].upper()
+            qty  = float(p["qty"])
+            entry= float(p["entry"])
+            if qty <= 0 or entry <= 0:
+                details.append({"symbol": sym, "skip": "bad_qty_or_entry"})
+                continue
+            res = await _manage_symbol(sym, side, qty, entry)
+            details.append(res)
+        except Exception as e:
+            details.append({"symbol": p.get("symbol","?"), "error": str(e)})
+
+    changed = sum(1 for d in details if d.get("changed")) if isinstance(details, list) else 0
+    return {"ok": True, "managed": len(details), "changed": changed, "details": details}
+
+# Loop controls (לשימוש ב-main / ראוטרים)
+async def _manager_loop(interval_sec: int):
+    global _MANAGER_RUNNING
+    _MANAGER_RUNNING = True
+    try:
+        while _MANAGER_RUNNING:
+            try:
+                res = await manage_open_trades()
+                logger.info({"event": "manage_tick", "changed": res.get("changed", 0)})
+            except Exception as e:
+                logger.error({"event": "manage_iteration_error", "error": str(e)})
+            await asyncio.sleep(max(10, int(interval_sec)))
+    finally:
+        _MANAGER_RUNNING = False
+
+def start_manager(interval_sec: int = 60) -> None:
+    global _manager_task, _MANAGER_RUNNING
+    if _MANAGER_RUNNING:
+        logger.info({"event": "manager_already_running"})
         return
+    loop = asyncio.get_event_loop()
+    _manager_task = loop.create_task(_manager_loop(interval_sec))
+    logger.info({"event": "manager_started", "interval": interval_sec})
 
-    logger.info({"event": "open_trade_manager_started", "interval_sec": interval})
-    while True:
-        await _once()
-        await asyncio.sleep(max(5, int(interval)))
-```
-
----
-
-# main.py
-
-```python
-from __future__ import annotations
-import os
-import asyncio
-import logging
-from typing import Optional
-
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-
-from utils import config as cfg
-from utils.config import check_config
-from utils.open_trade_manager import manage_open_trades
-from utils.auto_executor import start_executor, stop_executor, is_executor_running  # אם אצלך שמות אחרים – עדכן כאן
-
-logging.basicConfig(level=getattr(logging, cfg.LOG_LEVEL, "INFO"))
-logger = logging.getLogger("algogpt.main")
-
-app = FastAPI(title="AlgoGPT", version=os.getenv("ALGOGPT_VERSION", "2.x"))
-
-_manager_task: Optional[asyncio.Task] = None
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    # ולידציה של קונפיג – תעצור את האפליקציה אם משהו לא תקין
-    try:
-        check_config()
-    except Exception as e:
-        logger.error(f"[CONFIG] {e}")
-        raise
-
-    # לא מריצים אוטומטית כלום כאן – שליטה ע"י אנדפוינטים (למניעת עומס)
-    logger.info("🚀 AlgoGPT API started. Use /start-executor or /start-manager to run loops.")
-
-
-@app.get("/health")
-async def health():
-    return {"ok": True, "executor_running": is_executor_running()}
-
-
-@app.post("/start-executor")
-async def api_start_executor():
-    try:
-        start_executor()
-        return {"ok": True, "msg": "executor started"}
-    except Exception as e:
-        logger.exception("start-executor failed")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-@app.post("/stop-executor")
-async def api_stop_executor():
-    try:
-        stop_executor()
-        return {"ok": True, "msg": "executor stopping"}
-    except Exception as e:
-        logger.exception("stop-executor failed")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-@app.post("/manage-once")
-async def api_manage_once():
-    try:
-        await manage_open_trades(loop=False)
-        return {"ok": True, "msg": "managed once"}
-    except Exception as e:
-        logger.exception("manage-once failed")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-@app.post("/start-manager")
-async def api_start_manager(interval: Optional[int] = None):
-    global _manager_task
-    if _manager_task and not _manager_task.done():
-        return JSONResponse({"ok": False, "error": "manager already running"}, status_code=409)
-
-    async def _bg():
-        await manage_open_trades(loop=True, interval=interval)
-
-    try:
-        _manager_task = asyncio.create_task(_bg())
-        return {"ok": True, "msg": "manager started", "interval": interval or cfg.PRICE_MONITOR_INTERVAL}
-    except Exception as e:
-        logger.exception("start-manager failed")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-@app.post("/stop-manager")
-async def api_stop_manager():
-    global _manager_task
+def stop_manager() -> None:
+    global _manager_task, _MANAGER_RUNNING
+    _MANAGER_RUNNING = False
     try:
         if _manager_task and not _manager_task.done():
             _manager_task.cancel()
-            _manager_task = None
-        return {"ok": True, "msg": "manager stopped"}
-    except Exception as e:
-        logger.exception("stop-manager failed")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    except Exception:
+        pass
+    _manager_task = None
+    logger.info({"event": "manager_stopped"})
 
 
-# לוקאלי / דוקר
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "10000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=os.getenv("UVICORN_RELOAD", "0") == "1")
-```
