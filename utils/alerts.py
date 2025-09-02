@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import asyncio
 from typing import Optional, Dict, Any
-
 import logging
+
 from .telegram_api import (
-    send_message,
+    send_message as _send_message,
     edit_message as _edit_message,
     get_me as _get_me,
     send_chat_action as _send_chat_action,
@@ -26,6 +26,7 @@ __all__ = [
     "telegram_send_chat_action",
     "format_trade_alert",
     "send_telegram_alert",
+    "send_telegram_message",
     "edit_telegram_message",
     "tg_info",
     "tg_warn",
@@ -57,13 +58,36 @@ async def edit_telegram_message(
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
     """
-    Proxy נוח לעריכת הודעות — שומר על בעל-הבית utils.telegram_api.edit_message.
+    Proxy לעריכת הודעות (דק מעל utils.telegram_api.edit_message).
     """
     return await _edit_message(
         chat_id=chat_id,
         message_id=message_id,
         text=text,
         reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        disable_preview=disable_preview,
+    )
+
+async def send_telegram_message(
+    text: str,
+    *,
+    chat_id: Optional[int | str] = None,
+    reply_markup: Optional[Dict[str, Any]] = None,
+    silent: bool = False,
+    parse_mode: str = "Markdown",
+    disable_preview: bool = True,
+) -> Dict[str, Any]:
+    """
+    Proxy לשליחת הודעה — שומר על בעל-הבית utils.telegram_api.send_message
+    ומרכז את כל הקריאות דרך שכבת alerts.
+    """
+    _ = _ensure_chat_id()  # וידוא יעד קיים
+    return await _send_message(
+        text=text,
+        reply_markup=reply_markup,
+        chat_id=chat_id,
+        silent=silent,
         parse_mode=parse_mode,
         disable_preview=disable_preview,
     )
@@ -106,16 +130,17 @@ def format_trade_alert(
         f"{q_str}{s_str}{n_str}"
     )
 
-# ---------- Sending ----------
+# ---------- Sending (alerts-level helpers) ----------
 async def send_telegram_alert(
     message: str,
     parse_mode: str = "Markdown",
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
-    # משתמשים בבעל הבית send_message – הוא כבר עושה split+retries
-    _ = _ensure_chat_id()  # הקפדה שיש target chat
-    return await send_message(
-        message,
+    """
+    עטיפה "אלרטית" לשליחה — משתמשת ב-send_telegram_message לשכבת אחידות.
+    """
+    return await send_telegram_message(
+        text=message,
         parse_mode=parse_mode,
         disable_preview=disable_preview,
     )
@@ -152,6 +177,7 @@ def tg_grid(text: str) -> None:
 def tg_mngr(text: str) -> None:
     if _TG_MNGR:
         _fire_and_forget(send_telegram_alert(text))
+
 
 
 
