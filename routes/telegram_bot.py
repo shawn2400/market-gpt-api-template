@@ -15,6 +15,7 @@ from utils.indicators import prepare_indicators_for_backtest  # noqa: F401
 from utils.ai_analysis import analyze_with_ai  # noqa: F401
 from utils.liquidity import estimate_slippage
 from utils.trade_validator import validate_proposal
+from utils.approvals import preflight_proposal  # ⬅️ חדש: סינון קשיח לפני שליחה
 
 from utils.runtime_prefs import (
     set_mute, clear_mute, mute_remaining_sec,
@@ -148,7 +149,7 @@ async def webhook(request: Request):
     if TELEGRAM_WEBHOOK_SECRET:
         got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
         if not got or got.strip() != TELEGRAM_WEBHOOK_SECRET:
-            # קשיחות: 403 אמיתי ולא סתם {"ok": False}
+            # קשיחות: 403 אמיתי
             raise HTTPException(status_code=403, detail="unauthorized")
 
     update = await request.json()
@@ -520,9 +521,31 @@ async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
         return await send_message(f"⚠️ טרייד {tid} לא קיים/פג תוקף")
 
     tp = TradeProposal(**item["tp"])
+
+    # וולידציה פנימית (מבנה/טווחים)
     val = await validate_proposal(tp.dict(), interval=item.get("interval") or DEFAULT_INTERVAL, market=DEFAULT_MARKET)
     if not val["ok"]:
         return await edit_message(chat_id, message_id, "❌ הוולידציה נכשלה:\n" + "\n".join(f"- {e}" for e in val["errors"]))
+
+    # ⬅️ חדש: סינון Approvals קשיח לפני שליחה ל-sink
+    pre = preflight_proposal({
+        "symbol": tp.symbol,
+        "side": tp.side,
+        "entry": tp.entry,
+        "sl": tp.sl,
+        "tp1": tp.tp1,
+        "leverage": tp.leverage,
+        "success_pct": tp.success_pct,
+        "budget": item.get("tp", {}).get("budget"),
+        "interval": item.get("interval") or DEFAULT_INTERVAL,
+    })
+    if not pre["ok"]:
+        errs = "\n".join(f"- {e}" for e in pre["errors"])
+        warns = "\n".join(f"⚠️ {w}" for w in pre.get("warnings", []))
+        txt = "❌ approvals failed:\n" + errs
+        if warns:
+            txt += "\n\n" + warns
+        return await edit_message(chat_id, message_id, txt)
 
     trade_type = "FUTURES" if DEFAULT_MARKET.lower().startswith("future") else "SPOT"
     payload = {
@@ -562,6 +585,7 @@ async def _approve_trade_id(tid: str, chat_id: int, message_id: Optional[int]):
             return await edit_message(chat_id, message_id, f"✅ טרייד #{tid} נשלח ל־sink ופורסם לטלגרם.")
     except Exception as e:
         return await edit_message(chat_id, message_id, f"❌ ingest failed: {e}")
+
 
 
 
