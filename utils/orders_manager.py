@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 _Order = Dict[str, object]
 
 _LOCK = threading.Lock()
-# נשמור עד 1000 הזמנות בזיכרון (קליל ומהיר)
+# נשמור עד 1000 הזמנות בזיכרון
 _ORDERS: deque[_Order] = deque(maxlen=1000)
 
 _OPEN_STATUSES = {"NEW", "OPEN", "PARTIALLY_FILLED"}
@@ -64,6 +64,7 @@ def get_active_orders(*, symbol: Optional[str] = None, limit: int = 200) -> List
         items = [o for o in items if str(o.get("symbol")).upper() == sym]
     items = list(reversed(items))
     return items[:max(1, min(200, limit))]
+
 
 
 
