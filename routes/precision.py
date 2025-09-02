@@ -1,20 +1,23 @@
-# routes/precision.py
+# utils/precision.py
+# שמירה על תאימות לאחור: ייבוא והפצה מחדש מהמודול החדש precision_utils
 from __future__ import annotations
-from typing import Dict, Any
-from fastapi import APIRouter, Depends, Query
-from utils.auth import require_api_key
-from utils.precision import fix_order
+from .precision_utils import (
+    refresh_exchange_info,
+    get_precision_info,
+    round_to_precision,
+    apply_price_tick,
+    apply_price_tick_side,
+    apply_qty_step,
+    calc_quantity_from_budget,
+)
 
-router = APIRouter(prefix="/precision", tags=["Precision"], dependencies=[Depends(require_api_key)])
+__all__ = [
+    "refresh_exchange_info",
+    "get_precision_info",
+    "round_to_precision",
+    "apply_price_tick",
+    "apply_price_tick_side",
+    "apply_qty_step",
+    "calc_quantity_from_budget",
+]
 
-@router.get("/fix")
-def api_fix(
-    symbol: str = Query(...),
-    price: float = Query(...),
-    qty: float = Query(...),
-    market: str = Query("futures")
-) -> Dict[str, Any]:
-    """
-    מחזיר price/qty מתוקננים לפי tickSize/stepSize כדי למנוע דחיות ('Precision').
-    """
-    return fix_order(symbol, price, qty, market)
