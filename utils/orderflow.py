@@ -15,11 +15,12 @@ def _safe_float(x) -> float:
 
 def _cvd_from_aggtrades(trades: List[dict], window: int) -> Dict[str, float]:
     """
-    isBuyerMaker == True  -> sell (taker is buyer? binance semantics: True means the buyer is the market maker -> effectively SELL aggression)
-    Practically: treat isBuyerMaker True as SELL volume, False as BUY volume.
+    isBuyerMaker == True -> SELL aggression (הקונה הוא ה-MAKER).
+    לכן נספור True כסיילים, False כקניות.
     """
     buys, sells, cvd = 0.0, 0.0, 0.0
-    for t in trades[-window:]:
+    W = max(1, min(window, len(trades)))
+    for t in trades[-W:]:
         q = _safe_float(t.get("q"))
         if t.get("m"):  # isBuyerMaker
             sells += q
@@ -37,8 +38,8 @@ def _cvd_from_aggtrades(trades: List[dict], window: int) -> Dict[str, float]:
     }
 
 def _imbalance_from_depth(bids: List[List[str]], asks: List[List[str]], levels: int = 50) -> Dict[str, float]:
-    nb = min(levels, len(bids))
-    na = min(levels, len(asks))
+    nb = min(max(1, levels), len(bids))
+    na = min(max(1, levels), len(asks))
     bid_vol = sum(_safe_float(q) for _, q in bids[:nb])
     ask_vol = sum(_safe_float(q) for _, q in asks[:na])
     total = (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 1.0
@@ -51,28 +52,29 @@ def _imbalance_from_depth(bids: List[List[str]], asks: List[List[str]], levels: 
 def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_limit: int = 500, cvd_window: int = 300) -> Dict[str, Any]:
     symbol = symbol.upper().strip()
 
+    # Normalise depth limit to valid binance choices
+    depth_limit = max(5, min(depth_limit, 1000))
+    if depth_limit not in (5, 10, 20, 50, 100, 500, 1000):
+        for opt in (5, 10, 20, 50, 100, 500, 1000):
+            if depth_limit <= opt:
+                depth_limit = opt
+                break
+
     with httpx.Client(timeout=6.0) as client:
-        # aggTrades
-        r1 = client.get(f"{_FAPI}/fapi/v1/aggTrades", params={"symbol": symbol, "limit": min(trades_limit, 1000)})
+        r1 = client.get(f"{_FAPI}/fapi/v1/aggTrades", params={
+            "symbol": symbol,
+            "limit": min(max(1, trades_limit), 1000)
+        })
         r1.raise_for_status()
         trades = r1.json()
 
-        # depth
-        # valid limits: 5, 10, 20, 50, 100, 500, 1000
-        depth_limit = max(5, min(depth_limit, 1000))
-        if depth_limit not in (5, 10, 20, 50, 100, 500, 1000):
-            # round to nearest valid
-            for opt in (5, 10, 20, 50, 100, 500, 1000):
-                if depth_limit <= opt:
-                    depth_limit = opt
-                    break
         r2 = client.get(f"{_FAPI}/fapi/v1/depth", params={"symbol": symbol, "limit": depth_limit})
         r2.raise_for_status()
         depth = r2.json()
 
-    cvd = _cvd_from_aggtrades(trades, window=min(cvd_window, len(trades)))
-    bids = depth.get("bids", [])
-    asks = depth.get("asks", [])
+    cvd = _cvd_from_aggtrades(trades, window=cvd_window)
+    bids = depth.get("bids", []) or []
+    asks = depth.get("asks", []) or []
     imb = _imbalance_from_depth(bids, asks, levels=min(50, depth_limit))
 
     best_bid = _safe_float(bids[0][0]) if bids else None
@@ -93,6 +95,7 @@ def get_orderflow_snapshot(symbol: str, trades_limit: int = 800, depth_limit: in
             "imbalance": imb,
         }
     }
+
 
 
 
