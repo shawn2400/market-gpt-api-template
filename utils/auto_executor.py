@@ -1,6 +1,6 @@
 # utils/auto_executor.py
 from __future__ import annotations
-import asyncio, logging, os, time
+import asyncio, logging, os, time, random
 from collections import deque
 from typing import Optional, Dict, Any, List
 
@@ -11,11 +11,34 @@ from utils.indicators import prepare_indicators_for_backtest
 from utils.binance_client import get_klines_df
 from utils.anchor import evaluate_anchor
 from utils.trade_executor import execute_trade_live
-from utils.symbol_scheduler import SymbolScheduler
-from utils.http_client import circuit_breaker_open
-from utils.http_client import CB as CIRCUIT
-# אופציונלי: get_price אם תרצה בעתיד
-# from utils.ws_fallback import get_price as ws_get_price
+
+# Circuit-breaker & Scheduler: Fallbackים שקטים אם אין מודולים (שלב ב')
+try:
+    from utils.http_client import circuit_breaker_open
+except Exception:
+    def circuit_breaker_open() -> bool:  # type: ignore
+        return False
+
+try:
+    from utils.symbol_scheduler import SymbolScheduler
+except Exception:
+    class SymbolScheduler:  # type: ignore
+        def __init__(self, symbols: List[str], batch_size: Optional[int] = None):
+            self.syms = list(dict.fromkeys([s.upper() for s in symbols if s]))
+            self.i = 0
+            self.bs = int(os.getenv("SCAN_MAX_LIMIT", "10")) if batch_size is None else int(batch_size)
+            self.bs = max(1, min(self.bs, max(1, len(self.syms))))
+        def next_batch(self) -> List[str]:
+            if not self.syms: return []
+            j = (self.i + self.bs)
+            out = self.syms[self.i:j]
+            if j >= len(self.syms):
+                # סבב
+                random.shuffle(self.syms)
+                self.i = 0
+            else:
+                self.i = j
+            return out
 
 logger = logging.getLogger("algogpt.autoexec")
 
@@ -30,7 +53,7 @@ SYMBOL_COOLDOWN_SEC = int(os.getenv("SYMBOL_COOLDOWN_SEC", "600"))
 
 QUALITY_THRESHOLD = float(os.getenv("MIN_QUALITY_SCORE", str(getattr(cfg, "MIN_QUALITY_SCORE", 8.5))))
 SCAN_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "4"))
-TIME_BUDGET_SEC = float(os.getenv("SCAN_TIME_BUDGET_SEC", "7.5"))  # מגן על Timeout
+TIME_BUDGET_SEC = float(os.getenv("SCAN_TIME_BUDGET_SEC", "7.5"))
 
 _last_trade_ts: Dict[str, float] = {}
 
@@ -41,8 +64,7 @@ def _log(event: str, level: str = "INFO", **kw):
 
 def _decide_side(row: Dict[str, Any]) -> Optional[str]:
     e21, e50 = row.get("ema_21"), row.get("ema_50")
-    if e21 is None or e50 is None:
-        return None
+    if e21 is None or e50 is None: return None
     if e21 > e50: return "LONG"
     if e21 < e50: return "SHORT"
     return None
@@ -157,7 +179,6 @@ async def _scan_batch(symbols: List[str], max_trades: int) -> int:
     except asyncio.TimeoutError:
         _log("batch_timeout", count=len(symbols), level="WARNING")
 
-    # סדר לפי ציון איכות יורד
     results.sort(key=lambda p: p.get("score", 0.0), reverse=True)
     for plan in results:
         if trades_sent >= max_trades:
@@ -189,15 +210,13 @@ async def auto_scan_and_trade():
             batch = sched.next_batch()
             sent = await _scan_batch(batch, MAX_TRADES_PER_TICK)
 
-            # ניהול חי (אם מופעל)
             try:
                 if getattr(cfg, "ALLOW_MANAGE_OPEN_TRADES", True):
                     from utils.open_trade_manager import manage_open_trades
-                    _ = await manage_open_trades()  # ניהול קל, עם קירור פנימי
+                    _ = await manage_open_trades()
             except Exception as e:
                 _log("manage_call_error", error=str(e), level="WARNING")
 
-            # השהייה
             dt = time.time() - tic
             sleep_s = max(0.0, SCAN_INTERVAL - dt)
             await asyncio.sleep(sleep_s)
