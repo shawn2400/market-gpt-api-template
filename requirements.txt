@@ -5,9 +5,8 @@ gunicorn==22.0.0
 
 # Binance & Trading
 python-binance==1.0.19
-httpx==0.25.2          # ✅ תואם גם OpenAI וגם python-telegram-bot
+httpx==0.25.2
 websockets==12.0
-# aiohttp==3.9.5   # אופציונלי
 
 # Data / Math
 pandas==2.2.2
@@ -25,7 +24,18 @@ openai==1.37.0
 python-dotenv==1.0.1
 redis==5.0.4
 orjson==3.10.6
-psutil==5.
+psutil==5.9.8   # ✅ תוקן
+
+# Logging / Monitoring
+structlog==24.1.0
+prometheus-client==0.20.0
+
+# Telegram Bot
+python-telegram-bot==20.6
+
+# Tests
+pytest==8.2.2
+
 
 
 
