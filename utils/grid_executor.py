@@ -8,6 +8,7 @@ from utils.precision_utils import apply_price_tick_side, calc_quantity_from_budg
 from utils.binance_client import place_limit_order, set_leverage
 from utils.grid_planner import plan_grid
 from utils.grid_tracker import add_grid
+from utils.grid_manager import start_grid_for_position  # להצמדת SL/TP אחרי כניסה
 
 logger = logging.getLogger("algogpt.grid.executor")
 
@@ -117,6 +118,12 @@ async def execute_grid_trade(
     except Exception:
         pass
 
+    # --- הצמדת SL/TP חכמה לגריד ---
+    try:
+        res_mgr = await start_grid_for_position(s, use_indicators=True)
+    except Exception as e:
+        res_mgr = {"ok": False, "error": f"grid_manager_failed:{e}"}
+
     return {
         "mode": "grid_live",
         "ok": True if placed_orders else False,
@@ -127,4 +134,6 @@ async def execute_grid_trade(
         "budget": budget,
         "leverage": leverage,
         "orders": placed_orders,
+        "manager": res_mgr,
     }
+
