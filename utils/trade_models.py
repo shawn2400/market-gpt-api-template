@@ -27,7 +27,7 @@ class TradeProposal(BaseModel):
         return round(self.budget_usd * self.leverage, 2)
 
     def qty_estimate(self) -> float:
-        # הסתמכות על precision אמיתי עדיפה, כאן הערכה
+        # הערכה — עדיף להשתמש ב-precision אמיתי אם יש
         return round(self.notional_usd() / self.entry, 6)
 
     def risk_rr(self) -> Dict[str, float]:
@@ -55,7 +55,7 @@ def _fmt_time(minutes_from_now: Optional[int]) -> Optional[str]:
     return t.strftime("%Y-%m-%d %H:%M")
 
 def estimate_minutes(distance: float, per_min_move: float) -> Optional[int]:
-    if per_min_move <= 0 or not distance or distance <= 0:
+    if per_min_move is None or per_min_move <= 0 or not distance or distance <= 0:
         return None
     return int(max(1, round(distance / per_min_move)))
 
@@ -78,22 +78,39 @@ def build_eta(tp: TradeProposal, per_min_move: float) -> TradeETA:
 
 def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
     rr = tp.risk_rr()
-    lines = [
-        f"🧠 *AlgoGPT — הצעת טרייד*",
+    rr1_s = f"{rr.get('rr1', 0.0):.2f}"
+    rr2_s = f"{rr.get('rr2', 0.0):.2f}"
+    rr3_s = f"{rr.get('rr3', 0.0):.2f}"
+
+    line_rr = f"RR: TP1 `{rr1_s}`"
+    if tp.tp2 is not None:
+        line_rr += f" | TP2 `{rr2_s}`"
+    if tp.tp3 is not None:
+        line_rr += f" | TP3 `{rr3_s}`"
+
+    parts = [
+        "🧠 *AlgoGPT — הצעת טרייד*",
         f"*{tp.symbol}* | *{tp.side.upper()}* | מחיר עכשיו: `{tp.current_price:.4f}`",
-        f"כניסה: `{tp.entry:.4f}` | SL: `{tp.sl:.4f}` | TP1: `{tp.tp1:.4f}`"
-        f"{f' | TP2: `{tp.tp2:.4f}`' if tp.tp2 else ''}"
-        f"{f' | TP3: `{tp.tp3:.4f}`' if tp.tp3 else ''}",
+        " | ".join(
+            [f"כניסה: `{tp.entry:.4f}`", f"SL: `{tp.sl:.4f}`", f"TP1: `{tp.tp1:.4f}`"]
+            + ([f"TP2: `{tp.tp2:.4f}`"] if tp.tp2 is not None else [])
+            + ([f"TP3: `{tp.tp3:.4f}`"] if tp.tp3 is not None else [])
+        ),
         f"מינוף: `x{tp.leverage}` | תקציב: `${tp.budget_usd:.2f}` | Notional≈ `${tp.notional_usd():.2f}` | Qty≈ `{tp.qty_estimate():.6f}`",
-        f"RR: TP1 `{rr['rr1']:.2f}`"
-        f"{f' | TP2 `{rr['rr2']:.2f}`' if tp.tp2 else ''}"
-        f"{f' | TP3 `{rr['rr3']:.2f}`' if tp.tp3 else ''}",
-        f"% הצלחה משוער: `{tp.success_pct:.1f}%`" if tp.success_pct is not None else "",
+        line_rr,
+        (f"% הצלחה משוער: `{tp.success_pct:.1f}%`" if tp.success_pct is not None else ""),
         f"⏱️ *זמנים* (TZ={eta.tz}) — עכשיו: _{eta.now_local}_",
-        f"ETA → SL: _{eta.eta_sl or '—'}_ | TP1: _{eta.eta_tp1 or '—'}_"
-        f"{f' | TP2: _{eta.eta_tp2}_' if eta.eta_tp2 else ''}"
-        f"{f' | TP3: _{eta.eta_tp3}_' if eta.eta_tp3 else ''}",
+        " | ".join(
+            [
+                f"ETA → SL: _{eta.eta_sl or '—'}_",
+                f"TP1: _{eta.eta_tp1 or '—'}_",
+            ]
+            + ([f"TP2: _{eta.eta_tp2}_"] if eta.eta_tp2 else [])
+            + ([f"TP3: _{eta.eta_tp3}_"] if eta.eta_tp3 else [])
+        ),
+        (f"סיבה/תקציר: {why}" if why else "")
     ]
-    if why: lines.append(f"סיבה/תקציר: {why}")
-    return "\n".join([ln for ln in lines if ln])
+
+    return "\n".join([p for p in parts if p])
+
 
