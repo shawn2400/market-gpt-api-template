@@ -1,9 +1,9 @@
 # routes/ui_grid.py
 from __future__ import annotations
 import logging
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from utils.auth import require_api_key
 from utils.grid_tracker import get_open_grids
@@ -17,19 +17,21 @@ router = APIRouter(
 )
 
 @router.get("/json")
-def grid_json() -> Dict[str, Any]:
+def grid_json(account_id: Optional[str] = Query(None, description="סינון לפי account_id")) -> Dict[str, Any]:
     """
     מחזיר JSON עם כל הגרידים הפתוחים.
-    זה קליל → רק מידע חיוני מתוך grid_tracker.json.
+    אפשר לסנן לפי account_id.
     """
     grids = get_open_grids()
+    if account_id:
+        grids = [g for g in grids if str(g.get("account_id", "main")) == account_id]
     return {"ok": True, "count": len(grids), "grids": grids}
 
 @router.get("/", response_class=HTMLResponse)
 def grid_dashboard() -> str:
     """
-    דשבורד HTML בסיסי → מציג טבלה עם הגרידים הפעילים.
-    כולל כפתור רענון (JavaScript) → מושך /ui/grid/json.
+    דשבורד HTML בסיסי להצגת גרידים פתוחים.
+    כולל בחירת account_id לסינון.
     """
     return """
     <html>
@@ -43,12 +45,19 @@ def grid_dashboard() -> str:
             th, td { border: 1px solid #555; padding: 8px; text-align: center; }
             th { background: #333; }
             tr:nth-child(even) { background: #222; }
-            button { padding: 8px 16px; margin-top: 10px; }
+            button, select { padding: 8px 16px; margin-top: 10px; }
         </style>
     </head>
     <body>
         <h1>🚀 AlgoGPT Grid Dashboard</h1>
+        <label for="accountSelect">בחר Account:</label>
+        <select id="accountSelect" onchange="loadGrids()">
+            <option value="">All</option>
+            <option value="main">main</option>
+            <option value="spot1">spot1</option>
+        </select>
         <button onclick="loadGrids()">רענן עכשיו</button>
+
         <table id="gridTable">
             <thead>
                 <tr>
@@ -66,7 +75,10 @@ def grid_dashboard() -> str:
 
         <script>
         async function loadGrids() {
-            const res = await fetch('/ui/grid/json');
+            const acc = document.getElementById("accountSelect").value;
+            let url = '/ui/grid/json';
+            if (acc) url += '?account_id=' + acc;
+            const res = await fetch(url);
             const data = await res.json();
             const tbody = document.querySelector("#gridTable tbody");
             tbody.innerHTML = "";
@@ -96,3 +108,4 @@ def grid_dashboard() -> str:
     </body>
     </html>
     """
+
