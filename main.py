@@ -14,6 +14,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
+# --- סביבות ענן ---
 IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
 if not IS_CLOUD:
     try:
@@ -22,6 +23,7 @@ if not IS_CLOUD:
     except Exception:
         pass
 
+# --- עזרי קונפיג ---
 def _to_bool(v: str | None, default: bool = False) -> bool:
     if v is None:
         return default
@@ -36,44 +38,30 @@ def _clean_key(s: str | None) -> str:
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.17.0")
 
-# ---- Config & Logging ----
+# --- Utils ---
 from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 
-# ---- Binance + Prices ----
-from utils.binance_client import (
-    fapi_ping, futures_balance,
-    start_user_stream_keepalive, stop_user_stream,
-)
-from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
-
-# ---- Auth ----
 from utils.auth import extract_token, allow_all, token_matches
-
-# ---- Optional user-data consumer ----
-try:
-    from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
-except Exception:
-    async def start_user_stream_consumer():  # type: ignore
-        return None
-    async def stop_user_stream_consumer():  # type: ignore
-        return None
-
-# ---- Manager/Executor ----
+from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync, last_server_time_ms
+from utils.binance_client import fapi_ping, futures_balance, start_user_stream_keepalive, stop_user_stream
+from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor, is_executor_running
 
-# ---- Time Sync (חדש) ----
-from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync, last_server_time_ms
-
-# ---- ExchangeInfo warm-up (ל־readyz) ----
-from utils.binance_client import futures_exchange_info_safe
+# Optional
+try:
+    from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
+except Exception:
+    async def start_user_stream_consumer(): return None
+    async def stop_user_stream_consumer(): return None
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
+# --- תיקיות ---
 def _ensure_dir(path: str) -> bool:
     p = Path(path)
     try:
@@ -110,282 +98,91 @@ app.add_middleware(
 try:
     if static_ok and os.access("static", os.R_OK):
         app.mount("/static", StaticFiles(directory="static"), name="static")
-    else:
-        logger.warning({"event": "static_mount_skipped", "reason": "no_access_or_not_ok"})
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
-# ---------- Auth Middleware ----------
+# --- Auth Middleware ---
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    PUBLIC_PATHS = {
-        "/", "/openapi.json",
-        "/health", "/health/live", "/health_full", "/readyz",
-        "/docs", "/redoc",
-        "/telegram/webhook",
-    }
+    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook"}
     PUBLIC_PREFIXES = ["/price", "/static/"]
     path = request.url.path
-    if request.method.upper() == "OPTIONS":
-        return await call_next(request)
-    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
-        return await call_next(request)
-    if allow_all():
-        return await call_next(request)
-    token = extract_token(request, authorization=request.headers.get("Authorization",""),
-                          x_api_key=request.headers.get("X-API-Key"))
-    if not token_matches(token):
-        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    if request.method.upper() == "OPTIONS": return await call_next(request)
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES): return await call_next(request)
+    if allow_all(): return await call_next(request)
+    token = extract_token(request, authorization=request.headers.get("Authorization", ""), x_api_key=request.headers.get("X-API-Key"))
+    if not token_matches(token): return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ---------- Routers ----------
+# --- Routers ---
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
         mod = __import__(module_path, fromlist=[attr])
         router = getattr(mod, attr)
         app.include_router(router)
-        logger.info({"event": "router_registered", "router": module_path, "attr": attr})
+        logger.info({"event": "router_registered", "router": module_path})
     except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": module_path, "attr": attr, "error": str(e)})
+        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
-CORE_ROUTERS: List[Tuple[str, str]] = [
-    ("routes.trade", "router"),
-    ("routes.market", "router"),
-    ("routes.binance_status", "router"),
-    ("routes.executor", "router"),
-    ("routes.orders", "router"),
-    ("routes.price", "router"),
-    ("routes.rpc", "router"),
+ALL_ROUTERS: List[str] = [
+    "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders",
+    "routes.price", "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
+    "routes.ws_stream", "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
+    "routes.telegram_bot", "routes.metrics_extra", "routes.precision", "routes.alerts", "routes.reconcile",
+    "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl", "routes.ui", "routes.backtest"
 ]
+
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
-    CORE_ROUTERS.append(("routes.ai", "router"))
+    ALL_ROUTERS.append("routes.ai")
 
-EXTRA_ROUTERS: List[Tuple[str, str]] = [
-    ("routes.market_extra", "router"),
-    ("routes.executor_extra", "router"),
-    ("routes.anchor_extra", "router"),
-    ("routes.ws_stream", "router"),
-    ("routes.grid", "router"),
-    ("routes.debug", "router"),
-    ("routes.indicators", "router"),
-    ("routes.telegram_bot", "router"),
-    ("routes.telegram_bot", "router_public"),
-    ("routes.orderbook", "router"),
-    ("routes.metrics_extra", "router"),
-    ("routes.indicators_extra", "router"),
-    ("routes.precision", "router"),
-    ("routes.alerts", "router"),
-    ("routes.reconcile", "router"),
-    ("routes.scheduler_ai", "router"),
-    # חדש: ממשק אדמין קל (פקודות /panic, /config show וכו')
-    ("routes.admin", "router"),
-]
-for mod, attr in CORE_ROUTERS: _include_router(mod, attr)
-for mod, attr in EXTRA_ROUTERS: _include_router(mod, attr)
+for mod in ALL_ROUTERS: _include_router(mod)
 
-# ---------- Root & Health ----------
-@app.get("/", tags=["Config"])
-async def root_status():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+@app.get("/")
+async def root_status(): return {"ok": True, "status": "ok", "version": APP_VERSION}
 
-@app.get("/health", tags=["Health"])
-async def health():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+@app.get("/health")
+async def health(): return {"ok": True, "status": "ok", "version": APP_VERSION}
 
-@app.get("/health/live", tags=["Health"])
-async def health_live():
-    return {"ok": True, "status": "live"}
-
-@app.get("/health_full", tags=["Health"])
-async def health_full():
-    from utils.ws_fallback import is_price_fresh, get_price
-    from utils.binance_client import fapi_ping, futures_balance, start_user_stream_keepalive
-
-    k = _clean_key(os.getenv("BINANCE_API_KEY")); s = _clean_key(os.getenv("BINANCE_API_SECRET"))
-    key_len = len(k); sec_len = len(s)
-
-    try:
-        ping_ok = bool(fapi_ping())
-    except Exception as e:
-        ping_ok = False
-        logger.warning({"event": "health_ping_error", "error": str(e)})
-
-    try:
-        bal = futures_balance()
-        account_ok = isinstance(bal, list)
-    except Exception as e:
-        account_ok = False
-        logger.warning({"event": "health_account_error", "error": str(e)})
-
-    try:
-        lk = start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
-        listen_key_ok = bool(lk)
-    except Exception as e:
-        listen_key_ok = False
-        logger.warning({"event": "health_listenkey_error", "error": str(e)})
-
-    symbols = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
-    prices: Dict[str, Any] = {sym: {"fresh": is_price_fresh(sym, max_age_sec=int(os.getenv("HEALTH_PRICE_MAX_AGE", "30"))),
-                                     "price": get_price(sym)} for sym in symbols}
-
-    return {
-        "ok": bool((key_len == 64) and (sec_len == 64) and account_ok),
-        "version": APP_VERSION,
-        "binance": {"key_len": key_len, "secret_len": sec_len, "fapi_time_ok": ping_ok,
-                    "account_ok": account_ok, "listenKey_ok": listen_key_ok},
-        "prices": prices,
-        "time": datetime.now(timezone.utc).isoformat(),
-    }
-
-@app.get("/readyz", tags=["Health"])
+@app.get("/readyz")
 async def readyz():
-    """
-    readiness gate: time-sync קיים, exchangeInfo בזיכרון,
-    ומחירי WL/HEALTH_SYMBOLS טריים מספיק.
-    """
     try:
         ensure_fresh_sync()
-        st = last_server_time_ms()
-        time_ok = st is not None
-    except Exception:
-        time_ok = False
-
-    try:
-        info = futures_exchange_info_safe()  # cache חם
-        ex_ok = bool(info and isinstance(info.get("symbols"), list) and len(info["symbols"]) > 0)
-    except Exception:
-        ex_ok = False
-
-    syms = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
-    max_age = int(os.getenv("READY_PRICE_MAX_AGE", "45"))
-    prices_ok = all(is_price_fresh(sym, max_age_sec=max_age) for sym in syms)
-
-    ok = bool(time_ok and ex_ok and prices_ok)
-    return {
-        "ok": ok,
-        "time_sync_ok": time_ok,
-        "exchange_info_ok": ex_ok,
-        "prices_ok": prices_ok,
-        "symbols_checked": syms,
-    }
-
-@app.exception_handler(Exception)
-async def handle_exception(request: Request, exc: Exception):
-    logger.error({
-        "event": "exception",
-        "error": str(exc),
-        "type": exc.__class__.__name__,
-        "path": request.url.path,
-        "time": datetime.now(timezone.utc).isoformat(),
-    })
-    return JSONResponse({"detail": str(exc)}, status_code=500)
-
-_price_task: Optional[asyncio.Task] = None
-_manager_task: Optional[asyncio.Task] = None
+        ex_ok = bool(futures_balance())
+        syms = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
+        prices_ok = all(is_price_fresh(sym) for sym in syms)
+        return {"ok": ex_ok and prices_ok}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 @app.on_event("startup")
 async def startup_event():
-    global _price_task
-    logger.info({
-        "event": "startup",
-        "APP_VERSION": APP_VERSION,
-        "BINANCE_KEY_LEN": len(_clean_key(os.getenv("BINANCE_API_KEY"))),
-        "OPENAI_KEY_LEN": len((os.getenv("OPENAI_API_KEY") or "").strip()),
-        "config": dump_config_sanitized(),
-    })
-
-    # ---- Time sync (סעיפים 104–106) ----
+    logger.info({"event": "startup", "version": APP_VERSION})
+    try: sync_now(); start_background_sync() except: pass
+    try: start_user_stream_keepalive() except: pass
     try:
-        sync_now()
-        start_background_sync(interval_sec=int(os.getenv("TIME_SYNC_BG_SEC", "1800")))  # כל חצי שעה
-        logger.info({"event": "time_sync_started"})
-    except Exception as e:
-        logger.warning({"event": "time_sync_init_failed", "error": str(e)})
-
-    # ---- Futures listenKey keepalive ----
-    try:
-        start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
-        logger.info({"event": "listen_key_keepalive_started"})
-    except Exception as e:
-        logger.warning({"event": "listen_key_keepalive_failed", "error": str(e)})
-
-    # ---- WS price updater ----
-    syms = [s.strip().upper() for s in os.getenv("SYMS", os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT")).split(",") if s.strip()]
-    ws_keepalive = int(os.getenv("WS_KEEPALIVE_SEC", "25"))
-    rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
-    if syms:
-        try:
-            _price_task = asyncio.create_task(
-                auto_price_updater(syms, ws_interval_keepalive=ws_keepalive, rest_interval_sec=rest_every)
-            )
-            logger.info({"event": "price_updater_started", "symbols": syms, "ws_keepalive": ws_keepalive, "rest_every": rest_every})
-        except Exception as e:
-            logger.warning({"event": "price_updater_failed_start", "error": str(e)})
-
-    # ---- User-data consumer ----
-    try:
-        await start_user_stream_consumer()
-        logger.info({"event":"user_stream_consumer_started"})
-    except Exception as e:
-        logger.warning({"event":"user_stream_consumer_failed_start","error":str(e)})
+        syms = _parse_csv(os.getenv("SYMS", "BTCUSDT,ETHUSDT"))
+        if syms: asyncio.create_task(auto_price_updater(syms))
+    except: pass
+    try: await start_user_stream_consumer() except: pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global _price_task, _manager_task
-    try:
-        await stop_user_stream_consumer()
-    except Exception as e:
-        logger.warning({"event":"user_stream_consumer_stop_error","error":str(e)})
-    try:
-        stop_user_stream()
-        logger.info({"event": "listen_key_keepalive_stopped"})
-    except Exception as e:
-        logger.warning({"event": "listen_key_keepalive_stop_error", "error": str(e)})
-    if _price_task:
-        try: _price_task.cancel()
-        except Exception: pass
-        _price_task = None
-    if _manager_task:
-        try: _manager_task.cancel()
-        except Exception: pass
-        _manager_task = None
+    try: await stop_user_stream_consumer() except: pass
+    try: stop_user_stream() except: pass
 
-# --------- Exec / Manage ----------
-@app.post("/start-executor", tags=["Executor"])
-async def api_start_executor():
-    try:
-        start_executor()
-        return {"ok": True, "msg": "executor started"}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+@app.post("/start-executor")
+async def api_start_executor(): start_executor(); return {"ok": True}
 
-@app.post("/stop-executor", tags=["Executor"])
-async def api_stop_executor():
-    try:
-        stop_executor()
-        return {"ok": True, "msg": "executor stopping"}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+@app.post("/stop-executor")
+async def api_stop_executor(): stop_executor(); return {"ok": True}
 
-@app.post("/manage-once", tags=["Manager"])
-async def api_manage_once():
-    try:
-        await manage_open_trades()
-        return {"ok": True, "msg": "managed once"}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+@app.post("/manage-once")
+async def api_manage_once(): await manage_open_trades(); return {"ok": True}
 
 if __name__ == "__main__":
     import uvicorn
-    bind_host = os.getenv("BIND_HOST", "0.0.0.0")
-    bind_port = int(os.getenv("BIND_PORT", os.getenv("PORT", "8000")))
-    uvicorn.run(
-        "main:app",
-        host=bind_host,
-        port=bind_port,
-        reload=_to_bool(os.getenv("UVICORN_RELOAD", "0")),
-        log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
-    )
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
