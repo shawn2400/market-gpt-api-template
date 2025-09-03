@@ -39,7 +39,7 @@ from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.auth import extract_token, allow_all, token_matches
 from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync
-from utils.binance_client import futures_balance, start_user_stream_keepalive, stop_user_stream
+from utils.binance_client import futures_balance
 from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
@@ -96,12 +96,16 @@ async def validate_token(request: Request, call_next):
     if not token_matches(token): return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-def _include_router(module_path: str, attr: str = "router") -> None:
+def _include_router(module_path: str) -> None:
+    """כולל גם router וגם router_public אם קיימים במודול."""
     try:
-        mod = __import__(module_path, fromlist=[attr])
-        router = getattr(mod, attr)
-        app.include_router(router)
-        logger.info({"event": "router_registered", "router": module_path})
+        mod = __import__(module_path, fromlist=["router", "router_public"])
+        if hasattr(mod, "router"):
+            app.include_router(getattr(mod, "router"))
+            logger.info({"event": "router_registered", "router": module_path, "attr": "router"})
+        if hasattr(mod, "router_public"):
+            app.include_router(getattr(mod, "router_public"))
+            logger.info({"event": "router_registered", "router": module_path, "attr": "router_public"})
     except Exception as e:
         logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
@@ -111,11 +115,12 @@ ALL_ROUTERS: List[str] = [
     "routes.ws_stream", "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
     "routes.telegram_bot", "routes.metrics_extra", "routes.precision", "routes.alerts", "routes.reconcile",
     "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl", "routes.ui", "routes.backtest",
-    "routes.ui_grid",  # ✅ Dashboard Grid
+    "routes.ui_grid",
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ALL_ROUTERS.append("routes.ai")
-for mod in ALL_ROUTERS: _include_router(mod)
+for mod in ALL_ROUTERS:
+    _include_router(mod)
 
 # --- Endpoints ---
 @app.get("/")
@@ -137,37 +142,48 @@ async def readyz():
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info({"event": "startup", "version": APP_VERSION})
-    try: sync_now(); start_background_sync()
-    except Exception: pass
-    try: start_user_stream_keepalive()
-    except Exception: pass
+    logger.info({"event": "startup", "version": APP_VERSION, "config": dump_config_sanitized()})
+    try:
+        sync_now(); start_background_sync()
+    except Exception:
+        pass
     try:
         syms = _parse_csv(os.getenv("SYMS", "BTCUSDT,ETHUSDT"))
-        if syms: asyncio.create_task(auto_price_updater(syms))
-    except Exception: pass
-    try: await start_user_stream_consumer()
-    except Exception: pass
+        if syms:
+            asyncio.create_task(auto_price_updater(syms))
+    except Exception:
+        pass
+    try:
+        await start_user_stream_consumer()
+    except Exception:
+        pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    try: await stop_user_stream_consumer()
-    except Exception: pass
-    try: stop_user_stream()
-    except Exception: pass
+    try:
+        await stop_user_stream_consumer()
+    except Exception:
+        pass
 
 @app.post("/start-executor")
-async def api_start_executor(): start_executor(); return {"ok": True}
+async def api_start_executor():
+    start_executor()
+    return {"ok": True}
 
 @app.post("/stop-executor")
-async def api_stop_executor(): stop_executor(); return {"ok": True}
+async def api_stop_executor():
+    stop_executor()
+    return {"ok": True}
 
 @app.post("/manage-once")
-async def api_manage_once(): await manage_open_trades(); return {"ok": True}
+async def api_manage_once():
+    await manage_open_trades()
+    return {"ok": True}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
