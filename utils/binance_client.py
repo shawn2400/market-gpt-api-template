@@ -124,9 +124,6 @@ def futures_balance(account_id="main") -> List[Dict[str, Any]]:
 
 # ===== Prices =====
 def futures_mark_price(symbol: str, account_id="main") -> Optional[float]:
-    """
-    שליפת מחיר mark (Premium Index) מ־Binance Futures
-    """
     try:
         r = _request("GET", "/fapi/v1/premiumIndex", account_id=account_id, params={"symbol": symbol.upper()})
         data = r.json()
@@ -137,49 +134,27 @@ def futures_mark_price(symbol: str, account_id="main") -> Optional[float]:
         return None
 
 # ===== Orders =====
-def place_limit_order(symbol: str, side: str, quantity: float, price: float,
-                      time_in_force="GTC", post_only=False, reduce_only=False,
-                      position_side=None, new_client_order_id=None,
-                      account_id="main") -> Dict[str, Any]:
-    params = {
-        "symbol": symbol.upper(), "side": side.upper(), "type": "LIMIT",
-        "timeInForce": time_in_force,
-        "quantity": f"{quantity}", "price": f"{price}",
-        "reduceOnly": "true" if reduce_only else "false",
-        "newClientOrderId": new_client_order_id or "",
-    }
-    if position_side: params["positionSide"] = position_side
-    return _request("POST", "/fapi/v1/order", account_id=account_id, params=params, signed=True).json()
+def get_open_orders(symbol: Optional[str] = None, account_id="main") -> List[Dict[str, Any]]:
+    params = {"symbol": symbol.upper()} if symbol else {}
+    r = _request("GET", "/fapi/v1/openOrders", account_id=account_id, params=params, signed=True)
+    return r.json()
 
-def place_stop_market_order(symbol: str, side: str, stop_price: float, quantity: Optional[float] = None,
-                            reduce_only=True, position_side=None, new_client_order_id=None,
-                            account_id="main") -> Dict[str, Any]:
-    params = {
-        "symbol": symbol.upper(), "side": side.upper(), "type": "STOP_MARKET",
-        "stopPrice": f"{stop_price}",
-        "reduceOnly": "true" if reduce_only else "false",
-        "newClientOrderId": new_client_order_id or "",
-        "workingType": WORKING_TYPE,
-        "priceProtect": "true" if PRICE_PROTECT else "false",
-    }
-    if quantity: params["quantity"] = f"{quantity}"
-    if position_side: params["positionSide"] = position_side
-    return _request("POST", "/fapi/v1/order", account_id=account_id, params=params, signed=True).json()
+def cancel_order(symbol: str, order_id: Optional[int] = None,
+                 orig_client_order_id: Optional[str] = None,
+                 account_id="main") -> Dict[str, Any]:
+    params = {"symbol": symbol.upper()}
+    if order_id: params["orderId"] = order_id
+    if orig_client_order_id: params["origClientOrderId"] = orig_client_order_id
+    r = _request("DELETE", "/fapi/v1/order", account_id=account_id, params=params, signed=True)
+    return r.json()
 
-def place_take_profit_market(symbol: str, side: str, stop_price: float, quantity: Optional[float] = None,
-                             reduce_only=True, position_side=None, new_client_order_id=None,
-                             account_id="main") -> Dict[str, Any]:
-    params = {
-        "symbol": symbol.upper(), "side": side.upper(), "type": "TAKE_PROFIT_MARKET",
-        "stopPrice": f"{stop_price}",
-        "reduceOnly": "true" if reduce_only else "false",
-        "newClientOrderId": new_client_order_id or "",
-        "workingType": WORKING_TYPE,
-        "priceProtect": "true" if PRICE_PROTECT else "false",
-    }
-    if quantity: params["quantity"] = f"{quantity}"
-    if position_side: params["positionSide"] = position_side
-    return _request("POST", "/fapi/v1/order", account_id=account_id, params=params, signed=True).json()
+def futures_position_risk(account_id="main") -> List[Dict[str, Any]]:
+    r = _request("GET", "/fapi/v2/positionRisk", account_id=account_id, signed=True)
+    return r.json()
+
+def place_limit_order(...): ...
+def place_stop_market_order(...): ...
+def place_take_profit_market(...): ...
 
 # ===== User stream keepalive =====
 _listen_state: Dict[str, Any] = {"thread": None, "stop": None, "listenKey": None, "account_id": None}
@@ -187,7 +162,6 @@ _listen_state: Dict[str, Any] = {"thread": None, "stop": None, "listenKey": None
 def start_user_stream_keepalive(account_id: str = "main") -> None:
     if _listen_state.get("thread") and _listen_state["thread"].is_alive():
         return
-
     client = get_futures_client(account_id)
     r = client.post(f"{BASE_URL}/fapi/v1/listenKey")
     r.raise_for_status()
@@ -196,11 +170,9 @@ def start_user_stream_keepalive(account_id: str = "main") -> None:
         raise RuntimeError("Failed to obtain listenKey")
     _listen_state["listenKey"] = lk
     _listen_state["account_id"] = account_id
-
     keep_sec = int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800"))
     stop = threading.Event()
     _listen_state["stop"] = stop
-
     def _loop():
         logger.info({"event": "listen_key_keepalive_started"})
         while not stop.is_set():
@@ -209,7 +181,6 @@ def start_user_stream_keepalive(account_id: str = "main") -> None:
             except Exception as e:
                 logger.warning({"event": "listenkey_keepalive_error", "error": str(e)})
             stop.wait(keep_sec)
-
     t = threading.Thread(target=_loop, name="binance-listenkey-keepalive", daemon=True)
     _listen_state["thread"] = t
     t.start()
@@ -231,6 +202,7 @@ def stop_user_stream() -> None:
 __all__ = [
     "get_futures_client", "futures_balance", "futures_mark_price",
     "futures_exchange_info_safe", "get_symbol_info", "get_symbol_filters",
+    "get_open_orders", "cancel_order", "futures_position_risk",
     "place_limit_order", "place_stop_market_order", "place_take_profit_market",
     "start_user_stream_keepalive", "stop_user_stream"
 ]
