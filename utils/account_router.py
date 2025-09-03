@@ -1,42 +1,29 @@
 # utils/account_router.py
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Dict, Any
 import os, json
+from typing import Dict, Any
+from fastapi import APIRouter, Depends
+from utils.auth import require_api_key
 
-router = APIRouter(prefix="/accounts", tags=["Accounts"])
+router = APIRouter(
+    prefix="/accounts",
+    tags=["Accounts"],
+    dependencies=[Depends(require_api_key)]
+)
 
-ACCOUNTS_FILE = os.getenv("ACCOUNTS_CONFIG_FILE", "accounts/accounts_config.json")
-
-def _load_accounts() -> List[Dict[str, Any]]:
-    if not os.path.exists(ACCOUNTS_FILE):
-        return []
-    try:
-        with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data.get("accounts") or []
-    except Exception as e:
-        print(f"[account_router] Failed to load accounts: {e}")
-        return []
+ACCOUNTS_PATH = os.getenv("ACCOUNTS_CONFIG_PATH", "accounts/accounts_config.json")
 
 @router.get("/list")
 def list_accounts() -> Dict[str, Any]:
-    accounts = _load_accounts()
-    return {"ok": True, "total": len(accounts), "items": accounts}
+    try:
+        with open(ACCOUNTS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"ok": True, "accounts": data or {}}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 @router.get("/active")
-def active_account() -> Dict[str, Any]:
-    accounts = _load_accounts()
-    actives = [a for a in accounts if a.get("active")]
-    if not actives:
-        raise HTTPException(status_code=404, detail="No active account configured")
-    return {"ok": True, "account": actives[0]}
+def get_active_account() -> Dict[str, Any]:
+    return {"ok": True, "active": os.getenv("BINANCE_API_KEY", "default")}
 
-@router.get("/by-name")
-def account_by_name(name: str = Query(..., min_length=2, max_length=32)) -> Dict[str, Any]:
-    accounts = _load_accounts()
-    for a in accounts:
-        if a.get("name", "").lower() == name.strip().lower():
-            return {"ok": True, "account": a}
-    raise HTTPException(status_code=404, detail=f"Account not found: {name}")
 
