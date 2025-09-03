@@ -5,8 +5,7 @@ import os
 import asyncio
 import logging
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,9 +32,6 @@ def _parse_csv(s: str | None) -> List[str]:
     s = s or ""
     return [x.strip() for x in s.split(",") if x.strip()]
 
-def _clean_key(s: str | None) -> str:
-    return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
-
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.17.0")
 
 # --- Utils ---
@@ -45,13 +41,13 @@ from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 
 from utils.auth import extract_token, allow_all, token_matches
-from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync, last_server_time_ms
-from utils.binance_client import fapi_ping, futures_balance, start_user_stream_keepalive, stop_user_stream
-from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
+from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync
+from utils.binance_client import futures_balance, start_user_stream_keepalive, stop_user_stream
+from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.open_trade_manager import manage_open_trades
-from utils.auto_executor import start_executor, stop_executor, is_executor_running
+from utils.auto_executor import start_executor, stop_executor
 
-# Optional
+# Optional user stream
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
 except Exception:
@@ -67,9 +63,6 @@ def _ensure_dir(path: str) -> bool:
     try:
         p.mkdir(parents=True, exist_ok=True)
         return True
-    except PermissionError:
-        logger.warning({"event": "mkdir_permission_denied", "dir": path})
-        return False
     except Exception as e:
         logger.warning({"event": "mkdir_failed", "dir": path, "error": str(e)})
         return False
@@ -77,6 +70,7 @@ def _ensure_dir(path: str) -> bool:
 static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
+# --- FastAPI App ---
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
 
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
@@ -104,14 +98,18 @@ except Exception as e:
 # --- Auth Middleware ---
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook"}
-    PUBLIC_PREFIXES = ["/price", "/static/"]
+    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/ui/grid"}
+    PUBLIC_PREFIXES = ["/price", "/static/", "/ui/grid"]
     path = request.url.path
-    if request.method.upper() == "OPTIONS": return await call_next(request)
-    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES): return await call_next(request)
-    if allow_all(): return await call_next(request)
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+        return await call_next(request)
+    if allow_all():
+        return await call_next(request)
     token = extract_token(request, authorization=request.headers.get("Authorization", ""), x_api_key=request.headers.get("X-API-Key"))
-    if not token_matches(token): return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    if not token_matches(token):
+        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
 # --- Routers ---
@@ -129,19 +127,24 @@ ALL_ROUTERS: List[str] = [
     "routes.price", "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
     "routes.ws_stream", "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
     "routes.telegram_bot", "routes.metrics_extra", "routes.precision", "routes.alerts", "routes.reconcile",
-    "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl", "routes.ui", "routes.backtest"
+    "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl", "routes.ui", "routes.backtest",
+    "routes.ui_grid",  # ✅ Dashboard Grid
 ]
 
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ALL_ROUTERS.append("routes.ai")
 
-for mod in ALL_ROUTERS: _include_router(mod)
+for mod in ALL_ROUTERS:
+    _include_router(mod)
 
+# --- Endpoints ---
 @app.get("/")
-async def root_status(): return {"ok": True, "status": "ok", "version": APP_VERSION}
+async def root_status():
+    return {"ok": True, "status": "ok", "version": APP_VERSION}
 
 @app.get("/health")
-async def health(): return {"ok": True, "status": "ok", "version": APP_VERSION}
+async def health():
+    return {"ok": True, "status": "ok", "version": APP_VERSION}
 
 @app.get("/readyz")
 async def readyz():
@@ -157,31 +160,57 @@ async def readyz():
 @app.on_event("startup")
 async def startup_event():
     logger.info({"event": "startup", "version": APP_VERSION})
-    try: sync_now(); start_background_sync() except: pass
-    try: start_user_stream_keepalive() except: pass
+    try:
+        sync_now()
+        start_background_sync()
+    except Exception:
+        pass
+    try:
+        start_user_stream_keepalive()
+    except Exception:
+        pass
     try:
         syms = _parse_csv(os.getenv("SYMS", "BTCUSDT,ETHUSDT"))
-        if syms: asyncio.create_task(auto_price_updater(syms))
-    except: pass
-    try: await start_user_stream_consumer() except: pass
+        if syms:
+            asyncio.create_task(auto_price_updater(syms))
+    except Exception:
+        pass
+    try:
+        await start_user_stream_consumer()
+    except Exception:
+        pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    try: await stop_user_stream_consumer() except: pass
-    try: stop_user_stream() except: pass
+    try:
+        await stop_user_stream_consumer()
+    except Exception:
+        pass
+    try:
+        stop_user_stream()
+    except Exception:
+        pass
 
 @app.post("/start-executor")
-async def api_start_executor(): start_executor(); return {"ok": True}
+async def api_start_executor():
+    start_executor()
+    return {"ok": True}
 
 @app.post("/stop-executor")
-async def api_stop_executor(): stop_executor(); return {"ok": True}
+async def api_stop_executor():
+    stop_executor()
+    return {"ok": True}
 
 @app.post("/manage-once")
-async def api_manage_once(): await manage_open_trades(); return {"ok": True}
+async def api_manage_once():
+    await manage_open_trades()
+    return {"ok": True}
 
+# --- Run ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
