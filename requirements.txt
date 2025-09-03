@@ -25,22 +25,8 @@ openai==1.37.0
 python-dotenv==1.0.1
 redis==5.0.4
 orjson==3.10.6
-psutil==5.9.8   # NEW: דרוש ל-/debug/health
+psutil==5.
 
-# Logging / Monitoring
-structlog==24.1.0
-prometheus-client==0.20.0
-
-# Telegram Bot
-python-telegram-bot==20.6   # ✅ יציב מול httpx==0.25.2
-
-# Tests
-pytest==8.2.2
-
-# ---------- אופציונלי לביצועים ----------
-# uvloop==0.19.0
-# httptools==0.6.1
-# hiredis==3.0.0
 
 
 
