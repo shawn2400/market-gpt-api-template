@@ -1,80 +1,78 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="he">
 <head>
     <meta charset="UTF-8">
-    <title>AlgoGPT Grid Dashboard</title>
+    <title>AlgoGPT – Grid Dashboard</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f9f9f9; }
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; }
         h1 { color: #333; }
-        table { border-collapse: collapse; width: 100%; background: white; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-        th { background: #333; color: white; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 10px; border: 1px solid #ccc; text-align: center; }
+        th { background: #eee; }
         tr:nth-child(even) { background: #f2f2f2; }
-        button { padding: 6px 12px; margin: 10px 0; cursor: pointer; }
+        .ok { color: green; }
+        .fail { color: red; }
     </style>
-</head>
-<body>
-    <h1>AlgoGPT – Grid Dashboard</h1>
-    <p>מציג טריידים פתוחים מכל החשבונות (רענון אוטומטי כל 60 שניות)</p>
-
-    <button onclick="loadData()">רענן עכשיו</button>
-
-    <table id="gridTable">
-        <thead>
-            <tr>
-                <th>Account</th>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Market</th>
-                <th>Budget</th>
-                <th>Leverage</th>
-                <th>Base Price</th>
-                <th>State</th>
-                <th>Updated</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr><td colspan="9">טוען נתונים...</td></tr>
-        </tbody>
-    </table>
-
     <script>
-        async function loadData() {
+        async function loadGridData() {
             try {
-                const res = await fetch("/ui/grid/data");
+                const accountId = document.getElementById("accountFilter").value;
+                let url = "/ui/grid/data";
+                if (accountId) url += "?account_id=" + encodeURIComponent(accountId);
+
+                const res = await fetch(url);
                 const data = await res.json();
-                const tbody = document.querySelector("#gridTable tbody");
+
+                const tbody = document.getElementById("gridTableBody");
                 tbody.innerHTML = "";
 
-                if (!data.items || data.items.length === 0) {
-                    tbody.innerHTML = "<tr><td colspan='9'>אין טריידים פעילים כרגע</td></tr>";
-                    return;
+                if (data.ok && data.items.length > 0) {
+                    data.items.forEach(trade => {
+                        const row = `<tr>
+                            <td>${trade.symbol || "-"}</td>
+                            <td>${trade.side || "-"}</td>
+                            <td>${trade.market || "-"}</td>
+                            <td>${trade.account_id || "-"}</td>
+                            <td>${trade.entry || "-"}</td>
+                            <td>${trade.sl || "-"}</td>
+                            <td>${trade.tp || "-"}</td>
+                            <td>${trade.status || "-"}</td>
+                        </tr>`;
+                        tbody.innerHTML += row;
+                    });
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="8">אין נתונים להצגה</td></tr>`;
                 }
-
-                data.items.forEach(item => {
-                    const row = `<tr>
-                        <td>${item.account_id || '-'}</td>
-                        <td>${item.symbol || '-'}</td>
-                        <td>${item.side || '-'}</td>
-                        <td>${item.market || '-'}</td>
-                        <td>${item.budget || '-'}</td>
-                        <td>${item.leverage || '-'}</td>
-                        <td>${item.base_price || '-'}</td>
-                        <td>${item.state || '-'}</td>
-                        <td>${item.updated_at || '-'}</td>
-                    </tr>`;
-                    tbody.insertAdjacentHTML("beforeend", row);
-                });
             } catch (err) {
-                console.error("loadData error:", err);
+                console.error("loadGridData failed", err);
             }
         }
 
-        // רענון אוטומטי כל 60 שניות
-        setInterval(loadData, 60000);
-
-        // טעינה ראשונית
-        loadData();
+        // Auto-refresh כל 45 שניות (קליל, לא יעמיס)
+        setInterval(loadGridData, 45000);
+        window.onload = loadGridData;
     </script>
+</head>
+<body>
+    <h1>📊 AlgoGPT – Grid Dashboard</h1>
+    <label for="accountFilter">בחר חשבון:</label>
+    <input type="text" id="accountFilter" placeholder="main / spot1" oninput="loadGridData()">
+
+    <table>
+        <thead>
+            <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Market</th>
+                <th>Account</th>
+                <th>Entry</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody id="gridTableBody"></tbody>
+    </table>
 </body>
 </html>
+
