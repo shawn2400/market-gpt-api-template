@@ -1,21 +1,14 @@
 {
-  "accounts": [
-    {
-      "name": "main",
-      "type": "futures",
-      "api_key": "YOUR_API_KEY_HERE",
-      "api_secret": "YOUR_SECRET_HERE",
-      "active": true,
-      "default_leverage": 10,
-      "default_market": "futures"
-    },
-    {
-      "name": "spot1",
-      "type": "spot",
-      "api_key": "YOUR_SPOT_API_KEY",
-      "api_secret": "YOUR_SPOT_SECRET",
-      "active": true,
-      "default_market": "spot"
-    }
-  ]
+  "default": {
+    "api_key": "BINANCE_API_KEY_HERE",
+    "api_secret": "BINANCE_SECRET_KEY_HERE",
+    "type": "futures"
+  },
+  "spot_acc": {
+    "api_key": "SPOT_API_KEY",
+    "api_secret": "SPOT_SECRET_KEY",
+    "type": "spot"
+  }
 }
+
+
