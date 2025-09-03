@@ -7,6 +7,7 @@ import os, json, asyncio, uuid, time, hashlib
 import httpx
 
 from utils.auth import require_api_key
+# שימוש דרך שכבת alerts (proxy) לשמירת קונסיסטנטיות מעל טלגרם
 from utils.alerts import (
     send_telegram_message as send_message,
     edit_telegram_message as edit_message,
@@ -18,16 +19,17 @@ from utils.indicators import prepare_indicators_for_backtest  # noqa: F401
 from utils.ai_analysis import analyze_with_ai  # noqa: F401
 from utils.liquidity import estimate_slippage
 from utils.trade_validator import validate_proposal
-from utils.approvals import preflight_proposal
+from utils.approvals import preflight_proposal  # סינון קשיח/רך
+
 from utils.runtime_prefs import (
     set_mute, clear_mute, mute_remaining_sec,
     set_near_pct_override, get_near_pct_override,
     set_trade_quiet, TelePrefs
 )
+TPREFS = TelePrefs()
+
 from utils.hmac_utils import build_signed_outbound, generate_idempotency_key, sign_payload
 from utils.binance_client import futures_mark_price  # ✅ שימוש ב-Mark Price
-
-TPREFS = TelePrefs()
 
 router_public = APIRouter(prefix="/telegram", tags=["Telegram"])
 router = APIRouter(prefix="/telegram", tags=["Telegram"], dependencies=[Depends(require_api_key)])
@@ -190,23 +192,24 @@ async def webhook(request: Request):
                 "/size <trade_id> <risk_pct>\n"
             )
 
-        # ========== /propose ==========
+        # ========== NEW: /propose ==========
         if text.startswith("/propose "):
             try:
-                # /propose SYMBOL INTERVAL SIDE LEV ENTRY SL TP1 TP2 TP3 SUCCESS%
+                # פורמט: /propose SYMBOL INTERVAL SIDE LEV ENTRY SL TP1 TP2 TP3 SUCCESS%
                 parts = text.split()
                 if len(parts) < 11:
                     return await send_message("⚠️ שימוש: /propose <symbol> <interval> <LONG|SHORT> <lev> <entry> <sl> <tp1> <tp2> <tp3> <success_pct>")
                 _, symbol, interval, side, lev, entry, sl, tp1, tp2, tp3, succ = parts[:11]
                 symbol = symbol.upper()
 
-                # ✅ ממלאים current_price אוטומטית (fallback ל-entry אם אין)
+                # ✅ current_price מה-Mark Price (fallback ל-entry במקרה של כשל)
                 try:
                     nowp = futures_mark_price(symbol) or float(entry)
                 except Exception:
                     nowp = float(entry)
 
                 tid = uuid.uuid4().hex[:8].upper()
+                budget_default = 30.0
                 tp_dict = {
                     "symbol": symbol,
                     "side": side.upper(),
@@ -217,11 +220,15 @@ async def webhook(request: Request):
                     "tp2": float(tp2),
                     "tp3": float(tp3),
                     "success_pct": float(succ),
-                    "current_price": float(nowp),   # ✅
-                    "budget": 30.0,                 # נשאר לצורכי preflight/sink
+                    "current_price": float(nowp),   # ✅ חובה ל-TradeProposal
+                    "budget": budget_default,       # לשימוש ב-sink/preflight
+                    "budget_usd": budget_default,   # ✅ כדי ש-TradeProposal לא יתרסק
                 }
 
+                # ולידציה כללית (warnings/errs)
                 v = await validate_proposal(tp_dict, interval=interval, market=DEFAULT_MARKET)
+
+                # Early approvals (רך/קשיח לפי env)
                 pre = preflight_proposal({**tp_dict, "interval": interval})
                 if PROPOSE_BLOCK_ON_FAIL and not pre["ok"]:
                     lines = ["❌ ההצעה נדחתה (Preflight):", *[f"- {e}" for e in pre["errors"]]]
@@ -229,11 +236,14 @@ async def webhook(request: Request):
                         lines += ["", *[f"⚠️ {w}" for w in pre["warnings"]]]
                     return await send_message("\n".join(lines))
 
+                # נשמור להצבעה
                 PENDING[tid] = {"tp": tp_dict, "interval": interval}
 
                 warn_lines = []
-                if v.get("warnings"): warn_lines += [f"⚠️ {w}" for w in v["warnings"]]
-                if pre.get("warnings"): warn_lines += [f"⚠️ {w}" for w in pre["warnings"]]
+                if v.get("warnings"):
+                    warn_lines += [f"⚠️ {w}" for w in v["warnings"]]
+                if pre.get("warnings"):
+                    warn_lines += [f"⚠️ {w}" for w in pre["warnings"]]
                 pre_errs = pre.get("errors") or []
                 pre_note = "✅ Preflight OK" if not pre_errs else "❗Preflight has issues (see below)"
 
@@ -253,12 +263,264 @@ async def webhook(request: Request):
             except Exception as e:
                 return await send_message(f"❌ שגיאה ב-/propose: {e}")
 
-        # ----- המשך הפקודות הקיימות (ללא שינוי) -----
-        # ... (נשאר כפי ששלחת; לא שיניתי מלבד הקטע של /propose)
+        # ----- יתר הפקודות -----
+
+        if text.startswith("/pin_summary"):
+            parts = text.split()
+            if len(parts) != 2 or parts[1].lower() not in ("on", "off"):
+                return await send_message("שימוש: /pin_summary on|off")
+            on = (parts[1].lower() == "on")
+            await TPREFS.set_pin_summary(chat_id, on)
+            if not on:
+                await TPREFS.set_pin_message_id(chat_id, None)
+            else:
+                resp = await send_message("📌 סיכום מוצמד יופיע כאן. המערכת תעדכן ב־edit.")
+                try:
+                    if isinstance(resp, dict) and resp.get("message_id"):
+                        await TPREFS.set_pin_message_id(chat_id, int(resp["message_id"]))
+                except Exception:
+                    pass
+            return await send_message(f"pin_summary: {'ON' if on else 'OFF'}")
+
+        if text.startswith("/bundle"):
+            parts = text.split()
+            if len(parts) == 1:
+                sec = await TPREFS.get_bundle_window(chat_id)
+                return await send_message(f"bundle={sec}s  (שימוש: /bundle <seconds>, 0=כבוי)")
+            try:
+                sec = max(0, int(parts[1]))
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /bundle <seconds>\n({e})")
+            await TPREFS.set_bundle_window(chat_id, sec)
+            return await send_message(f"Bundling {'ON' if sec>0 else 'OFF'} ({sec}s)")
+
+        if text.startswith("/snooze "):
+            try:
+                _, mins, tid = text.split(maxsplit=2)
+                mins = int(mins)
+                await TPREFS.snooze_trade(tid, mins)
+                return await send_message(f"🔕 Snooze לטרייד {tid} ל-{mins} דק׳ הופעל.")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /snooze <minutes> <trade_id>\n({e})")
+
+        if text.startswith("/snooze_sym "):
+            try:
+                _, sym, mins = text.split(maxsplit=2)
+                mins = int(mins)
+                await TPREFS.snooze_symbol(sym, mins)
+                return await send_message(f"🔕 Snooze לסימבול {sym.upper()} ל-{mins} דק׳ הופעל.")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /snooze_sym <symbol> <minutes>\n({e})")
+
+        if text.startswith("/size "):
+            try:
+                _, tid, rpct = text.split(maxsplit=2)
+                rpct = float(rpct)
+                rec = await _load_trade_by_id(tid)
+                if not rec:
+                    return await send_message(f"לא נמצא טרייד id={tid}")
+                entry = float(rec["entry"])
+                sl    = float(rec["sl"])
+                lev   = int(rec.get("leverage", 10))
+                budget= float(rec.get("budget", rec.get("budget_usd", 30.0)))
+                qty, notion, margin = _calc_size(entry, sl, lev, budget, rpct)
+                txt = (
+                    f"🧮 *Position Size*\n"
+                    f"ID: `{tid}` | {rec.get('symbol','?')}\n"
+                    f"Risk: {rpct:.2f}% מתוך Budget={_fmt_usd(budget)}\n"
+                    f"Entry={entry:.6f}  SL={sl:.6f}  Lev=x{lev}\n"
+                    f"*Qty*={qty:.6f}\n"
+                    f"Notional≈{_fmt_usd(notion)} | Margin≈{_fmt_usd(margin)}"
+                )
+                return await send_message(txt)
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /size <trade_id> <risk_pct>\n({e})")
+
+        if text.startswith("/auto_on"):
+            os.environ["TRADE_AUTO_SUGGEST"] = "1"
+            return await send_message("🟢 Auto-Suggest הופעל.")
+        if text.startswith("/auto_off"):
+            os.environ["TRADE_AUTO_SUGGEST"] = "0"
+            return await send_message("🔴 Auto-Suggest כובה.")
+
+        if text.startswith("/approve "):
+            tid = text.split(maxsplit=1)[1].strip()
+            return await _approve_trade_id(tid, chat_id, mid)
+        if text.startswith("/reject "):
+            tid = text.split(maxsplit=1)[1].strip()
+            PENDING.pop(tid, None)
+            return await send_message(f"❌ טרייד {tid} נדחה")
+
+        if text.startswith("/tp_scale "):
+            try:
+                _, tid, p1, p2, p3 = text.split()
+                p = [float(p1), float(p2), float(p3)]
+                if abs(sum(p) - 100.0) > 1e-6:
+                    return await send_message("⚠️ הסכום חייב להיות 100 (למשל 50 30 20).")
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.post(ALERTS_UPDATE_URL, json={
+                        "trade_id": tid, "updates": {"tp_scale": json.dumps(p)}
+                    })
+                    r.raise_for_status()
+                return await send_message(f"✅ TP Scale ל-#{tid}: {int(p[0])}/{int(p[1])}/{int(p[2])}%")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /tp_scale <id> <p1> <p2> <p3>\n({e})")
+
+        if text.startswith("/sl_be "):
+            try:
+                _, tid = text.split(maxsplit=1)
+                rec = await _load_trade_by_id(tid)
+                if not rec: return await send_message(f"לא נמצא טרייד id={tid}")
+                entry = rec.get("entry")
+                if entry is None: return await send_message("אין entry מוגדר להצעה זו.")
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.post(ALERTS_UPDATE_URL, json={
+                        "trade_id": tid, "updates": {"sl": float(entry)}
+                    })
+                    r.raise_for_status()
+                return await send_message(f"🔒 SL הוגדר ל-BE ({float(entry):.6f}) ב-#{tid}")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /sl_be <id>\n({e})")
+
+        if text.startswith("/liquidity "):
+            try:
+                _, sym, notional, side = text.split()
+                notional = float(notional)
+                res = await estimate_slippage(sym, side, notional)
+                if not res.get("ok"):
+                    return await send_message(f"❌ {res.get('error','liquidity error')}")
+                msg = (
+                    f"💧 *Liquidity* {sym.upper()} {side.upper()} ${int(notional)}\n"
+                    f"Mid: `{res['mid_price']:.6f}`  Avg Fill: `{res['avg_fill_price']:.6f}`\n"
+                    f"Slippage: *{res['slippage_pct']:.3f}%*"
+                )
+                return await send_message(msg)
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /liquidity <symbol> <notional_usd> <side>\n({e})")
+
+        if text.startswith("/risk "):
+            try:
+                _, tid = text.split(maxsplit=1)
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.get(RISK_QUICK_URL, params={"trade_id": tid})
+                    r.raise_for_status()
+                    data = r.json()
+                if not data.get("ok"):
+                    return await send_message("❌ risk: not ok")
+                rr = data.get("rr"); rr_s = f"{rr:.2f}" if rr is not None else "—"
+                k = data.get("kelly_fraction"); k_s = f"{k*100:.1f}%" if k is not None else "—"
+                lev = data.get("leverage_cap") or "—"
+                msg = (
+                    f"🛡️ *Risk* #{tid}\n"
+                    f"{data.get('symbol','?')} {data.get('side','?')}\n"
+                    f"Entry: `{(data.get('entry') or 0):.6f}`  SL: `{(data.get('sl') or 0):.6f}`  TP1: `{(data.get('tp1') or 0):.6f}`\n"
+                    f"RR≈ *{rr_s}*  |  Kelly≈ *{k_s}*  |  Lev Cap≈ *x{lev}*\n"
+                    f"Success: ~{(data.get('success_pct') or 0):.1f}%"
+                )
+                return await send_message(msg)
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /risk <trade-id>\n({e})")
+
+        if text.startswith("/mute "):
+            try:
+                _, mins = text.split(maxsplit=1)
+                mins = max(1, int(mins))
+                set_mute(mins)
+                return await send_message(f"🔕 הושתק ל-{mins} דק׳ (נותר {mute_remaining_sec()}ש׳).")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /mute <minutes>\n({e})")
+
+        if text.startswith("/unmute"):
+            clear_mute()
+            return await send_message("🔔 התראות הופעלו.")
+
+        if text.startswith("/set_near "):
+            try:
+                _, pct = text.split(maxsplit=1)
+                pct = float(pct)
+                set_near_pct_override(pct)
+                return await send_message(f"📏 near-pct נקבע ל-{pct:.2f}%")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /set_near <pct>\n({e})")
+
+        if text.startswith("/quiet_on "):
+            try:
+                _, tid = text.split(maxsplit=1)
+                set_trade_quiet(tid, True)
+                return await send_message(f"😶 near-alerts כובו לטרייד #{tid}")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /quiet_on <id>\n({e})")
+
+        if text.startswith("/quiet_off "):
+            try:
+                _, tid = text.split(maxsplit=1)
+                set_trade_quiet(tid, False)
+                return await send_message(f"🔊 near-alerts הופעלו לטרייד #{tid}")
+            except Exception as e:
+                return await send_message(f"❌ שימוש: /quiet_off <id>\n({e})")
+
+        if text.startswith("/summary"):
+            try:
+                parts = text.split()
+                limit = int(parts[1]) if len(parts) > 1 else 15
+                async with httpx.AsyncClient(timeout=10) as client:
+                    r = await client.get(ALERTS_ACTIVE_URL)
+                    r.raise_for_status()
+                    items = r.json().get("items", [])
+
+                def dist(it):
+                    nowp = float(it.get("current_price") or 0)
+                    tp1 = it.get("tp1"); tp1 = float(tp1) if tp1 else None
+                    sl  = it.get("sl");  sl  = float(sl)  if sl  else None
+                    d1 = abs(nowp - tp1)/tp1 if (nowp and tp1) else 9e9
+                    ds = abs(nowp - sl)/sl   if (nowp and sl)  else 9e9
+                    return min(d1, ds)
+
+                items = sorted(items, key=dist)[:limit]
+                lines: List[str] = ["📋 *Active Summary*"]
+                for it in items:
+                    sym = it.get("symbol","")
+                    side = it.get("side","")
+                    nowp = float(it.get("current_price") or 0)
+                    tp1  = it.get("tp1"); tp1 = float(tp1) if tp1 else None
+                    sl   = it.get("sl");  sl  = float(sl)  if sl  else None
+                    d1 = f"{abs(nowp-tp1)/tp1*100:.2f}%" if (nowp and tp1) else "—"
+                    ds = f"{abs(nowp-sl)/sl*100:.2f}%"   if (nowp and sl)  else "—"
+                    lines.append(f"- {sym} {side}: Now `{nowp:.6f}` | ΔTP1 {d1} | ΔSL {ds}")
+
+                try:
+                    import zoneinfo, datetime as _dt
+                    tz = zoneinfo.ZoneInfo("Asia/Jerusalem")
+                    stamp = _dt.datetime.now(tz).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    stamp = time.strftime("%Y-%m-%d %H:%M")
+
+                lines.append(f"\n🕒 {stamp} Asia/Jerusalem")
+                lines.append(_summary_sig(items))
+
+                text_out = "\n".join(lines)
+                if await TPREFS.is_pin_summary(chat_id):
+                    pin_msg_id = await TPREFS.get_pin_message_id(chat_id)
+                    if pin_msg_id:
+                        try:
+                            await edit_message(chat_id, pin_msg_id, text_out)
+                            return {"ok": True}
+                        except Exception:
+                            resp = await send_message(text_out)
+                            try:
+                                msg_id = (resp.get("result") or {}).get("message_id") or resp.get("message_id")
+                                if msg_id:
+                                    await TPREFS.set_pin_message_id(chat_id, int(msg_id))
+                            except Exception:
+                                pass
+                            return {"ok": True}
+                return await send_message(text_out)
+            except Exception as e:
+                return await send_message(f"❌ שגיאה ב-/summary: {e}")
+
         return await send_message("שלח /help לקבלת פורמט.")
 
     # ----- callbacks -----
-    # (ללא שינוי מהגרסה שלך)
     if "callback_query" in update:
         cq = update["callback_query"]
         data = cq.get("data","")
@@ -273,11 +535,8 @@ async def webhook(request: Request):
             PENDING.pop(tid, None)
             return await edit_message(chat_id, mid, f"❌ טרייד {tid} נדחה")
         if data.startswith("adjust:"):
-            tid = data.split(":",1)[1]
-            return await edit_message(chat_id, mid, f"✏️ טרייד {tid} — שלח /propose עם ערכים מעודכנים.")
-        # ... שאר ה-handlers נשארים זהים ...
-        return {"ok": True}
-    return {"ok": True}
+            tid =
+
 
 
 
