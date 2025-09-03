@@ -4,6 +4,12 @@
     "api_key": "PUT_YOUR_BINANCE_API_KEY",
     "api_secret": "PUT_YOUR_BINANCE_API_SECRET",
     "market": "futures"
+  },
+  {
+    "id": "spot1",
+    "api_key": "PUT_YOUR_BINANCE_SPOT_KEY",
+    "api_secret": "PUT_YOUR_BINANCE_SPOT_SECRET",
+    "market": "spot"
   }
 ]
 
