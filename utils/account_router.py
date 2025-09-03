@@ -1,29 +1,29 @@
 # utils/account_router.py
-from __future__ import annotations
-import os, json
-from typing import Dict, Any
-from fastapi import APIRouter, Depends
-from utils.auth import require_api_key
+import os
+from typing import Optional
+import json
 
-router = APIRouter(
-    prefix="/accounts",
-    tags=["Accounts"],
-    dependencies=[Depends(require_api_key)]
-)
+ACCOUNTS_FILE = os.getenv("ACCOUNTS_CONFIG_PATH", "accounts/accounts_config.json")
 
-ACCOUNTS_PATH = os.getenv("ACCOUNTS_CONFIG_PATH", "accounts/accounts_config.json")
-
-@router.get("/list")
-def list_accounts() -> Dict[str, Any]:
+def _load_accounts() -> list[dict]:
     try:
-        with open(ACCOUNTS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return {"ok": True, "accounts": data or {}}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+        with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
 
-@router.get("/active")
-def get_active_account() -> Dict[str, Any]:
-    return {"ok": True, "active": os.getenv("BINANCE_API_KEY", "default")}
+def get_account_credentials(account_id: str) -> Optional[dict]:
+    for acc in _load_accounts():
+        if acc.get("id") == account_id:
+            return {
+                "api_key": acc.get("api_key"),
+                "api_secret": acc.get("api_secret"),
+                "market": acc.get("market", "futures"),
+            }
+    return None
+
+def list_account_ids() -> list[str]:
+    return [a.get("id") for a in _load_accounts() if a.get("id")]
+
 
 
