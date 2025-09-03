@@ -1,3 +1,4 @@
+# utils/trade_models.py
 from __future__ import annotations
 from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict
@@ -8,8 +9,8 @@ TZ = os.getenv("TZ", "Asia/Jerusalem")
 
 class TradeProposal(BaseModel):
     symbol: str = Field(..., min_length=6, max_length=20)
-    side: str = Field(..., regex=r"^(?i:LONG|SHORT)$")  # ✅ regex תקין
-    current_price: Optional[float] = Field(None, gt=0)   # ✅ אופציונלי
+    side: str = Field(..., regex=r"^(?i:LONG|SHORT)$")
+    current_price: Optional[float] = Field(None, gt=0)
     leverage: int = Field(10, ge=1, le=125)
     entry: float = Field(..., gt=0)
     sl: float = Field(..., gt=0)
@@ -37,6 +38,7 @@ class TradeProposal(BaseModel):
         rr3 = abs((self.tp3 or 0) - self.entry) / risk if (risk > 0 and self.tp3) else 0
         return {"risk_per_unit": risk, "rr1": rr1, "rr2": rr2, "rr3": rr3}
 
+
 class TradeETA(BaseModel):
     tz: str = TZ
     now_local: str
@@ -49,15 +51,18 @@ class TradeETA(BaseModel):
     minutes_tp2: Optional[int] = None
     minutes_tp3: Optional[int] = None
 
+
 def _fmt_time(minutes_from_now: Optional[int]) -> Optional[str]:
     if minutes_from_now is None: return None
     t = dt.datetime.now(ZoneInfo(TZ)) + dt.timedelta(minutes=minutes_from_now)
     return t.strftime("%Y-%m-%d %H:%M")
 
+
 def estimate_minutes(distance: Optional[float], per_min_move: Optional[float]) -> Optional[int]:
     if per_min_move is None or per_min_move <= 0 or not distance or distance <= 0:
         return None
     return int(max(1, round(distance / per_min_move)))
+
 
 def build_eta(tp: TradeProposal, per_min_move: float) -> TradeETA:
     now = dt.datetime.now(ZoneInfo(TZ)).strftime("%Y-%m-%d %H:%M")
@@ -75,6 +80,7 @@ def build_eta(tp: TradeProposal, per_min_move: float) -> TradeETA:
         eta_tp2=_fmt_time(m_t2), eta_tp3=_fmt_time(m_t3),
         minutes_sl=m_sl, minutes_tp1=m_t1, minutes_tp2=m_t2, minutes_tp3=m_t3,
     )
+
 
 def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
     rr = tp.risk_rr()
@@ -107,6 +113,7 @@ def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
         (f"סיבה/תקציר: {why}" if why else "")
     ]
     return "\n".join([p for p in parts if p])
+
 
 
 
