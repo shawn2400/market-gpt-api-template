@@ -10,6 +10,7 @@ from utils.binance_client import (
 
 router = APIRouter(prefix="/market", tags=["Market"], dependencies=[Depends(require_api_key)])
 
+
 @router.get("/mark-price")
 def mark_price(symbol: str = Query(..., min_length=3, max_length=20)):
     try:
@@ -21,6 +22,7 @@ def mark_price(symbol: str = Query(..., min_length=3, max_length=20)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch mark price: {e}")
+
 
 @router.get("/symbol-info")
 def symbol_info(symbol: str = Query(..., min_length=3, max_length=20), force_refresh: int = Query(0, ge=0, le=1)):
@@ -34,6 +36,7 @@ def symbol_info(symbol: str = Query(..., min_length=3, max_length=20), force_ref
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch symbol info: {e}")
 
+
 @router.get("/exchange-info")
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
     try:
@@ -45,8 +48,6 @@ def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
-
-
 
 
 
