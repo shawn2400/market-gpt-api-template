@@ -1,10 +1,10 @@
 # utils/limiters.py
 from __future__ import annotations
 import time, threading
-from typing import Dict
+from typing import Dict, List
 
 class TokenBucket:
-    """טוקן־באקט מקומי (לפי מפתח), refill לינארי, thread-safe."""
+    """טוקן־באקט מקומי (per key), refill לינארי, thread-safe."""
     def __init__(self, capacity: int, refill_per_sec: float):
         self.capacity = max(1, int(capacity))
         self.refill = float(refill_per_sec)
@@ -17,7 +17,6 @@ class TokenBucket:
         with self._lock:
             cur = self._tokens.get(key, self.capacity)
             last = self._last.get(key, now)
-            # refill
             cur = min(self.capacity, cur + self.refill * max(0.0, now - last))
             if cur >= tokens:
                 cur -= tokens
@@ -36,7 +35,7 @@ class Debouncer:
 
     def hit(self, key: str, min_interval_sec: float) -> bool:
         """
-        True אם צריך לדלג (כלומר עדיין בתוך חלון), False אם מותר לבצע.
+        מחזיר True אם צריך לדלג (עדיין בתוך חלון), False אם מותר לבצע.
         """
         now = time.monotonic()
         with self._lock:
@@ -51,14 +50,13 @@ class RateLimiter:
     def __init__(self, max_events: int, window_sec: float):
         self.max = max(1, int(max_events))
         self.win = float(window_sec)
-        self._hits: Dict[str, list[float]] = {}
+        self._hits: Dict[str, List[float]] = {}
         self._lock = threading.Lock()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         with self._lock:
             arr = self._hits.setdefault(key, [])
-            # ניקוי חלון
             cutoff = now - self.win
             while arr and arr[0] < cutoff:
                 arr.pop(0)
@@ -66,4 +64,7 @@ class RateLimiter:
                 arr.append(now)
                 return True
             return False
+
+__all__ = ["TokenBucket", "Debouncer", "RateLimiter"]
+
 
