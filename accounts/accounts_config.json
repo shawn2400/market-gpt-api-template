@@ -1,14 +1,10 @@
-{
-  "default": {
-    "api_key": "BINANCE_API_KEY_HERE",
-    "api_secret": "BINANCE_SECRET_KEY_HERE",
-    "type": "futures"
-  },
-  "spot_acc": {
-    "api_key": "SPOT_API_KEY",
-    "api_secret": "SPOT_SECRET_KEY",
-    "type": "spot"
+[
+  {
+    "id": "main",
+    "api_key": "PUT_YOUR_BINANCE_API_KEY",
+    "api_secret": "PUT_YOUR_BINANCE_API_SECRET",
+    "market": "futures"
   }
-}
+]
 
 
