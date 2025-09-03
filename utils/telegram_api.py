@@ -8,9 +8,9 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 BASE  = f"https://api.telegram.org/bot{TOKEN}"
 
 def _chat_default(chat_id: Optional[int|str]) -> int|str:
-    if chat_id is not None:
-        return chat_id
-    return os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or ""
+    return chat_id if chat_id is not None else (
+        os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or ""
+    )
 
 async def send_message(
     text: str,
@@ -18,7 +18,7 @@ async def send_message(
     chat_id: Optional[int|str] = None,
     silent: bool = False,
     parse_mode: str = "Markdown",
-    disable_preview: bool = True,  # NEW
+    disable_preview: bool = True,
 ) -> Dict[str, Any]:
     if not TOKEN:
         return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
@@ -41,7 +41,7 @@ async def edit_message(
     text: str,
     reply_markup: Optional[Dict[str, Any]] = None,
     parse_mode: str = "Markdown",
-    disable_preview: bool = True,  # keep parity
+    disable_preview: bool = True,
 ) -> Dict[str, Any]:
     if not TOKEN:
         return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
