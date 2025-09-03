@@ -24,6 +24,7 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
 )
 
+# ================= Models =================
 class PositionModel(BaseModel):
     symbol: str
     positionAmt: str
@@ -38,6 +39,7 @@ class PositionModel(BaseModel):
     isolated: bool = False
     updateTime: int = 0
 
+
 class BalanceModel(BaseModel):
     accountAlias: Optional[str] = None
     asset: str
@@ -48,35 +50,42 @@ class BalanceModel(BaseModel):
     maxWithdrawAmount: Optional[str] = None
     updateTime: Optional[int] = 0
 
+
 class PositionsResponse(BaseModel):
     ok: bool = True
     total: int
     items: List[PositionModel] = Field(default_factory=list)
+
 
 class BalancesResponse(BaseModel):
     ok: bool = True
     total: int
     items: List[BalanceModel] = Field(default_factory=list)
 
+
 class SymbolsResponse(BaseModel):
     ok: bool = True
     total: int
     items: List[str] = Field(default_factory=list)
+
 
 class SymbolInfoResponse(BaseModel):
     ok: bool = True
     symbol: str
     info: Dict[str, Any]
 
+
 class MarkPriceResponse(BaseModel):
     ok: bool = True
     symbol: str
     mark_price: float
 
+
 class ExchangeInfoResponse(BaseModel):
     ok: bool = True
     symbols_count: int
     raw: Dict[str, Any]
+
 
 class StatusResponse(BaseModel):
     ok: bool = True
@@ -96,6 +105,7 @@ class StatusResponse(BaseModel):
         }
     )
 
+
 class HealthResponse(BaseModel):
     ok: bool = True
     binance_ping: bool
@@ -105,6 +115,7 @@ class HealthResponse(BaseModel):
     cached: bool = False
     ttl_seconds: int = 10
 
+# ================= Routes =================
 @router.get("/ping")
 def ping() -> Dict[str, Any]:
     ok = bool(fapi_ping())
@@ -112,17 +123,20 @@ def ping() -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail="Binance ping failed")
     return {"ok": True}
 
+
 @router.get("/positions", response_model=PositionsResponse)
 def list_open_positions() -> PositionsResponse:
     data = futures_open_positions() or []
     items = [PositionModel(**p) for p in data]
     return PositionsResponse(total=len(items), items=items)
 
+
 @router.get("/balance", response_model=BalancesResponse)
 def list_balance() -> BalancesResponse:
     data = futures_balance() or []
     items = [BalanceModel(**b) for b in data]
     return BalancesResponse(total=len(items), items=items)
+
 
 @router.get("/symbols", response_model=SymbolsResponse)
 def list_symbols(limit: int = Query(0, ge=0, le=5000)) -> SymbolsResponse:
@@ -132,12 +146,14 @@ def list_symbols(limit: int = Query(0, ge=0, le=5000)) -> SymbolsResponse:
         symbols = symbols[:limit]
     return SymbolsResponse(total=len(symbols), items=symbols)
 
+
 @router.get("/symbol-info/{symbol}", response_model=SymbolInfoResponse)
 def symbol_info(symbol: str = Path(..., min_length=3, max_length=20)) -> SymbolInfoResponse:
     info = get_symbol_info(symbol, force_refresh=False)
     if not info:
         raise HTTPException(status_code=404, detail=f"Symbol {symbol.upper()} not found")
     return SymbolInfoResponse(symbol=symbol.upper(), info=info)
+
 
 @router.get("/mark-price/{symbol}", response_model=MarkPriceResponse)
 def mark_price(symbol: str = Path(..., min_length=3, max_length=20)) -> MarkPriceResponse:
@@ -146,21 +162,26 @@ def mark_price(symbol: str = Path(..., min_length=3, max_length=20)) -> MarkPric
         raise HTTPException(status_code=502, detail=f"Mark price not available for {symbol.upper()}")
     return MarkPriceResponse(symbol=symbol.upper(), mark_price=mp)
 
+
 @router.get("/exchange-info", response_model=ExchangeInfoResponse)
 def exchange_info(refresh: bool = Query(False)) -> ExchangeInfoResponse:
     info = futures_exchange_info_safe(force_refresh=bool(refresh))
     return ExchangeInfoResponse(symbols_count=len(info.get("symbols", [])), raw=info)
 
+
 @router.get("/trades", response_model=List[Dict[str, Any]])
 def list_trades(limit: int = Query(50, ge=1, le=500)):
     return get_trade_history(limit=limit)
+
 
 @router.get("/status", response_model=StatusResponse)
 def executor_status() -> StatusResponse:
     return StatusResponse(ok=True)
 
+
 _health_cache: Dict[str, Any] = {"ts": 0.0, "payload": None}
 _HEALTH_TTL = 10
+
 
 @router.get("/health", response_model=HealthResponse)
 def health_check(symbol: str = Query("BTCUSDT", min_length=3, max_length=20)) -> HealthResponse:
@@ -212,6 +233,7 @@ def health_check(symbol: str = Query("BTCUSDT", min_length=3, max_length=20)) ->
     _health_cache["ts"] = now
     _health_cache["payload"] = dict(payload)
     return HealthResponse(**payload)
+
 
 
 
