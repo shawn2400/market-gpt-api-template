@@ -1,77 +1,80 @@
 <!DOCTYPE html>
-<html lang="he">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>AlgoGPT Grid Dashboard</title>
-  <style>
-    body { background:#111; color:#eee; font-family:sans-serif; padding:20px; }
-    h1,h2 { color:#4fc3f7; }
-    table { border-collapse: collapse; width: 100%; margin: 10px 0; }
-    th, td { border: 1px solid #444; padding: 6px 10px; text-align: center; }
-    th { background:#222; }
-    select, button { padding:6px 10px; margin:5px; background:#222; color:#fff; border:1px solid #555; }
-  </style>
+    <meta charset="UTF-8">
+    <title>AlgoGPT Grid Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f9f9f9; }
+        h1 { color: #333; }
+        table { border-collapse: collapse; width: 100%; background: white; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background: #333; color: white; }
+        tr:nth-child(even) { background: #f2f2f2; }
+        button { padding: 6px 12px; margin: 10px 0; cursor: pointer; }
+    </style>
 </head>
 <body>
-  <h1>AlgoGPT Grid Dashboard</h1>
+    <h1>AlgoGPT – Grid Dashboard</h1>
+    <p>מציג טריידים פתוחים מכל החשבונות (רענון אוטומטי כל 60 שניות)</p>
 
-  <!-- Account filter -->
-  <form method="get" action="/ui/grid/">
-    <label>בחר חשבון:</label>
-    <select name="account_id">
-      {% for acc in accounts %}
-        <option value="{{acc}}" {% if acc == account_id %}selected{% endif %}>{{acc}}</option>
-      {% endfor %}
-    </select>
-    <button type="submit">טען</button>
-  </form>
+    <button onclick="loadData()">רענן עכשיו</button>
 
-  <h2>גרידים פעילים</h2>
-  {% if grids %}
-  <table>
-    <tr><th>Symbol</th><th>Side</th><th>Budget</th><th>Levels</th><th>Status</th></tr>
-    {% for g in grids %}
-    <tr>
-      <td>{{g.symbol}}</td>
-      <td>{{g.side}}</td>
-      <td>{{g.budget}}</td>
-      <td>{{g.levels|length if g.levels else 0}}</td>
-      <td>{{g.status}}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% else %}
-    <p>אין גרידים פעילים.</p>
-  {% endif %}
+    <table id="gridTable">
+        <thead>
+            <tr>
+                <th>Account</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Market</th>
+                <th>Budget</th>
+                <th>Leverage</th>
+                <th>Base Price</th>
+                <th>State</th>
+                <th>Updated</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td colspan="9">טוען נתונים...</td></tr>
+        </tbody>
+    </table>
 
-  <h2>טריידים פתוחים</h2>
-  {% if trades %}
-  <table>
-    <tr><th>ID</th><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>PNL</th></tr>
-    {% for t in trades %}
-    <tr>
-      <td>{{t.id}}</td>
-      <td>{{t.symbol}}</td>
-      <td>{{t.side}}</td>
-      <td>{{t.entry}}</td>
-      <td>{{t.sl}}</td>
-      <td>{{t.tp}}</td>
-      <td>{{t.pnl}}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% else %}
-    <p>אין טריידים פתוחים.</p>
-  {% endif %}
+    <script>
+        async function loadData() {
+            try {
+                const res = await fetch("/ui/grid/data");
+                const data = await res.json();
+                const tbody = document.querySelector("#gridTable tbody");
+                tbody.innerHTML = "";
 
-  <h2>סיכום PnL</h2>
-  <table>
-    <tr><th>Realized</th><th>Unrealized</th><th>Total</th></tr>
-    <tr>
-      <td>{{pnl.realized}}</td>
-      <td>{{pnl.unrealized}}</td>
-      <td>{{pnl.total}}</td>
-    </tr>
-  </table>
+                if (!data.items || data.items.length === 0) {
+                    tbody.innerHTML = "<tr><td colspan='9'>אין טריידים פעילים כרגע</td></tr>";
+                    return;
+                }
+
+                data.items.forEach(item => {
+                    const row = `<tr>
+                        <td>${item.account_id || '-'}</td>
+                        <td>${item.symbol || '-'}</td>
+                        <td>${item.side || '-'}</td>
+                        <td>${item.market || '-'}</td>
+                        <td>${item.budget || '-'}</td>
+                        <td>${item.leverage || '-'}</td>
+                        <td>${item.base_price || '-'}</td>
+                        <td>${item.state || '-'}</td>
+                        <td>${item.updated_at || '-'}</td>
+                    </tr>`;
+                    tbody.insertAdjacentHTML("beforeend", row);
+                });
+            } catch (err) {
+                console.error("loadData error:", err);
+            }
+        }
+
+        // רענון אוטומטי כל 60 שניות
+        setInterval(loadData, 60000);
+
+        // טעינה ראשונית
+        loadData();
+    </script>
 </body>
 </html>
