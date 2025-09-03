@@ -2,19 +2,23 @@
 from __future__ import annotations
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, Body, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, constr
 import os, time
 
 from utils.auth import require_api_key
-from utils.telegram_api import send_message as telegram_send, get_me as telegram_get_me, send_chat_action as telegram_send_chat_action
+from utils.telegram_api import (
+    send_message as telegram_send,
+    get_me as telegram_get_me,
+    send_chat_action as telegram_send_chat_action,
+)
 from utils.hmac_utils import verify_inbound
 from utils.approvals import preflight_proposal
 from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
 
-WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET","").strip()
-SINK_ENFORCE_APPROVALS = str(os.getenv("SINK_ENFORCE_APPROVALS","1")).lower() in ("1","true","yes","on")
+WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
+SINK_ENFORCE_APPROVALS = str(os.getenv("SINK_ENFORCE_APPROVALS", "1")).lower() in ("1", "true", "yes", "on")
 
 # זיכרון מינימלי (אפשר להחליף ל-Redis)
 _ACTIVE: Dict[str, Dict[str, Any]] = {}
@@ -26,7 +30,7 @@ class SendRequest(BaseModel):
 
 class TradeAlert(BaseModel):
     symbol: str
-    side: str = Field(..., pattern="^(?i)(LONG|SHORT)$")
+    side: constr(regex=r"^(?i:LONG|SHORT)$") = Field(...)  # ✅ ולידציה אמיתית + case-insensitive
     entry: float
     sl: float
     tp1: float
@@ -36,8 +40,19 @@ class TradeAlert(BaseModel):
     quality: Optional[float] = None
     success_pct: Optional[float] = None
 
-def format_trade_alert(symbol: str, side: str, entry: float, sl: float, tp1: float, tp2: float, size_usd: float,
-                       note: str = "", quality: Optional[float] = None, success_pct: Optional[float] = None) -> str:
+def format_trade_alert(
+    symbol: str,
+    side: str,
+    entry: float,
+    sl: float,
+    tp1: float,
+    tp2: float,
+    size_usd: float,
+    *,
+    note: str = "",
+    quality: Optional[float] = None,
+    success_pct: Optional[float] = None,
+) -> str:
     lines = [
         "🔔 *AlgoGPT — Trade Alert*",
         f"*{symbol.upper()}* | *{side.upper()}*",
@@ -57,38 +72,47 @@ async def send_telegram_alert(text: str, parse_mode: str = "Markdown", disable_p
 
 # == Service pings ==
 @router.get("/ping")
-async def ping(): return {"ok": True}
+async def ping() -> Dict[str, Any]:
+    return {"ok": True}
 
 @router.get("/status")
-async def status():
+async def status() -> Dict[str, Any]:
     me = await telegram_get_me()
     typing = await telegram_send_chat_action("typing")
     return {"ok": True, "getMe": me, "chatAction": typing}
 
 @router.post("/test")
-async def test():
+async def test() -> Dict[str, Any]:
     msg = "🔔 *AlgoGPT Alerts* — בדיקת בוט הצליחה.\nאם אתה רואה את זה בטלגרם, הכל תקין."
     res = await send_telegram_alert(msg)
     return {"ok": bool(res.get("ok")), "response": res}
 
 @router.post("/send")
-async def send(req: SendRequest = Body(...)):
+async def send(req: SendRequest = Body(...)) -> Dict[str, Any]:
     res = await send_telegram_alert(req.message, req.parse_mode or "Markdown", req.disable_preview)
     return {"ok": bool(res.get("ok")), "response": res}
 
 # == Simple trade push ==
 @router.post("/trade")
-async def trade_alert(req: TradeAlert = Body(...)):
+async def trade_alert(req: TradeAlert = Body(...)) -> Dict[str, Any]:
     text = format_trade_alert(
-        req.symbol, req.side, req.entry, req.sl, req.tp1, req.tp2, req.size_usd,
-        note=req.note, quality=req.quality, success_pct=req.success_pct
+        req.symbol,
+        req.side,
+        req.entry,
+        req.sl,
+        req.tp1,
+        req.tp2,
+        req.size_usd,
+        note=req.note,
+        quality=req.quality,
+        success_pct=req.success_pct,
     )
     res = await send_telegram_alert(text)
     return {"ok": bool(res.get("ok")), "response": res, "text": text}
 
 # == Sink APIs שהבוט משתמש בהם ==
 @router.get("/trades/active")
-async def trades_active():
+async def trades_active() -> Dict[str, Any]:
     return {"ok": True, "items": list(_ACTIVE.values())}
 
 class UpdateReq(BaseModel):
@@ -96,7 +120,7 @@ class UpdateReq(BaseModel):
     updates: Dict[str, Any]
 
 @router.post("/trades/update")
-async def trades_update(req: UpdateReq):
+async def trades_update(req: UpdateReq) -> Dict[str, Any]:
     if req.trade_id not in _ACTIVE:
         return {"ok": False, "error": "not_found"}
     _ACTIVE[req.trade_id].update(req.updates or {})
@@ -109,9 +133,10 @@ async def trade_ingest(
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-):
+) -> JSONResponse | Dict[str, Any]:
     if not WEBHOOK_HMAC_SECRET:
         raise HTTPException(400, "missing WEBHOOK_HMAC_SECRET")
+
     body = await request.body()
     if not verify_inbound(WEBHOOK_HMAC_SECRET, body, {"X-Signature": x_signature or "", "X-Timestamp": x_timestamp or ""}):
         raise HTTPException(401, "bad signature")
@@ -122,17 +147,19 @@ async def trade_ingest(
         raise HTTPException(400, "invalid json")
 
     # preflight נוסף בצד ה-sink (קשיח אם מופעל)
-    pre = preflight_proposal({
-        "symbol": data.get("symbol"),
-        "side": data.get("side"),
-        "entry": data.get("entry"),
-        "sl": data.get("sl"),
-        "tp1": data.get("tp1"),
-        "leverage": data.get("leverage"),
-        "success_pct": data.get("success_pct"),
-        "budget": data.get("budget"),
-        "interval": data.get("interval"),
-    })
+    pre = preflight_proposal(
+        {
+            "symbol": data.get("symbol"),
+            "side": data.get("side"),
+            "entry": data.get("entry"),
+            "sl": data.get("sl"),
+            "tp1": data.get("tp1"),
+            "leverage": data.get("leverage"),
+            "success_pct": data.get("success_pct"),
+            "budget": data.get("budget"),
+            "interval": data.get("interval"),
+        }
+    )
     if SINK_ENFORCE_APPROVALS and not pre["ok"]:
         return JSONResponse(
             status_code=422,
@@ -164,16 +191,24 @@ async def trade_ingest(
 
     # פרסום לטלגרם
     text = format_trade_alert(
-        record["symbol"], record["side"], float(record["entry"]), float(record["sl"]),
-        float(record["tp1"] or 0), float(record["tp2"] or 0), size_usd=float(data.get("budget") or 50.0),
-        note=data.get("reason") or "approved", quality=None, success_pct=record.get("success_pct")
+        record["symbol"],
+        record["side"],
+        float(record["entry"]),
+        float(record["sl"]),
+        float(record["tp1"] or 0),
+        float(record["tp2"] or 0),
+        size_usd=float(data.get("budget") or 50.0),
+        note=data.get("reason") or "approved",
+        quality=None,
+        success_pct=record.get("success_pct"),
     )
     await send_telegram_alert(text)
     return {"ok": True, "item": record, "warnings": pre.get("warnings", [])}
 
 @router.get("/analysis")
-async def analysis(symbol: Optional[str] = None):
+async def analysis(symbol: Optional[str] = None) -> Dict[str, Any]:
     return {"ok": True, "symbol": symbol, "note": "analysis endpoint stub"}
+
 
 
 
