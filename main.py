@@ -34,22 +34,25 @@ def _parse_csv(s: str | None) -> List[str]:
 def _clean_key(s: str | None) -> str:
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.16.0")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.17.0")
 
+# ---- Config & Logging ----
 from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 
+# ---- Binance + Prices ----
 from utils.binance_client import (
     fapi_ping, futures_balance,
     start_user_stream_keepalive, stop_user_stream,
 )
 from utils.ws_fallback import auto_price_updater, is_price_fresh, get_price
 
+# ---- Auth ----
 from utils.auth import extract_token, allow_all, token_matches
 
-# user-data consumer (Fallback שקט אם חסר)
+# ---- Optional user-data consumer ----
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
 except Exception:
@@ -58,9 +61,15 @@ except Exception:
     async def stop_user_stream_consumer():  # type: ignore
         return None
 
-# מנהל טריידים חי + אקסקיוטר
+# ---- Manager/Executor ----
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor, is_executor_running
+
+# ---- Time Sync (חדש) ----
+from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync, last_server_time_ms
+
+# ---- ExchangeInfo warm-up (ל־readyz) ----
+from utils.binance_client import futures_exchange_info_safe
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
@@ -106,12 +115,12 @@ try:
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
-# ---------- Auth ----------
+# ---------- Auth Middleware ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
         "/", "/openapi.json",
-        "/health", "/health/live", "/health_full",
+        "/health", "/health/live", "/health_full", "/readyz",
         "/docs", "/redoc",
         "/telegram/webhook",
     }
@@ -167,8 +176,9 @@ EXTRA_ROUTERS: List[Tuple[str, str]] = [
     ("routes.precision", "router"),
     ("routes.alerts", "router"),
     ("routes.reconcile", "router"),
-    # --- NEW: AI scheduler router
     ("routes.scheduler_ai", "router"),
+    # חדש: ממשק אדמין קל (פקודות /panic, /config show וכו')
+    ("routes.admin", "router"),
 ]
 for mod, attr in CORE_ROUTERS: _include_router(mod, attr)
 for mod, attr in EXTRA_ROUTERS: _include_router(mod, attr)
@@ -227,6 +237,38 @@ async def health_full():
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
+@app.get("/readyz", tags=["Health"])
+async def readyz():
+    """
+    readiness gate: time-sync קיים, exchangeInfo בזיכרון,
+    ומחירי WL/HEALTH_SYMBOLS טריים מספיק.
+    """
+    try:
+        ensure_fresh_sync()
+        st = last_server_time_ms()
+        time_ok = st is not None
+    except Exception:
+        time_ok = False
+
+    try:
+        info = futures_exchange_info_safe()  # cache חם
+        ex_ok = bool(info and isinstance(info.get("symbols"), list) and len(info["symbols"]) > 0)
+    except Exception:
+        ex_ok = False
+
+    syms = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
+    max_age = int(os.getenv("READY_PRICE_MAX_AGE", "45"))
+    prices_ok = all(is_price_fresh(sym, max_age_sec=max_age) for sym in syms)
+
+    ok = bool(time_ok and ex_ok and prices_ok)
+    return {
+        "ok": ok,
+        "time_sync_ok": time_ok,
+        "exchange_info_ok": ex_ok,
+        "prices_ok": prices_ok,
+        "symbols_checked": syms,
+    }
+
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
     logger.error({
@@ -251,12 +293,23 @@ async def startup_event():
         "OPENAI_KEY_LEN": len((os.getenv("OPENAI_API_KEY") or "").strip()),
         "config": dump_config_sanitized(),
     })
+
+    # ---- Time sync (סעיפים 104–106) ----
+    try:
+        sync_now()
+        start_background_sync(interval_sec=int(os.getenv("TIME_SYNC_BG_SEC", "1800")))  # כל חצי שעה
+        logger.info({"event": "time_sync_started"})
+    except Exception as e:
+        logger.warning({"event": "time_sync_init_failed", "error": str(e)})
+
+    # ---- Futures listenKey keepalive ----
     try:
         start_user_stream_keepalive(period_sec=int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
         logger.info({"event": "listen_key_keepalive_started"})
     except Exception as e:
         logger.warning({"event": "listen_key_keepalive_failed", "error": str(e)})
 
+    # ---- WS price updater ----
     syms = [s.strip().upper() for s in os.getenv("SYMS", os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT")).split(",") if s.strip()]
     ws_keepalive = int(os.getenv("WS_KEEPALIVE_SEC", "25"))
     rest_every = int(os.getenv("PRICE_SCAN_INTERVAL", "15"))
@@ -269,6 +322,7 @@ async def startup_event():
         except Exception as e:
             logger.warning({"event": "price_updater_failed_start", "error": str(e)})
 
+    # ---- User-data consumer ----
     try:
         await start_user_stream_consumer()
         logger.info({"event":"user_stream_consumer_started"})
