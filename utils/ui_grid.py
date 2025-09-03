@@ -1,104 +1,77 @@
 # routes/ui_grid.py
 from __future__ import annotations
 import logging
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
-from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, Query, HTTPException
+from typing import Dict, Any, List, Optional
 
 from utils.auth import require_api_key
-from utils.grid_manager import get_open_grids, cancel_grid
+from utils.account_router import list_account_ids
+from utils.grid_manager import list_active_grids  # נניח שקיים (או אפשר להרחיב)
+from utils.trade_storage import load_trades        # טבלה של כל הטריידים
+from utils.pnl_tracker import get_pnl_summary      # רווח/הפסד מצטבר
 
 logger = logging.getLogger("algogpt.routes.ui_grid")
 
-router = APIRouter(prefix="/ui/grid", tags=["Dashboard/Grid"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/ui/grid",
+    tags=["UI-Grid"],
+    dependencies=[Depends(require_api_key)],
+)
 
-# ──────────────────────────────────────────────────────────────
-# HTML Template
-# ──────────────────────────────────────────────────────────────
-def _render_dashboard(grids: List[Dict[str, Any]]) -> str:
-    rows = ""
-    for g in grids:
-        sym = g.get("symbol", "?")
-        acc_id = g.get("account_id", "main")
-        side = g.get("side", "-")
-        entry = g.get("entry", 0)
-        tp1, tp2, tp3 = (g.get("targets") or [None, None, None])
-        sl0 = g.get("sl0", None)
-
-        rows += f"""
-        <tr>
-            <td>{acc_id}</td>
-            <td>{sym}</td>
-            <td>{side}</td>
-            <td>{entry:.4f}</td>
-            <td>{tp1 or '-'}</td>
-            <td>{tp2 or '-'}</td>
-            <td>{tp3 or '-'}</td>
-            <td>{sl0 or '-'}</td>
-            <td>
-                <form method="post" action="/ui/grid/cancel/{sym}">
-                    <input type="hidden" name="account_id" value="{acc_id}"/>
-                    <button type="submit">❌ סגור</button>
-                </form>
-            </td>
-        </tr>
-        """
-
-    return f"""
-    <html>
-    <head>
-        <title>AlgoGPT Grid Dashboard</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            table {{ border-collapse: collapse; width: 100%; }}
-            th, td {{ border: 1px solid #ccc; padding: 6px; text-align: center; }}
-            th {{ background-color: #f4f4f4; }}
-            h2 {{ color: #333; }}
-        </style>
-    </head>
-    <body>
-        <h2>📊 AlgoGPT Grid Dashboard</h2>
-        <table>
-            <tr>
-                <th>Account</th>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Entry</th>
-                <th>TP1</th>
-                <th>TP2</th>
-                <th>TP3</th>
-                <th>SL</th>
-                <th>Actions</th>
-            </tr>
-            {rows if rows else "<tr><td colspan='9'>אין גרידים פעילים</td></tr>"}
-        </table>
-    </body>
-    </html>
-    """
-
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # Endpoints
-# ──────────────────────────────────────────────────────────────
-@router.get("/", response_class=HTMLResponse)
-async def ui_grid_dashboard() -> HTMLResponse:
-    """ טבלת גרידים פעילים """
-    grids = get_open_grids()
-    html = _render_dashboard(grids)
-    return HTMLResponse(content=html)
+# ──────────────────────────────────────────────
+
+@router.get("/accounts")
+def ui_list_accounts() -> Dict[str, Any]:
+    """
+    מחזיר את רשימת ה־account_id הנתמכים (מה־accounts_config.json).
+    """
+    return {"ok": True, "accounts": list_account_ids()}
 
 
-@router.post("/cancel/{symbol}", response_class=HTMLResponse)
-async def ui_grid_cancel(symbol: str, request: Request, account_id: Optional[str] = None):
-    """ כפתור סגירת גריד מתוך הדשבורד """
+@router.get("/active")
+def ui_active_grids(account_id: Optional[str] = Query(None, description="סינון לפי account_id")) -> Dict[str, Any]:
+    """
+    מציג גרידים פעילים, עם אפשרות לסינון לפי חשבון.
+    """
     try:
-        form = await request.form()
-        acc_id = form.get("account_id") or account_id or "main"
-        res = await cancel_grid(symbol, acc_id)
-        msg = "✅ גריד נסגר בהצלחה" if res.get("ok") else f"❌ שגיאה: {res}"
-        return HTMLResponse(content=f"<h3>{msg}</h3><a href='/ui/grid'>חזרה</a>")
+        grids = list_active_grids()  # אמור להחזיר [{"symbol":..,"account_id":..,"orders":[..]}]
+        if account_id:
+            grids = [g for g in grids if g.get("account_id") == account_id]
+        return {"ok": True, "active": grids}
     except Exception as e:
-        logger.exception("ui_grid_cancel_failed")
-        return HTMLResponse(content=f"<h3>שגיאה: {e}</h3><a href='/ui/grid'>חזרה</a>", status_code=500)
+        logger.exception("ui_active_grids_failed")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch grids: {e}")
+
+
+@router.get("/trades")
+def ui_trades(account_id: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """
+    מציג את כל הטריידים מה־trade_storage.json, עם אפשרות סינון לפי חשבון.
+    """
+    try:
+        trades = load_trades()
+        if account_id:
+            trades = [t for t in trades if t.get("account_id") == account_id]
+        return {"ok": True, "trades": trades}
+    except Exception as e:
+        logger.exception("ui_trades_failed")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trades: {e}")
+
+
+@router.get("/pnl")
+def ui_pnl(account_id: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """
+    מציג PnL מצטבר. אם account_id → יציג רק את הטריידים של אותו חשבון.
+    """
+    try:
+        summary = get_pnl_summary(account_id=account_id)
+        return {"ok": True, "summary": summary}
+    except Exception as e:
+        logger.exception("ui_pnl_failed")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch PnL: {e}")
+
 
 
 
