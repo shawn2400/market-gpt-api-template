@@ -5,12 +5,7 @@ import asyncio
 from typing import Optional, Dict, Any
 import logging
 
-from .telegram_api import (
-    send_message as _send_message,
-    edit_message as _edit_message,
-    get_me as _get_me,
-    send_chat_action as _send_chat_action,
-)
+from utils import telegram_api  # מקור יחיד לשכבת טלגרם
 
 logger = logging.getLogger("algogpt.alerts")
 
@@ -21,69 +16,28 @@ _TG_REC   = (os.getenv("TG_NOTIFY_RECONCILE","1").strip().lower() in ("1","true"
 _TG_GRID  = (os.getenv("TG_NOTIFY_GRID","1").strip().lower() in ("1","true","yes","on"))
 _TG_MNGR  = (os.getenv("TG_NOTIFY_MANAGER","0").strip().lower() in ("1","true","yes","on"))
 
-__all__ = [
-    "telegram_get_me",
-    "telegram_send_chat_action",
-    "format_trade_alert",
-    "send_telegram_alert",
-    "send_telegram_message",
-    "edit_telegram_message",
-    "tg_info",
-    "tg_warn",
-    "tg_ok",
-    "tg_err",
-    "tg_rec",
-    "tg_grid",
-    "tg_mngr",
-]
-
 def _ensure_chat_id() -> str:
     if not ADMIN_CHAT_ID:
         raise RuntimeError("ADMIN_CHAT_ID/TELEGRAM_CHAT_ID is not set")
     return ADMIN_CHAT_ID
 
-# ---------- Telegram thin proxies ----------
-async def telegram_get_me() -> Dict[str, Any]:
-    return await _get_me()
-
-async def telegram_send_chat_action(action: str = "typing") -> Dict[str, Any]:
-    return await _send_chat_action(action)
-
-async def edit_telegram_message(
-    chat_id: int | str,
-    message_id: int,
-    text: str,
-    reply_markup: Optional[Dict[str, Any]] = None,
-    parse_mode: str = "Markdown",
-    disable_preview: bool = True,
-) -> Dict[str, Any]:
-    """
-    Proxy לעריכת הודעות (דק מעל utils.telegram_api.edit_message).
-    """
-    return await _edit_message(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-        disable_preview=disable_preview,
-    )
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Proxies (API יציב לשאר המערכת)
+# ─────────────────────────────────────────────────────────────────────────────
 async def send_telegram_message(
     text: str,
-    *,
-    chat_id: Optional[int | str] = None,
     reply_markup: Optional[Dict[str, Any]] = None,
+    chat_id: Optional[int|str] = None,
     silent: bool = False,
     parse_mode: str = "Markdown",
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
     """
-    Proxy לשליחת הודעה — שומר על בעל-הבית utils.telegram_api.send_message
-    ומרכז את כל הקריאות דרך שכבת alerts.
+    שכבת proxy אחידה לשליחת הודעות. ברירת מחדל ל-admin chat אם לא סופק chat_id.
     """
-    _ = _ensure_chat_id()  # וידוא יעד קיים
-    return await _send_message(
+    if chat_id is None:
+        chat_id = _ensure_chat_id()
+    return await telegram_api.send_message(
         text=text,
         reply_markup=reply_markup,
         chat_id=chat_id,
@@ -92,7 +46,53 @@ async def send_telegram_message(
         disable_preview=disable_preview,
     )
 
-# ---------- Formatting ----------
+async def edit_telegram_message(
+    chat_id: int|str,
+    message_id: int,
+    text: str,
+    reply_markup: Optional[Dict[str, Any]] = None,
+    parse_mode: str = "Markdown",
+    disable_preview: bool = True,
+) -> Dict[str, Any]:
+    """
+    proxy לעריכת הודעה קיימת.
+    """
+    return await telegram_api.edit_message(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        disable_preview=disable_preview,
+    )
+
+async def telegram_get_me() -> Dict[str, Any]:
+    return await telegram_api.get_me()
+
+async def telegram_send_chat_action(action: str = "typing") -> Dict[str, Any]:
+    chat_id = _ensure_chat_id()
+    return await telegram_api.send_chat_action(action=action, chat_id=chat_id)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# שמירה על תאימות לאחור (שמות היסטוריים)
+# ─────────────────────────────────────────────────────────────────────────────
+async def send_telegram_alert(
+    message: str,
+    parse_mode: str = "Markdown",
+    disable_preview: bool = True,
+) -> Dict[str, Any]:
+    """
+    אליאס היסטורי ל-send_telegram_message.
+    """
+    return await send_telegram_message(
+        text=message,
+        parse_mode=parse_mode,
+        disable_preview=disable_preview,
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers תוכן
+# ─────────────────────────────────────────────────────────────────────────────
 def _coerce_side(side: str) -> str:
     s = (side or "").strip().upper()
     if s in ("LONG", "BUY"):
@@ -119,7 +119,7 @@ def format_trade_alert(
     q_str = f"\n• Quality: *{quality:.2f}*/10" if isinstance(quality, (int, float)) else ""
     s_str = f"\n• Success Rate: *{success_pct:.1f}%*" if isinstance(success_pct, (int, float)) else ""
     n_str = f"\n• Note: _{note}_" if note else ""
-    return (
+    txt = (
         "🔔 *AlgoGPT – Trade Alert*\n"
         f"*{sym}* • *{side_n}*\n"
         f"• Entry: `{entry:.6f}`\n"
@@ -129,23 +129,11 @@ def format_trade_alert(
         f"• Size ≈ ${size_usd:.2f}"
         f"{q_str}{s_str}{n_str}"
     )
+    return txt
 
-# ---------- Sending (alerts-level helpers) ----------
-async def send_telegram_alert(
-    message: str,
-    parse_mode: str = "Markdown",
-    disable_preview: bool = True,
-) -> Dict[str, Any]:
-    """
-    עטיפה "אלרטית" לשליחה — משתמשת ב-send_telegram_message לשכבת אחידות.
-    """
-    return await send_telegram_message(
-        text=message,
-        parse_mode=parse_mode,
-        disable_preview=disable_preview,
-    )
-
-# ---------- Fire-and-forget helpers ----------
+# ─────────────────────────────────────────────────────────────────────────────
+# fire-and-forget קלים
+# ─────────────────────────────────────────────────────────────────────────────
 def _fire_and_forget(coro):
     try:
         loop = asyncio.get_event_loop()
@@ -155,28 +143,29 @@ def _fire_and_forget(coro):
         pass
 
 def tg_info(text: str) -> None:
-    _fire_and_forget(send_telegram_alert(f"ℹ️ {text}"))
+    _fire_and_forget(send_telegram_message(f"ℹ️ {text}"))
 
 def tg_warn(text: str) -> None:
-    _fire_and_forget(send_telegram_alert(f"⚠️ {text}"))
+    _fire_and_forget(send_telegram_message(f"⚠️ {text}"))
 
 def tg_ok(text: str) -> None:
-    _fire_and_forget(send_telegram_alert(f"✅ {text}"))
+    _fire_and_forget(send_telegram_message(f"✅ {text}"))
 
 def tg_err(text: str) -> None:
-    _fire_and_forget(send_telegram_alert(f"❌ {text}"))
+    _fire_and_forget(send_telegram_message(f"❌ {text}"))
 
 def tg_rec(text: str) -> None:
     if _TG_REC:
-        _fire_and_forget(send_telegram_alert(text))
+        _fire_and_forget(send_telegram_message(text))
 
 def tg_grid(text: str) -> None:
     if _TG_GRID:
-        _fire_and_forget(send_telegram_alert(text))
+        _fire_and_forget(send_telegram_message(text))
 
 def tg_mngr(text: str) -> None:
     if _TG_MNGR:
-        _fire_and_forget(send_telegram_alert(text))
+        _fire_and_forget(send_telegram_message(text))
+
 
 
 
