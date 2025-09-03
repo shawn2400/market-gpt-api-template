@@ -10,23 +10,22 @@ from utils import config as cfg
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.precision_utils import apply_price_tick_side
+
+# שימוש בעטיפות ה"בטוחות" (Idempotency + כימות + בדיקות notional)
+from utils.order_hygiene import (
+    place_stop_market_safe,
+    place_take_profit_safe,
+)
+
+# פונקציות עזר מלקוח בינאנס (נוספו בפאצ' למטה)
 from utils.binance_client import (
     futures_mark_price,
-    place_stop_market_order as _place_stop_market_order,  # alias פנימי
-    place_take_profit_market,
-    get_open_orders, cancel_order, cancel_open_orders,
+    get_open_orders,
+    cancel_order,
     futures_position_risk,
 )
 
 logger = logging.getLogger("algogpt.open_trade_manager")
-
-# חשיפת alias בשם ההיסטורי שבו שאר הקוד משתמש
-def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float,
-                      reduce_only: bool = True, client_order_id: Optional[str] = None) -> Dict[str, Any]:
-    return _place_stop_market_order(
-        symbol=symbol, side=side, stop_price=stop_price, quantity=quantity,
-        reduce_only=reduce_only, client_order_id=client_order_id
-    )
 
 # ===== ENV =====
 def _as_bool(s: Optional[str], default=False) -> bool:
@@ -126,7 +125,7 @@ async def _klines_df(symbol: str) -> pd.DataFrame:
 
 def _ensure_grid_orders(sym: str, side_u: str, entry: float, atr: float, qty: float) -> Optional[str]:
     """
-    אם אין TP Reduce-Only פתוחים – יצירת 3×TP MARKER עם clientOrderId מסומן.
+    אם אין TP Reduce-Only פתוחים – יצירת 3×TP עם עטיפת hygiene (Idempotent).
     """
     try:
         oo = get_open_orders(sym) or []
@@ -150,10 +149,10 @@ def _ensure_grid_orders(sym: str, side_u: str, entry: float, atr: float, qty: fl
         q = max(0.0, qty * pct)
         px, _ = apply_price_tick_side(tgt, sym, close_side)
         try:
-            place_take_profit_market(sym, close_side, float(px), float(q), reduce_only=True, client_order_id=lab)
-            changed.append(lab)
-        except TypeError:
-            place_take_profit_market(sym, close_side, float(px), float(q), reduce_only=True)
+            # Idempotency key ייחודי לגריד
+            idp = f"grid:{sym}:{i}:{close_side}:{float(px):.8f}:{float(q):.8f}"
+            place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(px),
+                                   qty=float(q), reduce_only=True, idp_key=idp)
             changed.append(lab)
         except Exception as e:
             logger.warning({"event":"grid_tp_place_failed","symbol":sym,"stage":lab,"err":str(e)})
@@ -219,7 +218,7 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
         be_px = min(entry, trail_sl_raw)
         desired_sl, _ = apply_price_tick_side(be_px, sym, close_side)
 
-    # TP הרחבה מבוקרת (אם אין Grid TP לכל הכמות)
+    # TP הרחבה מבוקרת (אם אין Grid פעיל)
     sgn = 1.0 if side_u in ("BUY","LONG") else -1.0
     base_tp = entry + sgn * 2.0 * atr
     tp_shift = (MOMENTUM_TP_SHIFT_ATR * atr) if _momentum_ok(side_u, row) else 0.0
@@ -236,14 +235,18 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
         elif CHOP_ACTION == "partial_exit" and pnl_pct >= 0.0:
             near_tp, _ = apply_price_tick_side(entry + (sgn*0.5*atr), sym, close_side)
             try:
-                place_take_profit_market(sym, close_side, float(near_tp), float(qty*CHOP_PARTIAL_PCT), reduce_only=True)
+                idp = f"chop:partial:{sym}:{close_side}:{float(near_tp):.8f}:{float(qty*CHOP_PARTIAL_PCT):.8f}"
+                place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(near_tp),
+                                       qty=float(qty*CHOP_PARTIAL_PCT), reduce_only=True, idp_key=idp)
                 chop_action_taken = f"partial_exit~{int(CHOP_PARTIAL_PCT*100)}%"
             except Exception as e:
                 logger.warning({"event":"partial_exit_failed","symbol":sym,"err":str(e)})
         elif CHOP_ACTION == "full_exit":
             near_tp, _ = apply_price_tick_side(entry + (sgn*0.15*atr), sym, close_side)
             try:
-                place_take_profit_market(sym, close_side, float(near_tp), float(qty), reduce_only=True)
+                idp = f"chop:full:{sym}:{close_side}:{float(near_tp):.8f}:{float(qty):.8f}"
+                place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(near_tp),
+                                       qty=float(qty), reduce_only=True, idp_key=idp)
                 chop_action_taken = "force_exit"
             except Exception as e:
                 logger.warning({"event":"full_exit_failed","symbol":sym,"err":str(e)})
@@ -270,11 +273,16 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
         elif ty.startswith("TAKE_PROFIT"):
             tp_orders.append(o)
 
-    # הזזת SL (idempotent: מבטל ואז מציב)
+    # הזזת SL (Idempotent): מבטל ואז מציב חדש
     try:
         if sl_order_id:
-            cancel_order(sym, sl_order_id)
-        place_stop_market(sym, close_side, float(desired_sl), float(qty), reduce_only=True)
+            try:
+                cancel_order(sym, order_id=sl_order_id)
+            except Exception:
+                pass
+        idp = f"sl:update:{sym}:{close_side}:{float(desired_sl):.8f}:{float(qty):.8f}"
+        place_stop_market_safe(symbol=sym, side=close_side, stop_price=float(desired_sl),
+                               qty=float(qty), reduce_only=True, idp_key=idp)
         changed = True
     except Exception as e:
         errors.append(f"sl_update_failed:{e}")
@@ -282,7 +290,9 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
     # TP גלובלי רק אם אין Grid פעיל
     if GRID_ENABLE is False and not tp_orders:
         try:
-            place_take_profit_market(sym, close_side, float(desired_tp), float(qty), reduce_only=True)
+            idp = f"tp:global:{sym}:{close_side}:{float(desired_tp):.8f}:{float(qty):.8f}"
+            place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(desired_tp),
+                                   qty=float(qty), reduce_only=True, idp_key=idp)
             changed = True
         except Exception as e:
             errors.append(f"tp_update_failed:{e}")
@@ -292,7 +302,7 @@ async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[
         "symbol": sym, "side": side_u, "entry": entry, "price": px,
         "pnl_pct": round(pnl_pct, 4), "adx": round(adx, 3),
         "macd_hist": round(macd_hist, 5), "atr": round(atr, 6),
-        "is_chop": bool(is_chop), "desired_sl": desired_sl, "desired_tp": desired_tp,
+        "is_chop": bool(is_chop), "desired_sl": float(desired_sl), "desired_tp": float(desired_tp),
         "grid": grid_info, "changed": changed, "chop_action": chop_action_taken, "errors": errors,
     }
 
