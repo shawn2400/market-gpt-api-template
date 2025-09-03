@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
 
 from utils.auth import require_api_key
+from utils.account_router import get_account_credentials
 from utils.grid_utils import execute_grid_trade as basic_grid
 from utils.grid_manager import start_grid_for_position
 from utils.binance_spot_client import spot_price
@@ -26,6 +27,7 @@ class GridTradeRequest(BaseModel):
     grids: int = Field(3, ge=1, le=20, example=3)
     dry_run: bool = Field(True, description="אם True → לא מציב פקודות אמיתיות")
     market: str = Field("futures", regex="^(futures|spot)$", example="futures")
+    account_id: str = Field("main", description="ID מה־accounts_config.json")
 
 class GridTradeResponse(BaseModel):
     ok: bool
@@ -33,6 +35,7 @@ class GridTradeResponse(BaseModel):
     symbol: str
     side: str
     market: str
+    account_id: str
     base_price: Optional[float]
     budget: float
     leverage: Optional[int] = None
@@ -46,32 +49,31 @@ class GridTradeResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────
 @router.get("/status")
 def grid_status() -> Dict[str, Any]:
-    return {"ok": True, "grid_enabled": True, "active_strategies": 0, "note": "Grid engine loaded"}
+    return {"ok": True, "grid_enabled": True, "note": "Grid engine ready"}
 
 @router.get("/active")
 def grid_active() -> Dict[str, Any]:
     return {"ok": True, "active": []}
 
-@router.post("/start")
-def grid_start() -> Dict[str, Any]:
-    return {"ok": True, "message": "Grid start requested"}
-
-@router.post("/stop")
-def grid_stop() -> Dict[str, Any]:
-    return {"ok": True, "message": "Grid stop requested"}
-
 # ──────────────────────────────────────────────────────────────
-# New: /trade/grid endpoint
+# New: /grid/trade endpoint
 # ──────────────────────────────────────────────────────────────
 @router.post("/trade", response_model=GridTradeResponse)
 async def trade_grid(req: GridTradeRequest):
     """
-    🔹 Endpoint ייעודי להפעלת Grid:
-    - market=futures → משתמש ב־grid_manager (SL/TP אמיתיים)
-    - market=spot → משתמש ב־grid_utils (סימולציה בסיסית)
+    🔹 Grid Trade עם בחירת חשבון:
+    - account_id → נשלף מתוך accounts_config.json
+    - market=futures → grid_manager (SL/TP אמיתיים)
+    - market=spot → grid_utils (סימולציה בלבד)
     """
     sym = req.symbol.upper().strip()
     market = req.market.lower().strip()
+    acc_id = req.account_id.strip()
+
+    # --- בדיקת חשבון ---
+    creds = get_account_credentials(acc_id)
+    if not creds:
+        raise HTTPException(status_code=400, detail=f"Account {acc_id} not found in accounts_config.json")
 
     try:
         if market == "spot":
@@ -86,6 +88,7 @@ async def trade_grid(req: GridTradeRequest):
                 "symbol": sym,
                 "side": req.side,
                 "market": "spot",
+                "account_id": acc_id,
                 "base_price": price,
                 "budget": req.budget,
                 "levels": res.get("grid_levels"),
@@ -95,10 +98,10 @@ async def trade_grid(req: GridTradeRequest):
             }
 
         elif market == "futures":
-            # Futures grid עם SL/TP אמיתי
             price = futures_mark_price(sym)
             if not price:
                 raise RuntimeError("Futures mark price unavailable")
+
             if req.dry_run:
                 # הרצה יבשה
                 res = basic_grid(sym, levels=req.grids)
@@ -108,6 +111,7 @@ async def trade_grid(req: GridTradeRequest):
                     "symbol": sym,
                     "side": req.side,
                     "market": "futures",
+                    "account_id": acc_id,
                     "base_price": price,
                     "budget": req.budget,
                     "leverage": req.leverage,
@@ -117,7 +121,7 @@ async def trade_grid(req: GridTradeRequest):
                     "error": res.get("error"),
                 }
             else:
-                # Live grid עם הצמדת SL/TP דרך grid_manager
+                # Live grid עם הצמדת SL/TP
                 res = await start_grid_for_position(sym)
                 return {
                     "ok": bool(res.get("ok")),
@@ -125,6 +129,7 @@ async def trade_grid(req: GridTradeRequest):
                     "symbol": sym,
                     "side": req.side,
                     "market": "futures",
+                    "account_id": acc_id,
                     "base_price": price,
                     "budget": req.budget,
                     "leverage": req.leverage,
@@ -139,6 +144,7 @@ async def trade_grid(req: GridTradeRequest):
     except Exception as e:
         logger.exception("grid_trade_failed")
         raise HTTPException(status_code=500, detail=f"Grid trade failed: {e}")
+
 
 
 
