@@ -17,8 +17,10 @@ if _REDIS_URL:
 _mem: Dict[str, Trade] = {}
 _lock = threading.Lock()
 
+
 def _key(tid: str) -> str:
     return f"{_NAMESPACE}:trade:{tid}"
+
 
 def save(trade: Trade) -> None:
     if _redis:
@@ -29,6 +31,7 @@ def save(trade: Trade) -> None:
             pass
     with _lock:
         _mem[trade.trade_id] = trade
+
 
 def get(trade_id: str) -> Optional[Trade]:
     if _redis:
@@ -43,13 +46,13 @@ def get(trade_id: str) -> Optional[Trade]:
     with _lock:
         return _mem.get(trade_id)
 
+
 def list_open() -> List[Trade]:
     def _is_open(st: TradeState) -> bool:
         return st not in {TradeState.EXITED, TradeState.STOPPED, TradeState.CANCELED, TradeState.ERROR}
     out: List[Trade] = []
     if _redis:
         try:
-            # לאינדקס מלא דרוש SCAN; לשם פשטות—fallback לזיכרון אם אין אינדוקס
             raise RuntimeError("scan not implemented")
         except Exception:
             pass
@@ -59,6 +62,19 @@ def list_open() -> List[Trade]:
                 out.append(t)
     return out
 
+
+def get_all_state() -> List[Dict[str, str]]:
+    """החזרת כל מצב הטריידים בפורמט JSON-מוכן"""
+    out = []
+    with _lock:
+        for t in _mem.values():
+            try:
+                out.append(t.to_dict())
+            except Exception:
+                pass
+    return out
+
+
 def set_state(trade_id: str, to: TradeState) -> Optional[Trade]:
     t = get(trade_id)
     if not t:
@@ -67,4 +83,6 @@ def set_state(trade_id: str, to: TradeState) -> Optional[Trade]:
     save(t)
     return t
 
-__all__ = ["save", "get", "list_open", "set_state"]
+
+__all__ = ["save", "get", "list_open", "set_state", "get_all_state"]
+
