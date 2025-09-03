@@ -13,7 +13,6 @@ from decimal import Decimal, ROUND_DOWN, ROUND_UP, InvalidOperation
 from collections import deque
 
 import httpx
-import pandas as pd
 
 logger = logging.getLogger("algogpt.binance.client")
 
@@ -27,7 +26,15 @@ def _clean_env(s: Optional[str]) -> str:
 API_KEY     = _clean_env(os.getenv("BINANCE_API_KEY"))
 API_SECRET  = _clean_env(os.getenv("BINANCE_API_SECRET"))
 BASE        = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com").rstrip("/")
-RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "20000"))
+
+# time-sync & recvWindow — נשתמש ב־utils.time_sync אם קיים
+try:
+    from utils.time_sync import server_time_ms, recv_window_ms
+    _HAS_TIME_SYNC = True
+except Exception:
+    _HAS_TIME_SYNC = False
+
+RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "45000"))  # fallback אם time_sync לא נטען
 HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 BINANCE_BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
@@ -64,7 +71,20 @@ _CLIENT = httpx.Client(
 )
 
 def _ts_ms() -> int:
+    if _HAS_TIME_SYNC:
+        try:
+            return int(server_time_ms())
+        except Exception:
+            pass
     return int(time.time() * 1000)
+
+def _recv_window() -> int:
+    if _HAS_TIME_SYNC:
+        try:
+            return int(recv_window_ms())
+        except Exception:
+            pass
+    return int(RECV_WINDOW)
 
 def _sign(qs: str) -> str:
     return hmac.new(API_SECRET.encode(), qs.encode(), sha256).hexdigest()
@@ -92,15 +112,12 @@ def _order_leaky_bucket_gate():
     while True:
         with _order_gate_lock:
             now = time.monotonic()
-            # גרוף timestamps ישנים מחלון
             while _order_ts and (now - _order_ts[0]) > ORD_BUCKET_WINDOW:
                 _order_ts.popleft()
             if len(_order_ts) < ORD_BUCKET_SIZE:
                 _order_ts.append(now)
                 return
-            # נצטרך לישון עד שפנוי סל
             wait_for = ORD_BUCKET_WINDOW - (now - _order_ts[0])
-        # מחוץ ללוק — ישנים
         wait_for = max(0.0, min(wait_for, ORD_BUCKET_WINDOW))
         time.sleep(wait_for + random.uniform(0.0, 0.03))
 
@@ -128,7 +145,7 @@ def _request(
             req_params = dict(params or {})
             if signed:
                 req_params.setdefault("timestamp", _ts_ms())
-                req_params.setdefault("recvWindow", RECV_WINDOW)
+                req_params.setdefault("recvWindow", _recv_window())
                 # חתימה — שמירה על סדר הוספת הפרמטרים
                 items = [f"{k}={req_params[k]}" for k in req_params.keys()]
                 req_params["signature"] = _sign("&".join(items))
@@ -138,7 +155,6 @@ def _request(
             if r.status_code == 200:
                 return r
 
-            # Backoff על קודי עומס/שגיאה
             if r.status_code in (418, 429, 500, 502, 503, 504):
                 ra = r.headers.get("Retry-After")
                 if ra:
@@ -148,7 +164,6 @@ def _request(
                     delay = min(10.0, base + random.uniform(0, 0.4))
                 time.sleep(delay)
             else:
-                # ייתן פרטים אם יש JSON
                 try:
                     data = r.json()
                     raise RuntimeError(f"Binance error {data.get('code')}: {data.get('msg')}")
@@ -156,7 +171,6 @@ def _request(
                     r.raise_for_status()
         except Exception as e:
             last_exc = e
-            # backoff קצר בין ניסיונות (ללא הגזמה)
             ms = min(ORD_BACKOFF_MAX_MS, ORD_BACKOFF_BASE_MS * (2 ** attempt))
             time.sleep(ms / 1000.0)
         attempt += 1
@@ -166,7 +180,7 @@ def _request(
     raise RuntimeError("Unspecified Binance request failure")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Public: Ping / Price
+# Ping / Price
 # ──────────────────────────────────────────────────────────────────────────────
 def fapi_ping(tries: int = 3, per_try_timeout: float = 3.0) -> bool:
     for i in range(max(1, tries)):
@@ -342,7 +356,7 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
 # Decimal helpers
 # ──────────────────────────────────────────────────────────────────────────────
 def _quantize_multiple(x: float | str | Decimal, step_str: str, rounding=ROUND_DOWN) -> Decimal:
-    """מעגן את x למספר שלם של step (Decimal). תומך גם ב-'1e-3'."""
+    """מעגן את x למספר שלם של step (Decimal). תומך גם ב'1e-3'."""
     try:
         q = Decimal(str(x)) if not isinstance(x, Decimal) else x
         step = Decimal(step_str)
@@ -350,330 +364,224 @@ def _quantize_multiple(x: float | str | Decimal, step_str: str, rounding=ROUND_D
         val = (mult * step).quantize(step, rounding=ROUND_DOWN)
         return val
     except (InvalidOperation, ValueError):
-        # חזרה ל-default אם קלט לא תקין
-        q = Decimal("0")
-        step = Decimal(step_str if step_str else "1")
-        return (q / step).to_integral_value(rounding=rounding) * step
-
-def _to_plain_str(d: Decimal) -> str:
-    return format(d, "f")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Signed endpoints (balance/positions)
-# ──────────────────────────────────────────────────────────────────────────────
-def futures_position_risk() -> Optional[list]:
-    try:
-        return _request("GET", "/fapi/v2/positionRisk", signed=True).json()
-    except Exception:
-        return None
-
-# שמירת תאימות לשם ישן אם קיים בקוד אחר
-def futures_open_positions() -> Optional[list]:
-    return futures_position_risk()
-
-def futures_balance() -> list:
-    try:
-        data = _request("GET", "/fapi/v2/balance", signed=True).json()
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
+        # fallback בטוח
+        try:
+            step = Decimal(step_str)
+            return (Decimal(0) * step).quantize(step, rounding=ROUND_DOWN)
+        except Exception:
+            return Decimal("0")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Klines helper (Pandas)
+# Account / Balance / Leverage
 # ──────────────────────────────────────────────────────────────────────────────
-def get_klines_df(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
-    s = (symbol or "").upper().strip()
-    r = _request("GET", "/fapi/v1/klines", params={"symbol": s, "interval": interval, "limit": limit})
-    arr = r.json()
-    if not isinstance(arr, list) or not arr:
-        return pd.DataFrame()
-    cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
-    df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
-    for c in ("open","high","low","close","volume"):
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
+def futures_balance() -> List[Dict[str, Any]]:
+    """USDT-M futures balance (v2)."""
+    r = _request("GET", "/fapi/v2/balance", signed=True)
+    return r.json()
+
+def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
+    s = (symbol or "").upper()
+    lev = max(1, min(int(leverage), 125))
+    r = _request("POST", "/fapi/v1/leverage", params={"symbol": s, "leverage": lev}, signed=True)
+    return r.json()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Place LIMIT order (open position)
+# Orders
 # ──────────────────────────────────────────────────────────────────────────────
 def place_limit_order(
     *,
     symbol: str,
-    side: str,                # BUY/SELL
+    side: str,             # BUY / SELL
     quantity: float,
     price: float,
-    post_only: bool = False,  # GTX
+    time_in_force: str = "GTC",
+    post_only: bool = False,
     reduce_only: bool = False,
     position_side: Optional[str] = None,  # LONG/SHORT (Hedge) או None
-    time_in_force: Optional[str] = None,  # GTC/IOC/FOK/GTX
+    new_client_order_id: Optional[str] = None,
     new_order_resp_type: str = "RESULT",
-    client_order_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    sym  = (symbol or "").strip().upper()
-    sdir = (side   or "").strip().upper()
-    if sdir not in ("BUY", "SELL"):
-        raise ValueError("side must be BUY or SELL")
-
-    # קבל filters + עיגון דיוק
-    f = get_symbol_filters(sym)
-    step_str = f.get("stepSizeStr", DEFAULT_QTY_STEP_STR)
-    tick_str = f.get("tickSizeStr", DEFAULT_PRICE_TICK_STR)
-
-    qty_dec = _quantize_multiple(quantity, step_str, rounding=ROUND_DOWN)
-    if sdir == "SELL":
-        px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_UP)
-    else:
-        px_dec = _quantize_multiple(price, tick_str, rounding=ROUND_DOWN)
-
-    # minQty
-    min_qty = f.get("minQty")
-    if isinstance(min_qty, (float, int)) and min_qty is not None:
-        min_qty_dec = _quantize_multiple(Decimal(str(min_qty)), step_str, rounding=ROUND_UP)
-        if qty_dec < min_qty_dec:
-            qty_dec = min_qty_dec
-
-    # MIN_NOTIONAL
-    min_notional = f.get("minNotional") or DEFAULT_MIN_NOTIONAL
-    notional = float(qty_dec * px_dec)
-    if notional < float(min_notional):
-        raise RuntimeError(
-            f"MIN_NOTIONAL not met: notional={notional:.8f} < required={min_notional:.8f}. "
-            f"Increase budget or leverage."
-        )
-
-    qty_str = _to_plain_str(qty_dec)
-    px_str  = _to_plain_str(px_dec)
-
-    tif = "GTX" if post_only else (time_in_force or "GTC").strip().upper()
-    if tif not in ("GTC", "IOC", "FOK", "GTX"):
-        tif = "GTC"
-
+    s = symbol.upper().strip()
     params: Dict[str, Any] = {
-        "symbol": sym,
-        "side": sdir,
+        "symbol": s,
+        "side": side.upper(),
         "type": "LIMIT",
-        "quantity": qty_str,   # ← string
-        "price": px_str,       # ← string
-        "timeInForce": tif,
+        "timeInForce": time_in_force,
+        "quantity": f"{quantity:.18f}".rstrip("0").rstrip("."),
+        "price": f"{price:.18f}".rstrip("0").rstrip("."),
         "newOrderRespType": new_order_resp_type,
+        "reduceOnly": "true" if reduce_only else "false",
     }
-    if reduce_only:
-        params["reduceOnly"] = "true"
     if position_side:
-        ps = position_side.strip().upper()
-        if ps in ("LONG", "SHORT"):
-            params["positionSide"] = ps
-    if client_order_id:
-        params["newClientOrderId"] = client_order_id
+        params["positionSide"] = position_side.upper()
+    if post_only:
+        params["timeInForce"] = "GTX"  # Post-only דרך GTX
+    if new_client_order_id:
+        params["newClientOrderId"] = new_client_order_id
 
-    return _request("POST", "/fapi/v1/order", params=params, signed=True).json()
+    r = _request("POST", "/fapi/v1/order", params=params, signed=True)
+    return r.json()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Conditional (BRACKET) orders: STOP_MARKET / TAKE_PROFIT_MARKET
-# ──────────────────────────────────────────────────────────────────────────────
-def _align_trigger_price(desired: float, tick_str: str, side: str, *, is_stop: bool) -> Decimal:
-    """
-    Rounding direction chosen to be conservative:
-      - STOP for SELL (long SL below): round DOWN
-      - STOP for BUY  (short SL above): round UP
-      - TP   for SELL (long TP above):  round UP
-      - TP   for BUY  (short TP below): round DOWN
-    """
-    sdir = (side or "").upper()
-    if is_stop:
-        rnd = ROUND_DOWN if sdir == "SELL" else ROUND_UP
-    else:
-        rnd = ROUND_UP if sdir == "SELL" else ROUND_DOWN
-    return _quantize_multiple(desired, tick_str, rounding=rnd)
-
-def _place_conditional_market(
+def place_stop_market_order(
     *,
-    order_type: str,          # "STOP_MARKET" | "TAKE_PROFIT_MARKET"
     symbol: str,
-    side: str,                # BUY/SELL
+    side: str,
     stop_price: float,
-    quantity: Optional[float] = None,     # אם None → closePosition=true
+    quantity: Optional[float] = None,     # None → closePosition=true
     reduce_only: bool = True,
-    position_side: Optional[str] = None,  # LONG/SHORT
+    position_side: Optional[str] = None,
     working_type: Optional[str] = None,   # MARK_PRICE / CONTRACT_PRICE
     price_protect: Optional[bool] = None,
+    new_client_order_id: Optional[str] = None,
     new_order_resp_type: str = "RESULT",
-    client_order_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    sym  = (symbol or "").strip().upper()
-    sdir = (side   or "").strip().upper()
-    if sdir not in ("BUY", "SELL"):
-        raise ValueError("side must be BUY or SELL")
-
-    f = get_symbol_filters(sym)
-    step_str = f.get("stepSizeStr", DEFAULT_QTY_STEP_STR)
-    tick_str = f.get("tickSizeStr", DEFAULT_PRICE_TICK_STR)
-
-    # יישור מחירי טריגר ל-tick לפי הכיוון/סוג
-    is_stop = (order_type == "STOP_MARKET")
-    stop_dec = _align_trigger_price(float(stop_price), tick_str, sdir, is_stop=is_stop)
-    stop_str = _to_plain_str(stop_dec)
-
+    s = symbol.upper().strip()
     params: Dict[str, Any] = {
-        "symbol": sym,
-        "side": sdir,
-        "type": order_type,
-        "stopPrice": stop_str,
+        "symbol": s,
+        "side": side.upper(),
+        "type": "STOP_MARKET",
+        "stopPrice": f"{stop_price:.18f}".rstrip("0").rstrip("."),
         "newOrderRespType": new_order_resp_type,
-        "workingType": (working_type or WORKING_TYPE),
     }
-
-    if price_protect is None:
-        if PRICE_PROTECT:
-            params["priceProtect"] = "true"
-    else:
-        if price_protect:
-            params["priceProtect"] = "true"
-
-    if position_side:
-        ps = position_side.strip().upper()
-        if ps in ("LONG", "SHORT"):
-            params["positionSide"] = ps
-
     if quantity is None:
-        # סגור את כל הפוזיציה בכיוון הנגדי כשהטריגר יופעל
         params["closePosition"] = "true"
     else:
-        qty_dec = _quantize_multiple(quantity, step_str, rounding=ROUND_DOWN)
-        params["quantity"] = _to_plain_str(qty_dec)
-        if reduce_only:
-            params["reduceOnly"] = "true"
+        params["quantity"] = f"{quantity:.18f}".rstrip("0").rstrip(".")
+        params["reduceOnly"] = "true" if reduce_only else "false"
+    if position_side:
+        params["positionSide"] = position_side.upper()
+    params["workingType"] = (working_type or WORKING_TYPE)
+    if price_protect is None:
+        price_protect = PRICE_PROTECT
+    params["priceProtect"] = "true" if price_protect else "false"
+    if new_client_order_id:
+        params["newClientOrderId"] = new_client_order_id
 
-    if client_order_id:
-        params["newClientOrderId"] = client_order_id
+    r = _request("POST", "/fapi/v1/order", params=params, signed=True)
+    return r.json()
 
-    return _request("POST", "/fapi/v1/order", params=params, signed=True).json()
+def place_take_profit_market(
+    *,
+    symbol: str,
+    side: str,
+    stop_price: float,
+    quantity: Optional[float] = None,     # None → closePosition=true
+    reduce_only: bool = True,
+    position_side: Optional[str] = None,
+    working_type: Optional[str] = None,
+    price_protect: Optional[bool] = None,
+    new_client_order_id: Optional[str] = None,
+    new_order_resp_type: str = "RESULT",
+) -> Dict[str, Any]:
+    s = symbol.upper().strip()
+    params: Dict[str, Any] = {
+        "symbol": s,
+        "side": side.upper(),
+        "type": "TAKE_PROFIT_MARKET",
+        "stopPrice": f"{stop_price:.18f}".rstrip("0").rstrip("."),
+        "newOrderRespType": new_order_resp_type,
+    }
+    if quantity is None:
+        params["closePosition"] = "true"
+    else:
+        params["quantity"] = f"{quantity:.18f}".rstrip("0").rstrip(".")
+        params["reduceOnly"] = "true" if reduce_only else "false"
+    if position_side:
+        params["positionSide"] = position_side.upper()
+    params["workingType"] = (working_type or WORKING_TYPE)
+    if price_protect is None:
+        price_protect = PRICE_PROTECT
+    params["priceProtect"] = "true" if price_protect else "false"
+    if new_client_order_id:
+        params["newClientOrderId"] = new_client_order_id
 
-def place_stop_market_order(**kwargs) -> Dict[str, Any]:
-    kwargs = dict(kwargs)
-    kwargs["order_type"] = "STOP_MARKET"
-    return _place_conditional_market(**kwargs)
+    r = _request("POST", "/fapi/v1/order", params=params, signed=True)
+    return r.json()
 
-# שם תאימות: בקוד יש שימוש place_stop_market
-def place_stop_market(**kwargs) -> Dict[str, Any]:
-    return place_stop_market_order(**kwargs)
+# ──────────────────────────────────────────────────────────────────────────────
+# User Stream (listenKey) keepalive
+# ──────────────────────────────────────────────────────────────────────────────
+_LISTEN_KEY: Optional[str] = None
+_LISTEN_KEY_LOCK = threading.Lock()
+_LISTEN_BG: Optional[threading.Thread] = None
+_LISTEN_STOP = threading.Event()
 
-def place_take_profit_market(**kwargs) -> Dict[str, Any]:
-    kwargs = dict(kwargs)
-    kwargs["order_type"] = "TAKE_PROFIT_MARKET"
-    return _place_conditional_market(**kwargs)
+def _create_listen_key() -> str:
+    r = _request("POST", "/fapi/v1/listenKey")
+    js = r.json()
+    return str(js.get("listenKey"))
 
-# ─── Orders Management (Wrappers) ─────────────────────────────────────────────
-def get_order(symbol: str, order_id: Optional[int] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
-    if not order_id and not client_id:
-        raise ValueError("must provide order_id or client_id")
-    params = {"symbol": symbol.upper()}
-    if order_id: params["orderId"] = int(order_id)
-    if client_id: params["origClientOrderId"] = client_id
-    return _request("GET", "/fapi/v1/order", params=params, signed=True).json()
+def _keepalive_listen_key(lk: str) -> None:
+    _request("PUT", "/fapi/v1/listenKey", params={"listenKey": lk})
 
-def cancel_order(symbol: str, order_id: Optional[int] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
-    if not order_id and not client_id:
-        raise ValueError("must provide order_id or client_id")
-    params = {"symbol": symbol.upper()}
-    if order_id: params["orderId"] = int(order_id)
-    if client_id: params["origClientOrderId"] = client_id
-    return _request("DELETE", "/fapi/v1/order", params=params, signed=True).json()
-
-def cancel_open_orders(symbol: str) -> Dict[str, Any]:
-    params = {"symbol": symbol.upper()}
-    return _request("DELETE", "/fapi/v1/allOpenOrders", params=params, signed=True).json()
-
-def get_open_orders(symbol: Optional[str] = None) -> list:
-    params = {}
-    if symbol: params["symbol"] = symbol.upper()
-    return _request("GET", "/fapi/v1/openOrders", params=params, signed=True).json()
-
-# ─── User Data Stream ─────────────────────────────────────────────────────────
-_listen_key: Optional[str] = None
-_keepalive_thread: Optional[threading.Thread] = None
-_keepalive_stop = threading.Event()
+def _delete_listen_key(lk: str) -> None:
+    try:
+        _request("DELETE", "/fapi/v1/listenKey", params={"listenKey": lk})
+    except Exception:
+        pass
 
 def start_user_stream_keepalive(period_sec: int = 1800) -> Optional[str]:
-    global _listen_key, _keepalive_thread
-    if _keepalive_thread and _keepalive_thread.is_alive() and _listen_key:
-        return _listen_key
-    try:
-        lk = _request("POST", "/fapi/v1/listenKey").json().get("listenKey")
-        if not lk:
-            raise RuntimeError("listenKey missing")
-        _listen_key = lk
-    except Exception as e:
-        logger.error(f"[listenKey] create failed: {e}")
-        return None
+    global _LISTEN_KEY, _LISTEN_BG
+    with _LISTEN_KEY_LOCK:
+        if _LISTEN_BG and _LISTEN_BG.is_alive():
+            return _LISTEN_KEY
+        try:
+            _LISTEN_KEY = _create_listen_key()
+        except Exception as e:
+            logger.warning({"event": "listenkey_create_failed", "error": str(e)})
+            _LISTEN_KEY = None
+            return None
+        _LISTEN_STOP.clear()
 
-    _keepalive_stop.clear()
+        def _run():
+            while not _LISTEN_STOP.wait(timeout=max(60, period_sec - 60)):
+                try:
+                    if _LISTEN_KEY:
+                        _keepalive_listen_key(_LISTEN_KEY)
+                except Exception as e:
+                    logger.warning({"event": "listenkey_keepalive_failed", "error": str(e)})
+                    try:
+                        _LISTEN_KEY = _create_listen_key()
+                    except Exception:
+                        pass
 
-    def _run():
-        while not _keepalive_stop.is_set():
-            try:
-                time.sleep(max(60, period_sec - 60))
-                _request("PUT", "/fapi/v1/listenKey", params={"listenKey": _listen_key})
-            except Exception as e:
-                logger.warning({"event": "listenKey_keepalive_error", "error": str(e)})
-                time.sleep(10)
-
-    _keepalive_thread = threading.Thread(target=_run, name="binance-listenkey-keepalive", daemon=True)
-    _keepalive_thread.start()
-    return _listen_key
+        t = threading.Thread(target=_run, name="listenkey_keepalive", daemon=True)
+        t.start()
+        _LISTEN_BG = t
+        logger.info({"event": "listenkey_keepalive_started"})
+        return _LISTEN_KEY
 
 def stop_user_stream() -> None:
-    global _listen_key, _keepalive_thread
-    _keepalive_stop.set()
-    try:
-        if _listen_key:
-            _request("DELETE", "/fapi/v1/listenKey", params={"listenKey": _listen_key})
-    except Exception as e:
-        logger.warning({"event": "listenKey_delete_error", "error": str(e)})
-    _listen_key = None
-    _keepalive_thread = None
+    global _LISTEN_KEY, _LISTEN_BG
+    _LISTEN_STOP.set()
+    if _LISTEN_BG and _LISTEN_BG.is_alive():
+        try:
+            _LISTEN_BG.join(timeout=1.0)
+        except Exception:
+            pass
+    with _LISTEN_KEY_LOCK:
+        if _LISTEN_KEY:
+            try:
+                _delete_listen_key(_LISTEN_KEY)
+            except Exception:
+                pass
+        _LISTEN_KEY = None
+        _LISTEN_BG = None
+        logger.info({"event": "listenkey_keepalive_stopped"})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Back-compat exports
+# __all__
 # ──────────────────────────────────────────────────────────────────────────────
-def _floor_to_step_dec(x: float | str, step_str: str):
-    return _quantize_multiple(x, step_str, rounding=ROUND_DOWN)
-
-def _ceil_to_tick_dec(x: float | str, tick_str: str):
-    return _quantize_multiple(x, tick_str, rounding=ROUND_UP)
-
-def _floor_to_tick_dec(x: float | str, tick_str: str):
-    return _quantize_multiple(x, tick_str, rounding=ROUND_DOWN)
-
-to_decimal_str = _to_plain_str
-_to_decimal_str = _to_plain_str
-
 __all__ = [
-    "fapi_ping",
-    "futures_mark_price",
-    "futures_exchange_info_safe",
-    "get_symbol_filters",
+    "DEFAULT_QTY_STEP_STR", "DEFAULT_PRICE_TICK_STR", "DEFAULT_MIN_NOTIONAL",
+    "fapi_ping", "futures_mark_price", "futures_balance",
+    "futures_exchange_info_safe", "get_symbol_filters",
     "set_leverage",
-    "futures_position_risk",
-    "futures_open_positions",
-    "futures_balance",
-    "get_klines_df",
-    "place_limit_order",
-    "place_stop_market_order",
-    "place_stop_market",
-    "place_take_profit_market",
-    "get_order",
-    "cancel_order",
-    "cancel_open_orders",
-    "get_open_orders",
-    "start_user_stream_keepalive",
-    "stop_user_stream",
+    "place_limit_order", "place_stop_market_order", "place_take_profit_market",
     "_quantize_multiple",
-    "_to_plain_str",
-    "_floor_to_step_dec",
-    "_ceil_to_tick_dec",
-    "_floor_to_tick_dec",
+    "start_user_stream_keepalive", "stop_user_stream",
 ]
+
 
 
 
