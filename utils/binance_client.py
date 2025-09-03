@@ -1,13 +1,16 @@
+# utils/binance_client.py
 from __future__ import annotations
 
 import os, hmac, time, random, threading, logging
 from typing import Any, Dict, Optional, List
 from hashlib import sha256
 import httpx
+
 from utils.account_router import get_account_credentials
 
 logger = logging.getLogger("algogpt.binance.client")
 
+# ===== Config =====
 HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
 BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
 BINANCE_BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
@@ -22,11 +25,12 @@ DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK_STR", "0.01")
 WORKING_TYPE = (os.getenv("BINANCE_WORKING_TYPE") or "MARK_PRICE").strip().upper()
 PRICE_PROTECT = str(os.getenv("BINANCE_PRICE_PROTECT", "false")).lower() in ("1", "true", "yes", "on")
 
-_clients: Dict[str, httpx.Client] = {}
-_api_secrets: Dict[str, str] = {}
 BASE_URL = "https://fapi.binance.com"
 
-# ── Init client ───────────────────────────────
+_clients: Dict[str, httpx.Client] = {}
+_api_secrets: Dict[str, str] = {}
+
+# ===== Client Init =====
 def get_futures_client(account_id: str = "main") -> httpx.Client:
     if account_id in _clients:
         return _clients[account_id]
@@ -87,7 +91,7 @@ def _request(method: str, path: str, *, account_id="main", params=None, signed=F
     if last_exc: raise last_exc
     raise RuntimeError("Unspecified Binance request failure")
 
-# ── Exchange Info helpers ─────────────────────
+# ===== Exchange Info =====
 def futures_exchange_info_safe(account_id="main") -> Dict[str, Any]:
     try:
         r = _request("GET", "/fapi/v1/exchangeInfo", account_id=account_id)
@@ -113,12 +117,12 @@ def get_symbol_filters(symbol: str, account_id="main") -> Dict[str, Any]:
         "minNotional": float(filters.get("MIN_NOTIONAL", {}).get("notional", DEFAULT_MIN_NOTIONAL)),
     }
 
-# ── Balances ──────────────────────────────────
+# ===== Balances =====
 def futures_balance(account_id="main") -> List[Dict[str, Any]]:
     r = _request("GET", "/fapi/v2/balance", account_id=account_id, signed=True)
     return r.json()
 
-# ── Prices ────────────────────────────────────
+# ===== Prices =====
 def futures_mark_price(symbol: str, account_id="main") -> Optional[float]:
     """
     שליפת מחיר mark (Premium Index) מ־Binance Futures
@@ -132,15 +136,98 @@ def futures_mark_price(symbol: str, account_id="main") -> Optional[float]:
         logger.warning(f"futures_mark_price error: {e}")
         return None
 
-# ── Orders (שאר הפונקציות קיימות כבר) ───────
-# place_limit_order(...)
-# place_stop_market_order(...)
-# place_take_profit_market(...)
+# ===== Orders =====
+def place_limit_order(symbol: str, side: str, quantity: float, price: float,
+                      time_in_force="GTC", post_only=False, reduce_only=False,
+                      position_side=None, new_client_order_id=None,
+                      account_id="main") -> Dict[str, Any]:
+    params = {
+        "symbol": symbol.upper(), "side": side.upper(), "type": "LIMIT",
+        "timeInForce": time_in_force,
+        "quantity": f"{quantity}", "price": f"{price}",
+        "reduceOnly": "true" if reduce_only else "false",
+        "newClientOrderId": new_client_order_id or "",
+    }
+    if position_side: params["positionSide"] = position_side
+    return _request("POST", "/fapi/v1/order", account_id=account_id, params=params, signed=True).json()
 
-# ── User stream keepalive ─────────────────────
-# start_user_stream_keepalive(...)
-# stop_user_stream(...)
+def place_stop_market_order(symbol: str, side: str, stop_price: float, quantity: Optional[float] = None,
+                            reduce_only=True, position_side=None, new_client_order_id=None,
+                            account_id="main") -> Dict[str, Any]:
+    params = {
+        "symbol": symbol.upper(), "side": side.upper(), "type": "STOP_MARKET",
+        "stopPrice": f"{stop_price}",
+        "reduceOnly": "true" if reduce_only else "false",
+        "newClientOrderId": new_client_order_id or "",
+        "workingType": WORKING_TYPE,
+        "priceProtect": "true" if PRICE_PROTECT else "false",
+    }
+    if quantity: params["quantity"] = f"{quantity}"
+    if position_side: params["positionSide"] = position_side
+    return _request("POST", "/fapi/v1/order", account_id=account_id, params=params, signed=True).json()
 
+def place_take_profit_market(symbol: str, side: str, stop_price: float, quantity: Optional[float] = None,
+                             reduce_only=True, position_side=None, new_client_order_id=None,
+                             account_id="main") -> Dict[str, Any]:
+    params = {
+        "symbol": symbol.upper(), "side": side.upper(), "type": "TAKE_PROFIT_MARKET",
+        "stopPrice": f"{stop_price}",
+        "reduceOnly": "true" if reduce_only else "false",
+        "newClientOrderId": new_client_order_id or "",
+        "workingType": WORKING_TYPE,
+        "priceProtect": "true" if PRICE_PROTECT else "false",
+    }
+    if quantity: params["quantity"] = f"{quantity}"
+    if position_side: params["positionSide"] = position_side
+    return _request("POST", "/fapi/v1/order", account_id=account_id, params=params, signed=True).json()
+
+# ===== User stream keepalive =====
+_listen_state: Dict[str, Any] = {"thread": None, "stop": None, "listenKey": None, "account_id": None}
+
+def start_user_stream_keepalive(account_id: str = "main") -> None:
+    if _listen_state.get("thread") and _listen_state["thread"].is_alive():
+        return
+
+    client = get_futures_client(account_id)
+    r = client.post(f"{BASE_URL}/fapi/v1/listenKey")
+    r.raise_for_status()
+    lk = (r.json() or {}).get("listenKey")
+    if not lk:
+        raise RuntimeError("Failed to obtain listenKey")
+    _listen_state["listenKey"] = lk
+    _listen_state["account_id"] = account_id
+
+    keep_sec = int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800"))
+    stop = threading.Event()
+    _listen_state["stop"] = stop
+
+    def _loop():
+        logger.info({"event": "listen_key_keepalive_started"})
+        while not stop.is_set():
+            try:
+                client.put(f"{BASE_URL}/fapi/v1/listenKey", params={"listenKey": lk})
+            except Exception as e:
+                logger.warning({"event": "listenkey_keepalive_error", "error": str(e)})
+            stop.wait(keep_sec)
+
+    t = threading.Thread(target=_loop, name="binance-listenkey-keepalive", daemon=True)
+    _listen_state["thread"] = t
+    t.start()
+
+def stop_user_stream() -> None:
+    try:
+        stop: Optional[threading.Event] = _listen_state.get("stop")
+        if stop and not stop.is_set():
+            stop.set()
+        t: Optional[threading.Thread] = _listen_state.get("thread")
+        if t and t.is_alive():
+            t.join(timeout=2.0)
+    except Exception:
+        pass
+    finally:
+        _listen_state.update({"thread": None, "stop": None})
+
+# ===== Exports =====
 __all__ = [
     "get_futures_client", "futures_balance", "futures_mark_price",
     "futures_exchange_info_safe", "get_symbol_info", "get_symbol_filters",
