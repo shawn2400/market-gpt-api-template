@@ -4,14 +4,9 @@ import os
 import logging
 from typing import Any, Dict, Optional
 
-from utils.binance_client import (
-    futures_mark_price,
-    set_leverage,
-    place_limit_order,
-    place_stop_market_order,
-    place_take_profit_market,
-)
+from utils.binance_client import futures_mark_price, set_leverage
 from utils.precision_utils import apply_price_tick_side, calc_quantity_from_budget
+from utils.order_hygiene import place_limit_safe, place_stop_market_safe, place_take_profit_safe
 
 logger = logging.getLogger("algogpt.trade_executor")
 
@@ -86,21 +81,21 @@ async def execute_trade_live(
     except Exception as e:
         logger.debug(f"set_leverage({sym},{leverage}) failed: {e}")
 
-    # 1) כניסה IOC
-    order = place_limit_order(
-        symbol=sym,
-        side="BUY" if side_up in ("BUY", "LONG") else "SELL",
-        quantity=float(qty_calc),
-        price=float(px_aligned),
-        time_in_force="IOC",
-        post_only=False,
-        reduce_only=False,
-        position_side=None,
-        new_order_resp_type="RESULT",
-    )
+    # 1) כניסה IOC (quantized)
+    try:
+        order = place_limit_safe(
+            symbol=sym,
+            side="BUY" if side_up in ("BUY", "LONG") else "SELL",
+            qty=float(qty_calc),
+            limit_price=float(px_aligned),
+            post_only=False,
+            reduce_only=False,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"entry order failed: {e}"}
 
     status = (order or {}).get("status", "").upper()
-    filled = float(order.get("executedQty") or order.get("cumQty") or 0.0)
+    filled = float(order.get("executedQty") or order.get("cumQty") or order.get("qty") or 0.0)
     px_fill = float(order.get("avgPrice") or order.get("price") or px_aligned)
 
     if filled <= 0.0 or status in ("EXPIRED", "CANCELED", "REJECTED"):
@@ -109,8 +104,8 @@ async def execute_trade_live(
     # 2) מצמידים ברקט Reduce-Only
     try:
         close_side = _close_side(side_up)
-        place_stop_market_order(symbol=sym, side=close_side, stop_price=float(sl), quantity=float(filled), reduce_only=True)
-        place_take_profit_market(symbol=sym, side=close_side, stop_price=float(tp), quantity=float(filled), reduce_only=True)
+        place_stop_market_safe(symbol=sym, side=close_side, stop_price=float(sl), qty=float(filled), reduce_only=True)
+        place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(tp), qty=float(filled), reduce_only=True)
     except Exception as e_bracket:
         logger.exception("failed to attach SL/TP, trying to fail-safe close")
         return {"ok": False, "error": f"failed to attach SL/TP: {e_bracket}", "order": order}
@@ -128,6 +123,7 @@ async def execute_trade_live(
         "filledQty": float(filled),
         "order": order,
     }
+
 
 
 
