@@ -40,7 +40,7 @@ def _now_iso() -> str:
 class Trade:
     trade_id: str
     symbol: str
-    side: str                     # "LONG" / "SHORT"
+    side: str                         # "LONG" / "SHORT"
     qty: float
     entry_price: Optional[float] = None
     stop_price: Optional[float] = None
@@ -57,16 +57,17 @@ class Trade:
 
     def set_state(self, to: TradeState) -> None:
         if not self.can_transition(to):
-            raise ValueError(f"illegal transition {self.state} -> {to}")
+            raise ValueError(f"Illegal state transition: {self.state} → {to}")
         self.state = to
         self.updated_at = _now_iso()
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d["state"] = self.state.value
+        d["state"] = self.state.value  # Convert Enum to string
         return d
 
 def new_trade_id(prefix: str = "T") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 __all__ = ["TradeState", "Trade", "new_trade_id"]
+
