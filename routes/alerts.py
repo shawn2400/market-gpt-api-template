@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 import os, time
 
 from utils.auth import require_api_key
-from utils.alerts import send_telegram_alert, telegram_get_me, telegram_send_chat_action, format_trade_alert
+from utils.telegram_api import send_message as telegram_send, get_me as telegram_get_me, send_chat_action as telegram_send_chat_action
 from utils.hmac_utils import verify_inbound
 from utils.approvals import preflight_proposal
 from fastapi.responses import JSONResponse
@@ -35,6 +35,25 @@ class TradeAlert(BaseModel):
     note: str = ""
     quality: Optional[float] = None
     success_pct: Optional[float] = None
+
+def format_trade_alert(symbol: str, side: str, entry: float, sl: float, tp1: float, tp2: float, size_usd: float,
+                       note: str = "", quality: Optional[float] = None, success_pct: Optional[float] = None) -> str:
+    lines = [
+        "🔔 *AlgoGPT — Trade Alert*",
+        f"*{symbol.upper()}* | *{side.upper()}*",
+        f"Entry: `{entry:.6f}` | SL: `{sl:.6f}` | TP1: `{tp1:.6f}` | TP2: `{tp2:.6f}`",
+        f"Size≈ ${size_usd:.2f}",
+    ]
+    if quality is not None:
+        lines.append(f"Quality: `{quality:.2f}`")
+    if success_pct is not None:
+        lines.append(f"Success≈ `{success_pct:.1f}%`")
+    if note:
+        lines.append(f"Note: {note}")
+    return "\n".join(lines)
+
+async def send_telegram_alert(text: str, parse_mode: str = "Markdown", disable_preview: bool = True) -> Dict[str, Any]:
+    return await telegram_send(text, parse_mode=parse_mode, disable_preview=disable_preview)
 
 # == Service pings ==
 @router.get("/ping")
@@ -115,7 +134,6 @@ async def trade_ingest(
         "interval": data.get("interval"),
     })
     if SINK_ENFORCE_APPROVALS and not pre["ok"]:
-        # חשוב: להחזיר 422 אמיתי
         return JSONResponse(
             status_code=422,
             content={"ok": False, "errors": pre["errors"], "warnings": pre.get("warnings", [])},
@@ -144,7 +162,7 @@ async def trade_ingest(
     }
     _ACTIVE[tid] = record
 
-    # פרסום לטלגרם (פשוט)
+    # פרסום לטלגרם
     text = format_trade_alert(
         record["symbol"], record["side"], float(record["entry"]), float(record["sl"]),
         float(record["tp1"] or 0), float(record["tp2"] or 0), size_usd=float(data.get("budget") or 50.0),
@@ -153,10 +171,10 @@ async def trade_ingest(
     await send_telegram_alert(text)
     return {"ok": True, "item": record, "warnings": pre.get("warnings", [])}
 
-# אופציונלי — /alerts/analysis (stub עדינות)
 @router.get("/analysis")
 async def analysis(symbol: Optional[str] = None):
     return {"ok": True, "symbol": symbol, "note": "analysis endpoint stub"}
+
 
 
 
