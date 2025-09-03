@@ -1,4 +1,4 @@
-# --- Stage 1: Build with TA-Lib C and heavy deps ---
+# --- Stage 1: Build with TA-Lib and deps ---
 FROM python:3.11-slim AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
@@ -13,7 +13,8 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt ./
+COPY requirements.txt ./requirements.txt
+
 RUN python -m pip install --upgrade pip setuptools wheel \
  && pip install --prefix=/install --no-cache-dir -r requirements.txt
 
@@ -56,6 +57,7 @@ ENV WEB_CONCURRENCY=1 \
 CMD ["bash","-lc","bash /app/prestart.sh 2>/dev/null || true; \
     gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-1} \
     -b 0.0.0.0:${PORT:-10000} main:app --timeout ${GUNICORN_TIMEOUT:-120}"]
+
 
 
 
