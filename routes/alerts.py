@@ -1,6 +1,6 @@
 # routes/alerts.py
 from __future__ import annotations
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, Body, Header, HTTPException, Request
 from pydantic import BaseModel, Field, constr
 import os, time
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(requ
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
 SINK_ENFORCE_APPROVALS = str(os.getenv("SINK_ENFORCE_APPROVALS", "1")).lower() in ("1", "true", "yes", "on")
 
-# זיכרון מינימלי (אפשר להחליף ל-Redis)
+# זיכרון מינימלי (מומלץ להחליף ל-Redis בפרודקשן)
 _ACTIVE: Dict[str, Dict[str, Any]] = {}
 
 class SendRequest(BaseModel):
@@ -30,11 +30,12 @@ class SendRequest(BaseModel):
 
 class TradeAlert(BaseModel):
     symbol: str
-    side: constr(regex=r"^(?i:LONG|SHORT)$") = Field(...)  # ✅ ולידציה אמיתית + case-insensitive
+    side: constr(pattern=r"^(?i:LONG|SHORT)$") = Field(...)
     entry: float
     sl: float
     tp1: float
-    tp2: float
+    tp2: Optional[float] = None
+    tp3: Optional[float] = None
     size_usd: float = 50
     note: str = ""
     quality: Optional[float] = None
@@ -46,26 +47,34 @@ def format_trade_alert(
     entry: float,
     sl: float,
     tp1: float,
-    tp2: float,
-    size_usd: float,
+    tp2: Optional[float] = None,
+    tp3: Optional[float] = None,
+    size_usd: float = 50.0,
     *,
     note: str = "",
     quality: Optional[float] = None,
     success_pct: Optional[float] = None,
 ) -> str:
-    lines = [
+    parts = [
         "🔔 *AlgoGPT — Trade Alert*",
         f"*{symbol.upper()}* | *{side.upper()}*",
-        f"Entry: `{entry:.6f}` | SL: `{sl:.6f}` | TP1: `{tp1:.6f}` | TP2: `{tp2:.6f}`",
-        f"Size≈ ${size_usd:.2f}",
+        f"Entry: `{entry:.6f}` | SL: `{sl:.6f}` | TP1: `{tp1:.6f}`",
     ]
+    if tp2 is not None:
+        parts[-1] += f" | TP2: `{tp2:.6f}`"
+    if tp3 is not None:
+        parts[-1] += f" | TP3: `{tp3:.6f}`"
+
+    parts.append(f"Size≈ ${size_usd:.2f}")
+
     if quality is not None:
-        lines.append(f"Quality: `{quality:.2f}`")
+        parts.append(f"Quality: `{quality:.2f}`")
     if success_pct is not None:
-        lines.append(f"Success≈ `{success_pct:.1f}%`")
+        parts.append(f"Success≈ `{success_pct:.1f}%`")
     if note:
-        lines.append(f"Note: {note}")
-    return "\n".join(lines)
+        parts.append(f"Note: {note}")
+
+    return "\n".join(parts)
 
 async def send_telegram_alert(text: str, parse_mode: str = "Markdown", disable_preview: bool = True) -> Dict[str, Any]:
     return await telegram_send(text, parse_mode=parse_mode, disable_preview=disable_preview)
@@ -96,16 +105,8 @@ async def send(req: SendRequest = Body(...)) -> Dict[str, Any]:
 @router.post("/trade")
 async def trade_alert(req: TradeAlert = Body(...)) -> Dict[str, Any]:
     text = format_trade_alert(
-        req.symbol,
-        req.side,
-        req.entry,
-        req.sl,
-        req.tp1,
-        req.tp2,
-        req.size_usd,
-        note=req.note,
-        quality=req.quality,
-        success_pct=req.success_pct,
+        req.symbol, req.side, req.entry, req.sl, req.tp1, req.tp2, req.tp3, req.size_usd,
+        note=req.note, quality=req.quality, success_pct=req.success_pct
     )
     res = await send_telegram_alert(text)
     return {"ok": bool(res.get("ok")), "response": res, "text": text}
@@ -147,19 +148,17 @@ async def trade_ingest(
         raise HTTPException(400, "invalid json")
 
     # preflight נוסף בצד ה-sink (קשיח אם מופעל)
-    pre = preflight_proposal(
-        {
-            "symbol": data.get("symbol"),
-            "side": data.get("side"),
-            "entry": data.get("entry"),
-            "sl": data.get("sl"),
-            "tp1": data.get("tp1"),
-            "leverage": data.get("leverage"),
-            "success_pct": data.get("success_pct"),
-            "budget": data.get("budget"),
-            "interval": data.get("interval"),
-        }
-    )
+    pre = preflight_proposal({
+        "symbol": data.get("symbol"),
+        "side": data.get("side"),
+        "entry": data.get("entry"),
+        "sl": data.get("sl"),
+        "tp1": data.get("tp1"),
+        "leverage": data.get("leverage"),
+        "success_pct": data.get("success_pct"),
+        "budget": data.get("budget"),
+        "interval": data.get("interval"),
+    })
     if SINK_ENFORCE_APPROVALS and not pre["ok"]:
         return JSONResponse(
             status_code=422,
@@ -191,12 +190,11 @@ async def trade_ingest(
 
     # פרסום לטלגרם
     text = format_trade_alert(
-        record["symbol"],
-        record["side"],
-        float(record["entry"]),
-        float(record["sl"]),
+        record["symbol"], record["side"],
+        float(record["entry"]), float(record["sl"]),
         float(record["tp1"] or 0),
-        float(record["tp2"] or 0),
+        (float(record["tp2"]) if record.get("tp2") is not None else None),
+        (float(record["tp3"]) if record.get("tp3") is not None else None),
         size_usd=float(data.get("budget") or 50.0),
         note=data.get("reason") or "approved",
         quality=None,
@@ -208,6 +206,7 @@ async def trade_ingest(
 @router.get("/analysis")
 async def analysis(symbol: Optional[str] = None) -> Dict[str, Any]:
     return {"ok": True, "symbol": symbol, "note": "analysis endpoint stub"}
+
 
 
 
