@@ -1,5 +1,4 @@
-# ✅ גרסה מוכנה לעבודה: utils/binance_spot_client.py
-
+# utils/binance_spot_client.py
 from __future__ import annotations
 import os, hmac, time, random, threading, logging
 from typing import Any, Dict, Optional, List
@@ -10,10 +9,7 @@ import httpx
 
 logger = logging.getLogger("algogpt.binance.spot")
 
-# ──────────────────────────────────────────────────────────────────────────────
 # ENV / Spot base
-# ──────────────────────────────────────────────────────────────────────────────
-
 def _clean_env(s: Optional[str]) -> str:
     return (s or "").strip().strip('"').replace("\r", "").replace("\n", "").replace("\t", "")
 
@@ -48,10 +44,7 @@ def _request(method: str, path: str, *, params: Optional[Dict[str, Any]] = None,
         req_params["signature"] = _sign("&".join(items))
     return CLIENT.request(method.upper(), url, params=req_params)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Spot endpoints
-# ──────────────────────────────────────────────────────────────────────────────
-
 def spot_ping() -> bool:
     try:
         r = CLIENT.get(f"{BASE}/api/v3/ping", timeout=3.0)
