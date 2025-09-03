@@ -1,93 +1,22 @@
-# 📊 AlgoGPT — מערכת מסחר חכמה בזמן אמת (Pro Elite Edition)
-
-AlgoGPT היא מערכת מסחר אלגוריתמית אוטומטית הפועלת על Binance (Futures + Spot), מבצעת ניתוח טכני, סורקת מאות מטבעות בזמן אמת, שומרת טריידים, מפיקה דוחות PDF, ומבצעת טריידים חיים לפי כללים קשיחים.
-מתוכננת לרוץ על Render עם REST API יציב, כולל תמיכה מלאה ב־Grid חכם, Quality Scoring, ניתוח חדשות, SL/TP חכם, Watchlist, Multi-TF Scan ומערכת ניטור PNL.
 
 ---
 
-## 🚀 תכונות עיקריות
+# ✅ preset.txt (שדרוג “העתק-הדבק”)
 
-* ניתוח טכני חי: RSI, MACD, EMA21/50, Bollinger Bands, ADX, ATR, OBV, Volume Spike
-* חישוב SL/TP חכם: סטטי, Trailing ו־ATR × 1.5
-* אחריות מימוש מינוף דינמי 5×–35× לפי סיכון ואיכות
-* סוגי טריידים: Spot / Futures / Grid חכם
-* Smart Grid: פיצול לאסטרטגיות מרובות במידת הצורך
-* כניסה לפי Breakout, Pullback או Reversal בלבד
-* ניתוח Dual TF: 15m + 1h
-* תמיכה ב־Limit / Stop Limit בלבד (ללא Market SL/TP)
-* דוחות PDF יומיים: סטטיסטיקות, גרפים, סיכום PNL
-* Quality Scoring: ציון איכות 0–10 לכל טרייד
-* ניהול ומעקב טריידים (`trades_log.json`)
-* ניתוח חדשות וסנטימנט מ־CryptoPanic
-* REST API מלא ושלם לכל הפעולות
+```markdown
+# 📊 AlgoGPT — Pro Elite (Cold, Target-Locked, Deterministic Agent)
 
----
+- Cold-focus: ללא סנטימנט, ללא "דעות". **נתונים בלבד**.
+- Output יחיד: **JSON** לפי `OUTPUT_SCHEMA.json` (אין טקסט חופשי).
+- SOP קשיח לפני כל החלטה: BTC-Gate, TF Align (5m/15m/1h), Spread/Depth, Funding, Δ%5m, Volume≥1.2×MA20.
+- Quality Scoring ≥ 8.5 כ-Gate. מתחת — REJECT עם `reason_codes`.
+- SL/TP: Breakeven fee-aware, Trailing ATR (hysteresis), מקס' עדכונים/דקה (token-bucket).
+- Orders: Limit Post-Only, Stop-Limit (Trigger=MARK), Reduce-Only, No-Market.
+- Idempotency: `action_id`, `newClientOrderId` עקביים.
+- Telegram: Double-Check (Admin), HMAC, Cooldown, Dedupe.
+- Manage: BE arming ≥1.5×ATR או TP1 hit; Stall rule 30–45׳ → partial close 10–20% + הידוק SL.
+- Risk: Daily Caps, Cooldown per-symbol/side, No re-entry לפני BE/TP/SL.
 
-## 🧠 הרחבות Pro Elite
-
-* Confidence דינמי: ≥88% (או ≥86% עם quality ≥4)
-* Auto Risk Allocation לפי תנודתיות ויחס RRR
-* PNL Tracker ו־Snapshot לכל טרייד
-* סוג הזמנה חכם (Volatile vs Stable)
-* הגנה מפני טריידים כפולים (Active Trade Enforcement)
-* Trailing SL חכם (callback + activation)
-* חיזוי טווחים עם Prophet AI (`/ai-analyze`)
-* ניתוח נרות, פרצות, Volume Profile, OBV וכיווני מגמה
-* תשתית מלאה ל־Backtest → Analyze → Confirm → Execute
-
----
-
-## 📡 REST API — נתיבים
-
-| נתיב                  | שיטת HTTP | תיאור                              |
-| --------------------- | --------- | ---------------------------------- |
-| `/`                   | GET       | בדיקת תקינות השרת                  |
-| `/scan`               | GET       | סריקה טכנית חיה (Futures/Spot)     |
-| `/scan/multi`         | GET       | סריקת Multi-TF עם AI               |
-| `/backtest`           | POST      | הרצת סימולציית Backtest            |
-| `/execute-trade`      | POST      | ביצוע טרייד חי (Spot/Futures/Grid) |
-| `/sl_tp`              | POST      | חישוב SL/TP חכם                    |
-| `/calculate-quantity` | POST      | חישוב כמות לפי תקציב ומינוף        |
-| `/save`               | POST      | שמירת טרייד למעקב                  |
-| `/trades`             | GET       | הצגת כל הטריידים השמורים           |
-| `/open-trades`        | GET       | הצגת טריידים פתוחים                |
-| `/close-trade`        | POST      | סגירת טרייד פתוח לפי סימול         |
-| `/daily-report`       | GET       | דוח יומי PDF עם סיכום וגרפים       |
-| `/ai-analyze`         | POST      | חיזוי וגרף Prophet AI              |
-| `/news`               | GET       | חדשות קריפטו + ניתוח סנטימנט       |
-| `/analyze-news`       | GET       | ניתוח סנטימנט חדשות                |
-| `/stats`              | GET       | סטטיסטיקת PNL ו־Win Rate           |
-| `/preset`             | GET       | שליפת הגדרות מערכת                 |
-| `/strategy`           | GET       | תיאור כללי של האסטרטגיה            |
-| `/start-auto`         | POST      | הפעלת Auto Executor                |
-| `/stop-auto`          | POST      | עצירת Auto Executor                |
-| `/status`             | GET       | סטטוס Auto Executor                |
-
----
-
-## 🔐 קובץ `.env` (חובה)
-
-```env
-BINANCE_API_KEY=...
-BINANCE_API_SECRET=...
-CRYPTO_PANIC_API_KEY=...
-ALERT_EMAIL_ADDRESS=...
-ALERT_EMAIL_PASSWORD=...
-ALERT_TO_EMAIL=...
-OPENAI_API_KEY=...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-
-# Auto Executor Settings
-AUTO_RUN=true
-SCAN_INTERVAL=60        # שניות בין סריקות
-MIN_QUALITY_SCORE=6     # סף איכות טרייד
-MAX_TRADE_BUDGET=100    # USD תקציב לכל טרייד
-
-# אופציונלי: פילטר נפח ו-Trending
-MIN_VOLUME=1000000
-TRENDING_ONLY=false
-```
 
 
 
