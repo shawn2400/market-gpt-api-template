@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+  <meta charset="UTF-8">
+  <title>AlgoGPT Grid Dashboard</title>
+  <style>
+    body { background:#111; color:#eee; font-family:sans-serif; padding:20px; }
+    h1,h2 { color:#4fc3f7; }
+    table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+    th, td { border: 1px solid #444; padding: 6px 10px; text-align: center; }
+    th { background:#222; }
+    select, button { padding:6px 10px; margin:5px; background:#222; color:#fff; border:1px solid #555; }
+  </style>
+</head>
+<body>
+  <h1>AlgoGPT Grid Dashboard</h1>
+
+  <!-- Account filter -->
+  <form method="get" action="/ui/grid/">
+    <label>בחר חשבון:</label>
+    <select name="account_id">
+      {% for acc in accounts %}
+        <option value="{{acc}}" {% if acc == account_id %}selected{% endif %}>{{acc}}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">טען</button>
+  </form>
+
+  <h2>גרידים פעילים</h2>
+  {% if grids %}
+  <table>
+    <tr><th>Symbol</th><th>Side</th><th>Budget</th><th>Levels</th><th>Status</th></tr>
+    {% for g in grids %}
+    <tr>
+      <td>{{g.symbol}}</td>
+      <td>{{g.side}}</td>
+      <td>{{g.budget}}</td>
+      <td>{{g.levels|length if g.levels else 0}}</td>
+      <td>{{g.status}}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p>אין גרידים פעילים.</p>
+  {% endif %}
+
+  <h2>טריידים פתוחים</h2>
+  {% if trades %}
+  <table>
+    <tr><th>ID</th><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>PNL</th></tr>
+    {% for t in trades %}
+    <tr>
+      <td>{{t.id}}</td>
+      <td>{{t.symbol}}</td>
+      <td>{{t.side}}</td>
+      <td>{{t.entry}}</td>
+      <td>{{t.sl}}</td>
+      <td>{{t.tp}}</td>
+      <td>{{t.pnl}}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p>אין טריידים פתוחים.</p>
+  {% endif %}
+
+  <h2>סיכום PnL</h2>
+  <table>
+    <tr><th>Realized</th><th>Unrealized</th><th>Total</th></tr>
+    <tr>
+      <td>{{pnl.realized}}</td>
+      <td>{{pnl.unrealized}}</td>
+      <td>{{pnl.total}}</td>
+    </tr>
+  </table>
+</body>
+</html>
