@@ -1,14 +1,13 @@
 # routes/ui_grid.py
 from __future__ import annotations
 import logging
-from fastapi import APIRouter, Depends, Query, HTTPException
-from typing import Dict, Any, List, Optional
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from typing import List
 
 from utils.auth import require_api_key
 from utils.account_router import list_account_ids
-from utils.grid_manager import list_active_grids  # נניח שקיים (או אפשר להרחיב)
-from utils.trade_storage import load_trades        # טבלה של כל הטריידים
-from utils.pnl_tracker import get_pnl_summary      # רווח/הפסד מצטבר
 
 logger = logging.getLogger("algogpt.routes.ui_grid")
 
@@ -18,59 +17,39 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
 )
 
-# ──────────────────────────────────────────────
-# Endpoints
-# ──────────────────────────────────────────────
+# Templates folder
+templates = Jinja2Templates(directory="templates")
 
-@router.get("/accounts")
-def ui_list_accounts() -> Dict[str, Any]:
+@router.get("/", response_class=HTMLResponse)
+async def grid_dashboard(request: Request, account_id: str = Query(None)):
     """
-    מחזיר את רשימת ה־account_id הנתמכים (מה־accounts_config.json).
+    🔹 מציג Dashboard לגרידים + טריידים + PnL.
+    אם לא נבחר account_id → מציג את הראשון ברשימה.
     """
-    return {"ok": True, "accounts": list_account_ids()}
+    accounts: List[str] = list_account_ids()
+    acc_id = account_id or (accounts[0] if accounts else None)
 
+    # ⚠️ כאן אתה יכול למשוך נתוני גרידים/טריידים אמיתיים
+    # כרגע נשים דמו כדי שהעמוד יעבוד
+    grids = [
+        {"symbol": "BTCUSDT", "orders": 3},
+        {"symbol": "ETHUSDT", "orders": 2},
+    ]
+    trades = [
+        {"trade_id": "T1", "symbol": "BTCUSDT", "side": "LONG", "entry": 43210, "sl": 42800, "tp": 44500, "pnl": "+120$"},
+        {"trade_id": "T2", "symbol": "ETHUSDT", "side": "SHORT", "entry": 3100, "sl": 3180, "tp": 2950, "pnl": "-30$"},
+    ]
+    pnl_summary = {"realized": 90, "unrealized": 15, "total": 105}
 
-@router.get("/active")
-def ui_active_grids(account_id: Optional[str] = Query(None, description="סינון לפי account_id")) -> Dict[str, Any]:
-    """
-    מציג גרידים פעילים, עם אפשרות לסינון לפי חשבון.
-    """
-    try:
-        grids = list_active_grids()  # אמור להחזיר [{"symbol":..,"account_id":..,"orders":[..]}]
-        if account_id:
-            grids = [g for g in grids if g.get("account_id") == account_id]
-        return {"ok": True, "active": grids}
-    except Exception as e:
-        logger.exception("ui_active_grids_failed")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch grids: {e}")
+    return templates.TemplateResponse("ui_grid.html", {
+        "request": request,
+        "accounts": accounts,
+        "account_id": acc_id,
+        "grids": grids,
+        "trades": trades,
+        "pnl": pnl_summary,
+    })
 
-
-@router.get("/trades")
-def ui_trades(account_id: Optional[str] = Query(None)) -> Dict[str, Any]:
-    """
-    מציג את כל הטריידים מה־trade_storage.json, עם אפשרות סינון לפי חשבון.
-    """
-    try:
-        trades = load_trades()
-        if account_id:
-            trades = [t for t in trades if t.get("account_id") == account_id]
-        return {"ok": True, "trades": trades}
-    except Exception as e:
-        logger.exception("ui_trades_failed")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch trades: {e}")
-
-
-@router.get("/pnl")
-def ui_pnl(account_id: Optional[str] = Query(None)) -> Dict[str, Any]:
-    """
-    מציג PnL מצטבר. אם account_id → יציג רק את הטריידים של אותו חשבון.
-    """
-    try:
-        summary = get_pnl_summary(account_id=account_id)
-        return {"ok": True, "summary": summary}
-    except Exception as e:
-        logger.exception("ui_pnl_failed")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch PnL: {e}")
 
 
 
