@@ -1,4 +1,3 @@
-# utils/binance_client.py
 from __future__ import annotations
 
 import os, hmac, time, random, threading, logging
@@ -133,14 +132,14 @@ def futures_mark_price(symbol: str, account_id="main") -> Optional[float]:
         logger.warning(f"futures_mark_price error: {e}")
         return None
 
-# ── Order wrappers ────────────────────────────
-def place_limit_order(...): ...
-def place_stop_market_order(...): ...
-def place_take_profit_market(...): ...
-# (נשאר כמו שכבר יש לך)
+# ── Orders (שאר הפונקציות קיימות כבר) ───────
+# place_limit_order(...)
+# place_stop_market_order(...)
+# place_take_profit_market(...)
 
 # ── User stream keepalive ─────────────────────
-# (נשאר כמו שכבר יש לך)
+# start_user_stream_keepalive(...)
+# stop_user_stream(...)
 
 __all__ = [
     "get_futures_client", "futures_balance", "futures_mark_price",
