@@ -22,10 +22,8 @@ if not IS_CLOUD:
     except Exception:
         pass
 
-# --- עזרי קונפיג ---
 def _to_bool(v: str | None, default: bool = False) -> bool:
-    if v is None:
-        return default
+    if v is None: return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 def _parse_csv(s: str | None) -> List[str]:
@@ -39,7 +37,6 @@ from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
-
 from utils.auth import extract_token, allow_all, token_matches
 from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync
 from utils.binance_client import futures_balance, start_user_stream_keepalive, stop_user_stream
@@ -47,7 +44,6 @@ from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
 
-# Optional user stream
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
 except Exception:
@@ -57,7 +53,6 @@ except Exception:
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-# --- תיקיות ---
 def _ensure_dir(path: str) -> bool:
     p = Path(path)
     try:
@@ -78,16 +73,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 CORS_ALLOWED = (os.getenv("CORS_ALLOW_ORIGINS", "*") or "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
-if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
-    CORS_ALLOW_CREDENTIALS = False
+if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS: CORS_ALLOW_CREDENTIALS = False
 allow_origins = ["*"] if CORS_ALLOWED == "*" else _parse_csv(CORS_ALLOWED)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=CORS_ALLOW_CREDENTIALS,
-)
+app.add_middleware(CORSMiddleware, allow_origins=allow_origins, allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS)
 
 try:
     if static_ok and os.access("static", os.R_OK):
@@ -101,18 +89,13 @@ async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/ui/grid"}
     PUBLIC_PREFIXES = ["/price", "/static/", "/ui/grid"]
     path = request.url.path
-    if request.method.upper() == "OPTIONS":
-        return await call_next(request)
-    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
-        return await call_next(request)
-    if allow_all():
-        return await call_next(request)
+    if request.method.upper() == "OPTIONS": return await call_next(request)
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES): return await call_next(request)
+    if allow_all(): return await call_next(request)
     token = extract_token(request, authorization=request.headers.get("Authorization", ""), x_api_key=request.headers.get("X-API-Key"))
-    if not token_matches(token):
-        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    if not token_matches(token): return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# --- Routers ---
 def _include_router(module_path: str, attr: str = "router") -> None:
     try:
         mod = __import__(module_path, fromlist=[attr])
@@ -130,21 +113,16 @@ ALL_ROUTERS: List[str] = [
     "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl", "routes.ui", "routes.backtest",
     "routes.ui_grid",  # ✅ Dashboard Grid
 ]
-
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ALL_ROUTERS.append("routes.ai")
-
-for mod in ALL_ROUTERS:
-    _include_router(mod)
+for mod in ALL_ROUTERS: _include_router(mod)
 
 # --- Endpoints ---
 @app.get("/")
-async def root_status():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+async def root_status(): return {"ok": True, "status": "ok", "version": APP_VERSION}
 
 @app.get("/health")
-async def health():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+async def health(): return {"ok": True, "status": "ok", "version": APP_VERSION}
 
 @app.get("/readyz")
 async def readyz():
@@ -160,53 +138,33 @@ async def readyz():
 @app.on_event("startup")
 async def startup_event():
     logger.info({"event": "startup", "version": APP_VERSION})
-    try:
-        sync_now()
-        start_background_sync()
-    except Exception:
-        pass
-    try:
-        start_user_stream_keepalive()
-    except Exception:
-        pass
+    try: sync_now(); start_background_sync()
+    except Exception: pass
+    try: start_user_stream_keepalive()
+    except Exception: pass
     try:
         syms = _parse_csv(os.getenv("SYMS", "BTCUSDT,ETHUSDT"))
-        if syms:
-            asyncio.create_task(auto_price_updater(syms))
-    except Exception:
-        pass
-    try:
-        await start_user_stream_consumer()
-    except Exception:
-        pass
+        if syms: asyncio.create_task(auto_price_updater(syms))
+    except Exception: pass
+    try: await start_user_stream_consumer()
+    except Exception: pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    try:
-        await stop_user_stream_consumer()
-    except Exception:
-        pass
-    try:
-        stop_user_stream()
-    except Exception:
-        pass
+    try: await stop_user_stream_consumer()
+    except Exception: pass
+    try: stop_user_stream()
+    except Exception: pass
 
 @app.post("/start-executor")
-async def api_start_executor():
-    start_executor()
-    return {"ok": True}
+async def api_start_executor(): start_executor(); return {"ok": True}
 
 @app.post("/stop-executor")
-async def api_stop_executor():
-    stop_executor()
-    return {"ok": True}
+async def api_stop_executor(): stop_executor(); return {"ok": True}
 
 @app.post("/manage-once")
-async def api_manage_once():
-    await manage_open_trades()
-    return {"ok": True}
+async def api_manage_once(): await manage_open_trades(); return {"ok": True}
 
-# --- Run ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
