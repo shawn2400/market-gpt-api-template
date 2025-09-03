@@ -5,8 +5,10 @@ from typing import Optional, Dict, Any
 def spread_bps(best_bid: Optional[float], best_ask: Optional[float]) -> Optional[float]:
     try:
         b = float(best_bid); a = float(best_ask)
-        if b <= 0 or a <= 0 or a <= b:
-            return 0.0 if a == b and a > 0 else None
+        if b <= 0 or a <= 0:
+            return None
+        if a <= b:
+            return 0.0
         mid = (a + b) / 2.0
         return abs(a - b) / mid * 10000.0
     except Exception:
@@ -41,15 +43,25 @@ def gate_mark_index_sanity(*, mark: Optional[float], index: Optional[float], max
 
 def gate_pump_nuke(delta5m_abs_pct: Optional[float], *, threshold_pct: float = 1.0) -> Dict[str, Any]:
     if delta5m_abs_pct is None:
-        return {"ok": True, "code": "no_signal"}  # חסד
-    return {"ok": delta5m_abs_pct <= threshold_pct,
-            "code": "pump_nuke" if delta5m_abs_pct > threshold_pct else "ok",
-            "details": {"abs_5m_pct": delta5m_abs_pct, "max": threshold_pct}}
+        return {"ok": True, "code": "no_signal"}
+    return {
+        "ok": delta5m_abs_pct <= threshold_pct,
+        "code": "pump_nuke" if delta5m_abs_pct > threshold_pct else "ok",
+        "details": {"abs_5m_pct": delta5m_abs_pct, "max": threshold_pct},
+    }
 
 def gate_volume_ratio(ratio_ma20: Optional[float], *, min_ratio: float = 1.2) -> Dict[str, Any]:
     if ratio_ma20 is None:
-        return {"ok": True, "code": "no_signal"}  # חסד
-    return {"ok": ratio_ma20 >= min_ratio,
-            "code": "low_volume" if ratio_ma20 < min_ratio else "ok",
-            "details": {"ratio_ma20": ratio_ma20, "min": min_ratio}}
+        return {"ok": True, "code": "no_signal"}
+    return {
+        "ok": ratio_ma20 >= min_ratio,
+        "code": "low_volume" if ratio_ma20 < min_ratio else "ok",
+        "details": {"ratio_ma20": ratio_ma20, "min": min_ratio},
+    }
+
+__all__ = [
+    "spread_bps", "gate_spread_depth", "gate_mark_index_sanity",
+    "gate_pump_nuke", "gate_volume_ratio",
+]
+
 
