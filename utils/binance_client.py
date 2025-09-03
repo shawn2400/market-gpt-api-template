@@ -23,6 +23,8 @@ HTTP_MAX_CONNECTIONS = int(os.getenv("HTTP_MAX_CONNECTIONS", "64"))
 HTTP_MAX_KEEPALIVE = int(os.getenv("HTTP_MAX_KEEPALIVE", "32"))
 
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
+DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP_STR", "0.001")   # ✅ חדש
+DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK_STR", "0.01") # ✅ חדש
 
 WORKING_TYPE = (os.getenv("BINANCE_WORKING_TYPE") or "MARK_PRICE").strip().upper()
 PRICE_PROTECT = str(os.getenv("BINANCE_PRICE_PROTECT", "false")).lower() in ("1", "true", "yes", "on")
@@ -31,8 +33,7 @@ _clients: Dict[str, httpx.Client] = {}
 _api_secrets: Dict[str, str] = {}
 BASE_URL = "https://fapi.binance.com"
 
-
-# ── Init client ───────────────────────────────────────────────────────────────
+# ── Init client ────────────────────────────────────────────────
 def get_futures_client(account_id: str = "main") -> httpx.Client:
     if account_id in _clients:
         return _clients[account_id]
@@ -64,13 +65,11 @@ def get_futures_client(account_id: str = "main") -> httpx.Client:
     logger.info(f"[BinanceClient] ✅ Futures client initialized for account_id={account_id}")
     return client
 
-
 def _sign(account_id: str, qs: str) -> str:
     secret = _api_secrets.get(account_id)
     if not secret:
         raise RuntimeError(f"No API secret cached for account {account_id}")
     return hmac.new(secret.encode(), qs.encode(), sha256).hexdigest()
-
 
 def _request(
     method: str,
@@ -117,15 +116,13 @@ def _request(
         raise last_exc
     raise RuntimeError("Unspecified Binance request failure")
 
-
-# ── Public wrappers ───────────────────────────────────────────────────────────
+# ── Public wrappers ─────────────────────────────────────────────
 def fapi_ping(account_id: str = "main") -> bool:
     try:
         r = _request("GET", "/fapi/v1/ping", account_id=account_id)
         return r.status_code == 200
     except Exception:
         return False
-
 
 def futures_mark_price(symbol: str, account_id: str = "main") -> Optional[float]:
     try:
@@ -135,11 +132,9 @@ def futures_mark_price(symbol: str, account_id: str = "main") -> Optional[float]
     except Exception:
         return None
 
-
 def futures_balance(account_id: str = "main") -> List[Dict[str, Any]]:
     r = _request("GET", "/fapi/v2/balance", account_id=account_id, signed=True)
     return r.json()
-
 
 def set_leverage(symbol: str, leverage: int, account_id: str = "main") -> Dict[str, Any]:
     lev = max(1, min(int(leverage), 125))
@@ -152,10 +147,8 @@ def set_leverage(symbol: str, leverage: int, account_id: str = "main") -> Dict[s
     )
     return r.json()
 
-
-# ── Extra safe helpers (fix for ImportError) ──────────────────────────────────
+# ── ExchangeInfo ───────────────────────────────────────────────
 def futures_exchange_info_safe(symbol: Optional[str] = None, account_id: str = "main") -> Dict[str, Any]:
-    """Return exchangeInfo, filtered by symbol if provided."""
     try:
         r = _request("GET", "/fapi/v1/exchangeInfo", account_id=account_id)
         data = r.json()
@@ -168,9 +161,7 @@ def futures_exchange_info_safe(symbol: Optional[str] = None, account_id: str = "
         logger.warning(f"[BinanceClient] futures_exchange_info_safe error: {e}")
         return {}
 
-
 def get_symbol_info(symbol: str, account_id: str = "main") -> Dict[str, Any]:
-    """Return symbol precision info (filters)."""
     try:
         info = futures_exchange_info_safe(account_id=account_id)
         for s in info.get("symbols", []):
@@ -181,8 +172,7 @@ def get_symbol_info(symbol: str, account_id: str = "main") -> Dict[str, Any]:
         logger.warning(f"[BinanceClient] get_symbol_info error: {e}")
         return {}
 
-
-# ── Orders ────────────────────────────────────────────────────────────────────
+# ── Orders ─────────────────────────────────────────────────────
 def place_stop_market(
     symbol: str,
     side: str,
@@ -208,10 +198,8 @@ def place_stop_market(
     r = _request("POST", "/fapi/v1/order", account_id=account_id, params=params, signed=True)
     return r.json()
 
-
-# ── User stream keepalive ─────────────────────────────────────────────────────
+# ── User stream keepalive ──────────────────────────────────────
 _listen_state: Dict[str, Any] = {"thread": None, "stop": None, "listenKey": None, "account_id": None}
-
 
 def start_user_stream_keepalive(account_id: str = "main") -> None:
     if _listen_state.get("thread") and _listen_state["thread"].is_alive():
@@ -243,7 +231,6 @@ def start_user_stream_keepalive(account_id: str = "main") -> None:
     _listen_state["thread"] = t
     t.start()
 
-
 def stop_user_stream() -> None:
     try:
         stop: Optional[threading.Event] = _listen_state.get("stop")
@@ -256,6 +243,7 @@ def stop_user_stream() -> None:
         pass
     finally:
         _listen_state.update({"thread": None, "stop": None})
+
 
 
 
