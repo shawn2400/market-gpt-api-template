@@ -1,25 +1,18 @@
 # utils/grid_manager.py
 from __future__ import annotations
 import logging
-import time
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 from utils.account_router import get_account_credentials
 from utils.binance_client import get_futures_client
 from utils.binance_spot_client import get_spot_client
+from utils.order_hygiene import place_stop_market_safe, place_take_profit_safe
 
 logger = logging.getLogger("algogpt.grid_manager")
 
-# ────────────────────────────────────────────────
-# עזר
-# ────────────────────────────────────────────────
 _clients: Dict[str, Any] = {}
 
 def _get_client(account_id: str, market: str):
-    """
-    טוען client לפי account_id (מה־accounts_config.json).
-    שומר בזיכרון כדי לא ליצור מחדש כל קריאה.
-    """
     key = f"{account_id}:{market}"
     if key in _clients:
         return _clients[key]
@@ -29,22 +22,20 @@ def _get_client(account_id: str, market: str):
         raise RuntimeError(f"❌ Account {account_id} not found")
 
     if creds["market"] == "futures":
-        client = get_futures_client(creds["api_key"], creds["api_secret"])
+        client = get_futures_client(account_id)
     elif creds["market"] == "spot":
-        client = get_spot_client(creds["api_key"], creds["api_secret"])
+        client = get_spot_client(account_id)
     else:
         raise RuntimeError(f"❌ Unknown market type for account {account_id}")
 
     _clients[key] = client
     return client
 
-# ────────────────────────────────────────────────
-# פונקציות גריד
-# ────────────────────────────────────────────────
+
 async def start_grid_for_position(symbol: str, account_id: str = "main") -> Dict[str, Any]:
     """
-    מפעיל Grid עבור פוזיציה קיימת בחשבון שנבחר.
-    Futures → פותח SL/TP אמיתיים.
+    מפעיל Grid עבור פוזיציה קיימת בחשבון Futures או Spot.
+    Futures → מצמיד SL/TP (quantized).
     Spot   → כרגע סימולציה בלבד.
     """
     try:
@@ -56,7 +47,6 @@ async def start_grid_for_position(symbol: str, account_id: str = "main") -> Dict
         sym = symbol.upper().strip()
 
         if creds["market"] == "futures":
-            # דוגמה פשוטה: שולף balance / position
             pos = client.futures_position_information(symbol=sym)
             if not pos or float(pos[0].get("positionAmt", 0)) == 0:
                 return {"ok": False, "error": "no open futures position"}
@@ -65,29 +55,14 @@ async def start_grid_for_position(symbol: str, account_id: str = "main") -> Dict
             amt = float(pos[0]["positionAmt"])
             side = "LONG" if amt > 0 else "SHORT"
 
-            # SL/TP בסיסיים (לשדרוג בהמשך)
+            # SL/TP בסיסיים
             sl = entry * (0.99 if side == "LONG" else 1.01)
             tp = entry * (1.02 if side == "LONG" else 0.98)
 
             try:
-                # מצמיד SL
-                client.futures_create_order(
-                    symbol=sym,
-                    side="SELL" if side == "LONG" else "BUY",
-                    type="STOP_MARKET",
-                    stopPrice=round(sl, 2),
-                    quantity=abs(amt),
-                    reduceOnly=True,
-                )
-                # מצמיד TP
-                client.futures_create_order(
-                    symbol=sym,
-                    side="SELL" if side == "LONG" else "BUY",
-                    type="TAKE_PROFIT_MARKET",
-                    stopPrice=round(tp, 2),
-                    quantity=abs(amt),
-                    reduceOnly=True,
-                )
+                close_side = "SELL" if side == "LONG" else "BUY"
+                place_stop_market_safe(symbol=sym, side=close_side, stop_price=sl, qty=abs(amt), reduce_only=True)
+                place_take_profit_safe(symbol=sym, side=close_side, stop_price=tp, qty=abs(amt), reduce_only=True)
             except Exception as e:
                 return {"ok": False, "error": f"failed attach SL/TP: {e}"}
 
@@ -118,10 +93,9 @@ async def start_grid_for_position(symbol: str, account_id: str = "main") -> Dict
         logger.exception("start_grid_for_position_failed")
         return {"ok": False, "error": str(e)}
 
+
 async def cancel_grid(symbol: str, account_id: str = "main") -> Dict[str, Any]:
-    """
-    מבטל את כל הפקודות הפתוחות עבור סימבול מסוים.
-    """
+    """ מבטל את כל הפקודות הפתוחות עבור סימבול מסוים. """
     try:
         creds = get_account_credentials(account_id)
         if not creds:
@@ -141,10 +115,9 @@ async def cancel_grid(symbol: str, account_id: str = "main") -> Dict[str, Any]:
         logger.exception("cancel_grid_failed")
         return {"ok": False, "error": str(e)}
 
+
 async def reconcile(symbol: str, account_id: str = "main") -> Dict[str, Any]:
-    """
-    בודק אם יש פוזיציה מול פקודות גריד ומעדכן.
-    """
+    """ בודק אם יש פוזיציה מול פקודות גריד ומעדכן. """
     try:
         creds = get_account_credentials(account_id)
         if not creds:
@@ -156,28 +129,17 @@ async def reconcile(symbol: str, account_id: str = "main") -> Dict[str, Any]:
         if creds["market"] == "futures":
             pos = client.futures_position_information(symbol=sym)
             oo = client.futures_get_open_orders(symbol=sym)
-            return {
-                "ok": True,
-                "market": "futures",
-                "account_id": account_id,
-                "pos": pos,
-                "open_orders": oo,
-            }
+            return {"ok": True, "market": "futures", "account_id": account_id, "pos": pos, "open_orders": oo}
 
         elif creds["market"] == "spot":
             bal = client.get_asset_balance(asset=sym.replace("USDT", ""))
             oo = client.get_open_orders(symbol=sym)
-            return {
-                "ok": True,
-                "market": "spot",
-                "account_id": account_id,
-                "balance": bal,
-                "open_orders": oo,
-            }
+            return {"ok": True, "market": "spot", "account_id": account_id, "balance": bal, "open_orders": oo}
 
     except Exception as e:
         logger.exception("reconcile_failed")
         return {"ok": False, "error": str(e)}
+
 
 
 
