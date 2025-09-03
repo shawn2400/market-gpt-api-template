@@ -1,18 +1,34 @@
-# utils/decision_engine.py
+# utils/decision_log.py
 from __future__ import annotations
-from typing import List, Dict, Any
+import logging, uuid
+from typing import Optional, Dict, Any
 
-def select_best_trades(candidates: List[Dict[str, Any]], top_n: int = 5, diversify_by_symbol: bool = True):
-    out=[]; seen=set()
-    for c in sorted(candidates or [], key=lambda x: float(x.get("score", 0.0)), reverse=True):
-        sym=str(c.get("symbol","")).upper()
-        if diversify_by_symbol and sym in seen:
-            continue
-        seen.add(sym)
-        out.append(c)
-        if len(out) >= int(top_n):
-            break
-    return out
+logger = logging.getLogger("algogpt.decision")
+
+def _id(x: Optional[str]) -> str:
+    return x or uuid.uuid4().hex[:12]
+
+def log_decision(
+    *, event: str, symbol: str, side: Optional[str] = None,
+    reason_code: Optional[str] = None, setup_type: Optional[str] = None,
+    request_id: Optional[str] = None, action_id: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = {
+        "event": event,
+        "symbol": (symbol or "").upper(),
+        "side": (side or "").upper() if side else None,
+        "reason_code": reason_code,
+        "setup_type": setup_type,
+        "request_id": _id(request_id),
+        "action_id": _id(action_id),
+    }
+    if extra:
+        payload.update({"extra": extra})
+    logger.info(payload)
+
+__all__ = ["log_decision"]
+
 
 
 
