@@ -1,211 +1,132 @@
 # utils/binance_client.py
 from __future__ import annotations
 
-import os, hmac, time, random, threading, logging
-from typing import Any, Dict, Optional, List
-from hashlib import sha256
-import httpx
+import os, time, logging
+from typing import Any, Dict, List, Optional
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
 
-from utils.account_router import get_account_credentials
+logger = logging.getLogger("algogpt.binance")
 
-logger = logging.getLogger("algogpt.binance.client")
+# === Load API Keys ===
+API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+TESTNET = str(os.getenv("BINANCE_TESTNET", "0")).lower() in ("1", "true", "yes")
 
-# ===== Config =====
-HTTP_TIMEOUT_SEC = float(os.getenv("BINANCE_HTTP_TIMEOUT", "8.0"))
-BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "5"))
-BINANCE_BACKOFF_BASE = float(os.getenv("BINANCE_BACKOFF_BASE", "0.7"))
+if not API_KEY or not API_SECRET:
+    raise RuntimeError("❌ Missing BINANCE_API_KEY / BINANCE_API_SECRET")
 
-HTTP_MAX_CONNECTIONS = int(os.getenv("HTTP_MAX_CONNECTIONS", "64"))
-HTTP_MAX_KEEPALIVE = int(os.getenv("HTTP_MAX_KEEPALIVE", "32"))
+client = Client(API_KEY, API_SECRET, testnet=TESTNET)
 
-DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
-DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP_STR", "0.001")
-DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK_STR", "0.01")
+# === Caches ===
+_EXCHANGE_INFO: Dict[str, Any] = {}
+_EXCHANGE_INFO_TS: float = 0.0
+_EXCHANGE_INFO_TTL: int = 300  # 5 minutes
 
-WORKING_TYPE = (os.getenv("BINANCE_WORKING_TYPE") or "MARK_PRICE").strip().upper()
-PRICE_PROTECT = str(os.getenv("BINANCE_PRICE_PROTECT", "false")).lower() in ("1", "true", "yes", "on")
 
-BASE_URL = "https://fapi.binance.com"
-
-_clients: Dict[str, httpx.Client] = {}
-_api_secrets: Dict[str, str] = {}
-
-# ===== Client Init =====
-def get_futures_client(account_id: str = "main") -> httpx.Client:
-    if account_id in _clients:
-        return _clients[account_id]
-    creds = get_account_credentials(account_id)
-    if not creds:
-        raise RuntimeError(f"❌ Account {account_id} not found in accounts_config.json")
-    api_key, api_secret = creds["api_key"], creds["api_secret"]
-    _api_secrets[account_id] = api_secret
-    headers = {
-        "X-MBX-APIKEY": api_key,
-        "Accept": "application/json",
-        "Accept-Encoding": "gzip",
-        "User-Agent": f"AlgoGPT/{account_id} binance-client",
-    }
-    client = httpx.Client(
-        timeout=httpx.Timeout(HTTP_TIMEOUT_SEC),
-        headers=headers,
-        limits=httpx.Limits(max_keepalive_connections=HTTP_MAX_KEEPALIVE, max_connections=HTTP_MAX_CONNECTIONS),
-        http2=False,
-    )
-    _clients[account_id] = client
-    return client
-
-def _sign(account_id: str, qs: str) -> str:
-    secret = _api_secrets.get(account_id)
-    if not secret:
-        raise RuntimeError(f"No API secret cached for account {account_id}")
-    return hmac.new(secret.encode(), qs.encode(), sha256).hexdigest()
-
-def _request(method: str, path: str, *, account_id="main", params=None, signed=False, timeout=None) -> httpx.Response:
-    client = get_futures_client(account_id)
-    url = f"{BASE_URL}{path}"
-    attempt, last_exc = 0, None
-    while attempt <= max(1, BINANCE_MAX_RETRIES):
+# === Helpers ===
+def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
+    global _EXCHANGE_INFO, _EXCHANGE_INFO_TS
+    now = time.time()
+    if force_refresh or (now - _EXCHANGE_INFO_TS > _EXCHANGE_INFO_TTL):
         try:
-            req_params = dict(params or {})
-            if signed:
-                ts = int(time.time() * 1000)
-                req_params.setdefault("timestamp", ts)
-                req_params.setdefault("recvWindow", 45000)
-                items = [f"{k}={req_params[k]}" for k in sorted(req_params.keys())]
-                req_params["signature"] = _sign(account_id, "&".join(items))
-            r = client.request(method.upper(), url, params=req_params, timeout=timeout or HTTP_TIMEOUT_SEC)
-            if r.status_code == 200:
-                return r
-            if r.status_code in (418, 429, 500, 502, 503, 504):
-                time.sleep(min(10.0, BINANCE_BACKOFF_BASE * (2**attempt) + random.uniform(0, 0.4)))
-            else:
-                try:
-                    data = r.json()
-                    raise RuntimeError(f"Binance error {data.get('code')}: {data.get('msg')}")
-                except Exception:
-                    r.raise_for_status()
+            data = client.futures_exchange_info()
+            _EXCHANGE_INFO = data
+            _EXCHANGE_INFO_TS = now
+            logger.info("Binance futures_exchange_info refreshed")
         except Exception as e:
-            last_exc = e
-            time.sleep(0.5 * (2**attempt))
-        attempt += 1
-    if last_exc: raise last_exc
-    raise RuntimeError("Unspecified Binance request failure")
+            logger.error(f"Failed to refresh exchange info: {e}")
+    return _EXCHANGE_INFO
 
-# ===== Exchange Info =====
-def futures_exchange_info_safe(account_id="main") -> Dict[str, Any]:
+
+# === Core Functions ===
+def fapi_ping() -> bool:
     try:
-        r = _request("GET", "/fapi/v1/exchangeInfo", account_id=account_id)
-        return r.json()
+        client.futures_ping()
+        return True
     except Exception as e:
-        logger.warning(f"exchange_info error: {e}")
-        return {}
+        logger.warning(f"fapi_ping failed: {e}")
+        return False
 
-def get_symbol_info(symbol: str, account_id="main") -> Dict[str, Any]:
-    info = futures_exchange_info_safe(account_id)
-    for s in info.get("symbols", []):
-        if s.get("symbol") == symbol.upper():
-            return s
-    return {}
 
-def get_symbol_filters(symbol: str, account_id="main") -> Dict[str, Any]:
-    s = get_symbol_info(symbol, account_id)
-    if not s: return {}
-    filters = {f["filterType"]: f for f in s.get("filters", [])}
-    return {
-        "tickSizeStr": filters.get("PRICE_FILTER", {}).get("tickSize", DEFAULT_PRICE_TICK_STR),
-        "stepSizeStr": filters.get("LOT_SIZE", {}).get("stepSize", DEFAULT_QTY_STEP_STR),
-        "minNotional": float(filters.get("MIN_NOTIONAL", {}).get("notional", DEFAULT_MIN_NOTIONAL)),
-    }
-
-# ===== Balances =====
-def futures_balance(account_id="main") -> List[Dict[str, Any]]:
-    r = _request("GET", "/fapi/v2/balance", account_id=account_id, signed=True)
-    return r.json()
-
-# ===== Prices =====
-def futures_mark_price(symbol: str, account_id="main") -> Optional[float]:
+def futures_balance() -> Optional[List[Dict[str, Any]]]:
     try:
-        r = _request("GET", "/fapi/v1/premiumIndex", account_id=account_id, params={"symbol": symbol.upper()})
-        data = r.json()
-        px = float(data.get("markPrice") or 0)
-        return px if px > 0 else None
+        return client.futures_account_balance()
     except Exception as e:
-        logger.warning(f"futures_mark_price error: {e}")
+        logger.error(f"futures_balance failed: {e}")
         return None
 
-# ===== Orders =====
-def get_open_orders(symbol: Optional[str] = None, account_id="main") -> List[Dict[str, Any]]:
-    params = {"symbol": symbol.upper()} if symbol else {}
-    r = _request("GET", "/fapi/v1/openOrders", account_id=account_id, params=params, signed=True)
-    return r.json()
 
-def cancel_order(symbol: str, order_id: Optional[int] = None,
-                 orig_client_order_id: Optional[str] = None,
-                 account_id="main") -> Dict[str, Any]:
-    params = {"symbol": symbol.upper()}
-    if order_id: params["orderId"] = order_id
-    if orig_client_order_id: params["origClientOrderId"] = orig_client_order_id
-    r = _request("DELETE", "/fapi/v1/order", account_id=account_id, params=params, signed=True)
-    return r.json()
-
-def futures_position_risk(account_id="main") -> List[Dict[str, Any]]:
-    r = _request("GET", "/fapi/v2/positionRisk", account_id=account_id, signed=True)
-    return r.json()
-
-def place_limit_order(...): ...
-def place_stop_market_order(...): ...
-def place_take_profit_market(...): ...
-
-# ===== User stream keepalive =====
-_listen_state: Dict[str, Any] = {"thread": None, "stop": None, "listenKey": None, "account_id": None}
-
-def start_user_stream_keepalive(account_id: str = "main") -> None:
-    if _listen_state.get("thread") and _listen_state["thread"].is_alive():
-        return
-    client = get_futures_client(account_id)
-    r = client.post(f"{BASE_URL}/fapi/v1/listenKey")
-    r.raise_for_status()
-    lk = (r.json() or {}).get("listenKey")
-    if not lk:
-        raise RuntimeError("Failed to obtain listenKey")
-    _listen_state["listenKey"] = lk
-    _listen_state["account_id"] = account_id
-    keep_sec = int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800"))
-    stop = threading.Event()
-    _listen_state["stop"] = stop
-    def _loop():
-        logger.info({"event": "listen_key_keepalive_started"})
-        while not stop.is_set():
-            try:
-                client.put(f"{BASE_URL}/fapi/v1/listenKey", params={"listenKey": lk})
-            except Exception as e:
-                logger.warning({"event": "listenkey_keepalive_error", "error": str(e)})
-            stop.wait(keep_sec)
-    t = threading.Thread(target=_loop, name="binance-listenkey-keepalive", daemon=True)
-    _listen_state["thread"] = t
-    t.start()
-
-def stop_user_stream() -> None:
+def futures_open_positions() -> Optional[List[Dict[str, Any]]]:
     try:
-        stop: Optional[threading.Event] = _listen_state.get("stop")
-        if stop and not stop.is_set():
-            stop.set()
-        t: Optional[threading.Thread] = _listen_state.get("thread")
-        if t and t.is_alive():
-            t.join(timeout=2.0)
-    except Exception:
-        pass
-    finally:
-        _listen_state.update({"thread": None, "stop": None})
+        return client.futures_position_information()
+    except Exception as e:
+        logger.error(f"futures_open_positions failed: {e}")
+        return None
 
-# ===== Exports =====
-__all__ = [
-    "get_futures_client", "futures_balance", "futures_mark_price",
-    "futures_exchange_info_safe", "get_symbol_info", "get_symbol_filters",
-    "get_open_orders", "cancel_order", "futures_position_risk",
-    "place_limit_order", "place_stop_market_order", "place_take_profit_market",
-    "start_user_stream_keepalive", "stop_user_stream"
-]
+
+def futures_mark_price(symbol: str) -> Optional[float]:
+    try:
+        res = client.futures_mark_price(symbol=symbol.upper())
+        return float(res["markPrice"])
+    except Exception as e:
+        logger.error(f"futures_mark_price failed for {symbol}: {e}")
+        return None
+
+
+def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
+    return _refresh_exchange_info(force_refresh=force_refresh)
+
+
+def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    info = _refresh_exchange_info(force_refresh=force_refresh)
+    syms = info.get("symbols", [])
+    symbol = symbol.upper()
+    for s in syms:
+        if s.get("symbol") == symbol:
+            return s
+    return None
+
+
+# === Order Functions (basic) ===
+def place_limit_order(
+    symbol: str,
+    side: str,
+    quantity: float,
+    price: float,
+    reduce_only: bool = False,
+    time_in_force: str = "GTC",
+) -> Dict[str, Any]:
+    """
+    Place a limit order on Binance Futures
+    """
+    try:
+        order = client.futures_create_order(
+            symbol=symbol.upper(),
+            side=side.upper(),
+            type="LIMIT",
+            quantity=quantity,
+            price=price,
+            timeInForce=time_in_force,
+            reduceOnly=reduce_only,
+        )
+        logger.info(f"Limit order placed: {order}")
+        return {"ok": True, "order": order}
+    except BinanceAPIException as e:
+        logger.error(f"BinanceAPIException: {e}")
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"place_limit_order failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
+    try:
+        res = client.futures_cancel_order(symbol=symbol.upper(), orderId=order_id)
+        return {"ok": True, "result": res}
+    except Exception as e:
+        logger.error(f"cancel_order failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 
