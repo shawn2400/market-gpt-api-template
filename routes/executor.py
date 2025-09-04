@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any
 
 from utils.auth import require_api_key
-from utils.binance_client import futures_mark_price, futures_balance, futures_open_positions
+from utils.binance_client import (
+    futures_mark_price,
+    futures_balance,
+    futures_open_positions,   # ← שימוש חדש
+)
 
 router = APIRouter(
     prefix="/executor",
@@ -17,7 +21,7 @@ def executor_status() -> Dict[str, Any]:
     """סטטוס כללי של ה-Executor כולל פוזיציות פתוחות ויתרה."""
     try:
         balance = futures_balance()
-        positions = futures_open_positions()
+        positions = futures_open_positions() or []
         return {"ok": True, "executor": "running", "balance": balance, "positions": positions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"executor_status failed: {e}")
@@ -32,6 +36,7 @@ def get_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict
         return {"ok": True, "symbol": symbol.upper(), "mark_price": float(price)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"get_mark_price failed: {e}")
+
 
 
 
