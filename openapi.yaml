@@ -1,12 +1,10 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  version: 2.16.0
+  version: 2.17.0
   description: >
-    AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot). כולל Circuit-Breaker, מקביליות נשלטת, Grid 3×TP
-    (Reduce-Only), user-data stream לנעילת SL אחרי TP, מנהל טריידים חי (Chop/Trail/BE), וסריקה חכמה לפי סלאייסים. ברירת
-    המחדל: נדרש Bearer. נקודות ציבוריות: / , /health , /health/live , /health_full , /price/{symbol} ,
-    /telegram/webhook.
+    AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot). כולל Circuit-Breaker, Grid, ניהול SL/TP חי, Dashboard
+    UI, ניתוח AI, ו־PnL Summary.
 servers:
   - url: https://algogpt-docker.onrender.com
     description: Production
@@ -17,13 +15,15 @@ tags:
   - name: Market
   - name: Price
   - name: Trades
-  - name: Orders
   - name: Executor
   - name: Manager
   - name: Grid
-  - name: Indicators
+  - name: UI
+  - name: PnL
+  - name: Orderbook
+  - name: WS
+  - name: Metrics
   - name: Telegram
-  - name: Reconcile
 security:
   - bearerAuth: []
 components:
@@ -31,6 +31,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+
   schemas:
     Error:
       type: object
@@ -38,109 +39,23 @@ components:
         detail:
           type: string
           example: Invalid API key
+
     BasicStatus:
       type: object
-      required: [ok, status, version]
       properties:
         ok: { type: boolean, example: true }
         status: { type: string, example: ok }
-        version: { type: string, example: 2.16.0 }
-    HealthFull:
+        version: { type: string, example: 2.17.0 }
+
+    ReadyzResponse:
       type: object
-      required: [ok, version, binance, prices, time]
       properties:
         ok: { type: boolean, example: true }
-        version: { type: string, example: 2.16.0 }
-        binance:
+        error: { type: string, nullable: true }
+        details:
           type: object
-          properties:
-            key_len: { type: integer, example: 64 }
-            secret_len: { type: integer, example: 64 }
-            fapi_time_ok: { type: boolean, example: true }
-            account_ok: { type: boolean, example: true }
-            listenKey_ok: { type: boolean, example: true }
-        prices:
-          type: object
-          additionalProperties:
-            type: object
-            properties:
-              fresh: { type: boolean }
-              price: { type: number }
-        time:
-          type: string
-          example: 2025-08-30T22:49:11.854Z
-    TradeRequest:
-      type: object
-      required: [symbol, side, budget]
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        side:
-          type: string
-          enum: [BUY, SELL]
-          example: BUY
-        budget: { type: number, example: 50 }
-        leverage: { type: integer, example: 10 }
-        dry_run: { type: boolean, default: false }
-    TradeResponse:
-      type: object
-      additionalProperties: true
-      properties:
-        ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
-        side: { type: string, example: BUY }
-        qty: { type: number, example: 0.001 }
-        entry: { type: number, example: 108500.1 }
-        leverage: { type: integer, example: 10 }
-        error: { type: string, example: "" }
-    OrderModel:
-      type: object
-      properties:
-        id: { type: string, example: sim-1725041000-001 }
-        symbol: { type: string, example: BTCUSDT }
-        side: { type: string, example: BUY }
-        qty: { type: number, example: 0.001 }
-        price: { type: number, example: 108350.2 }
-        status: { type: string, example: FILLED }
-        leverage: { type: integer, example: 10 }
-        created_at: { type: string, example: 2025-08-30T20:40:10Z }
-    OrdersSummary:
-      type: object
-      required: [ok, total, returned, items]
-      properties:
-        ok: { type: boolean, example: true }
-        total: { type: integer, example: 1 }
-        returned: { type: integer, example: 1 }
-        items:
-          type: array
-          items: { $ref: "#/components/schemas/OrderModel" }
-    AnalyzeRequest:
-      type: object
-      required: [symbol]
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        interval: { type: string, example: 15m, default: 15m }
-    AnalyzeResponse:
-      type: object
-      properties:
-        symbol: { type: string, example: BTCUSDT }
-        interval: { type: string, example: 15m }
-        analysis: { type: string, example: "[Quick] BTCUSDT 15m: bias long" }
-        fallback: { type: boolean, example: false }
-    ScanItem:
-      type: object
-      required: [symbol, analysis]
-      properties:
-        symbol: { type: string, example: ETHUSDT }
-        analysis: { type: string, example: "RSI 57, ADX 20.7 — ניטרלי/שורי קל" }
-        fallback: { type: boolean, example: false }
-    ManualScanResponse:
-      type: object
-      required: [interval, results]
-      properties:
-        interval: { type: string, example: 15m }
-        results:
-          type: array
-          items: { $ref: "#/components/schemas/ScanItem" }
+          additionalProperties: true
+
     PriceResponse:
       type: object
       properties:
@@ -150,254 +65,783 @@ components:
         source: { type: string, example: binance_fapi }
         ts: { type: number, example: 1693430000.12 }
         error: { type: string, example: "" }
-    PositionModel:
-      type: object
-      properties:
-        symbol: { type: string }
-        positionAmt: { type: string }
-        entryPrice: { type: string }
-        breakEvenPrice: { type: string }
-        markPrice: { type: string }
-        unRealizedProfit: { type: string }
-        liquidationPrice: { type: string }
-        leverage: { type: string }
-        marginType: { type: string }
-        positionSide: { type: string }
-        isolated: { type: boolean }
-        updateTime: { type: integer }
-    BalanceModel:
-      type: object
-      properties:
-        accountAlias: { type: string }
-        asset: { type: string }
-        balance: { type: string }
-        crossWalletBalance: { type: string }
-        crossUnPnl: { type: string }
-        availableBalance: { type: string }
-        maxWithdrawAmount: { type: string }
-        updateTime: { type: integer }
-    PositionsResponse:
-      type: object
-      required: [ok, total, items]
-      properties:
-        ok: { type: boolean, example: true }
-        total: { type: integer, example: 0 }
-        items:
-          type: array
-          items: { $ref: "#/components/schemas/PositionModel" }
-    BalancesResponse:
-      type: object
-      required: [ok, total, items]
-      properties:
-        ok: { type: boolean, example: true }
-        total: { type: integer, example: 0 }
-        items:
-          type: array
-          items: { $ref: "#/components/schemas/BalanceModel" }
-    SymbolsResponse:
-      type: object
-      required: [ok, total, items]
-      properties:
-        ok: { type: boolean, example: true }
-        total: { type: integer, example: 200 }
-        items:
-          type: array
-          items:
-            type: string
-            example: BTCUSDT
-    SymbolInfoResponse:
-      type: object
-      required: [ok, symbol, info]
-      properties:
-        ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
-        info:
-          type: object
-          additionalProperties: true
-    MarkPriceResponse:
-      type: object
-      required: [ok, symbol, mark_price]
-      properties:
-        ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
-        mark_price: { type: number, example: 108500.1 }
-    ExchangeInfoResponse:
-      type: object
-      required: [ok, symbols_count, raw]
-      properties:
-        ok: { type: boolean, example: true }
-        symbols_count: { type: integer, example: 200 }
-        raw:
-          type: object
-          additionalProperties: true
-    StatusResponse:
-      type: object
-      required: [ok, executor, endpoints]
-      properties:
-        ok: { type: boolean, example: true }
-        executor: { type: string, example: running }
-        endpoints:
-          type: object
-          additionalProperties:
-            type: string
-    HealthResponse:
-      type: object
-      required: [ok, binance_ping, signed_balance_ok, mark_price_ok, details, cached, ttl_seconds]
-      properties:
-        ok: { type: boolean }
-        binance_ping: { type: boolean }
-        signed_balance_ok: { type: boolean }
-        mark_price_ok: { type: boolean }
-        details:
-          type: object
-          additionalProperties: true
-        cached: { type: boolean }
-        ttl_seconds: { type: integer }
-    RPCRequest:
-      type: object
-      required: [target]
-      properties:
-        target:
-          type: string
-          enum:
-            - ai.ping
-            - ai.health
-            - ai.price
-            - ai.analyze
-            - ai.manual_scan
-            - ai.quality
-            - market.mark_price
-            - market.symbol_info
-            - market.exchange_info
-            - price.get
-            - trade.execute
-            - orders.open
-            - orders.history
-            - executor.ping
-            - executor.positions
-            - executor.balance
-            - executor.symbols
-            - executor.symbol_info
-            - executor.mark_price
-            - executor.exchange_info
-            - executor.trades
-            - executor.status
-            - executor.health
-            - grid.status
-            - grid.active
-            - indicators.sample
-            - indicators.by_symbol
-        params:
-          type: object
-          additionalProperties: true
-    RPCResponse:
-      type: object
-      required: [ok]
-      properties:
-        ok: { type: boolean }
-        result:
-          type: object
-          additionalProperties: true
-        error:
-          type: string
-    TelegramMessage:
-      type: object
-      description: Minimal subset of Telegram message
-      properties:
-        message_id: { type: integer, example: 6 }
-        date: { type: integer, example: 1756734763 }
-        text: { type: string, example: /start }
-        chat:
-          type: object
-          properties:
-            id: { type: integer, example: 449087907 }
-            type: { type: string, example: private }
-          additionalProperties: true
-        from:
-          type: object
-          additionalProperties: true
-      additionalProperties: true
-    TelegramCallbackQuery:
-      type: object
-      description: Minimal subset of Telegram callback query
-      properties:
-        id: { type: string, example: "1234567890" }
-        from:
-          type: object
-          additionalProperties: true
-        data:
-          type: string
-          example: approve:abcd1234
-        message:
-          $ref: "#/components/schemas/TelegramMessage"
-      additionalProperties: true
-    TelegramUpdate:
-      type: object
-      description: Raw Telegram update object
-      properties:
-        update_id: { type: integer, example: 308383011 }
-        message:
-          $ref: "#/components/schemas/TelegramMessage"
-        callback_query:
-          $ref: "#/components/schemas/TelegramCallbackQuery"
-      additionalProperties: true
-    TelegramWebhookSetRequest:
-      type: object
-      required: [url]
-      properties:
-        url:
-          type: string
-          format: uri
-          example: https://algogpt-docker.onrender.com/telegram/webhook
-    TelegramGenericResponse:
-      type: object
-      properties:
-        ok: { type: boolean, example: true }
-        result:
-          type: object
-          additionalProperties: true
-        description:
-          type: string
-          example: Webhook was set
+
     GenericOk:
       type: object
       properties:
         ok: { type: boolean, example: true }
-        error:
-          type: string
+        error: { type: string, nullable: true }
+
+    ExecutorStatusSimple:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        status: { type: string, example: running }
+
+    PnLSummary:
+      type: object
+      properties:
+        total_trades: { type: integer, example: 12 }
+        realized_pnl_usd: { type: number, example: 123.45 }
+        win_rate: { type: number, example: 58.3 }
+        days:
+          type: array
+          items:
+            type: object
+            properties:
+              day: { type: string, example: "2025-09-03" }
+              count: { type: integer, example: 3 }
+              pnl: { type: number, example: 25.7 }
+        symbols:
+          type: array
+          items:
+            type: object
+            properties:
+              symbol: { type: string, example: "BTCUSDT" }
+              count: { type: integer, example: 5 }
+              pnl: { type: number, example: 80.1 }
+        sampled_days: { type: integer, example: 30 }
+        source_files_checked:
+          type: array
+          items: { type: string }
+        note: { type: string }
+
+    PnLSummaryResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        summary: { $ref: '#/components/schemas/PnLSummary' }
+        source: { type: string, example: pnl_summary }
+
+    UIGridResponse:
+      type: object
+      required: [ ok, total, items ]
+      properties:
+        ok: { type: boolean, example: true }
+        total: { type: integer, example: 2 }
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    GridActiveResponse:
+      type: object
+      required: [ ok, active ]
+      properties:
+        ok: { type: boolean, example: true }
+        active:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    OrderbookDepthResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        symbol: { type: string, example: BTCUSDT }
+        lastUpdateId: { type: integer, example: 123456789 }
+        bids:
+          type: array
+          items:
+            type: array
+            items:
+              oneOf: [ { type: number }, { type: string } ]
+          description: '[price, qty]'
+        asks:
+          type: array
+          items:
+            type: array
+            items:
+              oneOf: [ { type: number }, { type: string } ]
+
+    WSHealthResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        symbol: { type: string, example: BTCUSDT }
+        price: { type: number, example: 108500 }
+        fresh: { type: boolean }
+        snapshot:
+          type: array
+          items:
+            type: object
+            properties:
+              symbol: { type: string }
+              price: { type: number }
+              ts: { type: number }
+              age_sec: { type: number }
+              fresh: { type: boolean }
+
+    WSLastPricesResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              symbol: { type: string }
+              price: { type: number }
+              ts: { type: number }
+              age_sec: { type: number }
+              fresh: { type: boolean }
+
+    ExecutorSymbolsResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        items:
+          type: array
+          items: { type: string }
+          example: [ BTCUSDT, ETHUSDT, SOLUSDT ]
+
+    ExchangeInfoResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        info:
+          type: object
+          additionalProperties: true
+
+    BalanceResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        balances:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    OpenPositionsResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    MarkPriceResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        symbol: { type: string, example: BTCUSDT }
+        markPrice: { type: number, example: 108500.12 }
+
+    MetricsSnapshot:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        ts: { type: number, example: 1693430000.12 }
+        client: { type: string, nullable: true, example: "10.1.2.3" }
+        metrics:
+          type: object
+          additionalProperties: true
+
+    FundingHeatmapResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        limit: { type: integer, example: 24 }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              symbol: { type: string, example: BTCUSDT }
+              last_rate: { type: number, example: 0.0001 }
+              trend: { type: string, example: "↑" }
+              series:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+    LongShortRatioResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+        symbol: { type: string, example: BTCUSDT }
+        period: { type: string, example: 5m }
+        limit: { type: integer, example: 30 }
+        last_ratio: { type: number, example: 1.12 }
+        series:
+          type: array
+          items: { type: object, additionalProperties: true }
+
+    AIAnalyzeResponse:
+      type: object
+      properties:
+        symbol: { type: string, example: BTCUSDT }
+        interval: { type: string, example: 15m }
+        analysis: { type: string, example: "[Quick] BTCUSDT 15m: ..." }
+        fallback: { type: boolean, example: false }
+
+    # ====== NEW: concrete response schemas to satisfy validator ======
+
+    GridTradeResponse:
+      type: object
+      required: [ ok, mode, symbol, side, market, account_id, budget ]
+      properties:
+        ok: { type: boolean, example: true }
+        mode: { type: string, example: futures_dry, description: "futures_dry | futures_live | spot_dry | spot_live" }
+        symbol: { type: string, example: BTCUSDT }
+        side: { type: string, example: LONG }
+        market: { type: string, example: futures }
+        account_id: { type: string, example: main }
+        base_price: { type: number, nullable: true, example: 108500 }
+        budget: { type: number, example: 100 }
+        leverage: { type: integer, nullable: true, example: 10 }
+        levels:
+          type: array
           nullable: true
+          items: { type: number }
+        allocations:
+          type: array
+          nullable: true
+          items: { type: number }
+        orders:
+          type: array
+          nullable: true
+          items: { type: object, additionalProperties: true }
+        error: { type: string, nullable: true }
+
+    ExecutorTradeResponse:
+      type: object
+      required: [ ok ]
+      properties:
+        ok: { type: boolean, example: true }
+        symbol: { type: string, example: BTCUSDT }
+        side: { type: string, example: BUY }
+        qty: { type: number, example: 0.5 }
+        entry_price: { type: number, example: 108000 }
+        sl_price: { type: number, example: 106000 }
+        tp_price: { type: number, example: 110000 }
+        leverage: { type: integer, example: 10 }
+        position_side: { type: string, example: BOTH }
+        order_ids:
+          type: array
+          items:
+            oneOf:
+              - { type: string }
+              - { type: number }
+        meta:
+          type: object
+          additionalProperties: true
+        error: { type: string, nullable: true }
+
+    ExecutorBulkResponse:
+      type: object
+      required: [ ok, results ]
+      properties:
+        ok: { type: boolean, example: true }
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutorTradeResponse'
+
+    TelegramSetWebhookResponse:
+      type: object
+      required: [ ok ]
+      properties:
+        ok: { type: boolean, example: true }
+        telegram:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Present when using routes.telegram_bot.set_telegram_webhook
+        telegram_response:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Present when using routes.telegram_routes.set_webhook
+
 paths:
+
+  # ── 1
   /:
     get:
       operationId: getRootStatus
       summary: Root server status
-      tags: [Config]
+      tags: [ Config ]
       security: []
       responses:
         "200":
           description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BasicStatus" }
+          content: { application/json: { schema: { $ref: "#/components/schemas/BasicStatus" } } }
 
+  # ── 2
   /health:
     get:
       operationId: getHealth
       summary: Health check
-      tags: [Health]
+      tags: [ Health ]
       security: []
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/BasicStatus" } } }
+
+  # ── 3
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: Readiness with Binance & price freshness
+      tags: [ Health ]
+      security: []
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/ReadyzResponse" } } }
+
+  # ── 4
+  /price/{symbol}:
+    get:
+      operationId: getPrice
+      summary: Get latest price
+      tags: [ Price ]
+      security: []
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/PriceResponse" } } }
+        "502":
+          description: Upstream error
+
+  # ── 5
+  /trade/execute:
+    post:
+      operationId: executeTrade
+      summary: Execute a trade
+      tags: [ Trades ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol: { type: string, example: BTCUSDT }
+                side: { type: string, example: BUY }
+                budget: { type: number, example: 50 }
+                leverage: { type: integer, example: 10 }
+                dry_run: { type: boolean, example: false }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GenericOk" } } } }
+        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── 6
+  /manage-once:
+    post:
+      operationId: manageOnce
+      summary: Manage open trades once
+      tags: [ Manager ]
+      responses:
+        "200": { description: Managed, content: { application/json: { schema: { $ref: "#/components/schemas/GenericOk" } } } }
+        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── 7
+  /pnl/summary:
+    get:
+      operationId: getPnLSummary
+      summary: Get PnL summary (last N days)
+      tags: [ PnL ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PnLSummaryResponse" } } } }
+        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── 8
+  /ui/grid/data:
+    get:
+      operationId: getGridDashboardData
+      summary: Grid Dashboard (JSON API)
+      tags: [ UI, Grid ]
+      parameters:
+        - in: query
+          name: account_id
+          required: false
+          schema: { type: string, example: main }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UIGridResponse" } } } }
+        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── 9
+  /grid/active:
+    get:
+      operationId: getActiveGrids
+      summary: Active grids
+      tags: [ Grid ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GridActiveResponse" } } } }
+        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── 10
+  /grid/dashboard/data:
+    get:
+      operationId: getGridDashboardDataRaw
+      summary: Load dashboard JSON data file
+      tags: [ Grid ]
+      parameters:
+        - in: query
+          name: path
+          required: false
+          schema: { type: string, example: trades_log.json }
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/BasicStatus" }
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  items:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+                  note: { type: string }
+        "400": { description: Invalid path }
+        "500": { description: Load failed }
 
-  /health/live:
+  # ── 11
+  /grid/trade:
+    post:
+      operationId: tradeGrid
+      summary: Plan/execute grid trade
+      tags: [ Grid ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol: { type: string, example: BTCUSDT }
+                side: { type: string, example: LONG }
+                budget: { type: number, example: 100 }
+                leverage: { type: integer, example: 10 }
+                grids: { type: integer, example: 3 }
+                dry_run: { type: boolean, example: true }
+                market: { type: string, example: futures }
+                account_id: { type: string, example: main }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridTradeResponse' }
+        "400": { description: Bad request }
+        "500": { description: Server error }
+
+  # ── 12
+  /executor/status:
     get:
-      operationId: getHealthLive
-      summary: Live health check
-      tags: [Health]
+      operationId: getExecutorStatus
+      summary: Executor status
+      tags: [ Executor ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ExecutorStatusSimple" } } } }
+        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ── 13
+  /executor/trade:
+    post:
+      operationId: openExecutorTrade
+      summary: Open trade with SL/TP (executor)
+      tags: [ Executor ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ symbol, side, qty, entry_price, sl_price, tp_price ]
+              properties:
+                symbol: { type: string, example: BTCUSDT }
+                side: { type: string, example: BUY }
+                qty: { type: number, example: 0.5 }
+                entry_price: { type: number, example: 108000 }
+                sl_price: { type: number, example: 106000 }
+                tp_price: { type: number, example: 110000 }
+                leverage: { type: integer, example: 10 }
+                position_side: { type: string, example: BOTH }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutorTradeResponse' }
+        "400": { description: Bad request }
+        "500": { description: Server error }
+
+  # ── 14
+  /executor/bulk:
+    post:
+      operationId: openExecutorBulk
+      summary: Open multiple trades (executor)
+      tags: [ Executor ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                trades:
+                  type: array
+                  items: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutorBulkResponse' }
+        "500": { description: Server error }
+
+  # ── 15
+  /executor/open-positions:
+    get:
+      operationId: getOpenPositions
+      summary: Open futures positions
+      tags: [ Executor ]
+      x-aliases:
+        - /executor/positions
+        - /executor/positions/open
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OpenPositionsResponse" } } } }
+
+  # ── 16
+  /executor/balance:
+    get:
+      operationId: getExecutorBalance
+      summary: Futures account balances
+      tags: [ Executor ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BalanceResponse" } } } }
+
+  # ── 17
+  /executor/mark-price:
+    get:
+      operationId: getExecutorMarkPrice
+      summary: Futures mark price for a symbol
+      tags: [ Executor ]
+      parameters:
+        - in: query
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MarkPriceResponse" } } } }
+        "400": { description: Missing symbol }
+        "500": { description: Server error }
+
+  # ── 18
+  /executor/exchange-info:
+    get:
+      operationId: getExecutorExchangeInfo
+      summary: Exchange info (with cache fallback)
+      tags: [ Executor ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ExchangeInfoResponse" } } } }
+        "500": { description: Server error }
+
+  # ── 19
+  /executor/symbols:
+    get:
+      operationId: getExecutorSymbols
+      summary: Tradable symbols (derived)
+      tags: [ Executor ]
+      x-aliases:
+        - /executor/symbols/allowed
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ExecutorSymbolsResponse" } } } }
+
+  # ── 20
+  /orderbook/depth/{symbol}:
+    get:
+      operationId: getOrderbookDepth
+      summary: Orderbook depth
+      tags: [ Orderbook ]
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, example: 100 }
+        - in: query
+          name: market
+          required: false
+          schema: { type: string, example: futures }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderbookDepthResponse" } } } }
+
+  # ── 21
+  /ws/health:
+    get:
+      operationId: getWSHealth
+      summary: WebSocket price health
+      tags: [ WS ]
+      parameters:
+        - in: query
+          name: symbol
+          schema: { type: string, example: BTCUSDT }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WSHealthResponse" } } } }
+
+  # ── 22
+  /ws/last-prices:
+    get:
+      operationId: getWSLastPrices
+      summary: Snapshot of all last prices (cache)
+      tags: [ WS ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WSLastPricesResponse" } } } }
+
+  # ── 23
+  /ai/analyze:
+    get:
+      operationId: analyzeAIGet
+      summary: Technical analysis (AI)
+      tags: [ AI ]
+      parameters:
+        - in: query
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+        - in: query
+          name: interval
+          required: false
+          schema: { type: string, example: 15m }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AIAnalyzeResponse" } } } }
+      x-aliases:
+        - POST /ai/analyze
+
+  # ── 24
+  /metrics:
+    get:
+      operationId: getMetricsSnapshot
+      summary: System metrics snapshot
+      tags: [ Metrics ]
+      x-aliases:
+        - /metrics/
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MetricsSnapshot" } } } }
+
+  # ── 25
+  /metrics/funding/heatmap:
+    get:
+      operationId: getFundingHeatmap
+      summary: Futures funding heatmap
+      tags: [ Metrics ]
+      parameters:
+        - in: query
+          name: symbols
+          required: true
+          schema: { type: string, example: BTCUSDT,ETHUSDT,SOLUSDT }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, example: 24 }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FundingHeatmapResponse" } } } }
+
+  # ── 26
+  /metrics/longshort/{symbol}:
+    get:
+      operationId: getLongShortRatio
+      summary: Long/Short ratio
+      tags: [ Metrics ]
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema: { type: string, example: BTCUSDT }
+        - in: query
+          name: period
+          schema: { type: string, example: 5m }
+        - in: query
+          name: limit
+          schema: { type: integer, example: 30 }
+        - in: query
+          name: source
+          schema: { type: string, example: global }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/LongShortRatioResponse" } } } }
+
+  # ── 27
+  /telegram/mute:
+    post:
+      operationId: setTelegramMute
+      summary: Set mute state
+      tags: [ Telegram ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                state: { type: boolean, example: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  mute: { type: boolean }
+
+  # ── 28
+  /telegram/set-webhook:
+    post:
+      operationId: setTelegramWebhook
+      summary: Set Telegram webhook
+      tags: [ Telegram ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string, example: https://algogpt-docker.onrender.com/telegram/webhook }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TelegramSetWebhookResponse' }
+        "500":
+          description: Error setting webhook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ── 29
+  /telegram/webhook:
+    post:
+      operationId: telegramWebhook
+      summary: Telegram webhook endpoint (public)
+      tags: [ Telegram ]
       security: []
       responses:
         "200":
@@ -408,375 +852,36 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean, example: true }
-                  status: { type: string, example: live }
-
-  /health_full:
-    get:
-      operationId: getHealthFull
-      summary: Full connectivity & prices
-      tags: [Health]
-      security: []
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/HealthFull" }
-
-  /ai/ping:
-    get:
-      operationId: ai_ping
-      tags: [AI]
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BasicStatus" }
-
-  /ai/health:
-    get:
-      operationId: ai_health
-      tags: [AI]
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BasicStatus" }
-
-  /ai/manual-scan:
-    get:
-      operationId: ai_manual_scan
-      tags: [AI]
-      parameters:
-        - in: query
-          name: symbols
-          required: true
-          schema: { type: string, example: "BTCUSDT,ETHUSDT" }
-        - in: query
-          name: interval
-          required: true
-          schema: { type: string, example: 15m }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ManualScanResponse" }
-
-  /ai/manual_scan:
-    get:
-      operationId: ai_manual_scan_alias
-      tags: [AI]
-      parameters:
-        - in: query
-          name: symbols
-          required: true
-          schema: { type: string, example: "BTCUSDT,ETHUSDT" }
-        - in: query
-          name: interval
-          required: true
-          schema: { type: string, example: 15m }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ManualScanResponse" }
-
-  /ai/analyze:
-    post:
-      operationId: ai_analyze
-      tags: [AI]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AnalyzeRequest" }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AnalyzeResponse" }
-
-  /ai/price:
-    get:
-      operationId: ai_price
-      tags: [AI, Price]
-      parameters:
-        - in: query
-          name: symbol
-          required: true
-          schema: { type: string, example: BTCUSDT }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PriceResponse" }
-
-  /price/{symbol}:
-    get:
-      operationId: getPriceSymbol
-      summary: Get latest price with multi-source fallback
-      tags: [Price]
-      security: []
-      parameters:
-        - in: path
-          name: symbol
-          required: true
-          schema: { type: string, example: BTCUSDT }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PriceResponse" }
-        "502":
-          description: Upstream error
-
-  /rpc:
-    post:
-      operationId: postRPC
-      summary: Multiplexed RPC for all features
-      tags: [AI, Market, Price, Trades, Orders, Executor, Grid, Indicators]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/RPCRequest" }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RPCResponse" }
-        "401":
-          description: Invalid API key
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /trade/execute:
-    post:
-      operationId: postTradeExecute
-      summary: Execute a trade (use dry_run=true for simulation)
-      tags: [Trades]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/TradeRequest" }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TradeResponse" }
-        "401":
-          description: Invalid API key
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /orders/open:
-    get:
-      operationId: getOrdersOpen
-      summary: Open orders
-      tags: [Orders]
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OrdersSummary" }
-
-  /orders/history:
-    get:
-      operationId: getOrdersHistory
-      summary: Orders history
-      tags: [Orders]
-      parameters:
-        - in: query
-          name: symbol
-          required: false
-          schema: { type: string, example: BTCUSDT }
-        - in: query
-          name: limit
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OrdersSummary" }
-
-  /executor/status:
-    get:
-      operationId: getExecutorStatus
-      summary: Executor status
-      tags: [Executor]
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/StatusResponse" }
-
-  /executor/health:
-    get:
-      operationId: getExecutorHealth
-      summary: Lightweight health (ping+balance+mark)
-      tags: [Executor]
-      parameters:
-        - in: query
-          name: symbol
-          required: false
-          schema: { type: string, example: BTCUSDT }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/HealthResponse" }
-
-  /start-executor:
-    post:
-      operationId: startExecutor
-      summary: Start auto executor loop
-      tags: [Executor]
-      responses:
-        "200":
-          description: Started
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericOk" }
-        "401":
-          description: Invalid API key
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /stop-executor:
-    post:
-      operationId: stopExecutor
-      summary: Stop auto executor loop
-      tags: [Executor]
-      responses:
-        "200":
-          description: Stopping
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericOk" }
-        "401":
-          description: Invalid API key
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /manage-once:
-    post:
-      operationId: manageOnce
-      summary: One-shot live position manager (SL/TP/Chop/Grid)
-      tags: [Manager]
-      responses:
-        "200":
-          description: Managed
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericOk" }
-        "401":
-          description: Invalid API key
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /reconcile/all:
-    post:
-      operationId: reconcileAll
-      summary: Reconcile grid/SL/TP across all symbols with open positions
-      tags: [Reconcile]
-      responses:
-        "200":
-          description: Reconciled
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericOk" }
-        "401":
-          description: Invalid API key
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /reconcile/{symbol}:
-    post:
-      operationId: reconcileBySymbol
-      summary: Reconcile grid/SL/TP for a specific symbol
-      tags: [Reconcile]
-      parameters:
-        - in: path
-          name: symbol
-          required: true
-          schema: { type: string, example: BTCUSDT }
-      responses:
-        "200":
-          description: Reconciled
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/GenericOk" }
-        "401":
-          description: Invalid API key
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /telegram/set-webhook:
-    post:
-      operationId: telegram_setWebhook
-      summary: Set Telegram webhook URL (requires Bearer)
-      tags: [Telegram]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/TelegramWebhookSetRequest" }
-      responses:
-        "200":
-          description: Telegram API response
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/TelegramGenericResponse" }
         "400":
-          description: Missing TELEGRAM_BOT_TOKEN or TELEGRAM_WEBHOOK_SECRET
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Invalid API key
+          description: Bad payload
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /telegram/webhook:
-    post:
-      operationId: telegram_webhook
-      summary: Telegram webhook receiver (public; validated by secret header)
-      tags: [Telegram]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/TelegramUpdate" }
+  # ── 30
+  /market/tickers:
+    get:
+      operationId: getMarketTickers
+      summary: Mark prices for multiple symbols
+      tags: [ Market ]
+      parameters:
+        - in: query
+          name: symbols
+          required: true
+          schema: { type: string, example: BTCUSDT,ETHUSDT }
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GenericOk" }
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    symbol: { type: string }
+                    markPrice: { type: number }
+
 
 
 
