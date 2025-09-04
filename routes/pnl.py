@@ -5,7 +5,7 @@ from typing import Dict, Any
 from fastapi import APIRouter, Body, HTTPException, Depends
 
 from utils import pnl_tracker
-from utils.auth import require_api_key
+from utils.auth import require_api_key  # ← תוקן, היה require_bearer_token
 
 router = APIRouter(prefix="/pnl", tags=["PnL"], dependencies=[Depends(require_api_key)])
 
@@ -59,6 +59,7 @@ async def get_pnl_report(limit_days: int = 7) -> Dict[str, Any]:
         return {"ok": True, "file_path": pdf_path, "url": url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"pnl pdf error: {e}")
+
 
 
 
