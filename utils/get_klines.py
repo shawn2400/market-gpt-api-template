@@ -61,7 +61,7 @@ async def _rest_klines_async(symbol: str, interval: str, limit: int, market_type
     except Exception:
         _mark_invalid(market, sym_in)
         raise
-    url = _endpoint_for(market_type)
+    url = _endpoint_for(market)
     params = {"symbol": norm, "interval": interval, "limit": int(limit)}
     async with httpx.AsyncClient(timeout=8.0) as x:
         r = await x.get(url, params=params)
@@ -91,7 +91,7 @@ def _resample_ohlcv(df_small: pd.DataFrame, target_interval: str) -> pd.DataFram
     return agg
 
 
-async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:
+async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     interval = (interval or "15m").lower()
     try:
         df = await _rest_klines_async(symbol, interval, limit, market_type)
@@ -115,18 +115,30 @@ async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: 
     return pd.DataFrame()
 
 
-def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:
+def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
+    """
+    קריאה סינכרונית בטוחה ל־get_klines.
+    אם יש event loop פעיל (FastAPI/uvicorn) → נריץ עם run_coroutine_threadsafe,
+    כדי למנוע RuntimeError או ריסטרט ל־SHELL.
+    """
     try:
         loop = asyncio.get_running_loop()
+        if loop.is_running():
+            fut = asyncio.run_coroutine_threadsafe(
+                get_klines(symbol, interval, limit, market_type), loop
+            )
+            return fut.result(timeout=10)
     except RuntimeError:
-        loop = None
-    if loop and loop.is_running():
+        # אין event loop → מריצים רגיל
+        return asyncio.run(get_klines(symbol, interval, limit, market_type))
+    except Exception as e:
+        print(f"[get_klines_sync] error: {e}")
         return pd.DataFrame()
-    return asyncio.run(get_klines(symbol, interval, limit, market_type))
 
 
-async def aget_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:
+async def aget_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     return await get_klines(symbol, interval, limit, market_type)
+
 
 
 
