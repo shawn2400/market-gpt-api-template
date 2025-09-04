@@ -145,8 +145,10 @@ def place_limit_order(
         order = client.futures_create_order(**params)
         return {"ok": True, "order": order}
     except BinanceAPIException as e:
+        logger.error(f"BinanceAPIException (limit): {e}")
         return {"ok": False, "error": str(e)}
     except Exception as e:
+        logger.error(f"place_limit_order failed: {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -176,7 +178,11 @@ def place_stop_market_order(
 
         order = client.futures_create_order(**params)
         return {"ok": True, "order": order}
+    except BinanceAPIException as e:
+        logger.error(f"BinanceAPIException (stop): {e}")
+        return {"ok": False, "error": str(e)}
     except Exception as e:
+        logger.error(f"place_stop_market_order failed: {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -206,7 +212,11 @@ def place_take_profit_market(
 
         order = client.futures_create_order(**params)
         return {"ok": True, "order": order}
+    except BinanceAPIException as e:
+        logger.error(f"BinanceAPIException (take-profit): {e}")
+        return {"ok": False, "error": str(e)}
     except Exception as e:
+        logger.error(f"place_take_profit_market failed: {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -214,8 +224,13 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     try:
         res = client.futures_cancel_order(symbol=symbol.upper(), orderId=order_id)
         return {"ok": True, "result": res}
-    except Exception as e:
+    except BinanceAPIException as e:
+        logger.error(f"BinanceAPIException (cancel): {e}")
         return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"cancel_order failed: {e}")
+        return {"ok": False, "error": str(e)}
+
 
 
 
