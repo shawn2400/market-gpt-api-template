@@ -20,10 +20,10 @@ if not API_KEY or not API_SECRET:
 client = Client(API_KEY, API_SECRET)
 client.FUTURES_URL = BASE_URL_FUTURES
 
-# === Default precision fallbacks (for precision_utils) ===
+# === Default precision fallbacks (used in precision_utils) ===
 DEFAULT_PRICE_TICK = 0.01
 DEFAULT_QTY_STEP = 0.001
-DEFAULT_MIN_NOTIONAL = 5.0  # ברירת מחדל ~5$ אם Binance לא מחזיר
+DEFAULT_MIN_NOTIONAL = 5.0  # ברירת מחדל ~5$
 DEFAULT_PRICE_TICK_STR = "0.01"
 DEFAULT_QTY_STEP_STR = "0.001"
 
