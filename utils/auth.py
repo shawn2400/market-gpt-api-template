@@ -1,23 +1,16 @@
 # utils/auth.py
 from __future__ import annotations
-import os
-import hmac
-import logging
+import os, hmac, logging
 from typing import Set, Optional, List
 from threading import RLock
 from fastapi import Header, HTTPException, status, Request
 
 logger = logging.getLogger("algogpt.auth")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
 def _truthy(v: str | None) -> bool:
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
 def _split_tokens(val: str) -> Set[str]:
-    # תומך בפסיקים/נקודה־פסיק/שבירת שורה
     raw = val.replace("\n", ",").replace(";", ",").split(",")
     return {p.strip() for p in raw if p and p.strip()}
 
@@ -40,10 +33,7 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
         return parts[1].strip()
     return None
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Tokens store (with refresh)
-# ──────────────────────────────────────────────────────────────────────────────
-
+# Tokens
 _TOKENS_LOCK = RLock()
 _TOKENS: Set[str] = set()
 _ALLOW_ALL: bool = False
@@ -78,7 +68,6 @@ def _init_store() -> None:
 _init_store()
 
 def refresh_tokens_from_env() -> int:
-    """רענון טוקנים ו־allow_all מתוך ENV (ללא ריסטארט פרוסס)."""
     global _TOKENS, _ALLOW_ALL
     with _TOKENS_LOCK:
         _TOKENS = _load_tokens_from_env()
@@ -88,10 +77,6 @@ def refresh_tokens_from_env() -> int:
     return count
 
 def get_loaded_tokens(mask: bool = True) -> List[str]:
-    """
-    מחזיר רשימת הטוקנים הטעונים. ברירת מחדל: במסוך.
-    שים לב: החזרת טוקנים גולמיים עלולה להיות מסוכנת—השתמש בזהירות!
-    """
     with _TOKENS_LOCK:
         toks = list(_TOKENS)
     return [(_mask_token(t) if mask else t) for t in toks]
@@ -114,19 +99,13 @@ def extract_token(
     authorization: Optional[str] = None,
     x_api_key: Optional[str] = None,
 ) -> Optional[str]:
-    """
-    מאחד את כל מקורות הטוקן: Authorization: Bearer, X-API-Key, ו־?api_key=
-    """
     token = _extract_bearer(authorization) or (x_api_key or "").strip() or None
     if not token:
         qp = request.query_params.get("api_key")
         token = qp.strip() if qp else None
     return token or None
 
-# ──────────────────────────────────────────────────────────────────────────────
 # FastAPI dependency
-# ──────────────────────────────────────────────────────────────────────────────
-
 async def require_api_key(
     request: Request,
     authorization: Optional[str] = Header(None),
@@ -143,14 +122,19 @@ async def require_api_key(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+# Alias for backward compatibility
+require_bearer_token = require_api_key
+
 __all__ = [
     "require_api_key",
+    "require_bearer_token",
     "refresh_tokens_from_env",
     "get_loaded_tokens",
     "extract_token",
     "allow_all",
     "token_matches",
 ]
+
 
 
 
