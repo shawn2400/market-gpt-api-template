@@ -14,14 +14,14 @@ from utils.binance_client import (
     DEFAULT_MIN_NOTIONAL as _DEF_MIN_NOTIONAL,
 )
 
-# דיוק גבוה למניעת שגיאות ציפה
+# דיוק גבוה למניעת שגיאות חישוביות
 getcontext().prec = 28
 
 # ===================== ExchangeInfo Cache =====================
 _EX_INFO_LOCK = threading.Lock()
 _EX_INFO_DATA: Optional[Dict[str, Any]] = None
 _EX_INFO_TS: float = 0.0
-_EX_INFO_TTL_SEC = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))  # 15 דקות ברירת מחדל
+_EX_INFO_TTL_SEC = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))  # ברירת מחדל 15 דקות
 
 def _load_ex_info_live() -> Dict[str, Any]:
     try:
@@ -41,7 +41,7 @@ def _ensure_ex_info(ttl_sec: int = _EX_INFO_TTL_SEC) -> Dict[str, Any]:
         return _EX_INFO_DATA or {}
 
 def refresh_exchange_info() -> None:
-    """רענון יזום (למשל לאחר עדכוני סימבולים/פילטרים בבורסה)."""
+    """רענון יזום של exchangeInfo"""
     global _EX_INFO_DATA, _EX_INFO_TS
     with _EX_INFO_LOCK:
         _EX_INFO_DATA = _load_ex_info_live()
@@ -60,7 +60,7 @@ def _find_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
 def get_precision_info(symbol: str) -> dict:
     """
     מחזיר pricePrecision / quantityPrecision מתוך exchangeInfo.
-    אם הסימבול לא נמצא – מחזיר דיפולט שמרני.
+    אם הסימבול לא נמצא – מחזיר ערכים דיפולטיביים.
     """
     info = _find_symbol_info(symbol)
     if not info:
@@ -72,7 +72,7 @@ def get_precision_info(symbol: str) -> dict:
 
 # ===================== Rounding =====================
 def round_to_precision(value: float, digits: int) -> float:
-    """עיגול פשוט ל־N ספרות אחרי הנקודה (ללא התאמה ל־tick/step)."""
+    """עיגול פשוט ל־N ספרות אחרי הנקודה"""
     try:
         return round(float(value), int(digits))
     except Exception:
@@ -81,11 +81,10 @@ def round_to_precision(value: float, digits: int) -> float:
 def _decimal_step_round(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         return value
-    # Floor למכפלה הקרובה כדי למנוע דחיית הזמנות בבינאנס
-    return (value // step) * step
+    return (value // step) * step  # floor
 
 def _decimal_step_round_up(value: Decimal, step: Decimal) -> Decimal:
-    """Ceil למכפלת step (למשל SELL מול tick)."""
+    """Ceil למכפלת step (משמש ל-Sell מול tick)."""
     if step <= 0:
         return value
     eps = Decimal("1e-18")
@@ -101,7 +100,6 @@ def _tick_or_default(info: dict) -> str:
 
 def _step_or_default(info: dict) -> str:
     step = None
-    # קודם LOT_SIZE; אם אין → MARKET_LOT_SIZE
     for f in (info.get("filters") or []):
         if f.get("filterType") == "LOT_SIZE":
             step = f.get("stepSize")
@@ -113,10 +111,10 @@ def _step_or_default(info: dict) -> str:
                 break
     return str(step or _DEF_QTY_STEP)
 
+# ===================== Price & Qty Appliers =====================
 def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
     """
-    מעגל מחיר ל־tickSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
-    אם לא נמצא tickSize – משתמש ב־DEFAULT מה־ENV.
+    מעגל מחיר ל־tickSize לפי exchangeInfo.
     """
     info = _find_symbol_info(symbol) or {}
     price_precision = info.get("pricePrecision", 8)
@@ -153,8 +151,7 @@ def apply_price_tick_side(price: float, symbol: str, side: str) -> Tuple[float, 
 
 def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
     """
-    מעגל כמות ל־stepSize לפי exchangeInfo ומחזיר (float_dec, string_formatted).
-    אם לא נמצא stepSize – משתמש ב־DEFAULT מה־ENV.
+    מעגל כמות ל־stepSize לפי exchangeInfo.
     """
     info = _find_symbol_info(symbol) or {}
     qty_precision = info.get("quantityPrecision", 8)
@@ -216,8 +213,7 @@ def calc_quantity_from_budget(
     leverage: float = 1.0,
 ) -> Dict[str, Any]:
     """
-    מחשב כמות לפי תקציב×מינוף, עם עיגון ל-LOT_SIZE ועמידה ב-MIN_NOTIONAL (עם Fallback).
-    מחזיר: {"ok":bool, "qty":float, "qty_str":str, "notional":float, "min_notional":float, "reason":str?}
+    מחשב כמות לפי תקציב×מינוף, עם עיגון ל-LOT_SIZE ועמידה ב-MIN_NOTIONAL.
     """
     try:
         price = float(price); budget_usd = float(budget_usd); leverage = max(1.0, float(leverage))
@@ -236,12 +232,10 @@ def calc_quantity_from_budget(
     mn = float(flt.get("min_notional") or _DEF_MIN_NOTIONAL)
     min_qty = flt.get("min_qty")
 
-    # minQty
     if min_qty is not None and qty_dec < float(min_qty):
         qty_dec, qty_str = apply_qty_step(float(min_qty), symbol)
         notional = qty_dec * price
 
-    # MIN_NOTIONAL
     if notional + 1e-9 < mn:
         needed_qty = (mn / price) * 1.001
         qty_dec2, qty_str2 = apply_qty_step(needed_qty, symbol)
