@@ -8,7 +8,7 @@ from utils.binance_client import futures_exchange_info_safe, futures_open_positi
 from utils.trade_manager import get_trade_history
 
 router = APIRouter(
-    prefix="/executor",
+    prefix="/executor-extra",
     tags=["ExecutorExtra"],
     dependencies=[Depends(require_api_key)]
 )
@@ -19,13 +19,14 @@ def executor_symbols() -> List[str]:
     info = futures_exchange_info_safe()
     return [s["symbol"] for s in info.get("symbols", [])]
 
-@router.get("/open_positions")
+@router.get("/open-positions")
 def open_positions() -> List[Dict[str, Any]]:
-    """פוזיציות פתוחות (כמו /positions)"""
+    """פוזיציות פתוחות"""
     return futures_open_positions() or []
 
 @router.get("/trades")
 def executor_trades(limit: int = 50) -> List[Dict[str, Any]]:
     """היסטוריית טריידים מה־trade_manager"""
     return get_trade_history(limit=limit)
+
 
