@@ -23,7 +23,8 @@ if not IS_CLOUD:
         pass
 
 def _to_bool(v: str | None, default: bool = False) -> bool:
-    if v is None: return default
+    if v is None: 
+        return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 def _parse_csv(s: str | None) -> List[str]:
@@ -43,6 +44,7 @@ from utils.binance_client import futures_balance
 from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
+from utils.metrics import metrics_tracker
 
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
@@ -66,16 +68,27 @@ static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
 # --- FastAPI App ---
-app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
+app = FastAPI(
+    title="AlgoGPT API",
+    version=APP_VERSION,
+    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת"
+)
 
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 CORS_ALLOWED = (os.getenv("CORS_ALLOW_ORIGINS", "*") or "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
-if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS: CORS_ALLOW_CREDENTIALS = False
+if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS: 
+    CORS_ALLOW_CREDENTIALS = False
 allow_origins = ["*"] if CORS_ALLOWED == "*" else _parse_csv(CORS_ALLOWED)
-app.add_middleware(CORSMiddleware, allow_origins=allow_origins, allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=CORS_ALLOW_CREDENTIALS
+)
 
 try:
     if static_ok and os.access("static", os.R_OK):
@@ -89,15 +102,38 @@ async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/ui/grid"}
     PUBLIC_PREFIXES = ["/price", "/static/", "/ui/grid"]
     path = request.url.path
-    if request.method.upper() == "OPTIONS": return await call_next(request)
-    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES): return await call_next(request)
-    if allow_all(): return await call_next(request)
-    token = extract_token(request, authorization=request.headers.get("Authorization", ""), x_api_key=request.headers.get("X-API-Key"))
-    if not token_matches(token): return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+        return await call_next(request)
+    if allow_all():
+        return await call_next(request)
+    token = extract_token(
+        request,
+        authorization=request.headers.get("Authorization", ""),
+        x_api_key=request.headers.get("X-API-Key")
+    )
+    if not token_matches(token):
+        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
+# --- Metrics Middleware ---
+@app.middleware("http")
+async def track_metrics(request: Request, call_next):
+    start = asyncio.get_event_loop().time()
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (asyncio.get_event_loop().time() - start) * 1000
+        metrics_tracker.observe_request(500, duration_ms)
+        raise
+    else:
+        duration_ms = (asyncio.get_event_loop().time() - start) * 1000
+        metrics_tracker.observe_request(response.status_code, duration_ms)
+        return response
+
+# --- Routers ---
 def _include_router(module_path: str) -> None:
-    """כולל גם router וגם router_public אם קיימים במודול."""
     try:
         mod = __import__(module_path, fromlist=["router", "router_public"])
         if hasattr(mod, "router"):
@@ -124,10 +160,12 @@ for mod in ALL_ROUTERS:
 
 # --- Endpoints ---
 @app.get("/")
-async def root_status(): return {"ok": True, "status": "ok", "version": APP_VERSION}
+async def root_status():
+    return {"ok": True, "status": "ok", "version": APP_VERSION}
 
 @app.get("/health")
-async def health(): return {"ok": True, "status": "ok", "version": APP_VERSION}
+async def health():
+    return {"ok": True, "status": "ok", "version": APP_VERSION}
 
 @app.get("/readyz")
 async def readyz():
@@ -183,6 +221,7 @@ async def api_manage_once():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
