@@ -1,155 +1,133 @@
 # utils/order_hygiene.py
 from __future__ import annotations
-from typing import Optional, Dict, Any, Tuple
-from decimal import Decimal, ROUND_DOWN
-import os, uuid
+import logging
+from typing import Dict, Any, Optional, Tuple
 
-from utils.idempotency import claim as idp_claim
 from utils.binance_client import (
     get_symbol_filters,
-    place_limit_order,
-    place_stop_market_order,
-    place_take_profit_market,
+    cancel_order,
+    DEFAULT_MIN_NOTIONAL,
 )
-from utils.decision_log import log_decision
 
-# =============================================================================
-# Config
-# =============================================================================
-_SLIP_MAX_PCT = float(os.getenv("SLIPPAGE_MAX_PCT", "0.35"))
-_POST_ONLY_DEFAULT = str(os.getenv("POST_ONLY_DEFAULT", "false")).lower() in ("1", "true", "yes", "on")
-_IDP_TTL = int(os.getenv("IDEMPOTENCY_DEFAULT_TTL_SEC", "120"))
+from utils.precision_utils import (
+    apply_price_tick,
+    apply_price_tick_side,
+    apply_qty_step,
+    calc_quantity_from_budget,
+)
 
-# =============================================================================
-# Helpers
-# =============================================================================
-def _fmt(x: float) -> str:
-    return f"{x:.18f}".rstrip("0").rstrip(".")
+logger = logging.getLogger("algogpt.order_hygiene")
 
-def _quantize_price_qty(symbol: str, qty: float, price: Optional[float]) -> Tuple[Decimal, Optional[Decimal], Dict[str, Any]]:
-    """עיגול מחיר וכמות לפי פילטרים של Binance"""
-    f = get_symbol_filters(symbol)
-    step_str = f.get("stepSizeStr", "0.001")
-    tick_str = f.get("tickSizeStr", "0.1")
-    q = (Decimal(str(qty)) // Decimal(step_str)) * Decimal(step_str)
-    p = None
+# ============================
+# Order Validation & Cleanup
+# ============================
+
+def validate_order_payload(
+    symbol: str,
+    side: str,
+    price: Optional[float],
+    qty: Optional[float],
+    budget_usd: Optional[float] = None,
+    leverage: float = 1.0,
+) -> Dict[str, Any]:
+    """
+    מבצע ניקוי ובדיקות ל־Order לפני שליחה ל־Binance.
+    - מיישם tickSize/stepSize
+    - מוודא MIN_NOTIONAL
+    - מאפשר חישוב כמות מתוך budget
+    """
+    side = (side or "").upper()
+    if side not in ("BUY", "SELL"):
+        return {"ok": False, "reason": "bad_side", "side": side}
+
+    filters = get_symbol_filters(symbol)
+    if not filters:
+        return {"ok": False, "reason": "no_filters"}
+
+    # מחיר
+    price_out, price_str = (None, None)
     if price is not None:
-        p = (Decimal(str(price)) // Decimal(tick_str)) * Decimal(tick_str)
-    return (
-        q.quantize(Decimal(step_str), rounding=ROUND_DOWN),
-        (p.quantize(Decimal(tick_str), rounding=ROUND_DOWN) if p else None),
-        f,
-    )
+        if side == "BUY":
+            price_out, price_str = apply_price_tick_side(price, symbol, "BUY")
+        else:
+            price_out, price_str = apply_price_tick_side(price, symbol, "SELL")
 
-def _ensure_notional_ok(qty: Decimal, price: Optional[Decimal], f: Dict[str, Any]) -> None:
-    min_notional = float(f.get("minNotional") or os.getenv("MIN_NOTIONAL_USDT", "5"))
-    if price is not None:
-        notional = float(qty) * float(price)
-        if notional < min_notional:
-            raise ValueError(f"min notional {min_notional} not met (got {notional:.4f})")
-
-def _coerce_side(side: str) -> str:
-    s = side.strip().upper()
-    if s not in ("BUY", "SELL"):
-        raise ValueError("side must be BUY/SELL")
-    return s
-
-def _client_oid(prefix: str, symbol: str, tag: str) -> str:
-    return f"{prefix}{symbol}:{tag}:{uuid.uuid4().hex[:10]}"
-
-def _slippage_check(wish: float, limit_price: Optional[float]) -> None:
-    if limit_price is None:
-        return
-    slip_pct = abs((limit_price - wish) / wish) * 100.0
-    if slip_pct > _SLIP_MAX_PCT:
-        raise ValueError(f"limit slippage {slip_pct:.3f}% > max {_SLIP_MAX_PCT}%")
-
-# =============================================================================
-# Public Safe Wrappers
-# =============================================================================
-def place_limit_safe(
-    *, symbol: str, side: str, qty: float, limit_price: float,
-    post_only: Optional[bool] = None, reduce_only: bool = False,
-    position_side: Optional[str] = None, idp_key: Optional[str] = None,
-) -> Dict[str, Any]:
-    """ביצוע Limit Order עם הגנות (Idempotency, Slippage, MinNotional)"""
-    s, side = symbol.upper().strip(), _coerce_side(side)
-    q, p, f = _quantize_price_qty(s, qty, limit_price)
-    _ensure_notional_ok(q, p, f)
-    _slippage_check(limit_price, float(p))
-    cid = _client_oid("LIM:", s, "open" if not reduce_only else "reduce")
-    idp = idp_key or f"lim:{s}:{side}:{_fmt(float(q))}:{_fmt(float(p))}:{'ro' if reduce_only else 'nr'}"
-    if not idp_claim(idp, _IDP_TTL):
-        raise RuntimeError("duplicate limit order")
-    resp = place_limit_order(
-        symbol=s,
-        side=side,
-        quantity=float(q),
-        price=float(p),
-        time_in_force=("GTX" if (post_only if post_only is not None else _POST_ONLY_DEFAULT) else "GTC"),
-        post_only=bool(post_only if post_only is not None else _POST_ONLY_DEFAULT),
-        reduce_only=reduce_only,
-        position_side=position_side,
-        new_client_order_id=cid,
-    )
-    log_decision(event="place_limit", symbol=s, side=side, extra={"qty": float(q), "price": float(p)})
-    return resp
-
-def place_stop_market_safe(
-    *, symbol: str, side: str, stop_price: float, qty: Optional[float] = None,
-    reduce_only: bool = True, position_side: Optional[str] = None,
-    idp_key: Optional[str] = None,
-) -> Dict[str, Any]:
-    """ביצוע Stop Market עם הגנות"""
-    s, side = symbol.upper().strip(), _coerce_side(side)
-    q = None
-    f = get_symbol_filters(s)
+    # כמות
+    qty_out, qty_str = (None, None)
     if qty is not None:
-        q, _, f = _quantize_price_qty(s, qty, None)
-        _ensure_notional_ok(q, Decimal(stop_price), f)
-    cid = _client_oid("STP:", s, "close" if reduce_only else "open")
-    idp = idp_key or f"stp:{s}:{side}:{_fmt(stop_price)}:{_fmt(float(q) if q else 0)}:{'ro' if reduce_only else 'nr'}"
-    if not idp_claim(idp, _IDP_TTL):
-        raise RuntimeError("duplicate stop order")
-    resp = place_stop_market_order(
-        symbol=s,
-        side=side,
-        stop_price=stop_price,
-        quantity=(float(q) if q else None),
-        reduce_only=reduce_only,
-        position_side=position_side,
-        new_client_order_id=cid,
-    )
-    log_decision(event="place_stop_market", symbol=s, side=side, extra={"stop": stop_price, "qty": float(q) if q else None})
-    return resp
+        qty_out, qty_str = apply_qty_step(qty, symbol)
+    elif budget_usd is not None and price_out:
+        qres = calc_quantity_from_budget(symbol, price=price_out, budget_usd=budget_usd, leverage=leverage)
+        if not qres.get("ok"):
+            return {"ok": False, "reason": qres.get("reason", "budget_fail")}
+        qty_out, qty_str = qres["qty"], qres["qty_str"]
 
-def place_take_profit_safe(
-    *, symbol: str, side: str, stop_price: float, qty: Optional[float] = None,
-    reduce_only: bool = True, position_side: Optional[str] = None,
-    idp_key: Optional[str] = None,
-) -> Dict[str, Any]:
-    """ביצוע Take Profit Market עם הגנות"""
-    s, side = symbol.upper().strip(), _coerce_side(side)
-    q = None
-    f = get_symbol_filters(s)
-    if qty is not None:
-        q, _, f = _quantize_price_qty(s, qty, None)
-        _ensure_notional_ok(q, Decimal(stop_price), f)
-    cid = _client_oid("TPM:", s, "tp")
-    idp = idp_key or f"tp:{s}:{side}:{_fmt(stop_price)}:{_fmt(float(q) if q else 0)}"
-    if not idp_claim(idp, _IDP_TTL):
-        raise RuntimeError("duplicate take-profit order")
-    resp = place_take_profit_market(
-        symbol=s,
-        side=side,
-        stop_price=stop_price,
-        quantity=(float(q) if q else None),
-        reduce_only=reduce_only,
-        position_side=position_side,
-        new_client_order_id=cid,
-    )
-    log_decision(event="place_tp_market", symbol=s, side=side, extra={"tp": stop_price, "qty": float(q) if q else None})
-    return resp
+    if not qty_out or qty_out <= 0:
+        return {"ok": False, "reason": "bad_qty"}
+
+    # בדיקת מינימום notional
+    notional = (price_out or 0) * qty_out
+    min_notional = filters.get("min_notional") or DEFAULT_MIN_NOTIONAL
+    if notional < min_notional:
+        return {
+            "ok": False,
+            "reason": "below_min_notional",
+            "notional": notional,
+            "min_notional": min_notional,
+        }
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "side": side,
+        "price": price_out,
+        "price_str": price_str,
+        "qty": qty_out,
+        "qty_str": qty_str,
+        "notional": notional,
+    }
+
+# ============================
+# Cancel Helpers
+# ============================
+
+def safe_cancel(symbol: str, order_id: int) -> bool:
+    """
+    מנסה לבטל הזמנה, עם לוג.
+    """
+    try:
+        return cancel_order(symbol, order_id)
+    except Exception as e:
+        logger.error(f"[order_hygiene] cancel failed {symbol} {order_id}: {e}")
+        return False
+
+# ============================
+# Batch Validation
+# ============================
+
+def validate_orders_batch(orders: list[dict]) -> list[dict]:
+    """
+    מקבל רשימת payloads ומחזיר תוצאות אחרי וידוא.
+    """
+    results = []
+    for o in orders:
+        res = validate_order_payload(
+            o.get("symbol"),
+            o.get("side"),
+            o.get("price"),
+            o.get("qty"),
+            o.get("budget_usd"),
+            o.get("leverage", 1.0),
+        )
+        results.append(res)
+    return results
+
+__all__ = [
+    "validate_order_payload",
+    "validate_orders_batch",
+    "safe_cancel",
+]
+
 
 
 
