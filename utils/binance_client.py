@@ -25,7 +25,6 @@ DEFAULT_QTY_STEP_STR = "0.001"
 DEFAULT_PRICE_TICK_STR = "0.01"
 DEFAULT_MIN_NOTIONAL = 5.0
 
-
 # ==================== Core Safe Calls ====================
 def fapi_ping() -> bool:
     try:
@@ -35,14 +34,12 @@ def fapi_ping() -> bool:
         logger.warning("Futures ping failed: %s", e)
         return False
 
-
 def futures_exchange_info_safe() -> Optional[Dict[str, Any]]:
     try:
         return client.futures_exchange_info()
     except Exception as e:
         logger.error("Failed to fetch futures_exchange_info: %s", e)
         return None
-
 
 def futures_balance() -> List[Dict[str, Any]]:
     try:
@@ -51,7 +48,6 @@ def futures_balance() -> List[Dict[str, Any]]:
         logger.error("Failed to fetch futures_balance: %s", e)
         return []
 
-
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
         data = client.futures_mark_price(symbol=symbol)
@@ -59,7 +55,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error("Failed to fetch mark price for %s: %s", symbol, e)
         return None
-
 
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     try:
@@ -73,6 +68,28 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
         logger.error("Failed get_symbol_info: %s", e)
     return None
 
+def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    מחלץ פילטרים (minQty, tickSize, minNotional) עבור סימבול נתון.
+    """
+    try:
+        info = get_symbol_info(symbol)
+        if not info:
+            return None
+        filters = {}
+        for f in info.get("filters", []):
+            ftype = f.get("filterType")
+            if ftype == "LOT_SIZE":
+                filters["minQty"] = f.get("minQty")
+                filters["stepSize"] = f.get("stepSize")
+            elif ftype == "PRICE_FILTER":
+                filters["tickSize"] = f.get("tickSize")
+            elif ftype == "MIN_NOTIONAL":
+                filters["minNotional"] = f.get("notional") or f.get("minNotional")
+        return filters
+    except Exception as e:
+        logger.error("Failed get_symbol_filters: %s", e)
+        return None
 
 # ==================== Positions ====================
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -94,7 +111,6 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         logger.error("Failed to get open positions: %s", e)
         return []
 
-
 # ==================== Orders ====================
 def futures_create_order(**kwargs) -> Dict[str, Any]:
     """
@@ -102,8 +118,7 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     עטיפה בטוחה עם טיפול בשגיאות.
     """
     try:
-        res = client.futures_create_order(**kwargs)
-        return {"ok": True, "data": res}
+        return client.futures_create_order(**kwargs)
     except BinanceAPIException as e:
         logger.error("BinanceAPIException: %s", e)
         return {"ok": False, "error": str(e)}
@@ -111,44 +126,34 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         logger.error("Failed to create futures order: %s", e)
         return {"ok": False, "error": str(e)}
 
-
 def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     """
-    מבטל את כל ההוראות הפתוחות עבור סימבול מסוים ב-Futures.
+    מבטל את כל ההוראות הפתוחות לסימבול מסוים.
     """
     try:
-        res = client.futures_cancel_all_open_orders(symbol=symbol.upper())
-        return {"ok": True, "data": res}
-    except BinanceAPIException as e:
-        logger.error("[binance_client] cancel_all_orders BinanceAPIException: %s", e)
-        return {"ok": False, "error": str(e)}
+        return client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
-        logger.error("[binance_client] cancel_all_orders failed: %s", e)
+        logger.error("Failed to cancel orders for %s: %s", symbol, e)
         return {"ok": False, "error": str(e)}
 
-
+# ==================== Leverage ====================
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     """
-    מגדיר מינוף חדש עבור סימבול מסוים ב-Futures.
+    קובע מינוף חדש לסימבול נתון.
     """
     try:
-        res = client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
-        return {"ok": True, "data": res}
-    except BinanceAPIException as e:
-        logger.error("[binance_client] set_leverage BinanceAPIException: %s", e)
-        return {"ok": False, "error": str(e)}
+        return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
     except Exception as e:
-        logger.error("[binance_client] set_leverage failed: %s", e)
+        logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
-
-# ==================== Exports ====================
 __all__ = [
     "fapi_ping",
     "futures_exchange_info_safe",
     "futures_balance",
     "futures_mark_price",
     "get_symbol_info",
+    "get_symbol_filters",
     "get_open_positions",
     "futures_create_order",
     "futures_cancel_all_orders",
