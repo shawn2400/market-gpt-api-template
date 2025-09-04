@@ -16,17 +16,22 @@ _INTERVAL_SEC = {
     "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400
 }
 
+
 def _cache_key(market: str, symbol: str) -> str:
     return f"{market}:{symbol.upper()}"
+
 
 def _is_invalid(market: str, symbol: str) -> bool:
     return _invalid_cache.get(_cache_key(market, symbol), 0.0) > time.time()
 
+
 def _mark_invalid(market: str, symbol: str) -> None:
     _invalid_cache[_cache_key(market, symbol)] = time.time() + _INVALID_TTL
 
+
 def _endpoint_for(market_type: str) -> str:
     return f"{BINANCE_SPOT}/api/v3/klines" if str(market_type).lower() == "spot" else f"{BINANCE_FAPI}/fapi/v1/klines"
+
 
 def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
     cols = [
@@ -42,6 +47,7 @@ def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
     df = df.set_index("open_time", drop=False)
     df["timestamp"] = df["close_time"]
     return df
+
 
 async def _rest_klines_async(symbol: str, interval: str, limit: int, market_type: str) -> pd.DataFrame:
     market = "spot" if str(market_type).lower() == "spot" else "futures"
@@ -65,6 +71,7 @@ async def _rest_klines_async(symbol: str, interval: str, limit: int, market_type
             return pd.DataFrame()
     return _to_dataframe(data)
 
+
 def _resample_ohlcv(df_small: pd.DataFrame, target_interval: str) -> pd.DataFrame:
     if df_small is None or df_small.empty:
         return pd.DataFrame()
@@ -77,9 +84,12 @@ def _resample_ohlcv(df_small: pd.DataFrame, target_interval: str) -> pd.DataFram
         "open":"first","high":"max","low":"min","close":"last","volume":"sum"
     }).dropna()
     agg["open_time"] = agg.index
-    agg["close_time"] = agg.index + (pd.to_timedelta(_INTERVAL_SEC[target_interval.lower()], unit="s") - pd.to_timedelta(1,"ms"))
+    agg["close_time"] = agg.index + (
+        pd.to_timedelta(_INTERVAL_SEC[target_interval.lower()], unit="s") - pd.to_timedelta(1,"ms")
+    )
     agg["timestamp"] = agg["close_time"]
     return agg
+
 
 async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     interval = (interval or "15m").lower()
@@ -102,7 +112,8 @@ async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: 
                     return agg.tail(limit)
             except Exception:
                 continue
-    return None
+    return pd.DataFrame()
+
 
 def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     try:
@@ -112,6 +123,7 @@ def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: s
     if loop and loop.is_running():
         return None
     return asyncio.run(get_klines(symbol, interval, limit, market_type))
+
 
 async def aget_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     return await get_klines(symbol, interval, limit, market_type)
