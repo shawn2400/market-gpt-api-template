@@ -1,13 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>AlgoGPT Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f4f6f8; color: #333; }
+    h1 { color: #0066cc; }
+    .status { padding: 1rem; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .ok { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+  </style>
 </head>
 <body>
   <h1>AlgoGPT Dashboard</h1>
-  <p>✅ The dashboard endpoint is working.</p>
-  <p>This is a placeholder. Replace with React/Vue/HTML UI later.</p>
+  <div class="status">
+    <p>✅ API is running</p>
+    <p>Use endpoints <code>/executor</code>, <code>/pnl</code>, <code>/ai</code>, <code>/trade</code> for full access.</p>
+  </div>
 </body>
 </html>
+
 
