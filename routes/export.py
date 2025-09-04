@@ -1,237 +1,33 @@
-# routes/executor.py
+# routes/export.py
 from __future__ import annotations
-
-import time
-from typing import List, Dict, Any, Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Path
-from pydantic import BaseModel, Field, constr
-
+import logging
+from typing import List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from utils.auth import require_api_key
-from utils.trade_manager import get_trade_history
-from utils.binance_client import (
-    fapi_ping,
-    futures_open_positions,
-    futures_balance,
-    futures_mark_price,
-    futures_exchange_info_safe,
-    get_symbol_info,
-)
+from utils.trade_storage import cleanup_static
+
+logger = logging.getLogger("algogpt.routes.export")
 
 router = APIRouter(
-    prefix="/executor",
-    tags=["Executor"],
+    prefix="/export",
+    tags=["Export"],
     dependencies=[Depends(require_api_key)],
 )
 
-# ================= Models =================
-class PositionModel(BaseModel):
-    symbol: str
-    positionAmt: str
-    entryPrice: str
-    breakEvenPrice: str
-    markPrice: str
-    unRealizedProfit: str
-    liquidationPrice: str
-    leverage: str
-    marginType: constr(strip_whitespace=True)
-    positionSide: constr(strip_whitespace=True)
-    isolated: bool = False
-    updateTime: int = 0
-
-
-class BalanceModel(BaseModel):
-    accountAlias: Optional[str] = None
-    asset: str
-    balance: str
-    crossWalletBalance: Optional[str] = None
-    crossUnPnl: Optional[str] = None
-    availableBalance: Optional[str] = None
-    maxWithdrawAmount: Optional[str] = None
-    updateTime: Optional[int] = 0
-
-
-class PositionsResponse(BaseModel):
+class ExportResponse(BaseModel):
     ok: bool = True
-    total: int
-    items: List[PositionModel] = Field(default_factory=list)
+    cleaned_files: int
 
-
-class BalancesResponse(BaseModel):
-    ok: bool = True
-    total: int
-    items: List[BalanceModel] = Field(default_factory=list)
-
-
-class SymbolsResponse(BaseModel):
-    ok: bool = True
-    total: int
-    items: List[str] = Field(default_factory=list)
-
-
-class SymbolInfoResponse(BaseModel):
-    ok: bool = True
-    symbol: str
-    info: Dict[str, Any]
-
-
-class MarkPriceResponse(BaseModel):
-    ok: bool = True
-    symbol: str
-    mark_price: float
-
-
-class ExchangeInfoResponse(BaseModel):
-    ok: bool = True
-    symbols_count: int
-    raw: Dict[str, Any]
-
-
-class StatusResponse(BaseModel):
-    ok: bool = True
-    executor: str = "running"
-    endpoints: Dict[str, str] = Field(
-        default_factory=lambda: {
-            "ping": "/executor/ping",
-            "positions": "/executor/positions",
-            "balance": "/executor/balance",
-            "symbols": "/executor/symbols",
-            "symbol_info": "/executor/symbol-info/{symbol}",
-            "mark_price": "/executor/mark-price/{symbol}",
-            "exchange_info": "/executor/exchange-info",
-            "trades": "/executor/trades",
-            "health": "/executor/health",
-            "status": "/executor/status",
-        }
-    )
-
-
-class HealthResponse(BaseModel):
-    ok: bool = True
-    binance_ping: bool
-    signed_balance_ok: bool
-    mark_price_ok: bool
-    details: Dict[str, Any] = Field(default_factory=dict)
-    cached: bool = False
-    ttl_seconds: int = 10
-
-# ================= Routes =================
-@router.get("/ping")
-def ping() -> Dict[str, Any]:
-    ok = bool(fapi_ping())
-    if not ok:
-        raise HTTPException(status_code=502, detail="Binance ping failed")
-    return {"ok": True}
-
-
-@router.get("/positions", response_model=PositionsResponse)
-def list_open_positions() -> PositionsResponse:
-    data = futures_open_positions() or []
-    items = [PositionModel(**p) for p in data]
-    return PositionsResponse(total=len(items), items=items)
-
-
-@router.get("/balance", response_model=BalancesResponse)
-def list_balance() -> BalancesResponse:
-    data = futures_balance() or []
-    items = [BalanceModel(**b) for b in data]
-    return BalancesResponse(total=len(items), items=items)
-
-
-@router.get("/symbols", response_model=SymbolsResponse)
-def list_symbols(limit: int = Query(0, ge=0, le=5000)) -> SymbolsResponse:
-    info = futures_exchange_info_safe(force_refresh=False)
-    symbols = [s["symbol"] for s in info.get("symbols", [])]
-    if limit and limit > 0:
-        symbols = symbols[:limit]
-    return SymbolsResponse(total=len(symbols), items=symbols)
-
-
-@router.get("/symbol-info/{symbol}", response_model=SymbolInfoResponse)
-def symbol_info(symbol: str = Path(..., min_length=3, max_length=20)) -> SymbolInfoResponse:
-    info = get_symbol_info(symbol, force_refresh=False)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"Symbol {symbol.upper()} not found")
-    return SymbolInfoResponse(symbol=symbol.upper(), info=info)
-
-
-@router.get("/mark-price/{symbol}", response_model=MarkPriceResponse)
-def mark_price(symbol: str = Path(..., min_length=3, max_length=20)) -> MarkPriceResponse:
-    mp = futures_mark_price(symbol)
-    if mp is None:
-        raise HTTPException(status_code=502, detail=f"Mark price not available for {symbol.upper()}")
-    return MarkPriceResponse(symbol=symbol.upper(), mark_price=mp)
-
-
-@router.get("/exchange-info", response_model=ExchangeInfoResponse)
-def exchange_info(refresh: bool = Query(False)) -> ExchangeInfoResponse:
-    info = futures_exchange_info_safe(force_refresh=bool(refresh))
-    return ExchangeInfoResponse(symbols_count=len(info.get("symbols", [])), raw=info)
-
-
-@router.get("/trades", response_model=List[Dict[str, Any]])
-def list_trades(limit: int = Query(50, ge=1, le=500)):
-    return get_trade_history(limit=limit)
-
-
-@router.get("/status", response_model=StatusResponse)
-def executor_status() -> StatusResponse:
-    return StatusResponse(ok=True)
-
-
-_health_cache: Dict[str, Any] = {"ts": 0.0, "payload": None}
-_HEALTH_TTL = 10
-
-
-@router.get("/health", response_model=HealthResponse)
-def health_check(symbol: str = Query("BTCUSDT", min_length=3, max_length=20)) -> HealthResponse:
-    now = time.time()
-    if _health_cache["payload"] and (now - _health_cache["ts"] < _HEALTH_TTL):
-        cached_payload: Dict[str, Any] = dict(_health_cache["payload"])
-        cached_payload["cached"] = True
-        return HealthResponse(**cached_payload)
-
-    details: Dict[str, Any] = {}
-
+@router.post("/cleanup", response_model=ExportResponse)
+def cleanup(limit: int = Query(500, ge=50, le=2000)) -> ExportResponse:
+    """מנקה קבצי cache ישנים בתיקיית static/cache"""
     try:
-        ping_ok = bool(fapi_ping())
+        cleanup_static(max_files=limit)
+        return ExportResponse(cleaned_files=limit)
     except Exception as e:
-        ping_ok = False
-        details["ping_error"] = str(e)
+        logger.exception("export_cleanup_failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    try:
-        bal = futures_balance()
-        signed_ok = isinstance(bal, list)
-        if not signed_ok:
-            details["balance_raw"] = bal
-    except Exception as e:
-        signed_ok = False
-        details["balance_error"] = str(e)
-
-    try:
-        mp = futures_mark_price(symbol)
-        mp_ok = (mp is not None)
-        if mp_ok:
-            details["mark_price"] = mp
-        else:
-            details["mark_price_error"] = f"No mark price for {symbol}"
-    except Exception as e:
-        mp_ok = False
-        details["mark_price_error"] = str(e)
-
-    ok = ping_ok and signed_ok and mp_ok
-    payload = {
-        "ok": ok,
-        "binance_ping": ping_ok,
-        "signed_balance_ok": signed_ok,
-        "mark_price_ok": mp_ok,
-        "details": details,
-        "cached": False,
-        "ttl_seconds": _HEALTH_TTL,
-    }
-
-    _health_cache["ts"] = now
-    _health_cache["payload"] = dict(payload)
-    return HealthResponse(**payload)
 
 
