@@ -1,113 +1,72 @@
 # utils/trade_models.py
 from __future__ import annotations
-from pydantic import BaseModel, Field, validator
-from typing import Optional, Dict
-from zoneinfo import ZoneInfo
-import os, datetime as dt
-
-# Timezone ברירת מחדל
-TZ = os.getenv("TZ", "Asia/Jerusalem")
+import math
+from typing import Optional, Dict, Any
+from dataclasses import dataclass, asdict
+from datetime import datetime
+import pytz
 
 
-# =========================
-# Trade Proposal
-# =========================
-class TradeProposal(BaseModel):
-    symbol: str = Field(..., min_length=6, max_length=20)
-    side: str = Field(..., regex=r"^(?i:LONG|SHORT)$")
-    current_price: Optional[float] = Field(None, gt=0)
-    leverage: int = Field(10, ge=1, le=125)
-    entry: float = Field(..., gt=0)
-    sl: float = Field(..., gt=0)
-    tp1: float = Field(..., gt=0)
-    tp2: Optional[float] = Field(None, gt=0)
-    tp3: Optional[float] = Field(None, gt=0)
-    success_pct: Optional[float] = Field(None, ge=0, le=100)
-    budget_usd: float = Field(
-        default_factory=lambda: float(os.getenv("DEFAULT_BUDGET_USD", "50")), gt=0
-    )
-
-    @validator("symbol")
-    def up(cls, v):
-        return v.upper()
+@dataclass
+class TradeProposal:
+    symbol: str
+    side: str  # LONG/SHORT
+    entry: float
+    sl: float
+    tp1: float
+    tp2: Optional[float] = None
+    tp3: Optional[float] = None
+    leverage: int = 10
+    budget_usd: float = 50.0
+    success_pct: Optional[float] = None
+    current_price: Optional[float] = None
 
     def notional_usd(self) -> float:
-        return round(self.budget_usd * self.leverage, 2)
+        return float(self.budget_usd) * float(self.leverage)
 
     def qty_estimate(self) -> float:
-        return round(self.notional_usd() / self.entry, 6)
+        if self.entry <= 0:
+            return 0.0
+        return self.notional_usd() / float(self.entry)
 
-    def risk_rr(self) -> Dict[str, float]:
-        """Risk/Reward ratios for TP1–TP3"""
-        risk = abs(self.entry - self.sl)
-        rr1 = abs(self.tp1 - self.entry) / risk if risk > 0 else 0
-        rr2 = abs((self.tp2 or 0) - self.entry) / risk if (risk > 0 and self.tp2) else 0
-        rr3 = abs((self.tp3 or 0) - self.entry) / risk if (risk > 0 and self.tp3) else 0
-        return {"risk_per_unit": risk, "rr1": rr1, "rr2": rr2, "rr3": rr3}
+    def risk_rr(self) -> Dict[str, Any]:
+        rr: Dict[str, Any] = {}
+        if self.sl and self.entry:
+            risk = abs(self.entry - self.sl)
+            if risk > 0:
+                rr["rr1"] = abs(self.tp1 - self.entry) / risk if self.tp1 else None
+                rr["rr2"] = abs(self.tp2 - self.entry) / risk if self.tp2 else None
+                rr["rr3"] = abs(self.tp3 - self.entry) / risk if self.tp3 else None
+        return rr
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
-# =========================
-# Trade ETA
-# =========================
-class TradeETA(BaseModel):
-    tz: str = TZ
-    now_local: str
+@dataclass
+class TradeETA:
+    tz: str = "Asia/Jerusalem"
+    now_local: str = ""
     eta_sl: Optional[str] = None
     eta_tp1: Optional[str] = None
     eta_tp2: Optional[str] = None
     eta_tp3: Optional[str] = None
-    minutes_sl: Optional[int] = None
-    minutes_tp1: Optional[int] = None
-    minutes_tp2: Optional[int] = None
-    minutes_tp3: Optional[int] = None
+
+    @classmethod
+    def make(cls) -> "TradeETA":
+        tzname = "Asia/Jerusalem"
+        now_local = datetime.now(pytz.timezone(tzname)).strftime("%Y-%m-%d %H:%M:%S")
+        return cls(tz=tzname, now_local=now_local)
 
 
-def _fmt_time(minutes_from_now: Optional[int]) -> Optional[str]:
-    if minutes_from_now is None:
-        return None
-    t = dt.datetime.now(ZoneInfo(TZ)) + dt.timedelta(minutes=minutes_from_now)
-    return t.strftime("%Y-%m-%d %H:%M")
-
-
-def estimate_minutes(distance: Optional[float], per_min_move: Optional[float]) -> Optional[int]:
-    if per_min_move is None or per_min_move <= 0 or not distance or distance <= 0:
-        return None
-    return int(max(1, round(distance / per_min_move)))
-
-
-def build_eta(tp: TradeProposal, per_min_move: float) -> TradeETA:
-    now = dt.datetime.now(ZoneInfo(TZ)).strftime("%Y-%m-%d %H:%M")
-    dist_to_sl = abs(tp.entry - tp.sl)
-    dist_to_tp1 = abs(tp.tp1 - tp.entry)
-    dist_to_tp2 = abs(tp.tp2 - tp.entry) if tp.tp2 else None
-    dist_to_tp3 = abs(tp.tp3 - tp.entry) if tp.tp3 else None
-
-    m_sl = estimate_minutes(dist_to_sl, per_min_move)
-    m_t1 = estimate_minutes(dist_to_tp1, per_min_move)
-    m_t2 = estimate_minutes(dist_to_tp2, per_min_move) if dist_to_tp2 else None
-    m_t3 = estimate_minutes(dist_to_tp3, per_min_move) if dist_to_tp3 else None
-
-    return TradeETA(
-        now_local=now,
-        eta_sl=_fmt_time(m_sl),
-        eta_tp1=_fmt_time(m_t1),
-        eta_tp2=_fmt_time(m_t2),
-        eta_tp3=_fmt_time(m_t3),
-        minutes_sl=m_sl,
-        minutes_tp1=m_t1,
-        minutes_tp2=m_t2,
-        minutes_tp3=m_t3,
-    )
-
-
-# =========================
-# Formatter
-# =========================
+# --------------------------------------------------------------------
+# 📊 Formatter
+# --------------------------------------------------------------------
 def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
     rr = tp.risk_rr()
-    rr1_s = f"{rr['rr1']:.2f}"
-    rr2_s = f"{rr['rr2']:.2f}"
-    rr3_s = f"{rr['rr3']:.2f}"
+    rr1_s = f"{rr['rr1']:.2f}" if rr.get("rr1") else "—"
+    rr2_s = f"{rr['rr2']:.2f}" if rr.get("rr2") else "—"
+    rr3_s = f"{rr['rr3']:.2f}" if rr.get("rr3") else "—"
 
     line_rr = f"RR: TP1 `{rr1_s}`"
     if tp.tp2:
@@ -138,6 +97,7 @@ def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
         (f"סיבה/תקציר: {why}" if why else ""),
     ]
     return "\n".join([p for p in parts if p])
+
 
 
 
