@@ -70,30 +70,25 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
 
 def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
     """
-    מחזיר את הפילטרים (LOT_SIZE, PRICE_FILTER וכו') מתוך exchangeInfo.
+    מחזיר פילטרים (LOT_SIZE, PRICE_FILTER וכו') עבור סימבול.
     """
     try:
-        info = get_symbol_info(symbol)
-        if not info:
+        s = get_symbol_info(symbol)
+        if not s:
             return None
         filters = {}
-        for f in info.get("filters", []):
+        for f in s.get("filters", []):
             ftype = f.get("filterType")
             if ftype == "PRICE_FILTER":
                 filters["tickSize"] = f.get("tickSize")
-                filters["minPrice"] = f.get("minPrice")
-                filters["maxPrice"] = f.get("maxPrice")
-            elif ftype in ("LOT_SIZE", "MARKET_LOT_SIZE"):
-                filters["stepSize"] = f.get("stepSize")
+            elif ftype == "LOT_SIZE":
                 filters["minQty"] = f.get("minQty")
-                filters["maxQty"] = f.get("maxQty")
+                filters["stepSize"] = f.get("stepSize")
             elif ftype in ("MIN_NOTIONAL", "NOTIONAL"):
-                filters["notional"] = (
-                    f.get("notional") or f.get("minNotional") or f.get("minNotionalValue")
-                )
+                filters["notional"] = f.get("notional") or f.get("minNotional") or f.get("minNotionalValue")
         return filters
     except Exception as e:
-        logger.error("Failed get_symbol_filters(%s): %s", symbol, e)
+        logger.error("Failed get_symbol_filters: %s", e)
         return None
 
 # ==================== Positions ====================
@@ -131,6 +126,19 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         logger.error("Failed to create futures order: %s", e)
         return {"ok": False, "error": str(e)}
 
+def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
+    """
+    מבטל את כל ההוראות הפתוחות לסימבול מסוים.
+    """
+    try:
+        return client.futures_cancel_all_open_orders(symbol=symbol)
+    except BinanceAPIException as e:
+        logger.error("BinanceAPIException cancel_all: %s", e)
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.error("Failed to cancel all orders for %s: %s", symbol, e)
+        return {"ok": False, "error": str(e)}
+
 __all__ = [
     "fapi_ping",
     "futures_exchange_info_safe",
@@ -140,6 +148,7 @@ __all__ = [
     "get_symbol_filters",
     "get_open_positions",
     "futures_create_order",
+    "futures_cancel_all_orders",
     "DEFAULT_QTY_STEP_STR",
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
