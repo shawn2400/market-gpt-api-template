@@ -8,14 +8,14 @@ import uuid
 
 class TradeState(str, Enum):
     NEW = "NEW"
-    SUBMITTED = "SUBMITTED"            # נפתחו פקודות כניסה/סטופ/טי.פי
-    WORKING = "WORKING"                # הפקודות בתוקף, ממתין למילוי
+    SUBMITTED = "SUBMITTED"
+    WORKING = "WORKING"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
-    FILLED = "FILLED"                  # כניסה מלאה
+    FILLED = "FILLED"
     TP1 = "TP1"
     TP2 = "TP2"
-    EXITED = "EXITED"                  # נסגר ברווח
-    STOPPED = "STOPPED"                # נסגר בסטופ
+    EXITED = "EXITED"
+    STOPPED = "STOPPED"
     CANCELED = "CANCELED"
     ERROR = "ERROR"
 
@@ -40,7 +40,7 @@ def _now_iso() -> str:
 class Trade:
     trade_id: str
     symbol: str
-    side: str                         # "LONG" / "SHORT"
+    side: str
     qty: float
     entry_price: Optional[float] = None
     stop_price: Optional[float] = None
@@ -63,11 +63,12 @@ class Trade:
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d["state"] = self.state.value  # Convert Enum to string
+        d["state"] = self.state.value
         return d
 
 def new_trade_id(prefix: str = "T") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 __all__ = ["TradeState", "Trade", "new_trade_id"]
+
 
