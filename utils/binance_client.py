@@ -23,10 +23,10 @@ _EXCHANGE_INFO: Dict[str, Any] = {}
 _EXCHANGE_INFO_TS: float = 0.0
 _EXCHANGE_INFO_TTL: int = 300  # 5 minutes
 
-# === Default fallback values ===
-DEFAULT_QTY_STEP_STR: str = "0.001"        # ברירת מחדל ל-stepSize אם אין info
-DEFAULT_PRICE_TICK_STR: str = "0.01"       # ברירת מחדל ל-tickSize
-DEFAULT_MIN_NOTIONAL: float = 5.0          # מינימום notional (USD) לפי Binance
+# === Default fallback values (public) ===
+DEFAULT_QTY_STEP_STR: str = "0.001"   # ברירת מחדל ל-stepSize
+DEFAULT_PRICE_TICK_STR: str = "0.01"  # ברירת מחדל ל-tickSize
+DEFAULT_MIN_NOTIONAL: float = 5.0     # ברירת מחדל למינימום notional
 
 # === Helpers ===
 def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
@@ -92,6 +92,37 @@ def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[s
     return None
 
 
+def get_symbol_filters(symbol: str) -> Dict[str, Any]:
+    """
+    מחזיר filters רלוונטיים (PRICE_FILTER, LOT_SIZE וכו') לסימבול.
+    """
+    info = get_symbol_info(symbol)
+    if not info:
+        return {
+            "tickSizeStr": DEFAULT_PRICE_TICK_STR,
+            "stepSizeStr": DEFAULT_QTY_STEP_STR,
+            "minNotional": DEFAULT_MIN_NOTIONAL,
+        }
+    filters = {}
+    for f in info.get("filters", []):
+        t = f.get("filterType")
+        if t == "PRICE_FILTER":
+            filters["tickSizeStr"] = f.get("tickSize", DEFAULT_PRICE_TICK_STR)
+        elif t == "LOT_SIZE":
+            filters["stepSizeStr"] = f.get("stepSize", DEFAULT_QTY_STEP_STR)
+            filters["minQty"] = f.get("minQty")
+        elif t == "MARKET_LOT_SIZE":
+            filters["stepSizeStr"] = filters.get("stepSizeStr") or f.get("stepSize")
+        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+            filters["minNotional"] = (
+                f.get("notional")
+                or f.get("minNotional")
+                or f.get("minNotionalValue")
+                or DEFAULT_MIN_NOTIONAL
+            )
+    return filters
+
+
 # === Order Functions (basic) ===
 def place_limit_order(
     symbol: str,
@@ -100,10 +131,8 @@ def place_limit_order(
     price: float,
     reduce_only: bool = False,
     time_in_force: str = "GTC",
+    **kwargs,
 ) -> Dict[str, Any]:
-    """
-    Place a limit order on Binance Futures
-    """
     try:
         order = client.futures_create_order(
             symbol=symbol.upper(),
@@ -113,6 +142,7 @@ def place_limit_order(
             price=price,
             timeInForce=time_in_force,
             reduceOnly=reduce_only,
+            **kwargs,
         )
         logger.info(f"Limit order placed: {order}")
         return {"ok": True, "order": order}
@@ -131,6 +161,7 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"cancel_order failed: {e}")
         return {"ok": False, "error": str(e)}
+
 
 
 
