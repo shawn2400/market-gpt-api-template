@@ -3,9 +3,9 @@ from __future__ import annotations
 import json, csv
 from pathlib import Path
 from typing import Any, List, Dict
-from datetime import datetime
 
 def save_json(obj: Any, path: str | Path) -> bool:
+    """Save object as JSON to file."""
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -17,10 +17,11 @@ def save_json(obj: Any, path: str | Path) -> bool:
         return False
 
 def generate_daily_csv_report(trades: List[Dict[str, Any]], path: str | Path) -> bool:
-    """
-    Save trades list to CSV file
-    """
+    """Save trades list to CSV file."""
     try:
+        if not trades:
+            print("[export_utils] No trades to export.")
+            return False
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8", newline="") as f:
@@ -31,5 +32,6 @@ def generate_daily_csv_report(trades: List[Dict[str, Any]], path: str | Path) ->
     except Exception as e:
         print(f"[export_utils] Error saving CSV: {e}")
         return False
+
 
 
