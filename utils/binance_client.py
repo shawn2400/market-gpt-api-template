@@ -20,13 +20,14 @@ if not API_KEY or not API_SECRET:
 client = Client(API_KEY, API_SECRET)
 client.FUTURES_URL = BASE_URL_FUTURES
 
-# === Default precision fallbacks (used by precision_utils) ===
+# === Default precision fallbacks (for precision_utils) ===
 DEFAULT_PRICE_TICK = 0.01
 DEFAULT_QTY_STEP = 0.001
+DEFAULT_MIN_NOTIONAL = 5.0  # ברירת מחדל ~5$ אם Binance לא מחזיר
 DEFAULT_PRICE_TICK_STR = "0.01"
 DEFAULT_QTY_STEP_STR = "0.001"
 
-# === Safe wrappers ===
+# === Safe wrapper ===
 def _safe_call(func, *args, **kwargs):
     try:
         return func(*args, **kwargs)
@@ -36,7 +37,7 @@ def _safe_call(func, *args, **kwargs):
         logger.error(f"Binance client error: {e}")
     return None
 
-# === Core Futures Helpers ===
+# === Futures helpers ===
 def futures_mark_price(symbol: str) -> Optional[float]:
     data = _safe_call(client.futures_mark_price, symbol=symbol)
     if not data:
@@ -44,12 +45,12 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     return float(data.get("markPrice", 0.0))
 
 def futures_position_risk() -> List[Dict[str, Any]]:
-    data = _safe_call(client.futures_position_information)
-    return data or []
+    return _safe_call(client.futures_position_information) or []
 
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    data = _safe_call(client.futures_get_open_orders, symbol=symbol) if symbol else _safe_call(client.futures_get_open_orders)
-    return data or []
+    if symbol:
+        return _safe_call(client.futures_get_open_orders, symbol=symbol) or []
+    return _safe_call(client.futures_get_open_orders) or []
 
 def cancel_order(symbol: str, order_id: Optional[int] = None, orig_client_order_id: Optional[str] = None) -> Dict[str, Any]:
     try:
