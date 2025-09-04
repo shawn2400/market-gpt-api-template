@@ -1,4 +1,5 @@
 # main.py
+# =======
 from __future__ import annotations
 import os, asyncio, logging
 from pathlib import Path
@@ -18,7 +19,6 @@ if not IS_CLOUD:
     except Exception:
         pass
 
-# === UTILS ===
 def _to_bool(v: str | None, default: bool = False) -> bool:
     return default if v is None else str(v).strip().lower() in ("1", "true", "yes", "on")
 
@@ -27,7 +27,6 @@ def _parse_csv(s: str | None) -> List[str]:
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.17.0")
 
-# === IMPORTS ===
 from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
@@ -49,7 +48,6 @@ except Exception:
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-# === DIRECTORIES ===
 def _ensure_dir(path: str) -> bool:
     try:
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -61,7 +59,6 @@ def _ensure_dir(path: str) -> bool:
 static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
-# === APP ===
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת אפשרי")
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -111,13 +108,17 @@ async def track_metrics(request: Request, call_next):
         metrics_tracker.observe_request(response.status_code, (asyncio.get_event_loop().time() - start) * 1000)
         return response
 
+# ✅ עדכון רשימת ה-routers: מוסיף WS/Orderbook/WS-Health, מסיר ws_stream הלא קיים
 ROUTERS: List[str] = [
     "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
-    "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra", "routes.ws_stream",
-    "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra", "routes.telegram_bot",
-    "routes.telegram_routes", "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
-    "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl", "routes.ui",
-    "routes.backtest", "routes.ui_grid"
+    "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
+    "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
+    "routes.telegram_bot", "routes.telegram_routes",
+    "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
+    "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
+    "routes.ui", "routes.backtest", "routes.ui_grid",
+    # NEW:
+    "routes.orderbook", "routes.ws", "routes.ws_health", "routes.orderflow"
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ROUTERS.append("routes.ai")
