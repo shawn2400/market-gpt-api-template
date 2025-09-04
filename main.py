@@ -1,5 +1,4 @@
-# 🔄 גרסה מעודכנת של main.py (עם תמיכה ב-Telegram Webhook)
-
+# main.py
 from __future__ import annotations
 import os, asyncio, logging
 from pathlib import Path
@@ -11,10 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
-# --- Cloud Detection ---
-IS_CLOUD = bool(
-    os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE")
-)
+IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
 if not IS_CLOUD:
     try:
         from dotenv import load_dotenv
@@ -22,7 +18,7 @@ if not IS_CLOUD:
     except Exception:
         pass
 
-# --- Utils ---
+# === UTILS ===
 def _to_bool(v: str | None, default: bool = False) -> bool:
     return default if v is None else str(v).strip().lower() in ("1", "true", "yes", "on")
 
@@ -31,14 +27,14 @@ def _parse_csv(s: str | None) -> List[str]:
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.17.0")
 
-# --- Imports ---
+# === IMPORTS ===
 from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.auth import extract_token, allow_all, token_matches
 from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync
-from utils.binance_client import futures_balance, fapi_ping, futures_mark_price
+from utils.binance_client import futures_balance, fapi_ping
 from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
@@ -50,11 +46,10 @@ except Exception:
     async def start_user_stream_consumer(): return None
     async def stop_user_stream_consumer(): return None
 
-# --- Logger ---
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-# --- Directory Setup ---
+# === DIRECTORIES ===
 def _ensure_dir(path: str) -> bool:
     try:
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -66,13 +61,11 @@ def _ensure_dir(path: str) -> bool:
 static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
-# --- FastAPI Instance ---
+# === APP ===
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
-
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# --- CORS Setup ---
 CORS_ALLOWED = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
 if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
@@ -86,14 +79,12 @@ app.add_middleware(
     allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
 
-# --- Static Files ---
 try:
     if static_ok and os.access("static", os.R_OK):
         app.mount("/static", StaticFiles(directory="static"), name="static")
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
-# --- Middleware ---
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/ui/dashboard"}
@@ -103,7 +94,7 @@ async def validate_token(request: Request, call_next):
         return await call_next(request)
     if allow_all():
         return await call_next(request)
-    token = extract_token(request, authorization=request.headers.get("Authorization", ""), x_api_key=request.headers.get("X-API-Key"))
+    token = extract_token(request, request.headers.get("Authorization", ""), request.headers.get("X-API-Key"))
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
@@ -120,7 +111,6 @@ async def track_metrics(request: Request, call_next):
         metrics_tracker.observe_request(response.status_code, (asyncio.get_event_loop().time() - start) * 1000)
         return response
 
-# --- Routers ---
 ROUTERS: List[str] = [
     "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
     "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra", "routes.ws_stream",
@@ -145,7 +135,6 @@ def _include_router(path: str) -> None:
 for r in ROUTERS:
     _include_router(r)
 
-# --- Health ---
 @app.get("/")
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -169,47 +158,34 @@ async def readyz():
     except Exception as e:
         return {"ok": False, "error": str(e), "details": details}
 
-# --- Startup / Shutdown ---
 @app.on_event("startup")
 async def startup_event():
     logger.info({"event": "startup", "version": APP_VERSION, "config": dump_config_sanitized()})
-    try:
-        sync_now()
-        start_background_sync()
+    try: sync_now(); start_background_sync()
     except: pass
-    try:
-        asyncio.create_task(auto_price_updater(_parse_csv(os.getenv("SYMS", "BTCUSDT,ETHUSDT"))))
+    try: asyncio.create_task(auto_price_updater(_parse_csv(os.getenv("SYMS", "BTCUSDT,ETHUSDT"))))
     except: pass
-    try:
-        await start_user_stream_consumer()
+    try: await start_user_stream_consumer()
     except: pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    try:
-        await stop_user_stream_consumer()
+    try: await stop_user_stream_consumer()
     except: pass
 
-# --- Executor Control ---
 @app.post("/start-executor")
-async def api_start_executor():
-    start_executor()
-    return {"ok": True}
+async def api_start_executor(): start_executor(); return {"ok": True}
 
 @app.post("/stop-executor")
-async def api_stop_executor():
-    stop_executor()
-    return {"ok": True}
+async def api_stop_executor(): stop_executor(); return {"ok": True}
 
 @app.post("/manage-once")
-async def api_manage_once():
-    await manage_open_trades()
-    return {"ok": True}
+async def api_manage_once(): await manage_open_trades(); return {"ok": True}
 
-# --- Run (for local) ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
