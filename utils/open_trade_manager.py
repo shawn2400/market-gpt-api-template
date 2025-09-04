@@ -21,7 +21,7 @@ from utils.order_hygiene import (
 from utils.binance_client import (
     futures_mark_price,
     get_open_orders,
-    cancel_order,           # ✅ עכשיו זמין מה־binance_client
+    cancel_order,
     futures_position_risk,
 )
 
@@ -32,12 +32,16 @@ def _as_bool(s: Optional[str], default=False) -> bool:
     return str(s).strip().lower() in {"1", "true", "yes", "on"} if s is not None else default
 
 def _as_float(s: Optional[str], default: float) -> float:
-    try: return float(str(s).strip())
-    except: return default
+    try:
+        return float(str(s).strip())
+    except Exception:
+        return default
 
 def _as_int(s: Optional[str], default: int) -> int:
-    try: return int(str(s).strip())
-    except: return default
+    try:
+        return int(str(s).strip())
+    except Exception:
+        return default
 
 # Chop / Momentum params
 CHOP_DETECT_ENABLE     = _as_bool(os.getenv("CHOP_DETECT_ENABLE", "true"), True)
@@ -73,6 +77,7 @@ _last_touch: Dict[str, float] = {}
 
 # ===== Helpers =====
 def _fresh_price(symbol: str) -> Optional[float]:
+    """מחיר חי עם fallback ל־REST"""
     try:
         if is_price_fresh(symbol, max_age_sec=int(os.getenv("PRICE_MAX_AGE_SEC", "10"))):
             return get_price(symbol)
@@ -124,8 +129,180 @@ async def _klines_df(symbol: str) -> pd.DataFrame:
     return df
 
 # ===== Core =====
-# ... (הלוגיקה נשארה בדיוק כמו בגרסה הקודמת שלך, רק בלי בעיות ייבוא)
-# שאר הקובץ נשאר זהה – כולל _ensure_grid_orders, _positions, _manage_symbol, manage_open_trades
+def _ensure_grid_orders(sym: str, side_u: str, entry: float, atr: float, qty: float) -> Optional[str]:
+    try:
+        oo = get_open_orders(sym) or []
+    except Exception as e:
+        logger.warning({"event": "get_open_orders_failed", "symbol": sym, "err": str(e)})
+        oo = []
+
+    ro_tp = [o for o in oo if str(o.get("reduceOnly","")).lower() in ("true","1")
+             and str(o.get("type","")).upper().startswith("TAKE_PROFIT")]
+    if ro_tp:
+        return None
+
+    close_side = _side_to_close(side_u)
+    sgn = 1.0 if side_u in ("BUY","LONG") else -1.0
+    targets = [entry + sgn*GRID_TP1_ATR*atr, entry + sgn*GRID_TP2_ATR*atr, entry + sgn*GRID_TP3_ATR*atr]
+    splits  = [GRID_SPLIT_1, GRID_SPLIT_2, GRID_SPLIT_3]
+    labels  = ["GRID_TP1_RO", "GRID_TP2_RO", "GRID_TP3_RO"]
+
+    changed = []
+    for i in range(3):
+        tgt, pct, lab = targets[i], splits[i], labels[i]
+        if pct <= 0:
+            continue
+        q = max(0.0, qty * pct)
+        px, _ = apply_price_tick_side(tgt, sym, close_side)
+        try:
+            idp = f"grid:{sym}:{i}:{close_side}:{float(px):.8f}:{float(q):.8f}"
+            place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(px),
+                                   qty=float(q), reduce_only=True, idp_key=idp)
+            changed.append(lab)
+        except Exception as e:
+            logger.warning({"event":"grid_tp_place_failed","symbol":sym,"stage":lab,"err":str(e)})
+    return ",".join(changed) if changed else None
+
+def _positions() -> List[Dict[str, Any]]:
+    try:
+        pos = futures_position_risk() or []
+        out=[]
+        for p in pos:
+            amt = float(p.get("positionAmt") or 0.0)
+            if abs(amt) <= 0:
+                continue
+            sym = str(p.get("symbol") or "").upper()
+            entry = float(p.get("entryPrice") or 0.0)
+            lev = float(p.get("leverage") or 1.0)
+            side = "LONG" if amt > 0 else "SHORT"
+            out.append({"symbol": sym, "side": side, "qty": abs(amt), "entry": entry, "leverage": lev})
+        return out
+    except Exception as e:
+        logger.warning({"event":"positions_fetch_failed","err":str(e)})
+        return []
+
+async def _manage_symbol(sym: str, side: str, qty: float, entry: float) -> Dict[str, Any]:
+    side_u = side.upper()
+    close_side = _side_to_close(side_u)
+
+    last = _last_touch.get(sym, 0.0)
+    if (time.time() - last) < MANAGER_COOLDOWN_SEC:
+        return {"symbol": sym, "skipped": "cooldown"}
+
+    px = _fresh_price(sym)
+    if not px or px <= 0.0:
+        return {"symbol": sym, "skipped": "no_price"}
+
+    df = await _klines_df(sym)
+    ind = prepare_indicators_for_backtest(df)
+    if ind.empty:
+        return {"symbol": sym, "skipped": "no_indicators"}
+
+    tail: List[Dict[str, Any]] = [ind.iloc[i].to_dict() for i in range(max(0, len(ind)-50), len(ind))]
+    row = tail[-1]
+    atr = float(row.get("atr") or 0.0)
+    adx = float(row.get("adx") or 0.0)
+    macd_hist = float(row.get("macd_hist") or 0.0)
+    if atr <= 0.0:
+        return {"symbol": sym, "skipped": "atr_zero"}
+
+    grid_info = None
+    if GRID_ENABLE:
+        try:
+            grid_info = _ensure_grid_orders(sym, side_u, entry, atr, qty)
+        except Exception as e:
+            logger.warning({"event":"grid_ensure_error","symbol":sym,"err":str(e)})
+
+    if side_u in ("BUY","LONG"):
+        trail_sl_raw = px - (TRAIL_ATR_MULT * atr)
+        be_px = max(entry, trail_sl_raw)
+        desired_sl, _ = apply_price_tick_side(be_px, sym, close_side)
+    else:
+        trail_sl_raw = px + (TRAIL_ATR_MULT * atr)
+        be_px = min(entry, trail_sl_raw)
+        desired_sl, _ = apply_price_tick_side(be_px, sym, close_side)
+
+    sgn = 1.0 if side_u in ("BUY","LONG") else -1.0
+    base_tp = entry + sgn * 2.0 * atr
+    tp_shift = (MOMENTUM_TP_SHIFT_ATR * atr) if _momentum_ok(side_u, row) else 0.0
+    desired_tp, _ = apply_price_tick_side(base_tp + tp_shift, sym, close_side)
+
+    is_chop = _chop_now(tail)
+    pnl_pct = _pct(entry, px) if side_u in ("BUY","LONG") else _pct(px, entry)
+    chop_action_taken = None
+    if is_chop:
+        if CHOP_ACTION == "to_breakeven" and pnl_pct >= 0.0:
+            desired_sl, _ = apply_price_tick_side(entry, sym, close_side)
+            chop_action_taken = "SL->BE"
+
+    if not _as_bool(os.getenv("ALLOW_MANAGE_OPEN_TRADES", "true"), True):
+        return {"symbol": sym, "skipped": "ALLOW_MANAGE_OPEN_TRADES=false"}
+
+    changed = False
+    errors: List[str] = []
+
+    try:
+        oo = get_open_orders(sym) or []
+    except Exception:
+        oo = []
+    sl_order_id = None
+    tp_orders = []
+    for o in oo:
+        ty = str(o.get("type","")).upper()
+        ro = str(o.get("reduceOnly","")).lower() in ("true","1")
+        if not ro:
+            continue
+        if ty.startswith("STOP"):
+            sl_order_id = o.get("orderId")
+        elif ty.startswith("TAKE_PROFIT"):
+            tp_orders.append(o)
+
+    try:
+        if sl_order_id:
+            try:
+                cancel_order(sym, order_id=sl_order_id)
+            except Exception:
+                pass
+        idp = f"sl:update:{sym}:{close_side}:{float(desired_sl):.8f}:{float(qty):.8f}"
+        place_stop_market_safe(symbol=sym, side=close_side, stop_price=float(desired_sl),
+                               qty=float(qty), reduce_only=True, idp_key=idp)
+        changed = True
+    except Exception as e:
+        errors.append(f"sl_update_failed:{e}")
+
+    if GRID_ENABLE is False and not tp_orders:
+        try:
+            idp = f"tp:global:{sym}:{close_side}:{float(desired_tp):.8f}:{float(qty):.8f}"
+            place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(desired_tp),
+                                   qty=float(qty), reduce_only=True, idp_key=idp)
+            changed = True
+        except Exception as e:
+            errors.append(f"tp_update_failed:{e}")
+
+    _last_touch[sym] = time.time()
+    return {
+        "symbol": sym, "side": side_u, "entry": entry, "price": px,
+        "pnl_pct": round(pnl_pct, 4), "adx": round(adx, 3),
+        "macd_hist": round(macd_hist, 5), "atr": round(atr, 6),
+        "is_chop": bool(is_chop), "desired_sl": float(desired_sl), "desired_tp": float(desired_tp),
+        "grid": grid_info, "changed": changed, "chop_action": chop_action_taken, "errors": errors,
+    }
+
+# ===== API =====
+async def manage_open_trades() -> Dict[str, Any]:
+    pos = _positions()
+    if not pos:
+        return {"ok": True, "managed": 0, "details": [], "note": "no_positions"}
+    details=[]
+    for p in pos:
+        try:
+            res = await _manage_symbol(p["symbol"], p["side"], float(p["qty"]), float(p["entry"]))
+            details.append(res)
+        except Exception as e:
+            details.append({"symbol": p.get("symbol","?"), "error": str(e)})
+    changed = sum(1 for d in details if d.get("changed"))
+    return {"ok": True, "managed": len(details), "changed": changed, "details": details}
+
 
 
 
