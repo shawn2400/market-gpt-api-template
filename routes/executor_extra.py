@@ -4,10 +4,9 @@ from fastapi import APIRouter, Depends
 from typing import List, Dict, Any
 
 from utils.auth import require_api_key
-from utils.binance_client import futures_exchange_info_safe, futures_open_positions
+from utils.binance_client import futures_exchange_info_safe, get_open_positions
 from utils.trade_manager import get_trade_history
 
-# החזרתי prefix ל-/executor כדי שיהיה עקבי עם הבדיקות
 router = APIRouter(
     prefix="/executor",
     tags=["ExecutorExtra"],
@@ -23,12 +22,13 @@ def executor_symbols() -> List[str]:
 @router.get("/open-positions")
 def open_positions() -> List[Dict[str, Any]]:
     """פוזיציות פתוחות"""
-    return futures_open_positions() or []
+    return get_open_positions() or []
 
 @router.get("/trades-extra")
 def executor_trades(limit: int = 50) -> List[Dict[str, Any]]:
     """היסטוריית טריידים מה־trade_manager"""
     return get_trade_history(limit=limit)
+
 
 
 
