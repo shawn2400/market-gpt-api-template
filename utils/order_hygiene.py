@@ -1,157 +1,132 @@
-# utils/order_hygiene.py
+# utils/get_klines.py
 from __future__ import annotations
-import logging
-from typing import Dict, Any
+import asyncio, time
+from typing import Optional, List, Dict, Any
+import httpx, pandas as pd
+from utils.symbols import normalize_symbol
 
-from utils.binance_client import (
-    futures_create_order,
-    futures_cancel_all_orders,
-    get_symbol_info,
-    DEFAULT_MIN_NOTIONAL,
-)
+BINANCE_FAPI = "https://fapi.binance.com"
+BINANCE_SPOT = "https://api.binance.com"
 
-logger = logging.getLogger("algogpt.order_hygiene")
+_INVALID_TTL = 900
+_invalid_cache: Dict[str, float] = {}
+
+_INTERVAL_SEC = {
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400
+}
 
 
-# ===================== בדיקת מינימוםים =====================
-def check_minimums(symbol: str, qty: float) -> bool:
-    """
-    בדיקה אם הכמות עומדת בדרישות Binance (minQty, minNotional).
-    """
+def _cache_key(market: str, symbol: str) -> str:
+    return f"{market}:{symbol.upper()}"
+
+
+def _is_invalid(market: str, symbol: str) -> bool:
+    return _invalid_cache.get(_cache_key(market, symbol), 0.0) > time.time()
+
+
+def _mark_invalid(market: str, symbol: str) -> None:
+    _invalid_cache[_cache_key(market, symbol)] = time.time() + _INVALID_TTL
+
+
+def _endpoint_for(market_type: str) -> str:
+    return f"{BINANCE_SPOT}/api/v3/klines" if str(market_type).lower() == "spot" else f"{BINANCE_FAPI}/fapi/v1/klines"
+
+
+def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
+    cols = [
+        "open_time","open","high","low","close","volume",
+        "close_time","quote_asset_volume","number_of_trades",
+        "taker_buy_base","taker_buy_quote","ignore"
+    ]
+    df = pd.DataFrame(kl, columns=cols)
+    for c in ["open","high","low","close","volume","quote_asset_volume","taker_buy_base","taker_buy_quote"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
+    df = df.set_index("open_time", drop=False)
+    df["timestamp"] = df["close_time"]
+    return df
+
+
+async def _rest_klines_async(symbol: str, interval: str, limit: int, market_type: str) -> pd.DataFrame:
+    market = "spot" if str(market_type).lower() == "spot" else "futures"
+    sym_in = (symbol or "").upper().strip()
+    if not sym_in:
+        raise ValueError("symbol is required")
+    if _is_invalid(market, sym_in):
+        return pd.DataFrame()
     try:
-        info = get_symbol_info(symbol)
-        if not info:
-            logger.warning("[order_hygiene] no symbol info for %s", symbol)
-            return False
-
-        filters = {f["filterType"]: f for f in info.get("filters", [])}
-
-        # מינימום כמות
-        min_qty = float(filters.get("LOT_SIZE", {}).get("minQty", 0))
-        if qty < min_qty:
-            logger.warning("[order_hygiene] qty %.8f < minQty %.8f for %s", qty, min_qty, symbol)
-            return False
-
-        # מינימום ערך עסקה (notional)
-        min_notional = float(filters.get("MIN_NOTIONAL", {}).get("notional", DEFAULT_MIN_NOTIONAL))
-        mark_price = float(info.get("pricePrecision", 1))  # fallback פשוט
-        notional_val = qty * mark_price
-        if notional_val < min_notional:
-            logger.warning(
-                "[order_hygiene] notional %.4f < minNotional %.4f for %s",
-                notional_val,
-                min_notional,
-                symbol,
-            )
-            return False
-
-        return True
-    except Exception as e:
-        logger.error("[order_hygiene] check_minimums error: %s", e)
-        return False
+        norm = normalize_symbol(sym_in) if market == "futures" else sym_in
+    except Exception:
+        _mark_invalid(market, sym_in)
+        raise
+    url = _endpoint_for(market)
+    params = {"symbol": norm, "interval": interval, "limit": int(limit)}
+    async with httpx.AsyncClient(timeout=8.0) as x:
+        r = await x.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list) or len(data) == 0:
+            return pd.DataFrame()
+    return _to_dataframe(data)
 
 
-# ===================== ביטול קונפליקטים =====================
-def cancel_if_conflict(symbol: str, side: str) -> None:
-    """
-    מבטל הוראות פתוחות קודמות שיכולות להתנגש בכניסה החדשה.
-    """
+def _resample_ohlcv(df_small: pd.DataFrame, target_interval: str) -> pd.DataFrame:
+    if df_small is None or df_small.empty:
+        return pd.DataFrame()
+    rule = {"1h": "1H","2h": "2H","4h": "4H","1d": "1D"}.get(target_interval.lower())
+    if not rule:
+        return df_small
+    if not isinstance(df_small.index, pd.DatetimeIndex):
+        df_small = df_small.set_index("open_time")
+    agg = df_small.resample(rule, origin="start").agg({
+        "open":"first","high":"max","low":"min","close":"last","volume":"sum"
+    }).dropna()
+    agg["open_time"] = agg.index
+    agg["close_time"] = agg.index + (
+        pd.to_timedelta(_INTERVAL_SEC[target_interval.lower()], unit="s") - pd.to_timedelta(1,"ms")
+    )
+    agg["timestamp"] = agg["close_time"]
+    return agg
+
+
+async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
+    interval = (interval or "15m").lower()
     try:
-        res = futures_cancel_all_orders(symbol=symbol)
-        if res.get("ok"):
-            logger.info("[order_hygiene] cancelled existing orders for %s side=%s", symbol, side)
-        else:
-            logger.warning("[order_hygiene] cancel_if_conflict failed for %s: %s", symbol, res)
-    except Exception as e:
-        logger.warning("[order_hygiene] cancel_if_conflict error: %s", e)
+        df = await _rest_klines_async(symbol, interval, limit, market_type)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
+    if interval in ("1h","2h","4h","1d"):
+        for base in ("5m","1m"):
+            try:
+                factor = max(1, int(_INTERVAL_SEC[interval] // _INTERVAL_SEC[base]))
+                need = min(1500, limit * factor + 5)
+                small = await _rest_klines_async(symbol, base, need, market_type)
+                if small.empty:
+                    continue
+                agg = _resample_ohlcv(small, interval)
+                if not agg.empty:
+                    return agg.tail(limit)
+            except Exception:
+                continue
+    return pd.DataFrame()
 
 
-# ===================== Limit Order =====================
-def place_limit_order_safe(
-    *,
-    symbol: str,
-    side: str,
-    quantity: str,
-    price: str,
-    reduce_only: bool = False,
-    position_side: str = "BOTH",
-) -> Dict[str, Any]:
+def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     try:
-        res = futures_create_order(
-            symbol=symbol,
-            side=side.upper(),
-            type="LIMIT",
-            quantity=quantity,
-            price=price,
-            timeInForce="GTC",
-            reduceOnly=reduce_only,
-            positionSide=position_side,
-        )
-        return res
-    except Exception as e:
-        logger.error("[order_hygiene] limit order failed: %s", e)
-        return {"ok": False, "error": str(e)}
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        return None
+    return asyncio.run(get_klines(symbol, interval, limit, market_type))
 
 
-# ===================== Stop-Market (SL) =====================
-def place_stop_market_safe(
-    *,
-    symbol: str,
-    side: str,
-    quantity: str,
-    stop_price: str,
-    reduce_only: bool = True,
-    position_side: str = "BOTH",
-) -> Dict[str, Any]:
-    try:
-        res = futures_create_order(
-            symbol=symbol,
-            side=side.upper(),
-            type="STOP_MARKET",
-            quantity=quantity,
-            stopPrice=stop_price,
-            reduceOnly=reduce_only,
-            positionSide=position_side,
-        )
-        return res
-    except Exception as e:
-        logger.error("[order_hygiene] stop-market failed: %s", e)
-        return {"ok": False, "error": str(e)}
-
-
-# ===================== Take-Profit =====================
-def place_take_profit_safe(
-    *,
-    symbol: str,
-    side: str,
-    quantity: str,
-    tp_price: str,
-    reduce_only: bool = True,
-    position_side: str = "BOTH",
-) -> Dict[str, Any]:
-    try:
-        res = futures_create_order(
-            symbol=symbol,
-            side=side.upper(),
-            type="TAKE_PROFIT_MARKET",
-            quantity=quantity,
-            stopPrice=tp_price,
-            reduceOnly=reduce_only,
-            positionSide=position_side,
-        )
-        return res
-    except Exception as e:
-        logger.error("[order_hygiene] take-profit failed: %s", e)
-        return {"ok": False, "error": str(e)}
-
-
-__all__ = [
-    "check_minimums",
-    "cancel_if_conflict",
-    "place_limit_order_safe",
-    "place_stop_market_safe",
-    "place_take_profit_safe",
-]
+async def aget_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
+    return await get_klines(symbol, interval, limit, market_type)
 
 
 
