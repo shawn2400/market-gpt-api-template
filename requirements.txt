@@ -33,8 +33,12 @@ prometheus-client==0.20.0
 # Telegram Bot
 python-telegram-bot==20.6
 
+# PDF Reports
+fpdf==1.7.2
+
 # Tests
 pytest==8.2.2
+
 
 
 
