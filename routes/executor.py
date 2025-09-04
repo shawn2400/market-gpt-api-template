@@ -1,4 +1,4 @@
-# routes/export.py
+# routes/executor.py
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any
@@ -8,13 +8,13 @@ from utils.binance_client import futures_mark_price, futures_balance, futures_op
 
 router = APIRouter(
     prefix="/executor",
-    tags=["Export"],
+    tags=["Executor"],
     dependencies=[Depends(require_api_key)],
 )
 
 @router.get("/status")
 def executor_status() -> Dict[str, Any]:
-    """סטטוס כולל פוזיציות פתוחות ויתרה (גרסת Export)."""
+    """סטטוס כללי של ה-Executor כולל פוזיציות פתוחות ויתרה."""
     try:
         balance = futures_balance()
         positions = futures_open_positions()
@@ -24,7 +24,7 @@ def executor_status() -> Dict[str, Any]:
 
 @router.get("/mark_price")
 def get_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict[str, Any]:
-    """מחזיר Mark Price חי מסימבול מסוים (Export)."""
+    """מחזיר Mark Price חי מסימבול מסוים."""
     try:
         price = futures_mark_price(symbol)
         if not price:
@@ -32,6 +32,7 @@ def get_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict
         return {"ok": True, "symbol": symbol.upper(), "mark_price": float(price)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"get_mark_price failed: {e}")
+
 
 
 
