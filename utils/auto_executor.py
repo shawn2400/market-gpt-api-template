@@ -8,11 +8,11 @@ import pandas as pd
 
 from utils import config as cfg
 from utils.indicators import prepare_indicators_for_backtest
-from utils.get_klines import get_klines_sync   # ✅ תיקון — שימוש נכון
+from utils.get_klines import get_klines_sync
 from utils.anchor import evaluate_anchor
-from utils.trade_executor import execute_trade_live
+from utils.trade_executor import execute_trade_live  # ✅ סינכרוני
 
-# Circuit-breaker & Scheduler: fallback שקט אם אין מודולים
+# Circuit-breaker & Scheduler
 try:
     from utils.http_client import circuit_breaker_open
 except Exception:
@@ -22,7 +22,7 @@ except Exception:
 try:
     from utils.symbol_scheduler import SymbolScheduler
 except Exception:
-    class SymbolScheduler:  # type: ignore
+    class SymbolScheduler:  # fallback
         def __init__(self, symbols: List[str], batch_size: Optional[int] = None):
             self.syms = list(dict.fromkeys([s.upper() for s in symbols if s]))
             self.i = 0
@@ -66,31 +66,22 @@ def _decide_side(row: Dict[str, Any]) -> Optional[str]:
     e21, e50 = row.get("ema_21"), row.get("ema_50")
     if e21 is None or e50 is None:
         return None
-    if e21 > e50:
-        return "LONG"
-    if e21 < e50:
-        return "SHORT"
+    if e21 > e50: return "LONG"
+    if e21 < e50: return "SHORT"
     return None
 
 def _quality_score(row: Dict[str, Any], side: str) -> float:
     score = 0.0
-    if side == "LONG" and row.get("ema_21", 0) > row.get("ema_50", 0):
-        score += 3.0
-    if side == "SHORT" and row.get("ema_21", 0) < row.get("ema_50", 0):
-        score += 3.0
+    if side == "LONG" and row.get("ema_21", 0) > row.get("ema_50", 0): score += 3.0
+    if side == "SHORT" and row.get("ema_21", 0) < row.get("ema_50", 0): score += 3.0
     hist = float(row.get("macd_hist") or 0.0)
-    if (side == "LONG" and hist > 0) or (side == "SHORT" and hist < 0):
-        score += 2.0
+    if (side == "LONG" and hist > 0) or (side == "SHORT" and hist < 0): score += 2.0
     adx_v = float(row.get("adx") or 0.0)
-    if adx_v >= 30:
-        score += 3.0
-    elif adx_v >= 25:
-        score += 2.5
-    elif adx_v >= 20:
-        score += 1.5
+    if adx_v >= 30: score += 3.0
+    elif adx_v >= 25: score += 2.5
+    elif adx_v >= 20: score += 1.5
     rsi_v = float(row.get("rsi") or 50.0)
-    if 42 <= rsi_v <= 68:
-        score += 1.0
+    if 42 <= rsi_v <= 68: score += 1.0
     return max(0.0, min(10.0, score))
 
 def _pick_leverage(adx_v: float) -> int:
@@ -129,8 +120,7 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         row = ind.iloc[-1].to_dict()
 
         side = _decide_side(row)
-        if not side:
-            return None
+        if not side: return None
 
         anchor = evaluate_anchor(side)
         if not getattr(anchor, "allow", True):
@@ -159,12 +149,21 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
 
 async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     dry = not getattr(cfg, "EXECUTE_TRADES", False)
-    resp = await execute_trade_live(
-        symbol=plan["symbol"], side=plan["side"],
-        budget=float(getattr(cfg, "MAX_TRADE_BUDGET", 100.0)),
-        leverage=int(plan["leverage"]), entry=float(plan["entry"]),
-        sl=float(plan["sl"]), tp=float(plan["tp"]), dry_run=dry,
+
+    # ✅ wrap sync in threadpool
+    loop = asyncio.get_event_loop()
+    resp = await loop.run_in_executor(
+        None,
+        lambda: execute_trade_live(
+            symbol=plan["symbol"], side="BUY" if plan["side"] == "LONG" else "SELL",
+            budget=float(getattr(cfg, "MAX_TRADE_BUDGET", 100.0)),
+            leverage=int(plan["leverage"]),
+            sl=float(plan["sl"]), tp=float(plan["tp"]),
+            position_side="BOTH",
+            reduce_only=False,
+        ),
     )
+
     if resp.get("ok"):
         _last_trade_ts[plan["symbol"]] = time.time()
     return resp
@@ -177,8 +176,7 @@ async def _scan_batch(symbols: List[str], max_trades: int) -> int:
     async def worker(sym: str):
         async with sem:
             plan = await _scan_symbol(sym)
-            if plan:
-                results.append(plan)
+            if plan: results.append(plan)
 
     tasks = [asyncio.create_task(worker(s)) for s in symbols]
     try:
@@ -188,23 +186,20 @@ async def _scan_batch(symbols: List[str], max_trades: int) -> int:
 
     results.sort(key=lambda p: p.get("score", 0.0), reverse=True)
     for plan in results:
-        if trades_sent >= max_trades:
-            break
+        if trades_sent >= max_trades: break
         resp = await _execute_plan(plan)
         _log("trade_attempt", symbol=plan["symbol"], plan={"side": plan["side"], "entry": plan["entry"]},
              resp_ok=bool(resp.get("ok")))
-        if resp.get("ok"):
-            trades_sent += 1
+        if resp.get("ok"): trades_sent += 1
     return trades_sent
 
-# ======================== לולאה ראשית ========================
+# ======================== Main Loop ========================
 async def auto_scan_and_trade():
     global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
     EXECUTOR_RUNNING = True
     try:
         wl = [s.upper() for s in getattr(cfg, "WATCHLIST", ["BTCUSDT","ETHUSDT"]) if isinstance(s, str)]
-        if "BTCUSDT" not in wl:
-            wl.insert(0, "BTCUSDT")
+        if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
 
         while EXECUTOR_RUNNING:
@@ -217,13 +212,6 @@ async def auto_scan_and_trade():
 
             batch = sched.next_batch()
             await _scan_batch(batch, MAX_TRADES_PER_TICK)
-
-            try:
-                if getattr(cfg, "ALLOW_MANAGE_OPEN_TRADES", True):
-                    from utils.open_trade_manager import manage_open_trades
-                    _ = await manage_open_trades()
-            except Exception as e:
-                _log("manage_call_error", error=str(e), level="WARNING")
 
             dt = time.time() - tic
             sleep_s = max(0.0, SCAN_INTERVAL - dt)
@@ -255,6 +243,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
