@@ -294,6 +294,14 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
 def get_futures_client() -> Client:
     return client
 
+# --------------------------------------------------------------------
+# Compatibility alias
+# --------------------------------------------------------------------
+def get_open_positions() -> Optional[List[Dict[str, Any]]]:
+    """Alias ל-futures_open_positions כדי לשמור תאימות לראוטרים."""
+    return futures_open_positions()
+
+
 
 
 
