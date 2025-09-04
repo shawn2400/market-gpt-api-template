@@ -48,7 +48,7 @@ from utils.response_limits import ResponseSizeLimiter
 from utils.json_logger import setup_json_logging
 from utils.auth import extract_token, allow_all, token_matches
 from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync
-from utils.binance_client import futures_balance
+from utils.binance_client import futures_balance, fapi_ping, futures_mark_price
 from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
@@ -231,14 +231,37 @@ async def health():
 
 @app.get("/readyz")
 async def readyz():
+    details: dict[str, any] = {}
     try:
         ensure_fresh_sync()
-        ex_ok = bool(futures_balance())
+        # Binance Ping
+        try:
+            details["ping_ok"] = bool(fapi_ping())
+        except Exception as e:
+            details["ping_ok"] = False
+            details["ping_error"] = str(e)
+
+        # Balance check
+        try:
+            bal = futures_balance()
+            details["balance_ok"] = isinstance(bal, list)
+        except Exception as e:
+            details["balance_ok"] = False
+            details["balance_error"] = str(e)
+
+        # Prices
         syms = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
-        prices_ok = all(is_price_fresh(sym) for sym in syms)
-        return {"ok": ex_ok and prices_ok}
+        prices_ok = True
+        for sym in syms:
+            ok = is_price_fresh(sym)
+            details[f"price_{sym}"] = ok
+            if not ok:
+                prices_ok = False
+
+        overall = details.get("ping_ok") and details.get("balance_ok") and prices_ok
+        return {"ok": bool(overall), "details": details}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "details": details}
 
 
 @app.on_event("startup")
