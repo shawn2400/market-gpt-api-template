@@ -1,4 +1,5 @@
 # utils/get_klines.py
+# ===================
 from __future__ import annotations
 import asyncio, time
 from typing import Optional, List, Dict, Any
@@ -92,6 +93,10 @@ def _resample_ohlcv(df_small: pd.DataFrame, target_interval: str) -> pd.DataFram
 
 
 async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
+    """
+    API יציב: תומך market_type="futures"/"spot".
+    מיישר בעיית TypeError שראית בקריאות עם פרמטר market.
+    """
     interval = (interval or "15m").lower()
     try:
         df = await _rest_klines_async(symbol, interval, limit, market_type)
@@ -117,9 +122,7 @@ async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: 
 
 def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     """
-    קריאה סינכרונית בטוחה ל־get_klines.
-    אם יש event loop פעיל (FastAPI/uvicorn) → נריץ עם run_coroutine_threadsafe,
-    כדי למנוע RuntimeError או ריסטרט ל־SHELL.
+    סינכרוני בטוח: פועל גם כשיש event loop (FastAPI) וגם כשאין.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -129,7 +132,6 @@ def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: s
             )
             return fut.result(timeout=10)
     except RuntimeError:
-        # אין event loop → מריצים רגיל
         return asyncio.run(get_klines(symbol, interval, limit, market_type))
     except Exception as e:
         print(f"[get_klines_sync] error: {e}")
@@ -138,6 +140,7 @@ def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: s
 
 async def aget_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> Optional[pd.DataFrame]:
     return await get_klines(symbol, interval, limit, market_type)
+
 
 
 
