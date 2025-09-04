@@ -1,16 +1,16 @@
 # utils/trade_models.py
 from __future__ import annotations
-import math
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import pytz
 
+__all__ = ["TradeProposal", "TradeETA", "summarize"]
 
 @dataclass
 class TradeProposal:
     symbol: str
-    side: str  # LONG/SHORT
+    side: str
     entry: float
     sl: float
     tp1: float
@@ -42,7 +42,6 @@ class TradeProposal:
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
-
 @dataclass
 class TradeETA:
     tz: str = "Asia/Jerusalem"
@@ -58,10 +57,6 @@ class TradeETA:
         now_local = datetime.now(pytz.timezone(tzname)).strftime("%Y-%m-%d %H:%M:%S")
         return cls(tz=tzname, now_local=now_local)
 
-
-# --------------------------------------------------------------------
-# 📊 Formatter
-# --------------------------------------------------------------------
 def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
     rr = tp.risk_rr()
     rr1_s = f"{rr['rr1']:.2f}" if rr.get("rr1") else "—"
@@ -97,8 +92,6 @@ def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
         (f"סיבה/תקציר: {why}" if why else ""),
     ]
     return "\n".join([p for p in parts if p])
-
-
 
 
 
