@@ -1,56 +1,58 @@
-# utils/order_hygiene.py
+# ✅ order_hygiene.py — גרסה מעודכנת עם fallback חכם, לוגים רכים, בלי קריסה
 from __future__ import annotations
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from utils.binance_client import (
     futures_create_order,
     futures_cancel_all_orders,
     get_symbol_info,
-    futures_mark_price,
+    get_price,
     DEFAULT_MIN_NOTIONAL,
 )
 
 logger = logging.getLogger("algogpt.order_hygiene")
 
-
 # ===================== בדיקת מינימוםים =====================
-def check_minimums(symbol: str, qty: float) -> tuple[bool, str]:
+def check_minimums(symbol: str, qty: float) -> bool:
     """
-    בדיקה אם הכמות עומדת בדרישות Binance (minQty, minNotional).
-    מחזיר (True/False, reason).
+    בדיקה אם הכמות עומדת בדרישות Binance (minQty, minNotional), עם fallback בטוח.
     """
     try:
         info = get_symbol_info(symbol)
         if not info:
-            return False, f"no_symbol_info:{symbol}"
+            logger.warning("[order_hygiene] no symbol info for %s", symbol)
+            return False
 
         filters = {f["filterType"]: f for f in info.get("filters", [])}
 
-        # --- מינימום כמות ---
         min_qty = float(filters.get("LOT_SIZE", {}).get("minQty", 0))
-        if qty < min_qty:
-            return False, f"qty {qty} < minQty {min_qty}"
-
-        # --- מינימום ערך עסקה ---
         min_notional = float(filters.get("MIN_NOTIONAL", {}).get("notional", DEFAULT_MIN_NOTIONAL))
-        price = futures_mark_price(symbol) or 0.0
+
+        if qty < min_qty:
+            logger.warning("[order_hygiene] qty %.8f < minQty %.8f for %s", qty, min_qty, symbol)
+            return False
+
+        # בדיקת notional עם fallback למחיר חי
+        try:
+            price = float(get_price(symbol) or 0)
+        except Exception as e:
+            logger.warning("[order_hygiene] get_price failed for %s: %s", symbol, e)
+            price = float(info.get("pricePrecision", 1))  # fallback גס
+
         notional_val = qty * price
-
         if notional_val < min_notional:
-            return False, f"notional {notional_val:.4f} < minNotional {min_notional}"
+            logger.warning("[order_hygiene] notional %.4f < minNotional %.4f for %s", notional_val, min_notional, symbol)
+            return False
 
-        return True, "ok"
+        return True
     except Exception as e:
         logger.error("[order_hygiene] check_minimums error: %s", e)
-        return False, f"exception:{e}"
+        return False
 
 
 # ===================== ביטול קונפליקטים =====================
 def cancel_if_conflict(symbol: str, side: str) -> None:
-    """
-    מבטל הוראות פתוחות קודמות שיכולות להתנגש בכניסה החדשה.
-    """
     try:
         res = futures_cancel_all_orders(symbol=symbol)
         if res.get("ok"):
@@ -61,11 +63,9 @@ def cancel_if_conflict(symbol: str, side: str) -> None:
         logger.warning("[order_hygiene] cancel_if_conflict error: %s", e)
 
 
-# ===================== Limit Order =====================
-def place_limit_order_safe(
-    *, symbol: str, side: str, quantity: str, price: str,
-    reduce_only: bool = False, position_side: str = "BOTH"
-) -> Dict[str, Any]:
+# ===================== פקודות מסחר =====================
+def place_limit_order_safe(*, symbol: str, side: str, quantity: str, price: str,
+                            reduce_only: bool = False, position_side: str = "BOTH") -> Dict[str, Any]:
     try:
         return futures_create_order(
             symbol=symbol,
@@ -81,12 +81,8 @@ def place_limit_order_safe(
         logger.error("[order_hygiene] limit order failed: %s", e)
         return {"ok": False, "error": str(e)}
 
-
-# ===================== Stop-Market (SL) =====================
-def place_stop_market_safe(
-    *, symbol: str, side: str, quantity: str, stop_price: str,
-    reduce_only: bool = True, position_side: str = "BOTH"
-) -> Dict[str, Any]:
+def place_stop_market_safe(*, symbol: str, side: str, quantity: str, stop_price: str,
+                            reduce_only: bool = True, position_side: str = "BOTH") -> Dict[str, Any]:
     try:
         return futures_create_order(
             symbol=symbol,
@@ -101,12 +97,8 @@ def place_stop_market_safe(
         logger.error("[order_hygiene] stop-market failed: %s", e)
         return {"ok": False, "error": str(e)}
 
-
-# ===================== Take-Profit =====================
-def place_take_profit_safe(
-    *, symbol: str, side: str, quantity: str, tp_price: str,
-    reduce_only: bool = True, position_side: str = "BOTH"
-) -> Dict[str, Any]:
+def place_take_profit_safe(*, symbol: str, side: str, quantity: str, tp_price: str,
+                            reduce_only: bool = True, position_side: str = "BOTH") -> Dict[str, Any]:
     try:
         return futures_create_order(
             symbol=symbol,
@@ -129,6 +121,7 @@ __all__ = [
     "place_stop_market_safe",
     "place_take_profit_safe",
 ]
+
 
 
 
