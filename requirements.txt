@@ -36,6 +36,11 @@ python-telegram-bot==20.6
 # PDF Reports
 fpdf==1.7.2
 
+# Extra (נדרש עבור generate_logo / גרפים / WS)
+Pillow==10.4.0
+matplotlib==3.9.2
+aiohttp==3.9.5
+
 # Tests
 pytest==8.2.2
 
