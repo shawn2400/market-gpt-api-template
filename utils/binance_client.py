@@ -127,9 +127,8 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 # --------------------------------------------------------------------
-# Orders
+# Orders (place_limit_order, cancel_order וכו' נשארים כמו אצלך)
 # --------------------------------------------------------------------
-# ... (כל שאר הפונקציות - place_limit_order, cancel_order וכו' נשארות ללא שינוי)
 
 # --------------------------------------------------------------------
 # Leverage
@@ -147,13 +146,6 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
 
 def get_futures_client() -> Client:
     return client
-
-# --------------------------------------------------------------------
-# Compatibility alias
-# --------------------------------------------------------------------
-def get_open_positions() -> Optional[List[Dict[str, Any]]]:
-    """Alias לשמירה על תאימות ל־routes"""
-    return futures_open_positions()
 
 
 
