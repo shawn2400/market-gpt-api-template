@@ -1,0 +1,8 @@
+{
+  "trade_card_long": "🟢 *LONG* {symbol}\n• Entry: {entry}\n• SL: {sl}\n• TP1/2/3: {tp1}/{tp2}/{tp3}\n• Lev: {lev}×  | RR≈{rr}\n• Interval: {interval}\n\nאשר? /approve {trade_id}",
+  "trade_card_short": "🔴 *SHORT* {symbol}\n• Entry: {entry}\n• SL: {sl}\n• TP1/2/3: {tp1}/{tp2}/{tp3}\n• Lev: {lev}×  | RR≈{rr}\n• Interval: {interval}\n\nאשר? /approve {trade_id}",
+  "breakeven_move": "🔒 SL הוזז ל־BE עבור {symbol} (מ־{old_sl} ל־{new_sl}) — ניהול סיכונים.",
+  "tp_hit": "✅ TP{tpn} פגע עבור {symbol} במחיר {price}.",
+  "sl_hit": "⛔️ SL פגע עבור {symbol} במחיר {price}.",
+  "status_line": "📈 {symbol} | PnL: {pnl_pct}% | Size: {qty} | Entry: {entry} | SL: {sl} | TP: {tp1}/{tp2}/{tp3}"
+}
