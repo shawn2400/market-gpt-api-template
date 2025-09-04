@@ -1,4 +1,5 @@
 # utils/pnl_summary.py
+# ====================
 from __future__ import annotations
 import json, os, time
 from pathlib import Path
@@ -8,12 +9,18 @@ from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 TZ = ZoneInfo(os.getenv("TZ", "Asia/Jerusalem"))
 
-_CANDIDATE_FILES = [
+# ✅ הוספנו תמיכה ב-TRADES_LOG_PATH וב-logs/*
+_ENV_TRADES_LOG = (os.getenv("TRADES_LOG_PATH") or "").strip()
+_CANDIDATE_FILES_RAW = [
+    _ENV_TRADES_LOG if _ENV_TRADES_LOG else None,
     "pnl_tracker.json",
     "data/pnl_tracker.json",
+    "logs/pnl_tracker.json",
     "trades_log.json",
     "data/trades_log.json",
+    "logs/trades_log.json",
 ]
+_CANDIDATE_FILES = [p for p in _CANDIDATE_FILES_RAW if p]
 
 def _load_json_candidates() -> List[Dict[str, Any]]:
     """Load trades-like records from known files. Returns a flat list of dicts."""
@@ -36,7 +43,6 @@ def _load_json_candidates() -> List[Dict[str, Any]]:
                         v2["_day_key"] = k
                         items.append(v2)
         except Exception:
-            # ignore and continue
             continue
     return items
 
@@ -47,23 +53,19 @@ def _parse_ts(rec: Dict[str, Any]) -> Optional[datetime]:
         val = rec.get(k)
         if val is None:
             continue
-        # Try epoch (sec or ms)
         try:
             if isinstance(val, (int, float)):
-                # assume seconds; if too large, treat as ms
-                if val > 1e12:  # definitely ms
+                if val > 1e12:
                     dt = datetime.fromtimestamp(val / 1000.0, TZ)
-                elif val > 1e10:  # probably ms
+                elif val > 1e10:
                     dt = datetime.fromtimestamp(val / 1000.0, TZ)
                 else:
                     dt = datetime.fromtimestamp(val, TZ)
                 return dt
         except Exception:
             pass
-        # Try ISO strings or YYYY-MM-DD
         if isinstance(val, str):
             s = val.strip()
-            # YYYY-MM-DD only → take 23:59 that day to include in group
             if len(s) == 10 and s[4] == "-" and s[7] == "-":
                 try:
                     d = datetime.fromisoformat(s)
@@ -71,7 +73,6 @@ def _parse_ts(rec: Dict[str, Any]) -> Optional[datetime]:
                 except Exception:
                     pass
             try:
-                # auto parse ISO
                 d = datetime.fromisoformat(s.replace("Z", "+00:00"))
                 if d.tzinfo is None:
                     d = d.replace(tzinfo=TZ)
@@ -111,18 +112,8 @@ def _day_key(dt: datetime) -> str:
 
 def get_pnl_summary(limit_days: int = 30) -> Dict[str, Any]:
     """
-    Compute PnL summary for the last <limit_days> days (TZ-aware).
-    Returns schema:
-    {
-      "total_trades": int,
-      "realized_pnl_usd": float,
-      "win_rate": float [0..100],
-      "days": [{"day": "YYYY-MM-DD", "count": int, "pnl": float}],
-      "symbols": [{"symbol": "BTCUSDT", "count": int, "pnl": float}],
-      "sampled_days": int,
-      "source_files_checked": [...],
-      "note": str
-    }
+    מחזיר תקציר PnL לחלון הימים המבוקש.
+    ✅ תומך כעת גם ב-logs/trades_log.json וגם ב-TRADES_LOG_PATH.
     """
     items = _load_json_candidates()
     if not items:
@@ -140,7 +131,6 @@ def get_pnl_summary(limit_days: int = 30) -> Dict[str, Any]:
     now = datetime.now(TZ)
     cutoff = now - timedelta(days=max(1, int(limit_days)))
 
-    # normalize & filter
     norm: List[Dict[str, Any]] = []
     for rec in items:
         dt = _parse_ts(rec) or now
@@ -169,12 +159,10 @@ def get_pnl_summary(limit_days: int = 30) -> Dict[str, Any]:
             "note": "no trades in time window",
         }
 
-    # aggregates
     realized = sum(x["pnl"] for x in norm)
     wins = sum(1 for x in norm if x["pnl"] > 0)
     win_rate = 100.0 * wins / total if total > 0 else 0.0
 
-    # by day
     agg_days: Dict[str, Dict[str, Any]] = {}
     for x in norm:
         d = _day_key(x["ts"])
@@ -182,7 +170,6 @@ def get_pnl_summary(limit_days: int = 30) -> Dict[str, Any]:
         a["count"] += 1
         a["pnl"] += float(x["pnl"])
 
-    # by symbol
     agg_sym: Dict[str, Dict[str, Any]] = {}
     for x in norm:
         s = x["symbol"]
@@ -204,7 +191,6 @@ def get_pnl_summary(limit_days: int = 30) -> Dict[str, Any]:
         "note": "computed from available local JSON files",
     }
 
-# Optional helper kept for backwards compatibility with drafts you shared
 def summarize_trades(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Normalize a given list of trades to a minimal schema (no pandas)."""
     out: List[Dict[str, Any]] = []
@@ -218,6 +204,7 @@ def summarize_trades(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "timestamp": (_parse_ts(rec) or datetime.now(TZ)).isoformat(),
         })
     return out
+
 
 
 
