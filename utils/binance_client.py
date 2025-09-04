@@ -256,15 +256,24 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
         logger.error(f"cancel_order failed: {e}")
         return {"ok": False, "error": str(e)}
 
+
 def modify_stop_loss(symbol: str, order_id: int, new_stop: float) -> Dict[str, Any]:
-    """
-    Modify stop-loss by cancel + recreate order
-    """
+    """Modify stop-loss by cancel + recreate order"""
     try:
         cancel_order(symbol, order_id)
         return place_stop_market_order(symbol, "SELL", stop_price=new_stop)
     except Exception as e:
         logger.error(f"modify_stop_loss failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def modify_take_profit(symbol: str, order_id: int, new_tp: float) -> Dict[str, Any]:
+    """Modify take-profit by cancel + recreate order"""
+    try:
+        cancel_order(symbol, order_id)
+        return place_take_profit_market(symbol, "SELL", stop_price=new_tp)
+    except Exception as e:
+        logger.error(f"modify_take_profit failed: {e}")
         return {"ok": False, "error": str(e)}
 
 # --------------------------------------------------------------------
@@ -284,6 +293,8 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
 
 def get_futures_client() -> Client:
     return client
+
+
 
 
 
