@@ -1,39 +1,27 @@
 # routes/ws.py
+# =============
 from __future__ import annotations
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import asyncio, json, logging
 from typing import Dict, Any
-
-from utils.auth import require_api_key
-from utils.ws_fallback import get_price, auto_price_updater, update_price
+from utils.ws_fallback import LAST_PRICE_CACHE
 
 logger = logging.getLogger("algogpt.ws")
+router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
-router = APIRouter(prefix="/ws", tags=["WebSocket"], dependencies=[Depends(require_api_key)])
-
-# שמירת חיבורים פעילים
 connections: Dict[str, WebSocket] = {}
 
 @router.websocket("/stream")
 async def ws_stream(ws: WebSocket):
-    """
-    חיבור WebSocket שמזרים מחירי Binance מה־cache.
-    עובד עם ws_fallback.auto_price_updater ברקע.
-    """
     await ws.accept()
     cid = f"conn-{id(ws)}"
     connections[cid] = ws
     logger.info(f"[WS] Client connected: {cid}")
-
     try:
         while True:
-            # נשלח snapshot קטן של כל המחירים הטריים
             snapshot: Dict[str, Any] = {}
-            for sym, info in list(getattr(__import__('utils.ws_fallback'), 'LAST_PRICE_CACHE', {}).items()):
-                snapshot[sym] = {
-                    "price": info.get("price"),
-                    "ts": info.get("ts")
-                }
+            for sym, info in list(LAST_PRICE_CACHE.items()):
+                snapshot[sym] = {"price": info.get("price"), "ts": info.get("ts")}
             await ws.send_text(json.dumps({"event": "price_snapshot", "data": snapshot}))
             await asyncio.sleep(2)
     except WebSocketDisconnect:
@@ -42,5 +30,6 @@ async def ws_stream(ws: WebSocket):
         logger.error(f"[WS] Error for {cid}: {e}")
     finally:
         connections.pop(cid, None)
+
 
 
