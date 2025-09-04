@@ -15,11 +15,21 @@ def save_payload(obj: dict, expire: int = 3600) -> str:
         redis_client.setex(f"payload:{key}", expire, str(path))
     return f"/static/cache/{key}"
 
-def load_trades(path: str | Path) -> List[Dict[str, Any]]:
+def load_trades(path: str | Path | None = None) -> List[Dict[str, Any]]:
     try:
-        p = Path(path)
-        with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
+        if path is None:
+            # 🔹 לטעון את כל הקבצים ב־static/cache
+            files = sorted(STATIC_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+            trades: List[Dict[str, Any]] = []
+            for f in files:
+                try:
+                    trades.extend(json.loads(f.read_text()))
+                except Exception:
+                    continue
+            return trades
+        else:
+            p = Path(path)
+            return json.loads(p.read_text())
     except Exception:
         return []
 
