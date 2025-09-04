@@ -49,6 +49,7 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
 
 
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    """Return full exchange info for a single symbol."""
     info = _refresh_exchange_info(force_refresh=force_refresh)
     for s in info.get("symbols", []):
         if s.get("symbol") == symbol.upper():
@@ -103,6 +104,26 @@ def futures_open_positions() -> Optional[List[Dict[str, Any]]]:
         return None
 
 
+def futures_position_risk() -> Optional[List[Dict[str, Any]]]:
+    """Get current futures account positions with risk details."""
+    try:
+        return client.futures_position_risk()
+    except Exception as e:
+        logger.error(f"futures_position_risk failed: {e}")
+        return None
+
+
+def get_open_orders(symbol: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    """Get open orders, for a symbol or all."""
+    try:
+        if symbol:
+            return client.futures_get_open_orders(symbol=symbol.upper())
+        return client.futures_get_open_orders()
+    except Exception as e:
+        logger.error(f"get_open_orders failed: {e}")
+        return None
+
+
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
         res = client.futures_mark_price(symbol=symbol.upper())
@@ -110,28 +131,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error(f"futures_mark_price failed for {symbol}: {e}")
         return None
-
-
-def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Get all open futures orders, or by symbol if provided."""
-    try:
-        if symbol:
-            return client.futures_get_open_orders(symbol=symbol.upper())
-        return client.futures_get_open_orders()
-    except Exception as e:
-        logger.error(f"get_open_orders failed: {e}")
-        return []
-
-
-def futures_position_risk(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return futures position risk (current positions with risk metrics)."""
-    try:
-        if symbol:
-            return client.futures_position_information(symbol=symbol.upper())
-        return client.futures_position_information()
-    except Exception as e:
-        logger.error(f"futures_position_risk failed: {e}")
-        return []
 
 # --------------------------------------------------------------------
 # Orders
