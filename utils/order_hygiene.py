@@ -1,41 +1,45 @@
 # utils/order_hygiene.py
 from __future__ import annotations
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from utils.binance_client import (
     futures_create_order,
     futures_cancel_all_orders,
-    get_symbol_filters,
+    get_symbol_info,
+    DEFAULT_MIN_NOTIONAL,
 )
 
 logger = logging.getLogger("algogpt.order_hygiene")
 
 
-# ===================== מינימוםים =====================
+# ===================== בדיקת מינימוםים =====================
 def check_minimums(symbol: str, qty: float) -> bool:
     """
     בדיקה אם הכמות עומדת בדרישות Binance (minQty, minNotional).
     """
     try:
-        flt = get_symbol_filters(symbol)
-        if not flt:
-            logger.warning("[order_hygiene] no filters for %s", symbol)
+        info = get_symbol_info(symbol)
+        if not info:
+            logger.warning("[order_hygiene] no symbol info for %s", symbol)
             return False
 
-        min_qty = float(flt.get("minQty", 0))
-        min_notional = float(flt.get("notional") or flt.get("minNotional", 0))
-        tick_size = float(flt.get("tickSize", 0.0) or 0.0)
+        filters = {f["filterType"]: f for f in info.get("filters", [])}
 
+        # מינימום כמות
+        min_qty = float(filters.get("LOT_SIZE", {}).get("minQty", 0))
         if qty < min_qty:
-            logger.warning("[order_hygiene] qty %s < minQty %s for %s", qty, min_qty, symbol)
+            logger.warning("[order_hygiene] qty %.8f < minQty %.8f for %s", qty, min_qty, symbol)
             return False
 
-        # אם יש דרישת notional – נחשב לפי מחיר ממוצע משוער
-        if min_notional > 0 and (qty * tick_size) < min_notional:
+        # מינימום ערך עסקה (notional)
+        min_notional = float(filters.get("MIN_NOTIONAL", {}).get("notional", DEFAULT_MIN_NOTIONAL))
+        mark_price = float(info.get("pricePrecision", 1))  # fallback פשוט
+        notional_val = qty * mark_price
+        if notional_val < min_notional:
             logger.warning(
                 "[order_hygiene] notional %.4f < minNotional %.4f for %s",
-                qty * tick_size,
+                notional_val,
                 min_notional,
                 symbol,
             )
@@ -53,8 +57,11 @@ def cancel_if_conflict(symbol: str, side: str) -> None:
     מבטל הוראות פתוחות קודמות שיכולות להתנגש בכניסה החדשה.
     """
     try:
-        futures_cancel_all_orders(symbol=symbol)
-        logger.info("[order_hygiene] cancelled existing orders for %s side=%s", symbol, side)
+        res = futures_cancel_all_orders(symbol=symbol)
+        if res.get("ok"):
+            logger.info("[order_hygiene] cancelled existing orders for %s side=%s", symbol, side)
+        else:
+            logger.warning("[order_hygiene] cancel_if_conflict failed for %s: %s", symbol, res)
     except Exception as e:
         logger.warning("[order_hygiene] cancel_if_conflict error: %s", e)
 
@@ -72,7 +79,7 @@ def place_limit_order_safe(
     try:
         res = futures_create_order(
             symbol=symbol,
-            side=side,
+            side=side.upper(),
             type="LIMIT",
             quantity=quantity,
             price=price,
@@ -80,7 +87,7 @@ def place_limit_order_safe(
             reduceOnly=reduce_only,
             positionSide=position_side,
         )
-        return {"ok": True, "data": res}
+        return res
     except Exception as e:
         logger.error("[order_hygiene] limit order failed: %s", e)
         return {"ok": False, "error": str(e)}
@@ -99,14 +106,14 @@ def place_stop_market_safe(
     try:
         res = futures_create_order(
             symbol=symbol,
-            side=side,
+            side=side.upper(),
             type="STOP_MARKET",
             quantity=quantity,
             stopPrice=stop_price,
             reduceOnly=reduce_only,
             positionSide=position_side,
         )
-        return {"ok": True, "data": res}
+        return res
     except Exception as e:
         logger.error("[order_hygiene] stop-market failed: %s", e)
         return {"ok": False, "error": str(e)}
@@ -125,14 +132,14 @@ def place_take_profit_safe(
     try:
         res = futures_create_order(
             symbol=symbol,
-            side=side,
+            side=side.upper(),
             type="TAKE_PROFIT_MARKET",
             quantity=quantity,
             stopPrice=tp_price,
             reduceOnly=reduce_only,
             positionSide=position_side,
         )
-        return {"ok": True, "data": res}
+        return res
     except Exception as e:
         logger.error("[order_hygiene] take-profit failed: %s", e)
         return {"ok": False, "error": str(e)}
@@ -145,6 +152,7 @@ __all__ = [
     "place_stop_market_safe",
     "place_take_profit_safe",
 ]
+
 
 
 
