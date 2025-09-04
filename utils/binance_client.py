@@ -23,6 +23,10 @@ _EXCHANGE_INFO: Dict[str, Any] = {}
 _EXCHANGE_INFO_TS: float = 0.0
 _EXCHANGE_INFO_TTL: int = 300  # 5 minutes
 
+# === Default fallback values ===
+DEFAULT_QTY_STEP_STR: str = "0.001"        # ברירת מחדל ל-stepSize אם אין info
+DEFAULT_PRICE_TICK_STR: str = "0.01"       # ברירת מחדל ל-tickSize
+DEFAULT_MIN_NOTIONAL: float = 5.0          # מינימום notional (USD) לפי Binance
 
 # === Helpers ===
 def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
@@ -127,6 +131,7 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"cancel_order failed: {e}")
         return {"ok": False, "error": str(e)}
+
 
 
 
