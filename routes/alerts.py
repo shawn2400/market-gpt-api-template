@@ -3,15 +3,10 @@ from __future__ import annotations
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, Body, Header, HTTPException, Request
 from pydantic import BaseModel, Field, constr
-from fastapi.responses import JSONResponse
 import os, time
 
 from utils.auth import require_api_key
-from utils.telegram_api import (
-    send_message as telegram_send,
-    get_me as telegram_get_me,
-    send_chat_action as telegram_send_chat_action,
-)
+from utils.telegram_api import send_message as telegram_send
 from utils.hmac_utils import verify_inbound
 from utils.approvals import preflight_proposal
 
@@ -24,9 +19,7 @@ router = APIRouter(
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
 SINK_ENFORCE_APPROVALS = str(os.getenv("SINK_ENFORCE_APPROVALS", "1")).lower() in ("1", "true", "yes", "on")
 
-# זיכרון מקומי — בפרודקשן עדיף Redis
 _ACTIVE: Dict[str, Dict[str, Any]] = {}
-
 
 # ================= Models =================
 class TradeAlert(BaseModel):
@@ -41,13 +34,11 @@ class TradeAlert(BaseModel):
     budget_usd: Optional[float] = 50.0
     note: Optional[str] = None
 
-
 class AlertResponse(BaseModel):
     ok: bool
     id: Optional[str] = None
     reason: Optional[str] = None
     approved: Optional[bool] = None
-
 
 # ================= Routes =================
 @router.post("/trades/active", response_model=AlertResponse)
@@ -56,36 +47,29 @@ async def receive_alert(
     request: Request,
     x_signature: Optional[str] = Header(None),
 ) -> AlertResponse:
-    # אימות HMAC אם מופעל
     if WEBHOOK_HMAC_SECRET:
         body = (await request.body()).decode("utf-8")
         if not verify_inbound(body, x_signature, WEBHOOK_HMAC_SECRET):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
 
-    # Preflight approval
-    approved = True
-    reason = None
+    approved, reason = True, None
     if SINK_ENFORCE_APPROVALS:
         approved, reason = preflight_proposal(alert.dict())
 
-    # שליחה לטלגרם
     try:
         text = f"📢 *Alert* — {alert.symbol} {alert.side.upper()}\nEntry={alert.entry}, SL={alert.sl}, TP1={alert.tp1}"
         await telegram_send(text)
     except Exception as e:
         reason = f"telegram_error: {e}"
 
-    # שמירה בזיכרון
     alert_id = f"{alert.symbol}-{int(time.time())}"
     _ACTIVE[alert_id] = {**alert.dict(), "ts": time.time()}
 
     return AlertResponse(ok=True, id=alert_id, approved=approved, reason=reason)
 
-
 @router.get("/trades/active")
 def list_active_trades() -> Dict[str, Any]:
     return {"ok": True, "count": len(_ACTIVE), "items": _ACTIVE}
-
 
 @router.post("/trades/update", response_model=Dict[str, Any])
 async def update_trade_status(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
@@ -95,7 +79,6 @@ async def update_trade_status(payload: Dict[str, Any] = Body(...)) -> Dict[str, 
     _ACTIVE[trade_id].update(payload)
     return {"ok": True, "id": trade_id, "item": _ACTIVE[trade_id]}
 
-
 @router.post("/analysis")
 async def receive_analysis(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     try:
@@ -103,7 +86,6 @@ async def receive_analysis(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any
     except Exception:
         pass
     return {"ok": True}
-
 
 @router.post("/trade-ingest")
 async def ingest_trade(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
