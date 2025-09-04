@@ -62,7 +62,7 @@ static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
 # === APP ===
-app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
+app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת אפשרי")
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -185,6 +185,7 @@ async def api_manage_once(): await manage_open_trades(); return {"ok": True}
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
