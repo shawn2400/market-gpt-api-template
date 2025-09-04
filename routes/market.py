@@ -1,53 +1,49 @@
-# routes/market.py
+# routes/metrics.py
 from __future__ import annotations
-from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
+from typing import Dict, Any
+import time
+
 from utils.auth import require_api_key
-from utils.binance_client import (
-    get_symbol_info,
-    futures_mark_price,
-    futures_exchange_info_safe,
+from utils.metrics import metrics_tracker
+
+router = APIRouter(
+    prefix="/metrics",
+    tags=["Metrics"],
+    dependencies=[Depends(require_api_key)]
 )
 
-router = APIRouter(prefix="/market", tags=["Market"], dependencies=[Depends(require_api_key)])
+@router.get("/", summary="Core metrics snapshot")
+async def get_metrics() -> Dict[str, Any]:
+    """
+    החזרת מצב המערכת:
+    - uptime
+    - counters (total/errors/by_status)
+    - latencies (avg/min/max/p50/p95)
+    - RPS (5s/60s)
+    """
+    return metrics_tracker.get_metrics()
 
+@router.get("/ping")
+async def ping_metrics() -> Dict[str, Any]:
+    return {"ok": True, "ts": int(time.time())}
 
-@router.get("/mark-price")
-def mark_price(symbol: str = Query(..., min_length=3, max_length=20)):
+# --- Middleware hook ---
+@router.middleware("http")
+async def track_requests(request: Request, call_next):
+    start = time.time()
     try:
-        price = futures_mark_price(symbol)
-        if price is None:
-            raise HTTPException(status_code=503, detail=f"Mark price unavailable for {symbol}")
-        return {"symbol": symbol.upper(), "markPrice": price}
-    except HTTPException:
-        raise
+        response = await call_next(request)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch mark price: {e}")
-
-
-@router.get("/symbol-info")
-def symbol_info(symbol: str = Query(..., min_length=3, max_length=20), force_refresh: int = Query(0, ge=0, le=1)):
-    try:
-        info = get_symbol_info(symbol, force_refresh=bool(force_refresh))
-        if not info:
-            raise HTTPException(status_code=404, detail=f"Symbol info not found for {symbol}")
-        return info
-    except HTTPException:
+        duration_ms = (time.time() - start) * 1000.0
+        metrics_tracker.observe_request(500, duration_ms)
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch symbol info: {e}")
+    else:
+        duration_ms = (time.time() - start) * 1000.0
+        metrics_tracker.observe_request(response.status_code, duration_ms)
+        return response
 
-
-@router.get("/exchange-info")
-def exchange_info(force_refresh: int = Query(0, ge=0, le=1)):
-    try:
-        data = futures_exchange_info_safe(force_refresh=bool(force_refresh))
-        if not data or "symbols" not in data:
-            raise HTTPException(status_code=502, detail="Exchange info unavailable")
-        return data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
 
 
 
