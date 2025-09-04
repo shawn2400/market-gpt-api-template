@@ -1,6 +1,5 @@
 # utils/binance_client.py
 from __future__ import annotations
-
 import os, time, logging
 from typing import Any, Dict, List, Optional
 from binance.client import Client
@@ -23,12 +22,14 @@ _EXCHANGE_INFO: Dict[str, Any] = {}
 _EXCHANGE_INFO_TS: float = 0.0
 _EXCHANGE_INFO_TTL: int = 300  # 5 minutes
 
-# === Default fallback values (public) ===
-DEFAULT_QTY_STEP_STR: str = "0.001"   # ברירת מחדל ל-stepSize
-DEFAULT_PRICE_TICK_STR: str = "0.01"  # ברירת מחדל ל-tickSize
-DEFAULT_MIN_NOTIONAL: float = 5.0     # ברירת מחדל למינימום notional
+# === Default fallback values ===
+DEFAULT_QTY_STEP_STR: str = "0.001"
+DEFAULT_PRICE_TICK_STR: str = "0.01"
+DEFAULT_MIN_NOTIONAL: float = 5.0
 
-# === Helpers ===
+# --------------------------------------------------------------------
+# Exchange Info
+# --------------------------------------------------------------------
 def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
     global _EXCHANGE_INFO, _EXCHANGE_INFO_TS
     now = time.time()
@@ -43,7 +44,40 @@ def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
     return _EXCHANGE_INFO
 
 
-# === Core Functions ===
+def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
+    return _refresh_exchange_info(force_refresh=force_refresh)
+
+
+def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    info = _refresh_exchange_info(force_refresh=force_refresh)
+    for s in info.get("symbols", []):
+        if s.get("symbol") == symbol.upper():
+            return s
+    return None
+
+
+def get_symbol_filters(symbol: str) -> Dict[str, Any]:
+    """Extracts tickSize/stepSize/minNotional for a symbol."""
+    info = get_symbol_info(symbol) or {}
+    filters = {f["filterType"]: f for f in info.get("filters", [])}
+
+    tick = filters.get("PRICE_FILTER", {}).get("tickSize", DEFAULT_PRICE_TICK_STR)
+    step = filters.get("LOT_SIZE", {}).get("stepSize", DEFAULT_QTY_STEP_STR)
+    min_notional = (
+        filters.get("MIN_NOTIONAL", {}).get("notional")
+        or filters.get("MIN_NOTIONAL", {}).get("minNotional")
+        or DEFAULT_MIN_NOTIONAL
+    )
+
+    return {
+        "tickSizeStr": str(tick),
+        "stepSizeStr": str(step),
+        "minNotional": float(min_notional),
+    }
+
+# --------------------------------------------------------------------
+# Account
+# --------------------------------------------------------------------
 def fapi_ping() -> bool:
     try:
         client.futures_ping()
@@ -77,64 +111,22 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.error(f"futures_mark_price failed for {symbol}: {e}")
         return None
 
-
-def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
-    return _refresh_exchange_info(force_refresh=force_refresh)
-
-
-def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-    info = _refresh_exchange_info(force_refresh=force_refresh)
-    syms = info.get("symbols", [])
-    symbol = symbol.upper()
-    for s in syms:
-        if s.get("symbol") == symbol:
-            return s
-    return None
-
-
-def get_symbol_filters(symbol: str) -> Dict[str, Any]:
-    """
-    מחזיר filters רלוונטיים (PRICE_FILTER, LOT_SIZE וכו') לסימבול.
-    """
-    info = get_symbol_info(symbol)
-    if not info:
-        return {
-            "tickSizeStr": DEFAULT_PRICE_TICK_STR,
-            "stepSizeStr": DEFAULT_QTY_STEP_STR,
-            "minNotional": DEFAULT_MIN_NOTIONAL,
-        }
-    filters = {}
-    for f in info.get("filters", []):
-        t = f.get("filterType")
-        if t == "PRICE_FILTER":
-            filters["tickSizeStr"] = f.get("tickSize", DEFAULT_PRICE_TICK_STR)
-        elif t == "LOT_SIZE":
-            filters["stepSizeStr"] = f.get("stepSize", DEFAULT_QTY_STEP_STR)
-            filters["minQty"] = f.get("minQty")
-        elif t == "MARKET_LOT_SIZE":
-            filters["stepSizeStr"] = filters.get("stepSizeStr") or f.get("stepSize")
-        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-            filters["minNotional"] = (
-                f.get("notional")
-                or f.get("minNotional")
-                or f.get("minNotionalValue")
-                or DEFAULT_MIN_NOTIONAL
-            )
-    return filters
-
-
-# === Order Functions (basic) ===
+# --------------------------------------------------------------------
+# Orders
+# --------------------------------------------------------------------
 def place_limit_order(
     symbol: str,
     side: str,
     quantity: float,
     price: float,
-    reduce_only: bool = False,
     time_in_force: str = "GTC",
-    **kwargs,
+    reduce_only: bool = False,
+    position_side: Optional[str] = None,
+    new_client_order_id: Optional[str] = None,
+    post_only: bool = False,
 ) -> Dict[str, Any]:
     try:
-        order = client.futures_create_order(
+        params = dict(
             symbol=symbol.upper(),
             side=side.upper(),
             type="LIMIT",
@@ -142,15 +134,79 @@ def place_limit_order(
             price=price,
             timeInForce=time_in_force,
             reduceOnly=reduce_only,
-            **kwargs,
         )
-        logger.info(f"Limit order placed: {order}")
+        if position_side:
+            params["positionSide"] = position_side
+        if new_client_order_id:
+            params["newClientOrderId"] = new_client_order_id
+        if post_only:
+            params["timeInForce"] = "GTX"
+
+        order = client.futures_create_order(**params)
         return {"ok": True, "order": order}
     except BinanceAPIException as e:
-        logger.error(f"BinanceAPIException: {e}")
         return {"ok": False, "error": str(e)}
     except Exception as e:
-        logger.error(f"place_limit_order failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def place_stop_market_order(
+    symbol: str,
+    side: str,
+    stop_price: float,
+    quantity: Optional[float] = None,
+    reduce_only: bool = True,
+    position_side: Optional[str] = None,
+    new_client_order_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    try:
+        params = dict(
+            symbol=symbol.upper(),
+            side=side.upper(),
+            type="STOP_MARKET",
+            stopPrice=stop_price,
+            reduceOnly=reduce_only,
+        )
+        if quantity:
+            params["quantity"] = quantity
+        if position_side:
+            params["positionSide"] = position_side
+        if new_client_order_id:
+            params["newClientOrderId"] = new_client_order_id
+
+        order = client.futures_create_order(**params)
+        return {"ok": True, "order": order}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def place_take_profit_market(
+    symbol: str,
+    side: str,
+    stop_price: float,
+    quantity: Optional[float] = None,
+    reduce_only: bool = True,
+    position_side: Optional[str] = None,
+    new_client_order_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    try:
+        params = dict(
+            symbol=symbol.upper(),
+            side=side.upper(),
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=stop_price,
+            reduceOnly=reduce_only,
+        )
+        if quantity:
+            params["quantity"] = quantity
+        if position_side:
+            params["positionSide"] = position_side
+        if new_client_order_id:
+            params["newClientOrderId"] = new_client_order_id
+
+        order = client.futures_create_order(**params)
+        return {"ok": True, "order": order}
+    except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
@@ -159,8 +215,8 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
         res = client.futures_cancel_order(symbol=symbol.upper(), orderId=order_id)
         return {"ok": True, "result": res}
     except Exception as e:
-        logger.error(f"cancel_order failed: {e}")
         return {"ok": False, "error": str(e)}
+
 
 
 
