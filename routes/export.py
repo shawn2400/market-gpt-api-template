@@ -1,13 +1,14 @@
 # routes/export.py
 from __future__ import annotations
 import logging
+from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 
 from utils.auth import require_api_key
-from utils.trade_storage import cleanup_static, load_trades
+from utils.export_utils import export_daily_csv, export_daily_pdf
+from utils.pnl_summary import get_pnl_summary
 
-logger = logging.getLogger("algogpt.routes.export")
+logger = logging.getLogger("algogpt.export")
 
 router = APIRouter(
     prefix="/export",
@@ -15,41 +16,49 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
 )
 
-# ────────────────────────────────────────────────
-# Models
-# ────────────────────────────────────────────────
-class ExportResponse(BaseModel):
-    ok: bool = True
-    cleaned_files: int
 
-class TradesResponse(BaseModel):
-    ok: bool = True
-    total: int
-    items: list
-
-# ────────────────────────────────────────────────
-# Endpoints
-# ────────────────────────────────────────────────
-@router.post("/cleanup", response_model=ExportResponse)
-def cleanup(limit: int = Query(500, ge=50, le=2000)) -> ExportResponse:
-    """מנקה קבצי cache ישנים בתיקיית static/cache"""
+@router.get("/daily/csv", summary="Export daily trades to CSV")
+async def export_csv(
+    date: str = Query(None, description="תאריך בפורמט YYYY-MM-DD (ברירת מחדל היום)"),
+    _: Any = Depends(require_api_key),
+) -> Dict[str, Any]:
+    """
+    הפקת דוח CSV יומי עם כל הטריידים.
+    """
     try:
-        cleanup_static(max_files=limit)
-        return ExportResponse(cleaned_files=limit)
+        path = export_daily_csv(date=date)
+        return {"ok": True, "file": path}
     except Exception as e:
-        logger.exception("export_cleanup_failed")
+        logger.exception("[export] CSV error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/trades", response_model=TradesResponse)
-def list_trades(limit: int = Query(100, ge=1, le=1000)) -> TradesResponse:
-    """מחזיר את הטריידים האחרונים מה־cache"""
+
+@router.get("/daily/pdf", summary="Export daily trades to PDF")
+async def export_pdf(
+    date: str = Query(None, description="תאריך בפורמט YYYY-MM-DD (ברירת מחדל היום)"),
+    _: Any = Depends(require_api_key),
+) -> Dict[str, Any]:
+    """
+    הפקת דוח PDF יומי כולל PnL Summary.
+    """
     try:
-        trades = load_trades()
-        if limit and len(trades) > limit:
-            trades = trades[:limit]
-        return TradesResponse(total=len(trades), items=trades)
+        path = export_daily_pdf(date=date)
+        return {"ok": True, "file": path}
     except Exception as e:
-        logger.exception("export_trades_failed")
+        logger.exception("[export] PDF error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/pnl", summary="PnL Summary")
+async def pnl_summary(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    """
+    מחזיר סיכום רווח/הפסד מצטבר.
+    """
+    try:
+        summary = get_pnl_summary()
+        return {"ok": True, "summary": summary}
+    except Exception as e:
+        logger.exception("[export] PnL summary error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
