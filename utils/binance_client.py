@@ -111,6 +111,28 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.error(f"futures_mark_price failed for {symbol}: {e}")
         return None
 
+
+def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all open futures orders, or by symbol if provided."""
+    try:
+        if symbol:
+            return client.futures_get_open_orders(symbol=symbol.upper())
+        return client.futures_get_open_orders()
+    except Exception as e:
+        logger.error(f"get_open_orders failed: {e}")
+        return []
+
+
+def futures_position_risk(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return futures position risk (current positions with risk metrics)."""
+    try:
+        if symbol:
+            return client.futures_position_information(symbol=symbol.upper())
+        return client.futures_position_information()
+    except Exception as e:
+        logger.error(f"futures_position_risk failed: {e}")
+        return []
+
 # --------------------------------------------------------------------
 # Orders
 # --------------------------------------------------------------------
@@ -230,6 +252,7 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"cancel_order failed: {e}")
         return {"ok": False, "error": str(e)}
+
 
 
 
