@@ -1,31 +1,20 @@
 # routes/trade.py
 from __future__ import annotations
-
 import logging
 from typing import Dict, Any
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-
 from utils.auth import require_api_key
 from utils.trade_executor import execute_trade_live
 
 logger = logging.getLogger("algogpt.routes.trade")
 
-router = APIRouter(
-    prefix="/trade",
-    tags=["Trades"],
-    dependencies=[Depends(require_api_key)],
-)
+router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_api_key)])
 
-
-# ────────────────────────────────────────────────
-# Models
-# ────────────────────────────────────────────────
 class TradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
     side: str = Field(..., example="BUY")
-    budget: float = Field(..., example=50)
+    budget: float = Field(0, example=50)           # אם quantity ניתן, ה-budget לא חובה
     leverage: int = Field(10, example=10)
     entry: float | None = Field(None, example=28500.5)
     sl: float | None = Field(None, example=28000.0)
@@ -33,33 +22,21 @@ class TradeRequest(BaseModel):
     dry_run: bool = Field(False, description="True = סימולציה בלבד (ללא שליחה אמיתית)")
     quantity: float | None = Field(None, example=0.001)
 
-
 class TradeResponse(BaseModel):
     ok: bool = True
     error: str | None = None
     result: Dict[str, Any] | None = None
 
-
-# ────────────────────────────────────────────────
-# Endpoints
-# ────────────────────────────────────────────────
 @router.post("/execute", response_model=TradeResponse)
 async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     """
-    מבצע טרייד חי או סימולציה.
-    משתמש ב־execute_trade_live עם בדיקות Precision מלאות.
+    מבצע טרייד חי או סימולציה דרך execute_trade_live (כולל בדיקות Precision).
     """
     try:
         result = await execute_trade_live(
-            symbol=req.symbol,
-            side=req.side,
-            budget=req.budget,
-            leverage=req.leverage,
-            entry=req.entry,
-            sl=req.sl,
-            tp=req.tp,
-            dry_run=req.dry_run,
-            quantity=req.quantity,
+            symbol=req.symbol, side=req.side, budget=req.budget,
+            leverage=req.leverage, entry=req.entry, sl=req.sl, tp=req.tp,
+            dry_run=req.dry_run, quantity=req.quantity,
         )
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error") or "trade_failed")
@@ -69,6 +46,7 @@ async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
