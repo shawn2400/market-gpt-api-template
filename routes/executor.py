@@ -60,3 +60,4 @@ def get_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict
 
 
 
+
