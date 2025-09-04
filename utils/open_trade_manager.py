@@ -17,7 +17,7 @@ from utils.order_hygiene import (
     place_take_profit_safe,
 )
 
-# פונקציות עזר מבינאנס
+# פונקציות מבינאנס
 from utils.binance_client import (
     futures_mark_price,
     get_open_orders,
@@ -51,7 +51,6 @@ CHOP_PARTIAL_PCT       = _as_float(os.getenv("CHOP_PARTIAL_PCT", "0.33"), 0.33)
 # SL/TP dynamic
 BE_ARM_PCT       = _as_float(os.getenv("BE_ARM_PCT", "1.6"), 1.6)
 TRAIL_ATR_MULT   = _as_float(os.getenv("TRAIL_ATR_MULT", str(getattr(cfg, "STOP_LOSS_ATR_MULTIPLIER", 1.5))), 1.5)
-
 MOMENTUM_TP_SHIFT_ATR  = _as_float(os.getenv("MOMENTUM_TP_SHIFT", "0.5"), 0.5)
 
 # Cooldown
@@ -129,8 +128,10 @@ async def _klines_df(symbol: str) -> pd.DataFrame:
 def _ensure_grid_orders(sym: str, side_u: str, entry: float, atr: float, qty: float) -> Optional[str]:
     try:
         oo = get_open_orders(sym) or []
-    except Exception:
+    except Exception as e:
+        logger.warning({"event": "get_open_orders_failed", "symbol": sym, "err": str(e)})
         oo = []
+
     ro_tp = [o for o in oo if str(o.get("reduceOnly","")).lower() in ("true","1")
              and str(o.get("type","")).upper().startswith("TAKE_PROFIT")]
     if ro_tp:
@@ -294,6 +295,7 @@ async def manage_open_trades() -> Dict[str, Any]:
             details.append({"symbol": p.get("symbol","?"), "error": str(e)})
     changed = sum(1 for d in details if d.get("changed"))
     return {"ok": True, "managed": len(details), "changed": changed, "details": details}
+
 
 
 
