@@ -113,9 +113,6 @@ def _step_or_default(info: dict) -> str:
 
 # ===================== Price & Qty Appliers =====================
 def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
-    """
-    מעגל מחיר ל־tickSize לפי exchangeInfo.
-    """
     info = _find_symbol_info(symbol) or {}
     price_precision = info.get("pricePrecision", 8)
     tick_size = _tick_or_default(info)
@@ -129,9 +126,6 @@ def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
     return float(dec), s
 
 def apply_price_tick_side(price: float, symbol: str, side: str) -> Tuple[float, str]:
-    """
-    BUY → ROUND_DOWN | SELL → ROUND_UP
-    """
     info = _find_symbol_info(symbol) or {}
     price_precision = info.get("pricePrecision", 8)
     tick_size = _tick_or_default(info)
@@ -150,9 +144,6 @@ def apply_price_tick_side(price: float, symbol: str, side: str) -> Tuple[float, 
     return float(dec), s
 
 def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
-    """
-    מעגל כמות ל־stepSize לפי exchangeInfo.
-    """
     info = _find_symbol_info(symbol) or {}
     qty_precision = info.get("quantityPrecision", 8)
     step_size = _step_or_default(info)
@@ -167,9 +158,6 @@ def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
 
 # ===================== Filters + Quantity =====================
 def _symbol_filters(symbol: str) -> Dict[str, Any]:
-    """
-    מאתר tickSize/stepSize/minQty/minNotional מתוך exchangeInfo עם Fallbacks.
-    """
     info = _find_symbol_info(symbol) or {}
     tick_size = None
     step_size = None
@@ -212,9 +200,6 @@ def calc_quantity_from_budget(
     budget_usd: float,
     leverage: float = 1.0,
 ) -> Dict[str, Any]:
-    """
-    מחשב כמות לפי תקציב×מינוף, עם עיגון ל-LOT_SIZE ועמידה ב-MIN_NOTIONAL.
-    """
     try:
         price = float(price); budget_usd = float(budget_usd); leverage = max(1.0, float(leverage))
     except Exception:
@@ -263,6 +248,7 @@ def calc_quantity_from_budget(
         "min_qty": float(min_qty) if min_qty is not None else None,
     }
 
+# ===================== Exports =====================
 __all__ = [
     "refresh_exchange_info",
     "get_precision_info",
@@ -271,6 +257,9 @@ __all__ = [
     "apply_price_tick_side",
     "apply_qty_step",
     "calc_quantity_from_budget",
+    "_DEF_QTY_STEP",
+    "_DEF_TICK",
+    "_DEF_MIN_NOTIONAL",
 ]
 
 
