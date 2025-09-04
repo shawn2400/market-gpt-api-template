@@ -40,14 +40,16 @@ def manage_open_trades(
         leverage,
     )
 
-    # ביטול קונפליקטים
+    # ביטול קונפליקטים פתוחים
     cancel_if_conflict(symbol, side)
 
-    # בדיקה מול מינימום ביננס
-    if not check_minimums(symbol, qty):
-        return {"ok": False, "error": "below_minimum_notional_or_qty"}
+    # בדיקת minQty / minNotional מול Binance בזמן אמת
+    ok, reason = check_minimums(symbol, qty)
+    if not ok:
+        logger.warning("[open_trade_manager] Trade rejected: %s", reason)
+        return {"ok": False, "error": f"min_check_failed: {reason}"}
 
-    # 1. פקודת Limit לכניסה
+    # שלב 1: Limit Entry
     entry = place_limit_order_safe(
         symbol=symbol,
         side=side,
@@ -59,7 +61,7 @@ def manage_open_trades(
     if not entry.get("ok"):
         return {"ok": False, "error": f"entry_failed: {entry.get('error')}"}
 
-    # 2. פקודת Stop-Market ל־SL
+    # שלב 2: Stop-Market (SL)
     sl = place_stop_market_safe(
         symbol=symbol,
         side="SELL" if side.upper() == "BUY" else "BUY",
@@ -71,7 +73,7 @@ def manage_open_trades(
     if not sl.get("ok"):
         return {"ok": False, "error": f"sl_failed: {sl.get('error')}"}
 
-    # 3. פקודת Take-Profit ל־TP
+    # שלב 3: Take-Profit
     tp = place_take_profit_safe(
         symbol=symbol,
         side="SELL" if side.upper() == "BUY" else "BUY",
