@@ -10,17 +10,6 @@ from .redis_client import get_redis
 class TelePrefs:
     """
     העדפות טלגרם "דל-עומס" ב-Redis.
-
-    keyspace:
-      tprefs:{chat}:pin_summary         -> "on"/"off"
-      tprefs:{chat}:pin_message_id      -> int
-      tprefs:{chat}:bundle_window       -> int seconds
-      bundle:{chat}                     -> list of JSON (LPUSH/RPOP)
-      snooze:trade:{trade_id}           -> "1" (TTL)
-      snooze:symbol:{symbol}            -> "1" (TTL)
-      watchdog:last_beat                -> ts (float)
-      watchdog:bundle_stats:{chat}      -> hash {"queued":int, "last_flush":ts}
-      tprefs:pin_chats                  -> SET of chat_ids שבהם pin_summary=on
     """
 
     def __init__(self) -> None:
@@ -82,7 +71,6 @@ class TelePrefs:
             try:
                 out.append(json.loads(raw))
             except Exception:
-                # בליעת אירוע פגום
                 pass
         await self.r.hset(f"watchdog:bundle_stats:{chat_id}", mapping={"last_flush": time.time()})
         return out
@@ -107,6 +95,23 @@ class TelePrefs:
     async def get_watchdog_beat(self) -> Optional[float]:
         v = await self.r.get("watchdog:last_beat")
         return float(v) if v else None
+
+
+# --------------------------------------------------------------------
+# Mute toggle support
+# --------------------------------------------------------------------
+async def set_mute(chat_id: int, mute: bool) -> None:
+    r = get_redis()
+    if mute:
+        await r.set(f"tprefs:{chat_id}:mute", "1")
+    else:
+        await r.delete(f"tprefs:{chat_id}:mute")
+
+
+async def is_muted(chat_id: int) -> bool:
+    r = get_redis()
+    return (await r.exists(f"tprefs:{chat_id}:mute")) == 1
+
 
 
 
