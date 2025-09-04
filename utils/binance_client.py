@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 import logging
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
@@ -13,108 +13,109 @@ API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 
 if not API_KEY or not API_SECRET:
-    logger.warning("⚠️ Binance API keys missing or empty")
+    logger.error("[binance_client] Missing API keys")
+    raise RuntimeError("Missing Binance API keys")
 
-# === Binance Client ===
-_client: Optional[Client] = None
+# === Init client ===
+client = Client(API_KEY, API_SECRET)
+client.API_URL = "https://fapi.binance.com/fapi"  # Futures endpoint
 
-def get_client() -> Client:
-    """Lazy init Binance client"""
-    global _client
-    if _client is None:
-        _client = Client(API_KEY, API_SECRET)
-    return _client
-
-# === Default Fallbacks ===
+# === Defaults for precision fallbacks ===
 DEFAULT_QTY_STEP_STR = "0.001"
 DEFAULT_PRICE_TICK_STR = "0.01"
 DEFAULT_MIN_NOTIONAL = 5.0
 
-# === API Helpers ===
+# ==================== Core Safe Calls ====================
 def fapi_ping() -> bool:
     try:
-        get_client().futures_ping()
+        client.futures_ping()
         return True
     except Exception as e:
-        logger.error(f"[binance_client] futures_ping failed: {e}")
+        logger.warning("Futures ping failed: %s", e)
         return False
 
 def futures_exchange_info_safe() -> Optional[Dict[str, Any]]:
-    """Fetch futures exchangeInfo safely"""
     try:
-        return get_client().futures_exchange_info()
+        return client.futures_exchange_info()
     except Exception as e:
-        logger.error(f"[binance_client] exchange_info failed: {e}")
-        return None
-
-def futures_mark_price(symbol: str) -> Optional[float]:
-    try:
-        data = get_client().futures_mark_price(symbol=symbol)
-        return float(data["markPrice"])
-    except Exception as e:
-        logger.error(f"[binance_client] futures_mark_price failed for {symbol}: {e}")
+        logger.error("Failed to fetch futures_exchange_info: %s", e)
         return None
 
 def futures_balance() -> List[Dict[str, Any]]:
     try:
-        return get_client().futures_account_balance()
+        return client.futures_account_balance() or []
     except Exception as e:
-        logger.error(f"[binance_client] futures_balance failed: {e}")
+        logger.error("Failed to fetch futures_balance: %s", e)
         return []
 
-def futures_open_positions() -> List[Dict[str, Any]]:
+def futures_mark_price(symbol: str) -> Optional[float]:
     try:
-        return get_client().futures_position_information()
+        data = client.futures_mark_price(symbol=symbol)
+        return float(data["markPrice"])
     except Exception as e:
-        logger.error(f"[binance_client] futures_open_positions failed: {e}")
-        return []
+        logger.error("Failed to fetch mark price for %s: %s", symbol, e)
+        return None
 
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
-    """Return exchangeInfo for a specific symbol"""
-    info = futures_exchange_info_safe()
-    if not info:
-        return None
-    for s in info.get("symbols", []):
-        if s.get("symbol") == symbol.upper():
-            return s
+    try:
+        info = futures_exchange_info_safe()
+        if not info:
+            return None
+        for s in info.get("symbols", []):
+            if s.get("symbol") == symbol.upper():
+                return s
+    except Exception as e:
+        logger.error("Failed get_symbol_info: %s", e)
     return None
 
-# === Order Ops ===
-def cancel_order(symbol: str, order_id: int) -> bool:
+# ==================== Positions ====================
+def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    מחזיר רשימת פוזיציות פתוחות בחשבון Futures.
+    אם מועבר symbol → מסנן לפי סימבול.
+    """
     try:
-        get_client().futures_cancel_order(symbol=symbol, orderId=order_id)
-        return True
-    except BinanceAPIException as e:
-        logger.error(f"[binance_client] cancel_order failed for {symbol} {order_id}: {e}")
-        return False
+        acc_info = client.futures_account()
+        positions = acc_info.get("positions", [])
+        out = []
+        for pos in positions:
+            amt = float(pos.get("positionAmt", "0"))
+            if abs(amt) > 1e-12:
+                if symbol is None or pos.get("symbol") == symbol.upper():
+                    out.append(pos)
+        return out
     except Exception as e:
-        logger.error(f"[binance_client] cancel_order unexpected error: {e}")
-        return False
+        logger.error("Failed to get open positions: %s", e)
+        return []
 
-# === Wrapper for compatibility ===
-from utils.precision_utils import _symbol_filters
-
-def get_symbol_filters(symbol: str) -> Dict[str, Any]:
+# ==================== Orders ====================
+def futures_create_order(**kwargs) -> Dict[str, Any]:
     """
-    Wrapper around precision_utils._symbol_filters
-    Ensures compatibility for order_hygiene and others.
+    יוצר פקודת Futures (Limit / Market / Stop).
+    עטיפה בטוחה עם טיפול בשגיאות.
     """
-    return _symbol_filters(symbol)
+    try:
+        return client.futures_create_order(**kwargs)
+    except BinanceAPIException as e:
+        logger.error("BinanceAPIException: %s", e)
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.error("Failed to create futures order: %s", e)
+        return {"ok": False, "error": str(e)}
 
 __all__ = [
-    "get_client",
     "fapi_ping",
     "futures_exchange_info_safe",
-    "futures_mark_price",
     "futures_balance",
-    "futures_open_positions",
+    "futures_mark_price",
     "get_symbol_info",
-    "cancel_order",
-    "get_symbol_filters",
+    "get_open_positions",
+    "futures_create_order",
     "DEFAULT_QTY_STEP_STR",
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
