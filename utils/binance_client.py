@@ -18,7 +18,6 @@ API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 TESTNET = (os.getenv("BINANCE_TESTNET") or "0").strip().lower() in ("1", "true", "yes", "on")
 
 if not API_KEY or not API_SECRET:
-    # פרודקשן: עדיף לעצור מוקדם כדי לא לייצר שגיאות רנדומליות בהמשך.
     raise RuntimeError("Missing BINANCE_API_KEY / BINANCE_API_SECRET")
 
 client = Client(API_KEY, API_SECRET, testnet=TESTNET)
@@ -38,7 +37,6 @@ DEFAULT_MIN_NOTIONAL: float = 5.0
 # Exchange Info
 # =============================================================================
 def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
-    """Load futures exchange info with TTL caching."""
     global _EXCHANGE_INFO, _EXCHANGE_INFO_TS
     now = time.time()
     if force_refresh or (now - _EXCHANGE_INFO_TS > _EXCHANGE_INFO_TTL) or not _EXCHANGE_INFO:
@@ -46,18 +44,18 @@ def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
             data = client.futures_exchange_info()
             _EXCHANGE_INFO = data or {}
             _EXCHANGE_INFO_TS = now
-            logger.info("Binance futures_exchange_info refreshed (symbols=%s)", len(_EXCHANGE_INFO.get("symbols", [])))
+            logger.info(
+                "Binance futures_exchange_info refreshed (symbols=%s)",
+                len(_EXCHANGE_INFO.get("symbols", [])),
+            )
         except Exception as e:
             logger.error("Failed to refresh exchange info: %s", e)
-            # אל תחזיר None—שמור על dict ריק כדי להימנע מקריסות.
     return _EXCHANGE_INFO
 
 def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
-    """Safe accessor used ע״י ראוטרים."""
     return _refresh_exchange_info(force_refresh=force_refresh)
 
 def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-    """Return symbol entry from exchange info."""
     info = _refresh_exchange_info(force_refresh=force_refresh)
     sy = (symbol or "").upper()
     for s in info.get("symbols", []):
@@ -66,7 +64,6 @@ def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[s
     return None
 
 def get_symbol_filters(symbol: str) -> Dict[str, Any]:
-    """Extract common filters for symbol (with sane defaults)."""
     info = get_symbol_info(symbol) or {}
     filters = {}
     for f in info.get("filters", []) or []:
@@ -81,7 +78,6 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
         or (filters.get("MIN_NOTIONAL", {}) or {}).get("minNotional")
         or DEFAULT_MIN_NOTIONAL
     )
-
     return {
         "tickSizeStr": str(tick),
         "stepSizeStr": str(step),
@@ -92,7 +88,6 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
 # Account / Market Data
 # =============================================================================
 def fapi_ping() -> bool:
-    """Returns True if Binance futures ping succeeds."""
     try:
         client.futures_ping()
         return True
@@ -101,7 +96,6 @@ def fapi_ping() -> bool:
         return False
 
 def futures_balance() -> Optional[List[Dict[str, Any]]]:
-    """Signed balance (requires keys)."""
     try:
         return client.futures_account_balance()
     except Exception as e:
@@ -109,7 +103,6 @@ def futures_balance() -> Optional[List[Dict[str, Any]]]:
         return None
 
 def futures_open_positions() -> Optional[List[Dict[str, Any]]]:
-    """Open positions (position information)."""
     try:
         return client.futures_position_information()
     except Exception as e:
@@ -117,7 +110,6 @@ def futures_open_positions() -> Optional[List[Dict[str, Any]]]:
         return None
 
 def futures_position_risk() -> Optional[List[Dict[str, Any]]]:
-    """Position risk endpoint."""
     try:
         return client.futures_position_risk()
     except Exception as e:
@@ -125,7 +117,6 @@ def futures_position_risk() -> Optional[List[Dict[str, Any]]]:
         return None
 
 def get_open_orders(symbol: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
-    """Get open orders; optional per-symbol."""
     try:
         if symbol:
             return client.futures_get_open_orders(symbol=symbol.upper())
@@ -135,7 +126,6 @@ def get_open_orders(symbol: Optional[str] = None) -> Optional[List[Dict[str, Any
         return None
 
 def get_all_orders(symbol: str, limit: int = 100) -> Optional[List[Dict[str, Any]]]:
-    """Get historical orders for a symbol."""
     try:
         return client.futures_get_all_orders(symbol=symbol.upper(), limit=int(limit))
     except Exception as e:
@@ -143,7 +133,6 @@ def get_all_orders(symbol: str, limit: int = 100) -> Optional[List[Dict[str, Any
         return None
 
 def futures_mark_price(symbol: str) -> Optional[float]:
-    """Return current mark price for symbol, or None on failure."""
     try:
         res = client.futures_mark_price(symbol=symbol.upper())
         return float(res["markPrice"])
@@ -152,10 +141,102 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 # =============================================================================
+# Trading — New Wrappers
+# =============================================================================
+def place_limit_order(
+    *, symbol: str, side: str, quantity: float, price: float,
+    time_in_force: str = "GTC", post_only: bool = False,
+    reduce_only: bool = False, position_side: Optional[str] = None,
+    new_client_order_id: Optional[str] = None
+) -> Dict[str, Any]:
+    try:
+        params: Dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "side": side.upper(),
+            "type": "LIMIT",
+            "timeInForce": time_in_force,
+            "quantity": quantity,
+            "price": price,
+        }
+        if reduce_only:
+            params["reduceOnly"] = True
+        if post_only:
+            params["timeInForce"] = "GTX"
+        if position_side:
+            params["positionSide"] = position_side
+        if new_client_order_id:
+            params["newClientOrderId"] = new_client_order_id
+
+        return client.futures_create_order(**params)
+    except BinanceAPIException as e:
+        logger.error("BinanceAPIException (place_limit_order): %s", e)
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.error("place_limit_order failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+def place_stop_market_order(
+    *, symbol: str, side: str, stop_price: float,
+    quantity: Optional[float] = None, reduce_only: bool = True,
+    position_side: Optional[str] = None, new_client_order_id: Optional[str] = None
+) -> Dict[str, Any]:
+    try:
+        params: Dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "side": side.upper(),
+            "type": "STOP_MARKET",
+            "stopPrice": stop_price,
+        }
+        if quantity:
+            params["quantity"] = quantity
+        if reduce_only:
+            params["reduceOnly"] = True
+        if position_side:
+            params["positionSide"] = position_side
+        if new_client_order_id:
+            params["newClientOrderId"] = new_client_order_id
+
+        return client.futures_create_order(**params)
+    except BinanceAPIException as e:
+        logger.error("BinanceAPIException (place_stop_market_order): %s", e)
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.error("place_stop_market_order failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+def place_take_profit_market(
+    *, symbol: str, side: str, stop_price: float,
+    quantity: Optional[float] = None, reduce_only: bool = True,
+    position_side: Optional[str] = None, new_client_order_id: Optional[str] = None
+) -> Dict[str, Any]:
+    try:
+        params: Dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "side": side.upper(),
+            "type": "TAKE_PROFIT_MARKET",
+            "stopPrice": stop_price,
+        }
+        if quantity:
+            params["quantity"] = quantity
+        if reduce_only:
+            params["reduceOnly"] = True
+        if position_side:
+            params["positionSide"] = position_side
+        if new_client_order_id:
+            params["newClientOrderId"] = new_client_order_id
+
+        return client.futures_create_order(**params)
+    except BinanceAPIException as e:
+        logger.error("BinanceAPIException (place_take_profit_market): %s", e)
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.error("place_take_profit_market failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+# =============================================================================
 # Trading settings
 # =============================================================================
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
-    """Set futures leverage for a symbol."""
     try:
         res = client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
         return {"ok": True, "result": res}
@@ -167,61 +248,50 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 def get_futures_client() -> Client:
-    """Return underlying Binance client (use carefully)."""
     return client
 
 # =============================================================================
-# Compatibility shims (legacy imports)
+# Compatibility shims
 # =============================================================================
-# חלק ממודולים/ראוטרים ישנים מייבאים שמות היסטוריים. כדי לשמור תאימות לאחור
-# (ומבלי לגעת בכל הראוטרים), אנחנו מספקים alias-ים בטוחים.
 def get_open_positions():
-    """Legacy alias → returns result of futures_open_positions()."""
     try:
         return futures_open_positions()
     except Exception:
         return []
 
 def get_futures_open_positions():
-    """Legacy alias → identical to futures_open_positions()."""
     try:
         return futures_open_positions()
     except Exception:
         return []
 
 def get_signed_balance():
-    """Legacy alias → returns futures_balance()."""
     try:
         return futures_balance()
     except Exception:
         return []
 
 def get_mark_price(symbol: str):
-    """Legacy alias → returns futures_mark_price(symbol)."""
     try:
         return futures_mark_price(symbol)
     except Exception:
         return None
 
 def exchange_info_safe(force_refresh: bool = False):
-    """Legacy alias → returns futures_exchange_info_safe()."""
     try:
         return futures_exchange_info_safe(force_refresh=force_refresh)
     except Exception:
         return {"symbols": []}
 
 # =============================================================================
-# Public API (explicit export list)
+# Public API
 # =============================================================================
 __all__ = [
-    # Client / settings
     "get_futures_client", "set_leverage",
-    # Exchange info & filters
     "futures_exchange_info_safe", "get_symbol_info", "get_symbol_filters",
-    # Market/account data
     "fapi_ping", "futures_balance", "futures_open_positions", "futures_position_risk",
     "get_open_orders", "get_all_orders", "futures_mark_price",
-    # Legacy shims
+    "place_limit_order", "place_stop_market_order", "place_take_profit_market",
     "get_open_positions", "get_futures_open_positions", "get_signed_balance",
     "get_mark_price", "exchange_info_safe",
 ]
