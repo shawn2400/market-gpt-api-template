@@ -68,29 +68,6 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
         logger.error("Failed get_symbol_info: %s", e)
     return None
 
-def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
-    """
-    מחזיר פילטרים (LOT_SIZE, PRICE_FILTER וכו') עבור סימבול.
-    """
-    try:
-        s = get_symbol_info(symbol)
-        if not s:
-            return None
-        filters = {}
-        for f in s.get("filters", []):
-            ftype = f.get("filterType")
-            if ftype == "PRICE_FILTER":
-                filters["tickSize"] = f.get("tickSize")
-            elif ftype == "LOT_SIZE":
-                filters["minQty"] = f.get("minQty")
-                filters["stepSize"] = f.get("stepSize")
-            elif ftype in ("MIN_NOTIONAL", "NOTIONAL"):
-                filters["notional"] = f.get("notional") or f.get("minNotional") or f.get("minNotionalValue")
-        return filters
-    except Exception as e:
-        logger.error("Failed get_symbol_filters: %s", e)
-        return None
-
 # ==================== Positions ====================
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -126,17 +103,18 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         logger.error("Failed to create futures order: %s", e)
         return {"ok": False, "error": str(e)}
 
-def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
+def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     """
-    מבטל את כל ההוראות הפתוחות לסימבול מסוים.
+    מגדיר מינוף עבור סימבול מסוים ב-Futures.
     """
     try:
-        return client.futures_cancel_all_open_orders(symbol=symbol)
+        res = client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
+        return {"ok": True, "data": res}
     except BinanceAPIException as e:
-        logger.error("BinanceAPIException cancel_all: %s", e)
+        logger.error("[binance_client] set_leverage BinanceAPIException: %s", e)
         return {"ok": False, "error": str(e)}
     except Exception as e:
-        logger.error("Failed to cancel all orders for %s: %s", symbol, e)
+        logger.error("[binance_client] set_leverage failed: %s", e)
         return {"ok": False, "error": str(e)}
 
 __all__ = [
@@ -145,14 +123,14 @@ __all__ = [
     "futures_balance",
     "futures_mark_price",
     "get_symbol_info",
-    "get_symbol_filters",
     "get_open_positions",
     "futures_create_order",
-    "futures_cancel_all_orders",
+    "set_leverage",   # ✅ נוסף
     "DEFAULT_QTY_STEP_STR",
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
