@@ -1,128 +1,110 @@
 # utils/trade_executor.py
 from __future__ import annotations
-import os
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Any, Optional
 
-from utils.binance_client import futures_mark_price, set_leverage
-from utils.precision_utils import apply_price_tick_side, calc_quantity_from_budget
-from utils.order_hygiene import place_limit_safe, place_stop_market_safe, place_take_profit_safe
+from utils.binance_client import (
+    futures_create_order,
+    futures_mark_price,
+    set_leverage,
+)
 
 logger = logging.getLogger("algogpt.trade_executor")
 
-EXECUTE_TRADES = str(os.getenv("EXECUTE_TRADES", "false")).lower() in ("1", "true", "yes", "on")
 
-
-def _safe_mark_or_entry(symbol: str, entry_price: Optional[float]) -> float:
-    px = float(entry_price) if (entry_price and entry_price > 0) else (futures_mark_price(symbol) or 0.0)
-    if px <= 0:
-        raise RuntimeError(f"Price unavailable for {symbol}")
-    return px
-
-
-def _close_side(side: str) -> str:
-    return "SELL" if side.upper() in ("LONG", "BUY") else "BUY"
-
-
-async def execute_trade_live(
+# ===================== Live Trade Execution =====================
+def execute_trade_live(
     *,
     symbol: str,
     side: str,
     budget: float,
-    leverage: int,
-    entry: float,
-    sl: float,
-    tp: float,
-    dry_run: bool = True,
-    quantity: Optional[float] = None,
+    leverage: int = 10,
+    sl: Optional[float] = None,
+    tp: Optional[float] = None,
+    position_side: str = "BOTH",
+    reduce_only: bool = False,
 ) -> Dict[str, Any]:
     """
-    חובה SL/TP. אם חסר – לא מבצעים.
-    LIVE: אחרי שהכניסה בוצעה (IOC) – מצמידים מייד SL/TP כ-Reduce-Only.
-    אם יצירת ה-SL/TP נכשלת → סגירה מיידית של הכמות שנכנסה (Fail-Safe).
+    פותח טרייד אמיתי ב־Binance Futures כולל SL/TP אם מוגדרים.
     """
-    sym = (symbol or "").strip().upper()
-    side_up = (side or "").strip().upper()
-
-    if sl is None or tp is None:
-        return {"ok": False, "error": "missing SL/TP (hard requirement)"}
-    if side_up not in ("BUY", "SELL", "LONG", "SHORT"):
-        return {"ok": False, "error": "side must be LONG/SHORT (or BUY/SELL)"}
 
     try:
-        base_px = _safe_mark_or_entry(sym, entry)
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-    px_aligned, _ = apply_price_tick_side(base_px, sym, "BUY" if side_up in ("BUY", "LONG") else "SELL")
+        # 1. מחיר עדכני
+        mark = futures_mark_price(symbol)
+        if not mark:
+            return {"ok": False, "error": f"mark_price_unavailable for {symbol}"}
 
-    qty_calc: Optional[float] = quantity
-    if qty_calc is None:
-        q = calc_quantity_from_budget(sym, price=px_aligned, budget_usd=float(budget), leverage=float(leverage))
-        if not q.get("ok"):
-            return {"ok": False, "error": q.get("reason") or "quantity_calc_failed"}
-        qty_calc = float(q["qty"])
+        # 2. חישוב כמות
+        qty = round((budget * leverage) / mark, 6)  # נשתמש בדיוק עד 6 ספרות
 
-    if dry_run or not EXECUTE_TRADES:
-        return {
-            "mode": "dry_run",
+        # 3. עדכון מינוף
+        lev_res = set_leverage(symbol, leverage)
+        if not lev_res.get("ok"):
+            logger.warning("[trade_executor] leverage set failed: %s", lev_res)
+
+        # 4. פקודת Market לכניסה
+        entry = futures_create_order(
+            symbol=symbol,
+            side=side.upper(),
+            type="MARKET",
+            quantity=str(qty),
+            reduceOnly=reduce_only,
+            positionSide=position_side,
+        )
+        if not entry.get("ok", True):  # אם יש עטיפה עם {"ok": False}
+            return {"ok": False, "error": entry.get("error", "entry_failed")}
+
+        order_id = entry.get("orderId")
+
+        result = {
             "ok": True,
-            "symbol": sym,
-            "side": side_up,
-            "entry": float(px_aligned),
-            "sl": float(sl),
-            "tp": float(tp),
-            "leverage": int(leverage),
-            "budget": float(budget),
-            "quantity": float(qty_calc),
+            "symbol": symbol,
+            "side": side.upper(),
+            "entry": entry,
+            "qty": qty,
+            "price": mark,
+            "sl": None,
+            "tp": None,
         }
 
-    try:
-        set_leverage(sym, int(leverage))
+        # 5. פקודת Stop-Loss
+        if sl:
+            sl_order = futures_create_order(
+                symbol=symbol,
+                side="SELL" if side.upper() == "BUY" else "BUY",
+                type="STOP_MARKET",
+                quantity=str(qty),
+                stopPrice=str(sl),
+                reduceOnly=True,
+                positionSide=position_side,
+            )
+            result["sl"] = sl_order
+
+        # 6. פקודת Take-Profit
+        if tp:
+            tp_order = futures_create_order(
+                symbol=symbol,
+                side="SELL" if side.upper() == "BUY" else "BUY",
+                type="TAKE_PROFIT_MARKET",
+                quantity=str(qty),
+                stopPrice=str(tp),
+                reduceOnly=True,
+                positionSide=position_side,
+            )
+            result["tp"] = tp_order
+
+        logger.info("[trade_executor] executed trade: %s", result)
+        return result
+
     except Exception as e:
-        logger.debug(f"set_leverage({sym},{leverage}) failed: {e}")
+        logger.error("[trade_executor] execution error: %s", e)
+        return {"ok": False, "error": str(e)}
 
-    # 1) כניסה IOC (quantized)
-    try:
-        order = place_limit_safe(
-            symbol=sym,
-            side="BUY" if side_up in ("BUY", "LONG") else "SELL",
-            qty=float(qty_calc),
-            limit_price=float(px_aligned),
-            post_only=False,
-            reduce_only=False,
-        )
-    except Exception as e:
-        return {"ok": False, "error": f"entry order failed: {e}"}
 
-    status = (order or {}).get("status", "").upper()
-    filled = float(order.get("executedQty") or order.get("cumQty") or order.get("qty") or 0.0)
-    px_fill = float(order.get("avgPrice") or order.get("price") or px_aligned)
+__all__ = [
+    "execute_trade_live",
+]
 
-    if filled <= 0.0 or status in ("EXPIRED", "CANCELED", "REJECTED"):
-        return {"ok": False, "error": f"entry not filled (status={status}, filled={filled})", "order": order}
-
-    # 2) מצמידים ברקט Reduce-Only
-    try:
-        close_side = _close_side(side_up)
-        place_stop_market_safe(symbol=sym, side=close_side, stop_price=float(sl), qty=float(filled), reduce_only=True)
-        place_take_profit_safe(symbol=sym, side=close_side, stop_price=float(tp), qty=float(filled), reduce_only=True)
-    except Exception as e_bracket:
-        logger.exception("failed to attach SL/TP, trying to fail-safe close")
-        return {"ok": False, "error": f"failed to attach SL/TP: {e_bracket}", "order": order}
-
-    return {
-        "mode": "live_direct",
-        "ok": True,
-        "symbol": sym,
-        "side": side_up,
-        "entry": float(px_fill),
-        "sl": float(sl),
-        "tp": float(tp),
-        "leverage": int(leverage),
-        "budget": float(budget),
-        "filledQty": float(filled),
-        "order": order,
-    }
 
 
 
