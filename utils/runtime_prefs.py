@@ -2,24 +2,41 @@
 from __future__ import annotations
 import threading
 
-_lock = threading.Lock()
-_prefs = {
-    "mute": False,
+# מצב משתנה גלובלי (mute/unmute)
+_runtime_prefs = {
+    "mute": False
 }
+_lock = threading.Lock()
 
-def set_mute(value: bool) -> dict:
-    """עדכון מצב השתקה (mute)"""
+def is_muted() -> bool:
+    """
+    מחזיר אם המערכת במצב השתקה (mute).
+    """
     with _lock:
-        _prefs["mute"] = bool(value)
-        return {"ok": True, "mute": _prefs["mute"]}
+        return _runtime_prefs.get("mute", False)
 
-def get_prefs() -> dict:
-    """מחזיר העדפות נוכחיות"""
+def set_mute(state: bool) -> None:
+    """
+    מעדכן מצב השתקה (mute/unmute).
+    """
     with _lock:
-        return dict(_prefs)
+        _runtime_prefs["mute"] = bool(state)
 
-__all__ = ["set_mute", "get_prefs"]
+def toggle_mute() -> bool:
+    """
+    הופך את מצב ההשתקה (True -> False, False -> True).
+    מחזיר את המצב החדש.
+    """
+    with _lock:
+        new_state = not _runtime_prefs.get("mute", False)
+        _runtime_prefs["mute"] = new_state
+        return new_state
 
+__all__ = [
+    "is_muted",
+    "set_mute",
+    "toggle_mute",
+]
 
 
 
