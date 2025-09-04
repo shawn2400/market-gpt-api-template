@@ -22,16 +22,17 @@ def executor_status() -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"executor_status failed: {e}")
 
-@router.get("/mark_price")
+@router.get("/mark-price")
 def get_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict[str, Any]:
     """מחזיר Mark Price חי מסימבול מסוים."""
     try:
         price = futures_mark_price(symbol)
-        if not price:
+        if price is None:
             raise ValueError("No mark price available")
         return {"ok": True, "symbol": symbol.upper(), "mark_price": float(price)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"get_mark_price failed: {e}")
+
 
 
 
