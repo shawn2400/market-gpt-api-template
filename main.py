@@ -14,7 +14,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
 # --- סביבות ענן ---
-IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
+IS_CLOUD = bool(
+    os.getenv("RENDER")
+    or os.getenv("RENDER_SERVICE_ID")
+    or os.getenv("DYNO")
+    or os.getenv("K_SERVICE")
+)
 if not IS_CLOUD:
     try:
         from dotenv import load_dotenv  # type: ignore
@@ -22,14 +27,17 @@ if not IS_CLOUD:
     except Exception:
         pass
 
+
 def _to_bool(v: str | None, default: bool = False) -> bool:
-    if v is None: 
+    if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
 
 def _parse_csv(s: str | None) -> List[str]:
     s = s or ""
     return [x.strip() for x in s.split(",") if x.strip()]
+
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.17.0")
 
@@ -49,11 +57,17 @@ from utils.metrics import metrics_tracker
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
 except Exception:
-    async def start_user_stream_consumer(): return None
-    async def stop_user_stream_consumer(): return None
+
+    async def start_user_stream_consumer():
+        return None
+
+    async def stop_user_stream_consumer():
+        return None
+
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
+
 
 def _ensure_dir(path: str) -> bool:
     p = Path(path)
@@ -64,22 +78,23 @@ def _ensure_dir(path: str) -> bool:
         logger.warning({"event": "mkdir_failed", "dir": path, "error": str(e)})
         return False
 
+
 static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
 # --- FastAPI App ---
 app = FastAPI(
-    title="AlgoGPT API",
-    version=APP_VERSION,
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת"
+    title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת"
 )
 
-app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
+app.add_middleware(
+    ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880"))
+)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 CORS_ALLOWED = (os.getenv("CORS_ALLOW_ORIGINS", "*") or "*").strip()
 CORS_ALLOW_CREDENTIALS = _to_bool(os.getenv("CORS_ALLOW_CREDENTIALS", "0"), False)
-if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS: 
+if CORS_ALLOWED == "*" and CORS_ALLOW_CREDENTIALS:
     CORS_ALLOW_CREDENTIALS = False
 allow_origins = ["*"] if CORS_ALLOWED == "*" else _parse_csv(CORS_ALLOWED)
 app.add_middleware(
@@ -87,7 +102,7 @@ app.add_middleware(
     allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=CORS_ALLOW_CREDENTIALS
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
 
 try:
@@ -99,7 +114,16 @@ except Exception as e:
 # --- Auth Middleware ---
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/ui/dashboard"}
+    PUBLIC_PATHS = {
+        "/",
+        "/openapi.json",
+        "/health",
+        "/readyz",
+        "/docs",
+        "/redoc",
+        "/telegram/webhook",
+        "/ui/dashboard",
+    }
     PUBLIC_PREFIXES = ["/price", "/static/"]
     path = request.url.path
     if request.method.upper() == "OPTIONS":
@@ -111,11 +135,12 @@ async def validate_token(request: Request, call_next):
     token = extract_token(
         request,
         authorization=request.headers.get("Authorization", ""),
-        x_api_key=request.headers.get("X-API-Key")
+        x_api_key=request.headers.get("X-API-Key"),
     )
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
+
 
 # --- Metrics Middleware ---
 @app.middleware("http")
@@ -132,29 +157,64 @@ async def track_metrics(request: Request, call_next):
         metrics_tracker.observe_request(response.status_code, duration_ms)
         return response
 
+
 # --- Routers ---
 def _include_router(module_path: str) -> None:
     try:
         mod = __import__(module_path, fromlist=["router", "router_public"])
         if hasattr(mod, "router"):
             app.include_router(getattr(mod, "router"))
-            logger.info({"event": "router_registered", "router": module_path, "attr": "router"})
+            logger.info(
+                {"event": "router_registered", "router": module_path, "attr": "router"}
+            )
         if hasattr(mod, "router_public"):
             app.include_router(getattr(mod, "router_public"))
-            logger.info({"event": "router_registered", "router": module_path, "attr": "router_public"})
+            logger.info(
+                {
+                    "event": "router_registered",
+                    "router": module_path,
+                    "attr": "router_public",
+                }
+            )
     except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
+        logger.warning(
+            {"event": "router_register_failed", "router": module_path, "error": str(e)}
+        )
+
 
 ALL_ROUTERS: List[str] = [
-    "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders",
-    "routes.price", "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
-    "routes.ws_stream", "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
-    "routes.telegram_bot", "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
-    "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl", "routes.ui",
-    "routes.backtest", "routes.ui_grid",
+    "routes.trade",
+    "routes.market",
+    "routes.binance_status",
+    "routes.executor",
+    "routes.orders",
+    "routes.price",
+    "routes.rpc",
+    "routes.market_extra",
+    "routes.executor_extra",
+    "routes.anchor_extra",
+    "routes.ws_stream",
+    "routes.grid",
+    "routes.debug",
+    "routes.indicators",
+    "routes.indicators_extra",
+    "routes.telegram_bot",
+    "routes.metrics",
+    "routes.metrics_extra",
+    "routes.precision",
+    "routes.alerts",
+    "routes.reconcile",
+    "routes.scheduler_ai",
+    "routes.admin",
+    "routes.export",
+    "routes.pnl",
+    "routes.ui",
+    "routes.backtest",
+    "routes.ui_grid",
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ALL_ROUTERS.append("routes.ai")
+
 for mod in ALL_ROUTERS:
     _include_router(mod)
 
@@ -163,9 +223,11 @@ for mod in ALL_ROUTERS:
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
 
+
 @app.get("/health")
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
+
 
 @app.get("/readyz")
 async def readyz():
@@ -178,11 +240,15 @@ async def readyz():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
 @app.on_event("startup")
 async def startup_event():
-    logger.info({"event": "startup", "version": APP_VERSION, "config": dump_config_sanitized()})
+    logger.info(
+        {"event": "startup", "version": APP_VERSION, "config": dump_config_sanitized()}
+    )
     try:
-        sync_now(); start_background_sync()
+        sync_now()
+        start_background_sync()
     except Exception:
         pass
     try:
@@ -196,6 +262,7 @@ async def startup_event():
     except Exception:
         pass
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     try:
@@ -203,24 +270,34 @@ async def shutdown_event():
     except Exception:
         pass
 
+
 @app.post("/start-executor")
 async def api_start_executor():
     start_executor()
     return {"ok": True}
+
 
 @app.post("/stop-executor")
 async def api_stop_executor():
     stop_executor()
     return {"ok": True}
 
+
 @app.post("/manage-once")
 async def api_manage_once():
     await manage_open_trades()
     return {"ok": True}
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
+    uvicorn.run(
+        "main:app",
+        host=os.getenv("BIND_HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "8000")),
+    )
+
 
 
 
