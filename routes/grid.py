@@ -1,9 +1,11 @@
 # routes/grid.py
 from __future__ import annotations
-import logging
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+import logging, json, os
+from pathlib import Path
 from typing import Dict, Any, Optional, List
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
 from utils.account_router import get_account_credentials
@@ -21,12 +23,12 @@ router = APIRouter(prefix="/grid", tags=["Grid"], dependencies=[Depends(require_
 # ──────────────────────────────────────────────────────────────
 class GridTradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
-    side: str = Field(..., pattern="^(LONG|SHORT|BUY|SELL)$", example="LONG")  # fixed regex→pattern
+    side: str = Field(..., pattern="^(LONG|SHORT|BUY|SELL)$", example="LONG")
     budget: float = Field(..., gt=0, example=100)
     leverage: int = Field(10, ge=1, le=125, example=10)
     grids: int = Field(3, ge=1, le=20, example=3)
     dry_run: bool = Field(True, description="אם True → לא מציב פקודות אמיתיות")
-    market: str = Field("futures", pattern="^(futures|spot)$", example="futures")  # fixed regex→pattern
+    market: str = Field("futures", pattern="^(futures|spot)$", example="futures")
     account_id: str = Field("main", description="ID מה־accounts_config.json")
 
 class GridTradeResponse(BaseModel):
@@ -45,6 +47,40 @@ class GridTradeResponse(BaseModel):
     error: Optional[str] = None
 
 # ──────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────
+_ALLOWED_DIRS = [Path("."), Path("storage"), Path("static"), Path("logs")]
+
+def _safe_path(p: str) -> Path:
+    p = (p or "").strip() or "trades_log.json"
+    candidate = Path(p)
+    if not candidate.is_absolute():
+        # נסה בתוך תיקיות מותרות
+        for base in _ALLOWED_DIRS:
+            test = (base / candidate).resolve()
+            if test.exists():
+                return test
+        return (Path(".") / candidate).resolve()
+    # absolute → ודא שאינו בורח
+    resolved = candidate.resolve()
+    for base in _ALLOWED_DIRS:
+        if str(resolved).startswith(str(base.resolve())):
+            return resolved
+    # אם לא—חסום
+    raise HTTPException(status_code=400, detail="Invalid path location")
+
+def _load_json_or_empty(path: Path) -> Any:
+    try:
+        if not path.exists():
+            return {"ok": True, "items": [], "note": f"file not found: {path.name}"}
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"ok": True, "items": data}
+    except Exception as e:
+        logger.exception("grid_dashboard_load_failed")
+        raise HTTPException(status_code=500, detail=f"load failed: {e}")
+
+# ──────────────────────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────────────────────
 @router.get("/status")
@@ -54,6 +90,30 @@ def grid_status() -> Dict[str, Any]:
 @router.get("/active")
 def grid_active() -> Dict[str, Any]:
     return {"ok": True, "active": []}
+
+@router.get("/dashboard")
+def grid_dashboard_info() -> Dict[str, Any]:
+    """
+    Endpoint אינפורמטיבי שמדמה 'דאשבורד' לוגי (JSON).
+    """
+    return {
+        "ok": True,
+        "endpoints": {
+            "data": "/grid/dashboard/data?path=trades_log.json",
+            "active": "/grid/active",
+            "status": "/grid/status",
+        },
+        "notes": "דשבורד לוגי; הדאטה נשלף דרך /grid/dashboard/data",
+    }
+
+@router.get("/dashboard/data")
+def grid_dashboard_data(path: Optional[str] = Query(None, description="קובץ JSON לטעינה, ברירת מחדל trades_log.json")):
+    """
+    פותר את השגיאה: load_trades() – חסר פרמטר path.
+    טוען JSON מהקובץ המבוקש בצורה בטוחה.
+    """
+    safe = _safe_path(path or "trades_log.json")
+    return _load_json_or_empty(safe)
 
 @router.post("/trade", response_model=GridTradeResponse)
 async def trade_grid(req: GridTradeRequest):
@@ -128,9 +188,12 @@ async def trade_grid(req: GridTradeRequest):
         else:
             raise HTTPException(status_code=400, detail="Invalid market")
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("grid_trade_failed")
         raise HTTPException(status_code=500, detail=f"Grid trade failed: {e}")
+
 
 
 
