@@ -1,212 +1,92 @@
 # utils/binance_client.py
 from __future__ import annotations
-import os
-import time
-import logging
+import os, logging
 from typing import Any, Dict, List, Optional
-
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
 logger = logging.getLogger("algogpt.binance")
 
-# =============================================================================
-# ENV / Client
-# =============================================================================
-API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
-API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
-TESTNET = (os.getenv("BINANCE_TESTNET") or "0").strip().lower() in ("1", "true", "yes", "on")
+# === Load API Keys ===
+API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes")
+
+BASE_URL_FUTURES = "https://testnet.binancefuture.com" if TESTNET else "https://fapi.binance.com"
 
 if not API_KEY or not API_SECRET:
-    raise RuntimeError("Missing BINANCE_API_KEY / BINANCE_API_SECRET")
+    logger.warning("⚠️ Missing Binance API keys")
 
-client = Client(API_KEY, API_SECRET, testnet=TESTNET)
+client = Client(API_KEY, API_SECRET)
+client.FUTURES_URL = BASE_URL_FUTURES
 
-# =============================================================================
-# Caches / Defaults
-# =============================================================================
-_EXCHANGE_INFO: Dict[str, Any] = {}
-_EXCHANGE_INFO_TS: float = 0.0
-_EXCHANGE_INFO_TTL: int = int(os.getenv("EXINFO_TTL", "300"))  # seconds
-
-DEFAULT_QTY_STEP_STR: str = "0.001"
-DEFAULT_PRICE_TICK_STR: str = "0.01"
-DEFAULT_MIN_NOTIONAL: float = 5.0
-
-# =============================================================================
-# Exchange Info
-# =============================================================================
-def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
-    global _EXCHANGE_INFO, _EXCHANGE_INFO_TS
-    now = time.time()
-    if force_refresh or (now - _EXCHANGE_INFO_TS > _EXCHANGE_INFO_TTL) or not _EXCHANGE_INFO:
-        try:
-            data = client.futures_exchange_info()
-            _EXCHANGE_INFO = data or {}
-            _EXCHANGE_INFO_TS = now
-            logger.info("Binance futures_exchange_info refreshed (symbols=%s)", len(_EXCHANGE_INFO.get("symbols", [])))
-        except Exception as e:
-            logger.error("Failed to refresh exchange info: %s", e)
-    return _EXCHANGE_INFO
-
-def futures_exchange_info_safe(force_refresh: bool = False) -> Dict[str, Any]:
-    return _refresh_exchange_info(force_refresh=force_refresh)
-
-def get_symbol_info(symbol: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-    info = _refresh_exchange_info(force_refresh=force_refresh)
-    sy = (symbol or "").upper()
-    for s in info.get("symbols", []):
-        if s.get("symbol") == sy:
-            return s
+# === Safe wrappers ===
+def _safe_call(func, *args, **kwargs):
+    try:
+        return func(*args, **kwargs)
+    except BinanceAPIException as e:
+        logger.error(f"Binance API error: {e.message}")
+    except Exception as e:
+        logger.error(f"Binance client error: {e}")
     return None
 
-def get_symbol_filters(symbol: str) -> Dict[str, Any]:
-    info = get_symbol_info(symbol) or {}
-    filters = {}
-    for f in info.get("filters", []) or []:
-        ft = f.get("filterType")
-        if ft:
-            filters[ft] = f
+# === Core Futures Helpers ===
+def futures_mark_price(symbol: str) -> Optional[float]:
+    """Get current mark price"""
+    data = _safe_call(client.futures_mark_price, symbol=symbol)
+    if not data:
+        return None
+    return float(data.get("markPrice", 0.0))
 
-    tick = (filters.get("PRICE_FILTER", {}) or {}).get("tickSize", DEFAULT_PRICE_TICK_STR)
-    step = (filters.get("LOT_SIZE", {}) or {}).get("stepSize", DEFAULT_QTY_STEP_STR)
-    min_notional = (
-        (filters.get("MIN_NOTIONAL", {}) or {}).get("notional")
-        or (filters.get("MIN_NOTIONAL", {}) or {}).get("minNotional")
-        or DEFAULT_MIN_NOTIONAL
-    )
+def futures_position_risk() -> List[Dict[str, Any]]:
+    """Get current open positions"""
+    data = _safe_call(client.futures_position_information)
+    return data or []
 
-    return {
-        "tickSizeStr": str(tick),
-        "stepSizeStr": str(step),
-        "minNotional": float(min_notional),
-    }
+def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get all open orders (optionally by symbol)"""
+    data = _safe_call(client.futures_get_open_orders, symbol=symbol) if symbol else _safe_call(client.futures_get_open_orders)
+    return data or []
 
-# =============================================================================
-# Account / Market Data
-# =============================================================================
+def cancel_order(symbol: str, order_id: Optional[int] = None, orig_client_order_id: Optional[str] = None) -> Dict[str, Any]:
+    """Cancel order by orderId or origClientOrderId"""
+    try:
+        if order_id:
+            return client.futures_cancel_order(symbol=symbol, orderId=order_id)
+        elif orig_client_order_id:
+            return client.futures_cancel_order(symbol=symbol, origClientOrderId=orig_client_order_id)
+    except BinanceAPIException as e:
+        logger.error(f"cancel_order API error: {e.message}")
+    except Exception as e:
+        logger.error(f"cancel_order error: {e}")
+    return {}
+
 def fapi_ping() -> bool:
+    """Ping Binance Futures API"""
     try:
         client.futures_ping()
         return True
-    except Exception as e:
-        logger.warning("fapi_ping failed: %s", e)
+    except Exception:
         return False
 
-def futures_balance() -> Optional[List[Dict[str, Any]]]:
+def futures_balance() -> List[Dict[str, Any]]:
+    """Get Futures account balance"""
+    return _safe_call(client.futures_account_balance) or []
+
+def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
+    """Get symbol exchange info"""
     try:
-        return client.futures_account_balance()
+        ex = client.futures_exchange_info()
+        for s in ex.get("symbols", []):
+            if s.get("symbol") == symbol:
+                return s
     except Exception as e:
-        logger.error("futures_balance failed: %s", e)
-        return None
+        logger.error(f"get_symbol_info error: {e}")
+    return None
 
-def futures_open_positions() -> Optional[List[Dict[str, Any]]]:
-    try:
-        return client.futures_position_information()
-    except Exception as e:
-        logger.error("futures_open_positions failed: %s", e)
-        return None
-
-def futures_position_risk() -> Optional[List[Dict[str, Any]]]:
-    try:
-        return client.futures_position_risk()
-    except Exception as e:
-        logger.error("futures_position_risk failed: %s", e)
-        return None
-
-def get_open_orders(symbol: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
-    try:
-        if symbol:
-            return client.futures_get_open_orders(symbol=symbol.upper())
-        return client.futures_get_open_orders()
-    except Exception as e:
-        logger.error("get_open_orders failed: %s", e)
-        return None
-
-def get_all_orders(symbol: str, limit: int = 100) -> Optional[List[Dict[str, Any]]]:
-    try:
-        return client.futures_get_all_orders(symbol=symbol.upper(), limit=int(limit))
-    except Exception as e:
-        logger.error("get_all_orders failed: %s", e)
-        return None
-
-def futures_mark_price(symbol: str) -> Optional[float]:
-    try:
-        res = client.futures_mark_price(symbol=symbol.upper())
-        return float(res["markPrice"])
-    except Exception as e:
-        logger.error("futures_mark_price failed for %s: %s", symbol, e)
-        return None
-
-# =============================================================================
-# Trading settings
-# =============================================================================
-def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
-    try:
-        res = client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
-        return {"ok": True, "result": res}
-    except BinanceAPIException as e:
-        logger.error("BinanceAPIException (set_leverage): %s", e)
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error("set_leverage failed: %s", e)
-        return {"ok": False, "error": str(e)}
-
-def get_futures_client() -> Client:
-    return client
-
-def cancel_order(symbol: str, order_id: int):
-    """Cancel a futures order safely."""
-    try:
-        return client.futures_cancel_order(symbol=symbol.upper(), orderId=order_id)
-    except Exception as e:
-        logger.error("cancel_order failed for %s: %s", symbol, e)
-        return None
-
-# =============================================================================
-# Legacy aliases
-# =============================================================================
-def get_open_positions():
-    try:
-        return futures_open_positions()
-    except Exception:
-        return []
-
-def get_futures_open_positions():
-    try:
-        return futures_open_positions()
-    except Exception:
-        return []
-
-def get_signed_balance():
-    try:
-        return futures_balance()
-    except Exception:
-        return []
-
-def get_mark_price(symbol: str):
-    try:
-        return futures_mark_price(symbol)
-    except Exception:
-        return None
-
-def exchange_info_safe(force_refresh: bool = False):
-    try:
-        return futures_exchange_info_safe(force_refresh=force_refresh)
-    except Exception:
-        return {"symbols": []}
-
-# =============================================================================
-# Public API
-# =============================================================================
-__all__ = [
-    "get_futures_client", "set_leverage", "cancel_order",
-    "futures_exchange_info_safe", "get_symbol_info", "get_symbol_filters",
-    "fapi_ping", "futures_balance", "futures_open_positions", "futures_position_risk",
-    "get_open_orders", "get_all_orders", "futures_mark_price",
-    "get_open_positions", "get_futures_open_positions", "get_signed_balance",
-    "get_mark_price", "exchange_info_safe",
-]
+def futures_exchange_info_safe() -> Dict[str, Any]:
+    """Safe wrapper for exchange info"""
+    return _safe_call(client.futures_exchange_info) or {}
 
 
 
