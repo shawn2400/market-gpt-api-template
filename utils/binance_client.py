@@ -68,6 +68,34 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
         logger.error("Failed get_symbol_info: %s", e)
     return None
 
+def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    מחזיר את הפילטרים (LOT_SIZE, PRICE_FILTER וכו') מתוך exchangeInfo.
+    """
+    try:
+        info = get_symbol_info(symbol)
+        if not info:
+            return None
+        filters = {}
+        for f in info.get("filters", []):
+            ftype = f.get("filterType")
+            if ftype == "PRICE_FILTER":
+                filters["tickSize"] = f.get("tickSize")
+                filters["minPrice"] = f.get("minPrice")
+                filters["maxPrice"] = f.get("maxPrice")
+            elif ftype in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+                filters["stepSize"] = f.get("stepSize")
+                filters["minQty"] = f.get("minQty")
+                filters["maxQty"] = f.get("maxQty")
+            elif ftype in ("MIN_NOTIONAL", "NOTIONAL"):
+                filters["notional"] = (
+                    f.get("notional") or f.get("minNotional") or f.get("minNotionalValue")
+                )
+        return filters
+    except Exception as e:
+        logger.error("Failed get_symbol_filters(%s): %s", symbol, e)
+        return None
+
 # ==================== Positions ====================
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -109,12 +137,14 @@ __all__ = [
     "futures_balance",
     "futures_mark_price",
     "get_symbol_info",
+    "get_symbol_filters",
     "get_open_positions",
     "futures_create_order",
     "DEFAULT_QTY_STEP_STR",
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
