@@ -20,6 +20,12 @@ if not API_KEY or not API_SECRET:
 client = Client(API_KEY, API_SECRET)
 client.FUTURES_URL = BASE_URL_FUTURES
 
+# === Default precision fallbacks (used by precision_utils) ===
+DEFAULT_PRICE_TICK = 0.01
+DEFAULT_QTY_STEP = 0.001
+DEFAULT_PRICE_TICK_STR = "0.01"
+DEFAULT_QTY_STEP_STR = "0.001"
+
 # === Safe wrappers ===
 def _safe_call(func, *args, **kwargs):
     try:
@@ -32,24 +38,20 @@ def _safe_call(func, *args, **kwargs):
 
 # === Core Futures Helpers ===
 def futures_mark_price(symbol: str) -> Optional[float]:
-    """Get current mark price"""
     data = _safe_call(client.futures_mark_price, symbol=symbol)
     if not data:
         return None
     return float(data.get("markPrice", 0.0))
 
 def futures_position_risk() -> List[Dict[str, Any]]:
-    """Get current open positions"""
     data = _safe_call(client.futures_position_information)
     return data or []
 
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Get all open orders (optionally by symbol)"""
     data = _safe_call(client.futures_get_open_orders, symbol=symbol) if symbol else _safe_call(client.futures_get_open_orders)
     return data or []
 
 def cancel_order(symbol: str, order_id: Optional[int] = None, orig_client_order_id: Optional[str] = None) -> Dict[str, Any]:
-    """Cancel order by orderId or origClientOrderId"""
     try:
         if order_id:
             return client.futures_cancel_order(symbol=symbol, orderId=order_id)
@@ -62,7 +64,6 @@ def cancel_order(symbol: str, order_id: Optional[int] = None, orig_client_order_
     return {}
 
 def fapi_ping() -> bool:
-    """Ping Binance Futures API"""
     try:
         client.futures_ping()
         return True
@@ -70,11 +71,9 @@ def fapi_ping() -> bool:
         return False
 
 def futures_balance() -> List[Dict[str, Any]]:
-    """Get Futures account balance"""
     return _safe_call(client.futures_account_balance) or []
 
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
-    """Get symbol exchange info"""
     try:
         ex = client.futures_exchange_info()
         for s in ex.get("symbols", []):
@@ -85,8 +84,8 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     return None
 
 def futures_exchange_info_safe() -> Dict[str, Any]:
-    """Safe wrapper for exchange info"""
     return _safe_call(client.futures_exchange_info) or {}
+
 
 
 
