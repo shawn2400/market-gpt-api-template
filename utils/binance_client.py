@@ -44,10 +44,7 @@ def _refresh_exchange_info(force_refresh: bool = False) -> Dict[str, Any]:
             data = client.futures_exchange_info()
             _EXCHANGE_INFO = data or {}
             _EXCHANGE_INFO_TS = now
-            logger.info(
-                "Binance futures_exchange_info refreshed (symbols=%s)",
-                len(_EXCHANGE_INFO.get("symbols", [])),
-            )
+            logger.info("Binance futures_exchange_info refreshed (symbols=%s)", len(_EXCHANGE_INFO.get("symbols", [])))
         except Exception as e:
             logger.error("Failed to refresh exchange info: %s", e)
     return _EXCHANGE_INFO
@@ -78,6 +75,7 @@ def get_symbol_filters(symbol: str) -> Dict[str, Any]:
         or (filters.get("MIN_NOTIONAL", {}) or {}).get("minNotional")
         or DEFAULT_MIN_NOTIONAL
     )
+
     return {
         "tickSizeStr": str(tick),
         "stepSizeStr": str(step),
@@ -141,99 +139,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 # =============================================================================
-# Trading — New Wrappers
-# =============================================================================
-def place_limit_order(
-    *, symbol: str, side: str, quantity: float, price: float,
-    time_in_force: str = "GTC", post_only: bool = False,
-    reduce_only: bool = False, position_side: Optional[str] = None,
-    new_client_order_id: Optional[str] = None
-) -> Dict[str, Any]:
-    try:
-        params: Dict[str, Any] = {
-            "symbol": symbol.upper(),
-            "side": side.upper(),
-            "type": "LIMIT",
-            "timeInForce": time_in_force,
-            "quantity": quantity,
-            "price": price,
-        }
-        if reduce_only:
-            params["reduceOnly"] = True
-        if post_only:
-            params["timeInForce"] = "GTX"
-        if position_side:
-            params["positionSide"] = position_side
-        if new_client_order_id:
-            params["newClientOrderId"] = new_client_order_id
-
-        return client.futures_create_order(**params)
-    except BinanceAPIException as e:
-        logger.error("BinanceAPIException (place_limit_order): %s", e)
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error("place_limit_order failed: %s", e)
-        return {"ok": False, "error": str(e)}
-
-def place_stop_market_order(
-    *, symbol: str, side: str, stop_price: float,
-    quantity: Optional[float] = None, reduce_only: bool = True,
-    position_side: Optional[str] = None, new_client_order_id: Optional[str] = None
-) -> Dict[str, Any]:
-    try:
-        params: Dict[str, Any] = {
-            "symbol": symbol.upper(),
-            "side": side.upper(),
-            "type": "STOP_MARKET",
-            "stopPrice": stop_price,
-        }
-        if quantity:
-            params["quantity"] = quantity
-        if reduce_only:
-            params["reduceOnly"] = True
-        if position_side:
-            params["positionSide"] = position_side
-        if new_client_order_id:
-            params["newClientOrderId"] = new_client_order_id
-
-        return client.futures_create_order(**params)
-    except BinanceAPIException as e:
-        logger.error("BinanceAPIException (place_stop_market_order): %s", e)
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error("place_stop_market_order failed: %s", e)
-        return {"ok": False, "error": str(e)}
-
-def place_take_profit_market(
-    *, symbol: str, side: str, stop_price: float,
-    quantity: Optional[float] = None, reduce_only: bool = True,
-    position_side: Optional[str] = None, new_client_order_id: Optional[str] = None
-) -> Dict[str, Any]:
-    try:
-        params: Dict[str, Any] = {
-            "symbol": symbol.upper(),
-            "side": side.upper(),
-            "type": "TAKE_PROFIT_MARKET",
-            "stopPrice": stop_price,
-        }
-        if quantity:
-            params["quantity"] = quantity
-        if reduce_only:
-            params["reduceOnly"] = True
-        if position_side:
-            params["positionSide"] = position_side
-        if new_client_order_id:
-            params["newClientOrderId"] = new_client_order_id
-
-        return client.futures_create_order(**params)
-    except BinanceAPIException as e:
-        logger.error("BinanceAPIException (place_take_profit_market): %s", e)
-        return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error("place_take_profit_market failed: %s", e)
-        return {"ok": False, "error": str(e)}
-
-# =============================================================================
 # Trading settings
 # =============================================================================
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
@@ -250,8 +155,16 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
 def get_futures_client() -> Client:
     return client
 
+def cancel_order(symbol: str, order_id: int):
+    """Cancel a futures order safely."""
+    try:
+        return client.futures_cancel_order(symbol=symbol.upper(), orderId=order_id)
+    except Exception as e:
+        logger.error("cancel_order failed for %s: %s", symbol, e)
+        return None
+
 # =============================================================================
-# Compatibility shims
+# Legacy aliases
 # =============================================================================
 def get_open_positions():
     try:
@@ -287,15 +200,13 @@ def exchange_info_safe(force_refresh: bool = False):
 # Public API
 # =============================================================================
 __all__ = [
-    "get_futures_client", "set_leverage",
+    "get_futures_client", "set_leverage", "cancel_order",
     "futures_exchange_info_safe", "get_symbol_info", "get_symbol_filters",
     "fapi_ping", "futures_balance", "futures_open_positions", "futures_position_risk",
     "get_open_orders", "get_all_orders", "futures_mark_price",
-    "place_limit_order", "place_stop_market_order", "place_take_profit_market",
     "get_open_positions", "get_futures_open_positions", "get_signed_balance",
     "get_mark_price", "exchange_info_safe",
 ]
-
 
 
 
