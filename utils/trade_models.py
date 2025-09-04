@@ -5,9 +5,13 @@ from typing import Optional, Dict
 from zoneinfo import ZoneInfo
 import os, datetime as dt
 
+# Timezone ברירת מחדל
 TZ = os.getenv("TZ", "Asia/Jerusalem")
 
 
+# =========================
+# Trade Proposal
+# =========================
 class TradeProposal(BaseModel):
     symbol: str = Field(..., min_length=6, max_length=20)
     side: str = Field(..., regex=r"^(?i:LONG|SHORT)$")
@@ -34,6 +38,7 @@ class TradeProposal(BaseModel):
         return round(self.notional_usd() / self.entry, 6)
 
     def risk_rr(self) -> Dict[str, float]:
+        """Risk/Reward ratios for TP1–TP3"""
         risk = abs(self.entry - self.sl)
         rr1 = abs(self.tp1 - self.entry) / risk if risk > 0 else 0
         rr2 = abs((self.tp2 or 0) - self.entry) / risk if (risk > 0 and self.tp2) else 0
@@ -41,6 +46,9 @@ class TradeProposal(BaseModel):
         return {"risk_per_unit": risk, "rr1": rr1, "rr2": rr2, "rr3": rr3}
 
 
+# =========================
+# Trade ETA
+# =========================
 class TradeETA(BaseModel):
     tz: str = TZ
     now_local: str
@@ -92,6 +100,9 @@ def build_eta(tp: TradeProposal, per_min_move: float) -> TradeETA:
     )
 
 
+# =========================
+# Formatter
+# =========================
 def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
     rr = tp.risk_rr()
     rr1_s = f"{rr['rr1']:.2f}"
@@ -127,6 +138,7 @@ def summarize(tp: TradeProposal, eta: TradeETA, why: str = "") -> str:
         (f"סיבה/תקציר: {why}" if why else ""),
     ]
     return "\n".join([p for p in parts if p])
+
 
 
 
