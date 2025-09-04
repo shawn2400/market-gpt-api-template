@@ -15,18 +15,25 @@ from utils.hmac_utils import verify_inbound
 from utils.approvals import preflight_proposal
 from fastapi.responses import JSONResponse
 
-router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/alerts",
+    tags=["Alerts"],
+    dependencies=[Depends(require_api_key)],
+)
 
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
 SINK_ENFORCE_APPROVALS = str(os.getenv("SINK_ENFORCE_APPROVALS", "1")).lower() in ("1", "true", "yes", "on")
 
-# זיכרון מקומי — מומלץ להחליף ל־Redis בפרודקשן
+# זיכרון מקומי — לפרודקשן עדיף Redis
 _ACTIVE: Dict[str, Dict[str, Any]] = {}
 
+
+# === Models ===
 class SendRequest(BaseModel):
     message: str = Field(..., min_length=1)
     parse_mode: Optional[str] = "Markdown"
     disable_preview: bool = True
+
 
 class TradeAlert(BaseModel):
     symbol: str
@@ -41,6 +48,8 @@ class TradeAlert(BaseModel):
     quality: Optional[float] = None
     success_pct: Optional[float] = None
 
+
+# === Formatters ===
 def format_trade_alert(
     symbol: str, side: str, entry: float, sl: float, tp1: float,
     tp2: Optional[float] = None, tp3: Optional[float] = None,
@@ -66,13 +75,16 @@ def format_trade_alert(
         parts.append(f"Note: {note}")
     return "\n".join(parts)
 
+
 async def send_telegram_alert(text: str, parse_mode="Markdown", disable_preview=True) -> Dict[str, Any]:
     return await telegram_send(text, parse_mode=parse_mode, disable_preview=disable_preview)
 
-# == Service endpoints ==
+
+# === Endpoints ===
 @router.get("/ping")
 async def ping() -> Dict[str, Any]:
     return {"ok": True}
+
 
 @router.get("/status")
 async def status() -> Dict[str, Any]:
@@ -80,36 +92,41 @@ async def status() -> Dict[str, Any]:
     typing = await telegram_send_chat_action("typing")
     return {"ok": True, "getMe": me, "chatAction": typing}
 
+
 @router.post("/test")
 async def test() -> Dict[str, Any]:
     msg = "🔔 *AlgoGPT Alerts* — בדיקת בוט הצליחה.\nאם אתה רואה את זה בטלגרם, הכל תקין."
     res = await send_telegram_alert(msg)
     return {"ok": bool(res.get("ok")), "response": res}
 
+
 @router.post("/send")
 async def send(req: SendRequest = Body(...)) -> Dict[str, Any]:
     res = await send_telegram_alert(req.message, req.parse_mode or "Markdown", req.disable_preview)
     return {"ok": bool(res.get("ok")), "response": res}
 
-# == Simple trade push ==
+
 @router.post("/trade")
 async def trade_alert(req: TradeAlert = Body(...)) -> Dict[str, Any]:
     text = format_trade_alert(
         req.symbol, req.side, req.entry, req.sl, req.tp1,
         req.tp2, req.tp3, req.size_usd,
-        note=req.note, quality=req.quality, success_pct=req.success_pct
+        note=req.note, quality=req.quality, success_pct=req.success_pct,
     )
     res = await send_telegram_alert(text)
     return {"ok": bool(res.get("ok")), "response": res, "text": text}
 
-# == Sink APIs (לטלגרם) ==
+
+# === Sink APIs (לטלגרם/מערכות חיצוניות) ===
 @router.get("/trades/active")
 async def trades_active() -> Dict[str, Any]:
     return {"ok": True, "items": list(_ACTIVE.values())}
 
+
 class UpdateReq(BaseModel):
     trade_id: str
     updates: Dict[str, Any]
+
 
 @router.post("/trades/update")
 async def trades_update(req: UpdateReq) -> Dict[str, Any]:
@@ -117,6 +134,7 @@ async def trades_update(req: UpdateReq) -> Dict[str, Any]:
         return {"ok": False, "error": "not_found"}
     _ACTIVE[req.trade_id].update(req.updates or {})
     return {"ok": True, "item": _ACTIVE[req.trade_id]}
+
 
 @router.post("/trade-ingest")
 async def trade_ingest(
@@ -192,9 +210,11 @@ async def trade_ingest(
     await send_telegram_alert(text)
     return {"ok": True, "item": record, "warnings": pre.get("warnings", [])}
 
+
 @router.get("/analysis")
 async def analysis(symbol: Optional[str] = None) -> Dict[str, Any]:
     return {"ok": True, "symbol": symbol, "note": "analysis endpoint stub"}
+
 
 
 
