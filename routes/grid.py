@@ -21,12 +21,12 @@ router = APIRouter(prefix="/grid", tags=["Grid"], dependencies=[Depends(require_
 # ──────────────────────────────────────────────────────────────
 class GridTradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
-    side: str = Field(..., regex="^(LONG|SHORT|BUY|SELL)$", example="LONG")
+    side: str = Field(..., pattern="^(LONG|SHORT|BUY|SELL)$", example="LONG")  # fixed regex→pattern
     budget: float = Field(..., gt=0, example=100)
     leverage: int = Field(10, ge=1, le=125, example=10)
     grids: int = Field(3, ge=1, le=20, example=3)
     dry_run: bool = Field(True, description="אם True → לא מציב פקודות אמיתיות")
-    market: str = Field("futures", regex="^(futures|spot)$", example="futures")
+    market: str = Field("futures", pattern="^(futures|spot)$", example="futures")  # fixed regex→pattern
     account_id: str = Field("main", description="ID מה־accounts_config.json")
 
 class GridTradeResponse(BaseModel):
@@ -45,7 +45,7 @@ class GridTradeResponse(BaseModel):
     error: Optional[str] = None
 
 # ──────────────────────────────────────────────────────────────
-# Existing endpoints
+# Endpoints
 # ──────────────────────────────────────────────────────────────
 @router.get("/status")
 def grid_status() -> Dict[str, Any]:
@@ -55,29 +55,18 @@ def grid_status() -> Dict[str, Any]:
 def grid_active() -> Dict[str, Any]:
     return {"ok": True, "active": []}
 
-# ──────────────────────────────────────────────────────────────
-# New: /grid/trade endpoint
-# ──────────────────────────────────────────────────────────────
 @router.post("/trade", response_model=GridTradeResponse)
 async def trade_grid(req: GridTradeRequest):
-    """
-    🔹 Grid Trade עם בחירת חשבון:
-    - account_id → נשלף מתוך accounts_config.json
-    - market=futures → grid_manager (SL/TP אמיתיים)
-    - market=spot → grid_utils (סימולציה בלבד)
-    """
     sym = req.symbol.upper().strip()
     market = req.market.lower().strip()
     acc_id = req.account_id.strip()
 
-    # --- בדיקת חשבון ---
     creds = get_account_credentials(acc_id)
     if not creds:
         raise HTTPException(status_code=400, detail=f"Account {acc_id} not found in accounts_config.json")
 
     try:
         if market == "spot":
-            # Spot סימולציה בלבד
             price = spot_price(sym)
             if not price:
                 raise RuntimeError("Spot price unavailable")
@@ -103,7 +92,6 @@ async def trade_grid(req: GridTradeRequest):
                 raise RuntimeError("Futures mark price unavailable")
 
             if req.dry_run:
-                # הרצה יבשה
                 res = basic_grid(sym, levels=req.grids)
                 return {
                     "ok": bool(res.get("ok")),
@@ -121,7 +109,6 @@ async def trade_grid(req: GridTradeRequest):
                     "error": res.get("error"),
                 }
             else:
-                # Live grid עם הצמדת SL/TP
                 res = await start_grid_for_position(sym)
                 return {
                     "ok": bool(res.get("ok")),
@@ -144,6 +131,7 @@ async def trade_grid(req: GridTradeRequest):
     except Exception as e:
         logger.exception("grid_trade_failed")
         raise HTTPException(status_code=500, detail=f"Grid trade failed: {e}")
+
 
 
 
