@@ -43,10 +43,15 @@ def _coerce_side(side: str) -> str:
 def _client_oid(prefix: str, symbol: str, tag: str) -> str:
     return f"{prefix}{symbol}:{tag}:{uuid.uuid4().hex[:10]}"
 
-def _slippage_check(wish: float, limit_price: float) -> None:
-    slip_pct = abs((limit_price - wish) / wish) * 100.0
-    if slip_pct > _SLIP_MAX_PCT:
-        raise ValueError(f"limit slippage {slip_pct:.3f}% > max {_SLIP_MAX_PCT}%")
+def _slippage_check(wish: float, limit_price: Optional[float]) -> None:
+    try:
+        if limit_price is None:
+            return
+        slip_pct = abs((limit_price - wish) / wish) * 100.0
+        if slip_pct > _SLIP_MAX_PCT:
+            raise ValueError(f"limit slippage {slip_pct:.3f}% > max {_SLIP_MAX_PCT}%")
+    except Exception as e:
+        raise ValueError(f"Slippage check failed: {e}")
 
 # ── Public Safe wrappers ──────────────────────
 def place_limit_safe(*, symbol: str, side: str, qty: float, limit_price: float,
@@ -103,4 +108,5 @@ def place_take_profit_safe(*, symbol: str, side: str, stop_price: float, qty: Op
                                     new_client_order_id=cid)
     log_decision(event="place_tp_market", symbol=s, side=side, extra={"tp": stop_price, "qty": float(q) if q else None})
     return resp
+
 
