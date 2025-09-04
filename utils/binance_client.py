@@ -120,6 +120,14 @@ def get_open_orders(symbol: Optional[str] = None) -> Optional[List[Dict[str, Any
         return None
 
 
+def get_all_orders(symbol: str, limit: int = 100) -> Optional[List[Dict[str, Any]]]:
+    try:
+        return client.futures_get_all_orders(symbol=symbol.upper(), limit=limit)
+    except Exception as e:
+        logger.error(f"get_all_orders failed: {e}")
+        return None
+
+
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
         res = client.futures_mark_price(symbol=symbol.upper())
@@ -248,6 +256,17 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
         logger.error(f"cancel_order failed: {e}")
         return {"ok": False, "error": str(e)}
 
+def modify_stop_loss(symbol: str, order_id: int, new_stop: float) -> Dict[str, Any]:
+    """
+    Modify stop-loss by cancel + recreate order
+    """
+    try:
+        cancel_order(symbol, order_id)
+        return place_stop_market_order(symbol, "SELL", stop_price=new_stop)
+    except Exception as e:
+        logger.error(f"modify_stop_loss failed: {e}")
+        return {"ok": False, "error": str(e)}
+
 # --------------------------------------------------------------------
 # Leverage
 # --------------------------------------------------------------------
@@ -261,6 +280,10 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"set_leverage failed: {e}")
         return {"ok": False, "error": str(e)}
+
+
+def get_futures_client() -> Client:
+    return client
 
 
 
