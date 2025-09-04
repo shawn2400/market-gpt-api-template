@@ -8,11 +8,11 @@ import pandas as pd
 
 from utils import config as cfg
 from utils.indicators import prepare_indicators_for_backtest
-from utils.binance_client import get_klines_df
+from utils.get_klines import get_klines_sync as get_klines_df   # ✅ תיקון כאן
 from utils.anchor import evaluate_anchor
 from utils.trade_executor import execute_trade_live
 
-# Circuit-breaker & Scheduler: Fallbackים שקטים אם אין מודולים (שלב ב')
+# Circuit-breaker & Scheduler: fallback שקט אם אין מודולים
 try:
     from utils.http_client import circuit_breaker_open
 except Exception:
@@ -33,7 +33,6 @@ except Exception:
             j = (self.i + self.bs)
             out = self.syms[self.i:j]
             if j >= len(self.syms):
-                # סבב
                 random.shuffle(self.syms)
                 self.i = 0
             else:
@@ -71,18 +70,14 @@ def _decide_side(row: Dict[str, Any]) -> Optional[str]:
 
 def _quality_score(row: Dict[str, Any], side: str) -> float:
     score = 0.0
-    # Trend
     if side == "LONG" and row.get("ema_21", 0) > row.get("ema_50", 0): score += 3.0
     if side == "SHORT" and row.get("ema_21", 0) < row.get("ema_50", 0): score += 3.0
-    # Momentum
     hist = float(row.get("macd_hist") or 0.0)
     if (side == "LONG" and hist > 0) or (side == "SHORT" and hist < 0): score += 2.0
-    # ADX
     adx_v = float(row.get("adx") or 0.0)
     if adx_v >= 30: score += 3.0
     elif adx_v >= 25: score += 2.5
     elif adx_v >= 20: score += 1.5
-    # RSI – אמצע
     rsi_v = float(row.get("rsi") or 50.0)
     if 42 <= rsi_v <= 68: score += 1.0
     return max(0.0, min(10.0, score))
@@ -246,6 +241,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
