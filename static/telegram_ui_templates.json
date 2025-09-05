@@ -1,8 +1,17 @@
 {
-  "trade_card_long": "🟢 *LONG* {symbol}\n• Entry: {entry}\n• SL: {sl}\n• TP1/2/3: {tp1}/{tp2}/{tp3}\n• Lev: {lev}×  | RR≈{rr}\n• Interval: {interval}\n\nאשר? /approve {trade_id}",
-  "trade_card_short": "🔴 *SHORT* {symbol}\n• Entry: {entry}\n• SL: {sl}\n• TP1/2/3: {tp1}/{tp2}/{tp3}\n• Lev: {lev}×  | RR≈{rr}\n• Interval: {interval}\n\nאשר? /approve {trade_id}",
-  "breakeven_move": "🔒 SL הוזז ל־BE עבור {symbol} (מ־{old_sl} ל־{new_sl}) — ניהול סיכונים.",
-  "tp_hit": "✅ TP{tpn} פגע עבור {symbol} במחיר {price}.",
-  "sl_hit": "⛔️ SL פגע עבור {symbol} במחיר {price}.",
-  "status_line": "📈 {symbol} | PnL: {pnl_pct}% | Size: {qty} | Entry: {entry} | SL: {sl} | TP: {tp1}/{tp2}/{tp3}"
+  "trade_card_long": "\ud83d\udfe2 *LONG* {symbol}\n\ud83d\udd39 Entry: `{entry}`\n\ud83d\udd39 SL: `{sl}`\n\ud83d\udd39 TP1/2/3: `{tp1}` / `{tp2}` / `{tp3}`\n\ud83d\udd39 Leverage: `{lev}\u00d7`\n\ud83d\udd39 RR: `~{rr}`\n\ud83d\udd39 Interval: `{interval}`\n\n\u2705 /approve_{trade_id}   \u274c /reject_{trade_id}",
+
+  "trade_card_short": "\ud83d\udd34 *SHORT* {symbol}\n\ud83d\udd39 Entry: `{entry}`\n\ud83d\udd39 SL: `{sl}`\n\ud83d\udd39 TP1/2/3: `{tp1}` / `{tp2}` / `{tp3}`\n\ud83d\udd39 Leverage: `{lev}\u00d7`\n\ud83d\udd39 RR: `~{rr}`\n\ud83d\udd39 Interval: `{interval}`\n\n\u2705 /approve_{trade_id}   \u274c /reject_{trade_id}",
+
+  "breakeven_move": "\ud83d\udd10 SL הוזז ל־BE עבור `{symbol}`\nמ־`{old_sl}` ל־`{new_sl}` — *ניהול סיכונים*.",
+
+  "tp_hit": "\u2705 TP{tpn} פגע עבור `{symbol}` במחיר `{price}`",
+
+  "sl_hit": "\u26d4\ufe0f SL הופעל עבור `{symbol}` במחיר `{price}`",
+
+  "status_line": "\ud83d\udcca *{symbol}* | PnL: `{pnl_pct}%` | Size: `{qty}` | Entry: `{entry}`\nSL: `{sl}` | TP1/2/3: `{tp1}/{tp2}/{tp3}`",
+
+  "rejected": "\u274c הטרייד נדחה ({symbol})\n*החלטה:* {reason}",
+
+  "approved": "\u2705 הטרייד אושר ({symbol})\n\u23f3 ממתין לפתיחה..."
 }
