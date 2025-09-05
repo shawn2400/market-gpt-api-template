@@ -2,8 +2,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from telegram import Update
-from telegram.ext import CallbackContext
-import json, os
+import json
 
 from utils.telegram_notifier import handle_callback_action
 
@@ -18,3 +17,4 @@ async def telegram_callback_webhook(request: Request):
         return JSONResponse(content={"ok": True, "result": result})
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
