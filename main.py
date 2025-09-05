@@ -84,7 +84,10 @@ except Exception as e:
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/ui/dashboard"}
+    PUBLIC_PATHS = {
+        "/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc",
+        "/telegram/webhook", "/telegram/callbacks", "/ui/dashboard"
+    }
     PUBLIC_PREFIXES = ["/price", "/static/"]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
@@ -108,12 +111,12 @@ async def track_metrics(request: Request, call_next):
         metrics_tracker.observe_request(response.status_code, (asyncio.get_event_loop().time() - start) * 1000)
         return response
 
-# ✅ עדכון רשימת ה-routers: מוסיף WS/Orderbook/WS-Health, מסיר ws_stream הלא קיים
+# ✅ עדכון רשימת ה-routers: כולל Telegram callbacks
 ROUTERS: List[str] = [
     "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
     "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
     "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
-    "routes.telegram_bot", "routes.telegram_routes",
+    "routes.telegram_bot", "routes.telegram_routes", "routes.telegram_callbacks",
     "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
     "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
     "routes.ui", "routes.backtest", "routes.ui_grid",
@@ -186,6 +189,7 @@ async def api_manage_once(): await manage_open_trades(); return {"ok": True}
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
