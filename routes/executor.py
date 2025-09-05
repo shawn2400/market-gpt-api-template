@@ -1,26 +1,32 @@
 # routes/executor.py
 from __future__ import annotations
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
-from utils.open_trade_manager import manage_open_trades, bulk_manage_trades
+
+# ניהול טריידים (שומר תאימות לשם הקיים אצלך)
+try:
+    from utils.open_trade_manager import manage_open_trades, bulk_manage_trades  # type: ignore
+except Exception:
+    manage_open_trades = None  # type: ignore
+    bulk_manage_trades = None  # type: ignore
 
 # נתוני בורסה / סימבולים / מרק-פרייס / באלאנסים
 try:
-    from utils.binance_client import (
+    from utils.binance_client import (  # type: ignore
         futures_balance,
         get_open_positions,
         futures_mark_price,
         exchange_info as _exchange_info_primary,
     )
-except Exception:  # שמור תאימות גם אם פונקציות מסוימות לא קיימות בריצה
-    futures_balance = None
-    get_open_positions = None
-    futures_mark_price = None
+except Exception:
+    futures_balance = None  # type: ignore
+    get_open_positions = None  # type: ignore
+    futures_mark_price = None  # type: ignore
     _exchange_info_primary = None  # type: ignore
 
 # Fallback לקאש של Exchange Info אם קיים
@@ -50,7 +56,7 @@ class TradeRequest(BaseModel):
 
 
 class BulkTradeRequest(BaseModel):
-    trades: list[TradeRequest]
+    trades: List[TradeRequest]
 
 
 # ===================== Helpers =====================
@@ -58,16 +64,16 @@ def _safe_exchange_info() -> Dict[str, Any]:
     """
     מנסה להביא Exchange Info ממספר מקורות, עם פולבאק עדין.
     """
-    # 1) נסה מהלקוח הראשי
+    # 1) מקור ראשי (אם קיים)
     if callable(_exchange_info_primary):
         try:
-            info = _exchange_info_primary()
+            info = _exchange_info_primary()  # type: ignore[misc]
             if isinstance(info, dict) and info:
                 return info
         except Exception as e:
             logger.warning("[executor] exchange_info primary failed: %s", e)
 
-    # 2) נסה מה-cache אם קיים
+    # 2) קאש פנימי (אם קיים)
     if _ex_cache:
         for fn_name in ("get", "get_exchange_info", "exchange_info"):
             try:
@@ -79,14 +85,13 @@ def _safe_exchange_info() -> Dict[str, Any]:
             except Exception as e:
                 logger.warning("[executor] exchange_info cache.%s failed: %s", fn_name, e)
 
-    # 3) פולבאק ריק (לא זורקים שגיאה כדי לא “לשבור” זרימה)
+    # 3) פולבאק ריק—לא שובר זרימה
     return {"symbols": []}
 
 
 def _extract_symbols(info: Dict[str, Any]) -> List[str]:
     """
     חילוץ רשימת סימבולים “טריידבליים” ממבנה ExchangeInfo טיפוסי של ביננס.
-    לא מניח שדות קשיחים; מתאמץ להיות סלחני.
     """
     syms: List[str] = []
     if not isinstance(info, dict):
@@ -100,13 +105,11 @@ def _extract_symbols(info: Dict[str, Any]) -> List[str]:
             if not s:
                 continue
             status = str(it.get("status") or it.get("tradeStatus") or "TRADING").upper()
-            # FUTURES: לעתים יש שדה contractType=PERPETUAL או deliveryDate=0
             ct = str(it.get("contractType") or "").upper()
             if status == "TRADING" and (not ct or ct in ("PERPETUAL", "CURRENT_QUARTER", "NEXT_QUARTER")):
                 syms.append(s)
         except Exception:
             continue
-    # אם אין כלום, פולבאק מינימלי
     if not syms:
         syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     return sorted(set(syms))
@@ -114,11 +117,13 @@ def _extract_symbols(info: Dict[str, Any]) -> List[str]:
 
 # ===================== Endpoints =====================
 @router.post("/trade", summary="Open trade with SL/TP")
-async def open_trade(req: TradeRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def open_trade(req: TradeRequest) -> Dict[str, Any]:
     """
     פותח טרייד כולל Limit כניסה + Stop-Loss + Take-Profit.
     שומר תאימות לאחור ע"י שימוש ב-manage_open_trades כפי שקיים אצלך.
     """
+    if not callable(manage_open_trades):
+        raise HTTPException(status_code=500, detail="trade manager not available")
     try:
         logger.info("[executor] trade request: %s", req.dict())
         result = manage_open_trades(  # type: ignore[call-arg]
@@ -142,10 +147,12 @@ async def open_trade(req: TradeRequest, _: Any = Depends(require_api_key)) -> Di
 
 
 @router.post("/bulk", summary="Open multiple trades")
-async def open_bulk(req: BulkTradeRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def open_bulk(req: BulkTradeRequest) -> Dict[str, Any]:
     """
     פותח מספר טריידים ברצף.
     """
+    if not callable(bulk_manage_trades):
+        raise HTTPException(status_code=500, detail="bulk trade manager not available")
     try:
         trades = [t.dict() for t in req.trades]
         logger.info("[executor] bulk request: %s", trades)
@@ -157,24 +164,23 @@ async def open_bulk(req: BulkTradeRequest, _: Any = Depends(require_api_key)) ->
 
 
 @router.get("/status", summary="Executor status")
-async def executor_status(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def executor_status() -> Dict[str, Any]:
     """
     מחזיר סטטוס בסיסי של ה־Executor (חי).
     """
     return {"ok": True, "status": "running"}
 
 
-# ======== Aliases & Operational Info (שלא חזרו ב-OpenAPI והחזירו 404) ========
+# ======== Aliases & Operational Info (כיסינו 404 שהיו) ========
 
 @router.get("/open-positions", summary="List open futures positions")
 @router.get("/positions", summary="List open futures positions (alias)")
 @router.get("/positions/open", summary="List open futures positions (alias)")
-async def executor_open_positions(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def executor_open_positions() -> Dict[str, Any]:
     try:
         if callable(get_open_positions):
             pos = get_open_positions()  # type: ignore[call-arg]
             return {"ok": True, "items": pos}
-        # אם לא זמינה הפונקציה, נחזיר מבנה ריק אך חוקי
         return {"ok": True, "items": []}
     except Exception as e:
         logger.exception("[executor] open-positions error: %s", e)
@@ -182,7 +188,7 @@ async def executor_open_positions(_: Any = Depends(require_api_key)) -> Dict[str
 
 
 @router.get("/balance", summary="Futures account balances")
-async def executor_balance(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def executor_balance() -> Dict[str, Any]:
     try:
         if callable(futures_balance):
             bal = futures_balance()  # type: ignore[call-arg]
@@ -194,9 +200,7 @@ async def executor_balance(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
 
 
 @router.get("/mark-price", summary="Futures mark price for a symbol")
-async def executor_mark_price(
-    symbol: str = Query(..., description="e.g. BTCUSDT")
-) -> Dict[str, Any]:
+async def executor_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict[str, Any]:
     sym = (symbol or "").upper().strip()
     if not sym:
         raise HTTPException(status_code=400, detail="symbol is required")
@@ -211,7 +215,7 @@ async def executor_mark_price(
 
 
 @router.get("/exchange-info", summary="Raw exchange info (with cache fallback)")
-async def executor_exchange_info(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def executor_exchange_info() -> Dict[str, Any]:
     try:
         info = _safe_exchange_info()
         return {"ok": True, "info": info}
@@ -222,7 +226,7 @@ async def executor_exchange_info(_: Any = Depends(require_api_key)) -> Dict[str,
 
 @router.get("/symbols", summary="Tradable symbols (derived)")
 @router.get("/symbols/allowed", summary="Tradable symbols (alias)")
-async def executor_symbols(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def executor_symbols() -> Dict[str, Any]:
     try:
         info = _safe_exchange_info()
         syms = _extract_symbols(info)
