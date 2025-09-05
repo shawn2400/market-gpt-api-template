@@ -1,5 +1,3 @@
-# ✅ utils/telegram_notifier.py (גרסה מלאה ומעודכנת)
-
 import os
 import httpx
 import json
@@ -16,10 +14,8 @@ ENABLE_PUBLIC_FEED = str(os.getenv("ENABLE_PUBLIC_FEED", "0")).lower() in ("1", 
 
 TG_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-
 def _template(key: str, **kwargs) -> str:
     return TEMPLATES.get(key, "").format(**kwargs)
-
 
 def _send(text: str, chat_id: Optional[str] = None):
     if not BOT_TOKEN or not chat_id:
@@ -34,20 +30,17 @@ def _send(text: str, chat_id: Optional[str] = None):
     except Exception:
         pass
 
-
 def notify_tp_hit(symbol: str, price: float, tp_level: int):
     text = _template("tp_hit", symbol=symbol.upper(), price=price, tpn=tp_level)
     _send(text, ADMIN_CHAT_ID)
     if ENABLE_PUBLIC_FEED and PUBLIC_FEED_CHANNEL_ID:
         _send(text, PUBLIC_FEED_CHANNEL_ID)
 
-
 def notify_sl_hit(symbol: str, price: float):
     text = _template("sl_hit", symbol=symbol.upper(), price=price)
     _send(text, ADMIN_CHAT_ID)
     if ENABLE_PUBLIC_FEED and PUBLIC_FEED_CHANNEL_ID:
         _send(text, PUBLIC_FEED_CHANNEL_ID)
-
 
 def notify_be_moved(symbol: str, old_sl: float, new_sl: float):
     text = _template("breakeven_move", symbol=symbol.upper(), old_sl=old_sl, new_sl=new_sl)
