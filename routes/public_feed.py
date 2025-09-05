@@ -1,4 +1,3 @@
-# routes/public_feed.py
 from __future__ import annotations
 import os
 import logging
@@ -16,7 +15,6 @@ router = APIRouter(
     tags=["Public Feed"],
 )
 
-# הרשאות סוד עבור webhook
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET")
 PUBLIC_FEED_CHANNEL_ID = os.getenv("PUBLIC_FEED_CHANNEL_ID")
 ENABLE_PUBLIC_FEED = str(os.getenv("ENABLE_PUBLIC_FEED", "0")).lower() in ("1", "true", "yes", "on")
@@ -45,7 +43,6 @@ async def broadcast_trade(request: Request, _: Any = Depends(require_webhook_sec
         if not PUBLIC_FEED_CHANNEL_ID:
             raise HTTPException(status_code=500, detail="public channel not configured")
 
-        # שליחת ההודעה לערוץ
         send_telegram_raw(text=message, chat_id=PUBLIC_FEED_CHANNEL_ID)
         logger.info("[public-feed] broadcasted: %s", message)
         return {"ok": True, "message": "broadcasted"}
@@ -53,4 +50,5 @@ async def broadcast_trade(request: Request, _: Any = Depends(require_webhook_sec
     except Exception as e:
         logger.exception("public_feed_broadcast_error")
         raise HTTPException(status_code=500, detail=str(e))
+
 
