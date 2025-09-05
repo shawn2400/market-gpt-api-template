@@ -1,6 +1,3 @@
-# תפקיד: קריאות מ־executors → שיגור Telegram חכם
-# מופעל בעת TP/SL/BE ומעביר ל־telegram_notifier
-
 from __future__ import annotations
 import logging
 from typing import Optional
@@ -26,3 +23,4 @@ def on_be_moved(symbol: str, old_sl: float, new_sl: float):
         notify_be_moved(symbol=symbol, old_sl=old_sl, new_sl=new_sl)
     except Exception as e:
         logger.warning("[telegram] failed to notify BE move: %s", e)
+
