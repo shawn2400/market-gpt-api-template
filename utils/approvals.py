@@ -1,6 +1,5 @@
 # utils/approvals.py
 from __future__ import annotations
-
 import os, time, math, hashlib, json
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -26,38 +25,20 @@ def _as_int(s: Optional[str], default: int) -> int:
 # Policy (ניתן לשליטה דרך .env)
 # ──────────────────────────────────────────────────────────────────────────────
 APPROVAL_ENABLED              = _as_bool(os.getenv("APPROVAL_ENABLED", "1"), True)
-
-# סף הצלחה ממודל ה-AI (אם קיים שדה success_pct בהצעה)
-APPROVAL_SUCCESS_MIN          = _as_float(os.getenv("APPROVAL_SUCCESS_MIN", "60"), 60.0)  # %
-
-# יחס RR מינימלי (TP1 מול SL)
+APPROVAL_SUCCESS_MIN          = _as_float(os.getenv("APPROVAL_SUCCESS_MIN", "60"), 60.0)
 APPROVAL_RR_MIN               = _as_float(os.getenv("APPROVAL_RR_MIN", "1.30"), 1.30)
-
-# פער מינימלי בין Entry↔SL ו־Entry↔TP1 (באחוזים מהמחיר)
 MIN_TP_SL_DIFF_PCT            = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT", "0.15"), 0.15)
-
-# SL מקסימלי כאחוז מה־Entry (למנוע SL רחוק מדי)
-APPROVAL_MAX_SL_PCT           = _as_float(os.getenv("APPROVAL_MAX_SL_PCT", "3.0"), 3.0)   # %
-
-# מינימום נומינלי בדולרים
+APPROVAL_MAX_SL_PCT           = _as_float(os.getenv("APPROVAL_MAX_SL_PCT", "3.0"), 3.0)
 MIN_NOTIONAL_USDT             = _as_float(os.getenv("MIN_NOTIONAL_USDT", "5"), 5.0)
-
-# דרישת Fresh price
 APPROVAL_REQUIRE_FRESH_PRICE  = _as_bool(os.getenv("APPROVAL_REQUIRE_FRESH_PRICE", "1"), True)
 PRICE_MAX_AGE_SEC             = _as_int(os.getenv("PRICE_MAX_AGE_SEC", "10"), 10)
-
-# רשימת סימבולים מותרת (ברירת מחדל: WATCHLIST אם קיים, אחרת אין סינון)
 WATCHLIST_CSV                 = os.getenv("WATCHLIST", "") or os.getenv("HEALTH_SYMBOLS", "")
 REQUIRE_IN_WATCHLIST          = _as_bool(os.getenv("APPROVAL_REQUIRE_WATCHLIST", "1"), True)
-
-# חסימת כפילויות באותו סימבול/פרמטרים לזמן קצר
-APPROVAL_DUP_COOLDOWN_SEC     = _as_int(os.getenv("APPROVAL_DUP_COOLDOWN_SEC", "300"), 300)  # 5 דקות
-
-# Leverage cap (בטיחות)
+APPROVAL_DUP_COOLDOWN_SEC     = _as_int(os.getenv("APPROVAL_DUP_COOLDOWN_SEC", "300"), 300)
 MAX_LEVERAGE                  = _as_int(os.getenv("MAX_LEVERAGE", "35"), 35)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# State (in-memory, מספיק לגייטינג מקומי)
+# State
 # ──────────────────────────────────────────────────────────────────────────────
 _recent: Dict[str, float] = {}  # key->last_ts
 
@@ -88,8 +69,7 @@ def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
         e = float(entry); s = float(sl); t = float(tp1)
         sd = (side or "").upper()
         risk  = abs(e - s)
-        if risk <= 0:
-            return None
+        if risk <= 0: return None
         reward = (t - e) if sd in ("BUY","LONG") else (e - t)
         return float(reward / risk) if reward > 0 else None
     except Exception:
@@ -118,15 +98,36 @@ def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
     except Exception:
         return (False, None)
 
+def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[str]:
+    """
+    בדיקות tickSize/stepSize מתוך exchange_info.
+    """
+    out: List[str] = []
+    try:
+        from utils.binance_client import get_symbol_info
+        info = get_symbol_info(symbol)
+        if not info: return out
+        for f in info.get("filters", []):
+            if f.get("filterType") == "PRICE_FILTER":
+                tick = float(f.get("tickSize", "0.0"))
+                if tick > 0:
+                    for name, val in [("entry", entry), ("sl", sl), ("tp1", tp1)]:
+                        if round(val / tick) * tick != val:
+                            out.append(f"{name}_not_aligned_tick({val})")
+            if f.get("filterType") == "LOT_SIZE":
+                step = float(f.get("stepSize", "0.0"))
+                minq = float(f.get("minQty", "0.0"))
+                if step > 0 and minq > 0:
+                    # רק בדיקות עקרוניות, הכמות בפועל נבדקת ב-executor
+                    pass
+    except Exception:
+        pass
+    return out
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
 def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    סינון קשיח/עדין לפני שליחת טרייד הלאה (sink/ביצוע/פרסום).
-    קלט: dict עם מפתחות: symbol, side, entry, sl, tp1[, leverage, success_pct, budget, interval]
-    פלט: {"ok": bool, "errors": [...], "warnings":[...], "metrics": {...}}
-    """
     out_errors: List[str] = []
     out_warns:  List[str] = []
     metrics: Dict[str, Any] = {}
@@ -134,17 +135,14 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
     if not APPROVAL_ENABLED:
         return {"ok": True, "errors": [], "warnings": [], "metrics": {"disabled": True}}
 
-    # שדות חובה
     symbol = str(tp.get("symbol","")).upper()
     side   = str(tp.get("side","")).upper()
     entry  = float(tp.get("entry") or 0.0)
     sl     = float(tp.get("sl") or 0.0)
     tp1    = float(tp.get("tp1") or 0.0)
 
-    if not symbol:
-        out_errors.append("missing_symbol")
-    if side not in ("BUY","SELL","LONG","SHORT"):
-        out_errors.append("bad_side")
+    if not symbol: out_errors.append("missing_symbol")
+    if side not in ("BUY","SELL","LONG","SHORT"): out_errors.append("bad_side")
     if entry <= 0: out_errors.append("bad_entry")
     if sl    <= 0: out_errors.append("bad_sl")
     if tp1   <= 0: out_errors.append("bad_tp1")
@@ -152,35 +150,26 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
     if out_errors:
         return {"ok": False, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
-    # Watchlist
     if not _in_watchlist(symbol):
         out_errors.append("symbol_not_in_watchlist")
 
-    # Fresh price
     fp_ok, px = _fresh_price_ok(symbol)
     metrics["fresh_price_ok"] = fp_ok
     metrics["last_price"] = px
-    if not fp_ok:
-        out_warns.append("stale_or_missing_price")
+    if not fp_ok: out_warns.append("stale_or_missing_price")
 
-    # מרחקים מינימליים Entry↔SL & Entry↔TP1
     min_pct = float(MIN_TP_SL_DIFF_PCT)
-    if _pct(entry, sl) < min_pct:
-        out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
-    if _pct(entry, tp1) < min_pct:
-        out_errors.append(f"entry_tp1_too_close(<{min_pct:.3f}%)")
+    if _pct(entry, sl) < min_pct:  out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
+    if _pct(entry, tp1) < min_pct: out_errors.append(f"entry_tp1_too_close(<{min_pct:.3f}%)")
 
-    # SL לא רחוק מדי
     if _pct(entry, sl) > float(APPROVAL_MAX_SL_PCT):
         out_errors.append(f"sl_too_far(>{APPROVAL_MAX_SL_PCT:.2f}%)")
 
-    # RR
     rr = _rr(entry, sl, tp1, side)
     metrics["rr"] = rr
     if rr is None or rr < APPROVAL_RR_MIN:
         out_errors.append(f"rr_below_min({rr:.2f}<{APPROVAL_RR_MIN:.2f})" if rr is not None else "rr_invalid")
 
-    # success_pct (אם קיים)
     sp = tp.get("success_pct")
     if sp is not None:
         try:
@@ -191,15 +180,11 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             out_warns.append("success_pct_not_numeric")
 
-    # leverage
     lev = int(tp.get("leverage") or 0)
-    if lev <= 0:
-        out_warns.append("missing_leverage")
-    elif lev > MAX_LEVERAGE:
-        out_errors.append(f"leverage_above_cap(x{lev}>x{MAX_LEVERAGE})")
+    if lev <= 0: out_warns.append("missing_leverage")
+    elif lev > MAX_LEVERAGE: out_errors.append(f"leverage_above_cap(x{lev}>x{MAX_LEVERAGE})")
     metrics["leverage"] = lev
 
-    # notional min (אומדן: budget*lev — אם יש; אחרת, מדלגים בשקט)
     budget = tp.get("budget")
     if budget is not None and lev > 0:
         try:
@@ -210,7 +195,8 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             out_warns.append("notional_est_failed")
 
-    # דופליקטים לזמן קצר
+    out_errors.extend(_precision_checks(symbol, entry, sl, tp1))
+
     now = time.time()
     _purge_recent(now)
     key = _key_for(tp)
@@ -223,9 +209,10 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
     ok = (len(out_errors) == 0)
     return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
-# שמיש כמסנן בינארי קצר
 def can_auto_forward(tp: Dict[str, Any]) -> bool:
     res = preflight_proposal(tp)
     return bool(res.get("ok", False))
+
+
 
 
