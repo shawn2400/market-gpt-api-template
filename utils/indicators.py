@@ -19,12 +19,9 @@ def _rma(series: pd.Series, period: int) -> pd.Series:
     if len(s) == 0:
         return r
     alpha = 1.0 / float(period)
-    # ערך ראשון: ממוצע פשוט של period הראשון אם יש, אחרת הערך הראשון
     r.iloc[0] = s.iloc[:period].mean() if len(s) >= period else s.iloc[0]
     for i in range(1, len(s)):
-        prev = r.iloc[i - 1]
-        curr = s.iloc[i]
-        r.iloc[i] = prev * (1 - alpha) + alpha * curr
+        r.iloc[i] = r.iloc[i - 1] * (1 - alpha) + alpha * s.iloc[i]
     return r
 
 # -------------------------------------------------
@@ -35,85 +32,45 @@ def ema(series: pd.Series, period: int) -> pd.Series:
     return s.ewm(span=period, adjust=False).mean()
 
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    """
-    RSI לפי Wilder:
-    - מחשבים שינוי
-    - מפרקים ל-gain/loss
-    - RMA ל-gain ול-loss
-    - RSI = 100 - 100/(1+RS)
-    """
     s = _as_series(series)
     if s.empty:
         return s.copy()
-
     delta = s.diff().fillna(0.0)
     gain = delta.clip(lower=0.0)
     loss = (-delta).clip(lower=0.0)
-
     avg_gain = _rma(gain, period)
     avg_loss = _rma(loss, period)
-
-    rs = pd.Series(np.where(avg_loss == 0.0, np.inf, avg_gain / avg_loss), index=s.index, dtype=float)
+    rs = pd.Series(np.where(avg_loss == 0.0, np.inf, avg_gain / avg_loss), index=s.index)
     out = 100.0 - (100.0 / (1.0 + rs))
-    return out.clip(lower=0.0, upper=100.0)
+    return out.clip(0.0, 100.0)
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """
-    ATR לפי Wilder: RMA של True Range.
-    מצפה לעמודות: high, low, close
-    """
     if df is None or df.empty:
         return pd.Series(dtype=float)
-
     high = _as_series(df.get("high"))
     low = _as_series(df.get("low"))
     close = _as_series(df.get("close"))
-
     prev_close = close.shift(1).fillna(close.iloc[0])
-    tr = pd.concat([
-        (high - low),
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-
+    tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
     return _rma(tr, period)
 
 def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """
-    ADX קלאסי (Wilder):
-    - מחשבים +DM ו- -DM
-    - TR ו-RMA(+DM), RMA(-DM), RMA(TR)
-    - +DI/-DI = 100 * RMA(DM) / RMA(TR)
-    - DX = 100 * |+DI - -DI| / (+DI + -DI)
-    - ADX = RMA(DX)
-    """
     if df is None or df.empty:
         return pd.Series(dtype=float)
-
     high = _as_series(df.get("high"))
     low = _as_series(df.get("low"))
     close = _as_series(df.get("close"))
-
     up_move = high.diff()
-    down_move = (-low.diff())
-
-    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=high.index, dtype=float)
-    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=low.index, dtype=float)
-
+    down_move = -low.diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=high.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=low.index)
     prev_close = close.shift(1).fillna(close.iloc[0])
-    tr = pd.concat([
-        (high - low),
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-
+    tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
     atr_rma = _rma(tr, period).replace(0.0, np.nan)
     plus_di = 100.0 * (_rma(plus_dm, period) / atr_rma)
     minus_di = 100.0 * (_rma(minus_dm, period) / atr_rma)
-
     di_sum = (plus_di + minus_di).replace(0.0, np.nan)
     dx = (np.abs(plus_di - minus_di) / di_sum) * 100.0
-
     return _rma(dx.fillna(0.0), period)
 
 def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
@@ -137,15 +94,6 @@ def bollinger_bands(series: pd.Series, period: int = 20, std_factor: float = 2.0
 # Orchestrator
 # -------------------------------------------------
 def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    מצפה לעמודות: open, high, low, close, volume.
-    מחזיר DataFrame עם עמודות אינדיקטורים סטנדרטיות.
-    שמות עמודות מסונכרנים עם ה-API:
-      - ema_21, ema_50
-      - rsi, atr, adx
-      - macd, macd_signal, macd_hist
-      - bb_mid, bb_upper, bb_lower
-    """
     cols = [
         "open","high","low","close","volume",
         "ema_21","ema_50","rsi","atr","adx",
@@ -154,37 +102,22 @@ def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
     ]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
-
     base = df.copy()
     for col in ("open","high","low","close","volume"):
-        if col in base.columns:
-            base[col] = _as_series(base[col])
-        else:
-            base[col] = np.nan
-
-    # EMA
+        base[col] = _as_series(base.get(col, np.nan))
     base["ema_21"] = ema(base["close"], 21)
     base["ema_50"] = ema(base["close"], 50)
-
-    # RSI
     base["rsi"] = rsi(base["close"], 14)
-
-    # ATR + ADX
     base["atr"] = atr(base, 14)
     base["adx"] = adx(base, 14)
-
-    # MACD
     macd_line, signal_line, hist = macd(base["close"])
     base["macd"] = macd_line
     base["macd_signal"] = signal_line
     base["macd_hist"] = hist
-
-    # Bollinger Bands
     mid, upper, lower = bollinger_bands(base["close"])
     base["bb_mid"] = mid
     base["bb_upper"] = upper
     base["bb_lower"] = lower
-
     return base
 
 
