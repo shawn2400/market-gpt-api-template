@@ -1,18 +1,27 @@
 # utils/trade_executor.py
 from __future__ import annotations
-import logging
+import logging, uuid
 from typing import Dict, Any, Optional
 
-from utils.binance_client import (
-    futures_create_order,
-    futures_mark_price,
-    set_leverage,
-)
+from utils.binance_client import futures_create_order, futures_mark_price, set_leverage, get_symbol_info
 
 logger = logging.getLogger("algogpt.trade_executor")
 
+def _round_qty(symbol: str, qty: float) -> float:
+    """
+    התאמה ל־stepSize ו־minQty לפי Exchange Info.
+    """
+    try:
+        info = get_symbol_info(symbol)
+        if not info: return round(qty, 6)
+        step = float(info.get("filters", [{}])[2].get("stepSize", 0.001))
+        min_q = float(info.get("filters", [{}])[2].get("minQty", 0.0))
+        qty = max(qty, min_q)
+        # עיגול למטה לפי step
+        return (qty // step) * step
+    except Exception:
+        return round(qty, 6)
 
-# ===================== Live Trade Execution =====================
 def execute_trade_live(
     *,
     symbol: str,
@@ -27,22 +36,18 @@ def execute_trade_live(
     """
     פותח טרייד אמיתי ב־Binance Futures כולל SL/TP אם מוגדרים.
     """
-
     try:
-        # 1. מחיר עדכני
         mark = futures_mark_price(symbol)
         if not mark:
             return {"ok": False, "error": f"mark_price_unavailable for {symbol}"}
 
-        # 2. חישוב כמות
-        qty = round((budget * leverage) / mark, 6)  # נשתמש בדיוק עד 6 ספרות
+        qty = _round_qty(symbol, (budget * leverage) / mark)
+        if qty <= 0:
+            return {"ok": False, "error": "qty_invalid"}
 
-        # 3. עדכון מינוף
-        lev_res = set_leverage(symbol, leverage)
-        if not lev_res.get("ok"):
-            logger.warning("[trade_executor] leverage set failed: %s", lev_res)
+        set_leverage(symbol, leverage)
 
-        # 4. פקודת Market לכניסה
+        client_oid = f"ALGOGPT-{uuid.uuid4().hex[:12]}"
         entry = futures_create_order(
             symbol=symbol,
             side=side.upper(),
@@ -50,60 +55,56 @@ def execute_trade_live(
             quantity=str(qty),
             reduceOnly=reduce_only,
             positionSide=position_side,
+            newClientOrderId=client_oid,
         )
-        if not entry.get("ok", True):  # אם יש עטיפה עם {"ok": False}
-            return {"ok": False, "error": entry.get("error", "entry_failed")}
-
-        order_id = entry.get("orderId")
+        if not entry.get("orderId"):
+            return {"ok": False, "error": entry}
 
         result = {
             "ok": True,
             "symbol": symbol,
             "side": side.upper(),
-            "entry": entry,
             "qty": qty,
             "price": mark,
+            "entry": entry,
             "sl": None,
             "tp": None,
         }
 
-        # 5. פקודת Stop-Loss
+        hedge_side = "SELL" if side.upper() in ("BUY", "LONG") else "BUY"
+
         if sl:
-            sl_order = futures_create_order(
+            result["sl"] = futures_create_order(
                 symbol=symbol,
-                side="SELL" if side.upper() == "BUY" else "BUY",
+                side=hedge_side,
                 type="STOP_MARKET",
-                quantity=str(qty),
                 stopPrice=str(sl),
-                reduceOnly=True,
-                positionSide=position_side,
-            )
-            result["sl"] = sl_order
-
-        # 6. פקודת Take-Profit
-        if tp:
-            tp_order = futures_create_order(
-                symbol=symbol,
-                side="SELL" if side.upper() == "BUY" else "BUY",
-                type="TAKE_PROFIT_MARKET",
                 quantity=str(qty),
-                stopPrice=str(tp),
                 reduceOnly=True,
+                timeInForce="GTC",
                 positionSide=position_side,
+                newClientOrderId=f"{client_oid}-SL",
             )
-            result["tp"] = tp_order
+        if tp:
+            result["tp"] = futures_create_order(
+                symbol=symbol,
+                side=hedge_side,
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=str(tp),
+                quantity=str(qty),
+                reduceOnly=True,
+                timeInForce="GTC",
+                positionSide=position_side,
+                newClientOrderId=f"{client_oid}-TP",
+            )
 
-        logger.info("[trade_executor] executed trade: %s", result)
+        logger.info("[trade_executor] executed: %s", result)
         return result
-
     except Exception as e:
-        logger.error("[trade_executor] execution error: %s", e)
+        logger.exception("[trade_executor] execution error: %s", e)
         return {"ok": False, "error": str(e)}
 
-
-__all__ = [
-    "execute_trade_live",
-]
+__all__ = ["execute_trade_live"]
 
 
 
