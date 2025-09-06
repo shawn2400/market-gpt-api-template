@@ -8,14 +8,14 @@ from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
 
-# ניהול טריידים (שומר תאימות לשם הקיים אצלך)
+# ניהול טריידים
 try:
     from utils.open_trade_manager import manage_open_trades, bulk_manage_trades  # type: ignore
 except Exception:
     manage_open_trades = None  # type: ignore
     bulk_manage_trades = None  # type: ignore
 
-# נתוני בורסה / סימבולים / מרק-פרייס / באלאנסים
+# נתוני Binance
 try:
     from utils.binance_client import (  # type: ignore
         futures_balance,
@@ -24,16 +24,16 @@ try:
         exchange_info as _exchange_info_primary,
     )
 except Exception:
-    futures_balance = None  # type: ignore
-    get_open_positions = None  # type: ignore
-    futures_mark_price = None  # type: ignore
-    _exchange_info_primary = None  # type: ignore
+    futures_balance = None
+    get_open_positions = None
+    futures_mark_price = None
+    _exchange_info_primary = None
 
-# Fallback לקאש של Exchange Info אם קיים
+# Cache info
 try:
     from utils import exchange_info_cache as _ex_cache  # type: ignore
 except Exception:
-    _ex_cache = None  # type: ignore
+    _ex_cache = None
 
 logger = logging.getLogger("algogpt.executor")
 
@@ -45,65 +45,48 @@ router = APIRouter(
 
 # ===================== Models =====================
 class TradeRequest(BaseModel):
-    symbol: str = Field(..., description="Trading symbol, e.g., BTCUSDT")
-    side: str = Field(..., description="BUY or SELL")
-    qty: float = Field(..., gt=0, description="Quantity in contracts")
-    entry_price: float = Field(..., gt=0, description="Entry limit price")
-    sl_price: float = Field(..., gt=0, description="Stop-loss price")
-    tp_price: float = Field(..., gt=0, description="Take-profit price")
-    leverage: int = Field(10, description="Leverage for the trade")
-    position_side: str = Field("BOTH", description="BOTH | LONG | SHORT")
-
+    symbol: str
+    side: str
+    qty: float
+    entry_price: float
+    sl_price: float
+    tp_price: float
+    leverage: int = 10
+    position_side: str = "BOTH"
 
 class BulkTradeRequest(BaseModel):
     trades: List[TradeRequest]
 
-
 # ===================== Helpers =====================
 def _safe_exchange_info() -> Dict[str, Any]:
-    """
-    מנסה להביא Exchange Info ממספר מקורות, עם פולבאק עדין.
-    """
-    # 1) מקור ראשי (אם קיים)
     if callable(_exchange_info_primary):
         try:
-            info = _exchange_info_primary()  # type: ignore[misc]
-            if isinstance(info, dict) and info:
-                return info
+            info = _exchange_info_primary()
+            if isinstance(info, dict) and info: return info
         except Exception as e:
             logger.warning("[executor] exchange_info primary failed: %s", e)
 
-    # 2) קאש פנימי (אם קיים)
     if _ex_cache:
         for fn_name in ("get", "get_exchange_info", "exchange_info"):
             try:
                 fn = getattr(_ex_cache, fn_name, None)
                 if callable(fn):
                     info = fn()
-                    if isinstance(info, dict) and info:
-                        return info
+                    if isinstance(info, dict) and info: return info
             except Exception as e:
                 logger.warning("[executor] exchange_info cache.%s failed: %s", fn_name, e)
 
-    # 3) פולבאק ריק—לא שובר זרימה
     return {"symbols": []}
 
-
 def _extract_symbols(info: Dict[str, Any]) -> List[str]:
-    """
-    חילוץ רשימת סימבולים “טריידבליים” ממבנה ExchangeInfo טיפוסי של ביננס.
-    """
     syms: List[str] = []
-    if not isinstance(info, dict):
-        return syms
+    if not isinstance(info, dict): return syms
     arr = info.get("symbols") or info.get("data") or []
-    if not isinstance(arr, list):
-        return syms
+    if not isinstance(arr, list): return syms
     for it in arr:
         try:
             s = str(it.get("symbol") or "").upper().strip()
-            if not s:
-                continue
+            if not s: continue
             status = str(it.get("status") or it.get("tradeStatus") or "TRADING").upper()
             ct = str(it.get("contractType") or "").upper()
             if status == "TRADING" and (not ct or ct in ("PERPETUAL", "CURRENT_QUARTER", "NEXT_QUARTER")):
@@ -114,19 +97,13 @@ def _extract_symbols(info: Dict[str, Any]) -> List[str]:
         syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     return sorted(set(syms))
 
-
 # ===================== Endpoints =====================
-@router.post("/trade", summary="Open trade with SL/TP")
+@router.post("/trade")
 async def open_trade(req: TradeRequest) -> Dict[str, Any]:
-    """
-    פותח טרייד כולל Limit כניסה + Stop-Loss + Take-Profit.
-    שומר תאימות לאחור ע"י שימוש ב-manage_open_trades כפי שקיים אצלך.
-    """
     if not callable(manage_open_trades):
         raise HTTPException(status_code=500, detail="trade manager not available")
     try:
-        logger.info("[executor] trade request: %s", req.dict())
-        result = manage_open_trades(  # type: ignore[call-arg]
+        result = manage_open_trades(
             symbol=req.symbol,
             side=req.side,
             qty=req.qty,
@@ -139,82 +116,65 @@ async def open_trade(req: TradeRequest) -> Dict[str, Any]:
         if not isinstance(result, dict) or not result.get("ok"):
             raise HTTPException(status_code=400, detail=result if isinstance(result, dict) else {"ok": False})
         return result
-    except HTTPException:
-        raise
     except Exception as e:
         logger.exception("[executor] trade error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.post("/bulk", summary="Open multiple trades")
+@router.post("/bulk")
 async def open_bulk(req: BulkTradeRequest) -> Dict[str, Any]:
-    """
-    פותח מספר טריידים ברצף.
-    """
     if not callable(bulk_manage_trades):
         raise HTTPException(status_code=500, detail="bulk trade manager not available")
     try:
         trades = [t.dict() for t in req.trades]
-        logger.info("[executor] bulk request: %s", trades)
-        results = bulk_manage_trades(trades)  # type: ignore[arg-type]
+        results = bulk_manage_trades(trades)
         return {"ok": True, "results": results}
     except Exception as e:
         logger.exception("[executor] bulk error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/status", summary="Executor status")
+@router.get("/status")
 async def executor_status() -> Dict[str, Any]:
-    """
-    מחזיר סטטוס בסיסי של ה־Executor (חי).
-    """
     return {"ok": True, "status": "running"}
 
-
-# ======== Aliases & Operational Info (כיסינו 404 שהיו) ========
-
-@router.get("/open-positions", summary="List open futures positions")
-@router.get("/positions", summary="List open futures positions (alias)")
-@router.get("/positions/open", summary="List open futures positions (alias)")
+@router.get("/open-positions")
+@router.get("/positions")
+@router.get("/positions/open")
 async def executor_open_positions() -> Dict[str, Any]:
     try:
         if callable(get_open_positions):
-            pos = get_open_positions()  # type: ignore[call-arg]
+            pos = get_open_positions()
             return {"ok": True, "items": pos}
         return {"ok": True, "items": []}
     except Exception as e:
         logger.exception("[executor] open-positions error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/balance", summary="Futures account balances")
+@router.get("/balance")
 async def executor_balance() -> Dict[str, Any]:
     try:
         if callable(futures_balance):
-            bal = futures_balance()  # type: ignore[call-arg]
+            bal = futures_balance()
             return {"ok": True, "balances": bal}
         return {"ok": True, "balances": []}
     except Exception as e:
         logger.exception("[executor] balance error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/mark-price", summary="Futures mark price for a symbol")
-async def executor_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict[str, Any]:
+@router.get("/mark-price")
+async def executor_mark_price(symbol: str = Query(...)) -> Dict[str, Any]:
     sym = (symbol or "").upper().strip()
     if not sym:
         raise HTTPException(status_code=400, detail="symbol is required")
     try:
         if callable(futures_mark_price):
-            px = futures_mark_price(sym)  # type: ignore[call-arg]
+            px = futures_mark_price(sym)
             return {"ok": True, "symbol": sym, "markPrice": px}
         raise RuntimeError("mark price provider not available")
     except Exception as e:
         logger.exception("[executor] mark-price error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/exchange-info", summary="Raw exchange info (with cache fallback)")
+@router.get("/exchange-info")
 async def executor_exchange_info() -> Dict[str, Any]:
     try:
         info = _safe_exchange_info()
@@ -223,9 +183,8 @@ async def executor_exchange_info() -> Dict[str, Any]:
         logger.exception("[executor] exchange-info error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/symbols", summary="Tradable symbols (derived)")
-@router.get("/symbols/allowed", summary="Tradable symbols (alias)")
+@router.get("/symbols")
+@router.get("/symbols/allowed")
 async def executor_symbols() -> Dict[str, Any]:
     try:
         info = _safe_exchange_info()
@@ -234,6 +193,34 @@ async def executor_symbols() -> Dict[str, Any]:
     except Exception as e:
         logger.exception("[executor] symbols error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/close")
+async def close_position(symbol: str) -> Dict[str, Any]:
+    """
+    סוגר פוזיציה קיימת ב־Binance (Market).
+    """
+    try:
+        if not callable(get_open_positions):
+            raise HTTPException(status_code=500, detail="positions provider not available")
+        pos = get_open_positions()
+        sym = (symbol or "").upper()
+        for p in pos:
+            if p.get("symbol") == sym and float(p.get("positionAmt") or 0) != 0:
+                side = "SELL" if float(p["positionAmt"]) > 0 else "BUY"
+                from utils.trade_executor import execute_trade_live
+                res = execute_trade_live(
+                    symbol=sym,
+                    side=side,
+                    budget=abs(float(p["positionAmt"]) * float(p.get("entryPrice", 0))),
+                    leverage=int(p.get("leverage", 10)),
+                    reduce_only=True,
+                )
+                return {"ok": True, "result": res}
+        return {"ok": False, "error": f"No open position for {sym}"}
+    except Exception as e:
+        logger.exception("[executor] close error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
