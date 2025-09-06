@@ -1,33 +1,45 @@
-# utils/decision_log.py
+# utils/decision_engine.py
 from __future__ import annotations
-import logging, uuid
-from typing import Optional, Dict, Any
+import logging
+from typing import Dict, Any
+from utils.ai_analysis import analyze_with_ai
 
 logger = logging.getLogger("algogpt.decision")
 
-def _id(x: Optional[str]) -> str:
-    return x or uuid.uuid4().hex[:12]
+async def make_decision(features: Dict[str, Any], quality_score: float) -> Dict[str, Any]:
+    """
+    מחליט אם לבצע טרייד או לא.
+    - quality_score הוא הציון המספרי.
+    - אם יש GPT → מוסיף ניתוח טקסטואלי.
+    - אם אין GPT → מייצר Fallback בסיסי.
+    """
+    symbol = features.get("symbol", "UNKNOWN")
+    side = features.get("side", "LONG")
+    entry = features.get("entry")
+    sl = features.get("sl")
+    tp1 = features.get("tp1")
 
-def log_decision(
-    *, event: str, symbol: str, side: Optional[str] = None,
-    reason_code: Optional[str] = None, setup_type: Optional[str] = None,
-    request_id: Optional[str] = None, action_id: Optional[str] = None,
-    extra: Optional[Dict[str, Any]] = None,
-) -> None:
-    payload = {
-        "event": event,
-        "symbol": (symbol or "").upper(),
-        "side": (side or "").upper() if side else None,
-        "reason_code": reason_code,
-        "setup_type": setup_type,
-        "request_id": _id(request_id),
-        "action_id": _id(action_id),
+    # GPT analysis
+    ai_summary = ""
+    try:
+        ai_res = await analyze_with_ai(features)
+        if ai_res.get("ok"):
+            ai_summary = ai_res["analysis"]
+        else:
+            ai_summary = f"[Fallback] {symbol} {side} score={quality_score:.2f} entry={entry}, SL={sl}, TP1={tp1}"
+    except Exception as e:
+        ai_summary = f"[AI error → fallback] {symbol} {side} {quality_score:.2f} | entry={entry}, SL={sl}, TP1={tp1}"
+        logger.error(f"AI analysis failed: {e}")
+
+    decision = {
+        "symbol": symbol,
+        "side": side,
+        "quality_score": quality_score,
+        "ai_summary": ai_summary,
+        "approved": quality_score >= 8.5,  # תנאי סף
     }
-    if extra:
-        payload.update({"extra": extra})
-    logger.info(payload)
+    return decision
 
-__all__ = ["log_decision"]
 
 
 
