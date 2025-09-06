@@ -1,97 +1,202 @@
 # utils/telegram_notifier.py
-import os, httpx, json
-from pathlib import Path
-from typing import Optional
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from __future__ import annotations
+import os
+import logging
+import httpx
+import asyncio
+from typing import Dict, Any, Optional
+from datetime import datetime
 
-from utils.analytics_logger import log_event
+# אזור זמן: "Asia/Jerusalem" אם קיים, אחרת UTC
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+    _TZ_IL = ZoneInfo("Asia/Jerusalem")
+except Exception:
+    _TZ_IL = None
 
-TEMPLATE_PATH = Path("static/telegram_ui_templates.json")
-TEMPLATES = json.loads(TEMPLATE_PATH.read_text(encoding="utf-8")) if TEMPLATE_PATH.exists() else {}
+logger = logging.getLogger("algogpt.telegram")
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
-PUBLIC_FEED_CHANNEL_ID = os.getenv("PUBLIC_FEED_CHANNEL_ID")
-ENABLE_PUBLIC_FEED = str(os.getenv("ENABLE_PUBLIC_FEED", "0")).lower() in ("1", "true", "yes", "on")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
-TG_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-def _template(key: str, **kwargs) -> str:
-    return TEMPLATES.get(key, "").format(**kwargs)
-
-def _send(text: str, chat_id: Optional[str] = None, reply_markup: Optional[dict] = None):
-    if not BOT_TOKEN or not chat_id:
-        return
+# =========================
+# Utils
+# =========================
+def _fmt_pct(v: Optional[float], with_sign: bool = True) -> str:
     try:
-        payload = {
-            "chat_id": chat_id,
+        if v is None:
+            return "—"
+        if with_sign:
+            # שימוש ב־+/- כולל מקף יוניקוד יפה (לא חובה)
+            sign = "＋" if v >= 0 else "−"
+            return f"{sign}{abs(v):.1f}%"
+        return f"{v:.1f}%"
+    except Exception:
+        return str(v)
+
+def _fmt_price(v: Optional[float]) -> str:
+    try:
+        if v is None:
+            return "—"
+        # הפרדת אלפים בסגנון 25,090
+        if abs(v) >= 100:
+            return f"{v:,.0f}"
+        return f"{v:,.2f}"
+    except Exception:
+        return str(v)
+
+def _now_il_str() -> str:
+    try:
+        if _TZ_IL:
+            dt = datetime.now(_TZ_IL)
+            return dt.strftime("%d/%m/%Y | %H:%M")
+        # Fallback: UTC
+        return datetime.utcnow().strftime("%d/%m/%Y | %H:%M")
+    except Exception:
+        return ""
+
+async def _post_telegram(payload: Dict[str, Any]) -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.warning("Telegram not configured (missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            await client.post(url, json=payload)
+    except Exception as e:
+        logger.error(f"Telegram send failed: {e}")
+
+# =========================
+# Card Builder
+# =========================
+def _build_trade_card(decision: Dict[str, Any]) -> str:
+    """
+    יוצר טקסט כרטיס טרייד בפורמט המדויק שביקשת.
+    מצופה לקבל לפחות:
+      symbol, side, budget, leverage, tp1_pct, tp2_pct, tp3_pct, sl_pct,
+      eta_tp1_min, quality_score, price, expires_min
+    """
+    symbol   = (decision.get("symbol") or "UNKNOWN").upper()
+    side     = (decision.get("side") or "LONG").upper()
+    budget   = decision.get("budget", None)
+    leverage = decision.get("leverage", None)
+    tp1_pct  = decision.get("tp1_pct", None)
+    tp2_pct  = decision.get("tp2_pct", None)
+    tp3_pct  = decision.get("tp3_pct", None)
+    sl_pct   = decision.get("sl_pct", None)
+    eta_min  = decision.get("eta_tp1_min", None)
+    quality  = decision.get("quality_score", None)
+    price    = decision.get("price", None)
+    exp_min  = decision.get("expires_min", None)
+
+    # אייקון לפי כיוון
+    side_icon = "🟢" if side == "LONG" else "🔴" if side == "SHORT" else "🟦"
+
+    # טיימסטמפ
+    ts = _now_il_str()
+
+    # שורות
+    header = f"📅 {ts} (שעון ישראל)\n\n🚀 AlgoGPT — טרייד חדש ({symbol})\n"
+    body = []
+    body.append(f"{side_icon} כיוון: {side}")
+    if budget is not None:
+        body.append(f"💵 השקעה: {_fmt_price(float(budget))} USDT")
+    if leverage is not None:
+        body.append(f"⚖️ מינוף: ×{int(leverage)}")
+
+    # TP/SL
+    tp_line = f"🎯 TP1={_fmt_pct(tp1_pct)} | TP2={_fmt_pct(tp2_pct)} | TP3={_fmt_pct(tp3_pct)}"
+    sl_line = f"🛡️ SL: {_fmt_pct(-abs(sl_pct) if (sl_pct is not None) else None)}"  # להציג שלילי יפה
+
+    body.append(tp_line)
+    body.append(sl_line)
+    body.append("")  # רווח
+
+    # ETA/Quality/Price/Expiry
+    if eta_min is not None:
+        body.append(f"⏱️ זמן ל־TP1: ~{int(eta_min)} דק׳")
+    if quality is not None:
+        body.append(f"📊 איכות: {float(quality):.1f}/10")
+    if price is not None:
+        body.append(f"📈 מחיר שוק: {_fmt_price(float(price))} USDT")
+    if exp_min is not None:
+        # המרה פשוטה לדקות→שעות אם צריך
+        try:
+            exp_min = int(exp_min)
+            if exp_min >= 120 and exp_min % 60 == 0:
+                body.append(f"⏳ תפוגה: {exp_min // 60} שעות")
+            elif exp_min >= 60:
+                hrs = exp_min // 60
+                mins = exp_min % 60
+                body.append(f"⏳ תפוגה: {hrs} ש׳ {mins} ד׳")
+            else:
+                body.append(f"⏳ תפוגה: {exp_min} דק׳")
+        except Exception:
+            body.append(f"⏳ תפוגה: {exp_min} דק׳")
+
+    # אפשרות להוסיף סיכום AI כטקסט מסכם (אופציונלי)
+    ai_summary = (decision.get("ai_summary") or "").strip()
+    if ai_summary:
+        body.append("")
+        body.append(ai_summary)
+
+    return header + "\n".join(body)
+
+# =========================
+# Public API
+# =========================
+async def notify_trade_proposal(decision: Dict[str, Any], with_buttons: bool = True) -> None:
+    """
+    שולח כרטיס טרייד מלא עם התבנית החדשה.
+    אם with_buttons=True – מוסיף כפתורי אישור/דחייה (Callback).
+    """
+    text = _build_trade_card(decision)
+    payload: Dict[str, Any] = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",  # הטקסט בנוי להיות ידידותי ל־Markdown רגיל
+        "disable_web_page_preview": True,
+    }
+    if with_buttons:
+        symbol = (decision.get("symbol") or "UNKNOWN").upper()
+        side   = (decision.get("side") or "LONG").upper()
+        payload["reply_markup"] = {
+            "inline_keyboard": [[
+                {"text": "✅ אישור", "callback_data": f"approve:{symbol}:{side}"},
+                {"text": "❌ ביטול", "callback_data": f"reject:{symbol}:{side}"},
+            ]]
+        }
+    await _post_telegram(payload)
+
+async def notify_info(text: str) -> None:
+    """
+    הודעת סטטוס קצרה (ללא כפתורים), לשימוש בשלבים:
+    “✅ אושר…”, “📤 נשלח לביצוע…”, “🟢 Binance אישר…”, “טרייד פעיל…” וכו'.
+    """
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }
+    await _post_telegram(payload)
+
+async def notify_external_signal(payload: Dict[str, Any]) -> None:
+    """
+    התראת מקור חיצוני (TradingView/קבוצות/אחר) — Notify בלבד.
+    לא פותח טריידים.
+    """
+    try:
+        pretty = payload if isinstance(payload, dict) else {"data": str(payload)}
+        text = f"🌐 External Signal (Notify-Only)\n```\n{pretty}\n```"
+        await _post_telegram({
+            "chat_id": TELEGRAM_CHAT_ID,
             "text": text,
             "parse_mode": "Markdown",
             "disable_web_page_preview": True,
-        }
-        if reply_markup:
-            payload["reply_markup"] = reply_markup
-        httpx.post(f"{TG_BASE}/sendMessage", json=payload, timeout=4.0)
+        })
     except Exception as e:
-        log_event("telegram_send_failed", {"error": str(e), "chat_id": chat_id})
+        logger.error(f"notify_external_signal failed: {e}")
 
-def notify_trade_card(symbol: str, side: str, entry: float, sl: float, tp1: float, tp2: float, tp3: float, lev: int, rr: float, interval: str, trade_id: str):
-    key = "trade_card_long" if side.upper() == "LONG" else "trade_card_short"
-    text = _template(key, symbol=symbol, entry=entry, sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, lev=lev, rr=rr, interval=interval, trade_id=trade_id)
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ אשר", callback_data=f"approve:{trade_id}"),
-        InlineKeyboardButton("❌ דחה", callback_data=f"reject:{trade_id}")
-    ]])
-
-    _send(text, ADMIN_CHAT_ID, reply_markup=keyboard.to_dict())
-    if ENABLE_PUBLIC_FEED and PUBLIC_FEED_CHANNEL_ID:
-        _send(text, PUBLIC_FEED_CHANNEL_ID)
-
-def notify_tp_hit(symbol: str, price: float, tp_level: int):
-    text = _template("tp_hit", symbol=symbol.upper(), price=price, tpn=tp_level)
-    _send(text, ADMIN_CHAT_ID)
-    if ENABLE_PUBLIC_FEED and PUBLIC_FEED_CHANNEL_ID:
-        _send(text, PUBLIC_FEED_CHANNEL_ID)
-    log_event("tp_hit", {"symbol": symbol, "price": price, "tp_level": tp_level})
-
-def notify_sl_hit(symbol: str, price: float):
-    text = _template("sl_hit", symbol=symbol.upper(), price=price)
-    _send(text, ADMIN_CHAT_ID)
-    if ENABLE_PUBLIC_FEED and PUBLIC_FEED_CHANNEL_ID:
-        _send(text, PUBLIC_FEED_CHANNEL_ID)
-    log_event("sl_hit", {"symbol": symbol, "price": price})
-
-def notify_be_moved(symbol: str, old_sl: float, new_sl: float):
-    text = _template("breakeven_move", symbol=symbol.upper(), old_sl=old_sl, new_sl=new_sl)
-    _send(text, ADMIN_CHAT_ID)
-    if ENABLE_PUBLIC_FEED and PUBLIC_FEED_CHANNEL_ID:
-        _send(text, PUBLIC_FEED_CHANNEL_ID)
-    log_event("be_moved", {"symbol": symbol, "old_sl": old_sl, "new_sl": new_sl})
-
-async def handle_callback_action(update) -> dict:
-    try:
-        query = update.callback_query
-        if not query or not query.data:
-            return {"ok": False, "error": "empty callback"}
-
-        action, trade_id = query.data.split(":", 1)
-        symbol = trade_id.split("_")[0]  # לדוגמה אם trade_id=BTCUSDT_123
-
-        if action == "approve":
-            text = _template("approved", symbol=symbol, reason="אושר")
-            _send(text, ADMIN_CHAT_ID)
-            log_event("trade_approved", {"trade_id": trade_id, "symbol": symbol, "user": query.from_user.id})
-        elif action == "reject":
-            text = _template("rejected", symbol=symbol, reason="נדחה")
-            _send(text, ADMIN_CHAT_ID)
-            log_event("trade_rejected", {"trade_id": trade_id, "symbol": symbol, "user": query.from_user.id})
-        else:
-            return {"ok": False, "error": f"unknown action {action}"}
-
-        return {"ok": True, "action": action, "trade_id": trade_id}
-    except Exception as e:
-        log_event("callback_error", {"error": str(e)})
-        return {"ok": False, "error": str(e)}
 
 
