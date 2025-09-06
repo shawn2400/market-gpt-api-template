@@ -1,15 +1,11 @@
 # utils/telegram_notifier.py
 from __future__ import annotations
-import os
-import logging
-import httpx
-import asyncio
+import os, logging, httpx, asyncio
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-# אזור זמן: "Asia/Jerusalem" אם קיים, אחרת UTC
 try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
+    from zoneinfo import ZoneInfo
     _TZ_IL = ZoneInfo("Asia/Jerusalem")
 except Exception:
     _TZ_IL = None
@@ -19,38 +15,26 @@ logger = logging.getLogger("algogpt.telegram")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# =========================
-# Utils
-# =========================
+# ===== Utils =====
 def _fmt_pct(v: Optional[float], with_sign: bool = True) -> str:
     try:
-        if v is None:
-            return "—"
-        if with_sign:
-            # שימוש ב־+/- כולל מקף יוניקוד יפה (לא חובה)
-            sign = "＋" if v >= 0 else "−"
-            return f"{sign}{abs(v):.1f}%"
-        return f"{v:.1f}%"
+        if v is None: return "—"
+        sign = "＋" if v >= 0 else "−"
+        return f"{sign}{abs(v):.1f}%" if with_sign else f"{v:.1f}%"
     except Exception:
         return str(v)
 
 def _fmt_price(v: Optional[float]) -> str:
     try:
-        if v is None:
-            return "—"
-        # הפרדת אלפים בסגנון 25,090
-        if abs(v) >= 100:
-            return f"{v:,.0f}"
-        return f"{v:,.2f}"
+        if v is None: return "—"
+        return f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.2f}"
     except Exception:
         return str(v)
 
 def _now_il_str() -> str:
     try:
         if _TZ_IL:
-            dt = datetime.now(_TZ_IL)
-            return dt.strftime("%d/%m/%Y | %H:%M")
-        # Fallback: UTC
+            return datetime.now(_TZ_IL).strftime("%d/%m/%Y | %H:%M")
         return datetime.utcnow().strftime("%d/%m/%Y | %H:%M")
     except Exception:
         return ""
@@ -66,100 +50,55 @@ async def _post_telegram(payload: Dict[str, Any]) -> None:
     except Exception as e:
         logger.error(f"Telegram send failed: {e}")
 
-# =========================
-# Card Builder
-# =========================
+# ===== Card Builder =====
 def _build_trade_card(decision: Dict[str, Any]) -> str:
-    """
-    יוצר טקסט כרטיס טרייד בפורמט המדויק שביקשת.
-    מצופה לקבל לפחות:
-      symbol, side, budget, leverage, tp1_pct, tp2_pct, tp3_pct, sl_pct,
-      eta_tp1_min, quality_score, price, expires_min
-    """
     symbol   = (decision.get("symbol") or "UNKNOWN").upper()
     side     = (decision.get("side") or "LONG").upper()
-    budget   = decision.get("budget", None)
-    leverage = decision.get("leverage", None)
-    tp1_pct  = decision.get("tp1_pct", None)
-    tp2_pct  = decision.get("tp2_pct", None)
-    tp3_pct  = decision.get("tp3_pct", None)
-    sl_pct   = decision.get("sl_pct", None)
-    eta_min  = decision.get("eta_tp1_min", None)
-    quality  = decision.get("quality_score", None)
-    price    = decision.get("price", None)
-    exp_min  = decision.get("expires_min", None)
-
-    # אייקון לפי כיוון
     side_icon = "🟢" if side == "LONG" else "🔴" if side == "SHORT" else "🟦"
 
-    # טיימסטמפ
-    ts = _now_il_str()
+    header = f"📅 {_now_il_str()} (שעון ישראל)\n\n🚀 AlgoGPT — טרייד חדש ({symbol})\n"
+    body = [
+        f"{side_icon} כיוון: {side}",
+    ]
+    if decision.get("budget") is not None:
+        body.append(f"💵 השקעה: {_fmt_price(float(decision['budget']))} USDT")
+    if decision.get("leverage") is not None:
+        body.append(f"⚖️ מינוף: ×{int(decision['leverage'])}")
 
-    # שורות
-    header = f"📅 {ts} (שעון ישראל)\n\n🚀 AlgoGPT — טרייד חדש ({symbol})\n"
-    body = []
-    body.append(f"{side_icon} כיוון: {side}")
-    if budget is not None:
-        body.append(f"💵 השקעה: {_fmt_price(float(budget))} USDT")
-    if leverage is not None:
-        body.append(f"⚖️ מינוף: ×{int(leverage)}")
+    body.append(f"🎯 TP1={_fmt_pct(decision.get('tp1_pct'))} | TP2={_fmt_pct(decision.get('tp2_pct'))} | TP3={_fmt_pct(decision.get('tp3_pct'))}")
+    body.append(f"🛡️ SL: {_fmt_pct(-abs(decision['sl_pct']) if decision.get('sl_pct') else None)}")
 
-    # TP/SL
-    tp_line = f"🎯 TP1={_fmt_pct(tp1_pct)} | TP2={_fmt_pct(tp2_pct)} | TP3={_fmt_pct(tp3_pct)}"
-    sl_line = f"🛡️ SL: {_fmt_pct(-abs(sl_pct) if (sl_pct is not None) else None)}"  # להציג שלילי יפה
-
-    body.append(tp_line)
-    body.append(sl_line)
-    body.append("")  # רווח
-
-    # ETA/Quality/Price/Expiry
-    if eta_min is not None:
-        body.append(f"⏱️ זמן ל־TP1: ~{int(eta_min)} דק׳")
-    if quality is not None:
-        body.append(f"📊 איכות: {float(quality):.1f}/10")
-    if price is not None:
-        body.append(f"📈 מחיר שוק: {_fmt_price(float(price))} USDT")
-    if exp_min is not None:
-        # המרה פשוטה לדקות→שעות אם צריך
-        try:
-            exp_min = int(exp_min)
-            if exp_min >= 120 and exp_min % 60 == 0:
-                body.append(f"⏳ תפוגה: {exp_min // 60} שעות")
-            elif exp_min >= 60:
-                hrs = exp_min // 60
-                mins = exp_min % 60
-                body.append(f"⏳ תפוגה: {hrs} ש׳ {mins} ד׳")
-            else:
-                body.append(f"⏳ תפוגה: {exp_min} דק׳")
-        except Exception:
+    if decision.get("eta_tp1_min") is not None:
+        body.append(f"⏱️ זמן ל־TP1: ~{int(decision['eta_tp1_min'])} דק׳")
+    if decision.get("quality_score") is not None:
+        body.append(f"📊 איכות: {float(decision['quality_score']):.1f}/10")
+    if decision.get("price") is not None:
+        body.append(f"📈 מחיר שוק: {_fmt_price(float(decision['price']))} USDT")
+    if decision.get("expires_min") is not None:
+        exp_min = int(decision['expires_min'])
+        if exp_min >= 60:
+            hrs, mins = divmod(exp_min, 60)
+            body.append(f"⏳ תפוגה: {hrs} ש׳ {mins} ד׳")
+        else:
             body.append(f"⏳ תפוגה: {exp_min} דק׳")
 
-    # אפשרות להוסיף סיכום AI כטקסט מסכם (אופציונלי)
-    ai_summary = (decision.get("ai_summary") or "").strip()
-    if ai_summary:
+    if decision.get("ai_summary"):
         body.append("")
-        body.append(ai_summary)
+        body.append(decision["ai_summary"].strip())
 
     return header + "\n".join(body)
 
-# =========================
-# Public API
-# =========================
+# ===== Public API =====
 async def notify_trade_proposal(decision: Dict[str, Any], with_buttons: bool = True) -> None:
-    """
-    שולח כרטיס טרייד מלא עם התבנית החדשה.
-    אם with_buttons=True – מוסיף כפתורי אישור/דחייה (Callback).
-    """
     text = _build_trade_card(decision)
     payload: Dict[str, Any] = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown",  # הטקסט בנוי להיות ידידותי ל־Markdown רגיל
+        "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
     if with_buttons:
-        symbol = (decision.get("symbol") or "UNKNOWN").upper()
-        side   = (decision.get("side") or "LONG").upper()
+        symbol, side = decision.get("symbol","UNKNOWN").upper(), decision.get("side","LONG").upper()
         payload["reply_markup"] = {
             "inline_keyboard": [[
                 {"text": "✅ אישור", "callback_data": f"approve:{symbol}:{side}"},
@@ -169,23 +108,14 @@ async def notify_trade_proposal(decision: Dict[str, Any], with_buttons: bool = T
     await _post_telegram(payload)
 
 async def notify_info(text: str) -> None:
-    """
-    הודעת סטטוס קצרה (ללא כפתורים), לשימוש בשלבים:
-    “✅ אושר…”, “📤 נשלח לביצוע…”, “🟢 Binance אישר…”, “טרייד פעיל…” וכו'.
-    """
-    payload = {
+    await _post_telegram({
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
-    }
-    await _post_telegram(payload)
+    })
 
 async def notify_external_signal(payload: Dict[str, Any]) -> None:
-    """
-    התראת מקור חיצוני (TradingView/קבוצות/אחר) — Notify בלבד.
-    לא פותח טריידים.
-    """
     try:
         pretty = payload if isinstance(payload, dict) else {"data": str(payload)}
         text = f"🌐 External Signal (Notify-Only)\n```\n{pretty}\n```"
@@ -197,6 +127,7 @@ async def notify_external_signal(payload: Dict[str, Any]) -> None:
         })
     except Exception as e:
         logger.error(f"notify_external_signal failed: {e}")
+
 
 
 
