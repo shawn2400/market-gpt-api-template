@@ -1,6 +1,6 @@
 # routes/telegram_bot.py
 from __future__ import annotations
-import logging, os, json, re, time
+import logging, os, json, time
 from typing import Dict, Any, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,7 +11,6 @@ from telegram import Update
 
 from utils.auth import require_api_key
 from utils.runtime_prefs import is_muted, set_mute, toggle_mute
-from utils.tp_helper import on_approve_trade_async
 from utils.telegram_notifier import handle_callback_action
 from utils.security import verify_hmac, idem_seen
 from utils.risk import suggest_risk
@@ -174,7 +173,7 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
         update = Update.de_json(payload, None)
         result = await handle_callback_action(update)
 
-        approved = bool(result and (result.get("approved") or result.get("action") == "approve"))
+        approved = bool(result and (result.get("approved") or str(result.get("action","")).lower() in ("approve","approved")))
         opened = None; ladder = None; be_res = None
 
         if approved:
@@ -197,6 +196,7 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
     except Exception as e:
         logger.exception("telegram_webhook failed")
         return {"ok": False, "error": str(e)}
+
 
 
 
