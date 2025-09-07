@@ -126,7 +126,6 @@ def _side_to_exchange(side: str) -> Tuple[str,str]:
     s = (side or "").upper()
     if s in ("LONG","BUY"):  return "BUY","LONG"
     if s in ("SHORT","SELL"): return "SELL","SHORT"
-    # ברירת מחדל שמרנית
     return "BUY","LONG"
 
 def _quantize_qty(symbol: str, price: float, qty_guess: float) -> float:
@@ -140,13 +139,6 @@ def _quantize_qty(symbol: str, price: float, qty_guess: float) -> float:
 
 def _open_after_approve(symbol: str, side: str, entry_hint: Optional[float]=None, sl_price: Optional[float]=None,
                         leverage_hint: Optional[int]=None, budget_usd_hint: Optional[float]=None) -> Dict[str, Any]:
-    """
-    פותח פוזיציה MARKET אחרי אישור:
-    - Risk Engine לקביעת leverage/budget/quantity
-    - set_leverage
-    - MARKET order
-    - SL
-    """
     su = symbol.upper()
     ex_side, pos_side = _side_to_exchange(side)
     price = futures_mark_price(su) or float(entry_hint or 0.0) or 0.0
@@ -216,14 +208,13 @@ async def telegram_callback_webhook(request: Request):
             budget_usd_hint = None
 
             if isinstance(result, dict):
-                # נשתמש במה שיש אם הועבר ב-json של הכפתור/handler
                 entry = result.get("entry") or result.get("price")
                 sl_price = result.get("sl") or result.get("stop") or result.get("stop_loss")
                 tp_targets = result.get("targets") or result.get("tps")
                 leverage_hint = result.get("leverage")
                 budget_usd_hint = result.get("budget_usd")
 
-            # פתיחה אוטומטית אחרי אישור (אם הופעל ב-ENV)
+            # פתיחה אוטומטית אחרי אישור (אם מופעל ב-ENV)
             if _AUTO_OPEN_ON_APPROVE and symbol and side:
                 try:
                     opened = _open_after_approve(
@@ -266,6 +257,7 @@ async def telegram_callback_webhook(request: Request):
     except Exception as e:
         logger.exception("telegram_callback_webhook failed")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
 
 
 
