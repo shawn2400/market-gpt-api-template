@@ -27,6 +27,7 @@ def _parse_csv(s: str | None) -> List[str]:
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.17.0")
 
+# ===== Imports =====
 from utils import config as cfg  # noqa: F401
 from utils.config import dump_config_sanitized, LOG_LEVEL
 from utils.response_limits import ResponseSizeLimiter
@@ -38,6 +39,7 @@ from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
 from utils.metrics import metrics_tracker
+from utils.trade_manager import manage_open_trades_loop
 
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
@@ -45,6 +47,7 @@ except Exception:
     async def start_user_stream_consumer(): return None
     async def stop_user_stream_consumer(): return None
 
+# ===== Logging =====
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
@@ -59,7 +62,12 @@ def _ensure_dir(path: str) -> bool:
 static_ok = _ensure_dir("static")
 _ = _ensure_dir("logs")
 
-app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת אפשרי")
+# ===== FastAPI App =====
+app = FastAPI(
+    title="AlgoGPT API",
+    version=APP_VERSION,
+    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת אפשרי"
+)
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -82,6 +90,7 @@ try:
 except Exception as e:
     logger.warning({"event": "static_mount_failed", "error": str(e)})
 
+# ===== Middlewares =====
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
@@ -111,7 +120,7 @@ async def track_metrics(request: Request, call_next):
         metrics_tracker.observe_request(response.status_code, (asyncio.get_event_loop().time() - start) * 1000)
         return response
 
-# ✅ עדכון רשימת ה-routers: כולל Telegram callbacks
+# ===== Routers =====
 ROUTERS: List[str] = [
     "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
     "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
@@ -139,6 +148,7 @@ def _include_router(path: str) -> None:
 for r in ROUTERS:
     _include_router(r)
 
+# ===== Endpoints =====
 @app.get("/")
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -171,6 +181,8 @@ async def startup_event():
     except: pass
     try: await start_user_stream_consumer()
     except: pass
+    try: asyncio.create_task(manage_open_trades_loop(interval=20))  # ✅ Auto SL/TP manager
+    except: pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -178,17 +190,25 @@ async def shutdown_event():
     except: pass
 
 @app.post("/start-executor")
-async def api_start_executor(): start_executor(); return {"ok": True}
+async def api_start_executor():
+    start_executor()
+    return {"ok": True}
 
 @app.post("/stop-executor")
-async def api_stop_executor(): stop_executor(); return {"ok": True}
+async def api_stop_executor():
+    stop_executor()
+    return {"ok": True}
 
 @app.post("/manage-once")
-async def api_manage_once(): await manage_open_trades(); return {"ok": True}
+async def api_manage_once():
+    await manage_open_trades()
+    return {"ok": True}
 
+# ===== Run (Dev mode) =====
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
