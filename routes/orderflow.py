@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException
 from utils.auth import require_api_key
 
-# נטען את המנוע; אם נופל ב-import, עדיין נטען router_public כדי שנראה ב-openapi.json
+# נטען את המנוע; אם נופל ב-import, עדיין נטען router_public כדי לראות ב-openapi.json
 try:
     from utils.orderflow import get_orderflow_snapshot
     _OF_OK = True
@@ -53,7 +53,7 @@ async def get_orderflow(
     trades_limit: int = Query(800, ge=1, le=1000),
     depth_limit: int = Query(500, ge=5, le=1000),
     cvd_window: int = Query(300, ge=1, le=1000),
-    request: Request = None  # ✅ FastAPI יזריק בפועל; לא נרשום Optional/Union/Path כאן!
+    request: Request
 ) -> Dict[str, Any]:
     # Rate-limit לפי IP
     ip = None
@@ -76,6 +76,7 @@ async def get_orderflow(
         depth_limit=depth_limit,
         cvd_window=cvd_window
     )
+
 
 
 
