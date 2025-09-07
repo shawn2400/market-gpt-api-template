@@ -48,8 +48,7 @@ async def status() -> Dict[str, Any]:
 @router.get("/positions")
 async def open_positions(symbol: Optional[str] = Query(None)) -> Dict[str, Any]:
     try:
-        pos = futures_open_positions_safe(symbol)
-        return {"ok": True, "positions": pos}
+        return {"ok": True, "positions": futures_open_positions_safe(symbol)}
     except Exception as e:
         logger.error("positions failed: %s", e)
         raise HTTPException(500, str(e))
