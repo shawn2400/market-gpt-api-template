@@ -1,41 +1,27 @@
 # services/telegram_daily.py
 from __future__ import annotations
-import datetime as dt
-from utils.pnl_tracker import get_pnl_summary
-from utils.metrics import metrics_tracker
-from utils.telegram_notifier import send_telegram_message
+import asyncio, logging
+from datetime import datetime
+from utils.pnl_summary import get_pnl_summary
+from utils.telegram_notifier import notify_telegram
 
-async def send_heartbeat():
-    msg = f"💓 Heartbeat {dt.datetime.utcnow().isoformat()}"
-    await send_telegram_message(msg)
+logger = logging.getLogger("algogpt.telegram_daily")
 
-async def send_daily_summary():
-    pnl = get_pnl_summary(days=1)
-    m = metrics_tracker.get_metrics()
-    msg = (
-        f"📊 Daily Summary\n"
-        f"Trades: {pnl['total_trades']} | WinRate: {pnl['win_rate']}%\n"
-        f"PnL: {pnl['realized_pnl_usd']} USDT\n"
-        f"Errors: {m['requests']['errors_total']}\n"
-        f"Latency p95: {m['latency_ms']['p95']}ms"
-    )
-    await send_telegram_message(msg)
+async def start_daily_summaries():
+    while True:
+        now = datetime.utcnow()
+        if now.hour == 21 and now.minute < 2:  # 23:00 שעון ישראל בערך
+            try:
+                summary = get_pnl_summary(days=1)
+                msg = (
+                    f"📅 סיכום יומי {now.date()}\n"
+                    f"טריידים: {summary['total_trades']}\n"
+                    f"PnL: {summary['realized_pnl_usd']:.2f} USDT\n"
+                    f"WinRate: {summary['win_rate']}%\n"
+                )
+                await notify_telegram(msg)
+            except Exception as e:
+                logger.error({"event": "daily_summary_failed", "error": str(e)})
+        await asyncio.sleep(60)
 
-async def send_weekly_summary():
-    pnl = get_pnl_summary(days=7)
-    msg = (
-        f"📊 Weekly Summary\n"
-        f"Trades: {pnl['total_trades']} | WinRate: {pnl['win_rate']}%\n"
-        f"PnL: {pnl['realized_pnl_usd']} USDT"
-    )
-    await send_telegram_message(msg)
-
-async def send_monthly_summary():
-    pnl = get_pnl_summary(days=30)
-    msg = (
-        f"📊 Monthly Summary\n"
-        f"Trades: {pnl['total_trades']} | WinRate: {pnl['win_rate']}%\n"
-        f"PnL: {pnl['realized_pnl_usd']} USDT"
-    )
-    await send_telegram_message(msg)
 
