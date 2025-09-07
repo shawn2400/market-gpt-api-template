@@ -1,13 +1,14 @@
 # utils/trade_store.py
 from __future__ import annotations
 from typing import Dict, Any, List, Optional
-import os, json, time
-
+import os, json, time, logging
 from utils.redis_client import redis_client as RED
 
-USE_REDIS_TRADES = os.getenv("USE_REDIS_TRADES","0").lower() in ("1","true","yes")
+logger = logging.getLogger("algogpt.trade_store")
 
-_TRADES_MEM: Dict[str, Dict[str, Any]] = {}  # fallback
+USE_REDIS_TRADES = os.getenv("USE_REDIS_TRADES", "0").lower() in ("1", "true", "yes")
+
+_TRADES_MEM: Dict[str, Dict[str, Any]] = {}
 
 def _key(tid: str) -> str:
     return f"trades:active:{tid}"
@@ -31,14 +32,12 @@ def _decode_map(d: Dict[str, Any]) -> Dict[str, Any]:
             v = v.decode("utf-8", "ignore")
         if isinstance(k, bytes):
             k = k.decode("utf-8", "ignore")
-        # JSON?
         if isinstance(v, str) and v and v[0] in "[{":
             try:
                 out[k] = json.loads(v)
                 continue
             except Exception:
                 pass
-        # int/float?
         try:
             if v is None:
                 out[k] = v
@@ -52,9 +51,6 @@ def _decode_map(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 def create_trade(item: Dict[str, Any]) -> None:
-    """
-    יוצר/שומר טרייד פעיל.
-    """
     tid = str(item.get("trade_id"))
     if not tid:
         raise ValueError("missing trade_id")
@@ -75,8 +71,11 @@ def get_trade(tid: str) -> Optional[Dict[str, Any]]:
 
 def update_trade(tid: str, updates: Dict[str, Any]) -> None:
     if USE_REDIS_TRADES and RED:
-        if not RED.exists(_key(tid)): return
-        RED.hset(_key(tid), mapping=_encode_map(updates))
+        if not RED.exists(_key(tid)):
+            return
+        current = _decode_map(RED.hgetall(_key(tid)))
+        current.update(updates)
+        RED.hset(_key(tid), mapping=_encode_map(current))
     else:
         if tid in _TRADES_MEM:
             _TRADES_MEM[tid].update(updates)
@@ -86,7 +85,8 @@ def list_active(limit: int = 1000) -> List[Dict[str, Any]]:
         tids = list(RED.smembers(_set_key()) or [])
         out: List[Dict[str, Any]] = []
         for tid in tids[:limit]:
-            if isinstance(tid, bytes): tid = tid.decode("utf-8","ignore")
+            if isinstance(tid, bytes):
+                tid = tid.decode("utf-8", "ignore")
             d = RED.hgetall(_key(tid))
             if d:
                 out.append(_decode_map(d))
@@ -95,4 +95,5 @@ def list_active(limit: int = 1000) -> List[Dict[str, Any]]:
     out = list(_TRADES_MEM.values())
     out.sort(key=lambda r: int(r.get("ts") or 0), reverse=True)
     return out[:limit]
+
 
