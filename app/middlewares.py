@@ -2,16 +2,12 @@
 from __future__ import annotations
 import os, hmac, hashlib
 from typing import Callable, Awaitable
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-# מאחד אימות HMAC אופציונלי לכמה נתיבים, בלי להכביד:
-# - /alerts*, /risk*, /telegram/callbacks
-# שאר האימותים (API key/Bearer) כבר קיימים ברואטרים עצמם.
-# אם WEBHOOK_HMAC_SECRET לא מוגדר – לא בודקים HMAC.
-
+# ─────────── HMAC Config ───────────
 _HMAC_SECRET_RAW = os.getenv("WEBHOOK_HMAC_SECRET", "") or os.getenv("HMAC_SECRET", "")
 _HMAC_ENABLED = bool(_HMAC_SECRET_RAW.strip())
 _HMAC_SECRET = _HMAC_SECRET_RAW.encode("utf-8")
@@ -22,7 +18,16 @@ _SIG_HEADERS = (
     "X-Hub-Signature-256",
 )
 
+# נתיבים הדורשים HMAC כשמופעל
 _PROTECTED_PREFIXES = ("/alerts", "/risk", "/telegram/callbacks")
+
+# נתיבים שעוברים תמיד (בריאות/דוקס/סטטי)
+_BYPASS_PATHS = {
+    "/", "/health", "/healthz", "/readyz",
+    "/openapi.json", "/docs", "/redoc",
+    "/ws/health", "/server/healthz",
+}
+_BYPASS_PREFIXES = ("/static/",)
 
 def _need_hmac(path: str) -> bool:
     if not _HMAC_ENABLED:
@@ -49,18 +54,23 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable]):
         path = request.url.path
 
-        # OPTIONS / סטטיים – דילוג
-        if request.method.upper() == "OPTIONS" or path.startswith("/static/"):
+        # 1) BYPASS מוחלט לנתיבי בריאות/דוקס/סטטי/OPTIONS
+        if (
+            request.method.upper() == "OPTIONS"
+            or path in _BYPASS_PATHS
+            or any(path.startswith(p) for p in _BYPASS_PREFIXES)
+        ):
             return await call_next(request)
 
-        # HMAC רק אם מופעל ב-ENV ורק לנתיבים הייעודיים
+        # 2) דרישת HMAC לנתיבים מוגנים (אם מופעל ב-ENV)
         if _need_hmac(path):
-            # קריאת גוף (ישמר ב־scope כך שהנתיב יקבל אותו)
             body = await request.body()
             sig = _extract_signature(request)
             if not _verify(sig, body):
                 return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature"})
 
+        # 3) העברה לשאר ה־middlewares/routers
         return await call_next(request)
+
 
 
