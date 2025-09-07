@@ -1,58 +1,65 @@
 # utils/log_auto.py
 from __future__ import annotations
 import os, time, logging
-from collections import deque
 from typing import Deque, Tuple
+from collections import deque
 
-class LogAutoTuner:
+class _LogAuto:
     """
-    מרים DEBUG לבאסט קצר כשיש ספייק שגיאות/לטנסי/CPU, ואז חוזר ל-INFO.
-    נשלט ע"י ENV, לא חוסם ולא מכביד.
+    בקר לוג אוטומטי רזה:
+    - אוסף סטאטוס/משך אחרונים (ברירת מחדל: חלון של 200 בקשות).
+    - אם יש הרבה כשלים או שיהוי גבוה → מרים זמנית DEBUG, אח"כ חוזר ל-LOG_LEVEL המקורי.
+    - בלי ENV חובה; מכבד אם קיימים:
+        AUTO_TUNE_LATENCY_P95_MS (דיפולט 800ms)
+        LOG_AUTO_WINDOW (כמות דגימות לחלון, דיפולט 200)
+        LOG_AUTO_DEBUG_WINDOW_SEC (זמן הדיבאג, דיפולט 60s)
+        LOG_AUTO_ERR_RATE (סף כשלים, דיפולט 0.15)
     """
     def __init__(self) -> None:
-        self.enable = str(os.getenv("LOG_AUTO_TUNE", "0")).lower() in ("1","true","yes","on")
-        self.debug_burst_sec = int(os.getenv("LOG_DEBUG_BURST_SEC", "180"))
-        self.win_sec = int(os.getenv("LOG_ERROR_RATE_WINDOW_SEC", "60"))
-        self.err_spike = int(os.getenv("LOG_ERROR_RATE_SPIKE", "8"))
-        self.latency_p95_ms = int(os.getenv("LOG_LATENCY_P95_MS", os.getenv("AUTO_TUNE_LATENCY_P95_MS","800")))
-        self.cpu_spike = int(os.getenv("LOG_CPU_SPIKE", "85"))  # אופציונלי: אם תזין שימוש CPU
-        self._root = logging.getLogger()
-        self._was_forced = False
-        self._debug_until = 0.0
-        self._q: Deque[Tuple[float,int,float]] = deque(maxlen=500)  # (ts, status, dur_ms)
+        self.base_level = logging.getLogger().level
+        self.latency_p95_ms = float(os.getenv("AUTO_TUNE_LATENCY_P95_MS", "800"))
+        self.window_n = int(os.getenv("LOG_AUTO_WINDOW", "200"))
+        self.debug_for_sec = int(os.getenv("LOG_AUTO_DEBUG_WINDOW_SEC", "60"))
+        self.err_rate_thr = float(os.getenv("LOG_AUTO_ERR_RATE", "0.15"))
+        self.samples: Deque[Tuple[int, float]] = deque(maxlen=max(50, self.window_n))
+        self.debug_until = 0.0
 
-    def observe(self, status: int, dur_ms: float) -> None:
-        if not self.enable: 
-            return
-        now = time.time()
-        self._q.append((now, status, dur_ms))
-        # נקה חלון
-        while self._q and now - self._q[0][0] > self.win_sec:
-            self._q.popleft()
-        errors = sum(1 for _, s, _ in self._q if s >= 500)
-        # p95 גס (ללא numpy)
-        ms_sorted = sorted(x[2] for x in self._q)
-        p95 = ms_sorted[int(0.95*len(ms_sorted))-1] if ms_sorted else 0.0
+    def _maybe_reset_level(self) -> None:
+        if self.debug_until and time.time() > self.debug_until:
+            logging.getLogger().setLevel(self.base_level)
+            self.debug_until = 0.0
 
-        trigger = (errors >= self.err_spike) or (p95 >= self.latency_p95_ms)
-        if trigger:
-            self._set_debug_burst(now + self.debug_burst_sec)
-        elif self._was_forced and now >= self._debug_until:
-            self._set_info()
+    def _percentile(self, arr, p: float) -> float:
+        if not arr: return 0.0
+        a = sorted(arr)
+        idx = int(max(0, min(len(a) - 1, round(p * (len(a) - 1)))))
+        return a[idx]
 
-    def _set_debug_burst(self, until_ts: float) -> None:
-        if not self._was_forced:
-            self._prev_level = self._root.level
-        self._root.setLevel(logging.DEBUG)
-        self._was_forced = True
-        self._debug_until = until_ts
+    def observe(self, status_code: int, dur_ms: float) -> None:
+        try:
+            self.samples.append((status_code, float(dur_ms)))
+            now = time.time()
+            self._maybe_reset_level()
 
-    def _set_info(self) -> None:
-        lvl = os.getenv("LOG_LEVEL","info").lower()
-        new = logging.INFO if lvl=="info" else logging.getLevelName(lvl.upper())
-        self._root.setLevel(new)
-        self._was_forced = False
-        self._debug_until = 0.0
+            # אל תבדוק כל בקשה – רק כל ~20 דגימות
+            if len(self.samples) < min(60, self.window_n // 3):
+                return
+            if len(self.samples) % 20 != 0:
+                return
 
-# מחזיק יחיד גלובלי
-log_auto = LogAutoTuner()
+            # חשב מדדים בסיסיים
+            latencies = [d for _, d in self.samples]
+            p95 = self._percentile(latencies, 0.95)
+            errs = sum(1 for s, _ in self.samples if int(s) >= 500)
+            err_rate = errs / max(1, len(self.samples))
+
+            # טריגר דיבאג זמני
+            if p95 > self.latency_p95_ms or err_rate >= self.err_rate_thr:
+                logging.getLogger().setLevel(logging.DEBUG)
+                self.debug_until = now + self.debug_for_sec
+        except Exception:
+            # לא שוברים כלום בגלל בקר לוגים
+            pass
+
+log_auto = _LogAuto()
+
