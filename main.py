@@ -34,13 +34,12 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.time_sync import sync_now, start_background_sync, ensure_fresh_sync
 from utils.binance_client import futures_balance, fapi_ping
 from utils.ws_fallback import auto_price_updater, is_price_fresh
-# >> תיקון: ניהול טריידים מיובא מ-utils.trade_manager
 from utils.trade_manager import manage_open_trades, manage_open_trades_loop
 from utils.auto_executor import start_executor, stop_executor
 from utils.metrics import metrics_tracker
-from utils.log_auto import log_auto  # בקר לוג אוטומטי
+from utils.log_auto import log_auto
 
-# >> הוספה: מידלוור פנימי לאימות Bearer+HMAC+Idempotency עבור /alerts ו-/risk
+# Middleware פנימי עבור /alerts ו-/risk
 from app.middlewares import InternalAuthMiddleware
 
 try:
@@ -76,24 +75,22 @@ app.add_middleware(
     allow_credentials=CORS_ALLOW_CREDENTIALS,
 )
 
-# >> הוספה: מידלוור פנימי שמאבטח /alerts* ו-/risk* עם HMAC+Bearer+Idem
+# Middleware פנימי עבור /alerts* ו-/risk*
 app.add_middleware(InternalAuthMiddleware)
 
 # ===== Middleware =====
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    # >> הרחבתי את הרשימה כך שהאימות הכללי לא ייחול על /alerts ו-/risk
-    PUBLIC_PATHS = {
-        "/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc",
-        "/telegram/webhook", "/telegram/callbacks"
-    }
+    # מדלגים על אימות כללי עבור /alerts* ו-/risk* (יש אימות ייעודי ב-InternalAuthMiddleware)
+    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc",
+                    "/telegram/webhook", "/telegram/callbacks"}
     PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk"]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
     if allow_all():
         return await call_next(request)
-    token = extract_token(request, request.headers.get("Authorization", ""), request.headers.get("X-API-Key"))
+    token = extract_token(request, request.headers.get("Authorization",""), request.headers.get("X-API-Key"))
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
@@ -124,19 +121,17 @@ ROUTERS: List[str] = [
     "routes.reconcile","routes.scheduler_ai","routes.admin","routes.export","routes.pnl",
     "routes.ui","routes.backtest","routes.ui_grid","routes.orderbook","routes.ws","routes.ws_health","routes.orderflow"
 ]
-if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
+if _to_bool(os.getenv("ENABLE_AI_ROUTES","1"), True):
     ROUTERS.append("routes.ai")
 
 def _include_router(path: str) -> None:
     try:
-        mod = __import__(path, fromlist=["router", "router_public"])
-        if hasattr(mod, "router"):
-            app.include_router(getattr(mod, "router"))
-        if hasattr(mod, "router_public"):
-            app.include_router(getattr(mod, "router_public"))
-        logger.info({"event": "router_registered", "router": path})
+        mod = __import__(path, fromlist=["router","router_public"])
+        if hasattr(mod,"router"): app.include_router(getattr(mod,"router"))
+        if hasattr(mod,"router_public"): app.include_router(getattr(mod,"router_public"))
+        logger.info({"event":"router_registered","router":path})
     except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": path, "error": str(e)})
+        logger.warning({"event":"router_register_failed","router":path,"error":str(e)})
 
 for r in ROUTERS:
     _include_router(r)
@@ -144,11 +139,11 @@ for r in ROUTERS:
 # ===== Endpoints =====
 @app.get("/")
 async def root_status():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+    return {"ok": True, "status":"ok", "version": APP_VERSION}
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "status": "ok", "version": APP_VERSION}
+    return {"ok": True, "status":"ok", "version": APP_VERSION}
 
 @app.get("/readyz")
 async def readyz():
@@ -157,45 +152,33 @@ async def readyz():
         ensure_fresh_sync()
         details["ping_ok"] = bool(fapi_ping())
         details["balance_ok"] = isinstance(futures_balance(), list)
-        syms = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
+        syms = _parse_csv(os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT"))
         prices_ok = all(is_price_fresh(sym) for sym in syms)
-        for sym in syms:
-            details[f"price_{sym}"] = is_price_fresh(sym)
+        for sym in syms: details[f"price_{sym}"] = is_price_fresh(sym)
         return {"ok": bool(details["ping_ok"] and details["balance_ok"] and prices_ok), "details": details}
     except Exception as e:
         return {"ok": False, "error": str(e), "details": details}
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info({"event": "startup", "version": APP_VERSION, "config": dump_config_sanitized()})
-    try:
-        sync_now(); start_background_sync()
-    except:
-        pass
-    try:
-        asyncio.create_task(auto_price_updater(_parse_csv(os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT"))))
-    except:
-        pass
-    try:
-        await start_user_stream_consumer()
-    except:
-        pass
-    try:
-        asyncio.create_task(manage_open_trades_loop(interval=20))
-    except:
-        pass
+    logger.info({"event":"startup","version":APP_VERSION,"config":dump_config_sanitized()})
+    try: sync_now(); start_background_sync()
+    except: pass
+    try: asyncio.create_task(auto_price_updater(_parse_csv(os.getenv("WATCHLIST","BTCUSDT,ETHUSDT,SOLUSDT"))))
+    except: pass
+    try: await start_user_stream_consumer()
+    except: pass
+    try: asyncio.create_task(manage_open_trades_loop(interval=20))
+    except: pass
     try:
         from services.telegram_daily import start_daily_summaries
         asyncio.create_task(start_daily_summaries())
-    except:
-        pass
+    except: pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    try:
-        await stop_user_stream_consumer()
-    except:
-        pass
+    try: await stop_user_stream_consumer()
+    except: pass
 
 @app.post("/start-executor")
 async def api_start_executor():
@@ -214,7 +197,8 @@ async def api_manage_once():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
