@@ -1,7 +1,7 @@
 # utils/open_trade_manager.py
 from __future__ import annotations
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from utils.order_hygiene import (
     place_limit_order_safe,
@@ -27,27 +27,31 @@ def manage_open_trades(
     position_side: str = "BOTH",
 ) -> Dict[str, Any]:
     """
-    מנהל פתיחת טרייד עם SL ו־TP אוטומטיים.
+    ניהול טרייד פתוח כולל Entry + SL + TP
+    עם בדיקות מינימום וניקוי קונפליקטים קיימים.
     """
     logger.info(
-        "[open_trade_manager] Starting manage_open_trades: %s side=%s qty=%s entry=%s SL=%s TP=%s lev=%s",
-        symbol,
-        side,
-        qty,
-        entry_price,
-        sl_price,
-        tp_price,
-        leverage,
+        {
+            "event": "manage_open_trades_start",
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "entry": entry_price,
+            "sl": sl_price,
+            "tp": tp_price,
+            "leverage": leverage,
+        }
     )
 
-    # ביטול קונפליקטים פתוחים
+    # ביטול פקודות קודמות לאותו סימבול
     cancel_if_conflict(symbol, side)
 
-    # בדיקת minQty / minNotional מול Binance בזמן אמת
+    # בדיקת מינימום Binance
     ok, reason = check_minimums(symbol, qty)
     if not ok:
-        logger.warning("[open_trade_manager] Trade rejected: %s", reason)
-        return {"ok": False, "error": f"min_check_failed: {reason}"}
+        msg = f"min_check_failed: {reason}"
+        logger.warning({"event": "trade_rejected", "reason": msg})
+        return {"ok": False, "error": msg}
 
     # שלב 1: Limit Entry
     entry = place_limit_order_safe(
@@ -73,7 +77,7 @@ def manage_open_trades(
     if not sl.get("ok"):
         return {"ok": False, "error": f"sl_failed: {sl.get('error')}"}
 
-    # שלב 3: Take-Profit
+    # שלב 3: Take-Profit (TP)
     tp = place_take_profit_safe(
         symbol=symbol,
         side="SELL" if side.upper() == "BUY" else "BUY",
@@ -85,6 +89,9 @@ def manage_open_trades(
     if not tp.get("ok"):
         return {"ok": False, "error": f"tp_failed: {tp.get('error')}"}
 
+    logger.info(
+        {"event": "manage_open_trades_success", "symbol": symbol, "entry_id": entry.get("orderId")}
+    )
     return {
         "ok": True,
         "entry": entry,
@@ -96,7 +103,7 @@ def manage_open_trades(
 # ===================== Batch Manager =====================
 def bulk_manage_trades(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    מנהל מספר טריידים ברצף (batch).
+    ניהול מספר טריידים ברצף (batch).
     """
     results = []
     for t in trades:
@@ -113,7 +120,7 @@ def bulk_manage_trades(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             )
             results.append(res)
         except Exception as e:
-            logger.error("bulk_manage_trades error on %s: %s", t, e)
+            logger.error({"event": "bulk_manage_error", "trade": t, "error": str(e)})
             results.append({"ok": False, "error": str(e), "trade": t})
     return results
 
