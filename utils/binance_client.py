@@ -11,15 +11,29 @@ logger = logging.getLogger("algogpt.binance")
 # === Load API Keys ===
 API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
-
 if not API_KEY or not API_SECRET:
     logger.error("[binance_client] Missing API keys")
     raise RuntimeError("Missing Binance API keys")
 
+# === Env tuning ===
+BINANCE_TESTNET = str(os.getenv("BINANCE_TESTNET", "false")).lower() in ("1", "true", "yes", "on")
+FAPI_HTTP_BASE = (os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")).rstrip("/")
+RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "45000"))
+
 # === Init client ===
 client = Client(API_KEY, API_SECRET)
-# לצורך Futures בלבד
-client.API_URL = "https://fapi.binance.com/fapi"
+
+# קביעת בסיס ה-URL ל-Futures בלבד (לא נוגעים ב-API_URL כדי לא לשבור Spot)
+try:
+    # python-binance משתמש ב-FUTURES_URL לכל קריאות futures_*
+    futures_base = FAPI_HTTP_BASE + "/fapi"
+    if BINANCE_TESTNET:
+        # אפשר לאפשר בעתיד גם testnet ייעודי אם תגדיר כתובת מתאימה ב-ENV
+        futures_base = (os.getenv("BINANCE_FUTURES_HTTP_BASE_TESTNET", "https://testnet.binancefuture.com")).rstrip("/") + "/fapi"
+    client.FUTURES_URL = futures_base
+    logger.info("[binance_client] FUTURES_URL set to %s", client.FUTURES_URL)
+except Exception as e:
+    logger.warning("[binance_client] Could not set FUTURES_URL: %s", e)
 
 # === Defaults for precision fallbacks ===
 DEFAULT_QTY_STEP_STR = "0.001"
@@ -42,6 +56,11 @@ def futures_exchange_info_safe() -> Optional[Dict[str, Any]]:
         logger.error("Failed to fetch futures_exchange_info: %s", e)
         return None
 
+# === compat: פונקציה בשם exchange_info (נדרשת ע"י routes.executor) ===
+def exchange_info() -> Dict[str, Any]:
+    info = futures_exchange_info_safe()
+    return info if isinstance(info, dict) else {"symbols": []}
+
 def futures_balance() -> List[Dict[str, Any]]:
     try:
         return client.futures_account_balance() or []
@@ -51,7 +70,7 @@ def futures_balance() -> List[Dict[str, Any]]:
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
-        data = client.futures_mark_price(symbol=symbol)
+        data = client.futures_mark_price(symbol=symbol.upper())
         return float(data["markPrice"])
     except Exception as e:
         logger.error("Failed to fetch mark price for %s: %s", symbol, e)
@@ -81,7 +100,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
         info = get_symbol_info(symbol)
         if not info:
             return None
-        filters = {}
+        filters: Dict[str, Any] = {}
         for f in info.get("filters", []):
             ftype = f.get("filterType")
             if ftype == "LOT_SIZE":
@@ -90,6 +109,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
             elif ftype == "PRICE_FILTER":
                 filters["tickSize"] = f.get("tickSize")
             elif ftype == "MIN_NOTIONAL":
+                # ב-Binance לפעמים השדה נקרא notional
                 filters["minNotional"] = f.get("notional") or f.get("minNotional")
         return filters
     except Exception as e:
@@ -104,10 +124,10 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     try:
         acc_info = client.futures_account()
-        positions = acc_info.get("positions", [])
-        out = []
+        positions = acc_info.get("positions", []) or []
+        out: List[Dict[str, Any]] = []
         for pos in positions:
-            amt = float(pos.get("positionAmt", "0"))
+            amt = float(pos.get("positionAmt", "0") or 0)
             if abs(amt) > 1e-12:
                 if symbol is None or (pos.get("symbol") or "").upper() == symbol.upper():
                     out.append(pos)
@@ -124,9 +144,10 @@ def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, 
 def futures_create_order(**kwargs) -> Dict[str, Any]:
     """
     יוצר פקודת Futures (Limit / Market / Stop).
-    עטיפה בטוחה עם טיפול בשגיאות.
+    עטיפה בטוחה עם טיפול בשגיאות + הזרקת recvWindow מה-ENV אם חסר.
     """
     try:
+        kwargs.setdefault("recvWindow", RECV_WINDOW)
         return client.futures_create_order(**kwargs)
     except BinanceAPIException as e:
         logger.error("BinanceAPIException: %s", e)
@@ -140,7 +161,7 @@ def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     מבטל את כל ההוראות הפתוחות לסימבול מסוים.
     """
     try:
-        return client.futures_cancel_all_open_orders(symbol=symbol)
+        return client.futures_cancel_all_open_orders(symbol=symbol.upper(), recvWindow=RECV_WINDOW)
     except Exception as e:
         logger.error("Failed to cancel orders for %s: %s", symbol, e)
         return {"ok": False, "error": str(e)}
@@ -148,7 +169,7 @@ def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
 # === compat: ביטול הזמנה בודדת (אם צריך) ===
 def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
     try:
-        return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
+        return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId, recvWindow=RECV_WINDOW)
     except Exception as e:
         logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e)
         return {"ok": False, "error": str(e)}
@@ -157,20 +178,20 @@ def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol:
-            return client.futures_get_open_orders(symbol=symbol.upper()) or []
-        # Binance מאפשר גם בלי סימבול – כל הפתוחות
-        return client.futures_get_open_orders() or []
+            return client.futures_get_open_orders(symbol=symbol.upper(), recvWindow=RECV_WINDOW) or []
+        # כל ההזמנות הפתוחות לכל הסימבולים
+        return client.futures_get_open_orders(recvWindow=RECV_WINDOW) or []
     except Exception as e:
         logger.error("Failed to get open orders: %s", e)
         return []
 
-# ==================== Leverage ====================
+# ==================== Leverage / Client ====================
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     """
     קובע מינוף חדש לסימבול נתון.
     """
     try:
-        return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
+        return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage), recvWindow=RECV_WINDOW)
     except Exception as e:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
@@ -193,6 +214,7 @@ __all__ = [
     "client",
     "fapi_ping",
     "futures_exchange_info_safe",
+    "exchange_info",
     "futures_balance",
     "futures_mark_price",
     "get_price",
@@ -212,6 +234,7 @@ __all__ = [
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
