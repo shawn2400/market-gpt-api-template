@@ -1,5 +1,5 @@
 # utils/trade_manager.py
-import time, logging, asyncio, json
+import time, logging, asyncio, json, os
 from pathlib import Path
 from utils import ws_fallback
 from utils.indicators import atr, macd, adx
@@ -7,7 +7,7 @@ from utils.binance_client import (
     modify_stop_loss, modify_take_profit,
     get_open_positions, get_klines_df, close_all_positions
 )
-from utils.config import ALLOW_MANAGE_OPEN_TRADES
+from utils.config import ALLOW_MANAGE_OPEN_TRADES, AUTO_RUN
 from utils.telegram_notifier import (
     notify_sl_tp_update, notify_info,
     notify_error, notify_heartbeat,
@@ -18,17 +18,23 @@ logger = logging.getLogger("algogpt.trade_manager")
 
 _COOLDOWN = 30
 _last_update: dict[str, float] = {}
-DAILY_LOSS_CAP = -150.0  # USDT
-_symbol_losses: dict[str, float] = {}
+
+# === Daily Cap / KillSwitch ===
+DAILY_LOSS_CAP = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
 _daily_pnl = 0.0
 _trades_today: list[dict] = []
+_cap_triggered = False
+
+# Kill-Switch tracking
+_health_fails = 0
+_HEALTH_FAIL_MAX = int(os.getenv("KILLSWITCH_THRESHOLD", "3"))
 
 REVIEW_PATH = Path("static/cache/trade_reviews.json")
 
 async def manage_open_trades():
     """ניהול דינמי חי של טריידים פתוחים (SL, TP, BE, Trailing)."""
-    global _daily_pnl
-    if not ALLOW_MANAGE_OPEN_TRADES:
+    global _daily_pnl, _cap_triggered
+    if not ALLOW_MANAGE_OPEN_TRADES or _cap_triggered:
         return
 
     try:
@@ -83,6 +89,13 @@ async def manage_open_trades():
 
             _last_update[sym] = now
 
+        # === Check Daily Cap ===
+        if _daily_pnl <= DAILY_LOSS_CAP:
+            _cap_triggered = True
+            await panic_close_all()
+            await notify_error(f"🚨 Daily loss cap hit ({_daily_pnl:.2f} USDT) → AUTO_RUN disabled")
+            os.environ["AUTO_RUN"] = "0"
+
     except Exception as e:
         logger.error(f"[manage] Error: {e}")
         await notify_error(f"⚠️ TradeManager Error: {e}")
@@ -120,6 +133,19 @@ async def panic_close_all():
         await notify_info("🛑 Panic Button: כל הפוזיציות נסגרו!")
     except Exception as e:
         await notify_error(f"Panic close failed: {e}")
+
+def record_health(ok: bool):
+    """רישום כשלי /health → KillSwitch"""
+    global _health_fails, _cap_triggered
+    if ok:
+        _health_fails = 0
+        return
+    _health_fails += 1
+    if _health_fails >= _HEALTH_FAIL_MAX and not _cap_triggered:
+        _cap_triggered = True
+        asyncio.create_task(panic_close_all())
+        logger.error("🚨 KillSwitch triggered — too many /health fails")
+
 
 
 
