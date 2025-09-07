@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import logging
 from typing import Any, Dict, List, Optional
-
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
@@ -19,7 +18,7 @@ if not API_KEY or not API_SECRET:
 
 # === Init client ===
 client = Client(API_KEY, API_SECRET)
-# שימוש ב-Futures; השורה הזאת בסדר אם אתם עובדים על UM Futures בלבד
+# לצורך Futures בלבד
 client.API_URL = "https://fapi.binance.com/fapi"
 
 # === Defaults for precision fallbacks ===
@@ -43,11 +42,6 @@ def futures_exchange_info_safe() -> Optional[Dict[str, Any]]:
         logger.error("Failed to fetch futures_exchange_info: %s", e)
         return None
 
-# alias תאימות ל-routes שמצפים לשם 'exchange_info'
-def exchange_info() -> Dict[str, Any]:
-    info = futures_exchange_info_safe() or {}
-    return info if isinstance(info, dict) else {}
-
 def futures_balance() -> List[Dict[str, Any]]:
     try:
         return client.futures_account_balance() or []
@@ -57,11 +51,15 @@ def futures_balance() -> List[Dict[str, Any]]:
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
-        data = client.futures_mark_price(symbol=symbol.upper())
+        data = client.futures_mark_price(symbol=symbol)
         return float(data["markPrice"])
     except Exception as e:
         logger.error("Failed to fetch mark price for %s: %s", symbol, e)
         return None
+
+# === compat: get_price → משתמש ב-mark price ===
+def get_price(symbol: str) -> Optional[float]:
+    return futures_mark_price(symbol)
 
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     try:
@@ -69,7 +67,7 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
         if not info:
             return None
         for s in info.get("symbols", []):
-            if s.get("symbol") == symbol.upper():
+            if (s.get("symbol") or "").upper() == symbol.upper():
                 return s
     except Exception as e:
         logger.error("Failed get_symbol_info: %s", e)
@@ -106,24 +104,21 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     try:
         acc_info = client.futures_account()
-        positions = acc_info.get("positions", []) or []
+        positions = acc_info.get("positions", [])
         out = []
         for pos in positions:
             amt = float(pos.get("positionAmt", "0"))
             if abs(amt) > 1e-12:
-                if symbol is None or pos.get("symbol") == symbol.upper():
+                if symbol is None or (pos.get("symbol") or "").upper() == symbol.upper():
                     out.append(pos)
         return out
     except Exception as e:
         logger.error("Failed to get open positions: %s", e)
         return []
 
-# תאימות ל-routes שמבקשים פונקציה בשם הזו
-def futures_open_positions_safe(symbol: Optional[str] = None) -> List[dict]:
-    try:
-        return get_open_positions(symbol)
-    except Exception:
-        return []
+# === compat: alias לרואטר ישן ===
+def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    return get_open_positions(symbol)
 
 # ==================== Orders ====================
 def futures_create_order(**kwargs) -> Dict[str, Any]:
@@ -145,21 +140,28 @@ def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     מבטל את כל ההוראות הפתוחות לסימבול מסוים.
     """
     try:
-        return client.futures_cancel_all_open_orders(symbol=symbol.upper())
+        return client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
         logger.error("Failed to cancel orders for %s: %s", symbol, e)
         return {"ok": False, "error": str(e)}
 
-def get_open_orders(symbol: Optional[str] = None) -> List[dict]:
-    """
-    תאימות ל-routes.orders: מחזיר הזמנות פתוחות (אם יש), אחרת רשימה ריקה.
-    """
+# === compat: ביטול הזמנה בודדת (אם צריך) ===
+def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
+    try:
+        return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
+    except Exception as e:
+        logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e)
+        return {"ok": False, "error": str(e)}
+
+# === compat: החזרת הזמנות פתוחות (יש מודולים שמייבאים) ===
+def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol:
             return client.futures_get_open_orders(symbol=symbol.upper()) or []
+        # Binance מאפשר גם בלי סימבול – כל הפתוחות
         return client.futures_get_open_orders() or []
     except Exception as e:
-        logger.warning("get_open_orders failed: %s", e)
+        logger.error("Failed to get open orders: %s", e)
         return []
 
 # ==================== Leverage ====================
@@ -173,48 +175,44 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
-# ==================== Convenience / Shims ====================
+# === compat: החזרת ה-client (יש ראוטרים שמבקשים) ===
 def get_futures_client() -> Client:
-    """
-    תאימות ל-routes.grid ורבות אחרות: מחזיר מופע client לשימוש מתקדם.
-    """
     return client
 
-def get_price(symbol: str) -> Optional[float]:
+# === compat: שינוי SL/TP – עוטף ברירת־מחדל שלא ישבור ייבוא ===
+def modify_stop_loss(*args, **kwargs) -> Dict[str, Any]:
     """
-    מחיר עדכני:
-    1) קודם מנסה קאש WS (אם utils.ws_fallback קיים)
-    2) אחרת futures_mark_price (REST)
+    תאימות בלבד: אם תרצה בפועל לשנות SL – מומלץ לבטל ולהקים מחדש.
     """
-    try:
-        from utils.ws_fallback import get_price as _ws_get_price  # type: ignore
-        px = _ws_get_price(symbol)
-        if px:
-            return float(px)
-    except Exception:
-        pass
-    return futures_mark_price(symbol)
+    return {"ok": False, "error": "modify_stop_loss not implemented; cancel+recreate recommended"}
+
+def modify_take_profit(*args, **kwargs) -> Dict[str, Any]:
+    return {"ok": False, "error": "modify_take_profit not implemented; cancel+recreate recommended"}
 
 __all__ = [
+    "client",
     "fapi_ping",
     "futures_exchange_info_safe",
-    "exchange_info",
     "futures_balance",
     "futures_mark_price",
+    "get_price",
     "get_symbol_info",
     "get_symbol_filters",
     "get_open_positions",
     "futures_open_positions_safe",
-    "get_open_orders",
     "futures_create_order",
     "futures_cancel_all_orders",
+    "futures_cancel_order",
+    "get_open_orders",
     "set_leverage",
     "get_futures_client",
-    "get_price",
+    "modify_stop_loss",
+    "modify_take_profit",
     "DEFAULT_QTY_STEP_STR",
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
