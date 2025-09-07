@@ -2,15 +2,27 @@
 from __future__ import annotations
 import time, logging, asyncio, json, os
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from utils import ws_fallback
 from utils.indicators import atr, macd, adx
 from utils.binance_client import (
     modify_stop_loss, modify_take_profit,
     get_open_positions, get_klines_df, close_all_positions,
-    futures_mark_price, get_open_orders, set_breakeven_stop
 )
+
+# נסה לייבא כלים אופציונליים אם קיימים
+try:
+    from utils.binance_client import futures_mark_price, get_open_orders
+except Exception:
+    futures_mark_price = None
+    get_open_orders = None
+
+# Breakeven native אם קיים
+try:
+    from utils.binance_client import set_breakeven_stop as _set_be_native
+except Exception:
+    _set_be_native = None
 
 from utils.config import ALLOW_MANAGE_OPEN_TRADES, AUTO_RUN
 from utils.telegram_notifier import (
@@ -26,12 +38,13 @@ _COOLDOWN = int(os.getenv("TM_UPDATE_COOLDOWN_SEC", "30"))
 _BE_GUARD_ENABLE = os.getenv("BE_GUARD_ENABLE", "1").lower() in ("1", "true", "yes")
 _BE_GUARD_EVERY_SEC = int(os.getenv("BE_GUARD_EVERY_SEC", "30"))
 _TP1_TAGS: List[str] = [t.strip() for t in os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1").split(",") if t.strip()]
-_TP_BE_OFFSET_BPS: float = float(os.getenv("TP_BE_OFFSET_BPS", "5"))
+TP_BE_ONLY_AFTER_TP1 = os.getenv("TP_BE_ONLY_AFTER_TP1", "1").lower() in ("1","true","yes")
+TP_BE_OFFSET_BPS = float(os.getenv("TP_BE_OFFSET_BPS", "5"))
 
 # === Daily Cap / KillSwitch ===
 DAILY_LOSS_CAP = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
 _daily_pnl = 0.0
-_trades_today: List[Dict[str, Any]] = []
+_trades_today: list[dict] = []
 _cap_triggered = False
 
 # Kill-Switch tracking
@@ -53,6 +66,20 @@ def _tp1_pct_default() -> float:
     except Exception:
         return 1.8
 
+def _price_now(symbol: str) -> float:
+    try:
+        px = ws_fallback.get_price(symbol)
+        if px: return float(px)
+    except Exception:
+        pass
+    try:
+        if futures_mark_price:
+            px = futures_mark_price(symbol)
+            if px: return float(px)
+    except Exception:
+        pass
+    return 0.0
+
 async def manage_open_trades():
     """ניהול דינמי חי של טריידים פתוחים (SL, TP, BE, Trailing)."""
     global _daily_pnl, _cap_triggered
@@ -63,69 +90,70 @@ async def manage_open_trades():
         positions = get_open_positions()
         now = time.time()
         for pos in positions:
-            sym = (pos.get("symbol") or "").upper()
-            if not sym:
-                continue
-            qty = float(pos.get("positionAmt") or 0)
-            entry = float(pos.get("entryPrice") or 0)
-            side = "LONG" if qty > 0 else "SHORT"
-            # מחיר מה־WS fallback ואם אין — מה־markPrice של הבורסה
-            price = ws_fallback.get_price(sym) or futures_mark_price(sym) or float(pos.get("markPrice") or 0)
-
-            if price <= 0 or entry <= 0 or abs(qty) <= 0:
-                continue
-
-            # Cooldown פר-סימבול
-            if now - _last_update.get(sym, 0) < _COOLDOWN:
-                continue
-
-            df = get_klines_df(sym, interval="5m", limit=50)
-            if df is None or getattr(df, "empty", False):
-                continue
-
-            current_atr = float(atr(df)[-1])
-            current_adx = float(adx(df)[-1])
-            macd_line, macd_signal, _ = macd(df["close"])
-            macd_now = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
-            profit_pct = abs((price - entry) / max(entry, 1e-12)) * 100.0
-
-            # === Breakeven SL (תנאים רכים) ===
-            be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "1.5"))
-            if profit_pct >= be_trigger and (macd_now > 0 or current_adx > 20):
-                try:
-                    # שימוש ב-native BE עם offset מה-ENV (דיפולט 5 bps)
-                    set_breakeven_stop(sym, offset_bps=_TP_BE_OFFSET_BPS)
-                    await notify_sl_tp_update(sym, side, "breakeven", f"entry±{_TP_BE_OFFSET_BPS}bps")
-                except Exception as e:
-                    logger.error("[manage] set_breakeven_stop failed: %s", e)
-
-            # === Trailing SL (ATR/structure) ===
-            if side == "LONG":
-                recent_low = float(df["low"].iloc[-3:].min())
-                trail_sl = recent_low - 0.6 * current_atr
-            else:
-                recent_high = float(df["high"].iloc[-3:].max())
-                trail_sl = recent_high + 0.6 * current_atr
-
             try:
-                modify_stop_loss(sym, trail_sl, position_side=side, quantity=abs(qty))
-                await notify_sl_tp_update(sym, side, "trailing", trail_sl)
-            except Exception as e:
-                logger.error("[manage] trailing SL update failed %s: %s", sym, e)
+                sym = (pos.get("symbol") or "").upper()
+                qty = float(pos.get("positionAmt") or 0)
+                entry = float(pos.get("entryPrice") or 0)
+                if not sym or entry <= 0 or abs(qty) <= 0:
+                    continue
+                side = "LONG" if qty > 0 else "SHORT"
+                price = _price_now(sym)
+                if price <= 0:
+                    continue
 
-            # === Dynamic TP (מותאם תנופה) ===
-            if current_adx > 25 and macd_now > 0:
+                # Cooldown פר-סימבול
+                if now - _last_update.get(sym, 0) < _COOLDOWN:
+                    continue
+
+                df = get_klines_df(sym, interval="5m", limit=50)
+                if df is None or getattr(df, "empty", False):
+                    continue
+
+                current_atr = atr(df)[-1]
+                current_adx = adx(df)[-1]
+                macd_line, macd_signal, _ = macd(df["close"])
+                macd_now = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
+                profit_pct = abs((price - entry) / entry) * 100.0
+
+                # === Breakeven SL (תנאים רכים) ===
+                be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "1.5"))
+                if profit_pct >= be_trigger and (macd_now > 0 or current_adx > 20):
+                    # אם מותר רק אחרי TP1 (לפי ENV), דלג — BE Guard או callback יעשה זאת
+                    if not TP_BE_ONLY_AFTER_TP1:
+                        if _set_be_native:
+                            try:
+                                _ = _set_be_native(sym, offset_bps=TP_BE_OFFSET_BPS)
+                                await notify_sl_tp_update(sym, side, "breakeven", f"entry±{TP_BE_OFFSET_BPS}bps")
+                            except Exception as e:
+                                logger.error("[manage] native BE failed: %s", e)
+                        else:
+                            modify_stop_loss(sym, entry, position_side=side)
+                            await notify_sl_tp_update(sym, side, "breakeven", entry)
+
+                # === Trailing SL === (ClosePosition מלא, לא חלקי)
                 if side == "LONG":
-                    new_tp = price + 4.5 * current_atr
+                    recent_low = float(df["low"].iloc[-3:].min())
+                    trail_sl = recent_low - 0.6 * float(current_atr)
                 else:
-                    new_tp = price - 4.5 * current_atr
-                try:
-                    modify_take_profit(sym, new_tp, position_side=side, quantity=abs(qty))
-                    await notify_sl_tp_update(sym, side, "tp", new_tp)
-                except Exception as e:
-                    logger.error("[manage] dynamic TP update failed %s: %s", sym, e)
+                    recent_high = float(df["high"].iloc[-3:].max())
+                    trail_sl = recent_high + 0.6 * float(current_atr)
 
-            _last_update[sym] = now
+                modify_stop_loss(sym, trail_sl, position_side=side)
+                await notify_sl_tp_update(sym, side, "trailing", trail_sl)
+
+                # === Dynamic TP (מותאם תנופה) === — ClosePosition מלא
+                if current_adx > 25 and macd_now > 0:
+                    if side == "LONG":
+                        new_tp = price + 4.5 * float(current_atr)
+                    else:
+                        new_tp = price - 4.5 * float(current_atr)
+                    modify_take_profit(sym, new_tp, position_side=side)
+                    await notify_sl_tp_update(sym, side, "tp", new_tp)
+
+                _last_update[sym] = now
+
+            except Exception as ie:
+                logger.error("[manage] per-position error %s: %s", pos.get("symbol"), ie)
 
         # === שומר Breakeven “דליל” (אופציונלי) ===
         if _BE_GUARD_ENABLE:
@@ -205,13 +233,27 @@ async def handle_order_filled(event: Dict[str, Any]):
         if not is_tp1:
             return
 
-        # BE עם offset ברירת מחדל מה-ENV
-        try:
-            set_breakeven_stop(symbol, offset_bps=_TP_BE_OFFSET_BPS)
-            side = (event.get("side") or "LONG").upper()
-            await notify_sl_tp_update(symbol, side, "breakeven", f"entry±{_TP_BE_OFFSET_BPS}bps")
-        except Exception as e:
-            logger.error("[tm.order_filled] set_breakeven_stop failed: %s", e)
+        # העדפה: BE Native אם קיים (עם offset מה-ENV)
+        if _set_be_native:
+            try:
+                _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
+                await notify_sl_tp_update(symbol, "AUTO", "breakeven", f"entry±{TP_BE_OFFSET_BPS}bps")
+                return
+            except Exception as e:
+                logger.error("[tm.order_filled] native BE failed: %s", e)
+
+        # Fallback: BE מדויק על המחיר כניסה
+        for pos in get_open_positions(symbol):
+            amt = float(pos.get("positionAmt", "0"))
+            if abs(amt) < 1e-12:
+                continue
+            side = "LONG" if amt > 0 else "SHORT"
+            entry = float(pos.get("entryPrice", "0"))
+            if entry <= 0:
+                continue
+            modify_stop_loss(symbol, entry, position_side=side)
+            await notify_sl_tp_update(symbol, side, "breakeven", entry)
+            break
 
     except Exception as e:
         logger.error("[tm.order_filled] error: %s", e)
@@ -224,6 +266,9 @@ async def _be_guard_tick():
     if now - _last_be_guard < _BE_GUARD_EVERY_SEC:
         return
     _last_be_guard = now
+
+    if not futures_mark_price or not get_open_orders:
+        return  # אין כלים לביצוע שומר; דלג
 
     tp1_pct = _tp1_pct_default() / 100.0
     positions = get_open_positions()
@@ -267,18 +312,20 @@ async def _be_guard_tick():
             if symbol in _be_set_once:
                 continue
 
-            # בצע BE
-            try:
-                set_breakeven_stop(symbol, offset_bps=_TP_BE_OFFSET_BPS)
-                await notify_sl_tp_update(symbol, side, "breakeven", f"entry±{_TP_BE_OFFSET_BPS}bps")
-            except Exception as e:
-                logger.error("[tm.be_guard] set_breakeven_stop failed: %s", e)
-                continue
+            # בצע BE עם native אם יש, אחרת fallback
+            if _set_be_native:
+                _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
+                await notify_sl_tp_update(symbol, side, "breakeven", f"entry±{TP_BE_OFFSET_BPS}bps")
+            else:
+                modify_stop_loss(symbol, entry, position_side=side)
+                await notify_sl_tp_update(symbol, side, "breakeven", entry)
 
             _be_set_once.add(symbol)
             logger.info("[tm.be_guard] %s BE set", symbol)
+
         except Exception as e:
             logger.error("[tm.be_guard] error: %s", e)
+
 
 
 
