@@ -3,11 +3,8 @@ from __future__ import annotations
 import os, asyncio, logging
 from pathlib import Path
 from typing import List
-from datetime import datetime
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -41,8 +38,8 @@ from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
 from utils.metrics import metrics_tracker
 from utils.trade_manager import manage_open_trades_loop
-from services.auto_trade_summary import post_trade_summary
 from services.telegram_daily import start_daily_summaries
+from utils.log_auto import log_auto  # <<< חדש
 
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
@@ -53,21 +50,12 @@ except Exception:
 logger = setup_json_logging()
 logging.getLogger().setLevel(LOG_LEVEL)
 
-def _ensure_dir(path: str) -> bool:
-    try:
-        Path(path).mkdir(parents=True, exist_ok=True)
-        return True
-    except Exception as e:
-        logger.warning({"event": "mkdir_failed", "dir": path, "error": str(e)})
-        return False
+# יצירת תיקיות בסיס
+for d in ("static", "logs"):
+    try: Path(d).mkdir(parents=True, exist_ok=True)
+    except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
 
-_ = _ensure_dir("static"); _ = _ensure_dir("logs")
-
-app = FastAPI(
-    title="AlgoGPT API",
-    version=APP_VERSION,
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת"
-)
+app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT — מסחר אלגוריתמי בזמן אמת")
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -88,14 +76,14 @@ app.add_middleware(
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc",
-                    "/telegram/webhook", "/telegram/callbacks", "/ui/dashboard"}
+                    "/telegram/webhook", "/telegram/callbacks"}  # callbacks public
     PUBLIC_PREFIXES = ["/price", "/static/"]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
     if allow_all():
         return await call_next(request)
-    token = extract_token(request, request.headers.get("Authorization", ""), request.headers.get("X-API-Key"))
+    token = extract_token(request, request.headers.get("Authorization",""), request.headers.get("X-API-Key"))
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
@@ -106,54 +94,54 @@ async def track_metrics(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception:
-        metrics_tracker.observe_request(500, (asyncio.get_event_loop().time() - start) * 1000)
+        dur_ms = (asyncio.get_event_loop().time() - start) * 1000.0
+        metrics_tracker.observe_request(500, dur_ms)
+        log_auto.observe(500, dur_ms)  # <<< חיבור לבקר לוגים
         raise
     else:
-        metrics_tracker.observe_request(response.status_code, (asyncio.get_event_loop().time() - start) * 1000)
+        dur_ms = (asyncio.get_event_loop().time() - start) * 1000.0
+        metrics_tracker.observe_request(response.status_code, dur_ms)
+        log_auto.observe(response.status_code, dur_ms)  # <<< חיבור לבקר לוגים
         return response
 
 # ===== Routers =====
 ROUTERS: List[str] = [
-    "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
-    "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
-    "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
-    "routes.telegram_bot", "routes.telegram_routes", "routes.telegram_callbacks",
-    "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
-    "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
-    "routes.ui", "routes.backtest", "routes.ui_grid",
-    "routes.orderbook", "routes.ws", "routes.ws_health", "routes.orderflow"
+    "routes.trade","routes.market","routes.binance_status","routes.executor","routes.orders","routes.price",
+    "routes.rpc","routes.market_extra","routes.executor_extra","routes.anchor_extra",
+    "routes.grid","routes.debug","routes.indicators","routes.indicators_extra",
+    "routes.telegram_bot","routes.telegram_callbacks",  # <<< חדש (callbacks)
+    "routes.metrics","routes.metrics_extra","routes.precision","routes.alerts",
+    "routes.reconcile","routes.scheduler_ai","routes.admin","routes.export","routes.pnl",
+    "routes.ui","routes.backtest","routes.ui_grid","routes.orderbook","routes.ws","routes.ws_health","routes.orderflow"
 ]
-if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
+if str(os.getenv("ENABLE_AI_ROUTES","1")).lower() in ("1","true","yes","on"):
     ROUTERS.append("routes.ai")
 
 def _include_router(path: str) -> None:
     try:
-        mod = __import__(path, fromlist=["router", "router_public"])
-        if hasattr(mod, "router"):
-            app.include_router(getattr(mod, "router"))
-        if hasattr(mod, "router_public"):
-            app.include_router(getattr(mod, "router_public"))
+        mod = __import__(path, fromlist=["router","router_public"])
+        if hasattr(mod,"router"): app.include_router(getattr(mod,"router"))
+        if hasattr(mod,"router_public"): app.include_router(getattr(mod,"router_public"))
+        logger.info({"event":"router_registered","router":path,"attr":"router"})
     except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": path, "error": str(e)})
+        logger.warning({"event":"router_register_failed","router":path,"error":str(e)})
 
 for r in ROUTERS:
     _include_router(r)
 
 # ===== Endpoints =====
-@app.get("/")
-async def root_status(): return {"ok": True, "status": "ok", "version": APP_VERSION}
-
-@app.get("/health")
-async def health(): return {"ok": True, "status": "ok", "version": APP_VERSION}
+@app.get("/") async def root_status(): return {"ok": True, "status":"ok", "version": APP_VERSION}
+@app.get("/health") async def health(): return {"ok": True, "status":"ok", "version": APP_VERSION}
 
 @app.get("/readyz")
 async def readyz():
     details: dict[str, any] = {}
     try:
-        ensure_fresh_sync()
+        from utils.ws_fallback import is_price_fresh
+        from utils.binance_client import fapi_ping, futures_balance
         details["ping_ok"] = bool(fapi_ping())
         details["balance_ok"] = isinstance(futures_balance(), list)
-        syms = _parse_csv(os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT"))
+        syms = _parse_csv(os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT"))
         prices_ok = all(is_price_fresh(sym) for sym in syms)
         for sym in syms: details[f"price_{sym}"] = is_price_fresh(sym)
         return {"ok": bool(details["ping_ok"] and details["balance_ok"] and prices_ok), "details": details}
@@ -162,16 +150,16 @@ async def readyz():
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info({"event": "startup", "version": APP_VERSION, "config": dump_config_sanitized()})
+    logger.info({"event":"startup","version":APP_VERSION,"config":dump_config_sanitized()})
     try: sync_now(); start_background_sync()
     except: pass
-    try: asyncio.create_task(auto_price_updater(_parse_csv(os.getenv("SYMS", "BTCUSDT,ETHUSDT"))))
+    try: asyncio.create_task(auto_price_updater(_parse_csv(os.getenv("WATCHLIST","BTCUSDT,ETHUSDT,SOLUSDT"))))
     except: pass
     try: await start_user_stream_consumer()
     except: pass
     try: asyncio.create_task(manage_open_trades_loop(interval=20))
     except: pass
-    try: asyncio.create_task(start_daily_summaries())  # דוחות יומי/שבועי/חודשי
+    try: asyncio.create_task(start_daily_summaries())
     except: pass
 
 @app.on_event("shutdown")
@@ -179,18 +167,17 @@ async def shutdown_event():
     try: await stop_user_stream_consumer()
     except: pass
 
-@app.post("/start-executor")
-async def api_start_executor(): start_executor(); return {"ok": True}
+from utils.open_trade_manager import manage_open_trades
+from utils.auto_executor import start_executor, stop_executor
 
-@app.post("/stop-executor")
-async def api_stop_executor(): stop_executor(); return {"ok": True}
-
-@app.post("/manage-once")
-async def api_manage_once(): await manage_open_trades(); return {"ok": True}
+@app.post("/start-executor") async def api_start_executor(): start_executor(); return {"ok": True}
+@app.post("/stop-executor") async def api_stop_executor(): stop_executor(); return {"ok": True}
+@app.post("/manage-once") async def api_manage_once(): await manage_open_trades(); return {"ok": True}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
