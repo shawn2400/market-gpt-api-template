@@ -1,4 +1,4 @@
-# dashboard_live.py
+# routes/dashboard_live.py
 from __future__ import annotations
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import HTMLResponse
@@ -7,7 +7,9 @@ from utils.get_klines import get_klines
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ai_analysis import analyze_with_ai
 from utils.quality import compute_quality
-import asyncio, json, os, time
+import asyncio, json, logging
+
+logger = logging.getLogger("algogpt.dashboard")
 
 router = APIRouter(
     prefix="/dashboard",
@@ -15,7 +17,6 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
 )
 
-# רשימת WebSocket Live לכל המשתמשים
 clients: list[WebSocket] = []
 
 async def _analyze_symbol(symbol: str, interval: str = "15m") -> dict:
@@ -24,13 +25,16 @@ async def _analyze_symbol(symbol: str, interval: str = "15m") -> dict:
     """
     try:
         df = await get_klines(symbol, interval=interval, limit=200, market="futures")
+        if df is None or df.empty:
+            return {"symbol": symbol, "error": "no data"}
+
         indicators = prepare_indicators_for_backtest(df)
         row = indicators.iloc[-1].to_dict()
 
         # קריאת GPT
         ai_text = await analyze_with_ai({"symbol": symbol, **row})
 
-        # Quality Score לפי כללים מתקדמים
+        # Quality Score
         q = compute_quality(
             symbol=symbol,
             side="LONG" if row.get("ema_21", 0) < row.get("close", 0) else "SHORT",
@@ -57,7 +61,8 @@ async def _analyze_symbol(symbol: str, interval: str = "15m") -> dict:
             "success_pct": q.get("success_pct", 0),
         }
     except Exception as e:
-        return {"symbol": symbol, "error": str(e)}
+        logger.error(f"dashboard analyze failed: {e}")
+        return {"symbol": symbol, "type": "error", "error": str(e)}
 
 async def broadcast_update(data: dict):
     """
@@ -67,22 +72,25 @@ async def broadcast_update(data: dict):
     for ws in clients:
         try:
             await ws.send_json(data)
-        except WebSocketDisconnect:
+        except Exception:
             dead_clients.append(ws)
     for dead in dead_clients:
-        clients.remove(dead)
+        try:
+            clients.remove(dead)
+        except Exception:
+            pass
 
 @router.websocket("/live")
 async def websocket_dashboard(websocket: WebSocket):
     """
-    WebSocket שמזרים את כל המידע בזמן אמת.
+    WebSocket להזרים מידע חי מהמערכת.
     """
     await websocket.accept()
     clients.append(websocket)
+    logger.info("📡 client connected to dashboard")
 
     try:
         while True:
-            # טעינת watchlist.json כדי לעדכן סמלים בזמן אמת
             from utils.watchlist_utils import load_watchlist
             watchlist = [it["symbol"] for it in load_watchlist()]
             if "BTCUSDT" not in watchlist:
@@ -92,28 +100,22 @@ async def websocket_dashboard(websocket: WebSocket):
             for sym in watchlist:
                 result = await _analyze_symbol(sym)
                 updates.append(result)
-
-                # שולחים עדכון פר סימבול
                 await broadcast_update(result)
+                await asyncio.sleep(0.5)  # מניעת עומס
 
-                # מגבלת עומסים
-                await asyncio.sleep(0.5)
-
-            # שליחה כוללת לכל המחוברים
             await broadcast_update({"type": "batch", "results": updates})
-
-            # רענון כל 60 שניות
             await asyncio.sleep(60)
 
     except WebSocketDisconnect:
+        logger.info("❌ client disconnected from dashboard")
         clients.remove(websocket)
+    except Exception as e:
+        logger.error(f"dashboard websocket error: {e}")
+        if websocket in clients:
+            clients.remove(websocket)
 
-# דף HTML מובנה לניהול בזמן אמת
 @router.get("/", response_class=HTMLResponse)
 async def dashboard_page():
-    """
-    ממשק חזותי בזמן אמת — ניתן לפתוח בדפדפן.
-    """
     return """
     <!DOCTYPE html>
     <html>
@@ -123,8 +125,6 @@ async def dashboard_page():
         <style>
             body { background: #111; color: #eee; font-family: monospace; padding: 10px; }
             .symbol { border-bottom: 1px solid #333; padding: 6px; }
-            .green { color: #0f0; }
-            .red { color: #f00; }
         </style>
     </head>
     <body>
@@ -137,7 +137,7 @@ async def dashboard_page():
                 if (data.symbol) {
                     const elem = document.createElement("div");
                     elem.className = "symbol";
-                    elem.innerHTML = `<b>${data.symbol}</b> | מחיר: ${data.price} | RSI: ${data.rsi} | ADX: ${data.adx} | ציון: ${data.quality_score.toFixed(2)} | ${data.ai_analysis}`;
+                    elem.innerHTML = `<b>${data.symbol}</b> | מחיר: ${data.price} | RSI: ${data.rsi} | ADX: ${data.adx} | ציון: ${data.quality_score}`;
                     document.getElementById("content").prepend(elem);
                 }
             };
@@ -148,3 +148,4 @@ async def dashboard_page():
     </body>
     </html>
     """
+
