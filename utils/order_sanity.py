@@ -11,13 +11,18 @@ def _round_step(val: float, step: float) -> float:
     return floor(val / step) * step
 
 def normalize_order(symbol: str, qty: float, price: float) -> Tuple[float, float]:
+    """
+    מחזיר כמות/מחיר מעוגנים לפי LOT_SIZE ו־PRICE_FILTER של Binance.
+    """
     info: Dict[str, Any] = {}
     try:
         info = _exchange_info() or {}
     except Exception:
         info = {}
+
     step = DEFAULT_QTY_STEP
     tick = DEFAULT_PRICE_TICK
+
     for it in (info.get("symbols") or []):
         if (it.get("symbol") or "").upper() == symbol.upper():
             try:
@@ -32,10 +37,13 @@ def normalize_order(symbol: str, qty: float, price: float) -> Tuple[float, float
     return (_round_step(qty, step), _round_step(price, tick))
 
 def enforce_min_notional(qty: float, price: float) -> bool:
+    """בודק אם ערך ההזמנה עומד במינימום Notional"""
     return (qty * price) >= float(MIN_NOTIONAL_USDT)
 
 def clamp_leverage(lev: int) -> int:
+    """מוודא מינוף בתחום 1..MAX_LEVERAGE"""
     try:
         return max(1, min(int(MAX_LEVERAGE), int(lev)))
     except Exception:
         return 1
+
