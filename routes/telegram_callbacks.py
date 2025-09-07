@@ -33,11 +33,9 @@ _SIDE_HINTS = {
 }
 
 def _detect_approved(update: Update, result: Any) -> bool:
-    # בדיקה לפי אובייקט תוצאת ההנדלר
     if isinstance(result, dict):
         if result.get("approved") is True or str(result.get("action","")).lower() in ("approve","approved"):
             return True
-    # בדיקה לפי callback data
     try:
         data = update.callback_query.data if update.callback_query else None
         if data:
@@ -52,14 +50,12 @@ def _detect_approved(update: Update, result: Any) -> bool:
                     return True
     except Exception:
         pass
-    # בדיקה לפי הטקסט של ההודעה
     text = update.callback_query.message.text if (update and update.callback_query and update.callback_query.message) else ""
     if text and any(h in text.lower() for h in _APPROVE_HINTS):
         return True
     return False
 
 def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Optional[str]]:
-    # מתוך result
     if isinstance(result, dict):
         sym = result.get("symbol") or result.get("sym") or result.get("ticker")
         side = result.get("side")
@@ -68,7 +64,6 @@ def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Op
                 sd = side.strip().upper()
                 if sd in ("LONG","SHORT"): return sym.strip().upper(), sd
                 if sd in ("BUY","SELL"):    return sym.strip().upper(), ("LONG" if sd=="BUY" else "SHORT")
-    # מתוך טקסט ההודעה
     text = update.callback_query.message.text if (update and update.callback_query and update.callback_query.message) else ""
     if text:
         m = re.search(r"\b([A-Z]{3,15}USDT)\b", text)
@@ -78,7 +73,6 @@ def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Op
         for k, v in _SIDE_HINTS.items():
             if k in low: side = v; break
         if sym and side: return sym, side
-    # מתוך callback data
     try:
         data = update.callback_query.data if update.callback_query else None
         if data:
@@ -96,7 +90,7 @@ def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Op
     return None, None
 
 def _be_immediate_allowed() -> bool:
-    # 0 → מותר BE מיידית; 1 (דיפולט) → רק אחרי TP1 (כלומר כאן לא)
+    # 0 → מותר BE מיידי; 1 (דיפולט) → רק אחרי TP1
     return str(os.getenv("TP_BE_ONLY_AFTER_TP1","1")).lower() in ("0","false","no")
 
 def _be_offset_bps_default() -> float:
@@ -109,7 +103,6 @@ async def telegram_callback_webhook(request: Request):
         body = await request.body()
         update = Update.de_json(json.loads(body), None)
 
-        # תן להנדלר המרכזי לבצע את מה שהוא צריך (לוגיקה כללית/אדמינית וכו')
         result = await handle_callback_action(update)
 
         approved = _detect_approved(update, result)
@@ -118,18 +111,13 @@ async def telegram_callback_webhook(request: Request):
 
         if approved and str(os.getenv("TP_LADDER_ON_APPROVE","1")).lower() in ("1","true","yes","on"):
             symbol, side = _extract_symbol_side(update, result)
-            if symbol and side:
-                if _cooldown_ok(symbol):
-                    # מקים Ladder (עם ביטול הזמנות ישנות — רק שלנו אם הגדרת prefix+הגבלה)
-                    try:
-                        ladder = place_tp_ladder(symbol)
-                    except Exception as e:
-                        logger.warning("TP ladder failed: %s", e)
-                        ladder = {"ok": False, "error": str(e)}
-                else:
-                    ladder = {"ok": False, "cooldown": True, "wait_sec": _TP_LADDER_COOLDOWN}
+            if symbol and side and _cooldown_ok(symbol):
+                try:
+                    ladder = place_tp_ladder(symbol)
+                except Exception as e:
+                    logger.warning("TP ladder failed: %s", e)
+                    ladder = {"ok": False, "error": str(e)}
 
-                # BE מיידי? רק אם אפשר לפי ENV (אם לא — ה-BE יגיע אחרי TP1)
                 if _be_immediate_allowed():
                     try:
                         be_res = set_breakeven_stop(symbol, offset_bps=_be_offset_bps_default())
@@ -141,6 +129,7 @@ async def telegram_callback_webhook(request: Request):
     except Exception as e:
         logger.exception("telegram_callback_webhook failed")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
 
 
 
