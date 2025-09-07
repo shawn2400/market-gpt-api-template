@@ -4,9 +4,9 @@ import json, csv
 from pathlib import Path
 from typing import Any, List, Dict
 from fpdf import FPDF
-from datetime import datetime
 
 def save_json(obj: Any, path: str | Path) -> bool:
+    """Save object as JSON to file."""
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -18,6 +18,7 @@ def save_json(obj: Any, path: str | Path) -> bool:
         return False
 
 def generate_daily_csv_report(trades: List[Dict[str, Any]], path: str | Path) -> bool:
+    """Save trades list to CSV file."""
     try:
         if not trades:
             print("[export_utils] No trades to export.")
@@ -25,7 +26,7 @@ def generate_daily_csv_report(trades: List[Dict[str, Any]], path: str | Path) ->
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=trades[0].keys())
+            writer = csv.DictWriter(f, fieldnames=list(trades[0].keys()))
             writer.writeheader()
             writer.writerows(trades)
         return True
@@ -34,6 +35,7 @@ def generate_daily_csv_report(trades: List[Dict[str, Any]], path: str | Path) ->
         return False
 
 def generate_daily_pdf_report(trades: List[Dict[str, Any]], path: str | Path) -> bool:
+    """Save trades list to PDF file."""
     try:
         if not trades:
             print("[export_utils] No trades to export.")
@@ -48,10 +50,12 @@ def generate_daily_pdf_report(trades: List[Dict[str, Any]], path: str | Path) ->
         headers = list(trades[0].keys())
         col_width = 190 / max(1, len(headers))
 
+        # header row
         for h in headers:
-            pdf.cell(col_width, 8, h, border=1)
+            pdf.cell(col_width, 8, str(h), border=1)
         pdf.ln(8)
 
+        # rows
         for t in trades:
             for h in headers:
                 pdf.cell(col_width, 8, str(t.get(h, "")), border=1)
