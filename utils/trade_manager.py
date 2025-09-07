@@ -1,6 +1,6 @@
 # utils/trade_manager.py
 from __future__ import annotations
-import logging, asyncio
+import logging, asyncio, time
 from typing import Any, Dict, List
 
 from utils import ws_fallback
@@ -12,12 +12,16 @@ from utils.binance_client import (
     get_klines_df,
 )
 from utils.config import ALLOW_MANAGE_OPEN_TRADES, _as_float
+from utils.telegram_notifier import notify_info
 
 logger = logging.getLogger("algogpt.trade_manager")
 
-# שליטה דרך ENV
+# === שליטה דרך ENV ===
 BE_ARM_PCT = _as_float("BE_ARM_PCT", 1.6)          # אחוז רווח להזזת SL ל־BE
 TRAIL_ATR_MULT = _as_float("TRAIL_ATR_MULT", 1.5)  # מקדם ל־ATR ב־Trailing
+COOLDOWN_SEC = _as_float("MANAGER_COOLDOWN_SEC", 45)
+
+_last_update: Dict[str, float] = {}  # סימבול -> זמן עדכון אחרון
 
 
 async def manage_open_trades() -> List[Dict[str, Any]]:
@@ -26,6 +30,7 @@ async def manage_open_trades() -> List[Dict[str, Any]]:
     - SL ל־Breakeven אחרי TP1
     - Trailing SL לפי ATR
     - עדכון TP לפי מומנטום
+    שולח עדכונים לטלגרם (⚠️ / ✅).
     """
     results: List[Dict[str, Any]] = []
 
@@ -46,6 +51,12 @@ async def manage_open_trades() -> List[Dict[str, Any]]:
             if price <= 0 or entry <= 0 or abs(qty) <= 0:
                 continue
 
+            # ⏳ Cooldown
+            last_ts = _last_update.get(sym, 0)
+            if time.time() - last_ts < COOLDOWN_SEC:
+                continue
+            _last_update[sym] = time.time()
+
             df = get_klines_df(sym, interval="5m", limit=50)
             if df is None or df.empty:
                 continue
@@ -57,7 +68,6 @@ async def manage_open_trades() -> List[Dict[str, Any]]:
             macd_now = macd_line.iloc[-1] - macd_signal.iloc[-1]
 
             profit_pct = abs((price - entry) / entry) * 100
-
             updates: Dict[str, Any] = {"symbol": sym, "side": side, "price": price}
 
             # === Breakeven SL ===
@@ -66,6 +76,7 @@ async def manage_open_trades() -> List[Dict[str, Any]]:
                 logger.info(f"[manage][{sym}] Moving SL → BE: {new_sl}")
                 resp = modify_stop_loss(sym, side, new_sl, abs(qty))
                 updates["breakeven_sl"] = resp
+                await notify_info(f"✅ [{sym}] SL הוזז ל־Breakeven @ {new_sl:.2f}")
 
             # === Trailing SL ===
             trail_sl = None
@@ -80,6 +91,7 @@ async def manage_open_trades() -> List[Dict[str, Any]]:
                 logger.info(f"[manage][{sym}] Trailing SL → {trail_sl}")
                 resp = modify_stop_loss(sym, side, trail_sl, abs(qty))
                 updates["trailing_sl"] = resp
+                await notify_info(f"⚠️ [{sym}] Trailing SL עודכן ל־{trail_sl:.2f}")
 
             # === Dynamic TP ===
             if current_adx > 25 and macd_now > 0:
@@ -90,6 +102,7 @@ async def manage_open_trades() -> List[Dict[str, Any]]:
                 logger.info(f"[manage][{sym}] Momentum TP → {new_tp}")
                 resp = modify_take_profit(sym, side, new_tp, abs(qty))
                 updates["momentum_tp"] = resp
+                await notify_info(f"✅ [{sym}] TP הוזז דינמית ל־{new_tp:.2f}")
 
             results.append(updates)
 
@@ -98,6 +111,17 @@ async def manage_open_trades() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"[manage] Error during trade management: {e}")
         return results
+
+
+# === לולאת רקע להרצה אוטומטית ===
+async def manage_open_trades_loop(period: int = 30):
+    while True:
+        try:
+            await manage_open_trades()
+        except Exception as e:
+            logger.error(f"[manage_loop] error: {e}")
+        await asyncio.sleep(period)
+
 
 
 
