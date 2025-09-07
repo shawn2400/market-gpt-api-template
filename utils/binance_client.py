@@ -1,16 +1,14 @@
 # utils/binance_client.py
 from __future__ import annotations
-import os
-import time
-import math
-import logging
+import os, time, math, logging
 from typing import Any, Dict, List, Optional, Iterable, Tuple
+
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
 logger = logging.getLogger("algogpt.binance")
 
-# === ENV ===
+# ===== ENV בסיסי (עם ברירות מחדל סבירות) =====
 API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 if not API_KEY or not API_SECRET:
@@ -21,6 +19,8 @@ WORKING_TYPE = os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE").upper()
 RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "45000"))
 
 EXINFO_TTL = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))
+
+# קצב/בקוֹף — יהיו נתוני פתיחה בלבד; יש אוטוטיונר פנימי שמכוונן אותם ריצה.
 ORD_BUCKET_WINDOW = int(os.getenv("ORDERS_BUCKET_WINDOW_SEC", "10"))
 ORD_QPS_BUCKET = int(os.getenv("ORDERS_QPS_BUCKET", "4"))
 BACKOFF_BASE_MS = int(os.getenv("ORDER_BACKOFF_BASE_MS", "120"))
@@ -31,26 +31,23 @@ DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP", "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
-# === Ladder ENV (חדשים) ===
+# Ladder (יפעלו גם ללא ENV—עם ברירות מחדל פנימיות)
 LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1") == "1"
-LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "MARKET").upper()  # MARKET/TAKE_PROFIT_MARKET
+LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "MARKET").upper()
 LADDER_TP_DEFAULT_PCTS = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 LADDER_TP_DEFAULT_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
 LADDER_TP_MAX_LEVELS = int(os.getenv("LADDER_TP_MAX_LEVELS", "5"))
 
 LADDER_SL_ENABLE = os.getenv("LADDER_SL_ENABLE", "0") == "1"
-LADDER_SL_DEFAULT_PCTS = os.getenv("LADDER_SL_DEFAULT_PCTS", "")  # דוגמה: "0.7,1.2" (הפסד חלקי במדרגות)
+LADDER_SL_DEFAULT_PCTS = os.getenv("LADDER_SL_DEFAULT_PCTS", "")
 LADDER_SL_MAX_LEVELS = int(os.getenv("LADDER_SL_MAX_LEVELS", "3"))
 
-# === Init Futures client ===
+# ===== Binance Futures client =====
 client = Client(API_KEY, API_SECRET)
-client.API_URL = "https://fapi.binance.com/fapi"
+client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
-# === Caches ===
+# ===== Exchange info cache =====
 _exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
-_bucket_reset_at = 0.0
-_bucket_used = 0
-
 def _now() -> float: return time.time()
 
 def _get_exchange_info_cached() -> Optional[Dict[str, Any]]:
@@ -69,11 +66,9 @@ def _get_exchange_info_cached() -> Optional[Dict[str, Any]]:
 # ==================== Core Safe Calls ====================
 def fapi_ping() -> bool:
     try:
-        client.futures_ping()
-        return True
+        client.futures_ping(); return True
     except Exception as e:
-        logger.warning("Futures ping failed: %s", e)
-        return False
+        logger.warning("Futures ping failed: %s", e); return False
 
 def futures_exchange_info_safe() -> Optional[Dict[str, Any]]:
     return _get_exchange_info_cached()
@@ -87,10 +82,10 @@ def futures_balance() -> List[Dict[str, Any]]:
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
-        data = client.futures_mark_price(symbol=symbol)
+        data = client.futures_mark_price(symbol=symbol.upper())
         return float(data["markPrice"])
     except Exception as e:
-        logger.error("Failed to fetch mark price for %s: %s", symbol, e)
+        logger.error("Failed mark price for %s: %s", symbol, e)
         return None
 
 def get_price(symbol: str) -> Optional[float]:
@@ -128,8 +123,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
 
 # ==================== Precision helpers ====================
 def _decimals_from_step(step_str: str) -> int:
-    if "." not in step_str:
-        return 0
+    if "." not in step_str: return 0
     frac = step_str.split(".")[1]
     while frac and frac.endswith("0"):
         frac = frac[:-1]
@@ -161,20 +155,51 @@ def _ensure_min_notional(symbol: str, price: float, qty: float) -> float:
         return qty
     return min_notional / max(price, 1e-12)
 
-# ==================== Rate limit (רזה) ====================
+def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
+    qf = float(qty_str)
+    need = _ensure_min_notional(symbol, price, qf)
+    if need <= qf + 1e-12:
+        return qty_str
+    return _quantize_qty(symbol, need)
+
+# ==================== Auto-tune QPS/Backoff (ללא ENV חובה) ====================
+_bucket_reset_at = 0.0
+_bucket_used = 0
+_dyn_qps = max(1, ORD_QPS_BUCKET)           # יכוּון דינמית
+_dyn_backoff_base = max(60, BACKOFF_BASE_MS)
+_last_rl_hit = 0.0
+_rl_window = 30.0                            # שניות
+_rl_hits = 0
+
 def _rate_allow() -> bool:
-    global _bucket_reset_at, _bucket_used
+    global _bucket_reset_at, _bucket_used, _dyn_qps, _last_rl_hit, _rl_hits
     now = _now()
+    # התאוששות הדרגתית אם אין 429 זמן מה
+    if _last_rl_hit and (now - _last_rl_hit) > _rl_window and _rl_hits == 0:
+        _dyn_qps = min(ORD_QPS_BUCKET, _dyn_qps + 1)
+        _last_rl_hit = 0.0
     if now >= _bucket_reset_at:
         _bucket_reset_at = now + ORD_BUCKET_WINDOW
         _bucket_used = 0
-    if _bucket_used < ORD_QPS_BUCKET:
+        # דועך מכת rate-limit אם יש
+        if _rl_hits > 0:
+            _rl_hits = max(0, _rl_hits - 1)
+    if _bucket_used < _dyn_qps:
         _bucket_used += 1
         return True
     return False
 
+def _note_rate_limit_hit() -> None:
+    global _dyn_qps, _dyn_backoff_base, _last_rl_hit, _rl_hits
+    _rl_hits += 1
+    _last_rl_hit = _now()
+    # הורדת QPS עד מינימום 1
+    _dyn_qps = max(1, _dyn_qps - 1)
+    # הגדלת backoff בסיסי (תקרה נשמרת ע"י BACKOFF_MAX_MS)
+    _dyn_backoff_base = min(BACKOFF_MAX_MS, max(_dyn_backoff_base, int(_dyn_backoff_base * 1.5)))
+
 def _backoff_sleep(attempt: int) -> None:
-    delay_ms = min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * (2 ** max(0, attempt - 1)))
+    delay_ms = min(BACKOFF_MAX_MS, _dyn_backoff_base * (2 ** max(0, attempt - 1)))
     time.sleep(delay_ms / 1000.0)
 
 # ==================== Positions ====================
@@ -206,29 +231,34 @@ def _position_side_from_amt(amt: float) -> str:
 
 def _order_side_for_close(pos_side: str) -> str:
     ps = (pos_side or "").upper()
-    if ps == "LONG":
-        return "SELL"
-    if ps == "SHORT":
-        return "BUY"
+    if ps == "LONG":  return "SELL"
+    if ps == "SHORT": return "BUY"
     return "SELL"
 
 # ==================== Orders + wrappers ====================
 def _safe_create_order(**kwargs) -> Dict[str, Any]:
+    # הזרקת ברירות מחדל שאינן תלויות ENV בזמן ריצה
+    kwargs.setdefault("workingType", WORKING_TYPE)
+    kwargs.setdefault("recvWindow", RECV_WINDOW)
+
     for attempt in range(1, BINANCE_MAX_RETRIES + 1):
         if not _rate_allow():
-            _backoff_sleep(attempt)
-            continue
+            _backoff_sleep(attempt); continue
         try:
             return client.futures_create_order(**kwargs)
         except BinanceAPIException as e:
             s = str(e)
-            if "429" in s or "-1003" in s:
-                logger.warning("Rate-limited (%s), retrying attempt=%s", getattr(e, "status_code", "429"), attempt)
+            code = getattr(e, "code", None)
+            status = getattr(e, "status_code", None)
+            # rate-limit / weight
+            if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
+                logger.warning("Rate-limited, attempt=%s; qps=%s base=%sms", attempt, _dyn_qps, _dyn_backoff_base)
+                _note_rate_limit_hit()
                 _backoff_sleep(attempt); continue
             logger.error("BinanceAPIException: %s", e)
             return {"ok": False, "error": str(e)}
         except Exception as e:
-            logger.error("Failed to create futures order: %s", e)
+            logger.error("futures_create_order failed: %s", e)
             _backoff_sleep(attempt)
             if attempt == BINANCE_MAX_RETRIES:
                 return {"ok": False, "error": str(e)}
@@ -267,7 +297,7 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
-# ==================== Cancel+Recreate (single) ====================
+# ==================== Cancel+Recreate (יחיד) ====================
 def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
     open_orders = get_open_orders(symbol)
     count = 0
@@ -299,22 +329,13 @@ def _compute_partial_qty(symbol: str, pos_amt: float, pct: Optional[float], qty:
         raise ValueError("quantity rounds to zero")
     return True, _quantize_qty(symbol, q)
 
-def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
-    qf = float(qty_str)
-    need = _ensure_min_notional(symbol, price, qf)
-    if need <= qf + 1e-12:
-        return qty_str
-    return _quantize_qty(symbol, need)
-
 def modify_stop_loss(symbol: str, new_sl_price: float, position_side: Optional[str] = None,
                      pct: Optional[float] = None, quantity: Optional[float] = None) -> Dict[str, Any]:
     try:
         pos = get_single_position(symbol)
-        if not pos:
-            return {"ok": False, "error": f"No open position for {symbol}"}
+        if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
         amt = float(pos.get("positionAmt") or 0.0)
-        if abs(amt) < 1e-12:
-            return {"ok": False, "error": f"No non-zero position for {symbol}"}
+        if abs(amt) < 1e-12: return {"ok": False, "error": f"No non-zero position for {symbol}"}
 
         pos_side = position_side or _position_side_from_amt(amt)
         side = _order_side_for_close(pos_side)
@@ -329,13 +350,11 @@ def modify_stop_loss(symbol: str, new_sl_price: float, position_side: Optional[s
             order = _safe_create_order(
                 symbol=symbol.upper(), side=side, type="STOP_MARKET",
                 stopPrice=qprice, reduceOnly=True, quantity=qstr,
-                workingType=WORKING_TYPE, recvWindow=RECV_WINDOW,
             )
         else:
             order = _safe_create_order(
                 symbol=symbol.upper(), side=side, type="STOP_MARKET",
                 stopPrice=qprice, reduceOnly=True, closePosition=True,
-                workingType=WORKING_TYPE, recvWindow=RECV_WINDOW,
             )
         return {"ok": True, "canceled": canceled, "order": order, "stopPrice": qprice}
     except BinanceAPIException as e:
@@ -349,11 +368,9 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
                        pct: Optional[float] = None, quantity: Optional[float] = None) -> Dict[str, Any]:
     try:
         pos = get_single_position(symbol)
-        if not pos:
-            return {"ok": False, "error": f"No open position for {symbol}"}
+        if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
         amt = float(pos.get("positionAmt") or 0.0)
-        if abs(amt) < 1e-12:
-            return {"ok": False, "error": f"No non-zero position for {symbol}"}
+        if abs(amt) < 1e-12: return {"ok": False, "error": f"No non-zero position for {symbol}"}
 
         pos_side = position_side or _position_side_from_amt(amt)
         side = _order_side_for_close(pos_side)
@@ -368,13 +385,11 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
             order = _safe_create_order(
                 symbol=symbol.upper(), side=side, type="TAKE_PROFIT_MARKET",
                 stopPrice=qprice, reduceOnly=True, quantity=qstr,
-                workingType=WORKING_TYPE, recvWindow=RECV_WINDOW,
             )
         else:
             order = _safe_create_order(
                 symbol=symbol.upper(), side=side, type="TAKE_PROFIT_MARKET",
                 stopPrice=qprice, reduceOnly=True, closePosition=True,
-                workingType=WORKING_TYPE, recvWindow=RECV_WINDOW,
             )
         return {"ok": True, "canceled": canceled, "order": order, "stopPrice": qprice}
     except BinanceAPIException as e:
@@ -399,13 +414,11 @@ def set_breakeven_stop(symbol: str, offset_bps: float = 0.0) -> Dict[str, Any]:
         sl = entry * (1.0 - (offset_bps / 10000.0))
     return modify_stop_loss(symbol, sl, position_side=pos_side)
 
-# ==================== NEW: Ladder helpers ====================
+# ==================== Ladder helpers ====================
 def clear_take_profit_orders(symbol: str) -> int:
-    """מבטל את כל ה־TP הקיימים (TP/TP_MARKET)"""
     return _cancel_closing_orders(symbol, types=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
 
 def clear_stop_orders(symbol: str) -> int:
-    """מבטל את כל ה־SL הקיימים (STOP/STOP_MARKET)"""
     return _cancel_closing_orders(symbol, types=("STOP", "STOP_MARKET"))
 
 def _normalize_splits(splits: List[float], levels: int) -> List[float]:
@@ -435,12 +448,6 @@ def place_tp_ladder(
     position_side: Optional[str] = None,
     percent_targets: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
-    """
-    יוצר סדרת TP-MARKET בלדרים:
-      - אם percent_targets סופק → מחשב יחסית ל־entry.
-      - אחרת משתמש ב-targets_prices (מחירים מוחלטים).
-    ה-order האחרון ישתמש ב-closePosition=True כדי לסגור יתרה בבטחה.
-    """
     if not LADDER_TP_ENABLE:
         return {"ok": False, "error": "TP ladder disabled by ENV"}
 
@@ -456,27 +463,27 @@ def place_tp_ladder(
     pos_side = position_side or _position_side_from_amt(float(pos.get("positionAmt") or 0.0))
     side = _order_side_for_close(pos_side)
 
-    # בנה רשימת מחירים
+    # מחירי יעד
     prices: List[float]
-    if percent_targets is not None and len(percent_targets) > 0:
+    if percent_targets and len(percent_targets) > 0:
         prices = _build_tp_prices_by_pct(entry, pos_side, percent_targets)
-    elif targets_prices is not None and len(targets_prices) > 0:
+    elif targets_prices and len(targets_prices) > 0:
         prices = [float(p) for p in targets_prices]
     else:
-        # טעינה מ-ENV ברירת מחדל
-        pcts = [float(x) for x in LADDER_TP_DEFAULT_PCTS.split(",") if x.strip()]
+        # ברירת מחדל פנימית (גם אם ENV לא הוגדר)
+        s = (LADDER_TP_DEFAULT_PCTS or "1.8,3.2,5.5")
+        pcts = [float(x) for x in s.split(",") if x.strip()]
         prices = _build_tp_prices_by_pct(entry, pos_side, pcts)
 
-    # הגבלת מספר רמות
     prices = prices[: max(1, min(LADDER_TP_MAX_LEVELS, len(prices)))]
     levels = len(prices)
 
     # חלוקות
     if splits is None:
-        splits = [float(x) for x in LADDER_TP_DEFAULT_SPLITS.split(",") if x.strip()]
+        ss = (LADDER_TP_DEFAULT_SPLITS or "0.4,0.35,0.25")
+        splits = [float(x) for x in ss.split(",") if x.strip()]
     splits = _normalize_splits(splits or [], levels)
 
-    # בטל TP קודמים
     canceled = clear_take_profit_orders(symbol)
 
     results = []
@@ -484,12 +491,10 @@ def place_tp_ladder(
     for i, (p, sp) in enumerate(zip(prices, splits), start=1):
         qprice = _quantize_price(symbol, float(p))
         price_f = float(qprice)
-
-        # לרמות ביניים: כמות מדויקת; לרמה האחרונה: closePosition
         is_last = (i == levels)
         if not is_last:
             qi = float(_quantize_qty(symbol, amt * sp))
-            qi = min(qi, qty_left)  # הגנה
+            qi = min(qi, qty_left)
             if qi <= 0:
                 continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
@@ -502,11 +507,8 @@ def place_tp_ladder(
                 stopPrice=qprice,
                 reduceOnly=True,
                 quantity=qstr,
-                workingType=WORKING_TYPE,
-                recvWindow=RECV_WINDOW,
             )
         else:
-            # אחרון – סוגר יתרה (בטוח גם אם חלק נסגר בדרך)
             order = _safe_create_order(
                 symbol=symbol.upper(),
                 side=side,
@@ -514,8 +516,6 @@ def place_tp_ladder(
                 stopPrice=qprice,
                 reduceOnly=True,
                 closePosition=True,
-                workingType=WORKING_TYPE,
-                recvWindow=RECV_WINDOW,
             )
         results.append({"level": i, "stopPrice": qprice, "resp": order})
 
@@ -529,11 +529,6 @@ def place_sl_ladder(
     position_side: Optional[str] = None,
     percent_stops: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
-    """
-    SL ladder אופציונלי (ברירת מחדל: כבוי). בדרך כלל SL יחיד מספיק.
-    אם מפעילים – יקים מספר STOP_MARKET עם reduceOnly; האחרון closePosition.
-    percent_stops: אחוזי סטייה מ-entry (חיובי תמיד). LONG → entry*(1-%) ; SHORT → entry*(1+%).
-    """
     if not LADDER_SL_ENABLE:
         return {"ok": False, "error": "SL ladder disabled by ENV"}
 
@@ -562,7 +557,6 @@ def place_sl_ladder(
     elif stops_prices:
         prices = [float(x) for x in stops_prices]
     else:
-        # ENV (אם ריק – תחזור שגיאה)
         if not LADDER_SL_DEFAULT_PCTS.strip():
             return {"ok": False, "error": "No SL percentages provided"}
         pcts = [float(x) for x in LADDER_SL_DEFAULT_PCTS.split(",") if x.strip()]
@@ -604,8 +598,6 @@ def place_sl_ladder(
                 stopPrice=qprice,
                 reduceOnly=True,
                 quantity=qstr,
-                workingType=WORKING_TYPE,
-                recvWindow=RECV_WINDOW,
             )
         else:
             order = _safe_create_order(
@@ -615,12 +607,42 @@ def place_sl_ladder(
                 stopPrice=qprice,
                 reduceOnly=True,
                 closePosition=True,
-                workingType=WORKING_TYPE,
-                recvWindow=RECV_WINDOW,
             )
         results.append({"level": i, "stopPrice": qprice, "resp": order})
 
     return {"ok": True, "canceled": canceled, "levels": results, "side": pos_side}
+
+# ==================== extras: get_klines_df / close_all_positions ====================
+def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
+    try:
+        import pandas as pd
+    except Exception:
+        return None
+    try:
+        kl = client.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(10, limit)))
+        cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","tbbav","tbqav","ignore"]
+        df = pd.DataFrame(kl, columns=cols)
+        for c in ("open","high","low","close","volume"):
+            df[c] = df[c].astype(float)
+        return df
+    except Exception as e:
+        logger.error("get_klines_df failed: %s", e); return None
+
+def close_all_positions() -> Dict[str,Any]:
+    out = {"closed":[],"errors":[]}
+    try:
+        for p in get_open_positions():
+            sym = p.get("symbol"); amt = float(p.get("positionAmt","0"))
+            if abs(amt) <= 1e-12: continue
+            side = "SELL" if amt>0 else "BUY"
+            try:
+                res = _safe_create_order(symbol=sym, side=side, type="MARKET", reduceOnly=True, quantity=_quantize_qty(sym, abs(amt)))
+                out["closed"].append({"symbol":sym,"qty":abs(amt),"res":res})
+            except Exception as e:
+                out["errors"].append({"symbol":sym,"err":str(e)})
+        return out
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 # === compat helper ===
 def get_futures_client() -> Client:
@@ -651,11 +673,14 @@ __all__ = [
     "clear_stop_orders",
     "place_tp_ladder",
     "place_sl_ladder",
+    "get_klines_df",
+    "close_all_positions",
     "get_futures_client",
     "DEFAULT_QTY_STEP_STR",
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
