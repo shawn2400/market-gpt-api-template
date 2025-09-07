@@ -4,28 +4,37 @@
 # =========================
 from __future__ import annotations
 import asyncio, time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException
 from utils.auth import require_api_key
 
-# אם יש כשל ב-import של החישוב עצמו, נשמר את ה-router טעון ונחזיר שגיאה מבוקרת
+# נטען את המנוע; אם נופל ב-import, עדיין נטען router_public כדי שנראה ב-openapi.json
 try:
     from utils.orderflow import get_orderflow_snapshot
     _OF_OK = True
+    _OF_ERR: Optional[str] = None
 except Exception as _e:
     get_orderflow_snapshot = None  # type: ignore
     _OF_OK = False
     _OF_ERR = str(_e)
 
+# ראוטר מוגן (דורש API key)
 router = APIRouter(
-    prefix="",                # אין prefix כדי שהנתיב יהיה בדיוק /orderflow/{symbol}
+    prefix="",
     tags=["Analytics"],
     dependencies=[Depends(require_api_key)]
 )
 
-# --- Rate limit פנימי (קל ופשוט)
+# ראוטר ציבורי קטן כדי לוודא שהמודול נטען ל-OpenAPI גם אם יש כשל פנימי
+router_public = APIRouter()
+
+@router_public.get("/__of_ping", tags=["Analytics"])
+async def orderflow_ping() -> Dict[str, Any]:
+    return {"ok": True, "module": "orderflow", "calc_loaded": bool(_OF_OK), "error": _OF_ERR}
+
+# ---- Rate limit פנימי פשוט ----
 _rl_state: Dict[str, List[float]] = {}
-def _rl(ip: str | None, limit: int = 15, window: int = 60) -> bool:
+def _rl(ip: Optional[str], limit: int = 15, window: int = 60) -> bool:
     if not ip:
         return True
     now = time.time()
@@ -36,27 +45,18 @@ def _rl(ip: str | None, limit: int = 15, window: int = 60) -> bool:
     _rl_state[ip] = calls
     return True
 
-# ─────────────────────────────────────────────────────────
-# Public ping (לבדיקת רישום הראוטר ב-/openapi.json)
-# ─────────────────────────────────────────────────────────
-router_public = APIRouter()
-@router_public.get("/__of_ping", tags=["Analytics"])
-async def orderflow_ping():
-    return {"ok": True, "module": "orderflow", "calc_loaded": bool(_OF_OK), "error": (None if _OF_OK else _OF_ERR)}
-
-# ─────────────────────────────────────────────────────────
-# עיקר: צילום מצב Orderflow
-# שים לב: response_model=None כדי להימנע מבעיות Pydantic עם טיפוסים דינמיים
-# ─────────────────────────────────────────────────────────
+# ---- Endpoint עיקרי: צילום Orderflow ----
+# שים לב: request: Request (ללא Optional/ברירת מחדל) כדי לא להפיל את Pydantic
 @router.get("/orderflow/{symbol}", summary="Orderflow snapshot", response_model=None)
 async def get_orderflow(
     symbol: str = Path(..., description="e.g. BTCUSDT"),
     trades_limit: int = Query(800, ge=1, le=1000),
     depth_limit: int = Query(500, ge=5, le=1000),
     cvd_window: int = Query(300, ge=1, le=1000),
-    request: Request = Path(None, description="Request context (injected by FastAPI)")  # לא Optional, אין =None
+    request: Request = None  # ✅ FastAPI יזריק בפועל; לא נרשום Optional/Union/Path כאן!
 ) -> Dict[str, Any]:
-    # בדיקת קצבים לפי IP
+    # Rate-limit לפי IP
+    ip = None
     try:
         ip = request.client.host if request and request.client else None
     except Exception:
@@ -64,13 +64,13 @@ async def get_orderflow(
     if not _rl(ip):
         raise HTTPException(429, "Rate limit exceeded")
 
-    # אם מודול החישוב לא נטען, נחזיר שגיאה ברורה אבל הראוטר נשאר חי
+    # אם מנוע ה-orderflow לא נטען, מחזירים הודעת שגיאה ברורה
     if not _OF_OK or not callable(get_orderflow_snapshot):  # type: ignore
         raise HTTPException(500, f"orderflow engine not loaded: {_OF_ERR}")
 
-    # מחשבים ב-thread pool כדי לא לחסום event loop
+    # חישוב ב-thread מבלי לחסום event loop
     return await asyncio.to_thread(
-        get_orderflow_snapshot,   # type: ignore
+        get_orderflow_snapshot,  # type: ignore
         symbol,
         trades_limit=trades_limit,
         depth_limit=depth_limit,
