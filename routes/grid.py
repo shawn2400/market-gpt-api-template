@@ -160,6 +160,11 @@ async def trade_grid(req: GridTradeRequest):
                 }
             else:
                 res = await start_grid_for_position(sym, account_id=acc_id)
+                if not res:
+                    return {"ok": False, "mode": "futures_live", "symbol": sym, "side": req.side,
+                            "market": "futures", "account_id": acc_id,
+                            "base_price": price, "budget": req.budget,
+                            "leverage": req.leverage, "error": "grid manager returned None"}
                 return {
                     "ok": bool(res.get("ok")),
                     "mode": "futures_live",
@@ -183,6 +188,7 @@ async def trade_grid(req: GridTradeRequest):
     except Exception as e:
         logger.exception("grid_trade_failed")
         raise HTTPException(status_code=500, detail=f"Grid trade failed: {e}")
+
 
 
 
