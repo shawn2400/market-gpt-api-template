@@ -3,6 +3,7 @@ from __future__ import annotations
 import os, asyncio, logging
 from pathlib import Path
 from typing import List
+from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
+# ===== Env =====
 IS_CLOUD = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or os.getenv("DYNO") or os.getenv("K_SERVICE"))
 if not IS_CLOUD:
     try:
@@ -39,6 +41,8 @@ from utils.open_trade_manager import manage_open_trades
 from utils.auto_executor import start_executor, stop_executor
 from utils.metrics import metrics_tracker
 from utils.trade_manager import manage_open_trades_loop
+from services.auto_trade_summary import post_trade_summary
+from services.telegram_daily import start_daily_summaries
 
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
@@ -57,8 +61,7 @@ def _ensure_dir(path: str) -> bool:
         logger.warning({"event": "mkdir_failed", "dir": path, "error": str(e)})
         return False
 
-static_ok = _ensure_dir("static")
-_ = _ensure_dir("logs")
+_ = _ensure_dir("static"); _ = _ensure_dir("logs")
 
 app = FastAPI(
     title="AlgoGPT API",
@@ -168,6 +171,8 @@ async def startup_event():
     except: pass
     try: asyncio.create_task(manage_open_trades_loop(interval=20))
     except: pass
+    try: asyncio.create_task(start_daily_summaries())  # דוחות יומי/שבועי/חודשי
+    except: pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -186,6 +191,7 @@ async def api_manage_once(): await manage_open_trades(); return {"ok": True}
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8000")))
+
 
 
 
