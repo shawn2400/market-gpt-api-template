@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from utils.auth import require_api_key
-from utils.binance_client import get_open_orders, get_all_orders
+from utils.binance_client import get_open_orders
 
 router = APIRouter(prefix="/orders", tags=["Orders"], dependencies=[Depends(require_api_key)])
 
@@ -45,17 +45,6 @@ async def list_active_orders(
     items = [_map_order(o) for o in (data or [])][:limit]
     return OrdersSummary(total=len(items), returned=len(items), items=items)
 
-@router.get("/history", response_model=OrdersSummary)
-async def list_orders_history(
-    symbol: str = Query(..., description="Symbol is required for futures allOrders"),
-    limit: int = Query(100, ge=1, le=500, description="How many to return (default 100, max 500)"),
-):
-    try:
-        data = get_all_orders(symbol=symbol, limit=limit)
-    except Exception as e:
-        raise HTTPException(400, f"binance error: {e}")
-    items = [_map_order(o) for o in (data or [])]
-    return OrdersSummary(total=len(items), returned=len(items), items=items)
 
 
 
