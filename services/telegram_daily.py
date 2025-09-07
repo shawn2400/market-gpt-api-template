@@ -1,6 +1,6 @@
 # services/telegram_daily.py
 from __future__ import annotations
-import asyncio, datetime as dt
+import datetime as dt
 from utils.pnl_tracker import get_pnl_summary
 from utils.metrics import metrics_tracker
 from utils.telegram_notifier import send_telegram_message
@@ -30,4 +30,12 @@ async def send_weekly_summary():
     )
     await send_telegram_message(msg)
 
-# אפשר להפעיל עם scheduler קיים או cron פנימי
+async def send_monthly_summary():
+    pnl = get_pnl_summary(days=30)
+    msg = (
+        f"📊 Monthly Summary\n"
+        f"Trades: {pnl['total_trades']} | WinRate: {pnl['win_rate']}%\n"
+        f"PnL: {pnl['realized_pnl_usd']} USDT"
+    )
+    await send_telegram_message(msg)
+
