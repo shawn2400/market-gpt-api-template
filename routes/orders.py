@@ -36,7 +36,6 @@ class OrdersSummary(BaseModel):
 # Helpers
 # ─────────────────────────────
 def _map_order(o: dict) -> OrderModel:
-    """ ממפה אובייקט Binance לאובייקט OrderModel פנימי """
     try:
         return OrderModel(
             id=str(o.get("orderId") or o.get("clientOrderId") or ""),
@@ -60,9 +59,6 @@ async def list_active_orders(
     symbol: Optional[str] = Query(None, description="Optional symbol filter"),
     limit: int = Query(200, ge=1, le=200, description="How many to return (max 200)"),
 ):
-    """
-    מחזיר רשימת פקודות פתוחות.
-    """
     try:
         data = get_open_orders(symbol=symbol)
         items = [_map_order(o) for o in (data or [])][:limit]
@@ -71,15 +67,11 @@ async def list_active_orders(
         logger.error("list_active_orders failed: %s", e)
         raise HTTPException(500, f"orders open failed: {e}")
 
-
 @router.get("/history", response_model=OrdersSummary)
 async def list_orders_history(
     symbol: str = Query(..., description="Symbol is required for futures allOrders"),
     limit: int = Query(100, ge=1, le=500, description="How many to return (default 100, max 500)"),
 ):
-    """
-    מחזיר היסטוריית פקודות עבור סימבול ספציפי.
-    """
     try:
         data = get_all_orders(symbol=symbol, limit=limit)
         items = [_map_order(o) for o in (data or [])]
@@ -87,6 +79,7 @@ async def list_orders_history(
     except Exception as e:
         logger.error("list_orders_history failed: %s", e)
         raise HTTPException(500, f"orders history failed: {e}")
+
 
 
 
