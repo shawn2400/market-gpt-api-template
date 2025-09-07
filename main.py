@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, asyncio, logging
 from pathlib import Path
 from typing import List, Any
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -88,11 +88,11 @@ app.add_middleware(
 # Middleware פנימי
 app.add_middleware(InternalAuthMiddleware)
 
-# ===== Middleware =====
+# ===== Auth Middleware =====
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
-        "/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc",
+        "/", "/openapi.json", "/health", "/healthz", "/readyz", "/docs", "/redoc",
         "/telegram/webhook"   # ✅ callbacks merged
     }
     PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk"]
@@ -114,6 +114,7 @@ async def validate_token(request: Request, call_next):
 
     return await call_next(request)
 
+# ===== Metrics Middleware =====
 @app.middleware("http")
 async def track_metrics(request: Request, call_next):
     start = asyncio.get_event_loop().time()
@@ -138,7 +139,8 @@ ROUTERS: List[str] = [
     "routes.telegram_bot",   # ✅ unified bot+callbacks
     "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
     "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
-    "routes.ui", "routes.backtest", "routes.ui_grid", "routes.orderbook", "routes.ws", "routes.ws_health", "routes.orderflow"
+    "routes.ui", "routes.backtest", "routes.ui_grid", "routes.orderbook", "routes.ws", "routes.ws_health",
+    "routes.orderflow"       # ✅ וידוא טעינה
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ROUTERS.append("routes.ai")
@@ -157,7 +159,7 @@ def _include_router(path: str) -> None:
 for r in ROUTERS:
     _include_router(r)
 
-# ===== Endpoints =====
+# ===== Simple Endpoints =====
 @app.get("/")
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -165,6 +167,13 @@ async def root_status():
 @app.get("/health")
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
+
+# ---- NEW: /healthz alias (always present) ----
+_health_router = APIRouter()
+@_health_router.get("/healthz")
+async def healthz_alias():
+    return {"status": "ok", "service": "algogpt", "version": APP_VERSION}
+app.include_router(_health_router)
 
 @app.get("/readyz")
 async def readyz():
@@ -181,6 +190,7 @@ async def readyz():
     except Exception as e:
         return {"ok": False, "error": str(e), "details": details}
 
+# ===== Lifecycle =====
 @app.on_event("startup")
 async def startup_event():
     logger.info({"event": "startup", "version": APP_VERSION, "config": dump_config_sanitized()})
@@ -214,6 +224,7 @@ async def shutdown_event():
     except Exception:
         pass
 
+# ===== Ops endpoints =====
 @app.post("/start-executor")
 async def api_start_executor():
     start_executor()
@@ -232,6 +243,7 @@ async def api_manage_once():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
