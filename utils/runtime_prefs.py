@@ -1,42 +1,73 @@
 # utils/runtime_prefs.py
 from __future__ import annotations
+from typing import Any, Dict, Optional, Set
 import threading
 
-# מצב משתנה גלובלי (mute/unmute)
-_runtime_prefs = {
-    "mute": False
-}
 _lock = threading.Lock()
 
-def is_muted() -> bool:
-    """
-    מחזיר אם המערכת במצב השתקה (mute).
-    """
-    with _lock:
-        return _runtime_prefs.get("mute", False)
+# גלובלי + רשימת משתמשים מושתקים
+_muted_global: bool = False
+_muted_users: Set[str] = set()
 
-def set_mute(state: bool) -> None:
-    """
-    מעדכן מצב השתקה (mute/unmute).
-    """
+_prefs: Dict[str, Any] = {}
+
+def is_muted(chat_id: Optional[str] = None) -> bool:
     with _lock:
-        _runtime_prefs["mute"] = bool(state)
+        if _muted_global:
+            return True
+        return str(chat_id) in _muted_users if chat_id else False
+
+def mute(chat_id: Optional[str] = None) -> None:
+    with _lock:
+        global _muted_global
+        if chat_id:
+            _muted_users.add(str(chat_id))
+        else:
+            _muted_global = True
+
+def clear_mute(chat_id: Optional[str] = None) -> None:
+    with _lock:
+        global _muted_global
+        if chat_id:
+            _muted_users.discard(str(chat_id))
+        else:
+            _muted_global = False
+            _muted_users.clear()
+
+# תאימות לאחור לשמות שהיו אצלך
+def set_mute(state: bool) -> None:
+    if state:
+        mute(None)
+    else:
+        clear_mute(None)
 
 def toggle_mute() -> bool:
-    """
-    הופך את מצב ההשתקה (True -> False, False -> True).
-    מחזיר את המצב החדש.
-    """
     with _lock:
-        new_state = not _runtime_prefs.get("mute", False)
-        _runtime_prefs["mute"] = new_state
-        return new_state
+        if _muted_global:
+            clear_mute(None)
+        else:
+            mute(None)
+        return _muted_global
+
+# העדפות כלליות
+def get_pref(key: str, default: Any = None) -> Any:
+    with _lock:
+        return _prefs.get(key, default)
+
+def set_pref(key: str, value: Any) -> None:
+    with _lock:
+        _prefs[key] = value
 
 __all__ = [
     "is_muted",
+    "mute",
+    "clear_mute",
     "set_mute",
     "toggle_mute",
+    "get_pref",
+    "set_pref",
 ]
+
 
 
 
