@@ -15,7 +15,6 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 def _text_bbox(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont):
-    # Pillow >= 8: textbbox
     try:
         x0, y0, x1, y1 = draw.textbbox((0, 0), text, font=font)
     except Exception:
@@ -33,7 +32,7 @@ def generate_logo(
     add_glow: bool = True,
 ) -> str:
     """
-    יוצר PNG; בנוסף מייצר ICO ו-SVG בשם בסיסי זהה.
+    מייצר לוגו PNG + ICO + SVG.
     """
     _ensure_static(os.path.dirname(filename) or "static")
 
@@ -50,7 +49,6 @@ def generate_logo(
     tx = (size - tw) // 2
     ty = (size - th) // 2
 
-    # Glow layer (optional)
     if add_glow:
         glow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         gdraw = ImageDraw.Draw(glow)
@@ -59,24 +57,19 @@ def generate_logo(
             glow = glow.filter(ImageFilter.GaussianBlur(radius=r))
         img = Image.alpha_composite(img.convert("RGBA"), glow)
 
-    # Main text
     draw = ImageDraw.Draw(img)
     draw.text((tx, ty), text, font=font, fill=fg)
 
-    # Save PNG
     img.save(filename, optimize=True)
 
-    # Save ICO (256px)
+    # ICO
     base_no_ext, _ = os.path.splitext(filename)
-    ico_path = f"{base_no_ext}.ico"
     try:
-        img_ico = img.convert("RGBA").resize((256, 256))
-        img_ico.save(ico_path, format="ICO", sizes=[(256, 256)])
+        img.convert("RGBA").resize((256, 256)).save(f"{base_no_ext}.ico", format="ICO", sizes=[(256, 256)])
     except Exception:
         pass
 
-    # Save SVG (טקסט בסיסי)
-    svg_path = f"{base_no_ext}.svg"
+    # SVG
     try:
         svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}">
   <rect width="100%" height="100%" fill="{'none' if transparent else ('#1e1e1e' if dark_bg else '#eeeeee')}" />
@@ -84,11 +77,12 @@ def generate_logo(
         font-family="DejaVu Sans, Arial, sans-serif" font-weight="700"
         font-size="{int(size*0.18)}" fill="{('#ffffff' if dark_bg else '#0f0f0f')}">{text}</text>
 </svg>"""
-        with open(svg_path, "w", encoding="utf-8") as f:
+        with open(f"{base_no_ext}.svg", "w", encoding="utf-8") as f:
             f.write(svg)
     except Exception:
         pass
 
     return filename
+
 
 
