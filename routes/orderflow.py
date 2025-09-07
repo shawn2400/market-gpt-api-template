@@ -28,7 +28,7 @@ async def get_orderflow(
     trades_limit: int = Query(800, ge=1, le=1000),
     depth_limit: int = Query(500, ge=5, le=1000),
     cvd_window: int = Query(300, ge=1, le=1000),
-    request: Request,   # <<< תיקון: ללא default (לא Optional)
+    request: Request,   # <<< בלי default, לא Optional
 ) -> Dict[str, Any]:
     ip = None
     try:
