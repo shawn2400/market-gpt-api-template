@@ -28,7 +28,7 @@ DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP", "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
-# ===== Ladder ENV (דיפולטים פנימיים בטוחים) =====
+# ===== Ladder ENV =====
 LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1") == "1"
 LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
 LADDER_TP_DEFAULT_PCTS = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
@@ -36,22 +36,22 @@ LADDER_TP_DEFAULT_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25"
 LADDER_TP_MAX_LEVELS = int(os.getenv("LADDER_TP_MAX_LEVELS", "5"))
 
 LADDER_SL_ENABLE = os.getenv("LADDER_SL_ENABLE", "0") == "1"
-LADDER_SL_DEFAULT_PCTS = os.getenv("LADDER_SL_DEFAULT_PCTS", "")   # דוגמה: "0.7,1.2"
+LADDER_SL_DEFAULT_PCTS = os.getenv("LADDER_SL_DEFAULT_PCTS", "")
 LADDER_SL_MAX_LEVELS = int(os.getenv("LADDER_SL_MAX_LEVELS", "3"))
 
-# קירור TP-Ladder למניעת עומס/כפילויות
+# TP-Ladder cooldown
 TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 _tp_ladder_last_at: Dict[str, float] = {}
 
-# ביטול לפי prefix בלבד (כדי לא לגעת בהזמנות לא שלך)
-CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
+# ביטול לפי prefix בלבד
+CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
 # ===== ClientOrderId ENV =====
-ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()   # למשל: ALGOGPT
+ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
 ORDER_ID_SUFFIX = os.getenv("ORDER_ID_SUFFIX", "").strip()
 ORDER_ID_INCLUDE_TS = os.getenv("ORDER_ID_INCLUDE_TS", "1").lower() in ("1","true","yes","on")
-ORDER_ID_MAXLEN = int(os.getenv("ORDER_ID_MAXLEN", "36"))    # Binance Futures בד"כ עד 36
+ORDER_ID_MAXLEN = int(os.getenv("ORDER_ID_MAXLEN", "36"))  # Binance Futures לרוב 36
 
 def _sanitize_coid(s: str) -> str:
     out = []
@@ -63,12 +63,6 @@ def _sanitize_coid(s: str) -> str:
     return "".join(out)[:ORDER_ID_MAXLEN]
 
 def _coid(kind: str, symbol: str, level: int | None = None) -> str:
-    """
-    מבנה ידידותי לניתוח:
-    - ל-TP/SL ladder:  TP1_{SYMBOL}_{ts} / SL2_{SYMBOL}_{ts}
-    - לשאר:           KIND_{SYMBOL}_{ts}
-    תומך ב-Prefix/Suffix ו-Timestamp לפי ENV.
-    """
     k = kind.upper()
     if level is not None and k in ("TP", "SL"):
         k = f"{k}{level}"  # TP1 / SL2 ...
@@ -78,7 +72,6 @@ def _coid(kind: str, symbol: str, level: int | None = None) -> str:
         parts.append(ORDER_ID_PREFIX)
     parts.append(k)
     parts.append(symbol.upper())
-    # אם לא TP/SL עם level – תוסיף level נפרד (נדיר)
     if level is not None and kind.upper() not in ("TP", "SL"):
         parts.append(str(level))
     if ORDER_ID_INCLUDE_TS:
@@ -89,14 +82,10 @@ def _coid(kind: str, symbol: str, level: int | None = None) -> str:
 
 def _kind_from_kwargs(kwargs: dict) -> str:
     t = str(kwargs.get("type", "")).upper()
-    if "TAKE_PROFIT" in t:
-        return "TP"
-    if "STOP" in t:
-        return "SL"
-    if t == "MARKET":
-        return "MKT"
-    if t == "LIMIT":
-        return "LMT"
+    if "TAKE_PROFIT" in t: return "TP"
+    if "STOP" in t: return "SL"
+    if t == "MARKET": return "MKT"
+    if t == "LIMIT":  return "LMT"
     return "ORD"
 
 # ===== Init Futures client =====
@@ -121,8 +110,10 @@ def _get_exchange_info_cached() -> Optional[Dict[str, Any]]:
 
 # ========== Core ==========
 def fapi_ping() -> bool:
-    try: client.futures_ping(); return True
-    except Exception as e: logger.warning("Futures ping failed: %s", e); return False
+    try:
+        client.futures_ping(); return True
+    except Exception as e:
+        logger.warning("Futures ping failed: %s", e); return False
 
 def futures_exchange_info_safe() -> Optional[Dict[str, Any]]: return _get_exchange_info_cached()
 
@@ -226,7 +217,7 @@ def _backoff_sleep(attempt: int) -> None:
 
 # ========== Helper: prefix match for cancel ==========
 def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
-    if not prefix:
+    if not prefix: 
         return True
     coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
     return coid.startswith(prefix)
@@ -434,7 +425,7 @@ def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, s
                     *, position_side: Optional[str] = None, percent_targets: Optional[List[float]] = None) -> Dict[str, Any]:
     if not LADDER_TP_ENABLE: return {"ok": False, "error": "TP ladder disabled by ENV"}
 
-    # קירור למניעת כפילויות/עומס
+    # מניעת כפילות/עומס
     now = _now(); su = symbol.upper()
     last = _tp_ladder_last_at.get(su, 0.0)
     if now - last < max(0, TP_LADDER_COOLDOWN_SEC):
@@ -476,13 +467,12 @@ def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, s
         if not is_last:
             qi = float(_quantize_qty(symbol, amt * sp))
             qi = min(qi, qty_left)
-            if qi <= 0: 
-                continue
+            if qi <= 0: continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
-            qi = min(qi, qty_left)  # חיזוק: אל תחרוג מהיתרה אחרי התאמת מינימום
-            if qi <= 0:
-                continue
             qstr = _quantize_qty(symbol, qi)
+            # *** חיזוק נגד חריגה מהיתרה ***
+            if float(qstr) > qty_left:
+                qstr = _quantize_qty(symbol, qty_left)
             qty_left = max(0.0, qty_left - float(qstr))
             order = _safe_create_order(symbol=symbol.upper(), side=side,
                                        type=LADDER_TP_KIND, stopPrice=qprice,
@@ -538,13 +528,12 @@ def place_sl_ladder(symbol: str, stops_prices: Optional[List[float]] = None, spl
         if not is_last:
             qi = float(_quantize_qty(symbol, amt * sp))
             qi = min(qi, qty_left)
-            if qi <= 0:
-                continue
+            if qi <= 0: continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
-            qi = min(qi, qty_left)  # חיזוק: אל תחרוג מהיתרה אחרי התאמת מינימום
-            if qi <= 0:
-                continue
             qstr = _quantize_qty(symbol, qi)
+            # *** חיזוק נגד חריגה מהיתרה ***
+            if float(qstr) > qty_left:
+                qstr = _quantize_qty(symbol, qty_left)
             qty_left = max(0.0, qty_left - float(qstr))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
                                        stopPrice=qprice, reduceOnly=True, quantity=qstr,
@@ -599,6 +588,7 @@ __all__ = [
     "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
