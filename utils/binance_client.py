@@ -44,7 +44,7 @@ TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 _tp_ladder_last_at: Dict[str, float] = {}
 
 # ביטול לפי prefix בלבד (כדי לא לגעת בהזמנות לא שלך)
-CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
+CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
 # ===== ClientOrderId ENV =====
@@ -226,7 +226,7 @@ def _backoff_sleep(attempt: int) -> None:
 
 # ========== Helper: prefix match for cancel ==========
 def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
-    if not prefix: 
+    if not prefix:
         return True
     coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
     return coid.startswith(prefix)
@@ -476,8 +476,12 @@ def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, s
         if not is_last:
             qi = float(_quantize_qty(symbol, amt * sp))
             qi = min(qi, qty_left)
-            if qi <= 0: continue
+            if qi <= 0: 
+                continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
+            qi = min(qi, qty_left)  # חיזוק: אל תחרוג מהיתרה אחרי התאמת מינימום
+            if qi <= 0:
+                continue
             qstr = _quantize_qty(symbol, qi)
             qty_left = max(0.0, qty_left - float(qstr))
             order = _safe_create_order(symbol=symbol.upper(), side=side,
@@ -534,8 +538,12 @@ def place_sl_ladder(symbol: str, stops_prices: Optional[List[float]] = None, spl
         if not is_last:
             qi = float(_quantize_qty(symbol, amt * sp))
             qi = min(qi, qty_left)
-            if qi <= 0: continue
+            if qi <= 0:
+                continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
+            qi = min(qi, qty_left)  # חיזוק: אל תחרוג מהיתרה אחרי התאמת מינימום
+            if qi <= 0:
+                continue
             qstr = _quantize_qty(symbol, qi)
             qty_left = max(0.0, qty_left - float(qstr))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
@@ -591,6 +599,7 @@ __all__ = [
     "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
