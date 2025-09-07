@@ -14,7 +14,7 @@ logger = logging.getLogger("algogpt.tg_callbacks")
 
 router = APIRouter(prefix="/telegram/callbacks", tags=["TelegramCallbacks"])
 
-# קירור פנימי למניעת כפילות הקמות
+# קירור פנימי למניעת כפילויות הקמות
 _LADDER_LAST: Dict[str, float] = {}
 _TP_LADDER_COOLDOWN = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 
@@ -33,16 +33,18 @@ _SIDE_HINTS = {
 }
 
 def _detect_approved(update: Update, result: Any) -> bool:
+    # זיהוי “אושר” מתוך אובייקט התוצאה
     if isinstance(result, dict):
-        if result.get("approved") is True or str(result.get("action","")).lower() in ("approve","approved"):
+        if result.get("approved") is True or str(result.get("action", "")).lower() in ("approve", "approved"):
             return True
+    # זיהוי מתוך callback.data
     try:
         data = update.callback_query.data if update.callback_query else None
         if data:
             try:
                 dj = json.loads(data)
-                act = str(dj.get("action","")).lower()
-                if act in ("approve","approved"):
+                act = str(dj.get("action", "")).lower()
+                if act in ("approve", "approved"):
                     return True
             except Exception:
                 s = str(data).lower()
@@ -50,20 +52,25 @@ def _detect_approved(update: Update, result: Any) -> bool:
                     return True
     except Exception:
         pass
+    # זיהוי מתוך טקסט ההודעה
     text = update.callback_query.message.text if (update and update.callback_query and update.callback_query.message) else ""
     if text and any(h in text.lower() for h in _APPROVE_HINTS):
         return True
     return False
 
 def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Optional[str]]:
+    # קודם מתוך result
     if isinstance(result, dict):
         sym = result.get("symbol") or result.get("sym") or result.get("ticker")
         side = result.get("side")
         if isinstance(sym, str) and sym.strip():
             if isinstance(side, str) and side.strip():
                 sd = side.strip().upper()
-                if sd in ("LONG","SHORT"): return sym.strip().upper(), sd
-                if sd in ("BUY","SELL"):    return sym.strip().upper(), ("LONG" if sd=="BUY" else "SHORT")
+                if sd in ("LONG", "SHORT"):
+                    return sym.strip().upper(), sd
+                if sd in ("BUY", "SELL"):
+                    return sym.strip().upper(), ("LONG" if sd == "BUY" else "SHORT")
+    # מתוך טקסט ההודעה
     text = update.callback_query.message.text if (update and update.callback_query and update.callback_query.message) else ""
     if text:
         m = re.search(r"\b([A-Z]{3,15}USDT)\b", text)
@@ -71,8 +78,12 @@ def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Op
         low = text.lower()
         side = None
         for k, v in _SIDE_HINTS.items():
-            if k in low: side = v; break
-        if sym and side: return sym, side
+            if k in low:
+                side = v
+                break
+        if sym and side:
+            return sym, side
+    # מתוך callback.data
     try:
         data = update.callback_query.data if update.callback_query else None
         if data:
@@ -81,8 +92,10 @@ def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Op
                 sym = (dj.get("symbol") or dj.get("sym") or dj.get("ticker") or "").strip().upper()
                 sd  = (dj.get("side") or dj.get("position") or dj.get("dir") or "").strip().upper()
                 if sym and sd:
-                    if sd in ("LONG","SHORT"): return sym, sd
-                    if sd in ("BUY","SELL"):   return sym, ("LONG" if sd=="BUY" else "SHORT")
+                    if sd in ("LONG", "SHORT"):
+                        return sym, sd
+                    if sd in ("BUY", "SELL"):
+                        return sym, ("LONG" if sd == "BUY" else "SHORT")
             except Exception:
                 pass
     except Exception:
@@ -90,12 +103,14 @@ def _extract_symbol_side(update: Update, result: Any) -> Tuple[Optional[str], Op
     return None, None
 
 def _be_immediate_allowed() -> bool:
-    # 0 → מותר BE מיידי; 1 (דיפולט) → רק אחרי TP1
-    return str(os.getenv("TP_BE_ONLY_AFTER_TP1","1")).lower() in ("0","false","no")
+    # 0 → מותר BE מיידי; 1 (דיפולט) → רק אחרי TP1 (כאן לא)
+    return str(os.getenv("TP_BE_ONLY_AFTER_TP1", "1")).lower() in ("0", "false", "no")
 
 def _be_offset_bps_default() -> float:
-    try: return float(os.getenv("TP_BE_OFFSET_BPS","5"))
-    except: return 5.0
+    try:
+        return float(os.getenv("TP_BE_OFFSET_BPS", "5"))
+    except Exception:
+        return 5.0
 
 @router.post("/")
 async def telegram_callback_webhook(request: Request):
@@ -103,21 +118,23 @@ async def telegram_callback_webhook(request: Request):
         body = await request.body()
         update = Update.de_json(json.loads(body), None)
 
+        # נותן למנגנון הקיים שלך לבצע את פעולת ה-callback הרגילה
         result = await handle_callback_action(update)
 
         approved = _detect_approved(update, result)
         ladder = None
         be_res = None
 
-        if approved and str(os.getenv("TP_LADDER_ON_APPROVE","1")).lower() in ("1","true","yes","on"):
+        if approved and str(os.getenv("TP_LADDER_ON_APPROVE", "1")).lower() in ("1", "true", "yes", "on"):
             symbol, side = _extract_symbol_side(update, result)
-            if symbol and side and _cooldown_ok(symbol):
+            if symbol and _cooldown_ok(symbol):
                 try:
                     ladder = place_tp_ladder(symbol)
                 except Exception as e:
                     logger.warning("TP ladder failed: %s", e)
                     ladder = {"ok": False, "error": str(e)}
 
+                # BE מיידי (אופציונלי לפי ENV)
                 if _be_immediate_allowed():
                     try:
                         be_res = set_breakeven_stop(symbol, offset_bps=_be_offset_bps_default())
@@ -129,6 +146,7 @@ async def telegram_callback_webhook(request: Request):
     except Exception as e:
         logger.exception("telegram_callback_webhook failed")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
 
 
 
