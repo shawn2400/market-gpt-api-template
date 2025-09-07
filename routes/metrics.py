@@ -1,19 +1,12 @@
 # routes/metrics.py
 from __future__ import annotations
-import time
-from fastapi import APIRouter, Request
-from utils.metrics import metrics_tracker
+from fastapi import APIRouter, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, REGISTRY
 
-router = APIRouter(
-    prefix="/metrics",
-    tags=["Metrics"]
-)
+router = APIRouter(tags=["Metrics"])
 
-@router.get("/", summary="System metrics snapshot")
-async def get_metrics(request: Request):
-    return {
-        "ok": True,
-        "ts": int(time.time()),
-        "client": request.client.host if request.client else None,
-        "metrics": metrics_tracker.get_metrics(),
-    }
+@router.get("/metrics")
+def get_metrics():
+    data = generate_latest(REGISTRY)
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+
