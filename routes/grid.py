@@ -1,6 +1,6 @@
 # routes/grid.py
 from __future__ import annotations
-import logging, json, os
+import logging, json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -18,9 +18,9 @@ logger = logging.getLogger("algogpt.routes.grid")
 
 router = APIRouter(prefix="/grid", tags=["Grid"], dependencies=[Depends(require_api_key)])
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # Models
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 class GridTradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
     side: str = Field(..., pattern="^(LONG|SHORT|BUY|SELL)$", example="LONG")
@@ -43,30 +43,27 @@ class GridTradeResponse(BaseModel):
     leverage: Optional[int] = None
     levels: Optional[List[float]] = None
     allocations: Optional[List[float]] = None
-    orders: Optional[List[Dict[str, Any]]] = None
+    orders: Optional[Any] = None
     error: Optional[str] = None
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # Helpers
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 _ALLOWED_DIRS = [Path("."), Path("storage"), Path("static"), Path("logs")]
 
 def _safe_path(p: str) -> Path:
     p = (p or "").strip() or "trades_log.json"
     candidate = Path(p)
     if not candidate.is_absolute():
-        # נסה בתוך תיקיות מותרות
         for base in _ALLOWED_DIRS:
             test = (base / candidate).resolve()
             if test.exists():
                 return test
         return (Path(".") / candidate).resolve()
-    # absolute → ודא שאינו בורח
     resolved = candidate.resolve()
     for base in _ALLOWED_DIRS:
         if str(resolved).startswith(str(base.resolve())):
             return resolved
-    # אם לא—חסום
     raise HTTPException(status_code=400, detail="Invalid path location")
 
 def _load_json_or_empty(path: Path) -> Any:
@@ -80,9 +77,9 @@ def _load_json_or_empty(path: Path) -> Any:
         logger.exception("grid_dashboard_load_failed")
         raise HTTPException(status_code=500, detail=f"load failed: {e}")
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # Endpoints
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────
 @router.get("/status")
 def grid_status() -> Dict[str, Any]:
     return {"ok": True, "grid_enabled": True, "note": "Grid engine ready"}
@@ -93,9 +90,6 @@ def grid_active() -> Dict[str, Any]:
 
 @router.get("/dashboard")
 def grid_dashboard_info() -> Dict[str, Any]:
-    """
-    Endpoint אינפורמטיבי שמדמה 'דאשבורד' לוגי (JSON).
-    """
     return {
         "ok": True,
         "endpoints": {
@@ -108,10 +102,6 @@ def grid_dashboard_info() -> Dict[str, Any]:
 
 @router.get("/dashboard/data")
 def grid_dashboard_data(path: Optional[str] = Query(None, description="קובץ JSON לטעינה, ברירת מחדל trades_log.json")):
-    """
-    פותר את השגיאה: load_trades() – חסר פרמטר path.
-    טוען JSON מהקובץ המבוקש בצורה בטוחה.
-    """
     safe = _safe_path(path or "trades_log.json")
     return _load_json_or_empty(safe)
 
@@ -142,7 +132,7 @@ async def trade_grid(req: GridTradeRequest):
                 "budget": req.budget,
                 "levels": res.get("grid_levels"),
                 "allocations": None,
-                "orders": [],
+                "orders": [] if req.dry_run else None,
                 "error": res.get("error"),
             }
 
@@ -165,11 +155,11 @@ async def trade_grid(req: GridTradeRequest):
                     "leverage": req.leverage,
                     "levels": res.get("grid_levels"),
                     "allocations": None,
-                    "orders": [],
+                    "orders": [] if req.dry_run else None,
                     "error": res.get("error"),
                 }
             else:
-                res = await start_grid_for_position(sym)
+                res = await start_grid_for_position(sym, account_id=acc_id)
                 return {
                     "ok": bool(res.get("ok")),
                     "mode": "futures_live",
@@ -182,8 +172,8 @@ async def trade_grid(req: GridTradeRequest):
                     "leverage": req.leverage,
                     "levels": None,
                     "allocations": None,
-                    "orders": res.get("state", {}),
-                    "error": None if res.get("ok") else str(res.get("errors")),
+                    "orders": res,
+                    "error": None if res.get("ok") else str(res.get("error")),
                 }
         else:
             raise HTTPException(status_code=400, detail="Invalid market")
