@@ -217,7 +217,7 @@ def _backoff_sleep(attempt: int) -> None:
 
 # ========== Helper: prefix match for cancel ==========
 def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
-    if not prefix: 
+    if not prefix:
         return True
     coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
     return coid.startswith(prefix)
@@ -231,6 +231,12 @@ def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
     tset = set(t.upper() for t in types)
     prefix = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
     only_pref = CANCEL_ONLY_PREFIXED_ORDERS
+
+    if only_pref and not prefix:
+        # הגנה: אין prefix – אל תבטל כדי לא לפגוע בהזמנות לא שלך
+        logger.warning("CANCEL_ONLY_PREFIXED_ORDERS=1 אך לא הוגדר ORDER_ID_PREFIX/CANCEL_PREFIX_OVERRIDE; לא מבטל הזמנות.")
+        return 0
+
     for o in open_orders:
         otype = (o.get("type") or o.get("origType") or "").upper()
         if otype in tset:
@@ -350,6 +356,9 @@ def modify_stop_loss(symbol: str, new_sl_price: float, position_side: Optional[s
         is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
         if is_partial:
             qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
+            # קלמפ: לא לעבור את גודל הפוזיציה
+            if float(qstr) > abs(amt):
+                qstr = _quantize_qty(symbol, abs(amt))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
                                        stopPrice=qprice, reduceOnly=True, quantity=qstr,
                                        newClientOrderId=_coid("SL", symbol))
@@ -378,6 +387,9 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
         is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
         if is_partial:
             qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
+            # קלמפ: לא לעבור את גודל הפוזיציה
+            if float(qstr) > abs(amt):
+                qstr = _quantize_qty(symbol, abs(amt))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="TAKE_PROFIT_MARKET",
                                        stopPrice=qprice, reduceOnly=True, quantity=qstr,
                                        newClientOrderId=_coid("TP", symbol))
@@ -460,19 +472,24 @@ def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, s
     canceled = clear_take_profit_orders(symbol)
 
     results = []; qty_left = amt
+    filters = get_symbol_filters(symbol) or {}
+    step = float(filters.get("stepSize") or DEFAULT_QTY_STEP_STR)
+
     for i, (p, sp) in enumerate(zip(prices, splits), start=1):
         qprice = _quantize_price(symbol, float(p))
         price_f = float(qprice)
         is_last = (i == levels)
+
         if not is_last:
-            qi = float(_quantize_qty(symbol, amt * sp))
-            qi = min(qi, qty_left)
-            if qi <= 0: continue
+            # חישוב כמות חלקית שלא חורגת מהיתרה וה־step
+            qi = min(float(_quantize_qty(symbol, amt * sp)), qty_left)
+            if qi < step:
+                continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
             qstr = _quantize_qty(symbol, qi)
-            # *** חיזוק נגד חריגה מהיתרה ***
             if float(qstr) > qty_left:
-                qstr = _quantize_qty(symbol, qty_left)
+                # לא מציבים חלקי שעובר את היתרה — תן לרמה האחרונה לסגור
+                continue
             qty_left = max(0.0, qty_left - float(qstr))
             order = _safe_create_order(symbol=symbol.upper(), side=side,
                                        type=LADDER_TP_KIND, stopPrice=qprice,
@@ -521,19 +538,22 @@ def place_sl_ladder(symbol: str, stops_prices: Optional[List[float]] = None, spl
     canceled = clear_stop_orders(symbol)
 
     results = []; qty_left = amt
+    filters = get_symbol_filters(symbol) or {}
+    step = float(filters.get("stepSize") or DEFAULT_QTY_STEP_STR)
+
     for i, (p, sp) in enumerate(zip(prices, splits), start=1):
         qprice = _quantize_price(symbol, float(p))
         price_f = float(qprice)
         is_last = (i == levels)
+
         if not is_last:
-            qi = float(_quantize_qty(symbol, amt * sp))
-            qi = min(qi, qty_left)
-            if qi <= 0: continue
+            qi = min(float(_quantize_qty(symbol, amt * sp)), qty_left)
+            if qi < step:
+                continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
             qstr = _quantize_qty(symbol, qi)
-            # *** חיזוק נגד חריגה מהיתרה ***
             if float(qstr) > qty_left:
-                qstr = _quantize_qty(symbol, qty_left)
+                continue
             qty_left = max(0.0, qty_left - float(qstr))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
                                        stopPrice=qprice, reduceOnly=True, quantity=qstr,
@@ -588,6 +608,7 @@ __all__ = [
     "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
