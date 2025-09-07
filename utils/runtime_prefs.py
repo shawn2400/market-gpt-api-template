@@ -1,71 +1,49 @@
 # utils/runtime_prefs.py
 from __future__ import annotations
-from typing import Any, Dict, Optional, Set
 import threading
+from typing import Dict
 
-_lock = threading.Lock()
+# Thread-safe in-memory runtime preferences
+_state: Dict[str, object] = {
+    "mute": False,
+}
 
-# גלובלי + רשימת משתמשים מושתקים
-_muted_global: bool = False
-_muted_users: Set[str] = set()
+_lock = threading.RLock()
 
-_prefs: Dict[str, Any] = {}
-
-def is_muted(chat_id: Optional[str] = None) -> bool:
+def is_muted() -> bool:
+    """Return whether notifications/execution are muted."""
     with _lock:
-        if _muted_global:
-            return True
-        return str(chat_id) in _muted_users if chat_id else False
+        return bool(_state.get("mute", False))
 
-def mute(chat_id: Optional[str] = None) -> None:
-    with _lock:
-        global _muted_global
-        if chat_id:
-            _muted_users.add(str(chat_id))
-        else:
-            _muted_global = True
-
-def clear_mute(chat_id: Optional[str] = None) -> None:
-    with _lock:
-        global _muted_global
-        if chat_id:
-            _muted_users.discard(str(chat_id))
-        else:
-            _muted_global = False
-            _muted_users.clear()
-
-# תאימות לאחור לשמות שהיו אצלך
 def set_mute(state: bool) -> None:
-    if state:
-        mute(None)
-    else:
-        clear_mute(None)
+    """Set mute on/off."""
+    with _lock:
+        _state["mute"] = bool(state)
 
 def toggle_mute() -> bool:
+    """Toggle mute state and return the new value."""
     with _lock:
-        if _muted_global:
-            clear_mute(None)
-        else:
-            mute(None)
-        return _muted_global
+        new_state = not bool(_state.get("mute", False))
+        _state["mute"] = new_state
+        return new_state
 
-# העדפות כלליות
-def get_pref(key: str, default: Any = None) -> Any:
-    with _lock:
-        return _prefs.get(key, default)
+# --- compat shim (נדרש ע"י routes.telegram_bot) ---
+def clear_mute() -> None:
+    """Alias for set_mute(False) for backward compatibility."""
+    set_mute(False)
 
-def set_pref(key: str, value: Any) -> None:
+# אופציונלי: עוזר ל־/admin/debug להציג מצב נוכחי
+def get_prefs_snapshot() -> Dict[str, object]:
+    """Return a shallow copy of the current prefs (for debug/admin use)."""
     with _lock:
-        _prefs[key] = value
+        return dict(_state)
 
 __all__ = [
     "is_muted",
-    "mute",
-    "clear_mute",
     "set_mute",
     "toggle_mute",
-    "get_pref",
-    "set_pref",
+    "clear_mute",
+    "get_prefs_snapshot",
 ]
 
 
