@@ -1,27 +1,26 @@
 # services/auto_trade_summary.py
 from __future__ import annotations
-import datetime as dt
-from utils.telegram_notifier import send_telegram_message
+import logging
+from utils.pnl_tracker import get_last_trade
+from utils.telegram_notifier import notify_telegram
 
-async def send_trade_summary(trade: dict) -> None:
-    """
-    סיכום מידי של טרייד אחד — נשלח לטלגרם.
-    trade dict דוגמה:
-    {
-      "symbol": "BTCUSDT", "side": "LONG", "leverage": 20,
-      "entry": 27000, "exit": 27250, "pnl": 125.5,
-      "rr": 2.1, "sl": 26500, "tp": 27500
-    }
-    """
-    ts = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-    pnl_txt = f"{trade.get('pnl', 0):+.2f} USDT"
-    rr_txt = f"RR={trade.get('rr', '-')}"
+logger = logging.getLogger("algogpt.auto_summary")
+
+async def post_trade_summary():
+    trade = get_last_trade()
+    if not trade:
+        return
     msg = (
-        f"✅ Trade Closed [{ts}]\n"
-        f"{trade['symbol']} {trade['side']} x{trade['leverage']}\n"
-        f"Entry: {trade['entry']} | Exit: {trade.get('exit','-')}\n"
-        f"PnL: {pnl_txt} | {rr_txt}\n"
-        f"SL={trade.get('sl','-')} | TP={trade.get('tp','-')}"
+        f"📊 סיכום טרייד\n"
+        f"סימבול: {trade['symbol']}\n"
+        f"כיוון: {trade['side']}\n"
+        f"כניסה: {trade['entry_price']}\n"
+        f"יציאה: {trade['exit_price']}\n"
+        f"PnL: {trade['pnl_usd']:.2f} USDT\n"
+        f"ציון AI: {trade.get('ai_score','-')}\n"
+        f"Review: {trade.get('review','')}"
     )
-    await send_telegram_message(msg)
+    await notify_telegram(msg)
+    logger.info({"event": "trade_summary_sent", "symbol": trade["symbol"]})
+
 
