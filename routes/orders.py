@@ -25,7 +25,6 @@ class OrdersSummary(BaseModel):
     items: List[OrderModel] = Field(default_factory=list)
 
 def _map_order(o: dict) -> OrderModel:
-    # מפה תגובה של Binance לאובייקט סטנדרטי שלנו
     return OrderModel(
         id=str(o.get("orderId") or o.get("clientOrderId") or ""),
         symbol=str(o.get("symbol") or ""),
@@ -57,6 +56,7 @@ async def list_orders_history(
         raise HTTPException(400, f"binance error: {e}")
     items = [_map_order(o) for o in (data or [])]
     return OrdersSummary(total=len(items), returned=len(items), items=items)
+
 
 
 
