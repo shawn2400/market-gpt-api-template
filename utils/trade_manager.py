@@ -109,8 +109,8 @@ async def manage_open_trades():
                 if df is None or getattr(df, "empty", False):
                     continue
 
-                current_atr = atr(df)[-1]
-                current_adx = adx(df)[-1]
+                current_atr = float(atr(df)[-1])
+                current_adx = float(adx(df)[-1])
                 macd_line, macd_signal, _ = macd(df["close"])
                 macd_now = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
                 profit_pct = abs((price - entry) / entry) * 100.0
@@ -133,10 +133,10 @@ async def manage_open_trades():
                 # === Trailing SL === (ClosePosition מלא, לא חלקי)
                 if side == "LONG":
                     recent_low = float(df["low"].iloc[-3:].min())
-                    trail_sl = recent_low - 0.6 * float(current_atr)
+                    trail_sl = recent_low - 0.6 * current_atr
                 else:
                     recent_high = float(df["high"].iloc[-3:].max())
-                    trail_sl = recent_high + 0.6 * float(current_atr)
+                    trail_sl = recent_high + 0.6 * current_atr
 
                 modify_stop_loss(sym, trail_sl, position_side=side)
                 await notify_sl_tp_update(sym, side, "trailing", trail_sl)
@@ -144,9 +144,9 @@ async def manage_open_trades():
                 # === Dynamic TP (מותאם תנופה) === — ClosePosition מלא
                 if current_adx > 25 and macd_now > 0:
                     if side == "LONG":
-                        new_tp = price + 4.5 * float(current_atr)
+                        new_tp = price + 4.5 * current_atr
                     else:
-                        new_tp = price - 4.5 * float(current_atr)
+                        new_tp = price - 4.5 * current_atr
                     modify_take_profit(sym, new_tp, position_side=side)
                     await notify_sl_tp_update(sym, side, "tp", new_tp)
 
@@ -325,6 +325,7 @@ async def _be_guard_tick():
 
         except Exception as e:
             logger.error("[tm.be_guard] error: %s", e)
+
 
 
 
