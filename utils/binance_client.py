@@ -39,11 +39,9 @@ LADDER_SL_ENABLE = os.getenv("LADDER_SL_ENABLE", "0") == "1"
 LADDER_SL_DEFAULT_PCTS = os.getenv("LADDER_SL_DEFAULT_PCTS", "")
 LADDER_SL_MAX_LEVELS = int(os.getenv("LADDER_SL_MAX_LEVELS", "3"))
 
-# TP-Ladder cooldown
 TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 _tp_ladder_last_at: Dict[str, float] = {}
 
-# ביטול לפי prefix בלבד
 CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
@@ -51,7 +49,7 @@ CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
 ORDER_ID_SUFFIX = os.getenv("ORDER_ID_SUFFIX", "").strip()
 ORDER_ID_INCLUDE_TS = os.getenv("ORDER_ID_INCLUDE_TS", "1").lower() in ("1","true","yes","on")
-ORDER_ID_MAXLEN = int(os.getenv("ORDER_ID_MAXLEN", "36"))  # Binance Futures לרוב 36
+ORDER_ID_MAXLEN = int(os.getenv("ORDER_ID_MAXLEN", "36"))
 
 def _sanitize_coid(s: str) -> str:
     out = []
@@ -65,13 +63,11 @@ def _sanitize_coid(s: str) -> str:
 def _coid(kind: str, symbol: str, level: int | None = None) -> str:
     k = kind.upper()
     if level is not None and k in ("TP", "SL"):
-        k = f"{k}{level}"  # TP1 / SL2 ...
-
+        k = f"{k}{level}"
     parts = []
     if ORDER_ID_PREFIX:
         parts.append(ORDER_ID_PREFIX)
-    parts.append(k)
-    parts.append(symbol.upper())
+    parts.append(k); parts.append(symbol.upper())
     if level is not None and kind.upper() not in ("TP", "SL"):
         parts.append(str(level))
     if ORDER_ID_INCLUDE_TS:
@@ -223,17 +219,12 @@ def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
     return coid.startswith(prefix)
 
 def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
-    """
-    אם CANCEL_ONLY_PREFIXED_ORDERS=1 – נבטל רק הזמנות עם prefix מתאים
-    (CANCEL_PREFIX_OVERRIDE או ORDER_ID_PREFIX).
-    """
     open_orders = get_open_orders(symbol); count = 0
     tset = set(t.upper() for t in types)
     prefix = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
     only_pref = CANCEL_ONLY_PREFIXED_ORDERS
 
     if only_pref and not prefix:
-        # הגנה: אין prefix – אל תבטל כדי לא לפגוע בהזמנות לא שלך
         logger.warning("CANCEL_ONLY_PREFIXED_ORDERS=1 אך לא הוגדר ORDER_ID_PREFIX/CANCEL_PREFIX_OVERRIDE; לא מבטל הזמנות.")
         return 0
 
@@ -283,7 +274,6 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
     kwargs.setdefault("workingType", WORKING_TYPE)
     kwargs.setdefault("recvWindow", RECV_WINDOW)
 
-    # הזרקת ClientOrderId אוטומטי אם לא ניתן
     if not str(kwargs.get("newClientOrderId", "")).strip():
         sym = str(kwargs.get("symbol", "UNK")).upper()
         kind = _kind_from_kwargs(kwargs)
@@ -325,6 +315,22 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error("Failed to get open orders: %s", e); return []
 
+def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
+    """
+    Futures all orders for a symbol (Binance requires symbol).
+    limit: 1..1000 (Binance may cap). kwargs passthrough (e.g., startTime, endTime, orderId).
+    """
+    if not symbol or not symbol.strip():
+        return []
+    limit = max(1, min(int(limit), 1000))
+    try:
+        # python-binance exposes futures_get_all_orders
+        return client.futures_get_all_orders(symbol=symbol.upper(), limit=limit, **kwargs) or []
+    except BinanceAPIException as e:
+        logger.error("get_all_orders failed: %s", e); return []
+    except Exception as e:
+        logger.error("get_all_orders error: %s", e); return []
+
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     try: return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
     except Exception as e: logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e); return {"ok": False, "error": str(e)}
@@ -356,7 +362,6 @@ def modify_stop_loss(symbol: str, new_sl_price: float, position_side: Optional[s
         is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
         if is_partial:
             qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
-            # קלמפ: לא לעבור את גודל הפוזיציה
             if float(qstr) > abs(amt):
                 qstr = _quantize_qty(symbol, abs(amt))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
@@ -387,7 +392,6 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
         is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
         if is_partial:
             qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
-            # קלמפ: לא לעבור את גודל הפוזיציה
             if float(qstr) > abs(amt):
                 qstr = _quantize_qty(symbol, abs(amt))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="TAKE_PROFIT_MARKET",
@@ -437,7 +441,6 @@ def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, s
                     *, position_side: Optional[str] = None, percent_targets: Optional[List[float]] = None) -> Dict[str, Any]:
     if not LADDER_TP_ENABLE: return {"ok": False, "error": "TP ladder disabled by ENV"}
 
-    # מניעת כפילות/עומס
     now = _now(); su = symbol.upper()
     last = _tp_ladder_last_at.get(su, 0.0)
     if now - last < max(0, TP_LADDER_COOLDOWN_SEC):
@@ -481,14 +484,12 @@ def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, s
         is_last = (i == levels)
 
         if not is_last:
-            # חישוב כמות חלקית שלא חורגת מהיתרה וה־step
             qi = min(float(_quantize_qty(symbol, amt * sp)), qty_left)
             if qi < step:
                 continue
             qi = float(_ensure_min_notional(symbol, price_f, qi))
             qstr = _quantize_qty(symbol, qi)
             if float(qstr) > qty_left:
-                # לא מציבים חלקי שעובר את היתרה — תן לרמה האחרונה לסגור
                 continue
             qty_left = max(0.0, qty_left - float(qstr))
             order = _safe_create_order(symbol=symbol.upper(), side=side,
@@ -603,11 +604,12 @@ def get_futures_client() -> Client: return client
 __all__ = [
     "client","fapi_ping","futures_exchange_info_safe","futures_balance","futures_mark_price","get_price",
     "get_symbol_info","get_symbol_filters","get_open_positions","futures_open_positions_safe","get_single_position",
-    "futures_create_order","futures_cancel_all_orders","futures_cancel_order","get_open_orders","set_leverage",
+    "futures_create_order","futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
     "modify_stop_loss","modify_take_profit","set_breakeven_stop","clear_take_profit_orders","clear_stop_orders",
     "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
