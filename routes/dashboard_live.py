@@ -20,31 +20,36 @@ router = APIRouter(
 clients: list[WebSocket] = []
 
 async def _analyze_symbol(symbol: str, interval: str = "15m") -> dict:
-    """
-    ניתוח מלא לסימבול כולל אינדיקטורים, GPT, Quality Score.
-    """
+    """ ניתוח מלא לסימבול כולל אינדיקטורים, GPT, Quality Score. """
     try:
         df = await get_klines(symbol, interval=interval, limit=200, market="futures")
         if df is None or df.empty:
-            return {"symbol": symbol, "error": "no data"}
+            return {"symbol": symbol, "ok": False, "error": "no data"}
 
         indicators = prepare_indicators_for_backtest(df)
         row = indicators.iloc[-1].to_dict()
 
-        # קריאת GPT
-        ai_text = await analyze_with_ai({"symbol": symbol, **row})
+        ai_text = ""
+        try:
+            ai_text = await analyze_with_ai({"symbol": symbol, **row})
+        except Exception as e:
+            logger.warning("ai_analysis failed for %s: %s", symbol, e)
 
-        # Quality Score
-        q = compute_quality(
-            symbol=symbol,
-            side="LONG" if row.get("ema_21", 0) < row.get("close", 0) else "SHORT",
-            entry=float(row.get("close", 0)),
-            sl=None, tp=None,
-            leverage=10,
-            budget=50,
-            anchor=None,
-            atr=row.get("atr", None)
-        )
+        q = {}
+        try:
+            q = compute_quality(
+                symbol=symbol,
+                side="LONG" if row.get("ema_21", 0) < row.get("close", 0) else "SHORT",
+                entry=float(row.get("close", 0)),
+                sl=None, tp=None,
+                leverage=10,
+                budget=50,
+                anchor=None,
+                atr=row.get("atr", None),
+            )
+        except Exception as e:
+            logger.warning("quality_score failed for %s: %s", symbol, e)
+            q = {"quality_score": 0, "success_pct": 0}
 
         return {
             "symbol": symbol,
@@ -59,15 +64,13 @@ async def _analyze_symbol(symbol: str, interval: str = "15m") -> dict:
             "ai_analysis": ai_text,
             "quality_score": q.get("quality_score", 0),
             "success_pct": q.get("success_pct", 0),
+            "ok": True,
         }
     except Exception as e:
-        logger.error(f"dashboard analyze failed: {e}")
-        return {"symbol": symbol, "type": "error", "error": str(e)}
+        logger.error("dashboard analyze failed: %s", e)
+        return {"symbol": symbol, "ok": False, "error": str(e)}
 
 async def broadcast_update(data: dict):
-    """
-    שולח עדכון חי לכל הלקוחות המחוברים.
-    """
     dead_clients = []
     for ws in clients:
         try:
@@ -82,9 +85,6 @@ async def broadcast_update(data: dict):
 
 @router.websocket("/live")
 async def websocket_dashboard(websocket: WebSocket):
-    """
-    WebSocket להזרים מידע חי מהמערכת.
-    """
     await websocket.accept()
     clients.append(websocket)
     logger.info("📡 client connected to dashboard")
@@ -92,7 +92,10 @@ async def websocket_dashboard(websocket: WebSocket):
     try:
         while True:
             from utils.watchlist_utils import load_watchlist
-            watchlist = [it["symbol"] for it in load_watchlist()]
+            try:
+                watchlist = [it["symbol"] for it in load_watchlist()]
+            except Exception:
+                watchlist = []
             if "BTCUSDT" not in watchlist:
                 watchlist.insert(0, "BTCUSDT")
 
@@ -101,16 +104,17 @@ async def websocket_dashboard(websocket: WebSocket):
                 result = await _analyze_symbol(sym)
                 updates.append(result)
                 await broadcast_update(result)
-                await asyncio.sleep(0.5)  # מניעת עומס
+                await asyncio.sleep(0.5)
 
-            await broadcast_update({"type": "batch", "results": updates})
+            await broadcast_update({"ok": True, "type": "batch", "results": updates})
             await asyncio.sleep(60)
 
     except WebSocketDisconnect:
         logger.info("❌ client disconnected from dashboard")
-        clients.remove(websocket)
+        if websocket in clients:
+            clients.remove(websocket)
     except Exception as e:
-        logger.error(f"dashboard websocket error: {e}")
+        logger.error("dashboard websocket error: %s", e)
         if websocket in clients:
             clients.remove(websocket)
 
@@ -148,4 +152,5 @@ async def dashboard_page():
     </body>
     </html>
     """
+
 
