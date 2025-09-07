@@ -39,7 +39,7 @@ from utils.auto_executor import start_executor, stop_executor
 from utils.metrics import metrics_tracker
 from utils.trade_manager import manage_open_trades_loop
 from services.telegram_daily import start_daily_summaries
-from utils.log_auto import log_auto  # <<< חדש
+from utils.log_auto import log_auto  # חדש: בקר לוג אוטומטי
 
 try:
     from utils.user_stream import start_user_stream_consumer, stop_user_stream_consumer
@@ -76,7 +76,7 @@ app.add_middleware(
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc",
-                    "/telegram/webhook", "/telegram/callbacks"}  # callbacks public
+                    "/telegram/webhook", "/telegram/callbacks"}
     PUBLIC_PREFIXES = ["/price", "/static/"]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
@@ -96,12 +96,12 @@ async def track_metrics(request: Request, call_next):
     except Exception:
         dur_ms = (asyncio.get_event_loop().time() - start) * 1000.0
         metrics_tracker.observe_request(500, dur_ms)
-        log_auto.observe(500, dur_ms)  # <<< חיבור לבקר לוגים
+        log_auto.observe(500, dur_ms)
         raise
     else:
         dur_ms = (asyncio.get_event_loop().time() - start) * 1000.0
         metrics_tracker.observe_request(response.status_code, dur_ms)
-        log_auto.observe(response.status_code, dur_ms)  # <<< חיבור לבקר לוגים
+        log_auto.observe(response.status_code, dur_ms)
         return response
 
 # ===== Routers =====
@@ -109,12 +109,12 @@ ROUTERS: List[str] = [
     "routes.trade","routes.market","routes.binance_status","routes.executor","routes.orders","routes.price",
     "routes.rpc","routes.market_extra","routes.executor_extra","routes.anchor_extra",
     "routes.grid","routes.debug","routes.indicators","routes.indicators_extra",
-    "routes.telegram_bot","routes.telegram_callbacks",  # <<< חדש (callbacks)
+    "routes.telegram_bot","routes.telegram_callbacks",
     "routes.metrics","routes.metrics_extra","routes.precision","routes.alerts",
     "routes.reconcile","routes.scheduler_ai","routes.admin","routes.export","routes.pnl",
     "routes.ui","routes.backtest","routes.ui_grid","routes.orderbook","routes.ws","routes.ws_health","routes.orderflow"
 ]
-if str(os.getenv("ENABLE_AI_ROUTES","1")).lower() in ("1","true","yes","on"):
+if _to_bool(os.getenv("ENABLE_AI_ROUTES","1"), True):
     ROUTERS.append("routes.ai")
 
 def _include_router(path: str) -> None:
@@ -122,7 +122,7 @@ def _include_router(path: str) -> None:
         mod = __import__(path, fromlist=["router","router_public"])
         if hasattr(mod,"router"): app.include_router(getattr(mod,"router"))
         if hasattr(mod,"router_public"): app.include_router(getattr(mod,"router_public"))
-        logger.info({"event":"router_registered","router":path,"attr":"router"})
+        logger.info({"event":"router_registered","router":path})
     except Exception as e:
         logger.warning({"event":"router_register_failed","router":path,"error":str(e)})
 
@@ -137,8 +137,7 @@ for r in ROUTERS:
 async def readyz():
     details: dict[str, any] = {}
     try:
-        from utils.ws_fallback import is_price_fresh
-        from utils.binance_client import fapi_ping, futures_balance
+        ensure_fresh_sync()
         details["ping_ok"] = bool(fapi_ping())
         details["balance_ok"] = isinstance(futures_balance(), list)
         syms = _parse_csv(os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT"))
@@ -167,16 +166,14 @@ async def shutdown_event():
     try: await stop_user_stream_consumer()
     except: pass
 
-from utils.open_trade_manager import manage_open_trades
-from utils.auto_executor import start_executor, stop_executor
-
 @app.post("/start-executor") async def api_start_executor(): start_executor(); return {"ok": True}
-@app.post("/stop-executor") async def api_stop_executor(): stop_executor(); return {"ok": True}
-@app.post("/manage-once") async def api_manage_once(): await manage_open_trades(); return {"ok": True}
+@app.post("/stop-executor")  async def api_stop_executor():  stop_executor();  return {"ok": True}
+@app.post("/manage-once")    async def api_manage_once():    await manage_open_trades(); return {"ok": True}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
