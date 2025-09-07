@@ -93,7 +93,7 @@ app.add_middleware(InternalAuthMiddleware)
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
         "/", "/openapi.json", "/health", "/readyz", "/docs", "/redoc",
-        "/telegram/webhook"   # ✅ callbacks merged into telegram_bot
+        "/telegram/webhook"   # ✅ callbacks merged
     }
     PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk"]
     path = request.url.path
@@ -135,7 +135,7 @@ ROUTERS: List[str] = [
     "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
     "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
     "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
-    "routes.telegram_bot",   # ✅ unified
+    "routes.telegram_bot",   # ✅ unified bot+callbacks
     "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
     "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
     "routes.ui", "routes.backtest", "routes.ui_grid", "routes.orderbook", "routes.ws", "routes.ws_health", "routes.orderflow"
@@ -232,6 +232,7 @@ async def api_manage_once():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
