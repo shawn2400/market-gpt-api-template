@@ -1,12 +1,31 @@
 # routes/export.py
 from __future__ import annotations
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query
-
+from pydantic import BaseModel, Field
 from utils.auth import require_api_key
-from utils.export_utils import export_daily_csv, export_daily_pdf
-from utils.pnl_summary import get_pnl_summary
+
+# ניהול טריידים
+try:
+    from utils.open_trade_manager import manage_open_trades, bulk_manage_trades  # type: ignore
+except Exception:
+    manage_open_trades = None  # type: ignore
+    bulk_manage_trades = None  # type: ignore
+
+# נתוני Binance
+try:
+    from utils.binance_client import (  # type: ignore
+        futures_balance,
+        get_open_positions,
+        futures_mark_price,
+        futures_exchange_info_safe as _exchange_info_primary,
+    )
+except Exception:
+    futures_balance = None
+    get_open_positions = None
+    futures_mark_price = None
+    _exchange_info_primary = None
 
 logger = logging.getLogger("algogpt.export")
 
@@ -16,50 +35,33 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
 )
 
+class TradeRequest(BaseModel):
+    symbol: str
+    side: str
+    qty: float
+    entry_price: float
+    sl_price: float
+    tp_price: float
+    leverage: int = 10
+    position_side: str = "BOTH"
 
-@router.get("/daily/csv", summary="Export daily trades to CSV")
-async def export_csv(
-    date: str = Query(None, description="תאריך בפורמט YYYY-MM-DD (ברירת מחדל היום)"),
-    _: Any = Depends(require_api_key),
-) -> Dict[str, Any]:
-    """
-    הפקת דוח CSV יומי עם כל הטריידים.
-    """
-    try:
-        path = export_daily_csv(date=date)
-        return {"ok": True, "file": path}
-    except Exception as e:
-        logger.exception("[export] CSV error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+class BulkTradeRequest(BaseModel):
+    trades: List[TradeRequest]
 
+def _safe_exchange_info() -> Dict[str, Any]:
+    if callable(_exchange_info_primary):
+        try:
+            info = _exchange_info_primary()
+            if isinstance(info, dict) and info:
+                return info
+        except Exception as e:
+            logger.warning("[export] exchange_info primary failed: %s", e)
+    return {"symbols": []}
 
-@router.get("/daily/pdf", summary="Export daily trades to PDF")
-async def export_pdf(
-    date: str = Query(None, description="תאריך בפורמט YYYY-MM-DD (ברירת מחדל היום)"),
-    _: Any = Depends(require_api_key),
-) -> Dict[str, Any]:
-    """
-    הפקת דוח PDF יומי כולל PnL Summary.
-    """
-    try:
-        path = export_daily_pdf(date=date)
-        return {"ok": True, "file": path}
-    except Exception as e:
-        logger.exception("[export] PDF error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/status")
+async def export_status() -> Dict[str, Any]:
+    return {"ok": True, "status": "export-ready"}
 
-
-@router.get("/pnl", summary="PnL Summary")
-async def pnl_summary(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    """
-    מחזיר סיכום רווח/הפסד מצטבר.
-    """
-    try:
-        summary = get_pnl_summary()
-        return {"ok": True, "summary": summary}
-    except Exception as e:
-        logger.exception("[export] PnL summary error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 
