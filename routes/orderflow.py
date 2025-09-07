@@ -4,7 +4,7 @@
 # =========================
 from __future__ import annotations
 import asyncio, time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from fastapi import APIRouter, Depends, Path, Query, Request, HTTPException
 from utils.auth import require_api_key
 from utils.orderflow import get_orderflow_snapshot
@@ -28,7 +28,7 @@ async def get_orderflow(
     trades_limit: int = Query(800, ge=1, le=1000),
     depth_limit: int = Query(500, ge=5, le=1000),
     cvd_window: int = Query(300, ge=1, le=1000),
-    request: Request | None = None,
+    request: Request = None,  # <<< חשוב: לא Optional / לא Union
 ) -> Dict[str, Any]:
     ip = None
     try:
@@ -44,6 +44,7 @@ async def get_orderflow(
         depth_limit=depth_limit,
         cvd_window=cvd_window
     )
+
 
 
 
