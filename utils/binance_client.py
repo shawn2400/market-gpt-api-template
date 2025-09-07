@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import logging
 from typing import Any, Dict, List, Optional
+
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 
@@ -18,7 +19,8 @@ if not API_KEY or not API_SECRET:
 
 # === Init client ===
 client = Client(API_KEY, API_SECRET)
-client.API_URL = "https://fapi.binance.com/fapi"  # Futures endpoint
+# שימוש ב-Futures; השורה הזאת בסדר אם אתם עובדים על UM Futures בלבד
+client.API_URL = "https://fapi.binance.com/fapi"
 
 # === Defaults for precision fallbacks ===
 DEFAULT_QTY_STEP_STR = "0.001"
@@ -41,6 +43,11 @@ def futures_exchange_info_safe() -> Optional[Dict[str, Any]]:
         logger.error("Failed to fetch futures_exchange_info: %s", e)
         return None
 
+# alias תאימות ל-routes שמצפים לשם 'exchange_info'
+def exchange_info() -> Dict[str, Any]:
+    info = futures_exchange_info_safe() or {}
+    return info if isinstance(info, dict) else {}
+
 def futures_balance() -> List[Dict[str, Any]]:
     try:
         return client.futures_account_balance() or []
@@ -50,7 +57,7 @@ def futures_balance() -> List[Dict[str, Any]]:
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
-        data = client.futures_mark_price(symbol=symbol)
+        data = client.futures_mark_price(symbol=symbol.upper())
         return float(data["markPrice"])
     except Exception as e:
         logger.error("Failed to fetch mark price for %s: %s", symbol, e)
@@ -99,7 +106,7 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     try:
         acc_info = client.futures_account()
-        positions = acc_info.get("positions", [])
+        positions = acc_info.get("positions", []) or []
         out = []
         for pos in positions:
             amt = float(pos.get("positionAmt", "0"))
@@ -109,6 +116,13 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         return out
     except Exception as e:
         logger.error("Failed to get open positions: %s", e)
+        return []
+
+# תאימות ל-routes שמבקשים פונקציה בשם הזו
+def futures_open_positions_safe(symbol: Optional[str] = None) -> List[dict]:
+    try:
+        return get_open_positions(symbol)
+    except Exception:
         return []
 
 # ==================== Orders ====================
@@ -131,10 +145,22 @@ def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     מבטל את כל ההוראות הפתוחות לסימבול מסוים.
     """
     try:
-        return client.futures_cancel_all_open_orders(symbol=symbol)
+        return client.futures_cancel_all_open_orders(symbol=symbol.upper())
     except Exception as e:
         logger.error("Failed to cancel orders for %s: %s", symbol, e)
         return {"ok": False, "error": str(e)}
+
+def get_open_orders(symbol: Optional[str] = None) -> List[dict]:
+    """
+    תאימות ל-routes.orders: מחזיר הזמנות פתוחות (אם יש), אחרת רשימה ריקה.
+    """
+    try:
+        if symbol:
+            return client.futures_get_open_orders(symbol=symbol.upper()) or []
+        return client.futures_get_open_orders() or []
+    except Exception as e:
+        logger.warning("get_open_orders failed: %s", e)
+        return []
 
 # ==================== Leverage ====================
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
@@ -147,21 +173,49 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
+# ==================== Convenience / Shims ====================
+def get_futures_client() -> Client:
+    """
+    תאימות ל-routes.grid ורבות אחרות: מחזיר מופע client לשימוש מתקדם.
+    """
+    return client
+
+def get_price(symbol: str) -> Optional[float]:
+    """
+    מחיר עדכני:
+    1) קודם מנסה קאש WS (אם utils.ws_fallback קיים)
+    2) אחרת futures_mark_price (REST)
+    """
+    try:
+        from utils.ws_fallback import get_price as _ws_get_price  # type: ignore
+        px = _ws_get_price(symbol)
+        if px:
+            return float(px)
+    except Exception:
+        pass
+    return futures_mark_price(symbol)
+
 __all__ = [
     "fapi_ping",
     "futures_exchange_info_safe",
+    "exchange_info",
     "futures_balance",
     "futures_mark_price",
     "get_symbol_info",
     "get_symbol_filters",
     "get_open_positions",
+    "futures_open_positions_safe",
+    "get_open_orders",
     "futures_create_order",
     "futures_cancel_all_orders",
     "set_leverage",
+    "get_futures_client",
+    "get_price",
     "DEFAULT_QTY_STEP_STR",
     "DEFAULT_PRICE_TICK_STR",
     "DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
