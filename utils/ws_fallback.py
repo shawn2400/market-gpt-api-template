@@ -14,7 +14,6 @@ LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 logger = logging.getLogger("algogpt.ws")
 
 def update_price(symbol: str, price: float) -> None:
-    """עדכון מחיר ב־Cache."""
     if not symbol:
         return
     try:
@@ -26,12 +25,10 @@ def update_price(symbol: str, price: float) -> None:
     LAST_PRICE_CACHE[symbol.upper()] = {"price": p, "ts": time.time()}
 
 def get_price(symbol: str) -> Optional[float]:
-    """שליפת מחיר אחרון מה־Cache."""
     item = LAST_PRICE_CACHE.get(symbol.upper())
     return float(item["price"]) if item and "price" in item else None
 
 def is_price_fresh(symbol: str, max_age_sec: int = 10) -> bool:
-    """בדיקה אם המחיר עדכני (ברירת מחדל ≤ 10 שניות)."""
     info = LAST_PRICE_CACHE.get(symbol.upper())
     return bool(info and (time.time() - info.get("ts", 0.0)) <= max_age_sec)
 
@@ -41,10 +38,6 @@ async def auto_price_updater(
     ws_interval_keepalive: int = 25,
     rest_interval_sec: int = 15,
 ) -> None:
-    """
-    תהליך אוטומטי שמחבר WS לכל הסימבולים ומעדכן Cache.
-    REST משמש כ־fallback בלבד.
-    """
     syms = [s.upper() for s in symbols if isinstance(s, str) and s.strip()]
     if not syms:
         logger.warning({"event": "price_updater_empty_symbols"})
@@ -66,7 +59,6 @@ async def auto_price_updater(
             except Exception as e:
                 logger.error({"event": "ws_stream_error", "error": str(e)})
 
-            # fallback ל־REST עד שה־WS חוזר
             try:
                 rest_task = asyncio.create_task(
                     _rest_price_refresher_loop(syms, period=rest_interval_sec)
@@ -84,7 +76,6 @@ async def auto_price_updater(
                 t.cancel()
 
 async def _ws_price_stream(symbols: List[str], *, ping_interval: int = 25) -> None:
-    """WebSocket stream ל־Binance Futures markPrice."""
     import websockets  # type: ignore
 
     streams = "/".join(f"{s.lower()}@markPrice@1s" for s in symbols)
@@ -133,7 +124,6 @@ async def _ws_price_stream(symbols: List[str], *, ping_interval: int = 25) -> No
             backoff = min(backoff * 2, 60.0)
 
 async def _rest_price_refresher_loop(symbols: List[str], *, period: int = 15) -> None:
-    """Loop Fallback ל־REST."""
     target = set(s.upper() for s in symbols)
     async with httpx.AsyncClient(
         timeout=8.0,
@@ -168,7 +158,6 @@ async def _rest_price_refresher_loop(symbols: List[str], *, period: int = 15) ->
             except Exception as e:
                 logger.error({"event": "rest_fallback_iter_error", "error": str(e)})
             await asyncio.sleep(period)
-
 
 
 
