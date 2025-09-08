@@ -1,0 +1,84 @@
+{
+  "id": null,
+  "title": "AlgoGPT – Alerts Live",
+  "tags": ["algogpt", "alerts", "alertmanager"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "table",
+      "title": "Active Alerts",
+      "datasource": {
+        "type": "alertmanager",
+        "uid": "alertmanager"
+      },
+      "gridPos": { "h": 20, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "showHeader": true,
+        "footer": { "show": false },
+        "sortBy": [{ "displayName": "startsAt", "desc": true }]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 2, "color": "red" }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "severity" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  { "match": "==critical", "result": { "text": "Critical 🚨", "color": "red" } },
+                  { "match": "==warning", "result": { "text": "Warning ⚠️", "color": "yellow" } },
+                  { "match": "==info", "result": { "text": "Info ℹ️", "color": "blue" } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "ALERTS",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "__name__": true },
+            "indexByName": {
+              "alertname": 0,
+              "severity": 1,
+              "instance": 2,
+              "job": 3,
+              "startsAt": 4,
+              "endsAt": 5
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "Severity",
+              "instance": "Instance",
+              "job": "Job",
+              "startsAt": "Starts At",
+              "endsAt": "Ends At"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
