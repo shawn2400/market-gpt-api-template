@@ -138,10 +138,21 @@ async def _send_tg(chat_id: int, text: str) -> None:
     except Exception:
         logger.exception("failed sending telegram message")
 
+def _normalize_cmd(txt: str) -> str:
+    """
+    מחזיר את הפקודה ללא סיומת @BotName, למשל '/ping@AlgoGPT_AlertsBot' -> '/ping'
+    """
+    t = (txt or "").strip()
+    if not t.startswith("/"):
+        return t
+    head = t.split()[0]  # '/ping@Bot' או '/ping'
+    head = head.split("@", 1)[0]
+    return head.lower()
+
 def _parse_update_safe(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    מנסה לפענח Update דרך telegram.Update; אם נכשל (למשל חסר first_name),
-    נופל חזרה לפיענוח ידני של שדות message/callback_query.
+    ניסיון לפענוח Update דרך telegram.Update; אם נכשל (למשל חסר first_name),
+    נפול חזרה לפענוח ידני של message/callback_query.
     מחזיר: { chat_id, text, is_callback, update_obj }
     """
     chat_id = None
@@ -217,6 +228,12 @@ async def set_webhook(
         })
         return {"ok": True, "telegram": resp.json()}
 
+@router.get("/test-ping")
+async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    """בדיקת שליחה יזומה לבוט (עוקף webhook), לעזרה בדיבוג."""
+    await _send_tg(chat_id, f"pong ✅ (v{APP_VERSION}) [test]")
+    return {"ok": True, "sent": True, "chat_id": chat_id, "version": APP_VERSION}
+
 @router.post("/webhook")
 async def telegram_webhook(req: Request) -> Dict[str, Any]:
     _require_secret(req)
@@ -233,16 +250,21 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
         payload = json.loads(raw) if raw else {}
         parsed = _parse_update_safe(payload)
         chat_id = parsed.get("chat_id")
-        text = (parsed.get("text") or "").strip().lower()
+        raw_text = (parsed.get("text") or "").strip()
+        text = raw_text.lower()
+        cmd = _normalize_cmd(text)
+
+        logger.debug("tg webhook: chat_id=%s cb=%s text=%r cmd=%r",
+                     chat_id, parsed.get("is_callback"), raw_text, cmd)
 
         # ── פקודות קצרות ─────────────────────
-        if chat_id and (text.startswith("/ping") or text == "ping" or text.startswith("/start")):
+        if chat_id and (cmd in ("/ping", "ping", "/start")):
             await _send_tg(chat_id, f"pong ✅ (v{APP_VERSION})")
             return {"ok": True, "echo": "ping"}
-        if chat_id and text.startswith("/version"):
+        if chat_id and (cmd == "/version"):
             await _send_tg(chat_id, f"AlgoGPT v{APP_VERSION}")
             return {"ok": True, "version": APP_VERSION}
-        if chat_id and (text.startswith("/help")):
+        if chat_id and (cmd == "/help"):
             await _send_tg(chat_id, "פקודות: /ping • /version • /help\n(Callbacks נתמכים כרגיל)")
             return {"ok": True, "help": True}
 
