@@ -1,48 +1,52 @@
 groups:
   - name: algogpt.rules
-    interval: 15s
+    interval: 30s
     rules:
-      # CPU > 85% ליותר מ־2 דקות
-      - alert: HighCPUUsage
-        expr: rate(process_cpu_seconds_total[1m]) > 0.85
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "CPU גבוה"
-          description: "CPU > 85% עבור AlgoGPT"
-
-      # Memory > 80%
-      - alert: HighMemoryUsage
-        expr: process_resident_memory_bytes / process_virtual_memory_bytes > 0.8
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Memory גבוה"
-          description: "Memory > 80% עבור AlgoGPT"
-
-      # Health Down (Blackbox probe)
-      - alert: AlgoGPTHelperDown
+      - alert: HealthDown
         expr: probe_success{job="algogpt-render-health"} == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "AlgoGPT Health DOWN"
-          description: "ה־/health הציבורי של AlgoGPT נכשל"
+          summary: "AlgoGPT Health Down"
+          description: "ה־/health החיצוני מחזיר כשל."
 
-      # Telegram failure ratio > 5% ב־5 דקות אחרונות
-      - alert: TelegramHighFailureRate
-        expr: sum(rate(algogpt_telegram_messages_failed_total[5m])) 
-              / clamp_min(sum(rate(algogpt_telegram_messages_sent_total[5m])) 
-              + sum(rate(algogpt_telegram_messages_failed_total[5m])), 1) > 0.05
+      - alert: HighCPU
+        expr: rate(container_cpu_usage_seconds_total{container="algogpt"}[2m]) > 0.85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU שימוש גבוה"
+          description: "מעבר ל־85% CPU."
+
+      - alert: HighMemory
+        expr: container_memory_working_set_bytes{container="algogpt"} / container_spec_memory_limit_bytes{container="algogpt"} > 0.8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory שימוש גבוה"
+          description: "מעבר ל־80% זיכרון."
+
+      - alert: HighErrorRate
+        expr: sum(rate(algogpt_api_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(algogpt_api_requests_total[5m])), 1) > 0.05
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "כשלי טלגרם גבוהים"
-          description: "יותר מ־5% הודעות טלגרם נכשלו ב־5 דקות האחרונות"
+          summary: "שיעור שגיאות 5xx גבוה"
+          description: "יותר מ־5% מהקריאות נכשלות."
+
+      - alert: TelegramFailures
+        expr: rate(algogpt_telegram_messages_failed_total[1m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "כשלונות טלגרם"
+          description: "יותר מ־3 הודעות לדקה נכשלות."
+
 
 
 
