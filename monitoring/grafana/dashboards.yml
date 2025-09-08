@@ -1,9 +1,9 @@
 apiVersion: 1
 
 providers:
-  - name: 'AlgoGPT Dashboards'
+  - name: 'algogpt-dashboards'
     orgId: 1
-    folder: 'AlgoGPT'
+    folder: ''
     type: file
     disableDeletion: false
     editable: true
