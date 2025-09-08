@@ -132,15 +132,17 @@ def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, 
 
 def _get_account_cached() -> Optional[Dict[str, Any]]:
     now = _now()
+    # Respect temporary ban/backoff
     if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
         return _account_cache["data"]
 
+    # Short TTL cache
     if _account_cache["data"] and (now - _account_cache["ts"] <= ACCOUNT_TTL_SEC):
         return _account_cache["data"]
 
     try:
         data = client.futures_account()
-        _account_cache.update({"data": data, "ts": now})
+        _account_cache.update({"data": data, "ts": now, "ban_until": 0.0})
         return data
     except BinanceAPIException as e:
         s = str(e)
@@ -170,12 +172,17 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.error("Failed mark price for %s: %s", symbol, e); return None
 
 def get_price(symbol: str) -> Optional[float]:
+    # Prefer WS cache if fresh
     try:
-        if ws_is_fresh and ws_get_price and ws_is_fresh(symbol):
-            return float(ws_get_price(symbol) or 0.0) or None
+        if ws_is_fresh and ws_get_price and ws_is_fresh(symbol, int(os.getenv("PRICE_WS_FRESH_TTL", "20"))):
+            p = ws_get_price(symbol)
+            if p and p > 0:
+                return float(p)
     except Exception:
         pass
+    # Fallback to REST
     p = futures_mark_price(symbol)
+    # Feed WS cache for consumers
     try:
         if p and ws_update_price:
             ws_update_price(symbol, float(p))
@@ -706,6 +713,7 @@ __all__ = [
     "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
