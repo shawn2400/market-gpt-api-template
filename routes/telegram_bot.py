@@ -1,25 +1,15 @@
-# ✅ גרסה תקינה של routes/telegram_bot.py כולל /test-ping
+# routes/telegram_bot.py
 
 from __future__ import annotations
-import logging, os, json, time
-from typing import Dict, Any, Optional, Tuple
-
+import logging, os, json
+from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import httpx
 from telegram import Update
 
 from utils.auth import require_api_key
 from utils.runtime_prefs import is_muted, set_mute, toggle_mute
-from utils.telegram_notifier import handle_callback_action
-from utils.security import verify_hmac, idem_seen
-from utils.risk import suggest_risk
-from utils.binance_client import (
-    place_tp_ladder, set_breakeven_stop,
-    futures_create_order, set_leverage,
-    futures_mark_price, get_symbol_filters, modify_stop_loss,
-)
 
 logger = logging.getLogger("algogpt.routes.telegram")
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
@@ -29,44 +19,31 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "unknown")
 class MuteRequest(BaseModel):
     state: bool
 
-@router.get("/test-ping")
-async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+# ───────────────────────────────────────────────
+# Ping Sender (שולח הודעה לטלגרם)
+# ───────────────────────────────────────────────
+async def _send_ping(chat_id: int, msg: str):
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if token:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(url, data={"chat_id": chat_id, "text": f"pong ✅ (v{APP_VERSION}) [test]"})
-        except Exception:
-            logger.exception("Failed sending telegram message")
+    if not token: return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, data={"chat_id": chat_id, "text": msg})
+    except Exception:
+        logger.exception("Failed sending telegram message")
+
+# ───────────────────────────────────────────────
+# /test-ping endpoint (לבדיקת בוט)
+# ───────────────────────────────────────────────
+@router.get("/test-ping")
+async def test_ping(chat_id: int, api_key: str = Depends(require_api_key)) -> Dict[str, Any]:
+    msg = f"pong ✅ (v{APP_VERSION}) [test]"
+    await _send_ping(chat_id, msg)
     return {"ok": True, "sent": True, "chat_id": chat_id, "version": APP_VERSION}
 
-@router.get("/status")
-async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    return {"ok": True, "mute": is_muted()}
-
-@router.post("/mute")
-async def set_mute_state(req: MuteRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    set_mute(req.state)
-    return {"ok": True, "mute": req.state}
-
-@router.post("/toggle")
-async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    return {"ok": True, "mute": toggle_mute()}
-
-@router.post("/set-webhook")
-async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    if not token or not secret:
-        raise HTTPException(500, "Telegram bot config missing")
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"https://api.telegram.org/bot{token}/setWebhook",
-            json={"url": url, "secret_token": secret, "allowed_updates": ["message", "callback_query"], "drop_pending_updates": True}
-        )
-        return {"ok": True, "telegram": resp.json()}
-
+# ───────────────────────────────────────────────
+# Telegram webhook handler (callback API)
+# ───────────────────────────────────────────────
 @router.post("/webhook")
 async def telegram_webhook(req: Request) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -92,12 +69,50 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
 
     cmd = (text or "").split()[0].split("@", 1)[0].lower()
     if chat_id and cmd in ("/ping", "ping", "/start"):
-        await test_ping(chat_id)
+        await _send_ping(chat_id, f"pong ✅ (v{APP_VERSION})")
         return {"ok": True, "echo": "ping"}
     if chat_id and cmd == "/version":
-        await test_ping(chat_id)
+        await _send_ping(chat_id, f"AlgoGPT v{APP_VERSION}")
         return {"ok": True, "version": APP_VERSION}
     return {"ok": True, "ignored": True}
+
+# ───────────────────────────────────────────────
+# mute endpoints
+# ───────────────────────────────────────────────
+@router.get("/status")
+async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    return {"ok": True, "mute": is_muted()}
+
+@router.post("/mute")
+async def set_mute_state(req: MuteRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    set_mute(req.state)
+    return {"ok": True, "mute": req.state}
+
+@router.post("/toggle")
+async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    return {"ok": True, "mute": toggle_mute()}
+
+# ───────────────────────────────────────────────
+# webhook setter
+# ───────────────────────────────────────────────
+@router.post("/set-webhook")
+async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if not token or not secret:
+        raise HTTPException(500, "Telegram bot config missing")
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            json={
+                "url": url,
+                "secret_token": secret,
+                "allowed_updates": ["message", "callback_query"],
+                "drop_pending_updates": True
+            }
+        )
+        return {"ok": True, "telegram": resp.json()}
+
 
 
 
