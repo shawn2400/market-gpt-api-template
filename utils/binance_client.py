@@ -2,11 +2,9 @@
 from __future__ import annotations
 import os, time, math, logging
 from typing import Any, Dict, List, Optional, Iterable, Tuple
+
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
-
-# WS fallback integration
-from utils import ws_fallback
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -30,6 +28,10 @@ BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "6"))
 DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP", "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
+
+# ===== Account/Positions cache =====
+ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))          # כמה זמן לשמור futures_account() בזיכרון
+ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))  # זמן דילוג אחרי -1003
 
 # ===== Ladder ENV =====
 LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1") == "1"
@@ -91,13 +93,24 @@ def _kind_from_kwargs(kwargs: dict) -> str:
 client = Client(API_KEY, API_SECRET)
 client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
+# ===== Optional WS fallback for price =====
+try:
+    from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
+except Exception:  # לא חוסם — אם המודול לא קיים פשוט לא נשתמש בו
+    ws_get_price = None  # type: ignore
+    ws_is_fresh = None   # type: ignore
+    ws_update_price = None  # type: ignore
+
 # ===== Caches =====
 _exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
-def _now() -> float: return time.time()
+_account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
 
-def _get_exchange_info_cached() -> Optional[Dict[str, Any]]:
+def _now() -> float: 
+    return time.time()
+
+def _get_exchange_info_cached(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     ts = _now()
-    if _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
+    if not force_refresh and _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
         return _exinfo_cache["data"]
     try:
         data = client.futures_exchange_info()
@@ -105,6 +118,7 @@ def _get_exchange_info_cached() -> Optional[Dict[str, Any]]:
         return data
     except Exception as e:
         logger.error("futures_exchange_info failed: %s", e)
+        # מחזיר מה־cache הישן אם קיים
         return _exinfo_cache["data"]
 
 # ========== Core ==========
@@ -114,22 +128,69 @@ def fapi_ping() -> bool:
     except Exception as e:
         logger.warning("Futures ping failed: %s", e); return False
 
-def futures_exchange_info_safe() -> Optional[Dict[str, Any]]: return _get_exchange_info_cached()
+def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
+    """
+    NOTE: תומך force_refresh=True כדי לתקן קריאות שקוראות עם הפרמטר הזה.
+    """
+    return _get_exchange_info_cached(force_refresh=force_refresh)
+
+def _get_account_cached() -> Optional[Dict[str, Any]]:
+    now = _now()
+    # אם ב־ban — אל תכה ב־REST, תחזיר cache אם יש
+    if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
+        return _account_cache["data"]
+
+    if _account_cache["data"] and (now - _account_cache["ts"] <= ACCOUNT_TTL_SEC):
+        return _account_cache["data"]
+
+    try:
+        data = client.futures_account()
+        _account_cache.update({"data": data, "ts": now})
+        return data
+    except BinanceAPIException as e:
+        s = str(e)
+        code = getattr(e, "code", None)
+        status = getattr(e, "status_code", None)
+        if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
+            # Way too many requests => אל תציף עוד; קבע ban_until קצר כדי לדלג זמנית
+            _account_cache["ban_until"] = now + ACCOUNT_ON_BAN_BACKOFF
+            logger.error("futures_account banned/rate limited; backing off %ss", ACCOUNT_ON_BAN_BACKOFF)
+            return _account_cache["data"]
+        logger.error("futures_account error: %s", e)
+        return _account_cache["data"]
+    except Exception as e:
+        logger.error("futures_account failed: %s", e)
+        return _account_cache["data"]
 
 def futures_balance() -> List[Dict[str, Any]]:
-    try: return client.futures_account_balance() or []
-    except Exception as e: logger.error("Failed to fetch futures_balance: %s", e); return []
+    try:
+        data = _get_account_cached() or {}
+        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []  # fallback חד־פעמי
+    except Exception as e:
+        logger.error("Failed to fetch futures_balance: %s", e); return []
 
 def futures_mark_price(symbol: str) -> Optional[float]:
-    try: return float(client.futures_mark_price(symbol=symbol.upper())["markPrice"])
-    except Exception as e: logger.error("Failed mark price for %s: %s", symbol, e); return None
+    try:
+        return float(client.futures_mark_price(symbol=symbol.upper())["markPrice"])
+    except Exception as e:
+        logger.error("Failed mark price for %s: %s", symbol, e); return None
 
 def get_price(symbol: str) -> Optional[float]:
-    sym = symbol.upper()
-    p = ws_fallback.get_price(sym)
-    if p and ws_fallback.is_price_fresh(sym, max_age_sec=15):
-        return p
-    return futures_mark_price(sym)
+    """
+    קודם WS (אם טרי), אחרת REST; בסוף לעדכן cache של WS אם אפשר.
+    """
+    try:
+        if ws_is_fresh and ws_get_price and ws_is_fresh(symbol):
+            return float(ws_get_price(symbol) or 0.0) or None
+    except Exception:
+        pass
+    p = futures_mark_price(symbol)
+    try:
+        if p and ws_update_price:
+            ws_update_price(symbol, float(p))
+    except Exception:
+        pass
+    return p
 
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     info = futures_exchange_info_safe()
@@ -219,6 +280,72 @@ def _backoff_sleep(attempt: int) -> None:
     delay_ms = min(BACKOFF_MAX_MS, _dyn_backoff_base * (2 ** max(0, attempt - 1)))
     time.sleep(delay_ms / 1000.0)
 
+# ========== Helper: prefix match for cancel ==========
+def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
+    if not prefix:
+        return True
+    coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
+    return coid.startswith(prefix)
+
+def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
+    open_orders = get_open_orders(symbol); count = 0
+    tset = set(t.upper() for t in types)
+    prefix = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
+    only_pref = CANCEL_ONLY_PREFIXED_ORDERS
+
+    if only_pref and not prefix:
+        logger.warning("CANCEL_ONLY_PREFIXED_ORDERS=1 אך לא הוגדר ORDER_ID_PREFIX/CANCEL_PREFIX_OVERRIDE; לא מבטל הזמנות.")
+        return 0
+
+    for o in open_orders:
+        otype = (o.get("type") or o.get("origType") or "").upper()
+        if otype in tset:
+            if only_pref and not _order_has_prefix(o, prefix):
+                continue
+            oid = o.get("orderId")
+            if oid is not None:
+                try:
+                    client.futures_cancel_order(symbol=symbol.upper(), orderId=oid); count += 1
+                except Exception as e:
+                    logger.warning("Cancel order failed %s/%s: %s", symbol, oid, e)
+    return count
+
+# ========== Positions ==========
+def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    מושך פוזיציות מתוך futures_account() אך דרך cache פנימי כדי להימנע מבאן.
+    בזמן ban (-1003/429) יוחזר cache אם יש.
+    """
+    try:
+        acc_info = _get_account_cached() or {}
+        positions = acc_info.get("positions", []) or []
+        out = []
+        su = symbol.upper() if symbol else None
+        for pos in positions:
+            amt = float(pos.get("positionAmt", "0") or 0.0)
+            if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
+                out.append(pos)
+        return out
+    except Exception as e:
+        logger.error("Failed to get open positions: %s", e); return []
+
+def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    return get_open_positions(symbol)
+
+def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
+    for p in get_open_positions(symbol): 
+        return p
+    return None
+
+def _position_side_from_amt(amt: float) -> str: 
+    return "LONG" if amt > 0 else "SHORT"
+
+def _order_side_for_close(pos_side: str) -> str:
+    ps = (pos_side or "").upper()
+    if ps == "LONG":  return "SELL"
+    if ps == "SHORT": return "BUY"
+    return "SELL"
+
 # ========== Orders ==========
 def _safe_create_order(**kwargs) -> Dict[str, Any]:
     kwargs.setdefault("workingType", WORKING_TYPE)
@@ -248,15 +375,44 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
                 return {"ok": False, "error": str(e)}
     return {"ok": False, "error": "max_retries_exceeded"}
 
-def futures_create_order(**kwargs) -> Dict[str, Any]: return _safe_create_order(**kwargs)
+def futures_create_order(**kwargs) -> Dict[str, Any]: 
+    return _safe_create_order(**kwargs)
+
+def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *, reduce_only: bool=True, close_position: bool=False, client_order_id: Optional[str]=None) -> Dict[str, Any]:
+    """
+    נדרש ע״י utils/user_stream.py — יצירת STOP_MARKET עם reduceOnly/closePosition.
+    """
+    sym = symbol.upper()
+    qprice = _quantize_price(sym, float(stop_price))
+    qqty   = _quantize_qty(sym, float(quantity))
+    kwargs = dict(
+        symbol=sym, side=side.upper(), type="STOP_MARKET",
+        stopPrice=qprice, reduceOnly=bool(reduce_only), recvWindow=RECV_WINDOW,
+        workingType=WORKING_TYPE
+    )
+    if close_position:
+        kwargs["closePosition"] = True
+    else:
+        kwargs["quantity"] = qqty
+    if client_order_id:
+        kwargs["newClientOrderId"] = _sanitize_coid(client_order_id)
+    else:
+        kwargs["newClientOrderId"] = _coid("SL", sym)
+    return _safe_create_order(**kwargs)
 
 def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
-    try: return client.futures_cancel_all_open_orders(symbol=symbol.upper())
-    except Exception as e: logger.error("Failed to cancel orders for %s: %s", symbol, e); return {"ok": False, "error": str(e)}
+    try: 
+        return client.futures_cancel_all_open_orders(symbol=symbol.upper())
+    except Exception as e: 
+        logger.error("Failed to cancel orders for %s: %s", symbol, e); 
+        return {"ok": False, "error": str(e)}
 
 def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
-    try: return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
-    except Exception as e: logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e); return {"ok": False, "error": str(e)}
+    try: 
+        return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
+    except Exception as e: 
+        logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e); 
+        return {"ok": False, "error": str(e)}
 
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
@@ -266,6 +422,10 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         logger.error("Failed to get open orders: %s", e); return []
 
 def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
+    """
+    Futures all orders for a symbol (Binance requires symbol).
+    limit: 1..1000 (Binance may cap). kwargs passthrough (e.g., startTime, endTime, orderId).
+    """
     if not symbol or not symbol.strip():
         return []
     limit = max(1, min(int(limit), 1000))
@@ -277,38 +437,13 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
         logger.error("get_all_orders error: %s", e); return []
 
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
-    try: return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
-    except Exception as e: logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e); return {"ok": False, "error": str(e)}
+    try: 
+        return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
+    except Exception as e: 
+        logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e); 
+        return {"ok": False, "error": str(e)}
 
-# ========== Positions ==========
-def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    try:
-        acc_info = client.futures_account()
-        positions = acc_info.get("positions", []); out = []
-        for pos in positions:
-            amt = float(pos.get("positionAmt", "0"))
-            if abs(amt) > 1e-12 and (symbol is None or (pos.get("symbol") or "").upper() == symbol.upper()):
-                out.append(pos)
-        return out
-    except Exception as e:
-        logger.error("Failed to get open positions: %s", e); return []
-
-def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    return get_open_positions(symbol)
-
-def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
-    for p in get_open_positions(symbol): return p
-    return None
-
-def _position_side_from_amt(amt: float) -> str: return "LONG" if amt > 0 else "SHORT"
-
-def _order_side_for_close(pos_side: str) -> str:
-    ps = (pos_side or "").upper()
-    if ps == "LONG":  return "SELL"
-    if ps == "SHORT": return "BUY"
-    return "SELL"
-
-# ========== Modify Orders (SL/TP) ==========
+# ========== Cancel+Recreate ==========
 def _compute_partial_qty(symbol: str, pos_amt: float, pct: Optional[float], qty: Optional[float]) -> Tuple[bool, str]:
     if pct is None and qty is None: return False, ""
     target = 0.0
@@ -331,10 +466,12 @@ def modify_stop_loss(symbol: str, new_sl_price: float, position_side: Optional[s
         side = _order_side_for_close(pos_side)
         qprice = _quantize_price(symbol, float(new_sl_price))
         price_f = float(qprice)
-        canceled = futures_cancel_all_orders(symbol)
+        canceled = _cancel_closing_orders(symbol, types=("STOP", "STOP_MARKET"))
         is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
         if is_partial:
             qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
+            if float(qstr) > abs(amt):
+                qstr = _quantize_qty(symbol, abs(amt))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
                                        stopPrice=qprice, reduceOnly=True, quantity=qstr,
                                        newClientOrderId=_coid("SL", symbol))
@@ -343,6 +480,8 @@ def modify_stop_loss(symbol: str, new_sl_price: float, position_side: Optional[s
                                        stopPrice=qprice, reduceOnly=True, closePosition=True,
                                        newClientOrderId=_coid("SL", symbol))
         return {"ok": True, "canceled": canceled, "order": order, "stopPrice": qprice}
+    except BinanceAPIException as e:
+        logger.error("modify_stop_loss failed: %s", e); return {"ok": False, "error": str(e)}
     except Exception as e:
         logger.error("modify_stop_loss failed: %s", e); return {"ok": False, "error": str(e)}
 
@@ -357,10 +496,12 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
         side = _order_side_for_close(pos_side)
         qprice = _quantize_price(symbol, float(new_tp_price))
         price_f = float(qprice)
-        canceled = futures_cancel_all_orders(symbol)
+        canceled = _cancel_closing_orders(symbol, types=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
         is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
         if is_partial:
             qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
+            if float(qstr) > abs(amt):
+                qstr = _quantize_qty(symbol, abs(amt))
             order = _safe_create_order(symbol=symbol.upper(), side=side, type="TAKE_PROFIT_MARKET",
                                        stopPrice=qprice, reduceOnly=True, quantity=qstr,
                                        newClientOrderId=_coid("TP", symbol))
@@ -369,6 +510,8 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
                                        stopPrice=qprice, reduceOnly=True, closePosition=True,
                                        newClientOrderId=_coid("TP", symbol))
         return {"ok": True, "canceled": canceled, "order": order, "stopPrice": qprice}
+    except BinanceAPIException as e:
+        logger.error("modify_take_profit failed: %s", e); return {"ok": False, "error": str(e)}
     except Exception as e:
         logger.error("modify_take_profit failed: %s", e); return {"ok": False, "error": str(e)}
 
@@ -382,12 +525,12 @@ def set_breakeven_stop(symbol: str, offset_bps: float = 0.0) -> Dict[str, Any]:
     sl = entry * (1.0 + (offset_bps / 10000.0)) if pos_side == "LONG" else entry * (1.0 - (offset_bps / 10000.0))
     return modify_stop_loss(symbol, sl, position_side=pos_side)
 
-# ========== Ladder ==========
+# ========== Ladders ==========
 def clear_take_profit_orders(symbol: str) -> int:
-    return 0
+    return _cancel_closing_orders(symbol, types=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
 
 def clear_stop_orders(symbol: str) -> int:
-    return 0
+    return _cancel_closing_orders(symbol, types=("STOP", "STOP_MARKET"))
 
 def _normalize_splits(splits: List[float], levels: int) -> List[float]:
     if not splits or len(splits) != levels: return [1.0 / levels] * levels
@@ -395,15 +538,143 @@ def _normalize_splits(splits: List[float], levels: int) -> List[float]:
     if tot <= 0: return [1.0 / levels] * levels
     return [x / tot for x in s]
 
+def _build_tp_prices_by_pct(entry: float, pos_side: str, pcts: List[float]) -> List[float]:
+    out = []
+    for p in pcts:
+        p = float(p)
+        out.append(entry * (1.0 + p/100.0) if pos_side=="LONG" else entry * (1.0 - p/100.0))
+    return out
+
 def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, splits: Optional[List[float]] = None,
                     *, position_side: Optional[str] = None, percent_targets: Optional[List[float]] = None) -> Dict[str, Any]:
-    return {"ok": False, "error": "TP ladder not implemented"}
+    if not LADDER_TP_ENABLE: return {"ok": False, "error": "TP ladder disabled by ENV"}
+
+    now = _now(); su = symbol.upper()
+    last = _tp_ladder_last_at.get(su, 0.0)
+    if now - last < max(0, TP_LADDER_COOLDOWN_SEC):
+        return {"ok": False, "cooldown": True, "wait_sec": int(TP_LADDER_COOLDOWN_SEC - (now - last))}
+    _tp_ladder_last_at[su] = now
+
+    pos = get_single_position(symbol)
+    if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
+    amt = abs(float(pos.get("positionAmt") or 0.0))
+    if amt <= 0: return {"ok": False, "error": "No non-zero position"}
+    entry = float(pos.get("entryPrice") or 0.0)
+    pos_side = position_side or _position_side_from_amt(float(pos.get("positionAmt") or 0.0))
+    side = _order_side_for_close(pos_side)
+
+    if percent_targets and len(percent_targets) > 0:
+        prices = _build_tp_prices_by_pct(entry, pos_side, percent_targets)
+    elif targets_prices and len(targets_prices) > 0:
+        prices = [float(p) for p in targets_prices]
+    else:
+        s = (LADDER_TP_DEFAULT_PCTS or "1.8,3.2,5.5")
+        pcts = [float(x) for x in s.split(",") if x.strip()]
+        prices = _build_tp_prices_by_pct(entry, pos_side, pcts)
+
+    prices = prices[: max(1, min(LADDER_TP_MAX_LEVELS, len(prices)))]
+    levels = len(prices)
+
+    if splits is None:
+        ss = (LADDER_TP_DEFAULT_SPLITS or "0.4,0.35,0.25")
+        splits = [float(x) for x in ss.split(",") if x.strip()]
+    splits = _normalize_splits(splits or [], levels)
+
+    canceled = clear_take_profit_orders(symbol)
+
+    results = []; qty_left = amt
+    filters = get_symbol_filters(symbol) or {}
+    step = float(filters.get("stepSize") or DEFAULT_QTY_STEP_STR)
+
+    for i, (p, sp) in enumerate(zip(prices, splits), start=1):
+        qprice = _quantize_price(symbol, float(p))
+        price_f = float(qprice)
+        is_last = (i == levels)
+
+        if not is_last:
+            qi = min(float(_quantize_qty(symbol, amt * sp)), qty_left)
+            if qi < step:
+                continue
+            qi = float(_ensure_min_notional(symbol, price_f, qi))
+            qstr = _quantize_qty(symbol, qi)
+            if float(qstr) > qty_left:
+                continue
+            qty_left = max(0.0, qty_left - float(qstr))
+            order = _safe_create_order(symbol=symbol.upper(), side=side,
+                                       type=LADDER_TP_KIND, stopPrice=qprice,
+                                       reduceOnly=True, quantity=qstr,
+                                       newClientOrderId=_coid("TP", symbol, i))
+        else:
+            order = _safe_create_order(symbol=symbol.upper(), side=side,
+                                       type=LADDER_TP_KIND, stopPrice=qprice,
+                                       reduceOnly=True, closePosition=True,
+                                       newClientOrderId=_coid("TP", symbol, i))
+        results.append({"level": i, "stopPrice": qprice, "resp": order})
+    return {"ok": True, "canceled": canceled, "levels": results, "side": pos_side}
 
 def place_sl_ladder(symbol: str, stops_prices: Optional[List[float]] = None, splits: Optional[List[float]] = None,
                     *, position_side: Optional[str] = None, percent_stops: Optional[List[float]] = None) -> Dict[str, Any]:
-    return {"ok": False, "error": "SL ladder not implemented"}
+    if not LADDER_SL_ENABLE: return {"ok": False, "error": "SL ladder disabled by ENV"}
+    pos = get_single_position(symbol)
+    if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
+    amt = abs(float(pos.get("positionAmt") or 0.0))
+    if amt <= 0: return {"ok": False, "error": "No non-zero position"}
+    entry = float(pos.get("entryPrice") or 0.0)
+    pos_side = position_side or _position_side_from_amt(float(pos.get("positionAmt") or 0.0))
+    side = _order_side_for_close(pos_side)
 
-# ========== Extras ==========
+    if percent_stops:
+        prices = []
+        for pct in percent_stops:
+            pct = abs(float(pct))
+            prices.append(entry * (1.0 - pct/100.0) if pos_side=="LONG" else entry * (1.0 + pct/100.0))
+    elif stops_prices:
+        prices = [float(x) for x in stops_prices]
+    else:
+        if not (LADDER_SL_DEFAULT_PCTS or "").strip(): return {"ok": False, "error": "No SL percentages provided"}
+        pcts = [float(x) for x in LADDER_SL_DEFAULT_PCTS.split(",") if x.strip()]
+        prices = []
+        for pct in pcts:
+            pct = abs(float(pct))
+            prices.append(entry * (1.0 - pct/100.0) if pos_side=="LONG" else entry * (1.0 + pct/100.0))
+
+    prices = prices[: max(1, min(LADDER_SL_MAX_LEVELS, len(prices)))]
+    levels = len(prices)
+
+    if splits is None: splits = [1.0 / levels] * levels
+    splits = _normalize_splits(splits, levels)
+
+    canceled = clear_stop_orders(symbol)
+
+    results = []; qty_left = amt
+    filters = get_symbol_filters(symbol) or {}
+    step = float(filters.get("stepSize") or DEFAULT_QTY_STEP_STR)
+
+    for i, (p, sp) in enumerate(zip(prices, splits), start=1):
+        qprice = _quantize_price(symbol, float(p))
+        price_f = float(qprice)
+        is_last = (i == levels)
+
+        if not is_last:
+            qi = min(float(_quantize_qty(symbol, amt * sp)), qty_left)
+            if qi < step:
+                continue
+            qi = float(_ensure_min_notional(symbol, price_f, qi))
+            qstr = _quantize_qty(symbol, qi)
+            if float(qstr) > qty_left:
+                continue
+            qty_left = max(0.0, qty_left - float(qstr))
+            order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
+                                       stopPrice=qprice, reduceOnly=True, quantity=qstr,
+                                       newClientOrderId=_coid("SL", symbol, i))
+        else:
+            order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
+                                       stopPrice=qprice, reduceOnly=True, closePosition=True,
+                                       newClientOrderId=_coid("SL", symbol, i))
+        results.append({"level": i, "stopPrice": qprice, "resp": order})
+    return {"ok": True, "canceled": canceled, "levels": results, "side": pos_side}
+
+# ========== extras ==========
 def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
     try:
         import pandas as pd
@@ -413,8 +684,15 @@ def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
         kl = client.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(10, limit)))
         cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","tbbav","tbqav","ignore"]
         df = pd.DataFrame(kl, columns=cols)
-        for c in ("open","high","low","close","volume"): df[c] = df[c].astype(float)
+        for c in ("open","high","low","close","volume"): 
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype(float)
         return df
+    except BinanceAPIException as e:
+        s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
+        if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
+            logger.warning("get_klines_df rate limited/banned; returning None")
+            return None
+        logger.error("get_klines_df failed: %s", e); return None
     except Exception as e:
         logger.error("get_klines_df failed: %s", e); return None
 
@@ -436,16 +714,19 @@ def close_all_positions() -> Dict[str,Any]:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def get_futures_client() -> Client: return client
+def get_futures_client() -> Client: 
+    return client
 
 __all__ = [
     "client","fapi_ping","futures_exchange_info_safe","futures_balance","futures_mark_price","get_price",
     "get_symbol_info","get_symbol_filters","get_open_positions","futures_open_positions_safe","get_single_position",
-    "futures_create_order","futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
+    "futures_create_order","place_stop_market",
+    "futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
     "modify_stop_loss","modify_take_profit","set_breakeven_stop","clear_take_profit_orders","clear_stop_orders",
     "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
