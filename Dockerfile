@@ -27,7 +27,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=10000 \
     WEB_CONCURRENCY=1 \
-    GUNICORN_TIMEOUT=120
+    GUNICORN_TIMEOUT=120 \
+    PYTHONPATH=/app
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates \
@@ -64,14 +65,15 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Gunicorn + Uvicorn
+# Gunicorn + Uvicorn — מריץ את השירות הקליל app_single
 CMD bash -lc " \
   bash /app/prestart.sh 2>/dev/null || true && \
-  gunicorn main:app \
+  gunicorn app_single:app \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
