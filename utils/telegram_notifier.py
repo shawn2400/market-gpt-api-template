@@ -1,8 +1,9 @@
 # utils/telegram_notifier.py
 from __future__ import annotations
 import os, logging, httpx, asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime
+from utils.metrics_exporter import record_telegram_sent, record_telegram_failed
 
 try:
     from zoneinfo import ZoneInfo
@@ -44,14 +45,20 @@ async def _post(text: str, dedup: bool = True):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         client = await _ensure_client()
-        await client.post(url, json={
+        resp = await client.post(url, json={
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "Markdown",
             "disable_web_page_preview": True
         })
+        if resp.is_success:
+            record_telegram_sent()
+        else:
+            record_telegram_failed()
+            logger.error(f"Telegram send failed {resp.status_code}: {resp.text}")
     except Exception as e:
-        logger.error(f"Telegram send failed: {e}")
+        record_telegram_failed()
+        logger.error(f"Telegram send exception: {e}")
 
 # ====== Notifications ======
 async def notify_sl_tp_update(symbol: str, side: str, update_type: str, new_price: float):
@@ -75,23 +82,17 @@ async def notify_daily_summary(summary: Dict[str, Any]):
 async def notify_trade_review(symbol: str, review: str): 
     await _post(f"✍️ Review {symbol}: {review}", dedup=False)
 
-# ====== Callbacks router (NEW) ======
+# ====== Callbacks router ======
 def _extract_callback(update) -> Dict[str, Any]:
-    """
-    תומך ב-telegram.Update עם callback_query או message.
-    מחלץ action, symbol, side, ומדדים אופציונליים אם קיימים ב-data (JSON/kv).
-    """
     action = None; data: Dict[str, Any] = {}
     try:
         if hasattr(update, "callback_query") and update.callback_query and update.callback_query.data:
             raw = update.callback_query.data
-            # ניסיון JSON תחילה
             try:
                 import json
                 data = json.loads(raw)
                 action = data.get("action") or data.get("a")
             except Exception:
-                # נפוץ: "approve|BTCUSDT|LONG|entry=...,sl=..."
                 parts = str(raw).split("|")
                 action = parts[0].strip().lower() if parts else None
                 if len(parts) > 1: data["symbol"] = parts[1].strip()
@@ -101,7 +102,6 @@ def _extract_callback(update) -> Dict[str, Any]:
                         k,v = kv.split("=",1); data[k]=v
         elif hasattr(update, "message") and update.message and update.message.text:
             t = (update.message.text or "").strip()
-            # פקודות טקסט פשוטות
             if t.startswith("/approve"): action="approve"
             elif t.startswith("/reject"): action="reject"
             else: action="noop"
@@ -111,10 +111,6 @@ def _extract_callback(update) -> Dict[str, Any]:
     return {"action": (action or "noop").lower(), **data}
 
 async def handle_callback_action(update) -> Dict[str, Any]:
-    """
-    מחזיר תמיד dict עם המפתחות:
-      ok: bool, action: str, approved: bool, symbol/side/entry/sl/leverage/budget_usd אופציונליים.
-    """
     try:
         info = _extract_callback(update)
         action = info.get("action","noop").lower()
@@ -128,7 +124,6 @@ async def handle_callback_action(update) -> Dict[str, Any]:
         if symbol: out["symbol"] = symbol
         if side: out["side"] = side
 
-        # המרות אופציונליות
         for k in ("entry","sl","tp","leverage","budget_usd","success_pct"):
             if k in info:
                 try:
@@ -136,7 +131,6 @@ async def handle_callback_action(update) -> Dict[str, Any]:
                 except Exception:
                     out[k] = info[k]
 
-        # שלח נוטיפיקציה מנומסת
         if approved and symbol and side:
             await notify_info(f"✅ Approved {symbol} {side} @ {_now_il_str()}")
         elif rejected and symbol and side:
@@ -146,6 +140,7 @@ async def handle_callback_action(update) -> Dict[str, Any]:
     except Exception as e:
         logger.exception("handle_callback_action failed")
         return {"ok": False, "action": "error", "approved": False, "error": str(e)}
+
 
 
 
