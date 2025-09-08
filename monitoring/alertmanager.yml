@@ -2,24 +2,24 @@ global:
   resolve_timeout: 1m
 
 route:
-  receiver: telegram
-  group_by: ['alertname']
-  group_wait: 30s
-  group_interval: 5m
-  repeat_interval: 1h
+  group_by: ["alertname"]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 30m
+  receiver: "telegram"
 
 receivers:
-  - name: telegram
+  - name: "telegram"
     telegram_configs:
       - bot_token: "${TELEGRAM_BOT_TOKEN}"
         chat_id: "${TELEGRAM_CHAT_ID}"
         parse_mode: "Markdown"
-        message: |-
-          🚨 *AlgoGPT Alert* 🚨
-          *Alert:* {{ .GroupLabels.alertname }}
-          *Severity:* {{ .CommonLabels.severity }}
-          *Instance:* {{ .CommonLabels.instance }}
-          *Description:* {{ .CommonAnnotations.description }}
-          *Summary:* {{ .CommonAnnotations.summary }}
-          *Status:* {{ .Status }}
+        message: |
+          🚨 *{{ .Status | toUpper }}* – {{ .Labels.alertname }}
+          Severity: {{ .Labels.severity }}
+          {{ .Annotations.summary }}
+
+          {{ .Annotations.description }}
+          🔗 {{ .GeneratorURL }}
+
 
