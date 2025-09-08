@@ -3,7 +3,12 @@ from __future__ import annotations
 import logging, uuid
 from typing import Dict, Any, Optional
 
-from utils.binance_client import futures_create_order, futures_mark_price, set_leverage, get_symbol_info
+from utils.binance_client import (
+    futures_create_order,
+    futures_mark_price,
+    set_leverage,
+    get_symbol_info,
+)
 
 logger = logging.getLogger("algogpt.trade_executor")
 
@@ -13,7 +18,8 @@ def _round_qty(symbol: str, qty: float) -> float:
     """
     try:
         info = get_symbol_info(symbol)
-        if not info: return round(qty, 6)
+        if not info:
+            return round(qty, 6)
         step = float(info.get("filters", [{}])[2].get("stepSize", 0.001))
         min_q = float(info.get("filters", [{}])[2].get("minQty", 0.0))
         qty = max(qty, min_q)
@@ -22,33 +28,51 @@ def _round_qty(symbol: str, qty: float) -> float:
     except Exception:
         return round(qty, 6)
 
-def execute_trade_live(
+async def execute_trade_live(
     *,
     symbol: str,
     side: str,
     budget: float,
     leverage: int = 10,
+    entry: Optional[float] = None,
     sl: Optional[float] = None,
     tp: Optional[float] = None,
+    dry_run: bool = False,
     position_side: str = "BOTH",
     reduce_only: bool = False,
 ) -> Dict[str, Any]:
     """
     פותח טרייד אמיתי ב־Binance Futures כולל SL/TP אם מוגדרים.
+    תומך גם ב־dry_run (סימולציה) וגם בפרמטר entry (מחיר יעד, אופציונלי).
     """
     try:
         mark = futures_mark_price(symbol)
         if not mark:
             return {"ok": False, "error": f"mark_price_unavailable for {symbol}"}
 
-        qty = _round_qty(symbol, (budget * leverage) / mark)
+        price_ref = entry or mark
+        qty = _round_qty(symbol, (budget * leverage) / price_ref)
         if qty <= 0:
             return {"ok": False, "error": "qty_invalid"}
 
-        set_leverage(symbol, leverage)
+        if dry_run:
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "side": side.upper(),
+                "qty": qty,
+                "price": price_ref,
+                "entry": None,
+                "sl": sl,
+                "tp": tp,
+                "dry_run": True,
+            }
 
+        # ביצוע אמיתי
+        set_leverage(symbol, leverage)
         client_oid = f"ALGOGPT-{uuid.uuid4().hex[:12]}"
-        entry = futures_create_order(
+
+        entry_order = futures_create_order(
             symbol=symbol,
             side=side.upper(),
             type="MARKET",
@@ -57,8 +81,8 @@ def execute_trade_live(
             positionSide=position_side,
             newClientOrderId=client_oid,
         )
-        if not entry.get("orderId"):
-            return {"ok": False, "error": entry}
+        if not entry_order.get("orderId"):
+            return {"ok": False, "error": entry_order}
 
         result = {
             "ok": True,
@@ -66,7 +90,7 @@ def execute_trade_live(
             "side": side.upper(),
             "qty": qty,
             "price": mark,
-            "entry": entry,
+            "entry": entry_order,
             "sl": None,
             "tp": None,
         }
@@ -100,6 +124,7 @@ def execute_trade_live(
 
         logger.info("[trade_executor] executed: %s", result)
         return result
+
     except Exception as e:
         logger.exception("[trade_executor] execution error: %s", e)
         return {"ok": False, "error": str(e)}
