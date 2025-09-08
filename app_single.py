@@ -156,7 +156,7 @@ async def fapi_ping() -> bool:
         return False
 
 async def futures_balance_ok() -> bool:
-    """בדיקת בריאות בלבד – לא מציג נתונים."""
+    """בריאות בלבד – לא מציג נתונים רגישים."""
     try:
         headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
         async with httpx.AsyncClient(timeout=8.0) as x:
@@ -194,7 +194,7 @@ def _is_tp_fill(o: Dict[str, Any]) -> bool:
     return ty.startswith("TAKE_PROFIT") and st in ("FILLED","PARTIALLY_FILLED")
 
 async def _set_sl_close_position(symbol: str, side: str, stop_price: float) -> None:
-    """פשטות: SL כ-closePosition=True (לא דורש דיוק בכמויות/טיק)."""
+    """פשטות: SL כ-closePosition=True (מקטין שגיאות טיקים/כמות)."""
     side_close = "SELL" if side.upper() in ("BUY","LONG") else "BUY"
     headers = {"X-MBX-APIKEY": BINANCE_API_KEY, "Accept":"application/json"}
     payload = {
@@ -237,7 +237,7 @@ async def _user_stream_consumer():
                             sym  = str(o.get("s") or "").upper()
                             side = str(o.get("S") or "")
                             ap   = float(o.get("ap") or o.get("sp") or o.get("p") or 0.0)
-                            # לשם בדיקה – נציב SL בנקודת fill (אפשר לשפר ל-entry אם תרצה)
+                            # ברירת מחדל: קבע SL במחיר המילוי של ה-TP (אפשר לשנות ל-BE אמיתי לפי entry)
                             asyncio.create_task(_set_sl_close_position(sym, side, ap))
         except asyncio.CancelledError:
             break
@@ -314,3 +314,4 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app_single:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=PORT)
+
