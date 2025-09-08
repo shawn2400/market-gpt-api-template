@@ -46,11 +46,11 @@ RUN useradd -ms /bin/bash appuser
 WORKDIR /app
 COPY . .
 
-# תיקיות בסיס
+# תיקיות בסיס + ניקוי __pycache__ בתוך /app (לא לסרוק את כל ה־/!)
 RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
  && chmod 755 /app/static /app/logs /app/.cache /app/data || true \
  && chown -R appuser:appuser /app \
- && find / -name '__pycache__' -type d -exec rm -rf {} +
+ && find /app -name '__pycache__' -type d -print -exec rm -rf {} +
 
 # prestart ו-health scripts
 RUN test -f /app/prestart.sh && chmod +x /app/prestart.sh || true \
@@ -72,6 +72,7 @@ CMD bash -lc " \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
