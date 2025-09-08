@@ -5,7 +5,8 @@ FROM python:3.11-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     build-essential curl ca-certificates \
@@ -18,6 +19,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
  && pip install --prefix=/install --no-cache-dir --upgrade-strategy eager -r requirements.txt \
  && pip check
 
+
 # ================================
 # === Stage 2: Runtime layer =====
 # ================================
@@ -29,7 +31,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     WEB_CONCURRENCY=1 \
     GUNICORN_TIMEOUT=120 \
     PYTHONPATH=/app \
-    APP_MODULE=main:app
+    APP_MODULE=main:app \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates \
@@ -54,26 +57,30 @@ RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
  && chown -R appuser:appuser /app \
  && (find /usr/local /app -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true)
 
-# prestart & health
+# prestart & health (אופציונלי)
 RUN test -f /app/prestart.sh && chmod +x /app/prestart.sh || true \
  && test -f /app/health_full.sh && chmod +x /app/health_full.sh || true
 
 USER appuser
 
-# בריאות
+# בריאות פנימית של הקונטיינר
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD ["/bin/sh", "-c", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT}/health || exit 1"]
 
+# Render לא באמת צריך EXPOSE, אבל זה עוזר מקומית
+EXPOSE 10000
+
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Gunicorn + Uvicorn — ברירת מחדל main:app; אפשר להחליף ל-app_single:app עם APP_MODULE
+# Gunicorn + Uvicorn — ברירת מחדל main:app; ניתן להחליף ע"י APP_MODULE=app_single:app
 CMD bash -lc " \
   bash /app/prestart.sh 2>/dev/null || true && \
-  gunicorn ${APP_MODULE} \
+  gunicorn ${APP_MODULE:-main:app} \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
