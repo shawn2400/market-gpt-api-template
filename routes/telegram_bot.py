@@ -30,7 +30,7 @@ async def _send_ping(chat_id: int, msg: str):
     except Exception:
         logger.exception("Failed sending telegram message")
 
-# ✅ זה מה שהיה חסר:
+# ✅ תוודא שהשורות הבאות באמת נמצאות:
 @router.get("/test-ping")
 async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     msg = f"pong ✅ (v{APP_VERSION}) [test]"
