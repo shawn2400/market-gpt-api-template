@@ -67,7 +67,7 @@ for d in ("static", "logs"):
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
-    description="AlgoGPT — מסחר אלגוריתמי בזמן אמת"
+    description="AlgoGPT — מסחר אלגוריתמי בזמן אמתי"
 )
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -140,7 +140,7 @@ ROUTERS: List[str] = [
     "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
     "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
     "routes.ui", "routes.backtest", "routes.ui_grid", "routes.orderbook", "routes.ws", "routes.ws_health",
-    "routes.orderflow"       # ✅ וידוא טעינה (אם נשבר, רק אזהרה בלוג)
+    "routes.orderflow"
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ROUTERS.append("routes.ai")
@@ -168,7 +168,6 @@ async def root_status():
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
 
-# ---- NEW: /healthz alias (always present) ----
 _health_router = APIRouter()
 @_health_router.get("/healthz")
 async def healthz_alias():
@@ -243,6 +242,7 @@ async def api_manage_once():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
