@@ -1,6 +1,5 @@
 # utils/metrics_exporter.py
 from prometheus_client import Counter, Gauge, Histogram
-import time
 
 # ─────────────────────────────────────────────
 # Trades
@@ -26,7 +25,7 @@ pnl_total = Gauge(
 tp_hits_total = Counter(
     "algogpt_tp_hits_total",
     "כמה פעמים TP הופעל לפי רמות",
-    ["level"]  # tp1 / tp2 / tp3
+    ["level"]
 )
 
 sl_hits_total = Counter(
@@ -50,7 +49,7 @@ trailing_moves_total = Counter(
 approvals_total = Counter(
     "algogpt_approvals_total",
     "מספר אישורים/דחיות",
-    ["status"]  # approved / rejected
+    ["status"]
 )
 
 # ─────────────────────────────────────────────
@@ -59,7 +58,7 @@ approvals_total = Counter(
 ai_requests_total = Counter(
     "algogpt_ai_requests_total",
     "סה\"כ בקשות ל-AI",
-    ["status"]  # success / fail / timeout
+    ["status"]
 )
 
 ai_latency_seconds = Histogram(
@@ -69,7 +68,7 @@ ai_latency_seconds = Histogram(
 )
 
 # ─────────────────────────────────────────────
-# API Requests (FastAPI endpoints)
+# API Requests
 # ─────────────────────────────────────────────
 api_requests_total = Counter(
     "algogpt_api_requests_total",
@@ -98,42 +97,22 @@ grid_enabled = Gauge(
 )
 
 # ─────────────────────────────────────────────
-# Helpers for updating
+# Helpers
 # ─────────────────────────────────────────────
-def record_trade_open(count: int):
-    trades_open_total.set(count)
-
-def record_trade_close():
-    trades_closed_total.inc()
-
-def record_pnl(pnl_value: float):
-    pnl_total.set(pnl_value)
-
-def record_tp_hit(level: str):
-    tp_hits_total.labels(level=level).inc()
-
-def record_sl_hit():
-    sl_hits_total.inc()
-
-def record_breakeven():
-    breakeven_moves_total.inc()
-
-def record_trailing():
-    trailing_moves_total.inc()
-
-def record_approval(status: str):
-    approvals_total.labels(status=status).inc()
-
+def record_trade_open(count: int): trades_open_total.set(count)
+def record_trade_close(): trades_closed_total.inc()
+def record_pnl(pnl_value: float): pnl_total.set(pnl_value)
+def record_tp_hit(level: str): tp_hits_total.labels(level=level).inc()
+def record_sl_hit(): sl_hits_total.inc()
+def record_breakeven(): breakeven_moves_total.inc()
+def record_trailing(): trailing_moves_total.inc()
+def record_approval(status: str): approvals_total.labels(status=status).inc()
 def record_ai_call(status: str, latency: float):
     ai_requests_total.labels(status=status).inc()
     ai_latency_seconds.observe(latency)
-
 def record_api_request(path: str, method: str, status: int, latency: float):
     api_requests_total.labels(path=path, method=method, status=status).inc()
     api_latency_seconds.labels(path=path).observe(latency)
+def set_auto_executor(enabled: bool): auto_executor_enabled.set(1 if enabled else 0)
+def set_grid(enabled: bool): grid_enabled.set(1 if enabled else 0)
 
-def set_auto_executor(enabled: bool):
-    auto_executor_enabled.set(1 if enabled else 0)
-
-def set_grid(enabled: bool):
-    grid_enabled.set(1 if enabled else 0)
