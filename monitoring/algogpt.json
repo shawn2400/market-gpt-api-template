@@ -1,174 +1,82 @@
 {
-  "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      }
-    ]
-  },
-  "description": "AlgoGPT – זמינות, RPS, Latency, Blackbox, משאבי קונטיינר, התראות Prometheus/Alertmanager",
-  "editable": true,
-  "graphTooltip": 1,
+  "id": null,
+  "title": "AlgoGPT – Core",
+  "tags": ["algogpt", "fastapi", "trading"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
   "panels": [
-
     {
       "type": "stat",
-      "title": "סטטוס התראות (Alerts)",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "targets": [
-        { "expr": "count(ALERTS{alertstate=\"firing\"})", "legendFormat": "Active Alerts" }
-      ],
-      "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "orientation": "horizontal",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center"
+      "title": "Blackbox /health (probe_success)",
+      "gridPos": {"h": 4, "w": 3, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "avg(probe_success{job=\"algogpt-health\"})"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}
+        }
       },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
-            ]
-          },
-          "mappings": [
-            { "type": "value", "options": { "0": { "text": "✅ אין התראות" } } }
-          ]
-        }
-      }
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
     },
-
-    {
-      "type": "table",
-      "title": "התראות פעילות (Active Alerts)",
-      "gridPos": { "h": 6, "w": 12, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "targets": [
-        {
-          "expr": "ALERTS{alertstate=\"firing\"}",
-          "legendFormat": "{{alertname}}"
-        }
-      ],
-      "options": {
-        "showHeader": true,
-        "sortBy": []
-      }
-    },
-
-    {
-      "type": "timeseries",
-      "title": "מגמות התראות",
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "targets": [
-        {
-          "expr": "count_over_time(ALERTS{alertstate=\"firing\"}[5m])",
-          "legendFormat": "Firing Alerts (5m)"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
-    },
-
-    {
-      "type": "bargauge",
-      "title": "התראות לפי Severity",
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "targets": [
-        { "expr": "count(ALERTS{alertstate=\"firing\", severity=\"critical\"})", "legendFormat": "Critical" },
-        { "expr": "count(ALERTS{alertstate=\"firing\", severity=\"warning\"})", "legendFormat": "Warning" }
-      ],
-      "options": { "orientation": "horizontal", "displayMode": "lcd" },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green" },
-              { "color": "orange", "value": 1 },
-              { "color": "red", "value": 2 }
-            ]
-          }
-        }
-      }
-    },
-
     {
       "type": "stat",
       "title": "RPS (סה\"כ)",
-      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "targets": [
-        { "expr": "sum(rate(http_requests_total[1m])) OR sum(rate(requests_total[1m]))" }
-      ],
-      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+      "gridPos": {"h": 4, "w": 3, "x": 3, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(rate(algogpt_api_requests_total[1m]))"}],
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
     },
-
     {
       "type": "stat",
-      "title": "p95 (ms)",
-      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "title": "שיעור 5xx",
+      "gridPos": {"h": 4, "w": 3, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ms" } }
-    },
-
-    {
-      "type": "stat",
-      "title": "p99 (ms)",
-      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ms" } }
-    },
-
-    {
-      "type": "timeseries",
-      "title": "משאבי קונטיינר – algogpt (RAM/CPU)",
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "targets": [
-        { "expr": "container_memory_working_set_bytes{container=\"algogpt\"}", "legendFormat": "RAM working_set" },
-        { "expr": "rate(container_cpu_usage_seconds_total{container=\"algogpt\"}[2m])", "legendFormat": "CPU usage" }
+        {"expr": "sum(rate(algogpt_api_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(algogpt_api_requests_total[5m])),1)"}
       ],
       "fieldConfig": {
-        "defaults": { "unit": "bytes" },
-        "overrides": [
-          { "matcher": { "id": "byName", "options": "CPU usage" }, "properties": [{ "id": "unit", "value": "percentunit" }] }
-        ]
-      }
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "orange", "value": 0.01},
+            {"color": "red", "value": 0.05}
+          ]}
+        }
+      },
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
+    },
+    {
+      "type": "stat",
+      "title": "Telegram OK/Fail (5m)",
+      "gridPos": {"h": 4, "w": 3, "x": 9, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "sum(rate(algogpt_telegram_messages_sent_total[5m])) / clamp_min(sum(rate(algogpt_telegram_messages_sent_total[5m])) + sum(rate(algogpt_telegram_messages_failed_total[5m])), 1)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "yellow", "value": 0.7},
+              {"color": "green", "value": 0.95}
+            ]
+          }
+        }
+      },
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
     }
-  ],
-  "refresh": "10s",
-  "schemaVersion": 39,
-  "style": "dark",
-  "tags": ["algogpt", "fastapi", "alerts"],
-  "templating": { "list": [] },
-  "time": { "from": "now-6h", "to": "now" },
-  "timepicker": { "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"] },
-  "title": "AlgoGPT – Core & Alerts",
-  "uid": "algogpt-core",
-  "version": 2
+  ]
 }
+
 
 
 
