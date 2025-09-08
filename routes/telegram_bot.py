@@ -1,4 +1,4 @@
-# routes/telegram_bot.py
+# ✅ routes/telegram_bot.py — גרסה תקינה, מלאה וכוללת את /test-ping
 
 from __future__ import annotations
 import logging, os, json
@@ -16,15 +16,19 @@ router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "unknown")
 
+# ───────────────────────────────────────────────
+# Models
+# ───────────────────────────────────────────────
 class MuteRequest(BaseModel):
     state: bool
 
 # ───────────────────────────────────────────────
-# Ping Sender (שולח הודעה לטלגרם)
+# Telegram Ping Sender
 # ───────────────────────────────────────────────
 async def _send_ping(chat_id: int, msg: str):
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token: return
+    if not token:
+        return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -33,16 +37,16 @@ async def _send_ping(chat_id: int, msg: str):
         logger.exception("Failed sending telegram message")
 
 # ───────────────────────────────────────────────
-# /test-ping endpoint (לבדיקת בוט)
+# /test-ping endpoint
 # ───────────────────────────────────────────────
 @router.get("/test-ping")
-async def test_ping(chat_id: int, api_key: str = Depends(require_api_key)) -> Dict[str, Any]:
+async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     msg = f"pong ✅ (v{APP_VERSION}) [test]"
     await _send_ping(chat_id, msg)
     return {"ok": True, "sent": True, "chat_id": chat_id, "version": APP_VERSION}
 
 # ───────────────────────────────────────────────
-# Telegram webhook handler (callback API)
+# Telegram webhook (main handler)
 # ───────────────────────────────────────────────
 @router.post("/webhook")
 async def telegram_webhook(req: Request) -> Dict[str, Any]:
@@ -77,7 +81,7 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
     return {"ok": True, "ignored": True}
 
 # ───────────────────────────────────────────────
-# mute endpoints
+# Mute controls
 # ───────────────────────────────────────────────
 @router.get("/status")
 async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
@@ -93,7 +97,7 @@ async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]
     return {"ok": True, "mute": toggle_mute()}
 
 # ───────────────────────────────────────────────
-# webhook setter
+# Webhook setter
 # ───────────────────────────────────────────────
 @router.post("/set-webhook")
 async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
