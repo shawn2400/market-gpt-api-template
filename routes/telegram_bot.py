@@ -1,4 +1,4 @@
-# routes/telegram_bot.py
+# ✅ routes/telegram_bot.py
 from __future__ import annotations
 import logging, os, json
 from typing import Dict, Any
@@ -30,7 +30,6 @@ async def _send_ping(chat_id: int, msg: str):
     except Exception:
         logger.exception("Failed sending telegram message")
 
-# ✅ תוודא שהשורות הבאות באמת נמצאות:
 @router.get("/test-ping")
 async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     msg = f"pong ✅ (v{APP_VERSION}) [test]"
