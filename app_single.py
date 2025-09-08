@@ -1,6 +1,6 @@
 # app_single.py
 from __future__ import annotations
-import os, asyncio, time, json, logging, random
+import os, asyncio, time, json, logging, random, hmac, hashlib
 from typing import Dict, Any, Optional, List
 
 import httpx
@@ -31,8 +31,11 @@ BINANCE_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
 BINANCE_FAPI_HTTP  = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com").rstrip("/")
 BINANCE_FWS_BASE   = (os.getenv("BINANCE_FUTURES_WS_BASE") or "wss://fstream.binance.com").rstrip("/")
 
+def _sign(query: str) -> str:
+    return hmac.new(BINANCE_API_SECRET.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+
 # ===== In-Memory price cache =====
-LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}  # {SYMBOL: {"price": float, "ts": epoch}}
+LAST_PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
 def price_update(symbol: str, price: float) -> None:
     try:
         p = float(price)
@@ -146,7 +149,7 @@ async def auto_price_updater(symbols: List[str], ws_keepalive: int = WS_KEEPALIV
         for t in (ws_task, rest_task):
             if t and not t.done(): t.cancel()
 
-# ===== Minimal Binance helpers (HTTP) =====
+# ===== Minimal Binance helpers (HTTP, signed where needed) =====
 async def fapi_ping() -> bool:
     try:
         async with httpx.AsyncClient(timeout=5.0) as x:
@@ -156,16 +159,23 @@ async def fapi_ping() -> bool:
         return False
 
 async def futures_balance_ok() -> bool:
-    """בריאות בלבד – לא מציג נתונים רגישים."""
+    """בדיקת בריאות אמיתית (USER_DATA) עם חתימה."""
+    if not (BINANCE_API_KEY and BINANCE_API_SECRET):
+        return False
     try:
-        headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+        ts = int(time.time()*1000)
+        q = f"timestamp={ts}&recvWindow=45000"
+        sig = _sign(q)
+        headers = {"X-MBX-APIKEY": BINANCE_API_KEY, "Accept": "application/json"}
         async with httpx.AsyncClient(timeout=8.0) as x:
-            r = await x.get(f"{BINANCE_FAPI_HTTP}/fapi/v2/balance", headers=headers)
+            url = f"{BINANCE_FAPI_HTTP}/fapi/v2/balance?{q}&signature={sig}"
+            r = await x.get(url, headers=headers)
             return r.status_code == 200 and isinstance(r.json(), list)
-    except Exception:
+    except Exception as e:
+        log.warning({"event":"balance_check_failed","err":str(e)})
         return False
 
-# ===== User-Data Stream (TP→SL-BE) בסיסי =====
+# ===== User-Data Stream (TP→SL-BE) =====
 _running_stream = False
 _keepalive_task: Optional[asyncio.Task] = None
 
@@ -191,13 +201,16 @@ async def _keepalive_listen_key(lk: str):
 def _is_tp_fill(o: Dict[str, Any]) -> bool:
     ty = str(o.get("o","")).upper()
     st = str(o.get("X","")).upper()
-    return ty.startswith("TAKE_PROFIT") and st in ("FILLED","PARTIALLY_FILLED")
+    ro = str(o.get("R","")).lower() in ("true","1")  # reduceOnly
+    # TP/TP_MARKET/TAKE_PROFIT_MARKET...
+    return ty.startswith("TAKE_PROFIT") and st in ("FILLED","PARTIALLY_FILLED") and ro
 
 async def _set_sl_close_position(symbol: str, side: str, stop_price: float) -> None:
-    """פשטות: SL כ-closePosition=True (מקטין שגיאות טיקים/כמות)."""
+    """מציב SL כ-closePosition=true (חתום) כדי לנעול BE לאחר TP."""
+    if not (BINANCE_API_KEY and BINANCE_API_SECRET):
+        return
     side_close = "SELL" if side.upper() in ("BUY","LONG") else "BUY"
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY, "Accept":"application/json"}
-    payload = {
+    base = {
         "symbol": symbol.upper(),
         "side": side_close,
         "type": "STOP_MARKET",
@@ -207,13 +220,21 @@ async def _set_sl_close_position(symbol: str, side: str, stop_price: float) -> N
         "newClientOrderId": f"SL_BE_{symbol.upper()}_{int(time.time()*1000)}",
         "recvWindow": "45000",
         "workingType": os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
+        "timestamp": str(int(time.time()*1000)),
     }
+    q = "&".join(f"{k}={v}" for k, v in base.items())
+    sig = _sign(q)
+    headers = {"X-MBX-APIKEY": BINANCE_API_KEY, "Accept":"application/json"}
     async with httpx.AsyncClient(timeout=8.0) as x:
         try:
-            await x.post(f"{BINANCE_FAPI_HTTP}/fapi/v1/order", headers=headers, data=payload)
-            log.info({"event":"sl_be_set","symbol":symbol})
+            url = f"{BINANCE_FAPI_HTTP}/fapi/v1/order?{q}&signature={sig}"
+            r = await x.post(url, headers=headers)
+            if r.status_code != 200:
+                log.warning({"event":"sl_be_set_failed","symbol":symbol,"status":r.status_code,"body":r.text})
+            else:
+                log.info({"event":"sl_be_set","symbol":symbol})
         except Exception as e:
-            log.warning({"event":"sl_be_set_failed","symbol":symbol,"err":str(e)})
+            log.warning({"event":"sl_be_set_error","symbol":symbol,"err":str(e)})
 
 async def _user_stream_consumer():
     if not (BINANCE_API_KEY and BINANCE_API_SECRET):
@@ -237,7 +258,6 @@ async def _user_stream_consumer():
                             sym  = str(o.get("s") or "").upper()
                             side = str(o.get("S") or "")
                             ap   = float(o.get("ap") or o.get("sp") or o.get("p") or 0.0)
-                            # ברירת מחדל: קבע SL במחיר המילוי של ה-TP (אפשר לשנות ל-BE אמיתי לפי entry)
                             asyncio.create_task(_set_sl_close_position(sym, side, ap))
         except asyncio.CancelledError:
             break
@@ -314,4 +334,5 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app_single:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=PORT)
+
 
