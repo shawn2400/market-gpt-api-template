@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import httpx
+
+# נשתמש ב-telegram.Update אם אפשר, אבל לא ניפול אם parsing יכשל
 from telegram import Update
 
 from utils.auth import require_api_key
@@ -21,7 +23,6 @@ from utils.binance_client import (
 )
 
 logger = logging.getLogger("algogpt.routes.telegram")
-
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 # ───────────────────────────────────────────────
@@ -36,7 +37,6 @@ class MuteRequest(BaseModel):
 _TP_LADDER_COOLDOWN = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 _TP_LADDER_ON_APPROVE = os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1","true","yes","on")
 _AUTO_OPEN_ON_APPROVE = os.getenv("AUTO_OPEN_ON_APPROVE", "1").lower() in ("1","true","yes","on")
-_TELEGRAM_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 _HMAC_ENABLED = bool(os.getenv("WEBHOOK_HMAC_SECRET", "").strip())
 _X_SIG_HDRS = ("x-algogpt-signature", "X-Algogpt-Signature", "X-Hub-Signature-256")
 _X_IDEM = "X-Idempotency-Key"
@@ -52,14 +52,6 @@ def _require_secret(req: Request) -> None:
     if not wanted or got != wanted:
         raise HTTPException(status_code=403, detail="Invalid Telegram secret token")
 
-def _cooldown_ok(symbol: str) -> bool:
-    t = time.time()
-    last = _LADDER_LAST.get(symbol, 0.0)
-    if t - last >= _TP_LADDER_COOLDOWN:
-        _LADDER_LAST[symbol] = t
-        return True
-    return False
-
 def _verify_optional_hmac(req: Request, body: bytes) -> bool:
     if not _HMAC_ENABLED:
         return True
@@ -70,12 +62,20 @@ def _verify_optional_hmac(req: Request, body: bytes) -> bool:
             break
     if not header_val:
         return True
-    sig_hex = header_val.split("=",1)[1] if "=" in header_val else header_val
+    sig_hex = header_val.split("=", 1)[1] if "=" in header_val else header_val
     return verify_hmac(sig_hex, body)
 
-def _side_to_exchange(side: str) -> Tuple[str,str]:
+def _cooldown_ok(symbol: str) -> bool:
+    t = time.time()
+    last = _LADDER_LAST.get(symbol, 0.0)
+    if t - last >= _TP_LADDER_COOLDOWN:
+        _LADDER_LAST[symbol] = t
+        return True
+    return False
+
+def _side_to_exchange(side: str) -> Tuple[str, str]:
     s = (side or "").upper()
-    if s in ("LONG","BUY"):  return "BUY","LONG"
+    if s in ("LONG","BUY"):   return "BUY","LONG"
     if s in ("SHORT","SELL"): return "SELL","SHORT"
     return "BUY","LONG"
 
@@ -124,6 +124,61 @@ def _open_after_approve(symbol: str, side: str, entry_hint: Optional[float]=None
         "pos_side": pos_side,
     }
 
+def _send_tg(chat_id: int, text: str) -> None:
+    """שליחת הודעה קצרה לבוט (best-effort)."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        httpx.post(url, data={"chat_id": chat_id, "text": text}, timeout=5.0)
+    except Exception:
+        logger.exception("failed sending telegram message")
+
+def _parse_update_safe(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    מנסה לפענח Update דרך telegram.Update; אם נכשל (למשל חסר first_name),
+    נופל חזרה לפיענוח ידני של שדות message/callback_query.
+    מחזיר: { chat_id, text, is_callback, update_obj }
+    """
+    chat_id = None
+    text = None
+    is_callback = False
+    update_obj = None
+
+    # נסיון "תקני"
+    try:
+        update_obj = Update.de_json(payload, None)
+        if update_obj and update_obj.message:
+            chat_id = update_obj.message.chat.id
+            text = (update_obj.message.text or "").strip()
+        elif update_obj and update_obj.callback_query:
+            is_callback = True
+            chat_id = update_obj.callback_query.message.chat.id if update_obj.callback_query.message else None
+            text = (update_obj.callback_query.data or "").strip()
+        if chat_id:
+            return {"chat_id": chat_id, "text": text or "", "is_callback": is_callback, "update_obj": update_obj}
+    except Exception:
+        # נמשיך לפיענוח ידני
+        pass
+
+    # פיענוח ידני מינימלי
+    msg = payload.get("message") or {}
+    cbq = payload.get("callback_query") or {}
+    if msg:
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
+        text = (msg.get("text") or "").strip()
+        is_callback = False
+    elif cbq:
+        data = cbq.get("data")
+        text = (data or "").strip()
+        is_callback = True
+        m = cbq.get("message") or {}
+        chat = m.get("chat") or {}
+        chat_id = chat.get("id")
+    return {"chat_id": chat_id, "text": text or "", "is_callback": is_callback, "update_obj": update_obj}
+
 # ───────────────────────────────────────────────
 # Endpoints
 # ───────────────────────────────────────────────
@@ -170,10 +225,23 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
 
     try:
         payload = json.loads(raw) if raw else {}
-        update = Update.de_json(payload, None)
-        result = await handle_callback_action(update)
+        parsed = _parse_update_safe(payload)
+        chat_id = parsed.get("chat_id")
+        text = (parsed.get("text") or "").strip().lower()
 
-        approved = bool(result and (result.get("approved") or str(result.get("action","")).lower() in ("approve","approved")))
+        # ── פקודות קצרות ─────────────────────
+        if chat_id and text in ("/ping", "ping", "/start"):
+            _send_tg(chat_id, f"pong ✅ (v{os.getenv('ALGOGPT_VERSION', '?')})")
+            return {"ok": True, "echo": "ping"}
+
+        # ── callback / לוגיקת אישור קיימת ────
+        update_obj = parsed.get("update_obj")
+        result = None
+        if update_obj is not None:
+            # ניתן לטפל גם ב-message וגם ב-callback דרך הנוטיפייר
+            result = await handle_callback_action(update_obj)
+
+        approved = bool(result and (result.get("approved") or str(result.get("action", "")).lower() in ("approve", "approved")))
         opened = None; ladder = None; be_res = None
 
         if approved:
@@ -188,14 +256,15 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
                                              budget_usd_hint=result.get("budget_usd"))
             if _TP_LADDER_ON_APPROVE and symbol and side and _cooldown_ok(symbol):
                 ladder = place_tp_ladder(symbol, position_side=side)
-                if os.getenv("TP_BE_ONLY_AFTER_TP1","0") == "0":
-                    be_res = set_breakeven_stop(symbol, offset_bps=float(os.getenv("TP_BE_OFFSET_BPS","5")))
+                if os.getenv("TP_BE_ONLY_AFTER_TP1", "0") == "0":
+                    be_res = set_breakeven_stop(symbol, offset_bps=float(os.getenv("TP_BE_OFFSET_BPS", "5")))
 
         return {"ok": True, "approved": approved, "result": result,
                 "opened": opened, "ladder": ladder, "be": be_res}
     except Exception as e:
         logger.exception("telegram_webhook failed")
         return {"ok": False, "error": str(e)}
+
 
 
 
