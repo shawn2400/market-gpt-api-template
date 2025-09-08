@@ -1,4 +1,4 @@
-# ✅ routes/telegram_bot.py — גרסה תקינה, מלאה וכוללת את /test-ping
+# routes/telegram_bot.py
 
 from __future__ import annotations
 import logging, os, json
@@ -16,19 +16,12 @@ router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "unknown")
 
-# ───────────────────────────────────────────────
-# Models
-# ───────────────────────────────────────────────
 class MuteRequest(BaseModel):
     state: bool
 
-# ───────────────────────────────────────────────
-# Telegram Ping Sender
-# ───────────────────────────────────────────────
 async def _send_ping(chat_id: int, msg: str):
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        return
+    if not token: return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -36,18 +29,43 @@ async def _send_ping(chat_id: int, msg: str):
     except Exception:
         logger.exception("Failed sending telegram message")
 
-# ───────────────────────────────────────────────
-# /test-ping endpoint
-# ───────────────────────────────────────────────
 @router.get("/test-ping")
 async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     msg = f"pong ✅ (v{APP_VERSION}) [test]"
     await _send_ping(chat_id, msg)
     return {"ok": True, "sent": True, "chat_id": chat_id, "version": APP_VERSION}
 
-# ───────────────────────────────────────────────
-# Telegram webhook (main handler)
-# ───────────────────────────────────────────────
+@router.get("/status")
+async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    return {"ok": True, "mute": is_muted()}
+
+@router.post("/mute")
+async def set_mute_state(req: MuteRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    set_mute(req.state)
+    return {"ok": True, "mute": req.state}
+
+@router.post("/toggle")
+async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    return {"ok": True, "mute": toggle_mute()}
+
+@router.post("/set-webhook")
+async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if not token or not secret:
+        raise HTTPException(500, "Telegram bot config missing")
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            json={
+                "url": url,
+                "secret_token": secret,
+                "allowed_updates": ["message", "callback_query"],
+                "drop_pending_updates": True
+            }
+        )
+        return {"ok": True, "telegram": resp.json()}
+
 @router.post("/webhook")
 async def telegram_webhook(req: Request) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -78,44 +96,7 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
     if chat_id and cmd == "/version":
         await _send_ping(chat_id, f"AlgoGPT v{APP_VERSION}")
         return {"ok": True, "version": APP_VERSION}
-    return {"ok": True, "ignored": True}
-
-# ───────────────────────────────────────────────
-# Mute controls
-# ───────────────────────────────────────────────
-@router.get("/status")
-async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    return {"ok": True, "mute": is_muted()}
-
-@router.post("/mute")
-async def set_mute_state(req: MuteRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    set_mute(req.state)
-    return {"ok": True, "mute": req.state}
-
-@router.post("/toggle")
-async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    return {"ok": True, "mute": toggle_mute()}
-
-# ───────────────────────────────────────────────
-# Webhook setter
-# ───────────────────────────────────────────────
-@router.post("/set-webhook")
-async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    if not token or not secret:
-        raise HTTPException(500, "Telegram bot config missing")
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"https://api.telegram.org/bot{token}/setWebhook",
-            json={
-                "url": url,
-                "secret_token": secret,
-                "allowed_updates": ["message", "callback_query"],
-                "drop_pending_updates": True
-            }
-        )
-        return {"ok": True, "telegram": resp.json()}
+    return {"ok": True, "ignored": True"}
 
 
 
