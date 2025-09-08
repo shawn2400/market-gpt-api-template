@@ -1,12 +1,176 @@
-apiVersion: 1
-
-providers:
-  - name: 'algogpt'
-    orgId: 1
-    folder: 'AlgoGPT'
-    type: file
-    disableDeletion: false
-    editable: true
-    options:
-      path: /etc/grafana/provisioning/dashboards
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "AlgoGPT – זמינות, RPS, p95/p99, 4xx/5xx, לפי route/path, Blackbox, משאבי קונטיינר.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Blackbox /health (probe_success)",
+      "gridPos": {"h": 4, "w": 3, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "avg(probe_success{job=\"algogpt-health\"})"}],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "RPS (סה\"כ)",
+      "gridPos": {"h": 4, "w": 3, "x": 3, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[1m])) OR sum(rate(requests_total[1m])) OR sum(rate(api_requests_total[1m]))"
+        }
+      ],
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
+    },
+    {
+      "type": "stat",
+      "title": "שיעור 5xx",
+      "gridPos": {"h": 4, "w": 3, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "(sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))) OR (sum(rate(requests_total{status=~\"5..\"}[5m])) / sum(rate(requests_total[5m])))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {"mode": "percentage", "steps": [{"color": "green"}, {"color": "orange", "value": 0.01}, {"color": "red", "value": 0.05}]}
+        },
+        "overrides": []
+      },
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
+    },
+    {
+      "type": "stat",
+      "title": "p95 (ms)",
+      "gridPos": {"h": 4, "w": 3, "x": 9, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "(histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000) OR (histogram_quantile(0.95, sum(rate(request_latency_seconds_bucket[5m])) by (le)) * 1000) OR (histogram_quantile(0.95, sum(rate(request_latency_ms_bucket[5m])) by (le)))"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ms"}}
+    },
+    {
+      "type": "stat",
+      "title": "p99 (ms)",
+      "gridPos": {"h": 4, "w": 3, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "(histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000) OR (histogram_quantile(0.99, sum(rate(request_latency_seconds_bucket[5m])) by (le)) * 1000) OR (histogram_quantile(0.99, sum(rate(request_latency_ms_bucket[5m])) by (le)))"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ms"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "RPS לפי מסלול (handler / route / path)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (handler,method,status) (rate(http_requests_total[1m]))",
+          "legendFormat": "{{method}} {{handler}} ({{status}})"
+        },
+        {
+          "expr": "sum by (route,method,status) (rate(http_requests_total[1m]))",
+          "legendFormat": "{{method}} {{route}} ({{status}})"
+        },
+        {
+          "expr": "sum by (path,method,status) (rate(http_requests_total[1m]))",
+          "legendFormat": "{{method}} {{path}} ({{status}})"
+        }
+      ],
+      "options": {"legend": {"displayMode": "table", "placement": "right"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p95 לפי מסלול",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le,handler) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "handler={{handler}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le,route) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "route={{route}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le,path) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "path={{path}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Blackbox – משך (s) והצלחות",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "avg_over_time(probe_duration_seconds{job=\"algogpt-health\"}[5m])", "legendFormat": "duration"},
+        {"expr": "avg_over_time(probe_success{job=\"algogpt-health\"}[5m])", "legendFormat": "success"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "משאבי קונטיינר – algogpt (RAM/CPU)",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "container_memory_working_set_bytes{container=\"algogpt\"}", "legendFormat": "RAM working_set"},
+        {"expr": "rate(container_cpu_usage_seconds_total{container=\"algogpt\"}[2m])", "legendFormat": "CPU usage"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "bytes"},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "CPU usage"}, "properties": [{"id": "unit", "value": "percentunit"}]}
+        ]
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["algogpt", "fastapi"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {"refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]},
+  "title": "AlgoGPT – Core",
+  "uid": "algogpt-core",
+  "version": 1
+}
 
