@@ -97,6 +97,19 @@ grid_enabled = Gauge(
 )
 
 # ─────────────────────────────────────────────
+# Telegram Notifications
+# ─────────────────────────────────────────────
+telegram_messages_sent_total = Counter(
+    "algogpt_telegram_messages_sent_total",
+    "סה\"כ הודעות טלגרם שנשלחו בהצלחה"
+)
+
+telegram_messages_failed_total = Counter(
+    "algogpt_telegram_messages_failed_total",
+    "סה\"כ הודעות טלגרם שנכשלו"
+)
+
+# ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
 def record_trade_open(count: int): trades_open_total.set(count)
@@ -115,4 +128,7 @@ def record_api_request(path: str, method: str, status: int, latency: float):
     api_latency_seconds.labels(path=path).observe(latency)
 def set_auto_executor(enabled: bool): auto_executor_enabled.set(1 if enabled else 0)
 def set_grid(enabled: bool): grid_enabled.set(1 if enabled else 0)
+def record_telegram_sent(): telegram_messages_sent_total.inc()
+def record_telegram_failed(): telegram_messages_failed_total.inc()
+
 
