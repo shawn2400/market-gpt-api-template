@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
+from prometheus_client import make_asgi_app
 
 # ===== Env =====
 IS_CLOUD = bool(
@@ -41,8 +42,8 @@ from utils.binance_client import futures_balance, fapi_ping
 from utils.ws_fallback import auto_price_updater, is_price_fresh
 from utils.trade_manager import manage_open_trades, manage_open_trades_loop
 from utils.auto_executor import start_executor, stop_executor
-from utils.metrics import metrics_tracker
 from utils.log_auto import log_auto
+from utils.metrics_middleware import MetricsMiddleware   # ✅ חדש
 
 # Middleware פנימי
 from app.middlewares import InternalAuthMiddleware
@@ -88,14 +89,18 @@ app.add_middleware(
 # Middleware פנימי
 app.add_middleware(InternalAuthMiddleware)
 
+# ===== Metrics Middleware (חדש) =====
+app.add_middleware(MetricsMiddleware)
+app.mount("/metrics", make_asgi_app())
+
 # ===== Auth Middleware =====
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
         "/", "/openapi.json", "/health", "/healthz", "/readyz", "/docs", "/redoc",
-        "/telegram/webhook"   # ✅ callbacks merged
+        "/telegram/webhook"
     }
-    PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk"]
+    PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk", "/metrics"]
     path = request.url.path
 
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
@@ -114,29 +119,12 @@ async def validate_token(request: Request, call_next):
 
     return await call_next(request)
 
-# ===== Metrics Middleware =====
-@app.middleware("http")
-async def track_metrics(request: Request, call_next):
-    start = asyncio.get_event_loop().time()
-    try:
-        response = await call_next(request)
-    except Exception:
-        dur_ms = (asyncio.get_event_loop().time() - start) * 1000.0
-        metrics_tracker.observe_request(500, dur_ms)
-        log_auto.observe(500, dur_ms)
-        raise
-    else:
-        dur_ms = (asyncio.get_event_loop().time() - start) * 1000.0
-        metrics_tracker.observe_request(response.status_code, dur_ms)
-        log_auto.observe(response.status_code, dur_ms)
-        return response
-
 # ===== Routers =====
 ROUTERS: List[str] = [
     "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
     "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
     "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
-    "routes.telegram_bot",   # ✅ unified bot+callbacks (+ test-ping)
+    "routes.telegram_bot",
     "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
     "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
     "routes.ui", "routes.backtest", "routes.ui_grid", "routes.orderbook", "routes.ws", "routes.ws_health",
@@ -159,7 +147,7 @@ def _include_router(path: str) -> None:
 for r in ROUTERS:
     _include_router(r)
 
-# ===== Simple Endpoints =====
+# ===== Health =====
 @app.get("/")
 async def root_status():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
@@ -242,6 +230,7 @@ async def api_manage_once():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
