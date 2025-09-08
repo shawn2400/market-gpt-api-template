@@ -1,5 +1,5 @@
 # utils/multi_tf_scanner.py
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from . import scanner_utils as su
 
 async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
@@ -12,6 +12,7 @@ async def fallback_scan_manual(symbol: str) -> List[Dict[str, Any]]:
         if x:
             out.append(x)
     return out
+
 
 
 
