@@ -1,0 +1,29 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: "telegram-bot"
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 30m
+
+receivers:
+  - name: "telegram-bot"
+    telegram_configs:
+      - bot_token: "${TELEGRAM_BOT_TOKEN}"
+        chat_id: ${TELEGRAM_CHAT_ID}
+        parse_mode: "HTML"
+        message: |-
+          🚨 <b>{{ .Status | toUpper }}</b> Alert
+          🔹 <b>{{ .Labels.alertname }}</b>
+          🕒 {{ .StartsAt }}
+          🔖 Severity: {{ .Labels.severity }}
+          📌 Service: {{ .Labels.service }}
+          ℹ️ {{ .Annotations.description }}
+
+inhibit_rules:
+  - source_match:
+      severity: "critical"
+    target_match:
+      severity: "warning"
+    equal: ["alertname", "service"]
