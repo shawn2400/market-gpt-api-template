@@ -1,1 +1,99 @@
+{
+  "id": null,
+  "title": "AlgoGPT – Core",
+  "tags": ["algogpt", "core", "system"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Blackbox /health",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "avg(probe_success{job=\"algogpt-health\"})"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "red"}, {"color": "green", "value": 1}]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "RPS (Total)",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(rate(algogpt_api_requests_total[1m]))"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "stat",
+      "title": "5xx Error Rate",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "sum(rate(algogpt_api_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(algogpt_api_requests_total[5m])), 1)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.01},
+              {"color": "red", "value": 0.05}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p95/p99",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(algogpt_api_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(algogpt_api_latency_seconds_bucket[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "API RPS by Path",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (path,method,status) (rate(algogpt_api_requests_total[1m]))",
+          "legendFormat": "{{method}} {{path}} ({{status}})"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container CPU/Memory",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "rate(container_cpu_usage_seconds_total{container=\"algogpt\"}[2m])", "legendFormat": "CPU"},
+        {"expr": "container_memory_working_set_bytes{container=\"algogpt\"}", "legendFormat": "Memory"}
+      ]
+    }
+  ]
+}
 
