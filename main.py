@@ -122,13 +122,13 @@ async def validate_token(request: Request, call_next):
 # ===== Routers =====
 ROUTERS: List[str] = [
     "routes.trade", "routes.market", "routes.binance_status", "routes.executor", "routes.orders", "routes.price",
-    "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor_extra",
+    "routes.rpc", "routes.market_extra", "routes.executor_extra", "routes.anchor",   # ✅ anchor unified
     "routes.grid", "routes.debug", "routes.indicators", "routes.indicators_extra",
-    "routes.telegram_webhook",   # ⬅️ במקום telegram_bot
+    "routes.telegram_webhook",
     "routes.metrics", "routes.metrics_extra", "routes.precision", "routes.alerts",
     "routes.reconcile", "routes.scheduler_ai", "routes.admin", "routes.export", "routes.pnl",
     "routes.ui", "routes.backtest", "routes.ui_grid", "routes.orderbook", "routes.ws", "routes.ws_health",
-    "routes.orderflow"
+    "routes.orderflow", "routes.analysis", "routes.decision"  # ✅ analysis & decision unified
 ]
 if _to_bool(os.getenv("ENABLE_AI_ROUTES", "1"), True):
     ROUTERS.append("routes.ai")
@@ -230,6 +230,7 @@ async def api_manage_once():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
