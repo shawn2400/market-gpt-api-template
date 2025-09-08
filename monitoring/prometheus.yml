@@ -2,9 +2,15 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
-# טען חוקים (alert rules)
+# חוקים (alerts rules)
 rule_files:
   - /etc/prometheus/alerts/*.yml
+
+# שליחה ל־Alertmanager
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
   # ── Prometheus עצמו
@@ -17,7 +23,7 @@ scrape_configs:
     static_configs:
       - targets: ["cadvisor:8080"]
 
-  # ── Blackbox פנימי: בדיקת HTTP ל-/health של ה-App בתוך רשת ה-compose
+  # ── Blackbox פנימי: בדיקת HTTP ל-/health של האפליקציה בתוך הרשת
   - job_name: "algogpt-health"
     metrics_path: /probe
     params:
@@ -60,6 +66,7 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: blackbox:9115
+
 
 
 
