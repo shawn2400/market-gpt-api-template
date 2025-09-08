@@ -1,0 +1,52 @@
+groups:
+  - name: algogpt-core
+    interval: 30s
+    rules:
+      - alert: AlgoGPT_HealthProbeFailed
+        expr: avg_over_time(probe_success{job="algogpt-health"}[2m]) < 0.5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "בריאות אפליקציה נכשלת (Blackbox)"
+          description: "probe_success נמוך לאורך דקה+."
+
+      - alert: AlgoGPT_High5xxRate
+        expr: (sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "שיעור 5xx גבוה"
+          description: "יותר מ-5% שגיאות 5xx ב-5 הדקות האחרונות."
+
+      - alert: AlgoGPT_HighLatencyP95
+        expr: (
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000
+          OR histogram_quantile(0.95, sum(rate(request_latency_seconds_bucket[5m])) by (le)) * 1000
+          OR histogram_quantile(0.95, sum(rate(request_latency_ms_bucket[5m])) by (le))
+        ) > 1200
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 גבוה"
+          description: "p95 > 1200ms לאורך 3 דקות."
+
+      - alert: AlgoGPT_HighMemory
+        expr: container_memory_working_set_bytes{container="algogpt"} > 700 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "זיכרון גבוה באפליקציה"
+          description: "הקונטיינר algogpt חוצה ~700MB לאורך 5 דקות."
+
+      - alert: AlgoGPT_HighCPU
+        expr: rate(container_cpu_usage_seconds_total{container="algogpt"}[5m]) > 0.7
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU גבוה מתמשך"
+          description: "שימוש CPU של algogpt מעל 70% לאורך 5 דקות."
