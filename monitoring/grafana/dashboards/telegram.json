@@ -1,0 +1,74 @@
+{
+  "id": null,
+  "title": "AlgoGPT – Telegram Alerts",
+  "tags": ["algogpt", "telegram", "alerts"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Messages Sent (Total)",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(algogpt_telegram_messages_sent_total)"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "green"}}},
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
+    },
+    {
+      "type": "stat",
+      "title": "Messages Failed (Total)",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(algogpt_telegram_messages_failed_total)"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "fixed", "fixedColor": "red"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "red", "value": 1}
+          ]}
+        }
+      },
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages Sent – Rate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "rate(algogpt_telegram_messages_sent_total[5m])", "legendFormat": "Sent msg/s"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "color": {"mode": "palette-classic"}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages Failed – Rate",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "rate(algogpt_telegram_messages_failed_total[5m])", "legendFormat": "Failed msg/s"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "color": {"mode": "continuous-GrYlRd"}}}
+    },
+    {
+      "type": "stat",
+      "title": "Failure Ratio (last 5m)",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{
+        "expr": "sum(rate(algogpt_telegram_messages_failed_total[5m])) / clamp_min(sum(rate(algogpt_telegram_messages_sent_total[5m])) + sum(rate(algogpt_telegram_messages_failed_total[5m])), 1)"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 0.01},
+            {"color": "red", "value": 0.05}
+          ]}
+        }
+      },
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center"}
+    }
+  ]
+}
