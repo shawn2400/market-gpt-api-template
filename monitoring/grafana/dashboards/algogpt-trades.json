@@ -1,1 +1,59 @@
+{
+  "id": null,
+  "title": "AlgoGPT – Trades",
+  "tags": ["algogpt", "trades"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Open Trades",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "algogpt_trades_open_total"}]
+    },
+    {
+      "type": "stat",
+      "title": "Closed Trades",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "increase(algogpt_trades_closed_total[1d])"}]
+    },
+    {
+      "type": "stat",
+      "title": "PnL Total (USDT)",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "algogpt_pnl_total_usdt"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "TP / SL Hits",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "increase(algogpt_tp_hits_total[1d])", "legendFormat": "TP ({{level}})"},
+        {"expr": "increase(algogpt_sl_hits_total[1d])", "legendFormat": "SL"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Breakeven / Trailing SL",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "increase(algogpt_breakeven_moves_total[1d])", "legendFormat": "Breakeven"},
+        {"expr": "increase(algogpt_trailing_moves_total[1d])", "legendFormat": "Trailing"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "PnL Trend",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "algogpt_pnl_total_usdt"}]
+    }
+  ]
+}
 
