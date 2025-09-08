@@ -36,23 +36,23 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     procps psmisc \
  && rm -rf /var/lib/apt/lists/*
 
-# התקנת ספריות מה־builder
+# ספריות מה-builder
 COPY --from=builder /install /usr/local
 
-# יצירת משתמש לא־שורש
+# משתמש לא-שורש
 RUN useradd -ms /bin/bash appuser
 
-# העתקת קוד
+# קוד האפליקציה
 WORKDIR /app
 COPY . .
 
-# תיקיות בסיס
+# תיקיות בסיס + ניקוי __pycache__ בלי לגעת ב-/proc
 RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
  && chmod 755 /app/static /app/logs /app/.cache /app/data || true \
  && chown -R appuser:appuser /app \
- && find /app -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+ && (find /usr/local /app -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true)
 
-# prestart ו-health scripts
+# prestart & health
 RUN test -f /app/prestart.sh && chmod +x /app/prestart.sh || true \
  && test -f /app/health_full.sh && chmod +x /app/health_full.sh || true
 
