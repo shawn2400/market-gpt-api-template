@@ -6,8 +6,7 @@ services:
     container_name: algogpt
     restart: always
     ports:
-      # בפרוד מאחורי Nginx אפשר לבטל את החשיפה הזו ולהישען רק על פורט 80 של Nginx
-      - "${PORT:-10000}:${PORT:-10000}"
+      - "${PORT:-10000}:${PORT:-10000}"   # אפשר להסיר בפרוד ולהיחשף רק דרך Nginx:80
     env_file:
       - .env
     depends_on:
@@ -28,7 +27,6 @@ services:
       timeout: 10s
       retries: 5
     volumes:
-      # תוספת 1 (DB SQLite): שימור קובץ DB
       - algodata:/app/data
 
   nginx:
@@ -39,13 +37,11 @@ services:
       - algogpt
     ports:
       - "80:80"
-      # TLS בהמשך? בטל הערה לשורה הבאה וספק תעודות ב-volumes:
-      # - "443:443"
+      # - "443:443"  # TLS כשתרצה דומיין + תעודות
     volumes:
       - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./static:/app/static:ro
-      # אם תשתמש ב-Let's Encrypt על ה-Host:
-      # - /etc/letsencrypt:/etc/letsencrypt:ro
+      # - /etc/letsencrypt:/etc/letsencrypt:ro  # אם תנהל TLS על ה-Host
     healthcheck:
       test: ["CMD-SHELL", "nginx -t || exit 1"]
       interval: 30s
@@ -96,7 +92,8 @@ services:
     restart: unless-stopped
     ports:
       - "9115:9115"
-    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
     volumes:
       - ./monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
 
@@ -108,7 +105,8 @@ services:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./monitoring/secrets/render_metrics_token:/etc/prometheus/secrets/render_metrics_token:ro  # ← Bearer token לגרידת /metrics מה-Render
+      - ./monitoring/alerts:/etc/prometheus/alerts:ro
+      - ./monitoring/secrets/render_metrics_token:/etc/prometheus/secrets/render_metrics_token:ro
       - prom_data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -130,11 +128,26 @@ services:
       - ./monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
 
+  sqlite_backup:
+    image: alpine:3.19
+    container_name: sqlite_backup
+    restart: unless-stopped
+    depends_on:
+      - algogpt
+    volumes:
+      - algodata:/app/data:ro
+      - backup_data:/backups
+      - ./backup/backup.sh:/usr/local/bin/backup.sh:ro
+    command: >
+      /bin/sh -c 'echo "15 3 * * * /usr/local/bin/backup.sh >/dev/null 2>&1" | crontab - && crond -f -L /dev/stdout'
+
 volumes:
   redis_data:
   prom_data:
   grafana_data:
   algodata:
+  backup_data:
+
 
 
 
