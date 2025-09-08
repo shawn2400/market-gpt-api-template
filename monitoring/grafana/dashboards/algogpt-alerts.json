@@ -1,1 +1,47 @@
+{
+  "id": null,
+  "title": "AlgoGPT – Alerts",
+  "tags": ["algogpt", "alerts"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active Alerts (Critical)",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "count(ALERTS{alertstate=\"firing\", severity=\"critical\"})"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "red"}}}
+    },
+    {
+      "type": "stat",
+      "title": "Active Alerts (Warning)",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "count(ALERTS{alertstate=\"firing\", severity=\"warning\"})"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "yellow"}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Telegram Messages Rate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "rate(algogpt_telegram_messages_sent_total[5m])", "legendFormat": "Sent"},
+        {"expr": "rate(algogpt_telegram_messages_failed_total[5m])", "legendFormat": "Failed"}
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Active Alerts",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "ALERTS{alertstate=\"firing\"}"}
+      ],
+      "options": {"showHeader": true}
+    }
+  ]
+}
 
