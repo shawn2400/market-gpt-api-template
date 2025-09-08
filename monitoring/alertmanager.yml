@@ -1,29 +1,25 @@
 global:
-  resolve_timeout: 5m
+  resolve_timeout: 1m
 
 route:
-  receiver: "telegram-bot"
-  group_wait: 10s
-  group_interval: 1m
-  repeat_interval: 30m
+  receiver: telegram
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
 
 receivers:
-  - name: "telegram-bot"
+  - name: telegram
     telegram_configs:
       - bot_token: "${TELEGRAM_BOT_TOKEN}"
-        chat_id: ${TELEGRAM_CHAT_ID}
-        parse_mode: "HTML"
+        chat_id: "${TELEGRAM_CHAT_ID}"
+        parse_mode: "Markdown"
         message: |-
-          🚨 <b>{{ .Status | toUpper }}</b> Alert
-          🔹 <b>{{ .Labels.alertname }}</b>
-          🕒 {{ .StartsAt }}
-          🔖 Severity: {{ .Labels.severity }}
-          📌 Service: {{ .Labels.service }}
-          ℹ️ {{ .Annotations.description }}
+          🚨 *AlgoGPT Alert* 🚨
+          *Alert:* {{ .GroupLabels.alertname }}
+          *Severity:* {{ .CommonLabels.severity }}
+          *Instance:* {{ .CommonLabels.instance }}
+          *Description:* {{ .CommonAnnotations.description }}
+          *Summary:* {{ .CommonAnnotations.summary }}
+          *Status:* {{ .Status }}
 
-inhibit_rules:
-  - source_match:
-      severity: "critical"
-    target_match:
-      severity: "warning"
-    equal: ["alertname", "service"]
