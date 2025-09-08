@@ -6,7 +6,7 @@ services:
     container_name: algogpt
     restart: always
     ports:
-      - "${PORT:-10000}:${PORT:-10000}"
+      - "${PORT:-10000}:${PORT:-10000}"   # אפשר להסיר בפרוד ולהיחשף רק דרך Nginx:80
     env_file:
       - .env
     depends_on:
@@ -37,10 +37,11 @@ services:
       - algogpt
     ports:
       - "80:80"
-      # - "443:443"
+      # - "443:443"  # TLS כשתרצה דומיין + תעודות
     volumes:
       - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./static:/app/static:ro
+      # - /etc/letsencrypt:/etc/letsencrypt:ro  # אם תנהל TLS על ה-Host
     healthcheck:
       test: ["CMD-SHELL", "nginx -t || exit 1"]
       interval: 30s
@@ -68,7 +69,7 @@ services:
     environment:
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_LABEL_ENABLE: "true"
-      WATCHTOWER_SCHEDULE: "0 0 * * * *"
+      WATCHTOWER_SCHEDULE: "0 0 * * * *"   # כל שעה
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
@@ -111,6 +112,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
       - --web.external-url=http://prometheus:9090
       - --alertmanager.url=http://alertmanager:9093
 
@@ -122,6 +124,9 @@ services:
       - "9093:9093"
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
 
   grafana:
     image: grafana/grafana:latest
@@ -157,8 +162,6 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
-
-
 
 
 
