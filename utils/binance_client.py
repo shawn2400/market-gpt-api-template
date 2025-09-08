@@ -30,8 +30,8 @@ DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
 # ===== Account/Positions cache =====
-ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))          # כמה זמן לשמור futures_account() בזיכרון
-ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))  # זמן דילוג אחרי -1003
+ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))
+ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))
 
 # ===== Ladder ENV =====
 LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1") == "1"
@@ -96,7 +96,7 @@ client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.co
 # ===== Optional WS fallback for price =====
 try:
     from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
-except Exception:  # לא חוסם — אם המודול לא קיים פשוט לא נשתמש בו
+except Exception:
     ws_get_price = None  # type: ignore
     ws_is_fresh = None   # type: ignore
     ws_update_price = None  # type: ignore
@@ -105,7 +105,7 @@ except Exception:  # לא חוסם — אם המודול לא קיים פשוט 
 _exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
 
-def _now() -> float: 
+def _now() -> float:
     return time.time()
 
 def _get_exchange_info_cached(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
@@ -118,7 +118,6 @@ def _get_exchange_info_cached(force_refresh: bool=False) -> Optional[Dict[str, A
         return data
     except Exception as e:
         logger.error("futures_exchange_info failed: %s", e)
-        # מחזיר מה־cache הישן אם קיים
         return _exinfo_cache["data"]
 
 # ========== Core ==========
@@ -129,14 +128,10 @@ def fapi_ping() -> bool:
         logger.warning("Futures ping failed: %s", e); return False
 
 def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
-    """
-    NOTE: תומך force_refresh=True כדי לתקן קריאות שקוראות עם הפרמטר הזה.
-    """
     return _get_exchange_info_cached(force_refresh=force_refresh)
 
 def _get_account_cached() -> Optional[Dict[str, Any]]:
     now = _now()
-    # אם ב־ban — אל תכה ב־REST, תחזיר cache אם יש
     if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
         return _account_cache["data"]
 
@@ -152,7 +147,6 @@ def _get_account_cached() -> Optional[Dict[str, Any]]:
         code = getattr(e, "code", None)
         status = getattr(e, "status_code", None)
         if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
-            # Way too many requests => אל תציף עוד; קבע ban_until קצר כדי לדלג זמנית
             _account_cache["ban_until"] = now + ACCOUNT_ON_BAN_BACKOFF
             logger.error("futures_account banned/rate limited; backing off %ss", ACCOUNT_ON_BAN_BACKOFF)
             return _account_cache["data"]
@@ -165,7 +159,7 @@ def _get_account_cached() -> Optional[Dict[str, Any]]:
 def futures_balance() -> List[Dict[str, Any]]:
     try:
         data = _get_account_cached() or {}
-        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []  # fallback חד־פעמי
+        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []
     except Exception as e:
         logger.error("Failed to fetch futures_balance: %s", e); return []
 
@@ -176,9 +170,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         logger.error("Failed mark price for %s: %s", symbol, e); return None
 
 def get_price(symbol: str) -> Optional[float]:
-    """
-    קודם WS (אם טרי), אחרת REST; בסוף לעדכן cache של WS אם אפשר.
-    """
     try:
         if ws_is_fresh and ws_get_price and ws_is_fresh(symbol):
             return float(ws_get_price(symbol) or 0.0) or None
@@ -312,10 +303,6 @@ def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
 
 # ========== Positions ==========
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    מושך פוזיציות מתוך futures_account() אך דרך cache פנימי כדי להימנע מבאן.
-    בזמן ban (-1003/429) יוחזר cache אם יש.
-    """
     try:
         acc_info = _get_account_cached() or {}
         positions = acc_info.get("positions", []) or []
@@ -333,11 +320,11 @@ def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, 
     return get_open_positions(symbol)
 
 def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
-    for p in get_open_positions(symbol): 
+    for p in get_open_positions(symbol):
         return p
     return None
 
-def _position_side_from_amt(amt: float) -> str: 
+def _position_side_from_amt(amt: float) -> str:
     return "LONG" if amt > 0 else "SHORT"
 
 def _order_side_for_close(pos_side: str) -> str:
@@ -375,13 +362,10 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
                 return {"ok": False, "error": str(e)}
     return {"ok": False, "error": "max_retries_exceeded"}
 
-def futures_create_order(**kwargs) -> Dict[str, Any]: 
+def futures_create_order(**kwargs) -> Dict[str, Any]:
     return _safe_create_order(**kwargs)
 
 def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *, reduce_only: bool=True, close_position: bool=False, client_order_id: Optional[str]=None) -> Dict[str, Any]:
-    """
-    נדרש ע״י utils/user_stream.py — יצירת STOP_MARKET עם reduceOnly/closePosition.
-    """
     sym = symbol.upper()
     qprice = _quantize_price(sym, float(stop_price))
     qqty   = _quantize_qty(sym, float(quantity))
@@ -401,17 +385,17 @@ def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float
     return _safe_create_order(**kwargs)
 
 def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
-    try: 
+    try:
         return client.futures_cancel_all_open_orders(symbol=symbol.upper())
-    except Exception as e: 
-        logger.error("Failed to cancel orders for %s: %s", symbol, e); 
+    except Exception as e:
+        logger.error("Failed to cancel orders for %s: %s", symbol, e)
         return {"ok": False, "error": str(e)}
 
 def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
-    try: 
+    try:
         return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
-    except Exception as e: 
-        logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e); 
+    except Exception as e:
+        logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e)
         return {"ok": False, "error": str(e)}
 
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -422,10 +406,6 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         logger.error("Failed to get open orders: %s", e); return []
 
 def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
-    """
-    Futures all orders for a symbol (Binance requires symbol).
-    limit: 1..1000 (Binance may cap). kwargs passthrough (e.g., startTime, endTime, orderId).
-    """
     if not symbol or not symbol.strip():
         return []
     limit = max(1, min(int(limit), 1000))
@@ -437,10 +417,10 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
         logger.error("get_all_orders error: %s", e); return []
 
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
-    try: 
+    try:
         return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
-    except Exception as e: 
-        logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e); 
+    except Exception as e:
+        logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
 # ========== Cancel+Recreate ==========
@@ -684,7 +664,7 @@ def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
         kl = client.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(10, limit)))
         cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","tbbav","tbqav","ignore"]
         df = pd.DataFrame(kl, columns=cols)
-        for c in ("open","high","low","close","volume"): 
+        for c in ("open","high","low","close","volume"):
             df[c] = pd.to_numeric(df[c], errors="coerce").astype(float)
         return df
     except BinanceAPIException as e:
@@ -714,7 +694,7 @@ def close_all_positions() -> Dict[str,Any]:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def get_futures_client() -> Client: 
+def get_futures_client() -> Client:
     return client
 
 __all__ = [
