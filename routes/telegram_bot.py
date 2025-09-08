@@ -182,7 +182,7 @@ def _normalize_cmd(txt: str) -> str:
 
 def _parse_update_safe(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    ניסיון לפענוח Update דרך telegram.Update; אם נכשל (למשל חסר first_name),
+    ניסיון לפענוח Update דרך telegram.Update; אם נכשל (למשל חסר first_name/‏date),
     ניפול חזרה לפיענוח ידני של message/callback_query.
     מחזיר: { chat_id, text, is_callback, update_obj }
     """
