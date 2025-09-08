@@ -2,51 +2,62 @@ groups:
   - name: algogpt-core
     interval: 30s
     rules:
-      - alert: AlgoGPT_HealthProbeFailed
-        expr: avg_over_time(probe_success{job="algogpt-health"}[2m]) < 0.5
+      # ── זמינות של ה-API (/health)
+      - alert: AlgoGPTHostDown
+        expr: probe_success{job="algogpt-render-health"} == 0
         for: 1m
         labels:
-          severity: warning
+          severity: critical
+          service: algogpt
         annotations:
-          summary: "בריאות אפליקציה נכשלת (Blackbox)"
-          description: "probe_success נמוך לאורך דקה+."
+          summary: "AlgoGPT API is DOWN (external health)"
+          description: "The external /health endpoint failed for >1m."
 
-      - alert: AlgoGPT_High5xxRate
-        expr: (sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))) > 0.05
-        for: 2m
+      - alert: AlgoGPTInternalDown
+        expr: probe_success{job="algogpt-health"} == 0
+        for: 1m
         labels:
           severity: critical
+          service: algogpt
         annotations:
-          summary: "שיעור 5xx גבוה"
-          description: "יותר מ-5% שגיאות 5xx ב-5 הדקות האחרונות."
+          summary: "AlgoGPT API is DOWN (internal health)"
+          description: "The internal /health endpoint inside Docker Compose failed for >1m."
 
-      - alert: AlgoGPT_HighLatencyP95
-        expr: (
-          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000
-          OR histogram_quantile(0.95, sum(rate(request_latency_seconds_bucket[5m])) by (le)) * 1000
-          OR histogram_quantile(0.95, sum(rate(request_latency_ms_bucket[5m])) by (le))
-        ) > 1200
-        for: 3m
+      # ── CPU שימוש גבוה
+      - alert: HighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total{container="algogpt"}[2m]) > 0.85
+        for: 2m
         labels:
           severity: warning
+          service: algogpt
         annotations:
-          summary: "p95 גבוה"
-          description: "p95 > 1200ms לאורך 3 דקות."
+          summary: "High CPU usage (>85%)"
+          description: "Container algogpt is using >85% CPU for over 2 minutes."
 
-      - alert: AlgoGPT_HighMemory
-        expr: container_memory_working_set_bytes{container="algogpt"} > 700 * 1024 * 1024
+      # ── RAM שימוש גבוה
+      - alert: HighMemoryUsage
+        expr: container_memory_working_set_bytes{container="algogpt"} > 800000000
+        for: 2m
+        labels:
+          severity: warning
+          service: algogpt
+        annotations:
+          summary: "High memory usage (>800MB)"
+          description: "Container algogpt memory usage exceeded 800MB for >2 minutes."
+
+      # ── שגיאות 5xx חריגות
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m])) 
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
         for: 5m
         labels:
           severity: warning
+          service: algogpt
         annotations:
-          summary: "זיכרון גבוה באפליקציה"
-          description: "הקונטיינר algogpt חוצה ~700MB לאורך 5 דקות."
+          summary: "High 5xx error rate"
+          description: "More than 5% of requests returned 5xx errors in the last 5 minutes."
 
-      - alert: AlgoGPT_HighCPU
-        expr: rate(container_cpu_usage_seconds_total{container="algogpt"}[5m]) > 0.7
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "CPU גבוה מתמשך"
-          description: "שימוש CPU של algogpt מעל 70% לאורך 5 דקות."
