@@ -1,13 +1,22 @@
+# monitoring/grafana/datasource.yml
 apiVersion: 1
 
 datasources:
+  # ── Prometheus: מקור המטריקות הראשי
   - name: Prometheus
     type: prometheus
     uid: Prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: 2.53.0
 
+  # ── Alertmanager: מקור ההתראות
   - name: Alertmanager
     type: alertmanager
     uid: alertmanager
@@ -15,6 +24,8 @@ datasources:
     url: http://alertmanager:9093
     jsonData:
       implementation: prometheus
+      handleGrafanaManagedAlerts: true
+
 
 
 
