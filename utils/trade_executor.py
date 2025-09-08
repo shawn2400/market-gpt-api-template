@@ -2,7 +2,6 @@
 from __future__ import annotations
 import logging, uuid
 from typing import Dict, Any, Optional
-
 from utils.binance_client import (
     futures_create_order,
     futures_mark_price,
@@ -13,9 +12,7 @@ from utils.binance_client import (
 logger = logging.getLogger("algogpt.trade_executor")
 
 def _round_qty(symbol: str, qty: float) -> float:
-    """
-    התאמה ל־stepSize ו־minQty לפי Exchange Info.
-    """
+    """התאמה ל־stepSize ו־minQty לפי Exchange Info."""
     try:
         info = get_symbol_info(symbol)
         if not info:
@@ -23,7 +20,6 @@ def _round_qty(symbol: str, qty: float) -> float:
         step = float(info.get("filters", [{}])[2].get("stepSize", 0.001))
         min_q = float(info.get("filters", [{}])[2].get("minQty", 0.0))
         qty = max(qty, min_q)
-        # עיגול למטה לפי step
         return (qty // step) * step
     except Exception:
         return round(qty, 6)
@@ -68,7 +64,6 @@ async def execute_trade_live(
                 "dry_run": True,
             }
 
-        # ביצוע אמיתי
         set_leverage(symbol, leverage)
         client_oid = f"ALGOGPT-{uuid.uuid4().hex[:12]}"
 
