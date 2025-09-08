@@ -2,37 +2,29 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
-# אפשר להגדיר labels גלובליים (אופציונלי)
-# external_labels:
-#   env: production
-
 scrape_configs:
-  # ── Prometheus עצמו (לניטור עצמי)
   - job_name: "prometheus"
     static_configs:
       - targets: ["prometheus:9090"]
 
-  # ── cAdvisor: מדדים של דוקר/קונטיינרים/CPU/Mem/FS
   - job_name: "cadvisor"
     static_configs:
       - targets: ["cadvisor:8080"]
 
-  # ── Blackbox: בדיקת HTTP ל- /health_full של AlgoGPT (מצופה 2xx)
+  # ── Blackbox: בדיקת HTTP ל-/health של AlgoGPT (צפוי 200)
   - job_name: "algogpt-health"
     metrics_path: /probe
     params:
       module: [http_2xx]     # מוגדר ב-blackbox.yml
     static_configs:
       - targets:
-          - "http://algogpt:10000/health_full"   # כתובת הקונטיינר בתוך ה-compose network
+          - "http://algogpt:10000/health"   # <-- תוקן ל-/health
     relabel_configs:
-      # מעבירים את היעד האמיתי כפרמטר לבלאקבוקס
       - source_labels: [__address__]
         target_label: __param_target
-      # שומרים label instance ידידותי
       - source_labels: [__param_target]
         target_label: instance
-      # blackbox:9115 הוא זה שנגרד בפועל
       - target_label: __address__
         replacement: blackbox:9115
+
 
