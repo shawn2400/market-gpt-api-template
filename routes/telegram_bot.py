@@ -1,4 +1,4 @@
-# ✅ routes/telegram_bot.py
+# routes/telegram_bot.py
 from __future__ import annotations
 import logging, os, json
 from typing import Dict, Any
@@ -16,26 +16,43 @@ __all__ = ["router"]
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "unknown")
 
+
+# ───────────────────────────────────────────────
+# Models
+# ───────────────────────────────────────────────
 class MuteRequest(BaseModel):
     state: bool
 
+
+# ───────────────────────────────────────────────
+# Internal send ping
+# ───────────────────────────────────────────────
 async def _send_ping(chat_id: int, msg: str):
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
+        logger.warning("Telegram bot token not set")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(url, data={"chat_id": chat_id, "text": msg})
-    except Exception:
+    except Exception as e:
         logger.exception("Failed sending telegram message")
 
+
+# ───────────────────────────────────────────────
+# /test-ping
+# ───────────────────────────────────────────────
 @router.get("/test-ping")
 async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     msg = f"pong ✅ (v{APP_VERSION}) [test]"
     await _send_ping(chat_id, msg)
     return {"ok": True, "sent": True, "chat_id": chat_id, "version": APP_VERSION}
 
+
+# ───────────────────────────────────────────────
+# /status, /mute, /toggle
+# ───────────────────────────────────────────────
 @router.get("/status")
 async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
     return {"ok": True, "mute": is_muted()}
@@ -49,6 +66,10 @@ async def set_mute_state(req: MuteRequest, _: Any = Depends(require_api_key)) ->
 async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
     return {"ok": True, "mute": toggle_mute()}
 
+
+# ───────────────────────────────────────────────
+# /set-webhook
+# ───────────────────────────────────────────────
 @router.post("/set-webhook")
 async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -67,6 +88,10 @@ async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(requ
         )
         return {"ok": True, "telegram": resp.json()}
 
+
+# ───────────────────────────────────────────────
+# /webhook
+# ───────────────────────────────────────────────
 @router.post("/webhook")
 async def telegram_webhook(req: Request) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -97,6 +122,7 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
     if chat_id and cmd == "/version":
         await _send_ping(chat_id, f"AlgoGPT v{APP_VERSION}")
         return {"ok": True, "version": APP_VERSION}
+
     return {"ok": True, "ignored": True}
 
 
