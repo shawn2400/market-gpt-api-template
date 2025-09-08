@@ -12,15 +12,21 @@ from utils.runtime_prefs import is_muted, set_mute, toggle_mute
 logger = logging.getLogger("algogpt.routes.telegram")
 
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
-__all__ = ["router"]  # ← חובה עבור main.py
+__all__ = ["router"]
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "unknown")
 
 
+# ───────────────────────────────────────────────
+# Models
+# ───────────────────────────────────────────────
 class MuteRequest(BaseModel):
     state: bool
 
 
+# ───────────────────────────────────────────────
+# Internal util – Send ping to Telegram
+# ───────────────────────────────────────────────
 async def _send_ping(chat_id: int, msg: str):
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
@@ -33,30 +39,45 @@ async def _send_ping(chat_id: int, msg: str):
         logger.exception("Failed sending telegram message")
 
 
-@router.get("/test-ping")
+# ───────────────────────────────────────────────
+# GET /telegram/test-ping
+# ───────────────────────────────────────────────
+@router.get("/test-ping", summary="בדיקת בוט טלגרם", description="שליחת הודעת 'pong' לטלגרם לצורך בדיקה")
 async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     msg = f"pong ✅ (v{APP_VERSION}) [test]"
     await _send_ping(chat_id, msg)
     return {"ok": True, "sent": True, "chat_id": chat_id, "version": APP_VERSION}
 
 
-@router.get("/status")
+# ───────────────────────────────────────────────
+# GET /telegram/status
+# ───────────────────────────────────────────────
+@router.get("/status", summary="בדיקת מצב השתקה")
 async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
     return {"ok": True, "mute": is_muted()}
 
 
-@router.post("/mute")
+# ───────────────────────────────────────────────
+# POST /telegram/mute
+# ───────────────────────────────────────────────
+@router.post("/mute", summary="הפעלת/ביטול mute")
 async def set_mute_state(req: MuteRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     set_mute(req.state)
     return {"ok": True, "mute": req.state}
 
 
-@router.post("/toggle")
+# ───────────────────────────────────────────────
+# POST /telegram/toggle
+# ───────────────────────────────────────────────
+@router.post("/toggle", summary="החלפת מצב mute")
 async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
     return {"ok": True, "mute": toggle_mute()}
 
 
-@router.post("/set-webhook")
+# ───────────────────────────────────────────────
+# POST /telegram/set-webhook
+# ───────────────────────────────────────────────
+@router.post("/set-webhook", summary="הגדרת Webhook לטלגרם")
 async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
@@ -75,7 +96,10 @@ async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(requ
         return {"ok": True, "telegram": resp.json()}
 
 
-@router.post("/webhook")
+# ───────────────────────────────────────────────
+# POST /telegram/webhook
+# ───────────────────────────────────────────────
+@router.post("/webhook", summary="קלט מטלגרם (Webhook)")
 async def telegram_webhook(req: Request) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if token and req.headers.get("X-Telegram-Bot-Api-Secret-Token") != token:
@@ -106,7 +130,6 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
         await _send_ping(chat_id, f"AlgoGPT v{APP_VERSION}")
         return {"ok": True, "version": APP_VERSION}
     return {"ok": True, "ignored": True}
-
 
 
 
