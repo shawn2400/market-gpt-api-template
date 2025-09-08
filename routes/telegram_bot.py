@@ -3,12 +3,12 @@ from __future__ import annotations
 import logging, os, json, time
 from typing import Dict, Any, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import httpx
 
-# נשתמש ב-telegram.Update אם אפשר, אבל לא ניפול אם parsing יכשל
+# נשתמש ב-telegram.Update אם אפשר, אבל ניפול לפיענוח ידני אם parsing יכשל
 from telegram import Update
 
 from utils.auth import require_api_key
@@ -24,6 +24,8 @@ from utils.binance_client import (
 
 logger = logging.getLogger("algogpt.routes.telegram")
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
+
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "unknown")
 
 # ───────────────────────────────────────────────
 # Models
@@ -124,14 +126,15 @@ def _open_after_approve(symbol: str, side: str, entry_hint: Optional[float]=None
         "pos_side": pos_side,
     }
 
-def _send_tg(chat_id: int, text: str) -> None:
-    """שליחת הודעה קצרה לבוט (best-effort)."""
+async def _send_tg(chat_id: int, text: str) -> None:
+    """שליחת הודעה לבוט בצורה אסינכרונית (best-effort)."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        httpx.post(url, data={"chat_id": chat_id, "text": text}, timeout=5.0)
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, data={"chat_id": chat_id, "text": text})
     except Exception:
         logger.exception("failed sending telegram message")
 
@@ -146,7 +149,7 @@ def _parse_update_safe(payload: Dict[str, Any]) -> Dict[str, Any]:
     is_callback = False
     update_obj = None
 
-    # נסיון "תקני"
+    # ניסיון "תקני"
     try:
         update_obj = Update.de_json(payload, None)
         if update_obj and update_obj.message:
@@ -196,13 +199,16 @@ async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]
     return {"ok": True, "mute": toggle_mute()}
 
 @router.post("/set-webhook")
-async def set_webhook(url: str, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def set_webhook(
+    url: str = Query(..., min_length=8),
+    _: Any = Depends(require_api_key)
+) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
     if not token or not secret:
         raise HTTPException(500, "Telegram bot config missing")
     tg_api_url = f"https://api.telegram.org/bot{token}/setWebhook"
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(tg_api_url, json={
             "url": url,
             "secret_token": secret,
@@ -230,15 +236,20 @@ async def telegram_webhook(req: Request) -> Dict[str, Any]:
         text = (parsed.get("text") or "").strip().lower()
 
         # ── פקודות קצרות ─────────────────────
-        if chat_id and text in ("/ping", "ping", "/start"):
-            _send_tg(chat_id, f"pong ✅ (v{os.getenv('ALGOGPT_VERSION', '?')})")
+        if chat_id and (text.startswith("/ping") or text == "ping" or text.startswith("/start")):
+            await _send_tg(chat_id, f"pong ✅ (v{APP_VERSION})")
             return {"ok": True, "echo": "ping"}
+        if chat_id and text.startswith("/version"):
+            await _send_tg(chat_id, f"AlgoGPT v{APP_VERSION}")
+            return {"ok": True, "version": APP_VERSION}
+        if chat_id and (text.startswith("/help")):
+            await _send_tg(chat_id, "פקודות: /ping • /version • /help\n(Callbacks נתמכים כרגיל)")
+            return {"ok": True, "help": True}
 
         # ── callback / לוגיקת אישור קיימת ────
         update_obj = parsed.get("update_obj")
         result = None
         if update_obj is not None:
-            # ניתן לטפל גם ב-message וגם ב-callback דרך הנוטיפייר
             result = await handle_callback_action(update_obj)
 
         approved = bool(result and (result.get("approved") or str(result.get("action", "")).lower() in ("approve", "approved")))
