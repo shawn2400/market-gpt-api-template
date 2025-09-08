@@ -2,10 +2,8 @@
 from __future__ import annotations
 import logging
 from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel
-
 from utils.auth import require_api_key
 
 logger = logging.getLogger("algogpt.routes.orderflow")
@@ -50,7 +48,7 @@ class OrderflowOut(BaseModel):
     cvd: CVD
     depth: Depth
 
-@router.get("/__of_ping", summary="Orderflow router ping", include_in_schema=True, response_model=dict)
+@router.get("/__of_ping", summary="Orderflow router ping", include_in_schema=True)
 def __of_ping() -> dict[str, Any]:
     return {
         "ok": True,
@@ -62,9 +60,8 @@ def __of_ping() -> dict[str, Any]:
 @router.get(
     "/orderflow/{symbol}",
     response_model=OrderflowOut,
-    response_model_exclude_none=True,
     summary="Orderflow snapshot (protected)",
-    dependencies=[Depends(require_api_key)],   # המידלוור הכללי גם מגן, זה חיזוק
+    dependencies=[Depends(require_api_key)],
 )
 def orderflow(
     symbol: str = Path(..., min_length=1),
@@ -82,6 +79,7 @@ def orderflow(
     )
     data.setdefault("ok", True)
     return OrderflowOut(**data)
+
 
 
 
