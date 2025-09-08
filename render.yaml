@@ -6,67 +6,69 @@ services:
     autoDeploy: false
     pullRequestPreviewsEnabled: false
 
+    # בריאות
     healthCheckPath: /health
 
+    # Docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
 
     envVars:
-      # Render מזריק PORT אוטומטית; אנחנו עוגנים ל-10000
-      - key: PORT
-        value: "10000"
+      # מריץ את האפליקציה המלאה (כול הראוטים)
+      - key: APP_MODULE
+        value: main:app
 
-      # כדי למנוע כפילויות של משימות רקע — שמור וורקר יחיד
-      - key: WORKERS
+      # קונקרנסי נמוך כדי לא להעמיס
+      - key: WEB_CONCURRENCY
         value: "1"
 
       - key: LOG_LEVEL
-        value: "INFO"
+        value: info
 
-      # CORS — בפרודקשן רצוי whitelist
+      # CORS (בפרוד עדיף להחליף ל־Whitelist)
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
-      # גרסת האפליקציה
+      # גרסה/תצוגה
       - key: ALGOGPT_VERSION
-        value: "2.16.0"
+        value: "2.17.0"
 
-      # WS / Price Monitor flags
-      - key: WS_UPDATE_INTERVAL
-        value: "15"
-      - key: PRICE_MONITOR_INTERVAL
-        value: "60"   # ניהול חי כל 60ש'
-      - key: PRICE_WS_FRESH_TTL
-        value: "20"
-      - key: PRICE_MONITOR_DISABLE
-        value: "0"
-
-      # ספים חשובים למסחר
-      - key: MIN_QUALITY_SCORE
-        value: "8.5"
-      - key: MAX_TRADES_PER_TICK
-        value: "1"
-      - key: SYMBOL_COOLDOWN_SEC
-        value: "600"
-      - key: DEFAULT_INTERVAL
-        value: "15m"
+      # מחיר/WS
       - key: WATCHLIST
         value: "BTCUSDT,ETHUSDT,SOLUSDT"
       - key: INDICATOR_INTERVALS
         value: "15m,1h"
-      - key: ALLOW_MANAGE_OPEN_TRADES
-        value: "true"
+
+      # Binance endpoints (פרוד)
+      - key: BINANCE_FUTURES_HTTP_BASE
+        value: "https://fapi.binance.com"
+      - key: BINANCE_FUTURES_WS_BASE
+        value: "wss://fstream.binance.com"
+      - key: BINANCE_WORKING_TYPE
+        value: "MARK_PRICE"
+      - key: BINANCE_TESTNET
+        value: "false"
+
+      # מסחר חי
       - key: EXECUTE_TRADES
         value: "true"
-      - key: BINANCE_MARGIN_TYPE_DEFAULT
-        value: "ISOLATED"
+      - key: ALLOW_MANAGE_OPEN_TRADES
+        value: "true"
+      - key: ENABLE_AI_ROUTES
+        value: "1"
 
-      # 🔑 סודות — להגדיר ידנית ב-Render כ Synced=false ולהזין בדאשבורד
+      # דומיין ציבורי (ל־Telegram webhook)
+      - key: WEBHOOK_HOST
+        value: "https://algogpt-docker.onrender.com"
+
+      # DB ע"ג דיסק מתמשך
+      - key: DATABASE_URL
+        value: "sqlite:////app/data/algogpt.db"
+
+      # ===== סודות (להזין בדשבורד, לא ב־git) =====
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
-        sync: false
-      - key: OPENAI_API_KEY
         sync: false
       - key: API_BEARER_TOKEN
         sync: false
@@ -76,11 +78,14 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+      # ===========================================
 
+    # דיסק מתמשך עבור ה־SQLite (ותוצרים נוספים אם צריך)
     disk:
-      name: tmp
-      mountPath: /tmp
+      name: data
+      mountPath: /app/data
       sizeGB: 1
+
 
 
 
