@@ -26,3 +26,4 @@ def get_metrics_snapshot() -> Dict[str, Any]:
         "telegram_sent": _sent_telegram,
         "telegram_failed": _failed_telegram,
     }
+
