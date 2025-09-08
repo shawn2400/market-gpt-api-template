@@ -3,22 +3,24 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # ── Prometheus עצמו
   - job_name: "prometheus"
     static_configs:
       - targets: ["prometheus:9090"]
 
+  # ── cAdvisor (קונטיינרים/CPU/Mem/FS)
   - job_name: "cadvisor"
     static_configs:
       - targets: ["cadvisor:8080"]
 
-  # ── Blackbox: בדיקת HTTP ל-/health של AlgoGPT (צפוי 200)
+  # ── Blackbox פנימי: בדיקת HTTP ל-/health של ה-App בתוך רשת ה-compose
   - job_name: "algogpt-health"
     metrics_path: /probe
     params:
       module: [http_2xx]     # מוגדר ב-blackbox.yml
     static_configs:
       - targets:
-          - "http://algogpt:10000/health"   # <-- תוקן ל-/health
+          - "http://algogpt:10000/health"
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -26,5 +28,33 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: blackbox:9115
+
+  # ── NEW: גרידה מה-URL הציבורי של Render (HTTPS) עם Bearer
+  #       את הטוקן שמים בקובץ סוד הממופה לקונטיינר (ראו compose)
+  - job_name: "algogpt-render"
+    scheme: https
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["algogpt-docker.onrender.com"]
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/render_metrics_token
+
+  # ── NEW: Blackbox על ה-URL הציבורי (בריאות חיצונית)
+  - job_name: "algogpt-render-health"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - "https://algogpt-docker.onrender.com/health"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
 
 
