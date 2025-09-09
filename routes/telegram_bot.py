@@ -1,7 +1,7 @@
 # routes/telegram_bot.py
 from __future__ import annotations
 import os, logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,26 +14,22 @@ logger = logging.getLogger("algogpt.routes.telegram_bot")
 router = APIRouter(
     prefix="/telegram",
     tags=["Telegram"],
-    dependencies=[Depends(require_api_key)],  # שליחת הודעות—מוגן בטוקן
+    dependencies=[Depends(require_api_key)],
 )
 
-# ── ENV
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE  = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 DEFAULT_CHAT = os.getenv("TELEGRAM_TEST_CHAT_ID", "").strip()
 
-# ── Models
 class SendRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    chat_id: Optional[int] = Field(None, description="אם לא יימסר—יילקח מ־TELEGRAM_TEST_CHAT_ID")
+    chat_id: Optional[int] = Field(None, description="אם לא — יילקח מ־TELEGRAM_TEST_CHAT_ID")
     text: str = Field(..., min_length=1, max_length=4096)
     parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2")
-    disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה של קישורים")
+    disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה")
 
-# ── Endpoints
 @router.get("/health")
 async def health() -> Dict[str, Any]:
-    """בדיקת בריאות: token, getMe, webhook."""
     if not BOT_TOKEN:
         return {"ok": False, "error": "BOT_TOKEN missing"}
     try:
@@ -51,9 +47,6 @@ async def health() -> Dict[str, Any]:
 
 @router.get("/test-ping")
 async def test_ping(chat_id: Optional[int] = Query(None)) -> Dict[str, Any]:
-    """
-    שולח הודעת pong ✅ לצ'אט נתון. אם chat_id לא סופק, ננסה מה־ENV (TELEGRAM_TEST_CHAT_ID).
-    """
     if not BOT_TOKEN:
         raise HTTPException(500, "BOT_TOKEN missing")
     cid = chat_id or (int(DEFAULT_CHAT) if DEFAULT_CHAT.isdigit() else None)
@@ -62,9 +55,7 @@ async def test_ping(chat_id: Optional[int] = Query(None)) -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
             r = await cli.post(f"{API_BASE}/sendMessage", data={
-                "chat_id": cid,
-                "text": "pong ✅ (test-ping)",
-                "disable_web_page_preview": True,
+                "chat_id": cid, "text": "pong ✅ (test-ping)", "disable_web_page_preview": True,
             })
         j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
         return {"ok": bool(j.get("ok")), "result": j}
@@ -74,7 +65,6 @@ async def test_ping(chat_id: Optional[int] = Query(None)) -> Dict[str, Any]:
 
 @router.post("/send")
 async def send(req: SendRequest) -> Dict[str, Any]:
-    """שליחת הודעה גנרית—מאובטח ע"י API key."""
     if not BOT_TOKEN:
         raise HTTPException(500, "BOT_TOKEN missing")
     cid = req.chat_id or (int(DEFAULT_CHAT) if DEFAULT_CHAT.isdigit() else None)
@@ -95,8 +85,6 @@ async def send(req: SendRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error("telegram/send failed: %s", e)
         raise HTTPException(502, str(e))
-
-
 
 
 
