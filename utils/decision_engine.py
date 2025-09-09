@@ -1,11 +1,20 @@
 # utils/decision_engine.py
 from __future__ import annotations
 import logging, os
-from typing import Dict, Any, Optional
-
-from utils.ai_analysis import analyze_with_ai
+from typing import Dict, Any, Optional, List
+from collections import defaultdict
 
 logger = logging.getLogger("algogpt.decision")
+
+# --- Optional AI analysis import (non-fatal fallback) ---
+try:
+    from utils.ai_analysis import analyze_with_ai  # type: ignore
+except Exception as _e:
+    logger.warning("utils.ai_analysis.analyze_with_ai not available: %s (using fallback)", _e)
+
+    async def analyze_with_ai(payload: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
+        # Fallback: non-blocking, returns "not ok"
+        return {"ok": False, "reason": "ai_module_missing"}
 
 # =========================
 # ENV Weights / Thresholds
@@ -27,7 +36,7 @@ SR_LEVELS_ENABLE     = str(os.getenv("SR_LEVELS_ENABLE", "1")).lower() in ("1","
 TV_ENABLE            = str(os.getenv("TV_ENABLE", "0")).lower()      in ("1","true","yes","on")
 
 # שמירה על תאימות אחורה — סף ישן של 8.5 (אם משתמשים רק ב-quality)
-LEGACY_QUALITY_PASS  = _to_float(os.getenv("QUALITY_MIN_SCORE"), 8.5)
+LEGACY_QUALITY_PASS  = _to_float(os.getenv("QUALITY_MIN_SCORE"), 8.5)  # ← נשאר 8.5 כפי שביקשת
 
 def _clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
@@ -35,10 +44,9 @@ def _clamp01(x: float) -> float:
 def _normalize_score(x: Optional[float]) -> Optional[float]:
     """
     מנרמל ציון ל-[0..1].
-    קלט אפשרי:
-      - כבר הסתברות [0..1] → נשאר.
-      - ציון 0..10 → מחלקים ב-10 (למשל 8.5 -> 0.85)
-      - ציון 0..100 → מחלקים ב-100
+      - אם כבר הסתברות [0..1] → נשאר.
+      - אם 0..10 → /10 (למשל 8.5 -> 0.85)
+      - אם 0..100 → /100
     """
     if x is None:
         return None
@@ -63,6 +71,9 @@ def _safe_get_float(d: Dict[str, Any], key: str) -> Optional[float]:
     except Exception:
         return None
 
+# =========================
+# Decision (single trade)
+# =========================
 async def make_decision(features: Dict[str, Any], quality_score: float) -> Dict[str, Any]:
     """
     מחליט אם לבצע טרייד או לא, עם תמיכה בשקלול מודולים אופציונליים:
@@ -72,9 +83,9 @@ async def make_decision(features: Dict[str, Any], quality_score: float) -> Dict[
       - features.tv_score         (0..1 או 0..10/100) — אם הגיע hook חיצוני
       - features.anchor_ok        (bool) — וטו עוגן (BTC/ETH)
       - features.risk_ok          (bool) — וטו ניהול סיכונים
-      - fields תפעוליים (entry/sl/tp1...) לצורך תקציר AI
+      - שדות אופציונליים (entry/sl/tp1...) עבור תקציר AI
 
-    תואם אחורה:
+    תאימות אחורה:
       - אם אין ABC/SR/TV/Anchor/Risk → משתמש רק ב-quality כפי שהיה.
     """
     symbol = str(features.get("symbol") or "UNKNOWN").upper()
@@ -151,7 +162,13 @@ async def make_decision(features: Dict[str, Any], quality_score: float) -> Dict[
             "veto": veto or "",
         })
         if ai_res.get("ok"):
-            ai_summary = ai_res["analysis"]
+            ai_summary = ai_res.get("analysis", "") or ai_res.get("summary", "")
+            if not ai_summary:
+                ai_summary = (
+                    f"[AI ok] {symbol} {side} "
+                    f"prob={final_prob:.2f} q={qn if qn is not None else 'NA'} "
+                    f"entry={entry}, SL={sl}, TP1={tp1}"
+                )
         else:
             ai_summary = (
                 f"[Fallback] {symbol} {side} "
@@ -159,21 +176,21 @@ async def make_decision(features: Dict[str, Any], quality_score: float) -> Dict[
                 f"entry={entry}, SL={sl}, TP1={tp1}"
             )
     except Exception as e:
-        logger.error(f"AI analysis failed: {e}")
+        logger.error("AI analysis failed: %s", e)
         ai_summary = (
             f"[AI error → fallback] {symbol} {side} "
             f"{final_prob:.2f} | entry={entry}, SL={sl}, TP1={tp1}"
         )
 
     # Reasons / פירוק החלטה
-    reasons = []
+    reasons: List[str] = []
     if qn is not None:
         reasons.append(f"Quality={qn:.2f}*{QUALITY_WEIGHT:.2f}")
-    if "abc_local" in scores:
+    if "abc_local" in scores and scores["abc_local"] is not None:
         reasons.append(f"ABC={scores['abc_local']:.2f}*{ABC_LOCAL_WEIGHT:.2f}")
-    if "sr_levels" in scores:
+    if "sr_levels" in scores and scores["sr_levels"] is not None:
         reasons.append(f"SR={scores['sr_levels']:.2f}*{SR_LEVELS_WEIGHT:.2f}")
-    if "external_tv" in scores:
+    if "external_tv" in scores and scores["external_tv"] is not None:
         reasons.append(f"TV={scores['external_tv']:.2f}*{EXTERNAL_TV_WEIGHT:.2f}")
     if veto:
         reasons.append(f"VETO={veto}")
@@ -200,6 +217,100 @@ async def make_decision(features: Dict[str, Any], quality_score: float) -> Dict[
         "tp1": tp1,
     }
     return decision
+
+# =========================
+# Selection (many trades)
+# =========================
+def _num(x: Any, default=0.0) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return float(default)
+
+def select_best_trades(
+    candidates: List[Dict[str, Any]],
+    top_n: int = 5,
+    diversify_by_symbol: bool = True,
+    weights: Dict[str, float] | None = None,
+) -> List[Dict[str, Any]]:
+    """
+    בוחר עסקאות מובילות על בסיס ציון משוקלל ואפשרות לדיברסיפיקציה לפי סמל.
+
+    שדות נתמכים (גמיש; לא חובה הכול):
+      - _score / score / final_prob / quality_score / quality / speed / momentum / confidence / risk
+      - symbol / pair (לצורך דיברסיפיקציה)
+    """
+    if not candidates:
+        return []
+
+    # ברירת מחדל משקולות (ניתן לדרוס בפרמטר weights)
+    w = {
+        "quality":   0.45,
+        "speed":     0.20,
+        "momentum":  0.15,
+        "confidence":0.10,
+        "risk":      0.10,  # יורד מהציון
+    }
+    if weights:
+        try:
+            w.update({k: float(v) for k, v in weights.items()})
+        except Exception as e:
+            logger.warning("weights override invalid: %s (using defaults)", e)
+
+    scored: List[Dict[str, Any]] = []
+
+    for c in candidates:
+        # אם כבר יש _score / score / final_prob — נכבד
+        if "_score" in c:
+            base_score = _num(c.get("_score"))
+        elif "score" in c:
+            base_score = _num(c.get("score"))
+        elif "final_prob" in c:
+            base_score = _num(c.get("final_prob"))  # מניח 0..1
+        else:
+            # נחשב מסקאלרים סטנדרטיים (0..10) ונחסר סיכון
+            q  = _num(c.get("quality"))
+            sp = _num(c.get("speed"))
+            mo = _num(c.get("momentum"))
+            cf = _num(c.get("confidence"))
+            rk = _num(c.get("risk"))
+            base_score = (
+                w["quality"]*q +
+                w["speed"]*sp +
+                w["momentum"]*mo +
+                w["confidence"]*cf -
+                w["risk"]*rk
+            )
+
+        out = dict(c)
+        out["_score"] = float(base_score)
+        scored.append(out)
+
+    # מיון לפי ציון יורד
+    scored.sort(key=lambda x: x.get("_score", 0.0), reverse=True)
+
+    if not diversify_by_symbol:
+        return scored[:max(0, int(top_n))]
+
+    # דיברסיפיקציה לפי סמלים (round-robin)
+    buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for item in scored:
+        sym = str(item.get("symbol") or item.get("pair") or "").upper()
+        buckets[sym].append(item)
+
+    picked: List[Dict[str, Any]] = []
+    while len(picked) < max(0, int(top_n)):
+        advanced = False
+        for sym, arr in list(buckets.items()):
+            if arr and len(picked) < top_n:
+                picked.append(arr.pop(0))
+                advanced = True
+        if not advanced:
+            break
+
+    return picked[:top_n]
+
+__all__ = ["make_decision", "select_best_trades"]
 
 
 
