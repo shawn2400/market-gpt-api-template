@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from utils.redis_client import redis_client  # may be None if not configured
 
 WATCHLIST_PATH = os.getenv("WATCHLIST_PATH", "watchlist.json")
-FALLBACK_PATH = os.getenv("WATCHLIST_FALLBACK_PATH", "watchlist_fallback.json")
+WATCHLIST_FALLBACK_PATH = os.getenv("WATCHLIST_FALLBACK_PATH", "watchlist_fallback.json")
 ANCHOR_SYMBOL = "BTCUSDT"
 REDIS_KEY = "algogpt:watchlist"
 
@@ -18,12 +18,10 @@ _DEFAULT_WATCHLIST: List[Dict[str, Any]] = [
     {"symbol": "BNBUSDT", "direction": "LONG", "quality_score": 7},
 ]
 
-# ----------- Top-10 set (override-able via env) -----------
 def _top10_set_from_env() -> set[str]:
     s = os.getenv("TOP10_SYMBOLS", "")
     if s.strip():
         return set(x.strip().upper() for x in s.split(",") if x.strip())
-    # ברירת מחדל סבירה לשוק קריפטו
     return {
         "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
         "ADAUSDT","DOGEUSDT","TRXUSDT","TONUSDT","LTCUSDT"
@@ -34,7 +32,6 @@ TOP10_SET = _top10_set_from_env()
 def is_top10(symbol: str) -> bool:
     return symbol.upper() in TOP10_SET
 
-# -------------------- Helpers --------------------
 def _ensure_file(path: str = WATCHLIST_PATH) -> None:
     if not os.path.exists(path):
         try:
@@ -76,7 +73,6 @@ def _ensure_anchor(watchlist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         logger.info({"event": "watchlist_anchor", "msg": f"{ANCHOR_SYMBOL} enforced"})
     return watchlist
 
-# -------------------- Load/Save --------------------
 def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
     data: Optional[List[Dict[str, Any]]] = None
     if redis_client:
@@ -151,7 +147,6 @@ def save_watchlist(items: List[Dict[str, Any]], path: str = WATCHLIST_PATH) -> b
         logger.error({"event":"watchlist_save_error","error":str(e)})
         return False
 
-# -------------------- Win-rate from trades_log --------------------
 def _safe_load_trades_log(path: str) -> List[Dict[str, Any]]:
     try:
         if not os.path.isfile(path): return []
@@ -166,7 +161,7 @@ def compute_symbol_winrates(path: str = os.getenv("TRADES_LOG_PATH", "data/trade
     rows = _safe_load_trades_log(path)
     if not rows: return {}
     rows = rows[-limit:] if len(rows) > limit else rows
-    stat: Dict[str, Tuple[int,int]] = {}  # sym -> (wins,total)
+    stat: Dict[str, Tuple[int,int]] = {}
     for r in rows:
         sym = str(r.get("symbol","")).upper()
         if not sym: continue
@@ -180,7 +175,6 @@ def compute_symbol_winrates(path: str = os.getenv("TRADES_LOG_PATH", "data/trade
         if t>0: out[sym] = w/float(t)
     return out
 
-# -------------------- Pool builder (עם win-rate bias) --------------------
 def _norm(x: float, lo: float, hi: float) -> float:
     if hi<=lo: return 0.0
     y = (x - lo) / (hi - lo)
@@ -198,7 +192,7 @@ def build_symbol_pool(
     wl = load_watchlist(min_quality=min_quality)
     if not wl: return [ANCHOR_SYMBOL]
 
-    wr = compute_symbol_winrates()  # symbol-> [0..1]
+    wr = compute_symbol_winrates()
     qs_vals = [it.get("quality_score", 0) for it in wl if isinstance(it.get("quality_score"), int)]
     qs_lo, qs_hi = (min(qs_vals) if qs_vals else 0), (max(qs_vals) if qs_vals else 10)
 
@@ -209,67 +203,27 @@ def build_symbol_pool(
             continue
         qs = float(it.get("quality_score", 0))
         qs_norm = _norm(qs, qs_lo, max(qs_hi, qs_lo+1))
-        wr_val  = wr.get(sym, 0.5)  # אם אין היסטוריה → 0.5
+        wr_val  = wr.get(sym, 0.5)
         w = 0.5*qs_norm + winrate_weight*(wr_val-0.5) + 0.5
         if sym == ANCHOR_SYMBOL:
             w += 0.05
         scored.append((sym, w))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-
     pool = [s for s,_ in scored[:max(k-1,1)]]
     tail = [s for s,_ in scored[max(k-1,1):]]
-    if tail and random.random() < explore_prob:
-        pool.append(random.choice(tail))
+    import random as _rnd
+    if tail and _rnd.random() < explore_prob:
+        pool.append(_rnd.choice(tail))
     if include_anchor and ANCHOR_SYMBOL not in pool:
         pool.insert(0, ANCHOR_SYMBOL)
-
     seen=set(); out=[]
     for s in pool:
         if s in seen: continue
         seen.add(s); out.append(s)
     return out[:k]
 
-# -------------------- NEW: load_watchlist_env_or_fallback --------------------
-def load_watchlist_env_or_fallback(min_quality: Optional[int] = None,
-                                   fallback_path: Optional[str] = None) -> List[str]:
-    """
-    1) אם WATCHLIST (CSV) ב-ENV → השתמש.
-    2) אחרת → load_watchlist() מקובץ/Redis.
-    3) אם ריק → fallback JSON (כברירת מחדל WATCHLIST_FALLBACK_PATH).
-    """
-    env_csv = os.getenv("WATCHLIST", "").strip()
-    if env_csv:
-        arr = [x.strip().upper() for x in env_csv.split(",") if x.strip()]
-        if arr:
-            return arr
-
-    wl = load_watchlist(min_quality=min_quality)
-    if wl:
-        return [it["symbol"].upper() for it in wl if isinstance(it, dict) and it.get("symbol")]
-
-    fp = (fallback_path or FALLBACK_PATH or "watchlist_fallback.json")
-    try:
-        with open(fp, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return [str(x).strip().upper() for x in data if str(x).strip()]
-    except Exception as e:
-        logger.warning({"event":"watchlist_fallback_load_failed","path":fp,"error":str(e)})
-
-    return [ANCHOR_SYMBOL, "ETHUSDT", "SOLUSDT"]
-
-# -------------------- Prefs per symbol --------------------
 def get_symbol_prefs(symbol: str) -> Dict[str, Any]:
-    """
-    העדפות פר-סימבול (לא חובה):
-      - modes: ["FUTURES","SPOT","GRID"]
-      - max_leverage: int
-      - budget_usd: float
-      - min_rr: float
-      - grid_levels, grid_step_pct
-    מקור: ENV JSON (SYMBOL_PREFS_JSON) / Redis בזמן אמת (אופציונלי).
-    """
     try:
         raw = os.getenv("SYMBOL_PREFS_JSON","").strip()
         if raw:
@@ -280,10 +234,52 @@ def get_symbol_prefs(symbol: str) -> Dict[str, Any]:
                     return v
     except Exception:
         pass
-
     if is_top10(symbol):
         return {"max_leverage": 15, "min_rr": 1.6, "budget_usd": 120.0, "modes": ["FUTURES","SPOT","GRID"]}
     return {"max_leverage": 10, "min_rr": 1.9, "budget_usd": 110.0, "modes": ["FUTURES","SPOT","GRID"]}
+
+# ===== NEW: List[str] loader ל-auto_executor =====
+def load_watchlist_env_or_fallback() -> List[str]:
+    """
+    1) אם WATCHLIST=BTCUSDT,ETHUSDT,... ב-ENV -> מחזיר מזה.
+    2) אחרת טוען watchlist.json (עם מינימום איכות MIN_QUALITY_SCORE) ומפיק ממנו symbols.
+    3) אם אין/שגוי -> fallback לקובץ WATCHLIST_FALLBACK_PATH (רשימת מחרוזות).
+    4) מוסיף תמיד עוגן BTCUSDT אם לא קיים.
+    """
+    # ENV
+    env_wl = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
+    if env_wl:
+        if "BTCUSDT" not in env_wl:
+            env_wl.insert(0, "BTCUSDT")
+        return env_wl
+
+    # JSON + min_quality
+    try:
+        qmin = int(float(os.getenv("MIN_QUALITY_SCORE", "0")))
+    except Exception:
+        qmin = None
+    items = load_watchlist(min_quality=qmin)
+    syms = [d["symbol"].upper() for d in items] if items else []
+
+    if not syms:
+        # Fallback לקובץ של רשימת מחרוזות
+        try:
+            with open(WATCHLIST_FALLBACK_PATH, "r", encoding="utf-8") as f:
+                arr = json.load(f)
+            syms = [str(x).strip().upper() for x in arr if str(x).strip()]
+        except Exception:
+            syms = [ANCHOR_SYMBOL, "ETHUSDT", "SOLUSDT"]
+
+    if "BTCUSDT" not in syms:
+        syms.insert(0, "BTCUSDT")
+    # דה-דופ
+    out: List[str] = []
+    seen = set()
+    for s in syms:
+        if s not in seen:
+            out.append(s); seen.add(s)
+    return out
+
 
 
 
