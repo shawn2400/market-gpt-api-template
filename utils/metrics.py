@@ -2,7 +2,7 @@
 from __future__ import annotations
 import time, threading
 from collections import deque
-from typing import Dict, Any
+from typing import Dict, Any, Deque, List
 
 class _Metrics:
     def __init__(self, window_size: int = 1000):
@@ -11,21 +11,21 @@ class _Metrics:
         self.total_requests = 0
         self.total_errors = 0
         self.by_status: Dict[int, int] = {}
-        self.latencies = deque(maxlen=window_size)
-        self.recent_ts = deque(maxlen=5000)
+        self.latencies: Deque[float] = deque(maxlen=window_size)
+        self.recent_ts: Deque[float] = deque(maxlen=5000)
         # NEW: trade cost metrics
-        self.slippages = deque(maxlen=window_size)
-        self.order_latencies = deque(maxlen=window_size)
+        self.slippages: Deque[float] = deque(maxlen=window_size)
+        self.order_latencies: Deque[float] = deque(maxlen=window_size)
 
     @staticmethod
-    def _percentile(samples, p: float) -> float:
+    def _percentile(samples: List[float], p: float) -> float:
         if not samples: return 0.0
         s = sorted(samples)
         k = max(0, min(len(s)-1, int(round((p/100.0)*(len(s)-1)))))
         return float(s[k])
 
     @staticmethod
-    def _median(samples) -> float:
+    def _median(samples: List[float]) -> float:
         if not samples: return 0.0
         s, n = sorted(samples), len(samples)
         mid = n//2
@@ -85,6 +85,7 @@ class _Metrics:
             }
 
 metrics_tracker = _Metrics()
+
 
 
 
