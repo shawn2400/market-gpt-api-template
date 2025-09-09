@@ -312,10 +312,12 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
+    # LIMIT
     lim = futures_create_order(symbol=sym, side=side, type="LIMIT",
                                timeInForce="GTC", price=limit_str, quantity=qty_str)
     lim_id = str(lim.get("orderId") or "")
 
+    # STOP (STOP_LIMIT entry)
     stp = futures_create_order(symbol=sym, side=side, type="STOP",
                                timeInForce="GTC", stopPrice=stop_str, price=stop_str,
                                quantity=qty_str)
@@ -348,6 +350,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             except Exception: pass
             return {"entry_kind": "STOP", "price": stop_p, "order": stp}
 
+        # הסלמה — רק אם מוצדק
         if time.time() - t0 >= ESCALATE_AFTER_S:
             cur = get_price(sym) or futures_mark_price(sym) or base_price
             slip_bps = abs(cur - limit_p) / max(limit_p, 1e-9) * 10000.0
@@ -476,6 +479,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
