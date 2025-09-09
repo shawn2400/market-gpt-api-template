@@ -87,7 +87,8 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
     if quantity and quantity > 0:
         q = float(quantity)
     else:
-        if not budget or budget <= 0: raise ValueError("Either positive budget or quantity must be provided")
+        if not budget or budget <= 0:
+            raise ValueError("Either positive budget or quantity must be provided")
         usd = float(budget) * float(leverage)
         q = usd / price
     q = _ensure_min_notional(symbol, price, q)
@@ -412,32 +413,43 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    qty = _calc_qty(sym, base_price, budget, leverage, quantity)
+    # qty חישוב — יזרוק אם אין תקציב/כמות (אך ב-dry_run נרצה להמשיך; נטפל למטה)
+    qty_calc_error = None
+    qty: Optional[float] = None
+    try:
+        qty = _calc_qty(sym, base_price, budget, leverage, quantity)
+    except Exception as e:
+        qty_calc_error = str(e)
 
-    # Gate (quality) — נדרש ציון ≥ MIN_QUALITY_SCORE (ברירת מחדל 8.5)
     gate = _quality_gate(sym, side)
+
+    # Dry-run: תמיד נחזיר OK, עם gate ועם הערות, גם אם אין הקצאה תקפה.
+    if dry_run:
+        plan: Dict[str, Any] = {
+            "ok": True, "symbol": sym, "side": side, "leverage": leverage,
+            "base_price": base_price, "dry_run": True,
+            "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
+            "gate": gate, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
+        }
+        # אם יש כמות — בנה סולמות הדגמה; אחרת רק הצג מדיניות
+        if qty is not None:
+            ladders = _build_ladders(sym, side, qty,
+                                     ([tp] if tp is not None else tp_targets), tp_splits,
+                                     ([sl] if sl is not None else sl_targets), sl_splits)
+            plan.update({"qty": qty, **ladders})
+            plan["entry_simulation"] = {
+                "limit_around": _offset_bps(entry or base_price, (-ENTRY_BAND_BPS if side=="BUY" else +ENTRY_BAND_BPS), +1),
+                "stop_around":  _offset_bps(entry or base_price, (+STOP_BAND_BPS  if side=="BUY" else -STOP_BAND_BPS ), +1),
+                "escalate_after_sec": ESCALATE_AFTER_S, "escalate_slip_bps": ESCALATE_SLIP_BPS,
+                "allow_market_entry": ALLOW_MARKET_ENTRY,
+            }
+        return plan
+
+    # ביצוע אמיתי: דרוש גם הקצאה תקפה וגם Gate מאושר
+    if qty is None:
+        return {"ok": False, "reason": qty_calc_error or "allocation_invalid"}
     if not gate.get("enter_ok"):
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
-
-    ladders = _build_ladders(sym, side, qty,
-                             ([tp] if tp is not None else tp_targets), tp_splits,
-                             ([sl] if sl is not None else sl_targets), sl_splits)
-
-    plan: Dict[str, Any] = {
-        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
-        "base_price": base_price, "dry_run": dry_run,
-        "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
-        "gate": gate, **ladders
-    }
-
-    if dry_run:
-        plan["entry_simulation"] = {
-            "limit_around": _offset_bps(entry or base_price, (-ENTRY_BAND_BPS if side=="BUY" else +ENTRY_BAND_BPS), +1),
-            "stop_around":  _offset_bps(entry or base_price, (+STOP_BAND_BPS  if side=="BUY" else -STOP_BAND_BPS ), +1),
-            "escalate_after_sec": ESCALATE_AFTER_S, "escalate_slip_bps": ESCALATE_SLIP_BPS,
-            "allow_market_entry": ALLOW_MARKET_ENTRY,
-        }
-        return plan
 
     # אישור טלגרם אם נדרש
     if confirm_first:
@@ -449,17 +461,28 @@ async def execute_trade_live(
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # ביצוע
+    # ניסיון סט-לבורג'
     try:
         set_leverage(sym, int(leverage))
     except Exception as e:
         log.warning("set_leverage failed: %s", e)
 
     entry_res = await _place_hybrid_entry(sym, side, qty, base_price, entry)
-    plan["entry_result"] = entry_res
+    plan: Dict[str, Any] = {
+        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
+        "base_price": base_price, "dry_run": False,
+        "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
+        "gate": gate, "entry_result": entry_res,
+        "tp_orders": [], "sl_orders": []
+    }
 
-    # יציאות — reduceOnly GTC בלבד (STOP/TAKE_PROFIT עם price+stopPrice)
+    # יציאות — reduceOnly GTC בלבד
     close_side = "SELL" if side=="BUY" else "BUY"
+    ladders = _build_ladders(sym, side, qty,
+                             ([tp] if tp is not None else tp_targets), tp_splits,
+                             ([sl] if sl is not None else sl_targets), sl_splits)
+    plan["tp_orders"] = ladders["tp_orders"]; plan["sl_orders"] = ladders["sl_orders"]
+
     for arr, otype in ((plan["tp_orders"], "TAKE_PROFIT"), (plan["sl_orders"], "STOP")):
         for o in arr:
             try:
@@ -475,6 +498,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
