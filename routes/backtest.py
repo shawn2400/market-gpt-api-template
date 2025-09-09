@@ -22,7 +22,6 @@ FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com"
 CACHE_DIR = Path("static/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# ============== Helpers ==============
 def fetch_klines(symbol: str, interval: str = "1h", limit: int = 500) -> pd.DataFrame:
     try:
         url = f"{FUTURES_BASE}/fapi/v1/klines"
@@ -44,7 +43,6 @@ def _run(symbol: str, strategy: str, interval: str, limit: int, stress: bool) ->
     df = fetch_klines(symbol, interval, limit)
     raw: Dict[str, Any] = run_backtest(df, strategy=strategy, initial_balance=1000.0)
 
-    # כתיבת קובץ נרות לפורטלים/דיבוג
     file_id = uuid.uuid4().hex[:8]
     fname = f"backtest_{symbol}_{file_id}.json"
     fpath = CACHE_DIR / fname
@@ -69,7 +67,6 @@ def _run(symbol: str, strategy: str, interval: str, limit: int, stress: bool) ->
         out["stress"] = raw["stress"]
     return out
 
-# ============== Models ==============
 class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     symbol: str = Field(..., examples=["BTCUSDT"])
@@ -77,10 +74,8 @@ class BacktestRequest(BaseModel):
     interval: str = Field("1h")
     limit: int = Field(500, ge=50, le=1000)
     stress: bool = Field(False, description="החזרת נתוני Stress Metrics")
-    # שדה 'mode' נצרך בסמוק — נאפשר ומתעלמים ממנו
     mode: Optional[str] = Field(None, description="ignored")
 
-# ============== Endpoints ==============
 @router.get("")
 async def backtest_get(
     symbol: str,
@@ -89,13 +84,12 @@ async def backtest_get(
     limit: int = Query(500, ge=50, le=1000),
     stress: bool = Query(False),
 ) -> Dict[str, Any]:
-    """GET קומפקטי (פרמטרים בשורת כתובת)"""
     return _run(symbol, strategy, interval, limit, stress)
 
 @router.post("")
 async def backtest_post(req: BacktestRequest) -> Dict[str, Any]:
-    """POST גוף JSON (תואם לסמוק שלך)"""
     return _run(req.symbol, req.strategy, req.interval, req.limit, req.stress)
+
 
 
 
