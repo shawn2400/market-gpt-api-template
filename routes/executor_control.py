@@ -23,3 +23,4 @@ def stop():
     stop_executor()
     return {"ok": True, "running": is_executor_running(), "last_ts": EXECUTOR_LAST_TS}
 
+
