@@ -6,10 +6,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from utils.redis_client import redis_client  # may be None if not configured
 
 WATCHLIST_PATH = os.getenv("WATCHLIST_PATH", "watchlist.json")
+FALLBACK_PATH = os.getenv("WATCHLIST_FALLBACK_PATH", "watchlist_fallback.json")
 ANCHOR_SYMBOL = "BTCUSDT"
 REDIS_KEY = "algogpt:watchlist"
-FALLBACK_PATH = os.getenv("WATCHLIST_FALLBACK_PATH", "watchlist_fallback.json")
-TOP_SYMBOLS = int(os.getenv("TOP_SYMBOLS", "30"))
 
 logger = logging.getLogger("algogpt.watchlist")
 
@@ -77,36 +76,7 @@ def _ensure_anchor(watchlist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         logger.info({"event": "watchlist_anchor", "msg": f"{ANCHOR_SYMBOL} enforced"})
     return watchlist
 
-def _parse_env_symbols() -> List[str]:
-    raw = os.getenv("WATCHLIST", "") or os.getenv("SYMS", "")
-    out: List[str] = []
-    for tok in str(raw).replace(";", ",").split(","):
-        t = tok.strip().upper()
-        if t:
-            out.append(t)
-    # דה-דופ ושמירה על סדר
-    out = list(dict.fromkeys(out))
-    return out
-
-def _load_fallback_symbols(path: str = FALLBACK_PATH) -> List[str]:
-    try:
-        if not os.path.exists(path):
-            return []
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        arr: List[str] = []
-        if isinstance(data, list):
-            arr = [str(s).upper() for s in data if str(s).strip()]
-        elif isinstance(data, dict) and "symbols" in data:
-            arr = [str(s).upper() for s in (data.get("symbols") or []) if str(s).strip()]
-        # סינון ל־USDT בלבד
-        arr = [s for s in arr if s.endswith("USDT")]
-        return list(dict.fromkeys(arr))
-    except Exception as e:
-        logger.warning({"event": "watchlist_fallback_read_error", "error": str(e)})
-        return []
-
-# -------------------- Load/Save (dict records) --------------------
+# -------------------- Load/Save --------------------
 def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
     data: Optional[List[Dict[str, Any]]] = None
     if redis_client:
@@ -195,7 +165,6 @@ def compute_symbol_winrates(path: str = os.getenv("TRADES_LOG_PATH", "data/trade
                             limit: int = 400) -> Dict[str, float]:
     rows = _safe_load_trades_log(path)
     if not rows: return {}
-    # נסנן אחרונים
     rows = rows[-limit:] if len(rows) > limit else rows
     stat: Dict[str, Tuple[int,int]] = {}  # sym -> (wins,total)
     for r in rows:
@@ -226,20 +195,10 @@ def build_symbol_pool(
     explore_prob: float = 0.2,
     winrate_weight: float = 0.5,
 ) -> List[str]:
-    """
-    בונה Pool מסומן לפי:
-    - quality_score (normalize)
-    - win-rate היסטורי (אם קיים) — משקל עד winrate_weight
-    - בונוס לעוגן BTC
-    - explore_prob: החדרת דגימות פחות חזקות לפעמים (כדי לא להתקבע)
-    """
     wl = load_watchlist(min_quality=min_quality)
     if not wl: return [ANCHOR_SYMBOL]
 
-    # טען win-rate
     wr = compute_symbol_winrates()  # symbol-> [0..1]
-
-    # חישובי משקל
     qs_vals = [it.get("quality_score", 0) for it in wl if isinstance(it.get("quality_score"), int)]
     qs_lo, qs_hi = (min(qs_vals) if qs_vals else 0), (max(qs_vals) if qs_vals else 10)
 
@@ -251,28 +210,54 @@ def build_symbol_pool(
         qs = float(it.get("quality_score", 0))
         qs_norm = _norm(qs, qs_lo, max(qs_hi, qs_lo+1))
         wr_val  = wr.get(sym, 0.5)  # אם אין היסטוריה → 0.5
-        # משקל בסיס + winrate
-        w = 0.5*qs_norm + winrate_weight*(wr_val-0.5) + 0.5  # מרכז סביב ~0.5..1.2
-        if sym == ANCHOR_SYMBOL:  # בונוס קטן ל-BTC
+        w = 0.5*qs_norm + winrate_weight*(wr_val-0.5) + 0.5
+        if sym == ANCHOR_SYMBOL:
             w += 0.05
         scored.append((sym, w))
 
-    # מיון ראשוני
     scored.sort(key=lambda x: x[1], reverse=True)
 
-    # explore: נכניס מדי פעם סמל אקראי ממקום 11+
     pool = [s for s,_ in scored[:max(k-1,1)]]
     tail = [s for s,_ in scored[max(k-1,1):]]
     if tail and random.random() < explore_prob:
         pool.append(random.choice(tail))
     if include_anchor and ANCHOR_SYMBOL not in pool:
         pool.insert(0, ANCHOR_SYMBOL)
-    # דה-דופ + חיתוך
+
     seen=set(); out=[]
     for s in pool:
         if s in seen: continue
         seen.add(s); out.append(s)
     return out[:k]
+
+# -------------------- NEW: load_watchlist_env_or_fallback --------------------
+def load_watchlist_env_or_fallback(min_quality: Optional[int] = None,
+                                   fallback_path: Optional[str] = None) -> List[str]:
+    """
+    1) אם WATCHLIST (CSV) ב-ENV → השתמש.
+    2) אחרת → load_watchlist() מקובץ/Redis.
+    3) אם ריק → fallback JSON (כברירת מחדל WATCHLIST_FALLBACK_PATH).
+    """
+    env_csv = os.getenv("WATCHLIST", "").strip()
+    if env_csv:
+        arr = [x.strip().upper() for x in env_csv.split(",") if x.strip()]
+        if arr:
+            return arr
+
+    wl = load_watchlist(min_quality=min_quality)
+    if wl:
+        return [it["symbol"].upper() for it in wl if isinstance(it, dict) and it.get("symbol")]
+
+    fp = (fallback_path or FALLBACK_PATH or "watchlist_fallback.json")
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [str(x).strip().upper() for x in data if str(x).strip()]
+    except Exception as e:
+        logger.warning({"event":"watchlist_fallback_load_failed","path":fp,"error":str(e)})
+
+    return [ANCHOR_SYMBOL, "ETHUSDT", "SOLUSDT"]
 
 # -------------------- Prefs per symbol --------------------
 def get_symbol_prefs(symbol: str) -> Dict[str, Any]:
@@ -285,7 +270,6 @@ def get_symbol_prefs(symbol: str) -> Dict[str, Any]:
       - grid_levels, grid_step_pct
     מקור: ENV JSON (SYMBOL_PREFS_JSON) / Redis בזמן אמת (אופציונלי).
     """
-    # ENV JSON
     try:
         raw = os.getenv("SYMBOL_PREFS_JSON","").strip()
         if raw:
@@ -297,66 +281,10 @@ def get_symbol_prefs(symbol: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # ברירות מחדל – עדינות יותר ל-Top10
     if is_top10(symbol):
         return {"max_leverage": 15, "min_rr": 1.6, "budget_usd": 120.0, "modes": ["FUTURES","SPOT","GRID"]}
     return {"max_leverage": 10, "min_rr": 1.9, "budget_usd": 110.0, "modes": ["FUTURES","SPOT","GRID"]}
 
-# -------------------- New: flat symbols loader for executor --------------------
-def load_watchlist_env_or_fallback(min_quality_env: Optional[str] = None) -> List[str]:
-    """
-    מחזיר רשימת סמלים ל־Executor, באלגוריתם:
-      1) ENV: WATCHLIST/SYMS
-      2) Fallback JSON: WATCHLIST_FALLBACK_PATH (או ברירת מחדל)
-      3) watchlist.json (רשומות dict) עם סינון quality
-      4) ברירת מחדל: [BTCUSDT, ETHUSDT, SOLUSDT]
-    כולל:
-      - דה-דופ
-      - סינון ל־USDT
-      - הגבלת TOP_SYMBOLS
-      - עוגן BTC בראש הרשימה
-    """
-    # 1) ENV
-    syms = _parse_env_symbols()
-
-    # 2) Fallback JSON אם ENV ריק
-    if not syms:
-        syms = _load_fallback_symbols(FALLBACK_PATH)
-
-    # 3) watchlist.json (dict records) אם עדיין אין
-    if not syms:
-        try:
-            min_q = None
-            if min_quality_env is not None:
-                try: min_q = int(min_quality_env)
-                except Exception: min_q = None
-            else:
-                # ננסה מתוך ENV קיימים
-                for key in ("QUALITY_MIN_SCORE", "MIN_QUALITY_SCORE"):
-                    v = os.getenv(key)
-                    if v and v.strip().isdigit():
-                        min_q = int(v.strip()); break
-            rows = load_watchlist(min_quality=min_q)
-            syms = [r["symbol"].upper() for r in rows if isinstance(r, dict) and r.get("symbol")]
-        except Exception:
-            syms = []
-
-    # 4) ברירת מחדל
-    if not syms:
-        syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-
-    # ניקוי: USDT בלבד, דה-דופ, Anchor בראש
-    syms = [s.upper() for s in syms if s and s.upper().endswith("USDT")]
-    syms = list(dict.fromkeys(syms))
-    if ANCHOR_SYMBOL in syms:
-        syms.remove(ANCHOR_SYMBOL)
-    syms.insert(0, ANCHOR_SYMBOL)
-
-    # חיתוך TOP_SYMBOLS
-    if isinstance(TOP_SYMBOLS, int) and TOP_SYMBOLS > 0:
-        syms = syms[:TOP_SYMBOLS]
-
-    return syms
 
 
 
