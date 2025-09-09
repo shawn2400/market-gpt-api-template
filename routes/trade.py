@@ -18,22 +18,19 @@ router = APIRouter(
 class TradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
     side: str = Field(..., example="BUY")  # BUY/SELL
-    # sizing:
     budget: float = Field(0, example=50, description="אם quantity סופק – budget לא חובה")
     leverage: int = Field(10, example=10)
     quantity: float | None = Field(None, example=0.001)
-    # entry:
-    entry: float | None = Field(None, example=28500.5, description="מחיר כניסה; אם None תתבצע כניסה אוטומטית")
-    # single SL/TP:
+    entry: float | None = Field(None, example=28500.5, description="מחיר כניסה; אם None תתבצע כניסה דינמית")
     sl: float | None = Field(None, example=28000.0, description="Stop-Loss price (LIMIT/STOP)")
     tp: float | None = Field(None, example=29500.0, description="Take-Profit price (LIMIT/TAKE_PROFIT)")
-    # ladders (סטים):
     tp_targets: Optional[List[float]] = Field(None, description="רשימת יעדי TP (מחירים)")
     tp_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-TP (שברים שסוכמים ≤1; האחרון סוגר יתרה)")
     sl_targets: Optional[List[float]] = Field(None, description="רשימת מחירי SL מדרגיים")
     sl_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-SL")
-    # behavior:
     dry_run: bool = Field(False, description="True = סימולציה בלבד (ללא שליחה אמיתית)")
+    confirm_first: bool = Field(True, description="דרוש אישור בטלגרם לפני שליחה")
+    telegram_chat_id: Optional[int] = Field(None, description="מס׳ צ׳אט לאישור")
 
 class TradeResponse(BaseModel):
     ok: bool = True
@@ -43,8 +40,8 @@ class TradeResponse(BaseModel):
 @router.post("/execute", response_model=TradeResponse)
 async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     """
-    מבצע טרייד חי או סימולציה דרך execute_trade_live.
-    תומך: entry/SL/TP + סטים (ladders).
+    טרייד דינמי מלא: Gate איכות, כניסה היברידית (LIMIT+STOP) עם הסלמה ל-MARKET רק אם מוצדק,
+    SL/TP (כולל סטים) כ-limit-variants reduceOnly, ואישור טלגרם לפני ביצוע (אופציונלי).
     """
     try:
         args: Dict[str, Any] = {
@@ -54,18 +51,19 @@ async def post_trade_execute(req: TradeRequest) -> TradeResponse:
             "entry": req.entry, "sl": req.sl, "tp": req.tp,
             "tp_targets": req.tp_targets, "tp_splits": req.tp_splits,
             "sl_targets": req.sl_targets, "sl_splits": req.sl_splits,
+            "confirm_first": req.confirm_first, "telegram_chat_id": req.telegram_chat_id,
         }
         if req.quantity is not None:
             args["quantity"] = req.quantity
+
         result = await execute_trade_live(**args)
         if not result or not result.get("ok", False):
-            raise HTTPException(status_code=400, detail=(result or {}).get("error") or "trade_failed")
+            return TradeResponse(ok=False, error=(result or {}).get("reason") or (result or {}).get("error"), result=result)
         return TradeResponse(ok=True, result=result)
-    except HTTPException:
-        raise
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
