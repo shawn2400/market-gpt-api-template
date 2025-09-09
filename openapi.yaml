@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AlgoGPT API
-  version: 2.17.0
+  version: 2.18.0
   description: >
     AlgoGPT — מסחר אלגוריתמי בזמן אמת על Binance (Futures + Spot). כולל Circuit-Breaker, Grid, ניהול SL/TP חי, Dashboard
     UI, ניתוח AI, ו־PnL Summary.
@@ -45,7 +45,7 @@ components:
       properties:
         ok: { type: boolean, example: true }
         status: { type: string, example: ok }
-        version: { type: string, example: 2.17.0 }
+        version: { type: string, example: "2.18.0" }
 
     ReadyzResponse:
       type: object
@@ -60,9 +60,9 @@ components:
       type: object
       properties:
         ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
+        symbol: { type: string, example: "BTCUSDT" }
         price: { type: number, example: 108500 }
-        source: { type: string, example: binance_fapi }
+        source: { type: string, example: "binance_fapi" }
         ts: { type: number, example: 1693430000.12 }
         error: { type: string, example: "" }
 
@@ -111,7 +111,7 @@ components:
       properties:
         ok: { type: boolean, example: true }
         summary: { $ref: '#/components/schemas/PnLSummary' }
-        source: { type: string, example: pnl_summary }
+        source: { type: string, example: "pnl_summary" }
 
     UIGridResponse:
       type: object
@@ -140,7 +140,7 @@ components:
       type: object
       properties:
         ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
+        symbol: { type: string, example: "BTCUSDT" }
         lastUpdateId: { type: integer, example: 123456789 }
         bids:
           type: array
@@ -160,7 +160,7 @@ components:
       type: object
       properties:
         ok: { type: boolean }
-        symbol: { type: string, example: BTCUSDT }
+        symbol: { type: string, example: "BTCUSDT" }
         price: { type: number, example: 108500 }
         fresh: { type: boolean }
         snapshot:
@@ -196,7 +196,7 @@ components:
         items:
           type: array
           items: { type: string }
-          example: [ BTCUSDT, ETHUSDT, SOLUSDT ]
+          example: [ "BTCUSDT", "ETHUSDT", "SOLUSDT" ]
 
     ExchangeInfoResponse:
       type: object
@@ -230,7 +230,7 @@ components:
       type: object
       properties:
         ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
+        symbol: { type: string, example: "BTCUSDT" }
         markPrice: { type: number, example: 108500.12 }
 
     MetricsSnapshot:
@@ -253,7 +253,7 @@ components:
           items:
             type: object
             properties:
-              symbol: { type: string, example: BTCUSDT }
+              symbol: { type: string, example: "BTCUSDT" }
               last_rate: { type: number, example: 0.0001 }
               trend: { type: string, example: "↑" }
               series:
@@ -264,8 +264,8 @@ components:
       type: object
       properties:
         ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
-        period: { type: string, example: 5m }
+        symbol: { type: string, example: "BTCUSDT" }
+        period: { type: string, example: "5m" }
         limit: { type: integer, example: 30 }
         last_ratio: { type: number, example: 1.12 }
         series:
@@ -275,23 +275,25 @@ components:
     AIAnalyzeResponse:
       type: object
       properties:
-        symbol: { type: string, example: BTCUSDT }
-        interval: { type: string, example: 15m }
+        symbol: { type: string, example: "BTCUSDT" }
+        interval: { type: string, example: "15m" }
         analysis: { type: string, example: "[Quick] BTCUSDT 15m: ..." }
         fallback: { type: boolean, example: false }
 
     # ====== NEW: concrete response schemas to satisfy validator ======
-
     GridTradeResponse:
       type: object
       required: [ ok, mode, symbol, side, market, account_id, budget ]
       properties:
         ok: { type: boolean, example: true }
-        mode: { type: string, example: futures_dry, description: "futures_dry | futures_live | spot_dry | spot_live" }
-        symbol: { type: string, example: BTCUSDT }
-        side: { type: string, example: LONG }
-        market: { type: string, example: futures }
-        account_id: { type: string, example: main }
+        mode:
+          type: string
+          example: "futures_dry"
+          description: "futures_dry | futures_live | spot_dry | spot_live"
+        symbol: { type: string, example: "BTCUSDT" }
+        side: { type: string, example: "LONG" }
+        market: { type: string, example: "futures" }
+        account_id: { type: string, example: "main" }
         base_price: { type: number, nullable: true, example: 108500 }
         budget: { type: number, example: 100 }
         leverage: { type: integer, nullable: true, example: 10 }
@@ -314,14 +316,14 @@ components:
       required: [ ok ]
       properties:
         ok: { type: boolean, example: true }
-        symbol: { type: string, example: BTCUSDT }
-        side: { type: string, example: BUY }
+        symbol: { type: string, example: "BTCUSDT" }
+        side: { type: string, example: "BUY" }
         qty: { type: number, example: 0.5 }
         entry_price: { type: number, example: 108000 }
         sl_price: { type: number, example: 106000 }
         tp_price: { type: number, example: 110000 }
         leverage: { type: integer, example: 10 }
-        position_side: { type: string, example: BOTH }
+        position_side: { type: string, example: "BOTH" }
         order_ids:
           type: array
           items:
@@ -361,7 +363,6 @@ components:
 
 paths:
 
-  # ── 1
   /:
     get:
       operationId: getRootStatus
@@ -371,9 +372,10 @@ paths:
       responses:
         "200":
           description: OK
-          content: { application/json: { schema: { $ref: "#/components/schemas/BasicStatus" } } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BasicStatus" }
 
-  # ── 2
   /health:
     get:
       operationId: getHealth
@@ -383,9 +385,10 @@ paths:
       responses:
         "200":
           description: OK
-          content: { application/json: { schema: { $ref: "#/components/schemas/BasicStatus" } } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BasicStatus" }
 
-  # ── 3
   /readyz:
     get:
       operationId: getReadyz
@@ -395,9 +398,10 @@ paths:
       responses:
         "200":
           description: OK
-          content: { application/json: { schema: { $ref: "#/components/schemas/ReadyzResponse" } } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadyzResponse" }
 
-  # ── 4
   /price/{symbol}:
     get:
       operationId: getPrice
@@ -408,15 +412,16 @@ paths:
         - in: path
           name: symbol
           required: true
-          schema: { type: string, example: BTCUSDT }
+          schema: { type: string, example: "BTCUSDT" }
       responses:
         "200":
           description: OK
-          content: { application/json: { schema: { $ref: "#/components/schemas/PriceResponse" } } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceResponse" }
         "502":
           description: Upstream error
 
-  # ── 5
   /trade/execute:
     post:
       operationId: executeTrade
@@ -429,39 +434,72 @@ paths:
             schema:
               type: object
               properties:
-                symbol: { type: string, example: BTCUSDT }
-                side: { type: string, example: BUY }
+                symbol: { type: string, example: "BTCUSDT" }
+                side: { type: string, example: "BUY" }
                 budget: { type: number, example: 50 }
                 leverage: { type: integer, example: 10 }
                 dry_run: { type: boolean, example: false }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GenericOk" } } } }
-        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericOk" }
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 6
   /manage-once:
     post:
       operationId: manageOnce
       summary: Manage open trades once
       tags: [ Manager ]
       responses:
-        "200": { description: Managed, content: { application/json: { schema: { $ref: "#/components/schemas/GenericOk" } } } }
-        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "200":
+          description: Managed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenericOk" }
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 7
   /pnl/summary:
     get:
       operationId: getPnLSummary
       summary: Get PnL summary (last N days)
       tags: [ PnL ]
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PnLSummaryResponse" } } } }
-        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PnLSummaryResponse" }
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 8
   /ui/grid/data:
     get:
       operationId: getGridDashboardData
@@ -471,24 +509,46 @@ paths:
         - in: query
           name: account_id
           required: false
-          schema: { type: string, example: main }
+          schema: { type: string, example: "main" }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UIGridResponse" } } } }
-        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UIGridResponse" }
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 9
   /grid/active:
     get:
       operationId: getActiveGrids
       summary: Active grids
       tags: [ Grid ]
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/GridActiveResponse" } } } }
-        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GridActiveResponse" }
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 10
   /grid/dashboard/data:
     get:
       operationId: getGridDashboardDataRaw
@@ -498,7 +558,7 @@ paths:
         - in: query
           name: path
           required: false
-          schema: { type: string, example: trades_log.json }
+          schema: { type: string, example: "trades_log.json" }
       responses:
         "200":
           description: OK
@@ -515,7 +575,6 @@ paths:
         "400": { description: Invalid path }
         "500": { description: Load failed }
 
-  # ── 11
   /grid/trade:
     post:
       operationId: tradeGrid
@@ -528,14 +587,14 @@ paths:
             schema:
               type: object
               properties:
-                symbol: { type: string, example: BTCUSDT }
-                side: { type: string, example: LONG }
+                symbol: { type: string, example: "BTCUSDT" }
+                side: { type: string, example: "LONG" }
                 budget: { type: number, example: 100 }
                 leverage: { type: integer, example: 10 }
                 grids: { type: integer, example: 3 }
                 dry_run: { type: boolean, example: true }
-                market: { type: string, example: futures }
-                account_id: { type: string, example: main }
+                market: { type: string, example: "futures" }
+                account_id: { type: string, example: "main" }
       responses:
         "200":
           description: OK
@@ -545,18 +604,28 @@ paths:
         "400": { description: Bad request }
         "500": { description: Server error }
 
-  # ── 12
   /executor/status:
     get:
       operationId: getExecutorStatus
       summary: Executor status
       tags: [ Executor ]
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ExecutorStatusSimple" } } } }
-        "401": { description: Invalid API key, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "500": { description: Server error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExecutorStatusSimple" }
+        "401":
+          description: Invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 13
   /executor/trade:
     post:
       operationId: openExecutorTrade
@@ -570,14 +639,14 @@ paths:
               type: object
               required: [ symbol, side, qty, entry_price, sl_price, tp_price ]
               properties:
-                symbol: { type: string, example: BTCUSDT }
-                side: { type: string, example: BUY }
+                symbol: { type: string, example: "BTCUSDT" }
+                side: { type: string, example: "BUY" }
                 qty: { type: number, example: 0.5 }
                 entry_price: { type: number, example: 108000 }
                 sl_price: { type: number, example: 106000 }
                 tp_price: { type: number, example: 110000 }
                 leverage: { type: integer, example: 10 }
-                position_side: { type: string, example: BOTH }
+                position_side: { type: string, example: "BOTH" }
       responses:
         "200":
           description: OK
@@ -587,7 +656,6 @@ paths:
         "400": { description: Bad request }
         "500": { description: Server error }
 
-  # ── 14
   /executor/bulk:
     post:
       operationId: openExecutorBulk
@@ -611,7 +679,6 @@ paths:
               schema: { $ref: '#/components/schemas/ExecutorBulkResponse' }
         "500": { description: Server error }
 
-  # ── 15
   /executor/open-positions:
     get:
       operationId: getOpenPositions
@@ -621,18 +688,24 @@ paths:
         - /executor/positions
         - /executor/positions/open
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OpenPositionsResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenPositionsResponse" }
 
-  # ── 16
   /executor/balance:
     get:
       operationId: getExecutorBalance
       summary: Futures account balances
       tags: [ Executor ]
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BalanceResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BalanceResponse" }
 
-  # ── 17
   /executor/mark-price:
     get:
       operationId: getExecutorMarkPrice
@@ -642,23 +715,29 @@ paths:
         - in: query
           name: symbol
           required: true
-          schema: { type: string, example: BTCUSDT }
+          schema: { type: string, example: "BTCUSDT" }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MarkPriceResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MarkPriceResponse" }
         "400": { description: Missing symbol }
         "500": { description: Server error }
 
-  # ── 18
   /executor/exchange-info:
     get:
       operationId: getExecutorExchangeInfo
       summary: Exchange info (with cache fallback)
       tags: [ Executor ]
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ExchangeInfoResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExchangeInfoResponse" }
         "500": { description: Server error }
 
-  # ── 19
   /executor/symbols:
     get:
       operationId: getExecutorSymbols
@@ -667,9 +746,12 @@ paths:
       x-aliases:
         - /executor/symbols/allowed
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ExecutorSymbolsResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExecutorSymbolsResponse" }
 
-  # ── 20
   /orderbook/depth/{symbol}:
     get:
       operationId: getOrderbookDepth
@@ -679,7 +761,7 @@ paths:
         - in: path
           name: symbol
           required: true
-          schema: { type: string, example: BTCUSDT }
+          schema: { type: string, example: "BTCUSDT" }
         - in: query
           name: limit
           required: false
@@ -687,11 +769,14 @@ paths:
         - in: query
           name: market
           required: false
-          schema: { type: string, example: futures }
+          schema: { type: string, example: "futures" }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderbookDepthResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderbookDepthResponse" }
 
-  # ── 21
   /ws/health:
     get:
       operationId: getWSHealth
@@ -700,20 +785,26 @@ paths:
       parameters:
         - in: query
           name: symbol
-          schema: { type: string, example: BTCUSDT }
+          schema: { type: string, example: "BTCUSDT" }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WSHealthResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WSHealthResponse" }
 
-  # ── 22
   /ws/last-prices:
     get:
       operationId: getWSLastPrices
       summary: Snapshot of all last prices (cache)
       tags: [ WS ]
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WSLastPricesResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WSLastPricesResponse" }
 
-  # ── 23
   /ai/analyze:
     get:
       operationId: analyzeAIGet
@@ -723,28 +814,32 @@ paths:
         - in: query
           name: symbol
           required: true
-          schema: { type: string, example: BTCUSDT }
+          schema: { type: string, example: "BTCUSDT" }
         - in: query
           name: interval
           required: false
-          schema: { type: string, example: 15m }
+          schema: { type: string, example: "15m" }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AIAnalyzeResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIAnalyzeResponse" }
       x-aliases:
         - POST /ai/analyze
 
-  # ── 24
-  /metrics:
+  /metrics-json:
     get:
-      operationId: getMetricsSnapshot
-      summary: System metrics snapshot
+      operationId: getMetricsSnapshotJson
+      summary: System metrics snapshot (JSON)
       tags: [ Metrics ]
-      x-aliases:
-        - /metrics/
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MetricsSnapshot" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MetricsSnapshot" }
 
-  # ── 25
   /metrics/funding/heatmap:
     get:
       operationId: getFundingHeatmap
@@ -754,15 +849,18 @@ paths:
         - in: query
           name: symbols
           required: true
-          schema: { type: string, example: BTCUSDT,ETHUSDT,SOLUSDT }
+          schema: { type: string, example: "BTCUSDT,ETHUSDT,SOLUSDT" }
         - in: query
           name: limit
           required: false
           schema: { type: integer, example: 24 }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FundingHeatmapResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FundingHeatmapResponse" }
 
-  # ── 26
   /metrics/longshort/{symbol}:
     get:
       operationId: getLongShortRatio
@@ -772,20 +870,23 @@ paths:
         - in: path
           name: symbol
           required: true
-          schema: { type: string, example: BTCUSDT }
+          schema: { type: string, example: "BTCUSDT" }
         - in: query
           name: period
-          schema: { type: string, example: 5m }
+          schema: { type: string, example: "5m" }
         - in: query
           name: limit
           schema: { type: integer, example: 30 }
         - in: query
           name: source
-          schema: { type: string, example: global }
+          schema: { type: string, example: "global" }
       responses:
-        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/LongShortRatioResponse" } } } }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LongShortRatioResponse" }
 
-  # ── 27
   /telegram/mute:
     post:
       operationId: setTelegramMute
@@ -810,7 +911,6 @@ paths:
                   ok: { type: boolean }
                   mute: { type: boolean }
 
-  # ── 28
   /telegram/set-webhook:
     post:
       operationId: setTelegramWebhook
@@ -823,7 +923,7 @@ paths:
             schema:
               type: object
               properties:
-                url: { type: string, example: https://algogpt-docker.onrender.com/telegram/webhook }
+                url: { type: string, example: "https://algogpt-docker.onrender.com/telegram/webhook" }
       responses:
         "200":
           description: OK
@@ -836,7 +936,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 29
   /telegram/webhook:
     post:
       operationId: telegramWebhook
@@ -858,7 +957,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  # ── 30
   /market/tickers:
     get:
       operationId: getMarketTickers
@@ -868,7 +966,7 @@ paths:
         - in: query
           name: symbols
           required: true
-          schema: { type: string, example: BTCUSDT,ETHUSDT }
+          schema: { type: string, example: "BTCUSDT,ETHUSDT" }
       responses:
         "200":
           description: OK
@@ -879,8 +977,9 @@ paths:
                 items:
                   type: object
                   properties:
-                    symbol: { type: string }
-                    markPrice: { type: number }
+                    symbol: { type: string, example: "BTCUSDT" }
+                    markPrice: { type: number, example: 108500.12 }
+
 
 
 
