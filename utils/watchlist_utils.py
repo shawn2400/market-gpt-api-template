@@ -8,6 +8,8 @@ from utils.redis_client import redis_client  # may be None if not configured
 WATCHLIST_PATH = os.getenv("WATCHLIST_PATH", "watchlist.json")
 ANCHOR_SYMBOL = "BTCUSDT"
 REDIS_KEY = "algogpt:watchlist"
+FALLBACK_PATH = os.getenv("WATCHLIST_FALLBACK_PATH", "watchlist_fallback.json")
+TOP_SYMBOLS = int(os.getenv("TOP_SYMBOLS", "30"))
 
 logger = logging.getLogger("algogpt.watchlist")
 
@@ -75,7 +77,36 @@ def _ensure_anchor(watchlist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         logger.info({"event": "watchlist_anchor", "msg": f"{ANCHOR_SYMBOL} enforced"})
     return watchlist
 
-# -------------------- Load/Save --------------------
+def _parse_env_symbols() -> List[str]:
+    raw = os.getenv("WATCHLIST", "") or os.getenv("SYMS", "")
+    out: List[str] = []
+    for tok in str(raw).replace(";", ",").split(","):
+        t = tok.strip().upper()
+        if t:
+            out.append(t)
+    # דה-דופ ושמירה על סדר
+    out = list(dict.fromkeys(out))
+    return out
+
+def _load_fallback_symbols(path: str = FALLBACK_PATH) -> List[str]:
+    try:
+        if not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        arr: List[str] = []
+        if isinstance(data, list):
+            arr = [str(s).upper() for s in data if str(s).strip()]
+        elif isinstance(data, dict) and "symbols" in data:
+            arr = [str(s).upper() for s in (data.get("symbols") or []) if str(s).strip()]
+        # סינון ל־USDT בלבד
+        arr = [s for s in arr if s.endswith("USDT")]
+        return list(dict.fromkeys(arr))
+    except Exception as e:
+        logger.warning({"event": "watchlist_fallback_read_error", "error": str(e)})
+        return []
+
+# -------------------- Load/Save (dict records) --------------------
 def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
     data: Optional[List[Dict[str, Any]]] = None
     if redis_client:
@@ -270,6 +301,62 @@ def get_symbol_prefs(symbol: str) -> Dict[str, Any]:
     if is_top10(symbol):
         return {"max_leverage": 15, "min_rr": 1.6, "budget_usd": 120.0, "modes": ["FUTURES","SPOT","GRID"]}
     return {"max_leverage": 10, "min_rr": 1.9, "budget_usd": 110.0, "modes": ["FUTURES","SPOT","GRID"]}
+
+# -------------------- New: flat symbols loader for executor --------------------
+def load_watchlist_env_or_fallback(min_quality_env: Optional[str] = None) -> List[str]:
+    """
+    מחזיר רשימת סמלים ל־Executor, באלגוריתם:
+      1) ENV: WATCHLIST/SYMS
+      2) Fallback JSON: WATCHLIST_FALLBACK_PATH (או ברירת מחדל)
+      3) watchlist.json (רשומות dict) עם סינון quality
+      4) ברירת מחדל: [BTCUSDT, ETHUSDT, SOLUSDT]
+    כולל:
+      - דה-דופ
+      - סינון ל־USDT
+      - הגבלת TOP_SYMBOLS
+      - עוגן BTC בראש הרשימה
+    """
+    # 1) ENV
+    syms = _parse_env_symbols()
+
+    # 2) Fallback JSON אם ENV ריק
+    if not syms:
+        syms = _load_fallback_symbols(FALLBACK_PATH)
+
+    # 3) watchlist.json (dict records) אם עדיין אין
+    if not syms:
+        try:
+            min_q = None
+            if min_quality_env is not None:
+                try: min_q = int(min_quality_env)
+                except Exception: min_q = None
+            else:
+                # ננסה מתוך ENV קיימים
+                for key in ("QUALITY_MIN_SCORE", "MIN_QUALITY_SCORE"):
+                    v = os.getenv(key)
+                    if v and v.strip().isdigit():
+                        min_q = int(v.strip()); break
+            rows = load_watchlist(min_quality=min_q)
+            syms = [r["symbol"].upper() for r in rows if isinstance(r, dict) and r.get("symbol")]
+        except Exception:
+            syms = []
+
+    # 4) ברירת מחדל
+    if not syms:
+        syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+
+    # ניקוי: USDT בלבד, דה-דופ, Anchor בראש
+    syms = [s.upper() for s in syms if s and s.upper().endswith("USDT")]
+    syms = list(dict.fromkeys(syms))
+    if ANCHOR_SYMBOL in syms:
+        syms.remove(ANCHOR_SYMBOL)
+    syms.insert(0, ANCHOR_SYMBOL)
+
+    # חיתוך TOP_SYMBOLS
+    if isinstance(TOP_SYMBOLS, int) and TOP_SYMBOLS > 0:
+        syms = syms[:TOP_SYMBOLS]
+
+    return syms
 
 
 
