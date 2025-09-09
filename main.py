@@ -1,4 +1,3 @@
-# main.py
 from __future__ import annotations
 import os, asyncio, logging
 from pathlib import Path
@@ -15,7 +14,7 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price
 from utils.metrics_middleware import MetricsMiddleware
 from app.middlewares import InternalAuthMiddleware
-from utils.trade_executor import ConfirmStore  # מאגר אישורים בטלגרם
+from utils.trade_executor import ConfirmStore
 
 def _coerce_log_level(val):
     import logging as _l
@@ -37,7 +36,7 @@ for d in ("static", "logs"):
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
 
-# ── Middlewares
+# Middlewares
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
@@ -50,7 +49,7 @@ app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
-# ── Public/Auth middleware
+# Public/Auth middleware
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/healthz", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"}
@@ -65,17 +64,15 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Routers (לא נשבר אם לא קיים)
+# Routers (רק קיימים)
 for module_path in (
     "routes.trade",
     "routes.analytics",
     "routes.decision",
-    # אופציונליים:
     "routes.backtest",
     "routes.executor",
     "routes.binance_status",
     "routes.telegram_bot",
-    "routes.telegram_webhook",
 ):
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -85,7 +82,7 @@ for module_path in (
     except Exception as e:
         logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
-# ── Meta & Health
+# Meta & Health
 @app.get("/")
 async def root():
     return {"ok": True, "status": "ok", "service": "app_full", "title": "AlgoGPT API", "version": APP_VERSION}
@@ -98,7 +95,7 @@ async def health():
 async def debug_health():
     return {"ok": True, "status": "ok", "env": os.getenv("ENV","prod"), "version": APP_VERSION}
 
-# ── Price (לבדיקות)
+# Price (לבדיקות)
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     try:
@@ -107,7 +104,7 @@ async def price(symbol: str):
         p = None
     return {"symbol": symbol.upper(), "price": p, "fresh": bool(p and p > 0)}
 
-# ── Readyz
+# Readyz
 @app.get("/readyz")
 async def readyz():
     try:
@@ -127,7 +124,7 @@ async def readyz():
             prices[f"price_{s}"] = None
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-# ── Telegram webhook & ping (ציבוריים)
+# Telegram webhook & ping (ציבוריים)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -145,7 +142,6 @@ async def _tg_send(chat_id: int, text: str):
 
 @app.get("/telegram/ping")
 async def tg_ping():
-    # פינג ציבורי פשוט (לבדיקת חיות ה־webhook)
     return {"ok": True, "src": "telegram", "ts_ms": int(asyncio.get_event_loop().time()*1000)}
 
 @app.post("/telegram/webhook")
@@ -179,30 +175,10 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 
     return {"ok": True}
 
-# ── Auto setWebhook
-@app.on_event("startup")
-async def _startup():
-    if not BOT_TOKEN:
-        return
-    if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1") not in ("1", "true", "yes", "on"):
-        return
-    public_host = os.getenv("PUBLIC_HOST", "").strip()
-    if not public_host:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(f"{API_BASE}/setWebhook", data={
-                "url": f"{public_host}/telegram/webhook",
-                "secret_token": WEBHOOK_SECRET,
-                "drop_pending_updates": "true",
-                "max_connections": "40",
-            })
-    except Exception as e:
-        logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
