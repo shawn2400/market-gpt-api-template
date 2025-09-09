@@ -93,14 +93,12 @@ client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.co
 
 # Time sync to avoid INVALID_TIMESTAMP
 try:
-    # חלק מהגרסאות תומכות futures_time; אחרת נ fallback
     try:
         server_time = client.futures_time().get("serverTime")  # type: ignore
     except Exception:
         server_time = client.get_server_time().get("serverTime")
     local_ms = int(time.time() * 1000)
     offset = int(server_time) - local_ms
-    # בגרסאות שונות המאפיין שונה
     setattr(client, "TIME_OFFSET", offset)
     try:
         setattr(client, "timestamp_offset", offset)
@@ -151,10 +149,8 @@ def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, 
 
 def _get_account_cached() -> Optional[Dict[str, Any]]:
     now = _now()
-    # Respect temporary ban/backoff
     if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
         return _account_cache["data"]
-    # Short TTL cache
     if _account_cache["data"] and (now - _account_cache["ts"] <= ACCOUNT_TTL_SEC):
         return _account_cache["data"]
     try:
@@ -200,18 +196,52 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     return None
 
 def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    מחזיר מילון פילטרים מנורמל:
+    - tickSize, minPrice, maxPrice
+    - stepSize, minQty, maxQty
+    - mMinQty/mMaxQty (MARKET_LOT_SIZE)
+    - minNotional (נתמך: MIN_NOTIONAL/NOTIONAL)
+    - percentPrice (multiplierUp/Down/Decimal)
+    """
     try:
         si = get_symbol_info(symbol)
         if not si: return None
-        filters = {"minQty": None, "stepSize": None, "tickSize": None, "minNotional": None}
+        filters: Dict[str, Any] = {
+            "tickSize": None, "minPrice": None, "maxPrice": None,
+            "stepSize": None, "minQty": None, "maxQty": None,
+            "mMinQty": None, "mMaxQty": None,
+            "minNotional": None,
+            "percentPrice": {"up": None, "down": None, "decimals": None},
+        }
         for f in si.get("filters", []):
             t = f.get("filterType")
-            if t == "LOT_SIZE":
-                filters["minQty"] = f.get("minQty"); filters["stepSize"] = f.get("stepSize")
-            elif t == "PRICE_FILTER":
+            if t == "PRICE_FILTER":
                 filters["tickSize"] = f.get("tickSize")
+                filters["minPrice"] = f.get("minPrice")
+                filters["maxPrice"] = f.get("maxPrice")
+            elif t == "LOT_SIZE":
+                filters["minQty"] = f.get("minQty")
+                filters["maxQty"] = f.get("maxQty")
+                filters["stepSize"] = f.get("stepSize")
+            elif t == "MARKET_LOT_SIZE":
+                filters["mMinQty"] = f.get("minQty")
+                filters["mMaxQty"] = f.get("maxQty")
             elif t in ("MIN_NOTIONAL", "NOTIONAL"):
                 filters["minNotional"] = f.get("notional") or f.get("minNotional")
+            elif t == "PERCENT_PRICE":
+                filters["percentPrice"] = {
+                    "up": f.get("multiplierUp"),
+                    "down": f.get("multiplierDown"),
+                    "decimals": f.get("multiplierDecimal"),
+                }
+        # ברירות מחדל סבירות אם חסר
+        if not filters["tickSize"]:
+            filters["tickSize"] = DEFAULT_PRICE_TICK_STR
+        if not filters["stepSize"]:
+            filters["stepSize"] = DEFAULT_QTY_STEP_STR
+        if not filters["minNotional"]:
+            filters["minNotional"] = DEFAULT_MIN_NOTIONAL
         return filters
     except Exception as e:
         logger.error("Failed get_symbol_filters: %s", e)
@@ -228,7 +258,8 @@ def _quantize_price(symbol: str, price: float) -> str:
     f = get_symbol_filters(symbol) or {}
     tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
     if tick <= 0: tick = float(DEFAULT_PRICE_TICK_STR)
-    steps = round(price / tick); adj = steps * tick
+    steps = round(price / tick)
+    adj = steps * tick
     decs = _decimals_from_step(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
     return f"{adj:.{decs}f}"
 
@@ -236,19 +267,25 @@ def _quantize_qty(symbol: str, qty: float) -> str:
     f = get_symbol_filters(symbol) or {}
     step = float(f.get("stepSize") or DEFAULT_QTY_STEP_STR)
     if step <= 0: step = float(DEFAULT_QTY_STEP_STR)
-    steps = math.floor(qty / step); adj = max(step, steps * step)
+    steps = math.floor(qty / step)
+    adj = max(step, steps * step)
     decs = _decimals_from_step(str(f.get("stepSize") or DEFAULT_QTY_STEP_STR))
     return f"{adj:.{decs}f}"
 
 def _ensure_min_notional(symbol: str, price: float, qty: float) -> float:
     f = get_symbol_filters(symbol) or {}
-    min_notional = float(f.get("minNotional") or DEFAULT_MIN_NOTIONAL)
+    try:
+        min_notional = float(f.get("minNotional") or DEFAULT_MIN_NOTIONAL)
+    except Exception:
+        min_notional = DEFAULT_MIN_NOTIONAL
     notional = price * qty
     if notional >= min_notional: return qty
-    return min_notional / max(price, 1e-12)
+    need = min_notional / max(price, 1e-12)
+    return max(need, qty)
 
 def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
-    qf = float(qty_str); need = _ensure_min_notional(symbol, price, qf)
+    qf = float(qty_str)
+    need = _ensure_min_notional(symbol, price, qf)
     if need <= qf + 1e-12: return qty_str
     return _quantize_qty(symbol, need)
 
@@ -432,236 +469,6 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
-# ===== Ladders / Extras (כמו שסיפקת, ללא שינוי לוגי) =====
-def _compute_partial_qty(symbol: str, pos_amt: float, pct: Optional[float], qty: Optional[float]) -> Tuple[bool, str]:
-    if pct is None and qty is None: return False, ""
-    target = 0.0
-    if pct is not None:
-        pct = max(0.0, min(1.0, float(pct))); target = max(0.0, abs(pos_amt) * pct)
-    if qty is not None:
-        target = target if target > 0 else qty; target = min(target, abs(pos_amt))
-    q = float(_quantize_qty(symbol, target))
-    if q <= 0: raise ValueError("quantity rounds to zero")
-    return True, _quantize_qty(symbol, q)
-
-def modify_stop_loss(symbol: str, new_sl_price: float, position_side: Optional[str] = None,
-                     pct: Optional[float] = None, quantity: Optional[float] = None) -> Dict[str, Any]:
-    try:
-        pos = get_single_position(symbol)
-        if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
-        amt = float(pos.get("positionAmt") or 0.0)
-        if abs(amt) < 1e-12: return {"ok": False, "error": f"No non-zero position for {symbol}"}
-        pos_side = position_side or _position_side_from_amt(amt)
-        side = _order_side_for_close(pos_side)
-        qprice = _quantize_price(symbol, float(new_sl_price))
-        price_f = float(qprice)
-        canceled = _cancel_closing_orders(symbol, types=("STOP", "STOP_MARKET"))
-        is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
-        if is_partial:
-            qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
-            if float(qstr) > abs(amt):
-                qstr = _quantize_qty(symbol, abs(amt))
-            order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
-                                       stopPrice=qprice, reduceOnly=True, quantity=qstr,
-                                       newClientOrderId=_coid("SL", symbol))
-        else:
-            order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
-                                       stopPrice=qprice, reduceOnly=True, closePosition=True,
-                                       newClientOrderId=_coid("SL", symbol))
-        return {"ok": True, "canceled": canceled, "order": order, "stopPrice": qprice}
-    except BinanceAPIException as e:
-        logger.error("modify_stop_loss failed: %s", e); return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error("modify_stop_loss failed: %s", e); return {"ok": False, "error": str(e)}
-
-def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional[str] = None,
-                       pct: Optional[float] = None, quantity: Optional[float] = None) -> Dict[str, Any]:
-    try:
-        pos = get_single_position(symbol)
-        if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
-        amt = float(pos.get("positionAmt") or 0.0)
-        if abs(amt) < 1e-12: return {"ok": False, "error": f"No non-zero position for {symbol}"}
-        pos_side = position_side or _position_side_from_amt(amt)
-        side = _order_side_for_close(pos_side)
-        qprice = _quantize_price(symbol, float(new_tp_price))
-        price_f = float(qprice)
-        canceled = clear_take_profit_orders(symbol)
-        is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
-        if is_partial:
-            qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
-            if float(qstr) > abs(amt):
-                qstr = _quantize_qty(symbol, abs(amt))
-            order = _safe_create_order(symbol=symbol.upper(), side=side, type="TAKE_PROFIT_MARKET",
-                                       stopPrice=qprice, reduceOnly=True, quantity=qstr,
-                                       newClientOrderId=_coid("TP", symbol))
-        else:
-            order = _safe_create_order(symbol=symbol.upper(), side=side, type="TAKE_PROFIT_MARKET",
-                                       stopPrice=qprice, reduceOnly=True, closePosition=True,
-                                       newClientOrderId=_coid("TP", symbol))
-        return {"ok": True, "canceled": canceled, "order": order, "stopPrice": qprice}
-    except BinanceAPIException as e:
-        logger.error("modify_take_profit failed: %s", e); return {"ok": False, "error": str(e)}
-    except Exception as e:
-        logger.error("modify_take_profit failed: %s", e); return {"ok": False, "error": str(e)}
-
-def set_breakeven_stop(symbol: str, offset_bps: float = 0.0) -> Dict[str,Any]:
-    pos = get_single_position(symbol)
-    if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
-    entry = float(pos.get("entryPrice") or 0.0)
-    if entry <= 0: return {"ok": False, "error": f"Invalid entryPrice for {symbol}"}
-    amt = float(pos.get("positionAmt", "0"))
-    pos_side = _position_side_from_amt(amt)
-    sl = entry * (1.0 + (offset_bps / 10000.0)) if pos_side == "LONG" else entry * (1.0 - (offset_bps / 10000.0))
-    return modify_stop_loss(symbol, sl, position_side=pos_side)
-
-def clear_take_profit_orders(symbol: str) -> int:
-    return _cancel_closing_orders(symbol, types=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
-
-def clear_stop_orders(symbol: str) -> int:
-    return _cancel_closing_orders(symbol, types=("STOP", "STOP_MARKET"))
-
-def _normalize_splits(splits: List[float], levels: int) -> List[float]:
-    if not splits or len(splits) != levels: return [1.0 / levels] * levels
-    s = [max(0.0, float(x)) for x in splits]; tot = sum(s)
-    if tot <= 0: return [1.0 / levels] * levels
-    return [x / tot for x in s]
-
-def _build_tp_prices_by_pct(entry: float, pos_side: str, pcts: List[float]) -> List[float]:
-    out = []
-    for p in pcts:
-        p = float(p)
-        out.append(entry * (1.0 + p/100.0) if pos_side=="LONG" else entry * (1.0 - p/100.0))
-    return out
-
-def place_tp_ladder(symbol: str, targets_prices: Optional[List[float]] = None, splits: Optional[List[float]] = None,
-                    *, position_side: Optional[str] = None, percent_targets: Optional[List[float]] = None) -> Dict[str, Any]:
-    if not LADDER_TP_ENABLE: return {"ok": False, "error": "TP ladder disabled by ENV"}
-
-    now = _now(); su = symbol.upper()
-    last = _tp_ladder_last_at.get(su, 0.0)
-    if now - last < max(0, TP_LADDER_COOLDOWN_SEC):
-        return {"ok": False, "cooldown": True, "wait_sec": int(TP_LADDER_COOLDOWN_SEC - (now - last))}
-    _tp_ladder_last_at[su] = now
-
-    pos = get_single_position(symbol)
-    if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
-    amt = abs(float(pos.get("positionAmt") or 0.0))
-    if amt <= 0: return {"ok": False, "error": "No non-zero position"}
-    entry = float(pos.get("entryPrice") or 0.0)
-    pos_side = position_side or _position_side_from_amt(float(pos.get("positionAmt") or 0.0))
-    side = _order_side_for_close(pos_side)
-
-    if percent_targets and len(percent_targets) > 0:
-        prices = _build_tp_prices_by_pct(entry, pos_side, percent_targets)
-    elif targets_prices and len(targets_prices) > 0:
-        prices = [float(p) for p in targets_prices]
-    else:
-        s = (LADDER_TP_DEFAULT_PCTS or "1.8,3.2,5.5")
-        pcts = [float(x) for x in s.split(",") if x.strip()]
-        prices = _build_tp_prices_by_pct(entry, pos_side, pcts)
-
-    prices = prices[: max(1, min(LADDER_TP_MAX_LEVELS, len(prices)))]
-    levels = len(prices)
-
-    if splits is None:
-        ss = (LADDER_TP_DEFAULT_SPLITS or "0.4,0.35,0.25")
-        splits = [float(x) for x in ss.split(",") if x.strip()]
-    splits = _normalize_splits(splits or [], levels)
-
-    canceled = clear_take_profit_orders(symbol)
-
-    results = []; qty_left = amt
-    filters = get_symbol_filters(symbol) or {}
-    step = float(filters.get("stepSize") or DEFAULT_QTY_STEP_STR)
-
-    for i, (p, sp) in enumerate(zip(prices, splits), start=1):
-        qprice = _quantize_price(symbol, float(p))
-        price_f = float(qprice)
-        is_last = (i == levels)
-
-        if not is_last:
-            qi = min(float(_quantize_qty(symbol, amt * sp)), qty_left)
-            if qi < step:
-                continue
-            qi = float(_ensure_min_notional(symbol, price_f, qi))
-            qstr = _quantize_qty(symbol, qi)
-            if float(qstr) > qty_left:
-                continue
-            qty_left = max(0.0, qty_left - float(qstr))
-            order = _safe_create_order(symbol=symbol.upper(), side=side,
-                                       type=LADDER_TP_KIND, stopPrice=qprice,
-                                       reduceOnly=True, quantity=qstr,
-                                       newClientOrderId=_coid("TP", symbol, i))
-        else:
-            order = _safe_create_order(symbol=symbol.upper(), side=side,
-                                       type=LADDER_TP_KIND, stopPrice=qprice,
-                                       reduceOnly=True, closePosition=True,
-                                       newClientOrderId=_coid("TP", symbol, i))
-        results.append({"level": i, "stopPrice": qprice, "resp": order})
-    return {"ok": True, "canceled": canceled, "levels": results, "side": pos_side}
-
-def place_sl_ladder(symbol: str, stops_prices: Optional[List[float]] = None, splits: Optional[List[float]] = None,
-                    *, position_side: Optional[str] = None, percent_stops: Optional[List[float]] = None) -> Dict[str, Any]:
-    if not LADDER_SL_ENABLE: return {"ok": False, "error": "SL ladder disabled by ENV"}
-    pos = get_single_position(symbol)
-    if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
-    amt = abs(float(pos.get("positionAmt") or 0.0))
-    if amt <= 0: return {"ok": False, "error": "No non-zero position"}
-    entry = float(pos.get("entryPrice") or 0.0)
-    pos_side = position_side or _position_side_from_amt(float(pos.get("positionAmt") or 0.0))
-    side = _order_side_for_close(pos_side)
-
-    if percent_stops:
-        prices = []
-        for pct in percent_stops:
-            pct = abs(float(pct))
-            prices.append(entry * (1.0 - pct/100.0) if pos_side=="LONG" else entry * (1.0 + pct/100.0))
-    elif stops_prices:
-        prices = [float(x) for x in stops_prices]
-    else:
-        if not (LADDER_SL_DEFAULT_PCTS or "").strip(): return {"ok": False, "error": "No SL percentages provided"}
-        pcts = [float(x) for x in LADDER_SL_DEFAULT_PCTS.split(",") if x.strip()]
-        prices = []
-        for pct in pcts:
-            pct = abs(float(pct))
-            prices.append(entry * (1.0 - pct/100.0) if pos_side=="LONG" else entry * (1.0 + pct/100.0))
-
-    prices = prices[: max(1, min(LADDER_SL_MAX_LEVELS, len(prices)))]
-    levels = len(prices)
-
-    if splits is None: splits = [1.0 / levels] * levels
-    splits = _normalize_splits(splits, levels)
-
-    canceled = clear_stop_orders(symbol)
-
-    results = []; qty_left = amt
-    filters = get_symbol_filters(symbol) or {}
-    step = float(filters.get("stepSize") or DEFAULT_QTY_STEP_STR)
-
-    for i, (p, sp) in enumerate(zip(prices, splits), start=1):
-        qprice = _quantize_price(symbol, float(p))
-        price_f = float(qprice)
-        is_last = (i == levels)
-
-        if not is_last:
-            qi = min(float(_quantize_qty(symbol, amt * sp)), qty_left)
-            if qi < step:
-                continue
-            qi = float(_ensure_min_notional(symbol, price_f, qi))
-            qstr = _quantize_qty(symbol, qi)
-            if float(qstr) > qty_left:
-                continue
-            qty_left = max(0.0, qty_left - float(qstr))
-            order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
-                                       stopPrice=qprice, reduceOnly=True, quantity=qstr,
-                                       newClientOrderId=_coid("SL", symbol, i))
-        else:
-            order = _safe_create_order(symbol=symbol.upper(), side=side, type="STOP_MARKET",
-                                       stopPrice=qprice, reduceOnly=True, closePosition=True,
-                                       newClientOrderId=_coid("SL", symbol, i))
-        results.append({"level": i, "stopPrice": qprice, "resp": order})
-    return {"ok": True, "canceled": canceled, "levels": results, "side": pos_side}
-
 def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
     try:
         import pandas as pd
@@ -710,9 +517,8 @@ def get_price(symbol: str) -> Optional[float]:
                 return float(p)
     except Exception:
         pass
-    # Fallback to REST
+    # Fallback to REST (mark price)
     p = futures_mark_price(symbol)
-    # Feed WS cache for consumers
     try:
         if p and ws_update_price:
             ws_update_price(symbol, float(p))
@@ -728,8 +534,7 @@ __all__ = [
     "get_symbol_info","get_symbol_filters","get_open_positions","futures_open_positions_safe","get_single_position",
     "futures_create_order","place_stop_market",
     "futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
-    "modify_stop_loss","modify_take_profit","set_breakeven_stop","clear_take_profit_orders","clear_stop_orders",
-    "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
+    "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
 
