@@ -17,7 +17,6 @@ router = APIRouter(
 
 @router.get("/ping")
 def ping() -> Dict[str, Any]:
-    """בודק זמינות Binance API (fapi)."""
     try:
         return {"ok": bool(fapi_ping())}
     except Exception as e:
@@ -26,10 +25,6 @@ def ping() -> Dict[str, Any]:
 
 @router.get("/status")
 def binance_status(symbols: str = Query("BTCUSDT,ETHUSDT,BNBUSDT")) -> Dict[str, Any]:
-    """
-    סטטוס כללי: ping + דגימת Mark Price למספר סימבולים.
-    אפשר להעביר ?symbols=BTCUSDT,SOLUSDT,ADAUSDT
-    """
     syms: List[str] = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     samples: Dict[str, Any] = {}
     try:
@@ -49,7 +44,6 @@ def binance_status(symbols: str = Query("BTCUSDT,ETHUSDT,BNBUSDT")) -> Dict[str,
 
 @router.get("/mark-price")
 def mark_price(symbol: str = Query(..., min_length=6, max_length=20)) -> Dict[str, Any]:
-    """מחזיר Mark Price לסימבול יחיד."""
     try:
         price = futures_mark_price(symbol)
         if price is None:
@@ -63,7 +57,6 @@ def mark_price(symbol: str = Query(..., min_length=6, max_length=20)) -> Dict[st
 
 @router.get("/exchange-info")
 def exchange_info(force_refresh: int = Query(0, ge=0, le=1)) -> Dict[str, Any]:
-    """מחזיר snapshot של exchangeInfo (Binance Futures). force_refresh=1 כדי לרענן מטמון פנימי, אם קיים."""
     try:
         data = futures_exchange_info_safe(force_refresh=bool(force_refresh))
         if not data or "symbols" not in data:
@@ -74,6 +67,7 @@ def exchange_info(force_refresh: int = Query(0, ge=0, le=1)) -> Dict[str, Any]:
     except Exception as e:
         logger.error("binance/exchange-info failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to fetch exchange info: {e}")
+
 
 
 
