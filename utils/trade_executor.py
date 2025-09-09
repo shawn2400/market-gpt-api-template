@@ -12,7 +12,6 @@ from utils.binance_client import (
 logger = logging.getLogger("algogpt.trade_executor")
 
 def _round_qty(symbol: str, qty: float) -> float:
-    """התאמה ל־stepSize ו־minQty לפי Exchange Info."""
     try:
         info = get_symbol_info(symbol)
         if not info:
@@ -34,12 +33,13 @@ async def execute_trade_live(
     sl: Optional[float] = None,
     tp: Optional[float] = None,
     dry_run: bool = False,
+    quantity: Optional[float] = None,
     position_side: str = "BOTH",
     reduce_only: bool = False,
 ) -> Dict[str, Any]:
     """
-    פותח טרייד אמיתי ב־Binance Futures כולל SL/TP אם מוגדרים.
-    תומך גם ב־dry_run (סימולציה) וגם בפרמטר entry (מחיר יעד, אופציונלי).
+    פותח טרייד אמיתי או סימולציה ב־Binance Futures.
+    תומך גם ב־dry_run וגם בפרמטר quantity (מועדף על budget).
     """
     try:
         mark = futures_mark_price(symbol)
@@ -47,7 +47,10 @@ async def execute_trade_live(
             return {"ok": False, "error": f"mark_price_unavailable for {symbol}"}
 
         price_ref = entry or mark
-        qty = _round_qty(symbol, (budget * leverage) / price_ref)
+
+        # חישוב הכמות
+        qty = quantity if quantity is not None else (budget * leverage) / price_ref
+        qty = _round_qty(symbol, qty)
         if qty <= 0:
             return {"ok": False, "error": "qty_invalid"}
 
@@ -125,6 +128,7 @@ async def execute_trade_live(
         return {"ok": False, "error": str(e)}
 
 __all__ = ["execute_trade_live"]
+
 
 
 
