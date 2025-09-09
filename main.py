@@ -1,13 +1,13 @@
 # main.py
 from __future__ import annotations
-import os, asyncio, logging
+import os, asyncio, logging, json
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from prometheus_client import make_asgi_app
-import httpx, importlib, pkgutil
+import httpx
 
 from utils.json_logger import setup_json_logging
 from utils.response_limits import ResponseSizeLimiter
@@ -21,10 +21,8 @@ def _coerce_log_level(val):
     import logging as _l
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
         return int(val)
-    m = {
-        "debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING,
-        "warn": _l.WARNING, "error": _l.ERROR, "critical": _l.CRITICAL,
-    }
+    m = {"debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING,
+         "warn": _l.WARNING, "error": _l.ERROR, "critical": _l.CRITICAL}
     return m.get(str(val).strip().lower(), _l.INFO)
 
 logger = setup_json_logging()
@@ -45,13 +43,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
 CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0") in ("1","true","on")
-app.add_middleware(
-    CORSMiddleware,
+app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=CORS_ALLOW_CREDENTIALS,
-)
+    allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS)
 app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
@@ -71,26 +65,15 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Auto-load all routers under routes/
-def _autoload_routes():
+# ── Routers (שמות מדויקים לפי הקבצים אצלך)
+for module_path in ("routes.trade", "routes.analytics", "routes.decision"):
     try:
-        import routes as _routes_pkg  # package
+        mod = __import__(module_path, fromlist=["router"])
+        if hasattr(mod, "router"):
+            app.include_router(mod.router)
+            logger.info({"event": "router_registered", "router": module_path})
     except Exception as e:
-        logger.warning({"event": "routes_package_missing", "error": str(e)})
-        return
-    package_path = Path(_routes_pkg.__file__).parent
-    for modinfo in pkgutil.iter_modules([str(package_path)]):
-        name = modinfo.name
-        fqmn = f"routes.{name}"
-        try:
-            mod = importlib.import_module(fqmn)
-            if hasattr(mod, "router"):
-                app.include_router(mod.router)
-                logger.info({"event": "router_registered", "router": fqmn})
-        except Exception as e:
-            logger.warning({"event": "router_register_failed", "router": fqmn, "error": str(e)})
-
-_autoload_routes()
+        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
 # ── Meta & Health
 @app.get("/")
@@ -198,6 +181,7 @@ async def _startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
