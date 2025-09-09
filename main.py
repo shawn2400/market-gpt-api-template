@@ -15,7 +15,7 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price
 from utils.metrics_middleware import MetricsMiddleware
 from app.middlewares import InternalAuthMiddleware
-from utils.trade_executor import ConfirmStore  # אין צורך בקובץ חדש
+from utils.trade_executor import ConfirmStore  # מאגר אישורים בטלגרם
 
 def _coerce_log_level(val):
     import logging as _l
@@ -53,7 +53,7 @@ app.mount("/metrics", make_asgi_app())
 # ── Public/Auth middleware
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/healthz", "/readyz", "/docs", "/redoc", "/telegram/webhook"}
+    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/healthz", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"}
     PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk", "/metrics"]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
@@ -65,8 +65,18 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Routers (שמות מדויקים לפי הקבצים אצלך)
-for module_path in ("routes.trade", "routes.analytics", "routes.decision"):
+# ── Routers (לא נשבר אם לא קיים)
+for module_path in (
+    "routes.trade",
+    "routes.analytics",
+    "routes.decision",
+    # אופציונליים:
+    "routes.backtest",
+    "routes.executor",
+    "routes.binance_status",
+    "routes.telegram_bot",
+    "routes.telegram_webhook",
+):
     try:
         mod = __import__(module_path, fromlist=["router"])
         if hasattr(mod, "router"):
@@ -84,17 +94,25 @@ async def root():
 async def health():
     return {"ok": True, "status": "ok"}
 
+# אליאס לבריאות “ישנה”
+@app.get("/debug/health")
+async def debug_health():
+    return {"ok": True, "status": "ok", "env": os.getenv("ENV","prod"), "version": APP_VERSION}
+
 # ── Price (לבדיקות)
 @app.get("/price/{symbol}")
 async def price(symbol: str):
-    p = get_price(symbol)
+    try:
+        p = get_price(symbol)
+    except Exception:
+        p = None
     return {"symbol": symbol.upper(), "price": p, "fresh": bool(p and p > 0)}
 
 # ── Readyz
 @app.get("/readyz")
 async def readyz():
     try:
-        ping_ok = fapi_ping()
+        ping_ok = bool(fapi_ping())
     except Exception:
         ping_ok = False
     try:
@@ -110,7 +128,32 @@ async def readyz():
             prices[f"price_{s}"] = None
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-# ── Telegram webhook
+# ── Binance status (מינימלי כדי שהסמוק לא ייפול)
+@app.get("/binance/status")
+async def binance_status():
+    try:
+        ping_ok = bool(fapi_ping())
+    except Exception:
+        ping_ok = False
+    bal_ok = False
+    try:
+        bal = futures_balance()
+        bal_ok = bool(bal and isinstance(bal, list))
+    except Exception:
+        bal_ok = False
+    return {"ok": ping_ok and bal_ok, "ping_ok": ping_ok, "balance_ok": bal_ok}
+
+# ── Executor status (מספר בקשות אישור תלויות)
+@app.get("/executor/status")
+async def executor_status():
+    pending = 0
+    try:
+        pending = sum(1 for _cid, rec in (ConfirmStore._mem or {}).items() if rec.get("status") == "pending")
+    except Exception:
+        pending = 0
+    return {"ok": True, "pending_confirms": pending}
+
+# ── Telegram webhook & ping
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -126,6 +169,10 @@ async def _tg_send(chat_id: int, text: str):
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("telegram send failed: %s", e)
 
+@app.get("/telegram/ping")
+async def tg_ping():
+    return {"ok": True, "src": "telegram", "ts": int(asyncio.get_event_loop().time()*1000)}
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
@@ -134,7 +181,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 
     cb = update.get("callback_query")
     if cb:
-        data = str(cb.get("data", ""))
+        data = str(cb.get("data", ""))  # "CONFIRM:APPROVE:<cid>"
         chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
         chat_id = int(chat.get("id", 0))
         parts = data.split(":", 2)
@@ -181,6 +228,7 @@ async def _startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
