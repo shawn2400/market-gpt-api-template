@@ -25,12 +25,12 @@ ESCALATE_SLIP_BPS   = float(os.getenv("ESCALATE_SLIPPAGE_BPS", "15"))
 SL_LIMIT_OFFSET_BPS = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
-# איכות סיגנל (Gate) — ★ מינימום ציון 8.5 כברירת־מחדל
+# Gate איכות — ברירת מחדל ציון מינימלי 8.5
 MIN_QUALITY_SCORE   = float(os.getenv("MIN_QUALITY_SCORE", "8.5"))
 MAX_ATR_PCT         = float(os.getenv("MAX_ATR_PCT", "2.5"))  # ATR(14) כאחוז מחיר
 MIN_VOLUME          = float(os.getenv("MIN_VOLUME", "0"))     # אם 0 -> מתעלמים
 
-# דיוקים כלליים
+# Quantization
 DEFAULT_QTY_STEP    = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK        = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 DEFAULT_MIN_NOT     = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
@@ -206,7 +206,6 @@ def _ema(vals: List[float], period: int) -> List[float]:
     return ema
 
 def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
-    # kline: [open_time, open, high, low, close, volume, ...]
     trs: List[float] = []
     prev_close = None
     for row in kl:
@@ -218,8 +217,7 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
         trs.append(tr)
         prev_close = close
     if len(trs) < period: return trs[-1] if trs else 0.0
-    # EMA-ATR
-    return _ema(trs, period)[-1]
+    return _ema(trs, period)[-1]  # EMA-ATR
 
 def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
     cli = get_futures_client()
@@ -234,8 +232,6 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
     try:
         kl = _fetch_klines_raw(symbol, "1m", 60)
         closes = [float(r[4]) for r in kl]
-        highs  = [float(r[2]) for r in kl]
-        lows   = [float(r[3]) for r in kl]
         vols   = [float(r[5]) for r in kl]
         if len(closes) < 30:
             return {"enter_ok": False, "score": 0.0, "reasons": ["insufficient_data"]}
@@ -247,20 +243,12 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         atr_pct = (atr / last) * 100.0 if last > 0 else 999.0
         vol1m = vols[-1]
 
-        # Trend alignment
         trend_ok = (ema21 > ema50 and last > ema21) if side == "BUY" else (ema21 < ema50 and last < ema21)
-
-        # Short momentum (3m)
-        mom = (last / closes[-4] - 1.0) * 100.0  # % על 3 נרות לאחור (1m)
-        mom_ok = (mom > 0.05) if side == "BUY" else (mom < -0.05)  # ±0.05%
-
-        # Volume gate (optional)
+        mom = (last / closes[-4] - 1.0) * 100.0
+        mom_ok = (mom > 0.05) if side == "BUY" else (mom < -0.05)
         vol_ok = True if MIN_VOLUME <= 0 else (vol1m >= MIN_VOLUME)
-
-        # ATR sanity
         atr_ok = (atr_pct <= MAX_ATR_PCT)
 
-        # Score (דיסקרטי)
         score = 0.0
         score += 4.0 if trend_ok else 0.0
         score += 3.0 if mom_ok else 0.0
@@ -312,33 +300,28 @@ def _build_ladders(sym: str, side: str, qty: float,
 
 # ─────────── Hybrid entry + escalation ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float, ref_entry: Optional[float]) -> Dict[str, Any]:
-    """Places LIMIT (maker) + STOP (breakout). Cancels the other when one fills.
-       If none fills and conditions justify → escalate to MARKET (if allowed)."""
     ref = ref_entry if ref_entry is not None else base_price
     if side == "BUY":
-        limit_price = _offset_bps(ref, -ENTRY_BAND_BPS, +1)   # מתחת למחיר
-        stop_price  = _offset_bps(ref, +STOP_BAND_BPS,  +1)   # מעל למחיר
+        limit_price = _offset_bps(ref, -ENTRY_BAND_BPS, +1)
+        stop_price  = _offset_bps(ref, +STOP_BAND_BPS,  +1)
     else:
-        limit_price = _offset_bps(ref, +ENTRY_BAND_BPS, +1)   # מעל למחיר
-        stop_price  = _offset_bps(ref, -STOP_BAND_BPS,  +1)   # מתחת למחיר
+        limit_price = _offset_bps(ref, +ENTRY_BAND_BPS, +1)
+        stop_price  = _offset_bps(ref, -STOP_BAND_BPS,  +1)
 
     limit_str, limit_p = _q_price(sym, limit_price)
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    # 1) LIMIT
     lim = futures_create_order(symbol=sym, side=side, type="LIMIT",
                                timeInForce="GTC", price=limit_str, quantity=qty_str)
     lim_id = str(lim.get("orderId") or "")
 
-    # 2) STOP (STOP_LIMIT for entry)
     stp = futures_create_order(symbol=sym, side=side, type="STOP",
                                timeInForce="GTC", stopPrice=stop_str, price=stop_str,
                                quantity=qty_str)
     stp_id = str(stp.get("orderId") or "")
 
     def _is_filled(oid: str) -> bool:
-        """סינכרוני — נקרא מתוך thread כדי לא לחסום event loop."""
         try:
             lst = get_all_orders(sym, limit=10) or []
             for o in lst:
@@ -365,7 +348,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             except Exception: pass
             return {"entry_kind": "STOP", "price": stop_p, "order": stp}
 
-        # הסלמה — רק אם מוצדק
         if time.time() - t0 >= ESCALATE_AFTER_S:
             cur = get_price(sym) or futures_mark_price(sym) or base_price
             slip_bps = abs(cur - limit_p) / max(limit_p, 1e-9) * 10000.0
@@ -380,7 +362,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 except Exception: pass
                 mkt = futures_create_order(symbol=sym, side=side, type="MARKET", quantity=qty_str)
                 return {"entry_kind": "MARKET_ESCALATE", "price": float(cur), "order": mkt}
-            t0 = time.time()  # אם לא הסלמנו — נמשיך לנטר
+            t0 = time.time()
 
         await asyncio.sleep(1.0)
 
@@ -413,7 +395,7 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # qty חישוב — יזרוק אם אין תקציב/כמות (אך ב-dry_run נרצה להמשיך; נטפל למטה)
+    # חישוב כמות — ב-dry_run נרצה להמשיך גם אם אין הקצאה
     qty_calc_error = None
     qty: Optional[float] = None
     try:
@@ -423,7 +405,7 @@ async def execute_trade_live(
 
     gate = _quality_gate(sym, side)
 
-    # Dry-run: תמיד נחזיר OK, עם gate ועם הערות, גם אם אין הקצאה תקפה.
+    # Dry-run: תמיד OK, עם אינדיקציה ל-alloc_ok/alloc_error
     if dry_run:
         plan: Dict[str, Any] = {
             "ok": True, "symbol": sym, "side": side, "leverage": leverage,
@@ -431,7 +413,6 @@ async def execute_trade_live(
             "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
             "gate": gate, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
         }
-        # אם יש כמות — בנה סולמות הדגמה; אחרת רק הצג מדיניות
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
                                      ([tp] if tp is not None else tp_targets), tp_splits,
@@ -451,7 +432,6 @@ async def execute_trade_live(
     if not gate.get("enter_ok"):
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
 
-    # אישור טלגרם אם נדרש
     if confirm_first:
         if not telegram_chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
@@ -461,7 +441,6 @@ async def execute_trade_live(
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # ניסיון סט-לבורג'
     try:
         set_leverage(sym, int(leverage))
     except Exception as e:
@@ -476,7 +455,6 @@ async def execute_trade_live(
         "tp_orders": [], "sl_orders": []
     }
 
-    # יציאות — reduceOnly GTC בלבד
     close_side = "SELL" if side=="BUY" else "BUY"
     ladders = _build_ladders(sym, side, qty,
                              ([tp] if tp is not None else tp_targets), tp_splits,
@@ -498,6 +476,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
