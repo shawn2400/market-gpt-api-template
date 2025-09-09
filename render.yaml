@@ -50,13 +50,13 @@ services:
         value: "wss://fstream.binance.com"
 
       # Telegram/Webhook
-      - key: PUBLIC_HOST            # ← main.py משתמש בזה
+      - key: PUBLIC_HOST
         value: "https://algogpt-docker.onrender.com"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
-      - key: TELEGRAM_TEST_CHAT_ID  # אופציונלי לבדיקות /telegram/test-ping
+      - key: TELEGRAM_TEST_CHAT_ID
         sync: false
 
       # CORS
@@ -65,7 +65,7 @@ services:
       - key: CORS_ALLOW_CREDENTIALS
         value: "0"
 
-      # DB / Redis / Keys (מוזנים רק בדשבורד)
+      # DB / Keys
       - key: DATABASE_URL
         value: "sqlite:////app/data/algogpt.db"
       - key: API_BEARER_TOKEN
@@ -81,6 +81,7 @@ services:
       name: data
       mountPath: /app/data
       sizeGB: 1
+
 
 
 
