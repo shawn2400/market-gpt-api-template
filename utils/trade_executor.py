@@ -1,4 +1,4 @@
-# utils/trade_executor.py
+# ✅ trade_executor.py - גרסה סופית ותקינה עם תמיכה ב־quantity
 from __future__ import annotations
 import logging, uuid
 from typing import Dict, Any, Optional
@@ -11,7 +11,6 @@ from utils.binance_client import (
 
 logger = logging.getLogger("algogpt.trade_executor")
 
-
 def _round_qty(symbol: str, qty: float) -> float:
     try:
         info = get_symbol_info(symbol)
@@ -23,7 +22,6 @@ def _round_qty(symbol: str, qty: float) -> float:
         return (qty // step) * step
     except Exception:
         return round(qty, 6)
-
 
 async def execute_trade_live(
     *,
@@ -39,18 +37,12 @@ async def execute_trade_live(
     position_side: str = "BOTH",
     reduce_only: bool = False,
 ) -> Dict[str, Any]:
-    """
-    פותח טרייד אמיתי או סימולציה ב־Binance Futures.
-    תומך גם ב־dry_run וגם בפרמטר quantity (מועדף על budget).
-    """
     try:
         mark = futures_mark_price(symbol)
         if not mark:
             return {"ok": False, "error": f"mark_price_unavailable for {symbol}"}
 
         price_ref = entry or mark
-
-        # חישוב הכמות
         qty = quantity if quantity is not None else (budget * leverage) / price_ref
         qty = _round_qty(symbol, qty)
         if qty <= 0:
@@ -129,8 +121,8 @@ async def execute_trade_live(
         logger.exception("[trade_executor] execution error: %s", e)
         return {"ok": False, "error": str(e)}
 
-
 __all__ = ["execute_trade_live"]
+
 
 
 
