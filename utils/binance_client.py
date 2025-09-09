@@ -15,8 +15,9 @@ if not API_KEY or not API_SECRET:
     logger.error("[binance_client] Missing API keys")
     raise RuntimeError("Missing Binance API keys")
 
+HTTP_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))
 WORKING_TYPE = os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE").upper()
-RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "45000"))
+RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "15000"))
 
 EXINFO_TTL = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))
 ORD_BUCKET_WINDOW = int(os.getenv("ORDERS_BUCKET_WINDOW_SEC", "10"))
@@ -59,10 +60,7 @@ ORDER_ID_MAXLEN = int(os.getenv("ORDER_ID_MAXLEN", "36"))
 def _sanitize_coid(s: str) -> str:
     out = []
     for ch in s:
-        if ch.isalnum() or ch == "_":
-            out.append(ch)
-        else:
-            out.append("_")
+        out.append(ch if (ch.isalnum() or ch == "_") else "_")
     return "".join(out)[:ORDER_ID_MAXLEN]
 
 def _coid(kind: str, symbol: str, level: int | None = None) -> str:
@@ -89,9 +87,28 @@ def _kind_from_kwargs(kwargs: dict) -> str:
     if t == "LIMIT":  return "LMT"
     return "ORD"
 
-# ===== Init Futures client =====
-client = Client(API_KEY, API_SECRET)
+# ===== Init Futures client (+ timeout) =====
+client = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
 client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+
+# Time sync to avoid INVALID_TIMESTAMP
+try:
+    # חלק מהגרסאות תומכות futures_time; אחרת נ fallback
+    try:
+        server_time = client.futures_time().get("serverTime")  # type: ignore
+    except Exception:
+        server_time = client.get_server_time().get("serverTime")
+    local_ms = int(time.time() * 1000)
+    offset = int(server_time) - local_ms
+    # בגרסאות שונות המאפיין שונה
+    setattr(client, "TIME_OFFSET", offset)
+    try:
+        setattr(client, "timestamp_offset", offset)
+    except Exception:
+        pass
+    logger.info("Binance TIME_OFFSET set to %d ms", offset)
+except Exception as e:
+    logger.warning("Time sync failed: %s", e)
 
 # ===== Optional WS fallback for price =====
 try:
@@ -123,9 +140,11 @@ def _get_exchange_info_cached(force_refresh: bool=False) -> Optional[Dict[str, A
 # ========== Core ==========
 def fapi_ping() -> bool:
     try:
-        client.futures_ping(); return True
+        client.futures_ping()
+        return True
     except Exception as e:
-        logger.warning("Futures ping failed: %s", e); return False
+        logger.warning("Futures ping failed: %s", e)
+        return False
 
 def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     return _get_exchange_info_cached(force_refresh=force_refresh)
@@ -135,11 +154,9 @@ def _get_account_cached() -> Optional[Dict[str, Any]]:
     # Respect temporary ban/backoff
     if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
         return _account_cache["data"]
-
     # Short TTL cache
     if _account_cache["data"] and (now - _account_cache["ts"] <= ACCOUNT_TTL_SEC):
         return _account_cache["data"]
-
     try:
         data = client.futures_account()
         _account_cache.update({"data": data, "ts": now, "ban_until": 0.0})
@@ -163,39 +180,23 @@ def futures_balance() -> List[Dict[str, Any]]:
         data = _get_account_cached() or {}
         return data.get("assets") or data.get("balances") or client.futures_account_balance() or []
     except Exception as e:
-        logger.error("Failed to fetch futures_balance: %s", e); return []
+        logger.error("Failed to fetch futures_balance: %s", e)
+        return []
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
         return float(client.futures_mark_price(symbol=symbol.upper())["markPrice"])
     except Exception as e:
-        logger.error("Failed mark price for %s: %s", symbol, e); return None
-
-def get_price(symbol: str) -> Optional[float]:
-    # Prefer WS cache if fresh
-    try:
-        if ws_is_fresh and ws_get_price and ws_is_fresh(symbol, int(os.getenv("PRICE_WS_FRESH_TTL", "20"))):
-            p = ws_get_price(symbol)
-            if p and p > 0:
-                return float(p)
-    except Exception:
-        pass
-    # Fallback to REST
-    p = futures_mark_price(symbol)
-    # Feed WS cache for consumers
-    try:
-        if p and ws_update_price:
-            ws_update_price(symbol, float(p))
-    except Exception:
-        pass
-    return p
+        logger.error("Failed mark price for %s: %s", symbol, e)
+        return None
 
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     info = futures_exchange_info_safe()
     if not info: return None
     su = symbol.upper()
     for s in info.get("symbols", []):
-        if (s.get("symbol") or "").upper() == su: return s
+        if (s.get("symbol") or "").upper() == su:
+            return s
     return None
 
 def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
@@ -213,9 +214,10 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
                 filters["minNotional"] = f.get("notional") or f.get("minNotional")
         return filters
     except Exception as e:
-        logger.error("Failed get_symbol_filters: %s", e); return None
+        logger.error("Failed get_symbol_filters: %s", e)
+        return None
 
-# ========== Precision ==========
+# ===== Precision =====
 def _decimals_from_step(step_str: str) -> int:
     if "." not in step_str: return 0
     frac = step_str.split(".")[1]
@@ -250,7 +252,7 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     if need <= qf + 1e-12: return qty_str
     return _quantize_qty(symbol, need)
 
-# ========== Auto-tune QPS/Backoff ==========
+# ===== Rate limiting buckets =====
 _bucket_reset_at = 0.0; _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
 _dyn_backoff_base = max(60, BACKOFF_BASE_MS)
@@ -278,7 +280,7 @@ def _backoff_sleep(attempt: int) -> None:
     delay_ms = min(BACKOFF_MAX_MS, _dyn_backoff_base * (2 ** max(0, attempt - 1)))
     time.sleep(delay_ms / 1000.0)
 
-# ========== Helper: prefix match for cancel ==========
+# ===== Orders / Positions / Helpers =====
 def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
     if not prefix:
         return True
@@ -308,7 +310,6 @@ def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
                     logger.warning("Cancel order failed %s/%s: %s", symbol, oid, e)
     return count
 
-# ========== Positions ==========
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         acc_info = _get_account_cached() or {}
@@ -340,7 +341,6 @@ def _order_side_for_close(pos_side: str) -> str:
     if ps == "SHORT": return "BUY"
     return "SELL"
 
-# ========== Orders ==========
 def _safe_create_order(**kwargs) -> Dict[str, Any]:
     kwargs.setdefault("workingType", WORKING_TYPE)
     kwargs.setdefault("recvWindow", RECV_WINDOW)
@@ -372,7 +372,9 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
 def futures_create_order(**kwargs) -> Dict[str, Any]:
     return _safe_create_order(**kwargs)
 
-def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *, reduce_only: bool=True, close_position: bool=False, client_order_id: Optional[str]=None) -> Dict[str, Any]:
+def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *,
+                      reduce_only: bool=True, close_position: bool=False,
+                      client_order_id: Optional[str]=None) -> Dict[str, Any]:
     sym = symbol.upper()
     qprice = _quantize_price(sym, float(stop_price))
     qqty   = _quantize_qty(sym, float(quantity))
@@ -430,7 +432,7 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
-# ========== Cancel+Recreate ==========
+# ===== Ladders / Extras (כמו שסיפקת, ללא שינוי לוגי) =====
 def _compute_partial_qty(symbol: str, pos_amt: float, pct: Optional[float], qty: Optional[float]) -> Tuple[bool, str]:
     if pct is None and qty is None: return False, ""
     target = 0.0
@@ -483,7 +485,7 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
         side = _order_side_for_close(pos_side)
         qprice = _quantize_price(symbol, float(new_tp_price))
         price_f = float(qprice)
-        canceled = _cancel_closing_orders(symbol, types=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
+        canceled = clear_take_profit_orders(symbol)
         is_partial, qstr = _compute_partial_qty(symbol, amt, pct, quantity)
         if is_partial:
             qstr = _ensure_min_notional_qty(symbol, price_f, qstr)
@@ -502,7 +504,7 @@ def modify_take_profit(symbol: str, new_tp_price: float, position_side: Optional
     except Exception as e:
         logger.error("modify_take_profit failed: %s", e); return {"ok": False, "error": str(e)}
 
-def set_breakeven_stop(symbol: str, offset_bps: float = 0.0) -> Dict[str, Any]:
+def set_breakeven_stop(symbol: str, offset_bps: float = 0.0) -> Dict[str,Any]:
     pos = get_single_position(symbol)
     if not pos: return {"ok": False, "error": f"No open position for {symbol}"}
     entry = float(pos.get("entryPrice") or 0.0)
@@ -512,7 +514,6 @@ def set_breakeven_stop(symbol: str, offset_bps: float = 0.0) -> Dict[str, Any]:
     sl = entry * (1.0 + (offset_bps / 10000.0)) if pos_side == "LONG" else entry * (1.0 - (offset_bps / 10000.0))
     return modify_stop_loss(symbol, sl, position_side=pos_side)
 
-# ========== Ladders ==========
 def clear_take_profit_orders(symbol: str) -> int:
     return _cancel_closing_orders(symbol, types=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
 
@@ -661,7 +662,6 @@ def place_sl_ladder(symbol: str, stops_prices: Optional[List[float]] = None, spl
         results.append({"level": i, "stopPrice": qprice, "resp": order})
     return {"ok": True, "canceled": canceled, "levels": results, "side": pos_side}
 
-# ========== extras ==========
 def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
     try:
         import pandas as pd
@@ -701,6 +701,25 @@ def close_all_positions() -> Dict[str,Any]:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def get_price(symbol: str) -> Optional[float]:
+    # Prefer WS cache if fresh
+    try:
+        if ws_is_fresh and ws_get_price and ws_is_fresh(symbol, int(os.getenv("PRICE_WS_FRESH_TTL", "20"))):
+            p = ws_get_price(symbol)
+            if p and p > 0:
+                return float(p)
+    except Exception:
+        pass
+    # Fallback to REST
+    p = futures_mark_price(symbol)
+    # Feed WS cache for consumers
+    try:
+        if p and ws_update_price:
+            ws_update_price(symbol, float(p))
+    except Exception:
+        pass
+    return p
+
 def get_futures_client() -> Client:
     return client
 
@@ -713,6 +732,7 @@ __all__ = [
     "place_tp_ladder","place_sl_ladder","get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
