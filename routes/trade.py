@@ -9,7 +9,11 @@ from utils.trade_executor import execute_trade_live
 
 logger = logging.getLogger("algogpt.routes.trade")
 
-router = APIRouter(prefix="/trade", tags=["Trades"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/trade",
+    tags=["Trades"],
+    dependencies=[Depends(require_api_key)],
+)
 
 class TradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
@@ -30,22 +34,36 @@ class TradeResponse(BaseModel):
 @router.post("/execute", response_model=TradeResponse)
 async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     """
-    מבצע טרייד חי או סימולציה דרך execute_trade_live (כולל בדיקות Precision).
+    מבצע טרייד חי או סימולציה דרך execute_trade_live.
+    חשוב: מעבירים רק שדות שתואמים לחתימה בפועל כדי למנוע Unexpected kwargs.
     """
     try:
-        result = await execute_trade_live(
-            symbol=req.symbol, side=req.side, budget=req.budget,
-            leverage=req.leverage, entry=req.entry, sl=req.sl, tp=req.tp,
-            dry_run=req.dry_run, quantity=req.quantity,
-        )
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error") or "trade_failed")
+        args: Dict[str, Any] = {
+            "symbol": req.symbol,
+            "side": req.side,
+            "budget": req.budget,
+            "leverage": req.leverage,
+            "dry_run": req.dry_run,
+        }
+        # נעביר quantity רק אם המשתמש נתן אותו בפועל (לתאימות לאחור)
+        if req.quantity is not None:
+            args["quantity"] = req.quantity
+        # לא מעבירים entry/sl/tp אם execute_trade_live אינו תומך בהם בסביבתך
+        # (אם כן – ניתן להחזיר שורות אלה):
+        # if req.entry is not None: args["entry"] = req.entry
+        # if req.sl is not None:    args["sl"] = req.sl
+        # if req.tp is not None:    args["tp"] = req.tp
+
+        result = await execute_trade_live(**args)
+        if not result or not result.get("ok", False):
+            raise HTTPException(status_code=400, detail=(result or {}).get("error") or "trade_failed")
         return TradeResponse(ok=True, result=result)
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
