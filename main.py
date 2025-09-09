@@ -27,6 +27,7 @@ def _coerce_log_level(val):
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
+# ── FS bootstrap
 for d in ("static", "logs"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -36,35 +37,45 @@ for d in ("static", "logs"):
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
 
-# Middlewares
+# ── Middlewares
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
-CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
-CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0") in ("1","true","on")
+CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o]
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1","true","on")
+
 app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
-    allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS)
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=CORS_ALLOW_CREDENTIALS
+)
 app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
-# Public/Auth middleware
+# ── Auth gate (פותח public, חוסם כל השאר אם אין טוקן)
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    PUBLIC_PATHS = {"/", "/openapi.json", "/health", "/healthz", "/readyz", "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"}
+    PUBLIC_PATHS = {
+        "/", "/openapi.json", "/health", "/healthz", "/readyz",
+        "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"
+    }
     PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk", "/metrics"]
+
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
     if allow_all():
         return await call_next(request)
+
     token = extract_token(request, request.headers.get("Authorization", ""), request.headers.get("X-API-Key"))
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# Routers (רק קיימים)
+# ── Include routers (נכשל? נרשום אזהרה אבל נמשיך להעלות את האפליקציה)
 for module_path in (
     "routes.trade",
     "routes.analytics",
@@ -79,10 +90,12 @@ for module_path in (
         if hasattr(mod, "router"):
             app.include_router(mod.router)
             logger.info({"event": "router_registered", "router": module_path})
+        else:
+            logger.warning({"event": "router_missing_router_attr", "router": module_path})
     except Exception as e:
         logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
-# Meta & Health
+# ── Meta & Health
 @app.get("/")
 async def root():
     return {"ok": True, "status": "ok", "service": "app_full", "title": "AlgoGPT API", "version": APP_VERSION}
@@ -95,7 +108,7 @@ async def health():
 async def debug_health():
     return {"ok": True, "status": "ok", "env": os.getenv("ENV","prod"), "version": APP_VERSION}
 
-# Price (לבדיקות)
+# ── Price (בדיקות)
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     try:
@@ -104,7 +117,7 @@ async def price(symbol: str):
         p = None
     return {"symbol": symbol.upper(), "price": p, "fresh": bool(p and p > 0)}
 
-# Readyz
+# ── Readyz
 @app.get("/readyz")
 async def readyz():
     try:
@@ -124,7 +137,7 @@ async def readyz():
             prices[f"price_{s}"] = None
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-# Telegram webhook & ping (ציבוריים)
+# ── Telegram webhook & ping (ציבוריים)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -142,6 +155,7 @@ async def _tg_send(chat_id: int, text: str):
 
 @app.get("/telegram/ping")
 async def tg_ping():
+    # זמן יחסי ללולאת האירועים; מספיק לבדיקה מהירה
     return {"ok": True, "src": "telegram", "ts_ms": int(asyncio.get_event_loop().time()*1000)}
 
 @app.post("/telegram/webhook")
@@ -175,9 +189,31 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 
     return {"ok": True}
 
+# ── Auto setWebhook (אופציונלי — רק אם יש TOKEN ו־PUBLIC_HOST)
+@app.on_event("startup")
+async def _startup():
+    if not BOT_TOKEN:
+        return
+    if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() not in ("1", "true", "yes", "on"):
+        return
+    public_host = os.getenv("PUBLIC_HOST", "").strip()
+    if not public_host:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/setWebhook", data={
+                "url": f"{public_host}/telegram/webhook",
+                "secret_token": WEBHOOK_SECRET,
+                "drop_pending_updates": "true",
+                "max_connections": "40",
+            })
+    except Exception as e:
+        logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
