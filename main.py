@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 import os, asyncio, logging
 from pathlib import Path
@@ -55,7 +56,7 @@ app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
-# ── Auth gate (פותח public, חוסם כל השאר אם אין טוקן)
+# ── Auth gate (public paths vs. token)
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
@@ -75,15 +76,16 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Include routers (נכשל? נרשום אזהרה אבל נמשיך להעלות את האפליקציה)
+# ── Include routers (ודא שמודולים קיימים)
 for module_path in (
     "routes.trade",
-    "routes.analytics",
-    "routes.decision",
-    "routes.backtest",
+    "routes.analytics",        # אופציונלי: אם קיים
+    "routes.decision",         # אופציונלי: אם קיים
+    "routes.backtest",         # אופציונלי: אם קיים
     "routes.executor",
-    "routes.binance_status",
-    "routes.telegram_bot",
+    "routes.binance_status",   # אופציונלי: אם קיים
+    "routes.telegram_webhook", # ✅ השם הנכון
+    "routes.grid",             # ✅ Grid API
 ):
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -137,7 +139,7 @@ async def readyz():
             prices[f"price_{s}"] = None
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-# ── Telegram webhook & ping (ציבוריים)
+# ── Telegram webhook & ping (public)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -155,7 +157,6 @@ async def _tg_send(chat_id: int, text: str):
 
 @app.get("/telegram/ping")
 async def tg_ping():
-    # זמן יחסי ללולאת האירועים; מספיק לבדיקה מהירה
     return {"ok": True, "src": "telegram", "ts_ms": int(asyncio.get_event_loop().time()*1000)}
 
 @app.post("/telegram/webhook")
@@ -189,7 +190,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 
     return {"ok": True}
 
-# ── Auto setWebhook (אופציונלי — רק אם יש TOKEN ו־PUBLIC_HOST)
+# ── Auto setWebhook (optional)
 @app.on_event("startup")
 async def _startup():
     if not BOT_TOKEN:
@@ -213,6 +214,7 @@ async def _startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
