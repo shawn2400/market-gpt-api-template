@@ -1,4 +1,4 @@
-# routes/analysis.py
+# routes/analytics.py
 from __future__ import annotations
 import os, time, json, httpx
 from typing import Optional, Dict, Any, List
@@ -6,22 +6,10 @@ from fastapi import APIRouter, Depends, Body, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
-
-# --- Security fallbacks (לא להפיל אם חסר המודול) ---
-try:
-    from utils.security import verify_hmac, idem_seen  # type: ignore
-except Exception:
-    def verify_hmac(sig: Optional[str], raw: bytes) -> bool:  # NOOP (מאשר הכול)
-        return True
-    _idem_cache = set()
-    def idem_seen(key: Optional[str]) -> bool:
-        if not key: return False
-        if key in _idem_cache: return True
-        _idem_cache.add(key); return False
+from utils.security import verify_hmac, idem_seen
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
 
-# ===== Env =====
 BOT = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID_DEFAULT = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT}"
@@ -29,12 +17,11 @@ TIMEOUT = float(os.getenv("TELEGRAM_HTTP_TIMEOUT", "15"))
 
 USE_REDIS_TRADES = os.getenv("USE_REDIS_TRADES", "0").lower() in ("1", "true", "yes")
 if USE_REDIS_TRADES:
-    import redis  # type: ignore
+    import redis
     RED = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
 else:
     _TRADES: Dict[str, Dict[str, Any]] = {}
 
-# ===== Models =====
 class TradeIn(BaseModel):
     trade_id: str = Field(..., min_length=4, max_length=64)
     symbol: str; side: str; current_price: float; leverage: int; entry: float; sl: float; tp1: float
@@ -55,7 +42,6 @@ class UpdateReq(BaseModel):
 class AnalysisIn(BaseModel):
     chat_id: int | str; text: str; reply_to_message_id: Optional[int] = None; silent: Optional[bool] = True
 
-# ===== Helpers =====
 def _store_trade(item: Dict[str, Any]):
     if USE_REDIS_TRADES:
         RED.hset(f"trades:active:{item['trade_id']}", mapping=item)
@@ -74,7 +60,7 @@ def _all_active() -> List[Dict[str, Any]]:
 def _update_trade(tid: str, **updates):
     if USE_REDIS_TRADES and RED.exists(f"trades:active:{tid}"):
         RED.hset(f"trades:active:{tid}", mapping=updates)
-    elif not USE_REDIS_TRADES and tid in _TRADES:
+    elif tid in _TRADES:
         _TRADES[tid].update(updates)
 
 def _format_trade_message(rec: Dict[str, Any]) -> str:
@@ -98,7 +84,6 @@ def _approve_keyboard(trade_id: str) -> dict:
         {"text": "🛑 דחייה", "callback_data": f"reject:{trade_id}"}
     ]]}
 
-# ===== Routes =====
 @router.post("/trade-ingest", response_model=TradeOut)
 async def trade_ingest(payload: TradeIn = Body(...),
     x_idempotency_key: Optional[str] = Header(default=None),
@@ -147,7 +132,6 @@ async def analysis_ingest(payload: AnalysisIn = Body(...),
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.post(f"{TELEGRAM_API}/sendMessage", json=body); r.raise_for_status()
         return {"ok": True}
-
 
 
 
