@@ -20,7 +20,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
  && pip check
 
 # ================================
-# === Stage 2: Runtime layer =====
+# === Stage 2: Runtime layer  ====
 # ================================
 FROM python:3.11-slim
 
@@ -68,13 +68,14 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
 EXPOSE 10000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# מריצים אך ורק main:app
+# מריצים את main:app דרך Gunicorn+UvicornWorker
 CMD bash -lc "bash /app/prestart.sh 2>/dev/null || true && \
   gunicorn main:app \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
