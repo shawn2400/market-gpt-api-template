@@ -18,18 +18,18 @@ router = APIRouter(
 
 class TradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
-    side: str = Field(..., example="BUY")  # BUY/SELL
+    side: str = Field(..., example="BUY")
     budget: float = Field(0, example=50, description="אם quantity סופק – budget לא חובה")
     leverage: int = Field(10, example=10)
     quantity: float | None = Field(None, example=0.001)
     entry: float | None = Field(None, example=28500.5, description="מחיר כניסה; אם None תתבצע כניסה דינמית")
-    sl: float | None = Field(None, example=28000.0, description="Stop-Loss price (LIMIT/STOP)")
-    tp: float | None = Field(None, example=29500.0, description="Take-Profit price (LIMIT/TAKE_PROFIT)")
+    sl: float | None = Field(None, example=28000.0, description="Stop-Loss price")
+    tp: float | None = Field(None, example=29500.0, description="Take-Profit price")
     tp_targets: Optional[List[float]] = Field(None, description="רשימת יעדי TP (מחירים)")
-    tp_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-TP (שברים שסוכמים ≤1; האחרון סוגר יתרה)")
+    tp_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-TP")
     sl_targets: Optional[List[float]] = Field(None, description="רשימת מחירי SL מדרגיים")
     sl_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-SL")
-    dry_run: bool = Field(False, description="True = סימולציה בלבד (ללא שליחה אמיתית)")
+    dry_run: bool = Field(False, description="True = סימולציה בלבד")
     confirm_first: bool = Field(True, description="דרוש אישור בטלגרם לפני שליחה")
     telegram_chat_id: Optional[int] = Field(None, description="מס׳ צ׳אט לאישור")
 
@@ -38,10 +38,11 @@ class TradeResponse(BaseModel):
     error: str | None = None
     result: Dict[str, Any] | None = None
 
-@router.post("/execute", response_model=TradeResponse, response_class=JSONResponse)
-async def post_trade_execute(req: TradeRequest) -> JSONResponse:
+@router.post("/execute", response_model=TradeResponse)
+async def post_trade_execute(req: TradeRequest):
     """
-    טרייד דינמי מלא עם Gate איכות (MIN_QUALITY_SCORE), כניסה היברידית, TP/SL וזרימת אישור בטלגרם.
+    טרייד דינמי: Gate איכות, כניסה היברידית (LIMIT+STOP) עם הסלמה ל-MARKET אם מוצדק,
+    TP/SL (כולל סטים) כ-reduceOnly GTC, ואישור טלגרם אופציונלי.
     """
     try:
         args: Dict[str, Any] = {
@@ -59,11 +60,12 @@ async def post_trade_execute(req: TradeRequest) -> JSONResponse:
         result = await execute_trade_live(**args)
         if not result or not result.get("ok", False):
             payload = TradeResponse(ok=False, error=(result or {}).get("reason") or (result or {}).get("error"), result=result)
-            return JSONResponse(content=payload.model_dump(), media_type="application/json")
-        return JSONResponse(content=TradeResponse(ok=True, result=result).model_dump(), media_type="application/json")
+            return JSONResponse(status_code=200, content=payload.model_dump())
+        return JSONResponse(status_code=200, content=TradeResponse(ok=True, result=result).model_dump())
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
