@@ -2,7 +2,6 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends
 from utils.auth import require_api_key
-
 from utils import ws_user_stream as userws
 
 router = APIRouter(prefix="/ws-user", tags=["WS"], dependencies=[Depends(require_api_key)])
@@ -20,3 +19,4 @@ def ws_start():
 def ws_stop():
     userws.stop()
     return {"ok": True, "stopped": True}
+
