@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from prometheus_client import make_asgi_app
 import httpx
+import importlib.util as _ilus
 
 from utils.json_logger import setup_json_logging
 from utils.response_limits import ResponseSizeLimiter
@@ -15,16 +16,14 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price
 from utils.metrics_middleware import MetricsMiddleware
 from app.middlewares import InternalAuthMiddleware
-from utils.trade_executor import ConfirmStore  # לא צריך קובץ חדש
+from utils.trade_executor import ConfirmStore  # אישור טלגרם
 
 def _coerce_log_level(val):
     import logging as _l
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
         return int(val)
-    m = {
-        "debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING,
-        "warn": _l.WARNING, "error": _l.ERROR, "critical": _l.CRITICAL,
-    }
+    m = {"debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING,
+         "warn": _l.WARNING, "error": _l.ERROR, "critical": _l.CRITICAL}
     return m.get(str(val).strip().lower(), _l.INFO)
 
 logger = setup_json_logging()
@@ -71,15 +70,31 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Routers
-for module_path in ("routes.trade", "routes.analysis", "routes.decision"):
+# ── Routers (עם fallback מודולרי)
+def _maybe(module_name: str) -> str | None:
+    return module_name if _ilus.find_spec(module_name) else None
+
+def _register(module_name: str) -> None:
     try:
-        mod = __import__(module_path, fromlist=["router"])
+        mod = __import__(module_name, fromlist=["router"])
         if hasattr(mod, "router"):
             app.include_router(mod.router)
-            logger.info({"event": "router_registered", "router": module_path})
+            logger.info({"event": "router_registered", "router": module_name})
     except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
+        logger.warning({"event": "router_register_failed", "router": module_name, "error": str(e)})
+
+# חובה
+_register("routes.trade")
+
+# analysis: אם routes.analysis לא קיים אבל routes.analytics כן – נטען אותו
+_analysis = _maybe("routes.analysis") or _maybe("routes.analytics")
+if _analysis:
+    _register(_analysis)
+
+# decision: אם המודול קיים – נטען; אחרת נתעלם בשקט
+_decision = _maybe("routes.decision")
+if _decision:
+    _register(_decision)
 
 # ── Meta & Health
 @app.get("/")
@@ -90,13 +105,13 @@ async def root():
 async def health():
     return {"ok": True, "status": "ok"}
 
-# ── Price (לבדיקות)
+# ── Price (בדיקות)
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     p = get_price(symbol)
     return {"symbol": symbol.upper(), "price": p, "fresh": bool(p and p > 0)}
 
-# ── Readyz (לכיסוי הסקריפטים שלך)
+# ── Readyz
 @app.get("/readyz")
 async def readyz():
     try:
@@ -116,7 +131,7 @@ async def readyz():
             prices[f"price_{s}"] = None
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-# ── Telegram webhook (Approve/Reject) — ללא קבצים חדשים
+# ── Telegram webhook (Approve/Reject)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -165,7 +180,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 
     return {"ok": True}
 
-# ── Auto setWebhook (אופציונלי)
+# ── Auto setWebhook
 @app.on_event("startup")
 async def _startup():
     if not BOT_TOKEN:
@@ -189,6 +204,7 @@ async def _startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
