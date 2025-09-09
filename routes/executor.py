@@ -4,6 +4,7 @@ import logging
 from typing import Dict, Any, Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
 
 from utils.auth import require_api_key
@@ -24,21 +25,14 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
 )
 
-# ===== Models =====
 class ExecTradeRequest(BaseModel):
-    """בקשה מינימלית לטרייד דרך /executor/trade — עם תמיכה מלאה בהקצאה."""
     model_config = ConfigDict(extra="ignore")
-
     symbol: str = Field(..., examples=["BTCUSDT"])
     side: str = Field(..., examples=["BUY", "SELL"])
     leverage: int = Field(10, ge=1, le=125)
-
-    # Allocation (לפחות אחד > 0 כשלא dry_run)
     budget_usd: Optional[float] = Field(None, ge=0, description="תקציב ב-USD (מועדף)")
     budget: Optional[float] = Field(None, ge=0, description="שם ישן — שקול ל-budget_usd")
     quantity: Optional[float] = Field(None, ge=0)
-
-    # Entry/Exit (אופציונלי)
     entry: Optional[float] = Field(None)
     sl: Optional[float] = Field(None)
     tp: Optional[float] = Field(None)
@@ -46,8 +40,6 @@ class ExecTradeRequest(BaseModel):
     tp_splits: Optional[List[float]] = None
     sl_targets: Optional[List[float]] = None
     sl_splits: Optional[List[float]] = None
-
-    # Flags
     dry_run: bool = Field(True, description="True = סימולציה בלבד")
     confirm_first: bool = Field(True, description="אישור בטלגרם לפני ביצוע")
     telegram_chat_id: Optional[int] = Field(None)
@@ -100,10 +92,8 @@ async def exchange_info() -> Dict[str, Any]:
         raise HTTPException(500, str(e))
 
 @router.post("/trade")
-async def trade(req: ExecTradeRequest) -> Dict[str, Any]:
-    """נרמול הקצאה → הפעלה דרך execute_trade_live (זהה לסכמה של /trade/execute)."""
+async def trade(req: ExecTradeRequest):
     try:
-        # Normalize allocation
         budget_effective: Optional[float] = None
         if req.budget_usd and req.budget_usd > 0:
             budget_effective = float(req.budget_usd)
@@ -132,9 +122,8 @@ async def trade(req: ExecTradeRequest) -> Dict[str, Any]:
 
         res = await execute_trade_live(**args)
         ok = bool(res and res.get("ok", False))
-        status_code = 200 if ok or req.dry_run else 409  # ביצוע אמיתי שנדחה → 409
+        status_code = 200 if ok or req.dry_run else 409
         if not ok:
-            # נשמור סיבה מובנת לצריכת לקוח/טלגרם
             return JSONResponse({"ok": False, "result": res, "reason": res.get("reason")}, status_code=status_code)
         return {"ok": True, "result": res}
     except HTTPException:
@@ -142,8 +131,6 @@ async def trade(req: ExecTradeRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error("trade failed: %s", e)
         raise HTTPException(500, str(e))
-
-
 
 
 
