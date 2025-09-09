@@ -11,6 +11,7 @@ from utils.binance_client import (
 
 logger = logging.getLogger("algogpt.trade_executor")
 
+
 def _round_qty(symbol: str, qty: float) -> float:
     try:
         info = get_symbol_info(symbol)
@@ -22,6 +23,7 @@ def _round_qty(symbol: str, qty: float) -> float:
         return (qty // step) * step
     except Exception:
         return round(qty, 6)
+
 
 async def execute_trade_live(
     *,
@@ -127,7 +129,9 @@ async def execute_trade_live(
         logger.exception("[trade_executor] execution error: %s", e)
         return {"ok": False, "error": str(e)}
 
+
 __all__ = ["execute_trade_live"]
+
 
 
 
