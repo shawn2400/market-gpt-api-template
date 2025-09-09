@@ -40,6 +40,7 @@ RECONNECT_BACKOFF_MAX = float(os.getenv("USER_STREAM_RECONNECT_MAX_BACKOFF", "60
 ENABLE = os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1","true","yes","on")
 
 API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+LOG_SAMPLE_N = int(os.getenv("WS_LOG_SAMPLE_N", "20"))  # DEBUG אחת ל-N אירועים
 
 _running = False
 _task: Optional[asyncio.Task] = None
@@ -48,6 +49,7 @@ _last_keepalive = 0.0
 _last_event_ts = 0.0
 _reconnects = 0
 _seen_ids: Dict[str, float] = {}  # idempotency (orderId/execId) -> ts
+_evt_count = 0  # log sampling counter
 
 def is_running() -> bool:
     return _running
@@ -60,6 +62,7 @@ def get_stats() -> Dict[str, Any]:
         "last_event_ts": _last_event_ts,
         "reconnects": _reconnects,
         "seen_cache": len(_seen_ids),
+        "log_sample_n": LOG_SAMPLE_N,
     }
 
 def start():
@@ -110,7 +113,6 @@ async def _keepalive():
         _C_WS_ERRORS.inc()
 
 def _dedup_key(ev: Dict[str, Any]) -> Optional[str]:
-    # ניסיון עדין: נעדיף orderId (i) או execId (t)
     try:
         if ev.get("e") == "ORDER_TRADE_UPDATE":
             o = ev.get("o") or {}
@@ -122,22 +124,14 @@ def _dedup_key(ev: Dict[str, Any]) -> Optional[str]:
     return None
 
 def _should_review(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    תנאי לטריגר ביקורת:
-    - ORDER_TRADE_UPDATE
-    - סטטוס סופי: FILLED / CANCELED / EXPIRED
-    - לא דופליקט (ע"י _seen_ids)
-    """
     if ev.get("e") != "ORDER_TRADE_UPDATE":
         return None
     o = ev.get("o") or {}
     status = (o.get("X") or "").upper()
     if status not in {"FILLED", "CANCELED", "EXPIRED"}:
         return None
-
     sym = (o.get("s") or "").upper()
     side = (o.get("S") or "").upper()  # BUY/SELL
-    # בונים הקשר בסיסי
     ctx = {
         "status": status,
         "order_type": o.get("o"),
@@ -158,11 +152,15 @@ def _sweep_seen(ttl_sec: float = 900.0):
         _seen_ids.pop(k, None)
 
 async def _handle_msg(raw: str):
-    global _last_event_ts
+    global _last_event_ts, _evt_count
     _last_event_ts = time.time()
+    _evt_count += 1
     _C_WS_EVENTS.inc()
     try:
         ev = json.loads(raw)
+        # DEBUG מדגם
+        if LOG_SAMPLE_N > 0 and _evt_count % LOG_SAMPLE_N == 0:
+            logger.debug({"event":"ws_user_evt_sample", "type": ev.get("e")})
     except Exception:
         return
     k = _dedup_key(ev)
@@ -213,7 +211,6 @@ async def _runner():
                         msg = await asyncio.wait_for(ws.recv(), timeout=30.0)
                         await _handle_msg(msg)
                     except asyncio.TimeoutError:
-                        # אין הודעות — זה תקין. נמשיך לשמור על keepalive
                         continue
         except asyncio.CancelledError:
             break
