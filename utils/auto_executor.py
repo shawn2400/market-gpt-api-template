@@ -11,6 +11,22 @@ from utils.indicators import prepare_indicators_for_backtest
 from utils.get_klines import get_klines_sync
 from utils.anchor import evaluate_anchor
 from utils.trade_executor import execute_trade_live  # ✅ סינכרוני
+from utils.watchlist_utils import load_watchlist_env_or_fallback
+
+# Risk Gate (אופציונלי, לא שובר קוד)
+try:
+    from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
+except Exception:
+    RISK_CHECK_ENABLE = False
+    def pre_trade_risk_check(*args, **kwargs):  # type: ignore
+        return {"ok": True, "score": 100.0, "reasons": ["risk_module_missing"], "metrics": {}}
+
+# Notifications
+try:
+    from utils.telegram_notifier import notify_no_trades, notify_scan_error
+except Exception:
+    async def notify_no_trades(): return None
+    async def notify_scan_error(reason: str): return None
 
 # Circuit-breaker & Scheduler
 try:
@@ -120,13 +136,16 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         row = ind.iloc[-1].to_dict()
 
         side = _decide_side(row)
-        if not side: return None
+        if not side:
+            return None
 
+        # Anchor gate
         anchor = evaluate_anchor(side)
         if not getattr(anchor, "allow", True):
             _log("anchor_block", symbol=symbol, anchor=getattr(anchor, "__dict__", {}))
             return None
 
+        # Quality gate
         q = _quality_score(row, side)
         if q < QUALITY_THRESHOLD:
             _log("quality_below_threshold", symbol=symbol, score=q, thr=QUALITY_THRESHOLD)
@@ -139,6 +158,13 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
             _log("bad_entry_atr", symbol=symbol, entry=entry, atr=atr_v, level="WARNING")
             return None
 
+        # ✅ Risk gate (ללא שבירת קוד)
+        if RISK_CHECK_ENABLE:
+            risk = pre_trade_risk_check(symbol, "BUY" if side=="LONG" else "SELL", _pick_leverage(adx_v), entry)
+            if not risk.get("ok", True):
+                _log("risk_reject", symbol=symbol, risk=risk)
+                return None
+
         sl, tp = _derive_sl_tp(entry, atr_v, side, adx_v)
         lev = _pick_leverage(adx_v)
         return {"symbol": symbol, "side": side, "entry": entry, "sl": sl, "tp": tp,
@@ -149,8 +175,6 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
 
 async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     dry = not getattr(cfg, "EXECUTE_TRADES", False)
-
-    # ✅ wrap sync in threadpool
     loop = asyncio.get_event_loop()
     resp = await loop.run_in_executor(
         None,
@@ -163,7 +187,6 @@ async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             reduce_only=False,
         ),
     )
-
     if resp.get("ok"):
         _last_trade_ts[plan["symbol"]] = time.time()
     return resp
@@ -198,7 +221,7 @@ async def auto_scan_and_trade():
     global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
     EXECUTOR_RUNNING = True
     try:
-        wl = [s.upper() for s in getattr(cfg, "WATCHLIST", ["BTCUSDT","ETHUSDT"]) if isinstance(s, str)]
+        wl = load_watchlist_env_or_fallback()  # ✅ דינמי + Fallback
         if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
 
@@ -211,7 +234,15 @@ async def auto_scan_and_trade():
                 continue
 
             batch = sched.next_batch()
-            await _scan_batch(batch, MAX_TRADES_PER_TICK)
+            sent = 0
+            try:
+                sent = await _scan_batch(batch, MAX_TRADES_PER_TICK)
+            except Exception as e:
+                _log("scan_batch_error", error=str(e), level="ERROR")
+                await notify_scan_error(str(e))
+
+            if sent == 0:
+                await notify_no_trades()
 
             dt = time.time() - tic
             sleep_s = max(0.0, SCAN_INTERVAL - dt)
@@ -243,6 +274,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
