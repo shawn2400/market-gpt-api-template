@@ -1,129 +1,101 @@
 # routes/telegram_bot.py
 from __future__ import annotations
-import logging, os, json
-from typing import Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from pydantic import BaseModel
+import os, logging
+from typing import Optional, Dict, Any, List
+
 import httpx
-from telegram import Update
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, ConfigDict
 
 from utils.auth import require_api_key
-from utils.runtime_prefs import is_muted, set_mute, toggle_mute
 
-logger = logging.getLogger("algogpt.routes.telegram")
-router = APIRouter(prefix="/telegram", tags=["Telegram"])
-__all__ = ["router"]
+logger = logging.getLogger("algogpt.routes.telegram_bot")
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "unknown")
+router = APIRouter(
+    prefix="/telegram",
+    tags=["Telegram"],
+    dependencies=[Depends(require_api_key)],  # שליחת הודעות—מוגן בטוקן
+)
 
+# ── ENV
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+API_BASE  = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+DEFAULT_CHAT = os.getenv("TELEGRAM_TEST_CHAT_ID", "").strip()
 
-# ───────────────────────────────────────────────
-# Models
-# ───────────────────────────────────────────────
-class MuteRequest(BaseModel):
-    state: bool
+# ── Models
+class SendRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    chat_id: Optional[int] = Field(None, description="אם לא יימסר—יילקח מ־TELEGRAM_TEST_CHAT_ID")
+    text: str = Field(..., min_length=1, max_length=4096)
+    parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2")
+    disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה של קישורים")
 
-
-# ───────────────────────────────────────────────
-# Internal send ping
-# ───────────────────────────────────────────────
-async def _send_ping(chat_id: int, msg: str):
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        logger.warning("Telegram bot token not set")
-        return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+# ── Endpoints
+@router.get("/health")
+async def health() -> Dict[str, Any]:
+    """בדיקת בריאות: token, getMe, webhook."""
+    if not BOT_TOKEN:
+        return {"ok": False, "error": "BOT_TOKEN missing"}
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(url, data={"chat_id": chat_id, "text": msg})
+        async with httpx.AsyncClient(timeout=8.0) as cli:
+            me = await cli.get(f"{API_BASE}/getMe")
+            wh = await cli.get(f"{API_BASE}/getWebhookInfo")
+        return {
+            "ok": True,
+            "bot": (me.json().get("result", {}) if me.headers.get("content-type","").startswith("application/json") else {}),
+            "webhook": (wh.json().get("result", {}) if wh.headers.get("content-type","").startswith("application/json") else {}),
+        }
     except Exception as e:
-        logger.exception("Failed sending telegram message")
+        logger.warning("telegram/health failed: %s", e)
+        return {"ok": False, "error": str(e)}
 
-
-# ───────────────────────────────────────────────
-# /test-ping
-# ───────────────────────────────────────────────
 @router.get("/test-ping")
-async def test_ping(chat_id: int, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    msg = f"pong ✅ (v{APP_VERSION}) [test]"
-    await _send_ping(chat_id, msg)
-    return {"ok": True, "sent": True, "chat_id": chat_id, "version": APP_VERSION}
-
-
-# ───────────────────────────────────────────────
-# /status, /mute, /toggle
-# ───────────────────────────────────────────────
-@router.get("/status")
-async def get_mute(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    return {"ok": True, "mute": is_muted()}
-
-@router.post("/mute")
-async def set_mute_state(req: MuteRequest, _: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    set_mute(req.state)
-    return {"ok": True, "mute": req.state}
-
-@router.post("/toggle")
-async def toggle_mute_state(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    return {"ok": True, "mute": toggle_mute()}
-
-
-# ───────────────────────────────────────────────
-# /set-webhook
-# ───────────────────────────────────────────────
-@router.post("/set-webhook")
-async def set_webhook(url: str = Query(..., min_length=8), _: Any = Depends(require_api_key)) -> Dict[str, Any]:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    if not token or not secret:
-        raise HTTPException(500, "Telegram bot config missing")
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"https://api.telegram.org/bot{token}/setWebhook",
-            json={
-                "url": url,
-                "secret_token": secret,
-                "allowed_updates": ["message", "callback_query"],
-                "drop_pending_updates": True
-            }
-        )
-        return {"ok": True, "telegram": resp.json()}
-
-
-# ───────────────────────────────────────────────
-# /webhook
-# ───────────────────────────────────────────────
-@router.post("/webhook")
-async def telegram_webhook(req: Request) -> Dict[str, Any]:
-    token = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-    if token and req.headers.get("X-Telegram-Bot-Api-Secret-Token") != token:
-        raise HTTPException(status_code=403, detail="Invalid secret")
-
-    raw = await req.body()
+async def test_ping(chat_id: Optional[int] = Query(None)) -> Dict[str, Any]:
+    """
+    שולח הודעת pong ✅ לצ'אט נתון. אם chat_id לא סופק, ננסה מה־ENV (TELEGRAM_TEST_CHAT_ID).
+    """
+    if not BOT_TOKEN:
+        raise HTTPException(500, "BOT_TOKEN missing")
+    cid = chat_id or (int(DEFAULT_CHAT) if DEFAULT_CHAT.isdigit() else None)
+    if not cid:
+        raise HTTPException(400, "chat_id required (or set TELEGRAM_TEST_CHAT_ID)")
     try:
-        payload = json.loads(raw)
-    except Exception:
-        return {"ok": False, "error": "Invalid payload"}
+        async with httpx.AsyncClient(timeout=8.0) as cli:
+            r = await cli.post(f"{API_BASE}/sendMessage", data={
+                "chat_id": cid,
+                "text": "pong ✅ (test-ping)",
+                "disable_web_page_preview": True,
+            })
+        j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
+        return {"ok": bool(j.get("ok")), "result": j}
+    except Exception as e:
+        logger.error("telegram/test-ping failed: %s", e)
+        raise HTTPException(502, str(e))
 
-    update = Update.de_json(payload, None)
-    chat_id = None
-    if update and update.message:
-        chat_id = update.message.chat.id
-        text = (update.message.text or "").strip()
-    elif update and update.callback_query:
-        chat_id = update.callback_query.message.chat.id
-        text = (update.callback_query.data or "").strip()
-    else:
-        return {"ok": True, "skip": True}
+@router.post("/send")
+async def send(req: SendRequest) -> Dict[str, Any]:
+    """שליחת הודעה גנרית—מאובטח ע"י API key."""
+    if not BOT_TOKEN:
+        raise HTTPException(500, "BOT_TOKEN missing")
+    cid = req.chat_id or (int(DEFAULT_CHAT) if DEFAULT_CHAT.isdigit() else None)
+    if not cid:
+        raise HTTPException(400, "chat_id required (or set TELEGRAM_TEST_CHAT_ID)")
+    payload = {
+        "chat_id": cid,
+        "text": req.text,
+        "disable_web_page_preview": "true" if req.disable_preview else "false",
+    }
+    if req.parse_mode:
+        payload["parse_mode"] = req.parse_mode
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as cli:
+            r = await cli.post(f"{API_BASE}/sendMessage", data=payload)
+        j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
+        return {"ok": bool(j.get("ok")), "result": j}
+    except Exception as e:
+        logger.error("telegram/send failed: %s", e)
+        raise HTTPException(502, str(e))
 
-    cmd = (text or "").split()[0].split("@", 1)[0].lower()
-    if chat_id and cmd in ("/ping", "ping", "/start"):
-        await _send_ping(chat_id, f"pong ✅ (v{APP_VERSION})")
-        return {"ok": True, "echo": "ping"}
-    if chat_id and cmd == "/version":
-        await _send_ping(chat_id, f"AlgoGPT v{APP_VERSION}")
-        return {"ok": True, "version": APP_VERSION}
-
-    return {"ok": True, "ignored": True}
 
 
 
