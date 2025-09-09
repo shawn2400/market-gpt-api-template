@@ -44,7 +44,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
-CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0") in ("1","true","on")
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0") in ("1", "true", "on")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
@@ -71,8 +71,9 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Routers (מבטיחים ש-analysis וה-decision קיימים)
-for module_path in ("routes.trade", "routes.analysis", "routes.decision"):
+# ── Routers (analytics ולא analysis)
+ROUTERS = ("routes.trade", "routes.analytics", "routes.decision")
+for module_path in ROUTERS:
     try:
         mod = __import__(module_path, fromlist=["router"])
         if hasattr(mod, "router"):
@@ -88,6 +89,11 @@ async def root():
 
 @app.get("/health")
 async def health():
+    return {"ok": True, "status": "ok"}
+
+# alias נוח
+@app.get("/healthz")
+async def healthz():
     return {"ok": True, "status": "ok"}
 
 # ── Price (לבדיקות)
@@ -187,6 +193,7 @@ async def _startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
