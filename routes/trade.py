@@ -21,13 +21,16 @@ class TradeRequest(BaseModel):
     budget: float = Field(0, example=50, description="אם quantity סופק – budget לא חובה")
     leverage: int = Field(10, example=10)
     quantity: float | None = Field(None, example=0.001)
+
     entry: float | None = Field(None, example=28500.5, description="מחיר כניסה; אם None תתבצע כניסה דינמית")
     sl: float | None = Field(None, example=28000.0, description="Stop-Loss price (LIMIT/STOP)")
     tp: float | None = Field(None, example=29500.0, description="Take-Profit price (LIMIT/TAKE_PROFIT)")
+
     tp_targets: Optional[List[float]] = Field(None, description="רשימת יעדי TP (מחירים)")
     tp_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-TP (שברים שסוכמים ≤1; האחרון סוגר יתרה)")
     sl_targets: Optional[List[float]] = Field(None, description="רשימת מחירי SL מדרגיים")
     sl_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-SL")
+
     dry_run: bool = Field(False, description="True = סימולציה בלבד (ללא שליחה אמיתית)")
     confirm_first: bool = Field(True, description="דרוש אישור בטלגרם לפני שליחה")
     telegram_chat_id: Optional[int] = Field(None, description="מס׳ צ׳אט לאישור")
@@ -40,7 +43,7 @@ class TradeResponse(BaseModel):
 @router.post("/execute", response_model=TradeResponse)
 async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     """
-    טרייד דינמי מלא: Gate איכות, כניסה היברידית (LIMIT+STOP) עם הסלמה ל-MARKET רק אם מוצדק,
+    טרייד דינמי מלא: Gate איכות (ברירת־מחדל 8.5), כניסה היברידית (LIMIT+STOP) עם הסלמה ל-MARKET רק אם מוצדק,
     SL/TP (כולל סטים) כ-limit-variants reduceOnly, ואישור טלגרם לפני ביצוע (אופציונלי).
     """
     try:
@@ -63,6 +66,7 @@ async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
