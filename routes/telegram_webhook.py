@@ -8,18 +8,18 @@ import httpx
 from utils.metrics_tracker import get_metrics_snapshot
 
 logger = logging.getLogger("algogpt.telegram.webhook")
+
+# שינוי קטן למניעת קונפליקט עם /telegram/webhook שקיים ב-main.py
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_ONLY = str(os.getenv("TELEGRAM_ADMIN_ONLY", "1")).lower() in ("1","true","yes","on")
 ADMIN_IDS = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
 
-
 def _allowed_user(uid: int) -> bool:
     if not ADMIN_ONLY:
         return True
     return str(uid) in ADMIN_IDS
-
 
 async def _reply(chat_id: int, text: str):
     """שליחת תשובה למשתמש בטלגרם"""
@@ -33,7 +33,6 @@ async def _reply(chat_id: int, text: str):
     except Exception as e:
         logger.warning(f"[tg] sendMessage failed: {e}")
 
-
 HELP_TEXT = (
     "🤖 *AlgoGPT Bot* — Help / עזרה\n\n"
     "• /help — עזרה\n"
@@ -45,8 +44,9 @@ HELP_TEXT = (
     "• /system — ניטור משאבים\n"
 )
 
-@router.post("/webhook")
-async def webhook(req: Request):
+# לא /webhook כדי לא להתנגש עם main.py; זה מסלול פקודות/מענה טקסטואליות
+@router.post("/commands")
+async def commands(req: Request):
     if not TG_TOKEN:
         raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
     try:
