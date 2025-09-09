@@ -1,6 +1,6 @@
 # main.py
 from __future__ import annotations
-import os, asyncio, logging, json
+import os, asyncio, logging
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,7 +94,6 @@ async def root():
 async def health():
     return {"ok": True, "status": "ok"}
 
-# אליאס לבריאות “ישנה”
 @app.get("/debug/health")
 async def debug_health():
     return {"ok": True, "status": "ok", "env": os.getenv("ENV","prod"), "version": APP_VERSION}
@@ -128,32 +127,7 @@ async def readyz():
             prices[f"price_{s}"] = None
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-# ── Binance status (מינימלי כדי שהסמוק לא ייפול)
-@app.get("/binance/status")
-async def binance_status():
-    try:
-        ping_ok = bool(fapi_ping())
-    except Exception:
-        ping_ok = False
-    bal_ok = False
-    try:
-        bal = futures_balance()
-        bal_ok = bool(bal and isinstance(bal, list))
-    except Exception:
-        bal_ok = False
-    return {"ok": ping_ok and bal_ok, "ping_ok": ping_ok, "balance_ok": bal_ok}
-
-# ── Executor status (מספר בקשות אישור תלויות)
-@app.get("/executor/status")
-async def executor_status():
-    pending = 0
-    try:
-        pending = sum(1 for _cid, rec in (ConfirmStore._mem or {}).items() if rec.get("status") == "pending")
-    except Exception:
-        pending = 0
-    return {"ok": True, "pending_confirms": pending}
-
-# ── Telegram webhook & ping
+# ── Telegram webhook & ping (ציבוריים)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -171,7 +145,8 @@ async def _tg_send(chat_id: int, text: str):
 
 @app.get("/telegram/ping")
 async def tg_ping():
-    return {"ok": True, "src": "telegram", "ts": int(asyncio.get_event_loop().time()*1000)}
+    # פינג ציבורי פשוט (לבדיקת חיות ה־webhook)
+    return {"ok": True, "src": "telegram", "ts_ms": int(asyncio.get_event_loop().time()*1000)}
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
@@ -228,6 +203,7 @@ async def _startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
