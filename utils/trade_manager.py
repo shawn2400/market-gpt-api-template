@@ -28,7 +28,7 @@ from utils.config import ALLOW_MANAGE_OPEN_TRADES, AUTO_RUN
 from utils.telegram_notifier import (
     notify_sl_tp_update, notify_info,
     notify_error, notify_heartbeat,
-    notify_daily_summary, notify_trade_review
+    notify_daily_summary
 )
 
 logger = logging.getLogger("algogpt.trade_manager")
@@ -57,6 +57,9 @@ _last_update: Dict[str, float] = {}
 _last_be_guard = 0.0
 _be_set_once: set[str] = set()  # symbols שקיבלו BE במחזור חיי הפוזיציה
 
+# === מעקב מצב פוזיציות פתוחות לצורך זיהוי סגירה ===
+_prev_open_positions: Dict[str, Dict[str, Any]] = {}
+
 def _tp1_pct_default() -> float:
     """שולף את TP1 ברירת-המחדל מתוך LADDER_TP_DEFAULT_PCTS (ב-ENV)."""
     csv = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
@@ -79,6 +82,57 @@ def _price_now(symbol: str) -> float:
     except Exception:
         pass
     return 0.0
+
+async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> None:
+    """
+    מזהה סימבולים שהיו פתוחים בסבב הקודם וכעת לא קיימת פוזיציה פתוחה עבורם → טרייד נסגר.
+    עבור כל סגירה קורא ל־utils.ai_reviewer.review_trade_async עם קונטקסט מינימלי.
+    """
+    global _prev_open_positions
+    try:
+        curr_open: Dict[str, Dict[str, Any]] = {}
+        for p in curr_positions:
+            try:
+                sym = (p.get("symbol") or "").upper()
+                amt = float(p.get("positionAmt") or 0)
+                if sym and abs(amt) > 0:
+                    curr_open[sym] = p
+            except Exception:
+                continue
+
+        closed_syms = [s for s in _prev_open_positions.keys() if s not in curr_open]
+        if closed_syms:
+            try:
+                # טעינה עצלה כדי לא לשבור כשאין קובץ
+                from utils.ai_reviewer import review_trade_async
+            except Exception as e:
+                logger.debug("[ai_review] module missing, skip: %s", e)
+                _prev_open_positions = curr_open
+                return
+
+            for s in closed_syms:
+                prev = _prev_open_positions.get(s, {}) or {}
+                entry = float(prev.get("entryPrice") or 0)
+                side = "LONG" if float(prev.get("positionAmt") or 0) > 0 else "SHORT"
+                # נביא מחיר נוכחי כהערכה ל-exit (ללא תלות בלוג הזמנות)
+                exit_px = _price_now(s) or entry
+                rr = None
+                ctx = {
+                    "entry": entry,
+                    "exit": exit_px,
+                    "pnl_usd": None,          # אם יש לך חישוב/לוג—אפשר להעשיר
+                    "rr": rr,
+                    "indicators": {},
+                    "reasons": ["auto_detected_closure"],
+                }
+                try:
+                    await review_trade_async(s, side, ctx, to_telegram=True)
+                except Exception as e:
+                    logger.warning("[ai_review] failed for %s: %s", s, e)
+
+        _prev_open_positions = curr_open
+    except Exception as e:
+        logger.debug("[ai_review] closure detect error: %s", e)
 
 async def manage_open_trades():
     """ניהול דינמי חי של טריידים פתוחים (SL, TP, BE, Trailing)."""
@@ -158,6 +212,9 @@ async def manage_open_trades():
         # === שומר Breakeven “דליל” (אופציונלי) ===
         if _BE_GUARD_ENABLE:
             await _be_guard_tick()
+
+        # === Hook: זיהוי סגירות + ביקורת AI ===
+        await _detect_closures_and_review(positions)
 
         # === Daily Cap ===
         if _daily_pnl <= DAILY_LOSS_CAP and not _cap_triggered:
