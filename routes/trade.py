@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from utils.auth import require_api_key
 from utils.trade_executor import execute_trade_live
@@ -21,16 +22,13 @@ class TradeRequest(BaseModel):
     budget: float = Field(0, example=50, description="אם quantity סופק – budget לא חובה")
     leverage: int = Field(10, example=10)
     quantity: float | None = Field(None, example=0.001)
-
     entry: float | None = Field(None, example=28500.5, description="מחיר כניסה; אם None תתבצע כניסה דינמית")
     sl: float | None = Field(None, example=28000.0, description="Stop-Loss price (LIMIT/STOP)")
     tp: float | None = Field(None, example=29500.0, description="Take-Profit price (LIMIT/TAKE_PROFIT)")
-
     tp_targets: Optional[List[float]] = Field(None, description="רשימת יעדי TP (מחירים)")
     tp_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-TP (שברים שסוכמים ≤1; האחרון סוגר יתרה)")
     sl_targets: Optional[List[float]] = Field(None, description="רשימת מחירי SL מדרגיים")
     sl_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-SL")
-
     dry_run: bool = Field(False, description="True = סימולציה בלבד (ללא שליחה אמיתית)")
     confirm_first: bool = Field(True, description="דרוש אישור בטלגרם לפני שליחה")
     telegram_chat_id: Optional[int] = Field(None, description="מס׳ צ׳אט לאישור")
@@ -40,11 +38,10 @@ class TradeResponse(BaseModel):
     error: str | None = None
     result: Dict[str, Any] | None = None
 
-@router.post("/execute", response_model=TradeResponse)
-async def post_trade_execute(req: TradeRequest) -> TradeResponse:
+@router.post("/execute", response_model=TradeResponse, response_class=JSONResponse)
+async def post_trade_execute(req: TradeRequest) -> JSONResponse:
     """
-    טרייד דינמי מלא: Gate איכות (ברירת־מחדל 8.5), כניסה היברידית (LIMIT+STOP) עם הסלמה ל-MARKET רק אם מוצדק,
-    SL/TP (כולל סטים) כ-limit-variants reduceOnly, ואישור טלגרם לפני ביצוע (אופציונלי).
+    טרייד דינמי מלא עם Gate איכות (MIN_QUALITY_SCORE), כניסה היברידית, TP/SL וזרימת אישור בטלגרם.
     """
     try:
         args: Dict[str, Any] = {
@@ -61,11 +58,13 @@ async def post_trade_execute(req: TradeRequest) -> TradeResponse:
 
         result = await execute_trade_live(**args)
         if not result or not result.get("ok", False):
-            return TradeResponse(ok=False, error=(result or {}).get("reason") or (result or {}).get("error"), result=result)
-        return TradeResponse(ok=True, result=result)
+            payload = TradeResponse(ok=False, error=(result or {}).get("reason") or (result or {}).get("error"), result=result)
+            return JSONResponse(content=payload.model_dump(), media_type="application/json")
+        return JSONResponse(content=TradeResponse(ok=True, result=result).model_dump(), media_type="application/json")
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
