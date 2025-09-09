@@ -1,3 +1,4 @@
+### ✅ render.yaml (מתוקן ומוכן לפרודקשן) ###
 services:
   - type: web
     name: algogpt-docker
@@ -6,17 +7,24 @@ services:
     autoDeploy: false
     pullRequestPreviewsEnabled: false
 
-    healthCheckPath: /health
-
     dockerfilePath: ./Dockerfile
     dockerContext: .
+    healthCheckPath: /health
+
+    # פקודת הפעלה אמיתית (מריץ את main:app)
+    startCommand: >
+      bash -lc 'bash /app/prestart.sh 2>/dev/null || true;
+      gunicorn main:app \
+      --workers ${WEB_CONCURRENCY:-1} \
+      --bind 0.0.0.0:${PORT:-10000} \
+      --timeout ${GUNICORN_TIMEOUT:-120} \
+      --worker-class uvicorn.workers.UvicornWorker'
 
     envVars:
-      - key: APP_MODULE
-        value: main:app
-
       - key: PORT
         value: "10000"
+      - key: APP_MODULE
+        value: main:app
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
@@ -24,40 +32,45 @@ services:
       - key: LOG_LEVEL
         value: info
 
-      - key: CORS_ALLOW_ORIGINS
-        value: "*"
-
+      # AlgoGPT Settings
       - key: ALGOGPT_VERSION
         value: "2.17.0"
+      - key: ENABLE_AI_ROUTES
+        value: "1"
+      - key: EXECUTE_TRADES
+        value: "true"
+      - key: ALLOW_MANAGE_OPEN_TRADES
+        value: "true"
 
+      # WebSocket / Watchlist
       - key: WATCHLIST
         value: "BTCUSDT,ETHUSDT,SOLUSDT"
       - key: INDICATOR_INTERVALS
         value: "15m,1h"
 
-      - key: BINANCE_FUTURES_HTTP_BASE
-        value: "https://fapi.binance.com"
-      - key: BINANCE_FUTURES_WS_BASE
-        value: "wss://fstream.binance.com"
+      # Binance
       - key: BINANCE_WORKING_TYPE
         value: "MARK_PRICE"
       - key: BINANCE_TESTNET
         value: "false"
+      - key: BINANCE_FUTURES_HTTP_BASE
+        value: "https://fapi.binance.com"
+      - key: BINANCE_FUTURES_WS_BASE
+        value: "wss://fstream.binance.com"
 
-      - key: EXECUTE_TRADES
-        value: "true"
-      - key: ALLOW_MANAGE_OPEN_TRADES
-        value: "true"
-      - key: ENABLE_AI_ROUTES
-        value: "1"
-
+      # Telegram
       - key: WEBHOOK_HOST
         value: "https://algogpt-docker.onrender.com"
 
+      # CORS
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+      - key: CORS_ALLOW_CREDENTIALS
+        value: "0"
+
+      # DB / Redis / Keys (מוזנים רק בדשבורד)
       - key: DATABASE_URL
         value: "sqlite:////app/data/algogpt.db"
-
-      # סודות לקנפג רק בדשבורד של Render
       - key: API_BEARER_TOKEN
         sync: false
       - key: BINANCE_API_KEY
