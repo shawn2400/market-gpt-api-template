@@ -1,13 +1,13 @@
 # main.py
 from __future__ import annotations
-import os, asyncio, logging, json
+import os, asyncio, logging
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from prometheus_client import make_asgi_app
-import httpx
+import httpx, importlib, pkgutil
 
 from utils.json_logger import setup_json_logging
 from utils.response_limits import ResponseSizeLimiter
@@ -21,20 +21,16 @@ def _coerce_log_level(val):
     import logging as _l
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
         return int(val)
-    m = {
-        "debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING,
-        "warn": _l.WARNING, "error": _l.ERROR, "critical": _l.CRITICAL,
-    }
+    m = {"debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING,
+         "warn": _l.WARNING, "error": _l.ERROR, "critical": _l.CRITICAL}
     return m.get(str(val).strip().lower(), _l.INFO)
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
 for d in ("static", "logs"):
-    try:
-        Path(d).mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        logger.warning({"event": "mkdir_failed", "dir": d, "error": str(e)})
+    try: Path(d).mkdir(parents=True, exist_ok=True)
+    except Exception as e: logger.warning({"event": "mkdir_failed", "dir": d, "error": str(e)})
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
@@ -44,14 +40,11 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
-CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0") in ("1", "true", "on")
-app.add_middleware(
-    CORSMiddleware,
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0") in ("1","true","on")
+app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=CORS_ALLOW_CREDENTIALS,
-)
+    allow_methods=["*"], allow_headers=["*"],
+    allow_credentials=CORS_ALLOW_CREDENTIALS)
 app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
@@ -71,16 +64,30 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Routers (analytics ולא analysis)
-ROUTERS = ("routes.trade", "routes.analytics", "routes.decision")
-for module_path in ROUTERS:
-    try:
-        mod = __import__(module_path, fromlist=["router"])
-        if hasattr(mod, "router"):
-            app.include_router(mod.router)
-            logger.info({"event": "router_registered", "router": module_path})
-    except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
+# ── Include ALL routers under routes/*
+def include_all_route_modules():
+    import routes as _routes_pkg  # ודא שקיימת חבילת routes עם __init__.py
+    SKIP = {
+        # נמנע כפילות ב־/telegram/webhook כי מוגדר כאן ב-main:
+        "routes.telegram_webhook",
+    }
+    for modinfo in pkgutil.iter_modules(_routes_pkg.__path__, _routes_pkg.__name__ + "."):
+        name = modinfo.name
+        if name in SKIP: 
+            logger.info({"event": "router_skipped", "router": name, "reason": "handled_in_main"})
+            continue
+        try:
+            mod = importlib.import_module(name)
+            router = getattr(mod, "router", None)
+            if router is not None:
+                app.include_router(router)
+                logger.info({"event": "router_registered", "router": name})
+            else:
+                logger.info({"event": "router_missing_router_attr", "module": name})
+        except Exception as e:
+            logger.warning({"event": "router_register_failed", "router": name, "error": str(e)})
+
+include_all_route_modules()
 
 # ── Meta & Health
 @app.get("/")
@@ -91,7 +98,6 @@ async def root():
 async def health():
     return {"ok": True, "status": "ok"}
 
-# alias נוח
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "status": "ok"}
@@ -105,31 +111,25 @@ async def price(symbol: str):
 # ── Readyz
 @app.get("/readyz")
 async def readyz():
+    try: ping_ok = fapi_ping()
+    except Exception: ping_ok = False
     try:
-        ping_ok = fapi_ping()
-    except Exception:
-        ping_ok = False
-    try:
-        bal = futures_balance()
-        balance_ok = bool(bal and isinstance(bal, list))
+        bal = futures_balance(); balance_ok = bool(bal and isinstance(bal, list))
     except Exception:
         balance_ok = False
     prices = {}
     for s in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
-        try:
-            prices[f"price_{s}"] = get_price(s)
-        except Exception:
-            prices[f"price_{s}"] = None
+        try: prices[f"price_{s}"] = get_price(s)
+        except Exception: prices[f"price_{s}"] = None
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-# ── Telegram webhook
+# ── Telegram webhook (Approve/Reject)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 
 async def _tg_send(chat_id: int, text: str):
-    if not BOT_TOKEN:
-        return
+    if not BOT_TOKEN: return
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/sendMessage", data={
@@ -172,13 +172,11 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 # ── Auto setWebhook
 @app.on_event("startup")
 async def _startup():
-    if not BOT_TOKEN:
-        return
+    if not BOT_TOKEN: return
     if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1") not in ("1", "true", "yes", "on"):
         return
     public_host = os.getenv("PUBLIC_HOST", "").strip()
-    if not public_host:
-        return
+    if not public_host: return
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/setWebhook", data={
