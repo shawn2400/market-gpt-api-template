@@ -1,4 +1,4 @@
-### ✅ render.yaml (מתוקן ומוכן לפרודקשן) ###
+# render.yaml
 services:
   - type: web
     name: algogpt-docker
@@ -10,15 +10,6 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
-
-    # פקודת הפעלה אמיתית (מריץ את main:app)
-    startCommand: >
-      bash -lc 'bash /app/prestart.sh 2>/dev/null || true;
-      gunicorn main:app \
-      --workers ${WEB_CONCURRENCY:-1} \
-      --bind 0.0.0.0:${PORT:-10000} \
-      --timeout ${GUNICORN_TIMEOUT:-120} \
-      --worker-class uvicorn.workers.UvicornWorker'
 
     envVars:
       - key: PORT
@@ -32,9 +23,9 @@ services:
       - key: LOG_LEVEL
         value: info
 
-      # AlgoGPT Settings
+      # AlgoGPT
       - key: ALGOGPT_VERSION
-        value: "2.17.0"
+        value: "2.18.0"
       - key: ENABLE_AI_ROUTES
         value: "1"
       - key: EXECUTE_TRADES
@@ -42,7 +33,7 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "true"
 
-      # WebSocket / Watchlist
+      # WS / Watchlist
       - key: WATCHLIST
         value: "BTCUSDT,ETHUSDT,SOLUSDT"
       - key: INDICATOR_INTERVALS
@@ -58,9 +49,15 @@ services:
       - key: BINANCE_FUTURES_WS_BASE
         value: "wss://fstream.binance.com"
 
-      # Telegram
-      - key: WEBHOOK_HOST
+      # Telegram/Webhook
+      - key: PUBLIC_HOST            # ← main.py משתמש בזה
         value: "https://algogpt-docker.onrender.com"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: TELEGRAM_TEST_CHAT_ID  # אופציונלי לבדיקות /telegram/test-ping
+        sync: false
 
       # CORS
       - key: CORS_ALLOW_ORIGINS
@@ -78,10 +75,6 @@ services:
       - key: BINANCE_API_SECRET
         sync: false
       - key: REDIS_URL
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
 
     disk:
