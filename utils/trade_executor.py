@@ -10,37 +10,39 @@ from utils.binance_client import (
     get_symbol_filters, get_all_orders, futures_cancel_order, get_futures_client
 )
 
+# ✅ חדש: ריסק
+try:
+    from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
+except Exception:
+    RISK_CHECK_ENABLE = False
+    def pre_trade_risk_check(*args, **kwargs):  # type: ignore
+        return {"ok": True, "score": 100.0, "reasons": ["risk_module_missing"], "metrics": {}}
+
 log = logging.getLogger("algogpt.trade_executor")
 
 # ─────────── Policy & Defaults (ENV) ───────────
 ALLOW_MARKET_ENTRY  = os.getenv("ALLOW_MARKET_ENTRY", "1").lower() in ("1","true","yes","on")
 
-# כניסה היברידית: LIMIT Maker סביב המחיר + STOP (breakout) בצד השני
-ENTRY_BAND_BPS      = float(os.getenv("ENTRY_BAND_BPS", "8.5"))   # ברירת מחדל 8.5bps
+ENTRY_BAND_BPS      = float(os.getenv("ENTRY_BAND_BPS", "8.5"))
 STOP_BAND_BPS       = float(os.getenv("STOP_BAND_BPS",  "10"))
 ESCALATE_AFTER_S    = float(os.getenv("ESCALATE_AFTER_SEC", "10"))
 ESCALATE_SLIP_BPS   = float(os.getenv("ESCALATE_SLIPPAGE_BPS", "15"))
 
-# דיוק SL/TP (limit-variants)
 SL_LIMIT_OFFSET_BPS = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
-# Gate איכות — ברירת מחדל ציון מינימלי 8.5
 MIN_QUALITY_SCORE   = float(os.getenv("MIN_QUALITY_SCORE", "8.5"))
-MAX_ATR_PCT         = float(os.getenv("MAX_ATR_PCT", "2.5"))  # ATR(14) כאחוז מחיר
-MIN_VOLUME          = float(os.getenv("MIN_VOLUME", "0"))     # אם 0 -> מתעלמים
+MAX_ATR_PCT         = float(os.getenv("MAX_ATR_PCT", "2.5"))
+MIN_VOLUME          = float(os.getenv("MIN_VOLUME", "0"))
 
-# Quantization
 DEFAULT_QTY_STEP    = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK        = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 DEFAULT_MIN_NOT     = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
-# Telegram
 BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE            = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 CONFIRM_TTL_SEC     = int(os.getenv("CONFIRM_TTL_SEC", "180"))
 
-# Redis (אופציונלי)
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 try:
     import redis  # type: ignore
@@ -61,15 +63,13 @@ def _q_price(symbol: str, price: float) -> Tuple[str, float]:
     f = _filters(symbol); tick = float(f.get("tickSize") or DEFAULT_TICK) or DEFAULT_TICK
     decs = _decimals(str(f.get("tickSize") or DEFAULT_TICK))
     steps = round(price / tick); p = steps * tick
-    s = f"{p:.{decs}f}"
-    return s, float(s)
+    s = f"{p:.{decs}f}"; return s, float(s)
 
 def _q_qty(symbol: str, qty: float) -> Tuple[str, float]:
     f = _filters(symbol); step = float(f.get("stepSize") or DEFAULT_QTY_STEP) or DEFAULT_QTY_STEP
     decs = _decimals(str(f.get("stepSize") or DEFAULT_QTY_STEP))
     steps = math.floor(qty / step); q = max(step, steps * step)
-    s = f"{q:.{decs}f}"
-    return s, float(s)
+    s = f"{q:.{decs}f}"; return s, float(s)
 
 def _min_notional(symbol: str) -> float:
     f = _filters(symbol); mn = f.get("minNotional")
@@ -80,8 +80,7 @@ def _ensure_min_notional(symbol: str, price: float, qty: float) -> float:
     mn = _min_notional(symbol)
     if price * qty >= mn: return qty
     need = mn / max(price, 1e-9)
-    _, q2 = _q_qty(symbol, need)
-    return q2
+    _, q2 = _q_qty(symbol, need); return q2
 
 def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int, quantity: Optional[float]) -> float:
     if quantity and quantity > 0:
@@ -92,31 +91,27 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
         usd = float(budget) * float(leverage)
         q = usd / price
     q = _ensure_min_notional(symbol, price, q)
-    _, q = _q_qty(symbol, q)
-    return q
+    _, q = _q_qty(symbol, q); return q
 
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
 # ─────────── Telegram Confirm Store (memory/redis) ───────────
 class ConfirmStore:
-    _mem: Dict[str, Dict[str, Any]] = {}  # cid -> record
+    _mem: Dict[str, Dict[str, Any]] = {}
     _r = None
     try:
         if _redis_available:
             _r = redis.Redis.from_url(REDIS_URL, decode_responses=True)  # type: ignore
     except Exception as e:
-        log.warning("Redis unavailable: %s", e)
-        _r = None
+        log.warning("Redis unavailable: %s", e); _r = None
 
     @classmethod
     def create(cls, chat_id: int, payload: Dict[str, Any], ttl: int = CONFIRM_TTL_SEC) -> str:
         cid = f"cid_{int(time.time()*1000)}_{os.getpid()}_{abs(hash(os.urandom(8)))}"
         rec = {"status": "pending", "payload": payload, "chat_id": chat_id, "created_at": time.time()}
-        if cls._r:
-            cls._r.setex(f"confirm:{cid}", ttl, json.dumps(rec))
-        else:
-            cls._mem[cid] = rec
+        if cls._r: cls._r.setex(f"confirm:{cid}", ttl, json.dumps(rec))
+        else: cls._mem[cid] = rec
         return cid
 
     @classmethod
@@ -132,22 +127,18 @@ class ConfirmStore:
         if not rec: return None
         if rec.get("status") == "pending" and time.time() - rec["created_at"] > CONFIRM_TTL_SEC:
             rec["status"] = "expired"
-            if cls._r:
-                cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
-            else:
-                cls._mem[cid] = rec
+            if cls._r: cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
+            else: cls._mem[cid] = rec
         return rec
 
     @classmethod
     def _save(cls, cid: str, rec: Dict[str, Any]) -> None:
-        if cls._r:
-            cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
-        else:
-            cls._mem[cid] = rec
+        if cls._r: cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
+        else: cls._mem[cid] = rec
 
     @classmethod
     def approve(cls, cid: str, approver: str = "") -> None:
-        rec = cls.get(cid)
+        rec = cls.get(cid); 
         if not rec: return
         rec["status"] = "approved"; rec["approver"] = approver; cls._save(cid, rec)
 
@@ -160,22 +151,18 @@ class ConfirmStore:
 async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid: str) -> Dict[str, Any]:
     if not BOT_TOKEN:
         return {"ok": False, "error": "BOT_TOKEN missing"}
-    kb = {
-        "inline_keyboard": [[
-            {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
-            {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
-        ]]
-    }
+    kb = {"inline_keyboard": [[
+        {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
+        {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
+    ]]}
     text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
     async with httpx.AsyncClient(timeout=10.0) as cli:
         r = await cli.post(f"{API_BASE}/sendMessage", data={
             "chat_id": chat_id, "text": text, "parse_mode": "HTML",
             "disable_web_page_preview": True, "reply_markup": json.dumps(kb)
         })
-        try:
-            return r.json()
-        except Exception:
-            return {"ok": False, "error": f"http {r.status_code}"}
+        try: return r.json()
+        except Exception: return {"ok": False, "error": f"http {r.status_code}"}
 
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
@@ -196,28 +183,19 @@ async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, A
 
 # ─────────── Light indicators (no pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
-    k = 2 / (period + 1)
-    ema = []
-    s = None
+    k = 2 / (period + 1); ema=[]; s=None
     for v in vals:
-        if s is None: s = v
-        else: s = v * k + s * (1 - k)
-        ema.append(s)
+        s = v if s is None else (v*k + s*(1-k)); ema.append(s)
     return ema
 
 def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
-    trs: List[float] = []
-    prev_close = None
-    for row in kl:
-        high = float(row[2]); low = float(row[3]); close = float(row[4])
-        if prev_close is None:
-            tr = high - low
-        else:
-            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        trs.append(tr)
-        prev_close = close
+    trs=[]; prev=None
+    for r in kl:
+        h=float(r[2]); l=float(r[3]); c=float(r[4])
+        tr = (h-l) if prev is None else max(h-l, abs(h-prev), abs(l-prev))
+        trs.append(tr); prev=c
     if len(trs) < period: return trs[-1] if trs else 0.0
-    return _ema(trs, period)[-1]  # EMA-ATR
+    return _ema(trs, period)[-1]
 
 def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
     cli = get_futures_client()
@@ -225,10 +203,6 @@ def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> Lis
     return data or []
 
 def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
-    """
-    Computes Quality Score 0..10; enter only if score >= MIN_QUALITY_SCORE.
-    (דיסקרטי: Trend=4, Momentum=3, ATR=2, Volume=1)
-    """
     try:
         kl = _fetch_klines_raw(symbol, "1m", 60)
         closes = [float(r[4]) for r in kl]
@@ -241,13 +215,12 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         last  = closes[-1]
         atr   = _atr_from_klines(kl, 14)
         atr_pct = (atr / last) * 100.0 if last > 0 else 999.0
-        vol1m = vols[-1]
+        mom = (last / closes[-4] - 1.0) * 100.0
 
         trend_ok = (ema21 > ema50 and last > ema21) if side == "BUY" else (ema21 < ema50 and last < ema21)
-        mom = (last / closes[-4] - 1.0) * 100.0
-        mom_ok = (mom > 0.05) if side == "BUY" else (mom < -0.05)
-        vol_ok = True if MIN_VOLUME <= 0 else (vol1m >= MIN_VOLUME)
-        atr_ok = (atr_pct <= MAX_ATR_PCT)
+        mom_ok   = (mom > 0.05) if side == "BUY" else (mom < -0.05)
+        vol_ok   = True if MIN_VOLUME <= 0 else (vols[-1] >= MIN_VOLUME)
+        atr_ok   = (atr_pct <= MAX_ATR_PCT)
 
         score = 0.0
         score += 4.0 if trend_ok else 0.0
@@ -255,14 +228,14 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         score += 2.0 if atr_ok else 0.0
         score += 1.0 if vol_ok else 0.0
 
-        reasons = []
+        reasons=[]
         if not trend_ok: reasons.append("trend_mismatch")
         if not mom_ok:   reasons.append("weak_momentum")
         if not atr_ok:   reasons.append("atr_too_high")
         if not vol_ok:   reasons.append("low_volume")
 
         return {"enter_ok": score >= MIN_QUALITY_SCORE, "score": round(score, 2), "reasons": reasons,
-                "metrics": {"ema21": ema21, "ema50": ema50, "atr_pct": atr_pct, "mom_pct": mom, "vol1m": vol1m}}
+                "metrics": {"ema21": ema21, "ema50": ema50, "atr_pct": atr_pct, "mom_pct": mom, "vol1m": vols[-1]}}
     except Exception as e:
         log.warning("quality gate failed: %s", e)
         return {"enter_ok": False, "score": 0.0, "reasons": ["gate_error"]}
@@ -272,13 +245,10 @@ def _build_ladders(sym: str, side: str, qty: float,
                    tp_targets: Optional[List[float]], tp_splits: Optional[List[float]],
                    sl_targets: Optional[List[float]], sl_splits: Optional[List[float]]) -> Dict[str, Any]:
     plan = {"tp_orders": [], "sl_orders": []}
-
-    def _prep(targets: Optional[List[float]], splits: Optional[List[float]], kind: str, limit_sign: int):
+    def _prep(targets, splits, kind, limit_sign):
         if not targets: return
-        L = len(targets)
-        w = splits or []
-        if not w or len(w) != L:
-            w = [1.0 / L] * L
+        L = len(targets); w = splits or []
+        if not w or len(w) != L: w = [1.0 / L] * L
         tot = sum(max(0.0, float(x)) for x in w) or 1.0
         remain = qty
         for i, (t, wi) in enumerate(zip(targets, w), start=1):
@@ -293,7 +263,6 @@ def _build_ladders(sym: str, side: str, qty: float,
                 "stopPrice": stop_p, "price": lim_p, "qty": qalloc,
                 "type": "TAKE_PROFIT" if kind=="TP" else "STOP"
             })
-
     if tp_targets: _prep(tp_targets, tp_splits, "TP", +1 if side=="BUY" else -1)
     if sl_targets: _prep(sl_targets, sl_splits, "SL", -1 if side=="BUY" else +1)
     return plan
@@ -312,15 +281,11 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    # LIMIT
     lim = futures_create_order(symbol=sym, side=side, type="LIMIT",
                                timeInForce="GTC", price=limit_str, quantity=qty_str)
     lim_id = str(lim.get("orderId") or "")
-
-    # STOP (STOP_LIMIT entry)
     stp = futures_create_order(symbol=sym, side=side, type="STOP",
-                               timeInForce="GTC", stopPrice=stop_str, price=stop_str,
-                               quantity=qty_str)
+                               timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str)
     stp_id = str(stp.get("orderId") or "")
 
     def _is_filled(oid: str) -> bool:
@@ -329,8 +294,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             for o in lst:
                 if str(o.get("orderId")) == str(oid):
                     st = (o.get("status") or "").upper()
-                    if st in ("FILLED", "PARTIALLY_FILLED"):
-                        return True
+                    if st in ("FILLED", "PARTIALLY_FILLED"): return True
         except Exception:
             pass
         return False
@@ -350,7 +314,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             except Exception: pass
             return {"entry_kind": "STOP", "price": stop_p, "order": stp}
 
-        # הסלמה — רק אם מוצדק
         if time.time() - t0 >= ESCALATE_AFTER_S:
             cur = get_price(sym) or futures_mark_price(sym) or base_price
             slip_bps = abs(cur - limit_p) / max(limit_p, 1e-9) * 10000.0
@@ -366,27 +329,17 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 mkt = futures_create_order(symbol=sym, side=side, type="MARKET", quantity=qty_str)
                 return {"entry_kind": "MARKET_ESCALATE", "price": float(cur), "order": mkt}
             t0 = time.time()
-
         await asyncio.sleep(1.0)
 
 # ─────────── Public API ───────────
 async def execute_trade_live(
-    symbol: str,
-    side: str,
-    *,
-    budget: Optional[float] = None,
-    leverage: int = 5,
-    dry_run: bool = True,
-    quantity: Optional[float] = None,
-    entry: Optional[float] = None,
-    sl: Optional[float] = None,
-    tp: Optional[float] = None,
-    tp_targets: Optional[List[float]] = None,
-    tp_splits: Optional[List[float]] = None,
-    sl_targets: Optional[List[float]] = None,
-    sl_splits: Optional[List[float]] = None,
-    confirm_first: bool = True,
-    telegram_chat_id: Optional[int] = None,
+    symbol: str, side: str, *,
+    budget: Optional[float] = None, leverage: int = 5, dry_run: bool = True,
+    quantity: Optional[float] = None, entry: Optional[float] = None,
+    sl: Optional[float] = None, tp: Optional[float] = None,
+    tp_targets: Optional[List[float]] = None, tp_splits: Optional[List[float]] = None,
+    sl_targets: Optional[List[float]] = None, sl_splits: Optional[List[float]] = None,
+    confirm_first: bool = True, telegram_chat_id: Optional[int] = None,
 ) -> Dict[str, Any]:
 
     side = side.upper().strip()
@@ -398,7 +351,6 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # חישוב כמות — ב-dry_run נרצה להמשיך גם אם אין הקצאה
     qty_calc_error = None
     qty: Optional[float] = None
     try:
@@ -408,13 +360,15 @@ async def execute_trade_live(
 
     gate = _quality_gate(sym, side)
 
-    # Dry-run: תמיד OK, עם אינדיקציה ל-alloc_ok/alloc_error
+    # ✅ Risk preview
+    risk = pre_trade_risk_check(sym, side, leverage, entry)
+
     if dry_run:
         plan: Dict[str, Any] = {
             "ok": True, "symbol": sym, "side": side, "leverage": leverage,
             "base_price": base_price, "dry_run": True,
             "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
-            "gate": gate, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
+            "gate": gate, "risk": risk, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
@@ -429,11 +383,12 @@ async def execute_trade_live(
             }
         return plan
 
-    # ביצוע אמיתי: דרוש גם הקצאה תקפה וגם Gate מאושר
     if qty is None:
         return {"ok": False, "reason": qty_calc_error or "allocation_invalid"}
     if not gate.get("enter_ok"):
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
+    if RISK_CHECK_ENABLE and not risk.get("ok", True):
+        return {"ok": False, "reason": "risk_check_failed", "risk": risk}
 
     if confirm_first:
         if not telegram_chat_id:
@@ -454,7 +409,7 @@ async def execute_trade_live(
         "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
         "base_price": base_price, "dry_run": False,
         "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
-        "gate": gate, "entry_result": entry_res,
+        "gate": gate, "risk": risk, "entry_result": entry_res,
         "tp_orders": [], "sl_orders": []
     }
 
@@ -477,8 +432,8 @@ async def execute_trade_live(
                 o["response"] = resp
             except Exception as e:
                 o["response"] = {"ok": False, "error": str(e)}
-
     return plan
+
 
 
 
