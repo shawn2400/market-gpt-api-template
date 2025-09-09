@@ -6,40 +6,35 @@ services:
     autoDeploy: false
     pullRequestPreviewsEnabled: false
 
-    # בריאות
     healthCheckPath: /health
 
-    # Docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
 
     envVars:
-      # מריץ את האפליקציה המלאה (כול הראוטים)
       - key: APP_MODULE
         value: main:app
 
-      # קונקרנסי נמוך כדי לא להעמיס
+      - key: PORT
+        value: "10000"
       - key: WEB_CONCURRENCY
         value: "1"
-
+      - key: GUNICORN_TIMEOUT
+        value: "120"
       - key: LOG_LEVEL
         value: info
 
-      # CORS (בפרוד עדיף להחליף ל־Whitelist)
       - key: CORS_ALLOW_ORIGINS
         value: "*"
 
-      # גרסה/תצוגה
       - key: ALGOGPT_VERSION
         value: "2.17.0"
 
-      # מחיר/WS
       - key: WATCHLIST
         value: "BTCUSDT,ETHUSDT,SOLUSDT"
       - key: INDICATOR_INTERVALS
         value: "15m,1h"
 
-      # Binance endpoints (פרוד)
       - key: BINANCE_FUTURES_HTTP_BASE
         value: "https://fapi.binance.com"
       - key: BINANCE_FUTURES_WS_BASE
@@ -49,7 +44,6 @@ services:
       - key: BINANCE_TESTNET
         value: "false"
 
-      # מסחר חי
       - key: EXECUTE_TRADES
         value: "true"
       - key: ALLOW_MANAGE_OPEN_TRADES
@@ -57,20 +51,18 @@ services:
       - key: ENABLE_AI_ROUTES
         value: "1"
 
-      # דומיין ציבורי (ל־Telegram webhook)
       - key: WEBHOOK_HOST
         value: "https://algogpt-docker.onrender.com"
 
-      # DB ע"ג דיסק מתמשך
       - key: DATABASE_URL
         value: "sqlite:////app/data/algogpt.db"
 
-      # ===== סודות (להזין בדשבורד, לא ב־git) =====
+      # סודות לקנפג רק בדשבורד של Render
+      - key: API_BEARER_TOKEN
+        sync: false
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
-        sync: false
-      - key: API_BEARER_TOKEN
         sync: false
       - key: REDIS_URL
         sync: false
@@ -78,9 +70,7 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
-      # ===========================================
 
-    # דיסק מתמשך עבור ה־SQLite (ותוצרים נוספים אם צריך)
     disk:
       name: data
       mountPath: /app/data
