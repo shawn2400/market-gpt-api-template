@@ -1,6 +1,6 @@
 # routes/health.py
 from fastapi import APIRouter
-from utils.ai_client import ai_client, ai_healthcheck
+from utils.ai_client import ai_healthcheck
 
 router = APIRouter(prefix="/health", tags=["Health"])
 
@@ -25,7 +25,6 @@ async def strategy_version():
 @router.get("/ai", summary="AI Health")
 async def ai():
     return await ai_healthcheck()
-
 
 
 
