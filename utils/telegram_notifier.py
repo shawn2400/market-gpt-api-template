@@ -1,9 +1,11 @@
 # utils/telegram_notifier.py
 from __future__ import annotations
-import os, logging, httpx, asyncio
+import os, logging, httpx
 from typing import Dict, Any
 from datetime import datetime
-from utils.metrics_exporter import record_telegram_sent, record_telegram_failed
+
+# ✅ תיקון: שימוש ב-metrics_tracker
+from utils.metrics_tracker import record_telegram_sent, record_telegram_failed
 
 try:
     from zoneinfo import ZoneInfo
@@ -14,7 +16,7 @@ except Exception:
 logger = logging.getLogger("algogpt.telegram")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("ADMIN_CHAT_ID", "")
 ADMIN_CHAT_ID      = os.getenv("ADMIN_CHAT_ID", "")
 
 _http_client: httpx.AsyncClient | None = None
@@ -23,7 +25,8 @@ _sent_cache: set[str] = set()   # dedup
 def _now_il_str() -> str:
     if _TZ_IL:
         return datetime.now(_TZ_IL).strftime("%d/%m/%Y | %H:%M")
-    return datetime.utcnow().strftime("%d/%m/%Y | %H:%M")
+    from datetime import datetime as _dt
+    return _dt.utcnow().strftime("%d/%m/%Y | %H:%M")
 
 async def _ensure_client() -> httpx.AsyncClient:
     global _http_client
@@ -73,73 +76,29 @@ async def notify_sl_tp_update(symbol: str, side: str, update_type: str, new_pric
     )
     await _post(text)
 
-async def notify_info(text: str): await _post(text, dedup=False)
-async def notify_error(text: str): await _post(f"⚠️ Error: {text}", dedup=False)
-async def notify_heartbeat(): await _post(f"🟢 Heartbeat {_now_il_str()}: AlgoGPT חי ונושם")
-async def notify_daily_summary(summary: Dict[str, Any]):
-    text = f"📊 Daily Summary {_now_il_str()}\nPnL: {summary['pnl']:.2f} USDT\nTrades: {len(summary['trades'])}"
+async def notify_info(text: str):
     await _post(text, dedup=False)
-async def notify_trade_review(symbol: str, review: str): 
+
+async def notify_error(text: str):
+    await _post(f"⚠️ Error: {text}", dedup=False)
+
+async def notify_heartbeat():
+    await _post(f"🟢 Heartbeat {_now_il_str()}: AlgoGPT חי ונושם")
+
+async def notify_daily_summary(summary: Dict[str, Any]):
+    text = f"📊 Daily Summary {_now_il_str()}\nPnL: {summary.get('pnl',0):.2f} USDT\nTrades: {len(summary.get('trades',[]))}"
+    await _post(text, dedup=False)
+
+async def notify_trade_review(symbol: str, review: str):
     await _post(f"✍️ Review {symbol}: {review}", dedup=False)
 
-# ====== Callbacks router ======
-def _extract_callback(update) -> Dict[str, Any]:
-    action = None; data: Dict[str, Any] = {}
-    try:
-        if hasattr(update, "callback_query") and update.callback_query and update.callback_query.data:
-            raw = update.callback_query.data
-            try:
-                import json
-                data = json.loads(raw)
-                action = data.get("action") or data.get("a")
-            except Exception:
-                parts = str(raw).split("|")
-                action = parts[0].strip().lower() if parts else None
-                if len(parts) > 1: data["symbol"] = parts[1].strip()
-                if len(parts) > 2: data["side"] = parts[2].strip()
-                for kv in parts[3:]:
-                    if "=" in kv:
-                        k,v = kv.split("=",1); data[k]=v
-        elif hasattr(update, "message") and update.message and update.message.text:
-            t = (update.message.text or "").strip()
-            if t.startswith("/approve"): action="approve"
-            elif t.startswith("/reject"): action="reject"
-            else: action="noop"
-            data["text"]=t
-    except Exception:
-        action = "noop"
-    return {"action": (action or "noop").lower(), **data}
+# ====== Extras (לחוויית ניטור מלאה) ======
+async def notify_no_trades():
+    await _post("❌ לא נמצאו טריידים בסריקה האחרונה", dedup=False)
 
-async def handle_callback_action(update) -> Dict[str, Any]:
-    try:
-        info = _extract_callback(update)
-        action = info.get("action","noop").lower()
-        symbol = (info.get("symbol") or "").upper() or None
-        side = (info.get("side") or "").upper() or None
+async def notify_scan_error(reason: str):
+    await _post(f"⚠️ Scan error: {reason}", dedup=False)
 
-        approved = action in ("approve","approved","yes","ok","y")
-        rejected = action in ("reject","rejected","no","n","deny","denied")
-
-        out: Dict[str, Any] = {"ok": True, "action": action, "approved": approved}
-        if symbol: out["symbol"] = symbol
-        if side: out["side"] = side
-
-        for k in ("entry","sl","tp","leverage","budget_usd","success_pct"):
-            if k in info:
-                try:
-                    out[k] = float(info[k]) if k not in ("leverage",) else int(float(info[k]))
-                except Exception:
-                    out[k] = info[k]
-
-        if approved and symbol and side:
-            await notify_info(f"✅ Approved {symbol} {side} @ {_now_il_str()}")
-        elif rejected and symbol and side:
-            await notify_info(f"❌ Rejected {symbol} {side} @ {_now_il_str()}")
-
-        return out
-    except Exception as e:
-        logger.exception("handle_callback_action failed")
-        return {"ok": False, "action": "error", "approved": False, "error": str(e)}
 
 
 
