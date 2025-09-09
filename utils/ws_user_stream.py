@@ -1,214 +1,226 @@
 # utils/ws_user_stream.py
 from __future__ import annotations
-import os, time, json, hmac, hashlib, logging, asyncio
+import os, asyncio, json, time, logging
 from typing import Optional, Dict, Any
 
-import httpx
+logger = logging.getLogger("algogpt.ws_user")
 
+# ---- Prometheus (אופציונלי) ----
 try:
-    import websockets  # pip install websockets
+    from prometheus_client import Counter
+    _C_WS_EVENTS      = Counter("ws_user_events_total", "Total user-stream WS events")
+    _C_WS_ERRORS      = Counter("ws_user_errors_total", "Total user-stream WS errors")
+    _C_WS_RECONNECTS  = Counter("ws_user_reconnects_total", "Total user-stream WS reconnects")
+    _C_WS_DEDUP_SKIP  = Counter("ws_user_dedup_skips_total", "Deduped review skips")
 except Exception:
-    websockets = None  # המודול יתאפס כ"כבוי" אם אין תלות
+    class _N:
+        def inc(self, *a, **k): pass
+    _C_WS_EVENTS=_C_WS_ERRORS=_C_WS_RECONNECTS=_C_WS_DEDUP_SKIP=_N()
 
-# אינטגרציות (לא חובה—נשתמש אם קיימות)
-try:
-    from utils.trade_manager import handle_order_filled  # TP1/BE guard כבר שם
-except Exception:
-    async def handle_order_filled(_event: Dict[str, Any]):  # type: ignore
-        return None
-
+# ---- תלות ב-OpenAI review (רשות) ----
 try:
     from utils.ai_reviewer import review_trade_async
 except Exception:
-    async def review_trade_async(_s, _d, _ctx, to_telegram=True):  # type: ignore
-        return {"ok": False, "skipped": "ai_reviewer_missing"}
+    async def review_trade_async(*args, **kwargs):
+        return {"ok": False, "review": None}
 
-logger = logging.getLogger("algogpt.ws_user_stream")
+# ---- WS lib (ננסה websockets, ניפול רך אם חסר) ----
+try:
+    import websockets
+except Exception:
+    websockets = None
 
-# ====== ENV ======
-HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-WS_BASE   = os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com").rstrip("/")
-API_KEY   = os.getenv("BINANCE_API_KEY", "").strip()
-API_SEC   = os.getenv("BINANCE_API_SECRET", "").strip()
+import httpx
 
-ENABLE    = os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1","true","yes","on")
+BINANCE_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+FSTREAM_BASE = os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com").rstrip("/")
 KEEPALIVE_SEC = int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800"))
 RECONNECT_BACKOFF = float(os.getenv("USER_STREAM_RECONNECT_BACKOFF", "3.0"))
-MAX_BACKOFF = float(os.getenv("USER_STREAM_RECONNECT_MAX_BACKOFF", "60.0"))
+RECONNECT_BACKOFF_MAX = float(os.getenv("USER_STREAM_RECONNECT_MAX_BACKOFF", "60.0"))
+ENABLE = os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1","true","yes","on")
 
-# ====== STATE ======
-_listen_key: Optional[str] = None
-_task: Optional[asyncio.Task] = None
-_keep_task: Optional[asyncio.Task] = None
+API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+
 _running = False
-_last_event_ts: float = 0.0
-_stats = {"events": 0, "order_updates": 0, "acct_updates": 0, "closes": 0, "errors": 0}
+_task: Optional[asyncio.Task] = None
+_listen_key: Optional[str] = None
+_last_keepalive = 0.0
+_last_event_ts = 0.0
+_reconnects = 0
+_seen_ids: Dict[str, float] = {}  # idempotency (orderId/execId) -> ts
 
-# ====== HTTP helpers ======
+def is_running() -> bool:
+    return _running
+
+def get_stats() -> Dict[str, Any]:
+    return {
+        "running": _running,
+        "listen_key": bool(_listen_key),
+        "last_keepalive": _last_keepalive,
+        "last_event_ts": _last_event_ts,
+        "reconnects": _reconnects,
+        "seen_cache": len(_seen_ids),
+    }
+
+def start():
+    global _running, _task
+    if _running: 
+        return
+    _running = True
+    loop = asyncio.get_event_loop()
+    _task = loop.create_task(_runner())
+    logger.info({"event":"ws_user_stream_started"})
+
+def stop():
+    global _running, _task
+    _running = False
+    if _task and not _task.done():
+        _task.cancel()
+    logger.info({"event":"ws_user_stream_stopped"})
+
 async def _get_listen_key() -> Optional[str]:
     if not API_KEY:
-        logger.warning("USER-STREAM disabled: missing API key")
+        logger.warning("BINANCE_API_KEY missing — cannot open user stream")
         return None
-    url = f"{HTTP_BASE}/fapi/v1/listenKey"
+    url = f"{BINANCE_FAPI}/fapi/v1/listenKey"
     try:
-        async with httpx.AsyncClient(timeout=10.0, headers={"X-MBX-APIKEY": API_KEY}) as cli:
-            r = await cli.post(url)
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            r = await cli.post(url, headers={"X-MBX-APIKEY": API_KEY})
             r.raise_for_status()
-            lk = r.json().get("listenKey")
-            return lk
+            return (r.json() or {}).get("listenKey")
     except Exception as e:
-        logger.error("get listenKey failed: %s", e)
+        logger.error(f"[ws_user] get listenKey failed: {e}")
+        _C_WS_ERRORS.inc()
         return None
 
-async def _keepalive_loop():
-    global _listen_key
-    while _running and _listen_key:
-        try:
-            await asyncio.sleep(KEEPALIVE_SEC - 30)
-            async with httpx.AsyncClient(timeout=10.0, headers={"X-MBX-APIKEY": API_KEY}) as cli:
-                r = await cli.put(f"{HTTP_BASE}/fapi/v1/listenKey", params={"listenKey": _listen_key})
-                if not r.is_success:
-                    logger.warning("listenKey keepalive non-200: %s %s", r.status_code, r.text)
-        except Exception as e:
-            logger.warning("listenKey keepalive failed: %s", e)
-
-# ====== Event handling ======
-async def _on_order_trade_update(payload: Dict[str, Any]):
-    """ORDER_TRADE_UPDATE → נשתמש לשני דברים:
-       1) להעביר ל-trade_manager לטובת BE/TP guard (יש כבר פונקציה).
-       2) לזהות Fill/Close ולהזניק ביקורת AI (עדין/לא מעמיס).
-    """
-    _stats["order_updates"] += 1
+async def _keepalive():
+    global _last_keepalive
+    if not _listen_key or not API_KEY: 
+        return
+    if time.time() - _last_keepalive < max(KEEPALIVE_SEC - 60, KEEPALIVE_SEC * 0.8):
+        return
+    url = f"{BINANCE_FAPI}/fapi/v1/listenKey"
     try:
-        await handle_order_filled(payload.get("o", {}))
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            r = await cli.put(url, headers={"X-MBX-APIKEY": API_KEY}, params={"listenKey": _listen_key})
+            if r.is_success:
+                _last_keepalive = time.time()
+    except Exception as e:
+        logger.warning(f"[ws_user] keepalive failed: {e}")
+        _C_WS_ERRORS.inc()
+
+def _dedup_key(ev: Dict[str, Any]) -> Optional[str]:
+    # ניסיון עדין: נעדיף orderId (i) או execId (t)
+    try:
+        if ev.get("e") == "ORDER_TRADE_UPDATE":
+            o = ev.get("o") or {}
+            oi = o.get("i")
+            ex = o.get("t")
+            return f"o:{oi}" if oi is not None else (f"ex:{ex}" if ex is not None else None)
     except Exception:
         pass
+    return None
 
-    try:
-        o = payload.get("o", {})
-        symbol = str(o.get("s") or "").upper()
-        side   = "LONG" if (o.get("S") == "BUY") else "SHORT"
-        status = str(o.get("X") or o.get("x") or "").upper()  # X=current, x=execution
-        reason = str(o.get("R") or o.get("r") or "")
+def _should_review(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    תנאי לטריגר ביקורת:
+    - ORDER_TRADE_UPDATE
+    - סטטוס סופי: FILLED / CANCELED / EXPIRED
+    - לא דופליקט (ע"י _seen_ids)
+    """
+    if ev.get("e") != "ORDER_TRADE_UPDATE":
+        return None
+    o = ev.get("o") or {}
+    status = (o.get("X") or "").upper()
+    if status not in {"FILLED", "CANCELED", "EXPIRED"}:
+        return None
 
-        # Close detection (פשוט/עדין): order FILLED עם reduceOnly או סטטוס CANCELED/EXPIRED של TP/SL סופי
-        reduce_only = bool(o.get("ro"))
-        if status == "FILLED" and reduce_only:
-            _stats["closes"] += 1
-            ctx = {
-                "reason": reason, "reduce_only": True,
-                "pnl": o.get("rp"), "commission": o.get("n"),
-                "entry": o.get("ap"), "price": o.get("L"), "qty": o.get("l"),
-                "orderId": o.get("i"),
-            }
-            await review_trade_async(symbol, side, ctx, to_telegram=True)
-    except Exception as e:
-        logger.warning("order_update review hook failed: %s", e)
+    sym = (o.get("s") or "").upper()
+    side = (o.get("S") or "").upper()  # BUY/SELL
+    # בונים הקשר בסיסי
+    ctx = {
+        "status": status,
+        "order_type": o.get("o"),
+        "close_ts": ev.get("T"),
+        "exec_type": o.get("x"),
+        "avg_price": float(o.get("ap") or 0.0),
+        "last_price": float(o.get("L") or 0.0),
+        "qty": float(o.get("q") or 0.0),
+        "reduce_only": bool(o.get("R") or False),
+    }
+    side2 = "LONG" if side == "BUY" else ("SHORT" if side == "SELL" else side)
+    return {"symbol": sym, "side": side2, "context": ctx}
 
-async def _on_account_update(payload: Dict[str, Any]):
-    """ACCOUNT_UPDATE → זיהוי 'סגירת' פוזיציה דרך BUP ('P') כשהכמות יורדת ל-0."""
-    _stats["acct_updates"] += 1
-    try:
-        # payload example fields: B=updateReason, P=positions(list of {s, pa, ep, cr, up, mt, iw, ps})
-        poss = payload.get("P") or []
-        for p in poss:
-            symbol = str(p.get("s") or "").upper()
-            amt = float(p.get("pa") or 0)
-            if abs(amt) < 1e-12:
-                _stats["closes"] += 1
-                ctx = {
-                    "reason": "position_closed",
-                    "entry": p.get("ep"),
-                    "pnl": p.get("up"),
-                    "cross": p.get("cr"),
-                }
-                # אין לנו צד בטוח כאן—ננחש לפי סימן 'iw' או נשאיר 'BOTH'
-                await review_trade_async(symbol, "BOTH", ctx, to_telegram=True)
-    except Exception as e:
-        logger.warning("account_update review hook failed: %s", e)
+def _sweep_seen(ttl_sec: float = 900.0):
+    now = time.time()
+    to_del = [k for k,ts in _seen_ids.items() if now - ts > ttl_sec]
+    for k in to_del:
+        _seen_ids.pop(k, None)
 
-async def _dispatch(msg: Dict[str, Any]):
+async def _handle_msg(raw: str):
     global _last_event_ts
-    _stats["events"] += 1
     _last_event_ts = time.time()
-    et = (msg.get("e") or "").upper()
-    if et == "ORDER_TRADE_UPDATE":
-        await _on_order_trade_update(msg)
-    elif et == "ACCOUNT_UPDATE":
-        await _on_account_update(msg)
+    _C_WS_EVENTS.inc()
+    try:
+        ev = json.loads(raw)
+    except Exception:
+        return
+    k = _dedup_key(ev)
+    if k:
+        if k in _seen_ids:
+            _C_WS_DEDUP_SKIP.inc()
+            return
+        _seen_ids[k] = time.time()
+        _sweep_seen()
 
-# ====== main WS loop ======
-async def _ws_loop():
-    global _listen_key
+    review = _should_review(ev)
+    if review:
+        try:
+            await review_trade_async(review["symbol"], review["side"], review["context"], to_telegram=True)
+        except Exception as e:
+            logger.warning(f"[ws_user] review err: {e}")
+            _C_WS_ERRORS.inc()
+
+async def _runner():
+    global _listen_key, _reconnects
+    if not ENABLE:
+        logger.info({"event":"ws_user_stream_disabled"})
+        return
     if websockets is None:
-        logger.warning("websockets package not installed; USER-STREAM disabled.")
+        logger.warning("websockets package not available — user stream disabled")
         return
 
     backoff = RECONNECT_BACKOFF
     while _running:
         try:
-            _listen_key = await _get_listen_key()
             if not _listen_key:
-                await asyncio.sleep(backoff)
-                backoff = min(MAX_BACKOFF, backoff * 1.5)
-                continue
+                _listen_key = await _get_listen_key()
+                _last_keepalive = time.time()
+                if not _listen_key:
+                    await asyncio.sleep(backoff)
+                    backoff = min(RECONNECT_BACKOFF_MAX, backoff*1.5)
+                    continue
 
-            url = f"{WS_BASE}/ws/{_listen_key}"
-            logger.info({"event": "ws_user_stream_connecting", "url": url})
-            async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
-                backoff = RECONNECT_BACKOFF  # reset
+            url = f"{FSTREAM_BASE}/ws/{_listen_key}"
+            _reconnects += 1
+            _C_WS_RECONNECTS.inc()
+            logger.info({"event":"ws_user_connect", "url":url})
+            async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=10) as ws:
+                backoff = RECONNECT_BACKOFF  # הצליח — אפס backoff
                 while _running:
-                    raw = await ws.recv()
+                    await _keepalive()
                     try:
-                        msg = json.loads(raw)
-                        await _dispatch(msg)
-                    except Exception:
-                        logger.debug("non-json ws message: %s", raw)
+                        msg = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                        await _handle_msg(msg)
+                    except asyncio.TimeoutError:
+                        # אין הודעות — זה תקין. נמשיך לשמור על keepalive
+                        continue
         except asyncio.CancelledError:
             break
         except Exception as e:
-            _stats["errors"] += 1
-            logger.warning({"event": "ws_user_stream_error", "error": str(e)})
+            logger.warning(f"[ws_user] loop error: {e}")
+            _C_WS_ERRORS.inc()
             await asyncio.sleep(backoff)
-            backoff = min(MAX_BACKOFF, backoff * 1.5)
+            backoff = min(RECONNECT_BACKOFF_MAX, backoff*1.5)
+    logger.info({"event":"ws_user_runner_exit"})
 
-# ====== public control API ======
-def is_running() -> bool:
-    return _running
-
-def last_event_ts() -> float:
-    return _last_event_ts
-
-def get_stats() -> Dict[str, Any]:
-    return {
-        "running": _running,
-        "last_event_ts": _last_event_ts,
-        "listenKey": bool(_listen_key),
-        "counters": dict(_stats),
-        "ws_enabled": websockets is not None,
-    }
-
-def start() -> None:
-    global _running, _task, _keep_task
-    if _running:
-        return
-    if not ENABLE:
-        logger.info("USER-STREAM disabled by env (USER_STREAM_ENABLE=0)")
-        return
-    _running = True
-    loop = asyncio.get_event_loop()
-    _task = loop.create_task(_ws_loop())
-    _keep_task = loop.create_task(_keepalive_loop())
-    logger.info({"event": "ws_user_stream_started"})
-
-def stop() -> None:
-    global _running, _task, _keep_task, _listen_key
-    if not _running:
-        return
-    _running = False
-    if _task: _task.cancel()
-    if _keep_task: _keep_task.cancel()
-    _task = None
-    _keep_task = None
-    _listen_key = None
-    logger.info({"event": "ws_user_stream_stopped"})
