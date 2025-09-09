@@ -174,7 +174,7 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         return None
 
 async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    dry = not getattr(cfg, "EXECUTE_TRADES", False)
+    # dry-run נקבע מתוך cfg.EXECUTE_TRADES, ההרצה עצמה סינכרונית
     loop = asyncio.get_event_loop()
     resp = await loop.run_in_executor(
         None,
@@ -221,7 +221,7 @@ async def auto_scan_and_trade():
     global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
     EXECUTOR_RUNNING = True
     try:
-        wl = load_watchlist_env_or_fallback()  # ✅ דינמי + Fallback
+        wl = load_watchlist_env_or_fallback(min_quality=int(QUALITY_THRESHOLD))  # ✅ דינמי + Fallback
         if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
 
@@ -239,10 +239,16 @@ async def auto_scan_and_trade():
                 sent = await _scan_batch(batch, MAX_TRADES_PER_TICK)
             except Exception as e:
                 _log("scan_batch_error", error=str(e), level="ERROR")
-                await notify_scan_error(str(e))
+                try:
+                    await notify_scan_error(str(e))
+                except Exception:
+                    pass
 
             if sent == 0:
-                await notify_no_trades()
+                try:
+                    await notify_no_trades()
+                except Exception:
+                    pass
 
             dt = time.time() - tic
             sleep_s = max(0.0, SCAN_INTERVAL - dt)
@@ -274,6 +280,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
