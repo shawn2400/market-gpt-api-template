@@ -1,7 +1,7 @@
 # routes/trade.py
 from __future__ import annotations
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from utils.auth import require_api_key
@@ -17,14 +17,23 @@ router = APIRouter(
 
 class TradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
-    side: str = Field(..., example="BUY")
-    budget: float = Field(0, example=50)           # אם quantity ניתן, ה-budget לא חובה
+    side: str = Field(..., example="BUY")  # BUY/SELL
+    # sizing:
+    budget: float = Field(0, example=50, description="אם quantity סופק – budget לא חובה")
     leverage: int = Field(10, example=10)
-    entry: float | None = Field(None, example=28500.5)
-    sl: float | None = Field(None, example=28000.0)
-    tp: float | None = Field(None, example=29500.0)
-    dry_run: bool = Field(False, description="True = סימולציה בלבד (ללא שליחה אמיתית)")
     quantity: float | None = Field(None, example=0.001)
+    # entry:
+    entry: float | None = Field(None, example=28500.5, description="מחיר כניסה; אם None תתבצע כניסה אוטומטית")
+    # single SL/TP:
+    sl: float | None = Field(None, example=28000.0, description="Stop-Loss price (LIMIT/STOP)")
+    tp: float | None = Field(None, example=29500.0, description="Take-Profit price (LIMIT/TAKE_PROFIT)")
+    # ladders (סטים):
+    tp_targets: Optional[List[float]] = Field(None, description="רשימת יעדי TP (מחירים)")
+    tp_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-TP (שברים שסוכמים ≤1; האחרון סוגר יתרה)")
+    sl_targets: Optional[List[float]] = Field(None, description="רשימת מחירי SL מדרגיים")
+    sl_splits: Optional[List[float]] = Field(None, description="חלוקת כמויות ל-SL")
+    # behavior:
+    dry_run: bool = Field(False, description="True = סימולציה בלבד (ללא שליחה אמיתית)")
 
 class TradeResponse(BaseModel):
     ok: bool = True
@@ -35,25 +44,19 @@ class TradeResponse(BaseModel):
 async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     """
     מבצע טרייד חי או סימולציה דרך execute_trade_live.
-    חשוב: מעבירים רק שדות שתואמים לחתימה בפועל כדי למנוע Unexpected kwargs.
+    תומך: entry/SL/TP + סטים (ladders).
     """
     try:
         args: Dict[str, Any] = {
-            "symbol": req.symbol,
-            "side": req.side,
-            "budget": req.budget,
-            "leverage": req.leverage,
+            "symbol": req.symbol, "side": req.side,
+            "budget": req.budget, "leverage": req.leverage,
             "dry_run": req.dry_run,
+            "entry": req.entry, "sl": req.sl, "tp": req.tp,
+            "tp_targets": req.tp_targets, "tp_splits": req.tp_splits,
+            "sl_targets": req.sl_targets, "sl_splits": req.sl_splits,
         }
-        # נעביר quantity רק אם המשתמש נתן אותו בפועל (לתאימות לאחור)
         if req.quantity is not None:
             args["quantity"] = req.quantity
-        # לא מעבירים entry/sl/tp אם execute_trade_live אינו תומך בהם בסביבתך
-        # (אם כן – ניתן להחזיר שורות אלה):
-        # if req.entry is not None: args["entry"] = req.entry
-        # if req.sl is not None:    args["sl"] = req.sl
-        # if req.tp is not None:    args["tp"] = req.tp
-
         result = await execute_trade_live(**args)
         if not result or not result.get("ok", False):
             raise HTTPException(status_code=400, detail=(result or {}).get("error") or "trade_failed")
@@ -63,6 +66,7 @@ async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
