@@ -1,87 +1,94 @@
-# utils/trade_executor.py
+# routes/executor.py
 from __future__ import annotations
-import math, logging
-from typing import Optional, Dict, Any
+import logging
+from typing import Dict, Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+
+from utils.auth import require_api_key
 from utils.binance_client import (
-    futures_mark_price, set_leverage, futures_create_order, get_symbol_filters
+    fapi_ping,
+    futures_open_positions_safe,
+    futures_balance,
+    futures_mark_price,
+    futures_exchange_info_safe,
 )
-from utils.ws_fallback import get_price  # מחיר חי עם fallback
-log = logging.getLogger("algogpt.trade_executor")
+from utils.trade_executor import execute_trade_live
 
-def _round_step(x: float, step: float) -> float:
-    if step <= 0: return x
-    return math.floor(x / step) * step
+logger = logging.getLogger("algogpt.routes.executor")
 
-def _ensure_min_notional(qty: float, price: float, min_notional: float, step: float) -> float:
-    if min_notional and price * qty < min_notional:
-        target = (min_notional / price) * 1.001
-        qty = _round_step(target, step)
-    return qty
+router = APIRouter(
+    prefix="/executor",
+    tags=["Executor"],
+    dependencies=[Depends(require_api_key)],
+)
 
-async def execute_trade_live(
-    symbol: str,
-    side: str,
-    budget: Optional[float] = None,
-    leverage: int = 5,
-    dry_run: bool = True,
-    quantity: Optional[float] = None,   # ← NEW: תואם ל־router
-    **kwargs: Any,                      # ← סופג שדות נוספים קדימה/אחורה
-) -> Dict[str, Any]:
-    """
-    אם quantity סופקה – משתמשים בה.
-    אם לא – מחשבים כמות לפי budget*leverage/price עם עיגול ל־stepSize ועמידה ב־minNotional/minQty.
-    """
-    symbol = symbol.upper().strip()
-    side = side.upper().strip()
-    if side not in {"BUY","SELL"}:
-        raise ValueError(f"Invalid side: {side}")
+class TradeRequest(BaseModel):
+    symbol: str
+    side: str
+    budget: float
+    leverage: int = 10
+    reduce_only: bool = False
+    dry_run: bool = True
 
-    # מחיר חי
-    price = await get_price(symbol)  # float
-    if price is None or price <= 0:
-        # fallback ל־mark
-        mp = futures_mark_price(symbol)
-        price = float(mp.get("markPrice", 0.0))
-    if price <= 0:
-        raise RuntimeError(f"Cannot fetch price for {symbol}")
+@router.get("/ping")
+async def ping() -> Dict[str, Any]:
+    return {"ok": fapi_ping()}
 
-    # פילטרים
-    f = get_symbol_filters(symbol, futures=True)
-    step = float(f.get("stepSize", "0.001"))
-    min_qty = float(f.get("minQty", "0.0"))
-    min_notional = float(f.get("minNotional", "0.0"))
+@router.get("/status")
+async def status() -> Dict[str, Any]:
+    return {"ok": True, "status": "running"}
 
-    # חישוב כמות (אם לא נמסרה)
-    if quantity is None:
-        if not budget or budget <= 0:
-            raise ValueError("Either quantity or positive budget must be provided")
-        usd = float(budget) * float(leverage)
-        raw_qty = usd / price
-        qty = max(_round_step(raw_qty, step), min_qty)
-        qty = _ensure_min_notional(qty, price, min_notional, step)
-    else:
-        qty = float(quantity)
-        if qty < min_qty:
-            qty = min_qty
-        qty = _ensure_min_notional(qty, price, min_notional, step)
+@router.get("/positions")
+async def open_positions(symbol: Optional[str] = Query(None)) -> Dict[str, Any]:
+    try:
+        return {"ok": True, "positions": futures_open_positions_safe(symbol)}
+    except Exception as e:
+        logger.error("positions failed: %s", e)
+        raise HTTPException(500, str(e))
 
-    payload = {
-        "symbol": symbol,
-        "side": side,
-        "price": price,
-        "qty": qty,
-        "leverage": leverage,
-        "dry_run": dry_run,
-    }
+@router.get("/balance")
+async def balance() -> Dict[str, Any]:
+    try:
+        return {"ok": True, "balances": futures_balance()}
+    except Exception as e:
+        logger.error("balance failed: %s", e)
+        raise HTTPException(500, str(e))
 
-    if dry_run:
-        log.info("[DRY] %s", payload)
-        return {"ok": True, "dry_run": True, **payload}
+@router.get("/mark-price")
+async def mark_price(symbol: str = Query(...)) -> Dict[str, Any]:
+    try:
+        px = futures_mark_price(symbol)
+        if px is None:
+            raise RuntimeError("mark price unavailable")
+        return {"ok": True, "symbol": symbol.upper(), "markPrice": px}
+    except Exception as e:
+        logger.error("mark-price failed: %s", e)
+        raise HTTPException(500, str(e))
 
-    # בפועל
-    set_leverage(symbol, leverage)
-    resp = futures_create_order(symbol=symbol, side=side, quantity=qty, type="MARKET")  # או LIMIT/STOP בהתאם למדיניות
-    return {"ok": True, "dry_run": False, "order": resp, **payload}
+@router.get("/exchange-info")
+async def exchange_info() -> Dict[str, Any]:
+    try:
+        return {"ok": True, "info": futures_exchange_info_safe()}
+    except Exception as e:
+        logger.error("exchange-info failed: %s", e)
+        raise HTTPException(500, str(e))
+
+@router.post("/trade")
+async def trade(req: TradeRequest) -> Dict[str, Any]:
+    try:
+        res = await execute_trade_live(
+            symbol=req.symbol,
+            side=req.side,
+            budget=req.budget,
+            leverage=req.leverage,
+            dry_run=req.dry_run,
+        )
+        return {"ok": True, "result": res}
+    except Exception as e:
+        logger.error("trade failed: %s", e)
+        raise HTTPException(500, str(e))
 
 
 
