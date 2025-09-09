@@ -16,7 +16,7 @@ log = logging.getLogger("algogpt.trade_executor")
 ALLOW_MARKET_ENTRY  = os.getenv("ALLOW_MARKET_ENTRY", "1").lower() in ("1","true","yes","on")
 
 # כניסה היברידית: LIMIT Maker סביב המחיר + STOP (breakout) בצד השני
-ENTRY_BAND_BPS      = float(os.getenv("ENTRY_BAND_BPS", "8.5"))   # ★ ברירת מחדל 8.5bps
+ENTRY_BAND_BPS      = float(os.getenv("ENTRY_BAND_BPS", "8.5"))   # ברירת מחדל 8.5bps
 STOP_BAND_BPS       = float(os.getenv("STOP_BAND_BPS",  "10"))
 ESCALATE_AFTER_S    = float(os.getenv("ESCALATE_AFTER_SEC", "10"))
 ESCALATE_SLIP_BPS   = float(os.getenv("ESCALATE_SLIPPAGE_BPS", "15"))
@@ -479,7 +479,6 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
-
 
 
 
