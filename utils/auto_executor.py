@@ -63,13 +63,21 @@ EXECUTOR_LAST_TS: Optional[float] = None
 EXECUTOR_LOGS: deque[dict] = deque(maxlen=400)
 
 INTERVAL = os.getenv("DEFAULT_INTERVAL", getattr(cfg, "DEFAULT_INTERVAL", "15m"))
-SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", str(getattr(cfg, "SCAN_INTERVAL", 60))))
+SCAN_INTERVAL_BASE = int(os.getenv("SCAN_INTERVAL", str(getattr(cfg, "SCAN_INTERVAL", 60))))
 MAX_TRADES_PER_TICK = int(os.getenv("MAX_TRADES_PER_TICK", "1"))
 SYMBOL_COOLDOWN_SEC = int(os.getenv("SYMBOL_COOLDOWN_SEC", "600"))
 
 QUALITY_THRESHOLD = float(os.getenv("MIN_QUALITY_SCORE", str(getattr(cfg, "MIN_QUALITY_SCORE", 8.5))))
 SCAN_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "4"))
 TIME_BUDGET_SEC = float(os.getenv("SCAN_TIME_BUDGET_SEC", "7.5"))
+
+# Auto-tune (עדין, ללא שבירה)
+AUTO_TUNE_ENABLE = os.getenv("AUTO_TUNE_ENABLE", "1").lower() in ("1","true","yes","on")
+AUTO_TUNE_MIN = int(os.getenv("AUTO_TUNE_MIN_SCAN_INTERVAL", str(SCAN_INTERVAL_BASE)))
+AUTO_TUNE_MAX = int(os.getenv("AUTO_TUNE_MAX_SCAN_INTERVAL", str(max(SCAN_INTERVAL_BASE, 180))))
+AUTO_TUNE_UP_FACTOR = float(os.getenv("AUTO_TUNE_UP_FACTOR", "1.5"))
+AUTO_TUNE_DOWN_FACTOR = float(os.getenv("AUTO_TUNE_DOWN_FACTOR", "0.85"))
+AUTO_TUNE_STREAK_NO_TRADES = int(os.getenv("AUTO_TUNE_STREAK_NO_TRADES", "3"))
 
 _last_trade_ts: Dict[str, float] = {}
 
@@ -158,7 +166,7 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
             _log("bad_entry_atr", symbol=symbol, entry=entry, atr=atr_v, level="WARNING")
             return None
 
-        # ✅ Risk gate (ללא שבירת קוד)
+        # ✅ Risk gate
         if RISK_CHECK_ENABLE:
             risk = pre_trade_risk_check(symbol, "BUY" if side=="LONG" else "SELL", _pick_leverage(adx_v), entry)
             if not risk.get("ok", True):
@@ -174,7 +182,6 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         return None
 
 async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    # dry-run נקבע מתוך cfg.EXECUTE_TRADES, ההרצה עצמה סינכרונית
     loop = asyncio.get_event_loop()
     resp = await loop.run_in_executor(
         None,
@@ -221,16 +228,20 @@ async def auto_scan_and_trade():
     global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
     EXECUTOR_RUNNING = True
     try:
-        wl = load_watchlist_env_or_fallback(min_quality=int(QUALITY_THRESHOLD))  # ✅ דינמי + Fallback
+        wl = load_watchlist_env_or_fallback()  # ✅ דינמי + Fallback
         if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
+
+        # Auto-backoff state
+        current_interval = SCAN_INTERVAL_BASE
+        no_trade_streak = 0
 
         while EXECUTOR_RUNNING:
             tic = time.time()
             EXECUTOR_LAST_TS = tic
             if circuit_breaker_open():
                 _log("circuit_open_skip_tick", level="WARNING")
-                await asyncio.sleep(SCAN_INTERVAL)
+                await asyncio.sleep(current_interval)
                 continue
 
             batch = sched.next_batch()
@@ -239,19 +250,26 @@ async def auto_scan_and_trade():
                 sent = await _scan_batch(batch, MAX_TRADES_PER_TICK)
             except Exception as e:
                 _log("scan_batch_error", error=str(e), level="ERROR")
-                try:
-                    await notify_scan_error(str(e))
-                except Exception:
-                    pass
+                await notify_scan_error(str(e))
 
             if sent == 0:
-                try:
-                    await notify_no_trades()
-                except Exception:
-                    pass
+                await notify_no_trades()
+                no_trade_streak += 1
+            else:
+                no_trade_streak = 0
+
+            # Auto-backoff (עדין וללא שבירה)
+            if AUTO_TUNE_ENABLE:
+                if no_trade_streak >= AUTO_TUNE_STREAK_NO_TRADES:
+                    current_interval = int(min(AUTO_TUNE_MAX, max(current_interval * AUTO_TUNE_UP_FACTOR, current_interval + 5)))
+                    _log("scan_interval_backoff", new_interval=current_interval)
+                elif sent > 0 and current_interval > AUTO_TUNE_MIN:
+                    current_interval = int(max(AUTO_TUNE_MIN, current_interval * AUTO_TUNE_DOWN_FACTOR))
+                    _log("scan_interval_relax", new_interval=current_interval)
+                # אם אין שינוי — שומר על המצב הנוכחי
 
             dt = time.time() - tic
-            sleep_s = max(0.0, SCAN_INTERVAL - dt)
+            sleep_s = max(0.0, current_interval - dt)
             await asyncio.sleep(sleep_s)
     finally:
         EXECUTOR_RUNNING = False
