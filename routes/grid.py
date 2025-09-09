@@ -9,18 +9,17 @@ from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
 from utils.account_router import get_account_credentials
-from utils.grid_utils import execute_grid_trade as basic_grid
+
+# ✅ תיקון: היה utils.grid_utils; בפועל הפונקציה אצלך ב-grid_executor
+from utils.grid_executor import execute_grid_trade as basic_grid
+
 from utils.grid_manager import start_grid_for_position
 from utils.binance_spot_client import spot_price
 from utils.binance_client import futures_mark_price
 
 logger = logging.getLogger("algogpt.routes.grid")
-
 router = APIRouter(prefix="/grid", tags=["Grid"], dependencies=[Depends(require_api_key)])
 
-# ──────────────────────────────────────────────
-# Models
-# ──────────────────────────────────────────────
 class GridTradeRequest(BaseModel):
     symbol: str = Field(..., example="BTCUSDT")
     side: str = Field(..., pattern="^(LONG|SHORT|BUY|SELL)$", example="LONG")
@@ -46,9 +45,6 @@ class GridTradeResponse(BaseModel):
     orders: Optional[Any] = None
     error: Optional[str] = None
 
-# ──────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────
 _ALLOWED_DIRS = [Path("."), Path("storage"), Path("static"), Path("logs")]
 
 def _safe_path(p: str) -> Path:
@@ -77,9 +73,6 @@ def _load_json_or_empty(path: Path) -> Any:
         logger.exception("grid_dashboard_load_failed")
         raise HTTPException(status_code=500, detail=f"load failed: {e}")
 
-# ──────────────────────────────────────────────
-# Endpoints
-# ──────────────────────────────────────────────
 @router.get("/status")
 def grid_status() -> Dict[str, Any]:
     return {"ok": True, "grid_enabled": True, "note": "Grid engine ready"}
@@ -120,19 +113,14 @@ async def trade_grid(req: GridTradeRequest):
             price = spot_price(sym)
             if not price:
                 raise RuntimeError("Spot price unavailable")
-            res = basic_grid(sym, levels=req.grids)
+            res = await basic_grid(symbol=sym, side=("LONG" if req.side in ("LONG","BUY") else "SHORT"),
+                                   budget=req.budget, leverage=req.leverage, grids=req.grids, dry_run=True)
             return {
                 "ok": bool(res.get("ok")),
                 "mode": "spot_dry" if req.dry_run else "spot_live",
-                "symbol": sym,
-                "side": req.side,
-                "market": "spot",
-                "account_id": acc_id,
-                "base_price": price,
-                "budget": req.budget,
-                "levels": res.get("grid_levels"),
-                "allocations": None,
-                "orders": [] if req.dry_run else None,
+                "symbol": sym, "side": req.side, "market": "spot", "account_id": acc_id,
+                "base_price": price, "budget": req.budget, "levels": res.get("levels"),
+                "allocations": res.get("allocations"), "orders": [] if req.dry_run else None,
                 "error": res.get("error"),
             }
 
@@ -142,52 +130,36 @@ async def trade_grid(req: GridTradeRequest):
                 raise RuntimeError("Futures mark price unavailable")
 
             if req.dry_run:
-                res = basic_grid(sym, levels=req.grids)
+                res = await basic_grid(symbol=sym, side=("LONG" if req.side in ("LONG","BUY") else "SHORT"),
+                                       budget=req.budget, leverage=req.leverage, grids=req.grids, dry_run=True)
                 return {
-                    "ok": bool(res.get("ok")),
-                    "mode": "futures_dry",
-                    "symbol": sym,
-                    "side": req.side,
-                    "market": "futures",
-                    "account_id": acc_id,
-                    "base_price": price,
-                    "budget": req.budget,
-                    "leverage": req.leverage,
-                    "levels": res.get("grid_levels"),
-                    "allocations": None,
-                    "orders": [] if req.dry_run else None,
+                    "ok": bool(res.get("ok")), "mode": "futures_dry", "symbol": sym, "side": req.side,
+                    "market": "futures", "account_id": acc_id, "base_price": price,
+                    "budget": req.budget, "leverage": req.leverage, "levels": res.get("levels"),
+                    "allocations": res.get("allocations"), "orders": [],
                     "error": res.get("error"),
                 }
             else:
                 res = await start_grid_for_position(sym, account_id=acc_id)
                 if not res:
                     return {"ok": False, "mode": "futures_live", "symbol": sym, "side": req.side,
-                            "market": "futures", "account_id": acc_id,
-                            "base_price": price, "budget": req.budget,
-                            "leverage": req.leverage, "error": "grid manager returned None"}
+                            "market": "futures", "account_id": acc_id, "base_price": price,
+                            "budget": req.budget, "leverage": req.leverage,
+                            "error": "grid manager returned None"}
                 return {
-                    "ok": bool(res.get("ok")),
-                    "mode": "futures_live",
-                    "symbol": sym,
-                    "side": req.side,
-                    "market": "futures",
-                    "account_id": acc_id,
-                    "base_price": price,
-                    "budget": req.budget,
-                    "leverage": req.leverage,
-                    "levels": None,
-                    "allocations": None,
-                    "orders": res,
-                    "error": None if res.get("ok") else str(res.get("error")),
+                    "ok": bool(res.get("ok")), "mode": "futures_live", "symbol": sym, "side": req.side,
+                    "market": "futures", "account_id": acc_id, "base_price": price,
+                    "budget": req.budget, "leverage": req.leverage, "levels": None,
+                    "allocations": None, "orders": res, "error": None if res.get("ok") else str(res.get("error")),
                 }
         else:
             raise HTTPException(status_code=400, detail="Invalid market")
-
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("grid_trade_failed")
         raise HTTPException(status_code=500, detail=f"Grid trade failed: {e}")
+
 
 
 
