@@ -1,27 +1,25 @@
 # routes/executor_control.py
 from __future__ import annotations
-from fastapi import APIRouter
-from utils.auto_executor import start_executor, stop_executor, is_executor_running, EXECUTOR_LAST_TS
+from fastapi import APIRouter, Depends
+from utils.auth import require_api_key
 
-router = APIRouter(prefix="/executor", tags=["Executor"])
+try:
+    from utils.auto_executor import start_executor, stop_executor, is_executor_running, EXECUTOR_LAST_TS
+except Exception:
+    def start_executor(): ...
+    def stop_executor(): ...
+    def is_executor_running() -> bool: return False
+    EXECUTOR_LAST_TS = None
 
-@router.get("/status")
-def exec_status():
-    """סטטוס ריצה של ה-Auto Executor."""
-    return {"ok": True, "running": is_executor_running(), "last_ts": EXECUTOR_LAST_TS}
+router = APIRouter(prefix="/executor", tags=["Executor"], dependencies=[Depends(require_api_key)])
 
 @router.post("/start")
-def exec_start():
-    """הפעלת לולאת הסריקה/ביצוע."""
-    if is_executor_running():
-        return {"ok": True, "running": True, "note": "already running"}
+def start():
     start_executor()
-    return {"ok": True, "running": True}
+    return {"ok": True, "running": is_executor_running(), "last_ts": EXECUTOR_LAST_TS}
 
 @router.post("/stop")
-def exec_stop():
-    """עצירת הלולאה באופן נקי."""
-    if not is_executor_running():
-        return {"ok": True, "running": False, "note": "already stopped"}
+def stop():
     stop_executor()
-    return {"ok": True, "running": False}
+    return {"ok": True, "running": is_executor_running(), "last_ts": EXECUTOR_LAST_TS}
+
