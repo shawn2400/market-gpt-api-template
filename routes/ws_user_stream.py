@@ -20,3 +20,4 @@ def ws_stop():
     userws.stop()
     return {"ok": True, "stopped": True}
 
+
