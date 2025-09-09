@@ -1,3 +1,4 @@
+# utils/trade_executor.py
 from __future__ import annotations
 import os, math, time, logging, asyncio, json
 from typing import Optional, Dict, Any, List, Tuple
@@ -24,8 +25,8 @@ ESCALATE_SLIP_BPS= float(os.getenv("ESCALATE_SLIPPAGE_BPS", "15"))
 SL_LIMIT_OFFSET_BPS = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
-# איכות סיגנל (Gate)
-MIN_QUALITY_SCORE = float(os.getenv("MIN_QUALITY_SCORE", "6"))
+# איכות סיגנל (Gate) — ★ מינימום ציון 8.5 כברירת־מחדל
+MIN_QUALITY_SCORE = float(os.getenv("MIN_QUALITY_SCORE", "8.5"))
 MAX_ATR_PCT       = float(os.getenv("MAX_ATR_PCT", "2.5"))  # ATR(14) כאחוז מחיר
 MIN_VOLUME        = float(os.getenv("MIN_VOLUME", "0"))     # אם 0 -> מתעלמים
 
@@ -219,13 +220,16 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
     # EMA-ATR
     return _ema(trs, period)[-1]
 
-def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 50) -> List[List[float]]:
+def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
     cli = get_futures_client()
     data = cli.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(10, limit)))
     return data or []
 
 def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
-    """Computes Quality Score 0..10; enter only if score >= MIN_QUALITY_SCORE."""
+    """
+    Computes Quality Score 0..10; enter only if score >= MIN_QUALITY_SCORE.
+    (דיסקרטי: Trend=4, Momentum=3, ATR=2, Volume=1)
+    """
     try:
         kl = _fetch_klines_raw(symbol, "1m", 60)
         closes = [float(r[4]) for r in kl]
@@ -255,7 +259,7 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         # ATR sanity
         atr_ok = (atr_pct <= MAX_ATR_PCT)
 
-        # Score
+        # Score (דיסקרטי)
         score = 0.0
         score += 4.0 if trend_ok else 0.0
         score += 3.0 if mom_ok else 0.0
@@ -332,7 +336,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                                quantity=qty_str)
     stp_id = str(stp.get("orderId") or "")
 
-    async def _is_filled(oid: str) -> bool:
+    def _is_filled(oid: str) -> bool:
+        """סינכרוני — נקרא מתוך thread כדי לא לחסום event loop."""
         try:
             lst = get_all_orders(sym, limit=10) or []
             for o in lst:
@@ -346,8 +351,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
 
     t0 = time.time()
     while True:
-        lim_filled = await asyncio.to_thread(lambda: asyncio.run(_is_filled(lim_id)))
-        stp_filled = await asyncio.to_thread(lambda: asyncio.run(_is_filled(stp_id)))
+        lim_filled = await asyncio.to_thread(_is_filled, lim_id)
+        stp_filled = await asyncio.to_thread(_is_filled, stp_id)
 
         if lim_filled and not stp_filled:
             try: futures_cancel_order(sym, stp_id)
@@ -409,7 +414,7 @@ async def execute_trade_live(
 
     qty = _calc_qty(sym, base_price, budget, leverage, quantity)
 
-    # Gate (quality)
+    # Gate (quality) — נדרש ציון ≥ MIN_QUALITY_SCORE (ברירת מחדל 8.5)
     gate = _quality_gate(sym, side)
     if not gate.get("enter_ok"):
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
@@ -453,7 +458,7 @@ async def execute_trade_live(
     entry_res = await _place_hybrid_entry(sym, side, qty, base_price, entry)
     plan["entry_result"] = entry_res
 
-    # יציאות — reduceOnly GTC
+    # יציאות — reduceOnly GTC בלבד (STOP/TAKE_PROFIT עם price+stopPrice)
     close_side = "SELL" if side=="BUY" else "BUY"
     for arr, otype in ((plan["tp_orders"], "TAKE_PROFIT"), (plan["sl_orders"], "STOP")):
         for o in arr:
@@ -470,6 +475,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
