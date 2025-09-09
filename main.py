@@ -19,7 +19,7 @@ from utils.trade_executor import ConfirmStore  # לא צריך קובץ חדש
 
 def _coerce_log_level(val):
     import logging as _l
-    if isinstance(val, int) or (isinstance(val, str) and val.isdigit()):
+    if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
         return int(val)
     m = {
         "debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING,
@@ -72,11 +72,12 @@ async def validate_token(request: Request, call_next):
     return await call_next(request)
 
 # ── Routers
-for module_path in ("routes.trade",):
+for module_path in ("routes.trade", "routes.analysis", "routes.decision"):
     try:
         mod = __import__(module_path, fromlist=["router"])
         if hasattr(mod, "router"):
             app.include_router(mod.router)
+            logger.info({"event": "router_registered", "router": module_path})
     except Exception as e:
         logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
@@ -141,7 +142,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     cb = update.get("callback_query")
     if cb:
         data = str(cb.get("data", ""))
-        chat = cb.get("message", {})..get("chat", {}) or cb.get("from", {})
+        chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
         chat_id = int(chat.get("id", 0))
         parts = data.split(":", 2)
         if len(parts) == 3 and parts[0] == "CONFIRM":
