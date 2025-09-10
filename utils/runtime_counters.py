@@ -1,254 +1,314 @@
 # utils/runtime_counters.py
 from __future__ import annotations
-import os, time, threading
+import os, time, logging, math
 from collections import deque
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 
-_ws_lock = threading.Lock()
-_exec_lock = threading.Lock()
+logger = logging.getLogger("algogpt.runtime")
 
-# ===== ENV =====
-_WS_ALPHA = float(os.getenv("WS_LAT_EWMA_ALPHA", "0.2"))
-_EXEC_ALPHA = float(os.getenv("EXEC_TICK_EWMA_ALPHA", "0.2"))
-_STATUS_PRICE_TTL_ALERT = int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC", "10"))
-_EXEC_TIMEOUT_BURST_ALERT = int(os.getenv("EXEC_TIMEOUT_BURST_ALERT", "3"))
-_OPS_TICK_ENABLE = os.getenv("OPS_TICK_ENABLE", "1").lower() in ("1","true","on","yes")
-_PRICE_DRIFT_BPS_ALERT = float(os.getenv("PRICE_DRIFT_BPS_ALERT", "25"))
-_HEALTH_SYMBOLS = [s.strip().upper() for s in os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
+# =======================
+# Env
+# =======================
+ALPHA_WS  = float(os.getenv("WS_LAT_EWMA_ALPHA",  "0.2"))
+ALPHA_EXEC= float(os.getenv("EXEC_TICK_EWMA_ALPHA","0.2"))
 
-# NEW: Telegram alerts defaults ON
-_OPS_TTL_ALERT_TELEGRAM = os.getenv("OPS_TTL_ALERT_TELEGRAM", "1").lower() in ("1","true","on","yes")
-_OPS_TIMEOUT_BURST_TELEGRAM = os.getenv("OPS_TIMEOUT_BURST_TELEGRAM", "1").lower() in ("1","true","on","yes")
-_OPS_ALERT_COOLDOWN_SEC = int(os.getenv("OPS_ALERT_COOLDOWN_SEC", "120"))
+TTL_ALERT_SEC           = int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC", "10"))
+TIMEOUT_BURST_ALERT     = int(os.getenv("EXEC_TIMEOUT_BURST_ALERT", "3"))
+OPS_TICK_ENABLE         = os.getenv("OPS_TICK_ENABLE","1").lower() in ("1","true","on","yes")
 
-_last_ttl_alert_ts = 0.0
-_last_timeout_alert_ts = 0.0
+DRIFT_BPS_ALERT         = float(os.getenv("PRICE_DRIFT_BPS_ALERT","25"))
+DRIFT_DEGRADE_ENABLE    = os.getenv("OPS_DRIFT_DEGRADE_ENABLE","1").lower() in ("1","true","on","yes")
+DRIFT_DEGRADE_MIN_BPS   = float(os.getenv("OPS_DRIFT_DEGRADE_MIN_BPS","30"))
 
-def _notify_ops(msg: str) -> None:
-    """Best-effort notify to Telegram; no exception raising."""
+OPS_TTL_ALERT_TELEGRAM      = os.getenv("OPS_TTL_ALERT_TELEGRAM","1").lower() in ("1","true","on","yes")
+OPS_TIMEOUT_BURST_TELEGRAM  = os.getenv("OPS_TIMEOUT_BURST_TELEGRAM","1").lower() in ("1","true","on","yes")
+OPS_DRIFT_ALERT_TELEGRAM    = os.getenv("OPS_DRIFT_ALERT_TELEGRAM","0").lower() in ("1","true","on","yes")
+OPS_ALERT_COOLDOWN_SEC      = int(os.getenv("OPS_ALERT_COOLDOWN_SEC", "120"))
+
+DEGRADE_MAX_LEV         = int(os.getenv("OPS_DEGRADE_MAX_LEVERAGE","12"))
+ADX_SAFETY_MAX_LEV      = int(os.getenv("OPS_ADX_SAFETY_MAX_LEVERAGE","15"))
+
+HEALTH_SYMBOLS = [s.strip().upper() for s in os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
+
+# =======================
+# Telegram helper (soft)
+# =======================
+async def _notify_tg(msg: str) -> None:
     try:
-        from utils import telegram_notifier as tn  # type: ignore
-    except Exception:
-        tn = None  # type: ignore
-    if not tn:
+        from utils.telegram_notifier import notify_ops_alert  # preferred
+        await notify_ops_alert(msg)
         return
-    for fname in ("notify_ops_alert", "notify_text", "notify_admin", "notify_message"):
-        fn = getattr(tn, fname, None)
-        if callable(fn):
-            try:
-                # sync wrappers are fine; if async available, fire-and-forget
-                res = fn(msg)
-                return
-            except Exception:
-                continue
-
-# ===== EWMA =====
-def _ewma(prev: float, x: float, alpha: float) -> float:
-    if prev <= 0: return float(x)
-    return (1.0 - alpha) * prev + alpha * float(x)
-
-# ===== WS state =====
-_ws_state: Dict[str, Any] = {
-    "ewma_lat_ms": 0.0,
-    "reconnects": 0,
-    "last_event_ts": 0.0,
-    "ttl_sec": 0.0,
-    "up": 0,
-}
-
-# ===== EXEC state =====
-_exec_tick_ms: deque = deque(maxlen=2000)
-_exec_state: Dict[str, Any] = {
-    "ewma_ms": 0.0,
-    "timeouts_last_60s": 0,
-    "batch_timeouts_total": 0,
-    "trades_sent_60s": 0,
-    "no_trade_streak": 0,
-    "current_interval": 0,
-    "last_tick_ts": 0.0,
-}
-
-_time_buckets: deque = deque(maxlen=1000)  # ts of timeouts
-_trade_buckets: deque = deque(maxlen=2000) # ts of sent trades
-
-# ===== Ops flags =====
-_degrade_active = False
-_last_ops_eval = 0.0
-
-# ===== Price TTL helpers (WS cache optional) =====
-def _price_ttl_sec() -> float:
-    try:
-        from utils import ws_fallback
-        if hasattr(ws_fallback, "get_global_ttl_sec"):
-            v = ws_fallback.get_global_ttl_sec()
-            return float(v or 0.0)
-        now = time.time()
-        if hasattr(ws_fallback, "get_last_update_ts"):
-            ts = ws_fallback.get_last_update_ts()
-            return float(now - float(ts or 0.0)) if ts else 0.0
     except Exception:
         pass
-    return 0.0
-
-# ===== Price Drift (Mark vs Index) =====
-def _try_get_index_price(symbol: str) -> Optional[float]:
     try:
-        from utils.binance_client import futures_index_price  # type: ignore
-        return float(futures_index_price(symbol) or 0.0) or None
+        from utils.telegram_notifier import notify_scan_error  # fallback
+        await notify_scan_error(msg)
+    except Exception:
+        logger.info({"event":"ops.alert", "msg": msg})
+
+# cooldowns
+_last_alert_ts: Dict[str,float] = {}
+def _cooldown_ok(key: str, cool_s: int) -> bool:
+    now = time.time()
+    ts  = _last_alert_ts.get(key, 0.0)
+    if now - ts >= cool_s:
+        _last_alert_ts[key] = now
+        return True
+    return False
+
+# =======================
+# WS-User counters & hooks
+# =======================
+_ws_running = False
+_ws_reconnects = 0
+_ws_last_event_ts: Optional[float] = None
+_ws_ewma_inter_ms: Optional[float] = None
+
+def ws_on_connect():
+    global _ws_running
+    _ws_running = True
+
+def ws_on_disconnect():
+    global _ws_running
+    _ws_running = False
+
+def ws_on_reconnect():
+    global _ws_reconnects
+    _ws_reconnects += 1
+
+def ws_on_event(latency_ms: Optional[float] = None):
+    global _ws_last_event_ts, _ws_ewma_inter_ms
+    now = time.time()
+    if _ws_last_event_ts:
+        inter_ms = (now - _ws_last_event_ts) * 1000.0
+        if _ws_ewma_inter_ms is None:
+            _ws_ewma_inter_ms = inter_ms
+        else:
+            _ws_ewma_inter_ms = (1.0 - ALPHA_WS) * _ws_ewma_inter_ms + ALPHA_WS * inter_ms
+    _ws_last_event_ts = now
+
+def ws_user_status() -> Dict[str, Any]:
+    ttl = None
+    if _ws_last_event_ts:
+        ttl = max(0.0, time.time() - _ws_last_event_ts)
+    return {
+        "running": bool(_ws_running),
+        "reconnects": int(_ws_reconnects),
+        "last_event_ts": int(_ws_last_event_ts or 0),
+        "ttl_sec": round(ttl or 0.0, 3),
+        "inter_event_ewma_ms": round(_ws_ewma_inter_ms or 0.0, 3),
+    }
+
+# =======================
+# Executor counters
+# =======================
+_exec_last_tick_ms: Optional[float] = None
+_exec_ewma_ms: Optional[float] = None
+_exec_last_tick_ts: Optional[float] = None
+_exec_no_trade_streak: int = 0
+_exec_current_interval: int = int(os.getenv("SCAN_INTERVAL","60"))
+
+# timeouts rolling window
+_timeout_events: deque[float] = deque(maxlen=512)
+
+def exec_on_batch_timeout():
+    _timeout_events.append(time.time())
+
+def exec_on_trade_sent(symbol: str):
+    # reserved for future per-symbol counters
+    pass
+
+def exec_on_tick_stop(dt_ms: float, current_interval: int, no_trade_streak: int):
+    global _exec_last_tick_ms, _exec_ewma_ms, _exec_last_tick_ts, _exec_current_interval, _exec_no_trade_streak
+    _exec_last_tick_ms = float(dt_ms)
+    _exec_last_tick_ts = time.time()
+    _exec_current_interval = int(current_interval)
+    _exec_no_trade_streak = int(no_trade_streak)
+    if _exec_ewma_ms is None:
+        _exec_ewma_ms = _exec_last_tick_ms
+    else:
+        _exec_ewma_ms = (1.0 - ALPHA_EXEC) * _exec_ewma_ms + ALPHA_EXEC * _exec_last_tick_ms
+
+def executor_status() -> Dict[str, Any]:
+    burst_60s = sum(1 for t in _timeout_events if t >= time.time() - 60)
+    return {
+        "last_tick_ms": round(_exec_last_tick_ms or 0.0, 3),
+        "tick_ewma_ms": round(_exec_ewma_ms or 0.0, 3),
+        "last_tick_ts": int(_exec_last_tick_ts or 0),
+        "timeouts_last_60s": int(burst_60s),
+        "current_interval_sec": int(_exec_current_interval),
+        "no_trade_streak": int(_exec_no_trade_streak),
+    }
+
+# =======================
+# Dynamic leverage cap (Degrade/Bump)
+# =======================
+_degrade_active = False
+_dynamic_max_lev: Optional[int] = None
+
+def ops_gate_degrade_active(enable: bool = True, *, cap_leverage: Optional[int] = None):
+    """Enable/disable degrade mode; optional leverage cap."""
+    global _degrade_active, _dynamic_max_lev
+    _degrade_active = bool(enable)
+    if enable:
+        _dynamic_max_lev = int(cap_leverage or DEGRADE_MAX_LEV)
+    else:
+        _dynamic_max_lev = None
+    logger.warning({"event":"ops.degrade", "active": _degrade_active, "max_lev": _dynamic_max_lev})
+
+def ops_gate_bump():
+    """Cancel degrade & restore caps."""
+    ops_gate_degrade_active(False)
+
+def get_current_max_leverage(default_max: int) -> int:
+    if _dynamic_max_lev is None:
+        return int(default_max)
+    return int(max(1, min(_dynamic_max_lev, default_max)))
+
+# =======================
+# Price-Feed TTL helper (best-effort)
+# =======================
+def _get_ws_price_ttl_sec() -> float:
+    """
+    עדיפות: utils.ws_fallback.get_last_ts() לכל אחד מה-HEALTH_SYMBOLS.
+    אם לא קיים – נשתמש ב-WS last_event כ-approx.
+    """
+    try:
+        from utils import ws_fallback  # type: ignore
+        now = time.time()
+        ttls: List[float] = []
+        for sym in HEALTH_SYMBOLS:
+            try:
+                ts = float(ws_fallback.get_last_ts(sym))  # expected helper
+                if ts > 0:
+                    ttls.append(max(0.0, now - ts))
+            except Exception:
+                pass
+        if ttls:
+            return max(ttls)  # worst ttl
+    except Exception:
+        pass
+    # fallback: based on account WS activity
+    if _ws_last_event_ts:
+        return max(0.0, time.time() - _ws_last_event_ts)
+    return 1e9  # no data
+
+# =======================
+# Drift (Mark vs Index)
+# =======================
+def _index_price(symbol: str) -> Optional[float]:
+    """
+    עדיפות: utils.binance_client.futures_index_price
+    פallback: client.futures_premium_index() דרך get_futures_client()
+    """
+    try:
+        from utils.binance_client import futures_index_price as _fip  # type: ignore
+        p = _fip(symbol)
+        if p and p > 0:
+            return float(p)
+    except Exception:
+        pass
+    # fallback via client
+    try:
+        from utils.binance_client import get_futures_client  # type: ignore
+        c = get_futures_client()
+        data = c.futures_premium_index(symbol=symbol.upper())
+        p = float(data.get("indexPrice"))
+        if p > 0:
+            return p
+    except Exception:
+        return None
+    return None
+
+def _mark_price(symbol: str) -> Optional[float]:
+    try:
+        from utils.binance_client import futures_mark_price  # type: ignore
+        return futures_mark_price(symbol)
     except Exception:
         return None
 
-def _get_mark_price(symbol: str) -> Optional[float]:
-    try:
-        from utils.binance_client import futures_mark_price
-        return float(futures_mark_price(symbol) or 0.0) or None
-    except Exception:
-        return None
-
-def _drift_bps(mark: float, index: float) -> float:
-    try:
-        if index <= 0 or mark <= 0:
-            return 0.0
-        return abs(mark - index) / index * 10000.0
-    except Exception:
-        return 0.0
-
-_price_drift_alerts: deque = deque(maxlen=100)
-
-def _scan_price_drift() -> Dict[str, Any]:
-    worst = {"symbol": None, "bps": 0.0}
-    if _PRICE_DRIFT_BPS_ALERT <= 0:
-        return {"worst": worst, "alerts": 0}
-    alerts_new = 0
-    for s in _HEALTH_SYMBOLS:
-        mark = _get_mark_price(s)
-        idx = _try_get_index_price(s)
-        if not mark or not idx:
+def _check_price_drift() -> Tuple[float, Optional[str], Optional[float], Optional[float]]:
+    """
+    מחזיר: (max_drift_bps, symbol, mark, index)
+    """
+    max_bps = -1.0
+    max_sym: Optional[str] = None
+    max_m: Optional[float] = None
+    max_i: Optional[float] = None
+    for sym in HEALTH_SYMBOLS:
+        idx = _index_price(sym)
+        mrk = _mark_price(sym)
+        if not idx or not mrk or idx <= 0:
             continue
-        bps = _drift_bps(mark, idx)
-        if bps > (worst["bps"] or 0.0):
-            worst = {"symbol": s, "bps": round(bps, 2)}
-        if bps >= _PRICE_DRIFT_BPS_ALERT:
-            _price_drift_alerts.append((time.time(), s, bps))
-            alerts_new += 1
-    return {"worst": worst, "alerts": alerts_new}
+        bps = abs(mrk - idx) / idx * 10000.0
+        if bps > max_bps:
+            max_bps, max_sym, max_m, max_i = bps, sym, mrk, idx
+    return (max_bps if max_bps >= 0 else 0.0, max_sym, max_m, max_i)
 
-# ===== Public WS notifiers =====
-def ws_note_event(latency_ms: Optional[float] = None) -> None:
-    with _ws_lock:
-        if latency_ms is not None:
-            _ws_state["ewma_lat_ms"] = _ewma(_ws_state["ewma_lat_ms"], float(latency_ms), _WS_ALPHA)
-        _ws_state["last_event_ts"] = time.time()
-        _ws_state["ttl_sec"] = _price_ttl_sec()
-
-def ws_note_reconnect() -> None:
-    with _ws_lock:
-        _ws_state["reconnects"] = int(_ws_state.get("reconnects", 0)) + 1
-        _ws_state["up"] = 0
-
-def ws_note_up(up: bool) -> None:
-    with _ws_lock:
-        _ws_state["up"] = 1 if up else 0
-
-def get_ws_status() -> Dict[str, Any]:
-    with _ws_lock:
-        st = dict(_ws_state)
-    st["ttl_sec"] = max(st.get("ttl_sec", 0.0), _price_ttl_sec())
-    st["ttl_alert"] = bool(_STATUS_PRICE_TTL_ALERT and st["ttl_sec"] >= _STATUS_PRICE_TTL_ALERT)
-    st["ts"] = int(time.time())
-    return st
-
-# ===== Executor notifiers =====
-def exec_on_trade_sent(symbol: str) -> None:
-    _trade_buckets.append(time.time())
-
-def exec_on_batch_timeout() -> None:
-    _time_buckets.append(time.time())
-
-def exec_on_tick_stop(dt_ms: float, current_interval: int, no_trade_streak: int) -> None:
+# =======================
+# Ops tick (called every scan loop)
+# =======================
+def _count_timeouts_last_60s() -> int:
     now = time.time()
-    with _exec_lock:
-        _exec_state["ewma_ms"] = _ewma(_exec_state["ewma_ms"], float(dt_ms), _EXEC_ALPHA)
-        _exec_state["last_tick_ts"] = now
-        _exec_state["no_trade_streak"] = int(no_trade_streak)
-        _exec_state["current_interval"] = int(current_interval)
-        _exec_tick_ms.append(float(dt_ms))
-    cutoff = now - 60.0
-    while _time_buckets and _time_buckets[0] < cutoff:
-        _time_buckets.popleft()
-    _exec_state["timeouts_last_60s"] = len(_time_buckets)
-    while _trade_buckets and _trade_buckets[0] < cutoff:
-        _trade_buckets.popleft()
-    _exec_state["trades_sent_60s"] = len(_trade_buckets)
+    return sum(1 for t in _timeout_events if t >= now - 60)
 
-def _pctl(values: List[float], p: float) -> float:
-    if not values: return 0.0
-    s = sorted(values)
-    k = max(0, min(len(s)-1, int(round((p/100.0)*(len(s)-1)))))
-    return float(s[k])
+def _fmt_bps(x: float) -> str:
+    return f"{x:.1f}bps"
 
-def get_executor_status() -> Dict[str, Any]:
-    with _exec_lock:
-        ms = list(_exec_tick_ms)
-        st = dict(_exec_state)
-    st.update({
-        "p50_ms": _pctl(ms, 50.0),
-        "p95_ms": _pctl(ms, 95.0),
-        "p99_ms": _pctl(ms, 99.0),
-        "count": len(ms),
-    })
-    st["degrade_active"] = bool(_degrade_active)
-    st["ts"] = int(time.time())
-    return st
+def _fmt_pct(x: float) -> str:
+    return f"{x:.3f}%"
 
-# ===== Ops logic =====
-def _should_degrade() -> bool:
-    ttl = _price_ttl_sec()
-    timeouts = int(_exec_state.get("timeouts_last_60s", 0))
-    ewma_ms = float(_exec_state.get("ewma_ms", 0.0))
-    if ewma_ms <= 0:
-        return False
-    cond_ttl = bool(_STATUS_PRICE_TTL_ALERT and ttl >= _STATUS_PRICE_TTL_ALERT)
-    cond_to = bool(_EXEC_TIMEOUT_BURST_ALERT and timeouts >= _EXEC_TIMEOUT_BURST_ALERT)
-    return cond_ttl or cond_to
+def _fmt_price(x: Optional[float]) -> str:
+    return "NA" if x is None else f"{x:.6f}"
 
-def ops_is_degraded() -> bool:
-    return bool(_degrade_active)
-
-def ops_tick_safe() -> None:
-    """נקרא בסוף כל tick; מפעיל Price-Drift scan + TTL/Timeout alerts לטלגרם + דגל degrade."""
-    if not _OPS_TICK_ENABLE:
+def ops_tick_safe():
+    if not OPS_TICK_ENABLE:
         return
-    now = time.time()
-    global _degrade_active, _last_ops_eval, _last_ttl_alert_ts, _last_timeout_alert_ts
+    # --- TTL alert
+    try:
+        ttl = _get_ws_price_ttl_sec()
+        if OPS_TTL_ALERT_TELEGRAM and ttl > TTL_ALERT_SEC and _cooldown_ok("ttl", OPS_ALERT_COOLDOWN_SEC):
+            import asyncio
+            asyncio.create_task(_notify_tg(f"⚠️ TTL Alert: price_feed ttl={ttl:.1f}s > {TTL_ALERT_SEC}s"))
+    except Exception as e:
+        logger.debug({"event":"ops.ttl_check_err", "err": str(e)})
 
-    # update TTL snapshot
-    with _ws_lock:
-        _ws_state["ttl_sec"] = _price_ttl_sec()
+    # --- Timeout burst alert
+    try:
+        burst = _count_timeouts_last_60s()
+        if OPS_TIMEOUT_BURST_TELEGRAM and burst >= TIMEOUT_BURST_ALERT and _cooldown_ok("timeout_burst", OPS_ALERT_COOLDOWN_SEC):
+            import asyncio
+            asyncio.create_task(_notify_tg(f"⏱️ Timeout Burst: last_60s={burst} (≥{TIMEOUT_BURST_ALERT})"))
+    except Exception as e:
+        logger.debug({"event":"ops.timeout_check_err", "err": str(e)})
 
-    # price drift (לא שולח טלגרם כברירת מחדל; נשאיר למדיניות אופרטיבית)
-    _ = _scan_price_drift()
+    # --- Price Drift alert (+ optional degrade)
+    try:
+        max_bps, sym, mrk, idx = _check_price_drift()
+        if sym and max_bps >= DRIFT_BPS_ALERT:
+            if OPS_DRIFT_ALERT_TELEGRAM and _cooldown_ok("drift", OPS_ALERT_COOLDOWN_SEC):
+                import asyncio
+                asyncio.create_task(_notify_tg(
+                    f"📉 Price-Drift: {sym} | drift={_fmt_bps(max_bps)} "
+                    f"(mark={_fmt_price(mrk)} vs index={_fmt_price(idx)}) | thr={_fmt_bps(DRIFT_BPS_ALERT)}"
+                ))
+            # degrade policy
+            if DRIFT_DEGRADE_ENABLE and max_bps >= max(DRIFT_BPS_ALERT, DRIFT_DEGRADE_MIN_BPS) and not _degrade_active:
+                ops_gate_degrade_active(True, cap_leverage=DEGRADE_MAX_LEV)
+                logger.warning({"event":"ops.degrade_by_drift", "symbol": sym, "bps": round(max_bps,1), "cap": DEGRADE_MAX_LEV})
+    except Exception as e:
+        logger.debug({"event":"ops.drift_check_err", "err": str(e)})
 
-    # degrade state כל ~3ש׳׳
-    if now - _last_ops_eval > 3.0:
-        _degrade_active = _should_degrade()
-        _last_ops_eval = now
+# =======================
+# Back-compat no-ops
+# (so imports from other modules won't fail if missing)
+# =======================
+__all__ = [
+    "exec_on_batch_timeout", "exec_on_trade_sent", "exec_on_tick_stop", "executor_status",
+    "ws_on_connect", "ws_on_disconnect", "ws_on_reconnect", "ws_on_event", "ws_user_status",
+    "ops_tick_safe", "ops_gate_degrade_active", "ops_gate_bump", "get_current_max_leverage",
+]
 
-    # ===== Alerts to Telegram (default ON)
-    st_ws = get_ws_status()
-    st_ex = get_executor_status()
-
-    # TTL Alert
-    if _OPS_TTL_ALERT_TELEGRAM and st_ws.get("ttl_alert"):
-        if now - _last_ttl_alert_ts >= _OPS_ALERT_COOLDOWN_SEC:
-            _notify_ops(f"⚠️ TTL Alert: price_feed.ttl_sec={st_ws.get('ttl_sec')}s (>= { _STATUS_PRICE_TTL_ALERT }s)")
-            _last_ttl_alert_ts = now
-
-    # Timeout Burst Alert
-    if _OPS_TIMEOUT_BURST_TELEGRAM and int(st_ex.get("timeouts_last_60s", 0)) >= _EXEC_TIMEOUT_BURST_ALERT:
-        if now - _last_timeout_alert_ts >= _OPS_ALERT_COOLDOWN_SEC:
-            _notify_ops(f"⚠️ Timeout Burst: timeouts_last_60s={st_ex.get('timeouts_last_60s')} (>= { _EXEC_TIMEOUT_BURST_ALERT })")
-            _last_timeout_alert_ts = now
 
 
 
