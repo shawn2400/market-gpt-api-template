@@ -17,6 +17,7 @@ from utils.metrics_middleware import MetricsMiddleware
 from app.middlewares import InternalAuthMiddleware
 from utils.trade_executor import ConfirmStore
 
+# ── Logging
 def _coerce_log_level(val):
     import logging as _l
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
@@ -61,8 +62,7 @@ app.mount("/metrics", make_asgi_app())
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
-        "/docs", "/redoc", "/telegram/webhook", "/telegram/ping",
-        "/ws-user/status", "/executor/status"  # ✅ סטטוסים פתוחים לקריאה
+        "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"
     }
     PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk", "/metrics"]
 
@@ -89,8 +89,10 @@ for module_path in (
     "routes.grid",
     "routes.executor_control",
     "routes.ws_user_stream",
-    "routes.ai_analyze",
-    "routes.status",                 # ✅ חדש
+    "routes.ai_analyze",           # ✅ /ai/analyze עם Rate-Limit
+    "routes.ws_user_status",       # ✅ חדש: /ws-user/status עם counters (EWMA/ttl/reconnects)
+    "routes.executor_status",      # ✅ חדש: /executor/status עם tick EWMA/P95/P99/timeouts
+    # "routes.review_analytics",   # ✅ יתווסף בחבילה 2/2 יחד עם המודול
 ):
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -111,6 +113,7 @@ async def root():
 async def health():
     return {"ok": True, "status": "ok"}
 
+# ↓↓↓ צמצום אופרציות ב-OpenAPI: מסמנים Off לסכמה היכן שלא צריך ↓↓↓
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health():
     return {"ok": True, "status": "ok", "env": os.getenv("ENV","prod"), "version": APP_VERSION}
@@ -144,6 +147,7 @@ async def readyz():
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
 # ── Telegram webhook & ping (public)
+from fastapi import HTTPException, Header  # keep types
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -171,7 +175,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 
     cb = update.get("callback_query")
     if cb:
-        data = str(cb.get("data", ""))
+        data = str(cb.get("data", ""))  # "CONFIRM:APPROVE:<cid>"
         chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
         chat_id = int(chat.get("id", 0))
         parts = data.split(":", 2)
@@ -196,7 +200,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
 
 # ── Auto setWebhook (optional)
 @app.on_event("startup")
-async def _startup():
+async def _startup_webhook():
     if not BOT_TOKEN:
         return
     if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() not in ("1", "true", "yes", "on"):
@@ -215,7 +219,7 @@ async def _startup():
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
 
-# ── WS User-Data Stream autostart
+# ── WS User-Data Stream autostart (Plug-and-Play)
 @app.on_event("startup")
 async def _startup_user_stream():
     try:
@@ -229,6 +233,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
