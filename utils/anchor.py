@@ -1,7 +1,7 @@
 # utils/anchor.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Tuple
 import logging
 import os
 
@@ -22,7 +22,7 @@ class AnchorDecision:
     severity: str
     reason: str
 
-def _infer_btc_bias() -> tuple[Bias, float]:
+def _infer_btc_bias() -> Tuple[Bias, float]:
     """
     מחלץ כיוון ו"עוצמה" (0..100) לפי BTCUSDT מתוך ה-watchlist.
     אם אין נתון — מחזיר neutral, 50.
@@ -42,38 +42,38 @@ def _infer_btc_bias() -> tuple[Bias, float]:
         logger.warning("Anchor: failed to infer BTC bias: %s", e)
         return "neutral", 50.0
 
-def evaluate_anchor(side: str, mode: AnchorMode = None) -> AnchorDecision:
+def evaluate_anchor(side: str, mode: AnchorMode | None = None) -> AnchorDecision:
     """
     מעריך Anchor לפי BTCUSDT כעוגן.
     side: "LONG" או "SHORT" (הטרייד המבוקש).
     mode: "off" / "soft" / "hard" (אם None, נלקח מ־ENV ANCHOR_MODE, דיפולט soft).
+
     לוגיקה:
       - off  : לא חוסם, bias=neutral/נלמד, allow=True תמיד.
-      - soft : חוסם בעדינות כשיורד בניגוד לביאס (allow=False, severity=MEDIUM).
-      - hard : חוסם בכל אי-התאמה או ניטרליות (severity=HIGH).
+      - soft : חוסם בעדינות כשיש סתירה עם הביאס (allow=False, severity=MEDIUM).
+      - hard : חוסם בכל ניטרליות או סתירה (severity=HIGH).
     """
     s = str(side).upper().strip()
     if s not in ("LONG", "SHORT"):
         raise ValueError(f"invalid side: {side}")
 
-    mode = mode or os.getenv("ANCHOR_MODE", "soft").lower()
-    if mode not in ("off", "soft", "hard"):
-        mode = "soft"
+    mode_env = (mode or os.getenv("ANCHOR_MODE", "soft")).lower()
+    if mode_env not in ("off", "soft", "hard"):
+        mode_env = "soft"
 
     bias, score = _infer_btc_bias()
 
     # ברירת מחדל
     allow, severity, reason = True, "LOW", "bias allows trade"
 
-    if mode == "off":
-        return AnchorDecision(mode_requested=mode, mode_applied="off", bias=bias,
+    if mode_env == "off":
+        return AnchorDecision(mode_requested=mode_env, mode_applied="off", bias=bias,
                               score=score, allow=True, severity="NONE", reason="anchor disabled")
 
-    # soft / hard gating
     conflict = (s == "LONG" and bias == "bear") or (s == "SHORT" and bias == "bull")
     neutral  = (bias == "neutral")
 
-    if mode == "soft":
+    if mode_env == "soft":
         if conflict:
             allow, severity, reason = False, "MEDIUM", f"soft-block: trade {s} vs bias {bias}"
     else:  # hard
@@ -83,8 +83,8 @@ def evaluate_anchor(side: str, mode: AnchorMode = None) -> AnchorDecision:
             allow, severity, reason = False, "HIGH", f"hard-block: trade {s} vs bias {bias}"
 
     return AnchorDecision(
-        mode_requested=mode,
-        mode_applied=mode,
+        mode_requested=mode_env,
+        mode_applied=mode_env,
         bias=bias,
         score=score,
         allow=allow,
