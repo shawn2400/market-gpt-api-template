@@ -24,7 +24,8 @@ openai==1.37.0
 python-dotenv==1.0.1
 redis==5.0.4
 orjson==3.10.6
-psutil==5.9.8   # ✅ תוקן
+psutil==5.9.8
+PyYAML==6.0.2
 
 # Logging / Monitoring
 structlog==24.1.0
@@ -43,6 +44,7 @@ aiohttp==3.9.5
 
 # Tests
 pytest==8.2.2
+
 
 
 
