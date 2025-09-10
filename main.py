@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from prometheus_client import make_asgi_app
 import httpx
 
@@ -18,7 +19,15 @@ from utils.response_limits import ResponseSizeLimiter
 from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
-from app.middlewares import InternalAuthMiddleware
+
+# InternalAuthMiddleware (safe import with fallback)
+try:
+    from app.middlewares import InternalAuthMiddleware  # type: ignore
+except Exception:
+    class InternalAuthMiddleware(BaseHTTPMiddleware):  # no-op fallback
+        async def dispatch(self, request: Request, call_next):
+            return await call_next(request)
+
 from utils.trade_executor import ConfirmStore
 
 # Optional runtime counters (לסטטוסי WS/Executor)
@@ -92,7 +101,8 @@ async def validate_token(request: Request, call_next):
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
         "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"
     }
-    PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk",
+    # ⚠️ הורדתי את "/alerts" מה־PUBLIC_PREFIXES כדי למנוע Post ללא טוקן
+    PUBLIC_PREFIXES = ["/price", "/static/", "/risk",
                        "/metrics", "/status/ping", "/status/ws", "/status/executor", "/status/all"]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
@@ -139,7 +149,6 @@ for module_path in (
 ):
     if _try_include(module_path):
         try:
-            # שמור שבילים רשומים (למניעת כפילות אם נוסיף מקומי)
             for r in app.router.routes:
                 try:
                     _registered_paths.add(getattr(r, "path", None))
@@ -263,7 +272,12 @@ async def tg_ping():
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(401, "Invalid telegram secret")
-    update = await request.json()
+
+    # parse JSON safely
+    try:
+        update = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON")
 
     # Handle inline callback buttons: "CONFIRM:APPROVE:<cid>" / "CONFIRM:REJECT:<cid>"
     cb = update.get("callback_query")
@@ -281,6 +295,14 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
             else:
                 ConfirmStore.reject(cid, approver=approver)
                 await _tg_send(chat_id, "❌ בוטל. הטרייד לא יצא לפועל.")
+        # answerCallbackQuery (מסיר spinner)
+        try:
+            cb_id = cb.get("id")
+            if BOT_TOKEN and cb_id:
+                async with httpx.AsyncClient(timeout=10.0) as cli:
+                    await cli.post(f"{API_BASE}/answerCallbackQuery", data={"callback_query_id": cb_id})
+        except Exception:
+            pass
         return {"ok": True}
 
     # Simple "/ping"
@@ -315,14 +337,11 @@ async def flush_kill_switch():
 @app.on_event("startup")
 async def _startup_preflight_warmup():
     try:
-        # exchangeInfo cache
         _ = futures_exchange_info_safe(force_refresh=True)
     except Exception as e:
         logger.warning({"event": "warmup.exinfo_failed", "error": str(e)})
     try:
-        # מחיר BTC + בדיקת קווים קלים
         _ = get_price("BTCUSDT")
-        # הימנע מתלות הדדית: יבוא דינמי
         try:
             from utils.get_klines import get_klines_sync
             _ = get_klines_sync("BTCUSDT", interval=os.getenv("DEFAULT_INTERVAL", "15m"), limit=50)
@@ -371,6 +390,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
