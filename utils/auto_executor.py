@@ -57,17 +57,23 @@ TP_LADDER_COOLDOWN_SEC= int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 # Idempotency
 IDEMPOTENCY_TTL_SEC   = int(os.getenv("IDEMPOTENCY_TTL_SEC", "15"))
 
-# Prefix controls for cancels
-ORDER_ID_PREFIX             = os.getenv("ORDER_ID_PREFIX", "").strip()
-CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
+# Prefix / Cancel policy (ברירת מחדל: אוטומטי)
+ORDER_ID_PREFIX             = os.getenv("ORDER_ID_PREFIX", "ALG").strip()
+CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "").strip().lower() in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE      = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
-# ⬇️ חדשים (גדרות זהירות לביטולים)
+# ← אוטומטי: ב-ONEWAY נשתמש ב-prefix gate גם אם לא ביקשת מפורשות
 CANCEL_PREFIX_ONLY_IN_ONEWAY = os.getenv("CANCEL_PREFIX_ONLY_IN_ONEWAY", "1").lower() in ("1","true","yes","on")
-CANCEL_ONLY_REDUCEONLY       = os.getenv("CANCEL_ONLY_REDUCEONLY", "0").lower() in ("1","true","yes","on")
-CANCEL_TTL_SEC               = int(os.getenv("CANCEL_TTL_SEC", "0"))  # 0 = off
 
-# Position mode override: auto/hedge/oneway
+# ← אוטומטי: נעדיף לבטל reduceOnly; אם לא — נבטל רק אם יש prefix שלנו
+CANCEL_ONLY_REDUCEONLY       = os.getenv("CANCEL_ONLY_REDUCEONLY", "").strip().lower() in ("1","true","yes","on")
+
+# ← TTL דינמי: אם 0/ריק, נגזור לפי ESCALATE_AFTER_S (עם גבולות בטוחים)
+CANCEL_TTL_SEC               = int(os.getenv("CANCEL_TTL_SEC", "0") or 0)
+AUTO_CANCEL_TTL_MIN          = int(os.getenv("AUTO_CANCEL_TTL_MIN", "60"))
+AUTO_CANCEL_TTL_MAX          = int(os.getenv("AUTO_CANCEL_TTL_MAX", "900"))
+
+# Position mode override: auto/hedge/oneway (דיפולט auto)
 POSITION_MODE_OVERRIDE = os.getenv("POSITION_MODE_OVERRIDE", "auto").strip().lower()
 
 # Telegram
@@ -154,12 +160,10 @@ class _Idem:
                 return bool(ok)
             except Exception as e:
                 log.warning("Idempotency redis error: %s", e)
-        # memory fallback
         ts = cls._mem.get(k, 0.0)
         if now - ts < ttl:
             return False
         cls._mem[k] = now
-        # cleanup (best-effort)
         for kk, vv in list(cls._mem.items()):
             if now - vv > ttl * 2:
                 cls._mem.pop(kk, None)
@@ -217,7 +221,6 @@ class ConfirmStore:
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
 
-    # ⬇️ חדש: ניקוי כולל ל־/flush
     @classmethod
     def flush_all(cls) -> None:
         if cls._r:
@@ -227,39 +230,6 @@ class ConfirmStore:
             except Exception as e:
                 log.warning("ConfirmStore.flush_all redis: %s", e)
         cls._mem.clear()
-
-async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid: str) -> Dict[str, Any]:
-    if not BOT_TOKEN:
-        return {"ok": False, "error": "BOT_TOKEN missing"}
-    kb = {"inline_keyboard": [[
-        {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
-        {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
-    ]]}
-    text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
-    async with httpx.AsyncClient(timeout=10.0) as cli:
-        r = await cli.post(f"{API_BASE}/sendMessage", data={
-            "chat_id": chat_id, "text": text, "parse_mode": "HTML",
-            "disable_web_page_preview": True, "reply_markup": json.dumps(kb)
-        })
-        try: return r.json()
-        except Exception: return {"ok": False, "error": f"http {r.status_code}"}
-
-async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
-    cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
-    title = "אישור טרייד"
-    summary = (
-        f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
-        f"qty={payload.get('qty')} lev={payload.get('leverage')}<br/>"
-        f"כניסה: HYBRID (Limit±{ENTRY_BAND_BPS}bps / Stop±{STOP_BAND_BPS}bps)"
-    )
-    await send_confirm_request(chat_id, title, summary, cid)
-    t0 = time.time()
-    while time.time() - t0 < CONFIRM_TTL_SEC:
-        rec = ConfirmStore.get(cid)
-        if rec and rec.get("status") in ("approved", "rejected", "expired"):
-            return {"cid": cid, "status": rec["status"]}
-        await asyncio.sleep(0.5)
-    return {"cid": cid, "status": "expired"}
 
 # ─────────── Light indicators (no pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
@@ -275,7 +245,6 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
         tr = (h-l) if prev is None else max(h-l, abs(h-prev), abs(l-prev))
         trs.append(tr); prev=c
     if len(trs) < period: return trs[-1] if trs else 0.0
-    # Wilder RMA via EMA(alpha=1/period)
     alpha = 1.0/period
     s=None
     for v in trs:
@@ -334,7 +303,6 @@ def _detect_position_mode() -> str:
     ov = POSITION_MODE_OVERRIDE
     if ov in ("hedge", "oneway"):
         return ov
-    # auto
     try:
         cli = get_futures_client()
         info = cli.futures_get_position_mode()
@@ -347,16 +315,21 @@ def _detect_position_mode() -> str:
         log.debug("detect position mode failed (fallback=oneway): %s", e)
     return "oneway"
 
+def _auto_cancel_ttl() -> int:
+    if CANCEL_TTL_SEC > 0:
+        return int(CANCEL_TTL_SEC)
+    # TTL דינמי נגזר מהסקיילציה (פי 3), עם גבולות גזרות
+    ttl = int(max(AUTO_CANCEL_TTL_MIN, min(AUTO_CANCEL_TTL_MAX, 3 * ESCALATE_AFTER_S)))
+    return ttl
+
 # ─────────── Cancel old closing orders (TP/SL) — חכם ───────────
 def _cancel_old_closing_orders(symbol: str, mode: str = "oneway", pos_side: str = "BOTH") -> int:
     """
-    מבטל הזמנות TP/SL פעילות ישנות באופן בטוח:
-    - HEDGE: מבטל רק לאותו positionSide (LONG/SHORT) כדי לא לפגוע בצד הנגדי.
-    - ONEWAY: אם CANCEL_PREFIX_ONLY_IN_ONEWAY=1 → מבטל רק הזמנות עם prefix שלנו.
-    בנוסף (לפי ENV):
-      - CANCEL_ONLY_PREFIXED_ORDERS=1 → תמיד לבטל רק prefixed (גם ב-hedge).
-      - CANCEL_ONLY_REDUCEONLY=1 → לבטל רק הזמנות reduceOnly.
-      - CANCEL_TTL_SEC>0 → לבטל רק הזמנות שגילן >= TTL (לפי time/updateTime).
+    ביטול הזמנות TP/SL פעילות ישנות בצורה אוטומטית-דינמית:
+      • HEDGE: לבטל רק לאותו positionSide (LONG/SHORT).
+      • ONEWAY: לבטל רק הזמנות עם prefix שלנו (גם אם CANCEL_ONLY_PREFIXED_ORDERS לא הופעל ידנית).
+      • העדפה לבטל reduceOnly; אם לא reduceOnly — נבטל רק אם יש prefix שלנו.
+      • אם CANCEL_TTL_SEC=0 → TTL מחושב דינמית לפי ESCALATE_AFTER_S (עם גבולות).
     """
     try:
         orders = get_all_orders(symbol, limit=100) or []
@@ -366,13 +339,14 @@ def _cancel_old_closing_orders(symbol: str, mode: str = "oneway", pos_side: str 
         pref = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
         have_pref = bool(pref)
 
-        def _need_prefix_gate() -> bool:
+        def need_prefix_gate() -> bool:
             if CANCEL_ONLY_PREFIXED_ORDERS:
                 return True
             if mode == "oneway" and CANCEL_PREFIX_ONLY_IN_ONEWAY:
                 return True
             return False
 
+        ttl = _auto_cancel_ttl()
         now = time.time()
         count = 0
 
@@ -380,44 +354,45 @@ def _cancel_old_closing_orders(symbol: str, mode: str = "oneway", pos_side: str 
             st = (o.get("status") or "").upper()
             if st not in ("NEW","PARTIALLY_FILLED"):
                 continue
-
             typ = (o.get("type") or "").upper()
             if typ not in tps + sls:
                 continue
 
-            # HEDGE: לבטל רק את אותו הצד
+            # HEDGE: סנן לצד המתאים
             if mode == "hedge":
                 o_pos = (o.get("positionSide") or "").upper()
                 if o_pos and o_pos != pos_side.upper():
                     continue
 
-            # רק reduceOnly?
-            if CANCEL_ONLY_REDUCEONLY and not bool(o.get("reduceOnly")):
+            coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
+            is_prefixed = have_pref and coid.startswith(pref)
+            is_reduce   = bool(o.get("reduceOnly"))
+
+            # העדפת reduceOnly; אם לא—חייב prefix שלנו כדי לא לפגוע בהוראות ידניות
+            if CANCEL_ONLY_REDUCEONLY:
+                if not is_reduce:
+                    continue
+            else:
+                if not (is_reduce or (need_prefix_gate() and is_prefixed)):
+                    continue
+
+            # Prefix gate ב-ONEWAY/או לפי הגדרה מפורשת
+            if need_prefix_gate() and not is_prefixed:
                 continue
 
-            # דרישת prefix
-            if _need_prefix_gate():
-                if not have_pref:
-                    continue
-                coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
-                if not coid.startswith(pref):
-                    continue
-
             # TTL gating
-            if CANCEL_TTL_SEC > 0:
-                ts_ms = (o.get("updateTime") or o.get("time") or 0)
-                try:
-                    ts_s = float(ts_ms) / 1000.0 if ts_ms else 0.0
-                except Exception:
-                    ts_s = 0.0
-                age = now - ts_s if ts_s > 0 else 1e9
-                if age < float(CANCEL_TTL_SEC):
-                    continue
+            ts_ms = (o.get("updateTime") or o.get("time") or 0)
+            try:
+                ts_s = float(ts_ms) / 1000.0 if ts_ms else 0.0
+            except Exception:
+                ts_s = 0.0
+            age = now - ts_s if ts_s > 0 else 1e9
+            if age < float(ttl):
+                continue
 
             oid = o.get("orderId")
             if oid is None:
                 continue
-
             try:
                 futures_cancel_order(symbol, oid)
                 count += 1
@@ -499,7 +474,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         limit_price = _offset_bps(ref, +ENTRY_BAND_BPS, +1)
         stop_price  = _offset_bps(ref, -STOP_BAND_BPS,  +1)
 
-    # Slippage guard מול המחיר העדכני לפני פתיחת הזמנות
+    # Slippage guard
     cur = get_price(sym) or futures_mark_price(sym) or base_price
     slip_bps_now = abs(cur - ref) / max(ref, 1e-9) * 10000.0
     if slip_bps_now >= SLIPPAGE_GUARD_BPS:
@@ -592,7 +567,6 @@ async def execute_trade_live(
     tp_targets: Optional[List[float]] = None, tp_splits: Optional[List[float]] = None,
     sl_targets: Optional[List[float]] = None, sl_splits: Optional[List[float]] = None,
     confirm_first: bool = True, telegram_chat_id: Optional[int] = None,
-    # תאימות/שליטה:
     position_side: str = "BOTH", reduce_only: bool = False,
 ) -> Dict[str, Any]:
 
@@ -605,7 +579,7 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # Percent-Price Guard מול entry המבוקש (אם הוזן), אחרת מול base
+    # Percent-Price Guard
     ref_for_guard = float(entry or base_price)
     mk = float(get_price(sym) or futures_mark_price(sym) or base_price)
     pp_bps = abs(mk - ref_for_guard) / max(ref_for_guard, 1e-9) * 10000.0
@@ -620,22 +594,20 @@ async def execute_trade_live(
         qty_calc_error = str(e)
 
     gate = _quality_gate(sym, side)
-
-    # ✅ Risk preview
     risk = pre_trade_risk_check(sym, side, leverage, entry)
 
     # Mode & posSide auto
     mode = _detect_position_mode()  # 'hedge'/'oneway'
     pos_side_entry = "LONG" if side == "BUY" else "SHORT"
 
-    # Idempotency Shield
+    # Idempotency
     idem_payload = {"sym": sym, "side": side, "lev": int(leverage),
                     "qty": round(float(qty or 0), 10), "dry": bool(dry_run),
                     "entry_bucket": round(ref_for_guard, 5), "mode": mode, "pos_side": pos_side_entry}
     if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
         return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
 
-    # הרחבת TP/SL מסטרינגים ב-ENV אם לא הגיעו מבחוץ
+    # Expand ladders from ENV if needed
     if tp is None and not tp_targets and LADDER_TP_ENABLE:
         try:
             tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
@@ -693,7 +665,7 @@ async def execute_trade_live(
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # Hygiene: בטל TP/SL קודמים בבטיחות
+    # Hygiene: בטל TP/SL קודמים בבטיחות אוטומטית
     _cancel_old_closing_orders(sym, mode=mode, pos_side=pos_side_entry)
 
     try:
@@ -705,7 +677,6 @@ async def execute_trade_live(
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
-    # Post-fill sanity
     sanity_ok = bool(entry_res.get("sanity_ok", True))
     sanity_bps = entry_res.get("sanity_bps")
 
@@ -737,7 +708,6 @@ async def execute_trade_live(
             if mode == "hedge":
                 args["positionSide"] = pos_side_entry  # LONG/SHORT
 
-            # STOP/TAKE_PROFIT (לימיט) צריכים גם price וגם stopPrice
             if "MARKET" in typ:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
             else:
@@ -752,6 +722,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
