@@ -28,7 +28,7 @@ def _fallback_futures_info(force_refresh: bool = False) -> Dict[str, Any]:
     return {"symbols": []}
 
 try:
-    from utils.binance_client import futures_exchange_info_safe as _fex
+    from utils.binance_client import futures_exchange_info_safe as _fex  # type: ignore
     futures_exchange_info_safe = _fex  # type: ignore
 except Exception as e:
     logger.warning("[Symbols] could not import futures_exchange_info_safe (%s)", e)
@@ -127,6 +127,38 @@ class SymbolsCache:
             raise ValueError(f"Unknown symbol: {symbol}")
         return {f["filterType"]: f for f in s.get("filters", [])}
 
+    def suggest(self, base: str, quote: str, limit: int = 6) -> List[str]:
+        """
+        הצעות סמלים בסגנון: <BASE><QUOTE> או התאמות חלקיות לפי התחלה/סוף.
+        """
+        self.ensure_fresh()
+        base_u = str(base or "").upper()
+        quote_u = str(quote or DEFAULT_QUOTE).upper()
+        if not base_u:
+            return []
+
+        # עדיפות להצעה הישירה
+        cand = f"{base_u}{quote_u}"
+        out: List[str] = [cand] if cand in self._index else []
+
+        # הוספת התאמות לפי prefix/suffix
+        for sym in self._index.keys():
+            if sym.startswith(base_u) and sym.endswith(quote_u):
+                if sym not in out:
+                    out.append(sym)
+            if len(out) >= limit:
+                break
+
+        # אם עדיין אין, נסה QUOTE נפוצים
+        if not out:
+            for q in list(self._quotes)[:5]:
+                s = f"{base_u}{q}"
+                if s in self._index:
+                    out.append(s)
+                if len(out) >= limit:
+                    break
+        return out[:limit]
+
 # ────────────────────────────────────────────────
 # Public helpers
 # ────────────────────────────────────────────────
@@ -142,6 +174,13 @@ def parse_symbol_parts(symbol: str, cache: Optional[SymbolsCache] = None) -> Tup
     return s, None
 
 def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[SymbolsCache] = None) -> str:
+    """
+    מנרמל סמלים מהמשתמש/קובץ לפורמט Binance:
+      - מסיר תווים לא אלפאנומריים.
+      - בודק האם הסימבול קיים ברשימת ההחלפה העדכנית (ע״י cache עם TTL).
+      - אם חסר quote, מוסיף DEFAULT_QUOTE (לרוב USDT).
+      - במידה ואינו קיים — ירים ValueError עם הצעות חלופיות.
+    """
     if not symbol or not str(symbol).strip():
         raise ValueError("symbol is empty")
 
@@ -168,6 +207,7 @@ def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[Symbo
         except Exception:
             return candidate
 
+    # אם עדיין לא קיים — נסה להציע חלופות
     suggestions = []
     try:
         suggestions = c.suggest(base or raw, q or DEFAULT_QUOTE, limit=6)
@@ -185,6 +225,7 @@ if __name__ == "__main__":
     c = SymbolsCache("futures")
     print("has normalize:", hasattr(__import__(__name__), "normalize_symbol"))
     print("quotes count:", len(c.quotes()))
+
 
 
 
