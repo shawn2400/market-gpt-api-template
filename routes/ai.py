@@ -19,6 +19,10 @@ from utils.binance_client import futures_mark_price
 from utils.ai_analysis import analyze_with_ai, analyze_with_ai_and_filter
 from utils.approvals import preflight_proposal
 
+# NEW: Rate-limit לנתיב /ai/analyze
+from utils.rate_limit import require_rate_limit
+_rl_ai = Depends(require_rate_limit("ai_analyze"))  # rpm נשלף מה-ENV: AI_ANALYZE_RPM
+
 router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_api_key)])
 
 Side = Literal["LONG", "SHORT"]
@@ -157,11 +161,11 @@ async def ai_quality(payload: QualityRequest = Body(...)):
         anchor=_mk_anchor(anchor),
     )
 
-@router.get("/analyze")
+@router.get("/analyze", dependencies=[_rl_ai])  # ✅ RL ל-GET
 async def ai_analyze_get(symbol: str = Query(...), interval: str = Query("15m")):
     return await _do_ai_analyze(symbol, interval)
 
-@router.post("/analyze")
+@router.post("/analyze", include_in_schema=False, dependencies=[_rl_ai])  # ✅ RL + מוסתר מהסכמה
 async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
     return await _do_ai_analyze(payload.symbol, payload.interval)
 
@@ -184,7 +188,6 @@ async def _do_ai_analyze(symbol: str, interval: str):
                     "fallback": True}
         last = indicators.iloc[-1].to_dict()
 
-        # OpenAI (טקסט) – לא מסנן טריידים; זו אנליזה בלבד
         res = await analyze_with_ai({"symbol": symbol.upper(), **last})
         ok = bool(res.get("ok"))
         text = res.get("analysis") or _quick_analysis_text(symbol, interval, "AI returned empty")
@@ -194,7 +197,6 @@ async def _do_ai_analyze(symbol: str, interval: str):
                 "analysis": _quick_analysis_text(symbol, interval, f"analyze failed: {e}"),
                 "fallback": True}
 
-# ---- SUGGEST (Candidates + Early Approvals) ----
 @router.post("/suggest")
 async def suggest(req: SuggestRequest):
     run_early = str(os.getenv("APPROVAL_EARLY_AI","1")).lower() in ("1","true","yes","on")
@@ -208,10 +210,8 @@ async def suggest(req: SuggestRequest):
         out["rejected"] = res["rejected"]
     return out
 
-# ---- SUGGEST & QUEUE (to Telegram PENDING or to sink) ----
 @router.post("/suggest_and_queue")
 async def suggest_and_queue(req: SuggestQueueRequest):
-    # הפקה
     run_early = str(os.getenv("APPROVAL_EARLY_AI","1")).lower() in ("1","true","yes","on")
     res = await analyze_with_ai_and_filter(
         symbols=[s.upper() for s in req.symbols],
@@ -223,13 +223,11 @@ async def suggest_and_queue(req: SuggestQueueRequest):
     if not accepted:
         return {"ok": True, "queued": 0, "mode": req.mode, "accepted": []}
 
-    # קונפיג יעד
     env_to_tg = str(os.getenv("AI_QUEUE_TO_TELEGRAM","1")).lower() in ("1","true","yes","on")
     env_auto  = str(os.getenv("AI_QUEUE_AUTO_EXECUTE","0")).lower() in ("1","true","yes","on")
     to_telegram = req.queue_to_telegram if req.queue_to_telegram is not None else env_to_tg
     auto_exec   = req.auto_execute_sink if req.auto_execute_sink is not None else env_auto
 
-    # דחיפה
     queued: List[Dict[str, Any]] = []
     headers = {"Authorization": _bearer(), "Accept": "application/json"}
 
@@ -237,8 +235,7 @@ async def suggest_and_queue(req: SuggestQueueRequest):
         for c in accepted:
             payload = {**c}
             if to_telegram and req.mode == "telegram":
-                # דחיפה ל-PENDING של הטלגרם + שליחת הודעה עם כפתורים
-                url = TELEGRAM_ADD_PENDING_URL  # local path; נשתמש ב-root באותו שרת
+                url = TELEGRAM_ADD_PENDING_URL
                 try:
                     r = await client.post(url, json={"tp": payload, "interval": req.interval, "market": req.market}, headers=headers)
                     r.raise_for_status()
@@ -246,15 +243,13 @@ async def suggest_and_queue(req: SuggestQueueRequest):
                 except Exception as e:
                     queued.append({"symbol": c["symbol"], "side": c["side"], "target": "telegram", "error": str(e)})
             if auto_exec or req.mode == "sink":
-                # שילוח ישיר ל-sink (אוטו-ביצוע/פרסום)
                 try:
-                    # preflight (קשיח): אם נופל – לא שולחים
                     pf = preflight_proposal({**payload, "interval": req.interval})
                     if not pf.get("ok", False):
                         queued.append({"symbol": c["symbol"], "side": c["side"], "target": "sink", "error": "preflight_failed", "errors": pf.get("errors",[])})
                         continue
-                    rr_body = {  # sink payload אחיד
-                        "trade_id": None,  # יתמלא ב-sink
+                    rr_body = {
+                        "trade_id": None,
                         "trade_type": "FUTURES" if req.market.lower().startswith("future") else "SPOT",
                         "symbol": c["symbol"], "side": c["side"],
                         "current_price": c.get("current_price"),
@@ -272,6 +267,7 @@ async def suggest_and_queue(req: SuggestQueueRequest):
                     queued.append({"symbol": c["symbol"], "side": c["side"], "target": "sink", "error": str(e)})
 
     return {"ok": True, "mode": req.mode, "queued": len([q for q in queued if "error" not in q]), "details": queued}
+
 
 
 
