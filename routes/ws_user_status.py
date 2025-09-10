@@ -1,13 +1,23 @@
 # routes/ws_user_status.py
 from __future__ import annotations
 from fastapi import APIRouter
-from utils.runtime_counters import get_ws_status
+from utils.runtime_counters import ws_user_status
+try:
+    from utils import ws_user_stream
+    _have_ws = True
+except Exception:
+    _have_ws = False
 
-router = APIRouter(prefix="", tags=["status"])
+router = APIRouter(prefix="/ws-user", tags=["status"])
 
-@router.get("/ws-user/status")
-async def ws_user_status():
-    """
-    מחזיר: ewma latency, reconnects, last_event_ts, ttl_sec, up.
-    """
-    return {"ok": True, "status": get_ws_status()}
+@router.get("/status")
+def get_ws_user_status():
+    counters = ws_user_status()
+    extra = {}
+    if _have_ws and hasattr(ws_user_stream, "status"):
+        try:
+            extra = ws_user_stream.status()
+        except Exception:
+            extra = {}
+    return {"ok": True, "counters": counters, "stream": extra}
+
