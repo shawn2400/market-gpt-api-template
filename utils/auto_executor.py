@@ -37,7 +37,8 @@ POST_FILL_SANITY_BPS    = float(os.getenv("POST_FILL_SANITY_BPS", "40"))
 SL_LIMIT_OFFSET_BPS   = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS   = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
-MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "8.5"))
+# Quality gates (קבועים גלובליים; הסף בפועל כבר ירד ל-8 בקובץ .env שלך)
+MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "8"))
 MAX_ATR_PCT           = float(os.getenv("MAX_ATR_PCT", "2.5"))
 MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 
@@ -46,11 +47,11 @@ DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
 # Ladder config
-LADDER_TP_ENABLE      = os.getenv("LADDER_TP_ENABLE", "1").lower() in ("1","true","yes","on")
+LADDER_TP_ENABLE      = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
 LADDER_TP_KIND        = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()  # TAKE_PROFIT or TAKE_PROFIT_MARKET
 LADDER_TP_DEFAULT_PCTS= os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 LADDER_TP_DEFAULT_SPLITS=os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
-LADDER_SL_ENABLE      = os.getenv("LADDER_SL_ENABLE", "0").lower() in ("1","true","yes","on")
+LADDER_SL_ENABLE      = os.getenv("LADDER_SL_ENABLE", "0") in ("1","true","yes","on")
 LADDER_SL_DEFAULT_PCTS= os.getenv("LADDER_SL_DEFAULT_PCTS", "").strip()
 TP_LADDER_COOLDOWN_SEC= int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 
@@ -62,11 +63,40 @@ ORDER_ID_PREFIX                  = os.getenv("ORDER_ID_PREFIX", "").strip()
 CANCEL_ONLY_PREFIXED_ORDERS      = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE           = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
-# ✅ ביטול חכם (ENV חדשים/נתמכים)
-CANCEL_ONLY_PREFIXED_IN_ONEWAY   = os.getenv("CANCEL_ONLY_PREFIXED_IN_ONEWAY", os.getenv("CANCEL_PREFIX_ONLY_IN_ONEWAY","0")).lower() in ("1","true","yes","on")
-CANCEL_ONLY_REDUCE_ONLY          = os.getenv("CANCEL_ONLY_REDUCE_ONLY", os.getenv("CANCEL_ONLY_REDUCEONLY","0")).lower() in ("1","true","yes","on")
+# ✅ ביטול חכם + דינמי
+CANCEL_ONLY_PREFIXED_IN_ONEWAY   = os.getenv("CANCEL_ONLY_PREFIXED_IN_ONEWAY", "0").lower() in ("1","true","yes","on")
+CANCEL_ONLY_REDUCE_ONLY          = (os.getenv("CANCEL_ONLY_REDUCE_ONLY", os.getenv("CANCEL_ONLY_REDUCEONLY","0")).lower() in ("1","true","yes","on"))
 CANCEL_MIN_AGE_SEC               = int(os.getenv("CANCEL_MIN_AGE_SEC", "0"))
 CANCEL_MAX_AGE_SEC               = int(os.getenv("CANCEL_MAX_AGE_SEC", "0"))
+
+# ── Dynamic Policy (מופעל לכל טרייד) ──
+DYNAMIC_POLICY_ENABLE            = os.getenv("DYNAMIC_POLICY_ENABLE", os.getenv("DYN_TRADE_ENABLE","0")).lower() in ("1","true","yes","on")
+# טווחי דינמיקה (תואם .env שלך)
+def _fenv(name: str, default: float) -> float:
+    try: return float(str(os.getenv(name, str(default))).strip())
+    except Exception: return default
+DYN_ENTRY_MIN_BPS = _fenv("DYN_ENTRY_MIN_BPS", 5.0)
+DYN_ENTRY_MAX_BPS = _fenv("DYN_ENTRY_MAX_BPS", 20.0)
+DYN_STOP_MIN_BPS  = _fenv("DYN_STOP_MIN_BPS", 6.0)
+DYN_STOP_MAX_BPS  = _fenv("DYN_STOP_MAX_BPS", 25.0)
+
+DYN_ESCALATE_AFTER_MIN = _fenv("DYN_ESCALATE_AFTER_MIN", 5.0)
+DYN_ESCALATE_AFTER_MAX = _fenv("DYN_ESCALATE_AFTER_MAX", 25.0)
+
+DYN_ESCALATE_SLIP_MIN_BPS = _fenv("DYN_ESCALATE_SLIP_MIN_BPS", 5.0)
+DYN_ESCALATE_SLIP_MAX_BPS = _fenv("DYN_ESCALATE_SLIP_MAX_BPS", 60.0)
+
+DYN_SLIP_GUARD_MIN_BPS = _fenv("DYN_SLIP_GUARD_MIN_BPS", 20.0)
+DYN_SLIP_GUARD_MAX_BPS = _fenv("DYN_SLIP_GUARD_MAX_BPS", 80.0)
+
+# ATR% → תחום כיול (אפשר לשנות ב-.env אם תרצה)
+DYN_ATR_LOW_PCT  = _fenv("DYN_ATR_LOW_PCT", 0.5)   # מתחת לזה נחשב “רגוע”
+DYN_ATR_HIGH_PCT = _fenv("DYN_ATR_HIGH_PCT", 3.0)  # מעל לזה “חם מאוד”
+
+# ביטולי TTL דינמיים
+AUTO_CANCEL_TTL_MIN = int(os.getenv("AUTO_CANCEL_TTL_MIN", "60") or "60")
+AUTO_CANCEL_TTL_MAX = int(os.getenv("AUTO_CANCEL_TTL_MAX", "900") or "900")
+CANCEL_TTL_SEC      = int(os.getenv("CANCEL_TTL_SEC", "0") or "0")  # אם 0—נגזר דינמית
 
 # מצב פוזיציה דינמי
 POSITION_SIDE_MODE_ENV           = (os.getenv("POSITION_SIDE_MODE", os.getenv("POSITION_MODE_OVERRIDE","auto")) or "auto").strip().lower()
@@ -170,7 +200,6 @@ def _detect_position_mode() -> str:
     except Exception as e:
         log.debug("position mode detect failed: %s", e)
 
-    # fallback
     _pos_mode_cache, _pos_mode_cache_ts = "ONEWAY", now
     return "ONEWAY"
 
@@ -178,7 +207,6 @@ def _pos_side_for_open(side: str) -> str:
     return "LONG" if side == "BUY" else "SHORT"
 
 def _pos_side_for_close(entry_side: str) -> str:
-    # סגירת לונג = LONG, סגירת שורט = SHORT
     return "LONG" if entry_side == "BUY" else "SHORT"
 
 # ─────────── Idempotency (Redis/memory) ───────────
@@ -259,7 +287,7 @@ class ConfirmStore:
 
     @classmethod
     def approve(cls, cid: str, approver: str = "") -> None:
-        rec = cls.get(cid)
+        rec = cls.get(cid); 
         if not rec: return
         rec["status"] = "approved"; rec["approver"] = approver; cls._save(cid, rec)
 
@@ -286,12 +314,19 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
         except Exception: return {"ok": False, "error": f"http {r.status_code}"}
 
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    payload יכול לכלול: symbol, side, qty, leverage, entry_band_bps, stop_band_bps, escalate_after_s, escalate_slip_bps
+    """
     cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
     title = "אישור טרייד"
+    eb = payload.get("entry_band_bps", ENTRY_BAND_BPS)
+    sb = payload.get("stop_band_bps", STOP_BAND_BPS)
+    ea = payload.get("escalate_after_s", ESCALATE_AFTER_S)
+    es = payload.get("escalate_slip_bps", ESCALATE_SLIP_BPS)
     summary = (
         f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
         f"qty={payload.get('qty')} lev={payload.get('leverage')}<br/>"
-        f"כניסה: HYBRID (Limit±{payload.get('dyn_entry_bps')}bps / Stop±{payload.get('dyn_stop_bps')}bps)"
+        f"כניסה: HYBRID (Limit±{eb}bps / Stop±{sb}bps; Escalate {ea}s @ slip≥{es}bps)"
     )
     await send_confirm_request(chat_id, title, summary, cid)
     t0 = time.time()
@@ -366,90 +401,80 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         log.warning("quality gate failed: %s", e)
         return {"enter_ok": False, "score": 0.0, "reasons": ["gate_error"]}
 
-# ─────────── Market snapshot & dynamic policies ───────────
-# (אותה לוגיקה קלה גם לשימוש בביטולים הדינמיים)
-DYNAMIC_POLICY_ENABLE       = os.getenv("DYNAMIC_POLICY_ENABLE", "1").lower() in ("1","true","yes","on")
-DYN_TRADE_ENABLE            = os.getenv("DYN_TRADE_ENABLE", "1").lower() in ("1","true","yes","on")
-
-DYN_CANCEL_BASE_SEC         = int(os.getenv("DYN_CANCEL_BASE_SEC", "15"))
-DYN_CANCEL_MIN_SEC          = int(os.getenv("DYN_CANCEL_MIN_SEC",  "5"))
-DYN_CANCEL_MAX_SEC          = int(os.getenv("DYN_CANCEL_MAX_SEC",  "60"))
-
-DYN_ENTRY_MIN_BPS           = float(os.getenv("DYN_ENTRY_MIN_BPS", "5"))
-DYN_ENTRY_MAX_BPS           = float(os.getenv("DYN_ENTRY_MAX_BPS", "20"))
-DYN_STOP_MIN_BPS            = float(os.getenv("DYN_STOP_MIN_BPS",  "6"))
-DYN_STOP_MAX_BPS            = float(os.getenv("DYN_STOP_MAX_BPS",  "25"))
-DYN_SLIP_GUARD_MIN_BPS      = float(os.getenv("DYN_SLIP_GUARD_MIN_BPS", "20"))
-DYN_SLIP_GUARD_MAX_BPS      = float(os.getenv("DYN_SLIP_GUARD_MAX_BPS", "80"))
-DYN_ESCALATE_AFTER_MIN      = float(os.getenv("DYN_ESCALATE_AFTER_MIN", "5"))
-DYN_ESCALATE_AFTER_MAX      = float(os.getenv("DYN_ESCALATE_AFTER_MAX", "25"))
-DYN_ESCALATE_SLIP_MIN_BPS   = float(os.getenv("DYN_ESCALATE_SLIP_MIN_BPS", "5"))
-DYN_ESCALATE_SLIP_MAX_BPS   = float(os.getenv("DYN_ESCALATE_SLIP_MAX_BPS", "60"))
-
+# ─────────── Dynamic policy helpers ───────────
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
-def _market_snapshot(symbol: str) -> Dict[str, float]:
-    kl = _fetch_klines_raw(symbol, "1m", 60) or []
-    closes = [float(r[4]) for r in kl]
-    last = closes[-1] if closes else (get_price(symbol) or futures_mark_price(symbol) or 0.0)
-    atr = _atr_from_klines(kl, 14) if kl else 0.0
-    atr_pct = (atr / last) * 100.0 if last > 0 else 0.0
-    mom_pct = ((last / closes[-4] - 1.0) * 100.0) if len(closes) >= 4 and last > 0 else 0.0
-    return {"atr_pct": atr_pct, "mom_pct": mom_pct}
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * _clamp(t, 0.0, 1.0)
 
-# שמירה על תאימות לשם הישן בביטולים:
-def _market_snapshot_for_cancel(symbol: str) -> Dict[str, float]:
-    return _market_snapshot(symbol)
+def _vol_score_from_atr_pct(atr_pct: float) -> float:
+    """0=רגוע (מתחת ל-DYN_ATR_LOW_PCT), 1=חם (מעל DYN_ATR_HIGH_PCT)."""
+    if atr_pct <= DYN_ATR_LOW_PCT: return 0.0
+    if atr_pct >= DYN_ATR_HIGH_PCT: return 1.0
+    return (atr_pct - DYN_ATR_LOW_PCT) / max(1e-9, (DYN_ATR_HIGH_PCT - DYN_ATR_LOW_PCT))
 
-def _heat_factor(symbol: str) -> float:
-    snap = _market_snapshot(symbol)
-    atr = float(snap["atr_pct"]); mom = abs(float(snap["mom_pct"]))
-    # heat בקירוב 0..1.5 (ATR עד 1% מקבל 1.0, מומנטום מוסיף עד ~0.5)
-    return _clamp((atr / 1.0) + (mom / 100.0) * 0.5, 0.0, 1.5)
+def _market_state(symbol: str) -> Dict[str, Any]:
+    """מחזיר ATR%, תנופה 5 ד’, והמחיר האחרון — לשימוש במדיניות דינמית."""
+    try:
+        kl = _fetch_klines_raw(symbol, "1m", 60)
+        closes = [float(r[4]) for r in kl]
+        if len(closes) < 20:
+            return {"atr_pct": 0.0, "mom_5m_pct": 0.0, "last": get_price(symbol) or futures_mark_price(symbol)}
+        last  = closes[-1]
+        atr   = _atr_from_klines(kl, 14)
+        atr_pct = (atr / last) * 100.0 if last > 0 else 0.0
+        mom_5m = (last / closes[-5] - 1.0) * 100.0 if len(closes) >= 6 else 0.0
+        return {"atr_pct": atr_pct, "mom_5m_pct": mom_5m, "last": last}
+    except Exception as e:
+        log.debug("market_state failed: %s", e)
+        px = get_price(symbol) or futures_mark_price(symbol)
+        return {"atr_pct": 0.0, "mom_5m_pct": 0.0, "last": px}
 
-def _effective_trade_params(symbol: str, side: str) -> Dict[str, float]:
+def _dynamic_policy(symbol: str, side: str) -> Dict[str, Any]:
     """
-    מחשב פרמטרים דינמיים לכניסה/סטופ/סליפג'/הסלמה לפי 'חום שוק'.
+    בונה 'מדיניות דינמית' לפי ATR%:
+    • entry_band_bps      ↑ עם וולטליות
+    • stop_band_bps       ↑ עם וולטליות
+    • escalate_after_s    ↓ עם וולטליות (מגיב מהר יותר)
+    • escalate_slip_bps   ↓ עם וולטליות (מספיק סטייה קטנה כדי להסלים)
+    • slippage_guard_bps  ↑ עם וולטליות (מרווח סיבולת גדול יותר)
+    • cancel_min_age_sec  ↓ עם וולטליות (מנקה מהר יותר)
+    • cancel_max_age_sec  נגזר מהטווח/TTL
     """
-    if not DYN_TRADE_ENABLE:
-        return {
-            "entry_bps": ENTRY_BAND_BPS,
-            "stop_bps": STOP_BAND_BPS,
-            "slip_guard_bps": SLIPPAGE_GUARD_BPS,
-            "escalate_after_s": ESCALATE_AFTER_S,
-            "escalate_slip_bps": ESCALATE_SLIP_BPS,
-        }
-    heat = _heat_factor(symbol)
+    ms = _market_state(symbol)
+    atr_pct = float(ms.get("atr_pct") or 0.0)
+    v = _vol_score_from_atr_pct(atr_pct)
 
-    # שוק חם → מרווחי כניסה/סטופ גדולים יותר, להימנע מפינג-פונג/פספוס
-    entry = ENTRY_BAND_BPS * (1.0 + 0.8 * heat)
-    stop  = STOP_BAND_BPS  * (1.0 + 0.8 * heat)
+    entry_band_bps    = _lerp(DYN_ENTRY_MIN_BPS, DYN_ENTRY_MAX_BPS, v)
+    stop_band_bps     = _lerp(DYN_STOP_MIN_BPS,  DYN_STOP_MAX_BPS,  v)
+    escalate_after_s  = _lerp(DYN_ESCALATE_AFTER_MAX, DYN_ESCALATE_AFTER_MIN, v)  # גבוה→מהר יותר
+    escalate_slip_bps = _lerp(DYN_ESCALATE_SLIP_MAX_BPS, DYN_ESCALATE_SLIP_MIN_BPS, v)  # גבוה→סף נמוך יותר
+    slip_guard_bps    = _lerp(DYN_SLIP_GUARD_MIN_BPS, DYN_SLIP_GUARD_MAX_BPS, v)  # גבוה→Guard רחב יותר
 
-    # שוק חם → סליפג' גארד סובלני יותר
-    slip_guard = SLIPPAGE_GUARD_BPS * (1.0 + 1.0 * heat)
+    # ביטולים: אם CANCEL_TTL_SEC=0 → TTL נגזר סביב escalate_after (גבולות מ-ENV)
+    ttl_dynamic = None
+    if CANCEL_TTL_SEC <= 0:
+        base = max(5.0, escalate_after_s)  # עוגן
+        ttl_dynamic = int(_clamp(base * 6, AUTO_CANCEL_TTL_MIN, AUTO_CANCEL_TTL_MAX))
 
-    # שוק חם → הסלמה מהר יותר (מחכים פחות), אבל לא פחות מהמינימום
-    escalate_after = ESCALATE_AFTER_S / (1.0 + 0.7 * heat)
-
-    # טריגר סליפג' להסלמה — נמוך יותר בשוק חם (מוכן להסלים מוקדם)
-    escalate_slip = ESCALATE_SLIP_BPS / (1.0 + 0.5 * heat)
-
-    entry = _clamp(entry, DYN_ENTRY_MIN_BPS, DYN_ENTRY_MAX_BPS)
-    stop  = _clamp(stop,  DYN_STOP_MIN_BPS,  DYN_STOP_MAX_BPS)
-    slip_guard = _clamp(slip_guard, DYN_SLIP_GUARD_MIN_BPS, DYN_SLIP_GUARD_MAX_BPS)
-    escalate_after = _clamp(escalate_after, DYN_ESCALATE_AFTER_MIN, DYN_ESCALATE_AFTER_MAX)
-    escalate_slip  = _clamp(escalate_slip,  DYN_ESCALATE_SLIP_MIN_BPS, DYN_ESCALATE_SLIP_MAX_BPS)
+    # min/max age לחלון ביטול: בגדול, בוולטליות גבוהה מנקים מהר יותר
+    cancel_min_age_sec = int(_lerp(20, 5, v))   # 20s ברגוע → 5s בחם
+    cancel_max_age_sec = int(_lerp(900, 120, v))  # 15m ברגוע → 2m בחם
 
     return {
-        "entry_bps": float(entry),
-        "stop_bps": float(stop),
-        "slip_guard_bps": float(slip_guard),
-        "escalate_after_s": float(escalate_after),
-        "escalate_slip_bps": float(escalate_slip),
+        "atr_pct": atr_pct, "vol_score": v,
+        "entry_band_bps": entry_band_bps,
+        "stop_band_bps": stop_band_bps,
+        "escalate_after_s": escalate_after_s,
+        "escalate_slip_bps": escalate_slip_bps,
+        "slippage_guard_bps": slip_guard_bps,
+        "cancel_min_age_sec": cancel_min_age_sec,
+        "cancel_max_age_sec": cancel_max_age_sec,
+        "cancel_ttl_sec": int(CANCEL_TTL_SEC or (ttl_dynamic or 0)),
     }
 
-# ─────────── Cancel old closing orders (TP/SL) — דינמי ───────────
+# ─────────── Cancel old closing orders (TP/SL) — חכם + דינמי ───────────
 def _order_age_sec(o: Dict[str, Any]) -> Optional[float]:
     now_ms = int(time.time() * 1000)
     ts_ms = None
@@ -461,36 +486,29 @@ def _order_age_sec(o: Dict[str, Any]) -> Optional[float]:
         return max(0.0, (now_ms - ts_ms) / 1000.0)
     return None
 
-def _effective_cancel_min_age_sec(symbol: str) -> int:
-    if not DYNAMIC_POLICY_ENABLE:
-        return int(CANCEL_MIN_AGE_SEC)
-    heat = _heat_factor(symbol)
-    dyn = int(round(DYN_CANCEL_BASE_SEC * (1.0 + 0.8 * heat)))
-    dyn = int(_clamp(dyn, float(DYN_CANCEL_MIN_SEC), float(DYN_CANCEL_MAX_SEC)))
-    if CANCEL_MIN_AGE_SEC > 0:
-        dyn = max(dyn, int(CANCEL_MIN_AGE_SEC))
-    return dyn
-
-def _effective_cancel_max_age_sec() -> int:
-    return int(CANCEL_MAX_AGE_SEC)
-
 def _cancel_old_closing_orders(symbol: str) -> int:
+    """
+    דינמי לפי מצב שוק:
+      • ב-ONEWAY + CANCEL_ONLY_PREFIXED_IN_ONEWAY=1 → מבטל רק עם prefix.
+      • אם CANCEL_ONLY_REDUCE_ONLY=1 → מבטל רק reduceOnly.
+      • חלון גיל דינמי: cancel_min_age_sec ≤ age ≤ cancel_max_age_sec.
+    """
     try:
+        dp = _dynamic_policy(symbol, side="BUY") if DYNAMIC_POLICY_ENABLE else None
+        min_age = int(dp["cancel_min_age_sec"]) if dp else CANCEL_MIN_AGE_SEC
+        max_age = int(dp["cancel_max_age_sec"]) if dp else CANCEL_MAX_AGE_SEC
+
         orders = get_all_orders(symbol, limit=100) or []
         tps = ("TAKE_PROFIT", "TAKE_PROFIT_MARKET")
         sls = ("STOP", "STOP_MARKET")
         pref = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
         pos_mode = _detect_position_mode()   # 'HEDGE' / 'ONEWAY'
         is_oneway = (pos_mode == "ONEWAY")
-
         only_pref = False
-        if CANCEL_ONLY_PREFIXED_IN_ONEWAY and is_oneway and pref:
+        if CANCEL_ONLY_PREFIXED_IN_ONEWAY and is_oneway:
             only_pref = True
         elif CANCEL_ONLY_PREFIXED_ORDERS and pref:
             only_pref = True
-
-        eff_min = _effective_cancel_min_age_sec(symbol)
-        eff_max = _effective_cancel_max_age_sec()
 
         count = 0
         for o in orders:
@@ -501,18 +519,21 @@ def _cancel_old_closing_orders(symbol: str) -> int:
             if typ not in tps + sls:
                 continue
 
+            # ReduceOnly filter
             if CANCEL_ONLY_REDUCE_ONLY:
                 ro = bool(o.get("reduceOnly", False))
                 if not ro:
                     continue
 
+            # Age window filter
             age = _order_age_sec(o)
             if age is not None:
-                if eff_min > 0 and age < eff_min:
+                if min_age > 0 and age < min_age:
                     continue
-                if eff_max > 0 and age > eff_max:
+                if max_age > 0 and age > max_age:
                     continue
 
+            # Prefix filter
             if only_pref:
                 coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
                 if not (pref and coid.startswith(pref)):
@@ -589,23 +610,24 @@ def _build_ladders(sym: str, side: str, qty: float,
     if tp_targets: _prep("TP", tp_targets, tp_splits, +1 if side=="BUY" else -1)
     if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
     return plan
-# ─────────── Hybrid entry + escalation (עם פרמטרים דינמיים + positionSide ב-HEDGE) ───────────
+
+# ─────────── Hybrid entry + escalation (עם policy דינמית + positionSide ב-HEDGE) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
                               ref_entry: Optional[float], is_hedge: bool,
-                              dyn: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-    dyn = dyn or _effective_trade_params(sym, side)
-    entry_bps = float(dyn["entry_bps"]); stop_bps = float(dyn["stop_bps"])
-    slip_guard_bps = float(dyn["slip_guard_bps"])
-    escalate_after_s = float(dyn["escalate_after_s"])
-    escalate_slip_bps = float(dyn["escalate_slip_bps"])
+                              pol: Dict[str, Any]) -> Dict[str, Any]:
+    ebps = float(pol.get("entry_band_bps", ENTRY_BAND_BPS))
+    sbps = float(pol.get("stop_band_bps",  STOP_BAND_BPS))
+    slip_guard_bps = float(pol.get("slippage_guard_bps", SLIPPAGE_GUARD_BPS))
+    escalate_after = float(pol.get("escalate_after_s", ESCALATE_AFTER_S))
+    escalate_slip  = float(pol.get("escalate_slip_bps", ESCALATE_SLIP_BPS))
 
     ref = ref_entry if ref_entry is not None else base_price
     if side == "BUY":
-        limit_price = _offset_bps(ref, -entry_bps, +1)
-        stop_price  = _offset_bps(ref, +stop_bps,  +1)
+        limit_price = _offset_bps(ref, -ebps, +1)
+        stop_price  = _offset_bps(ref, +sbps, +1)
     else:
-        limit_price = _offset_bps(ref, +entry_bps, +1)
-        stop_price  = _offset_bps(ref, -stop_bps,  +1)
+        limit_price = _offset_bps(ref, +ebps, +1)
+        stop_price  = _offset_bps(ref, -sbps, +1)
 
     # Slippage guard מול המחיר העדכני לפני פתיחת הזמנות
     cur = get_price(sym) or futures_mark_price(sym) or base_price
@@ -617,7 +639,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    order_common_open: Dict[str, Any] = {}
+    order_common_open = {}
     if is_hedge:
         order_common_open["positionSide"] = _pos_side_for_open(side)
 
@@ -669,11 +691,11 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "STOP", "price": stp_fill_px, "sanity_bps": bps, "sanity_ok": bps <= POST_FILL_SANITY_BPS, "order": stp}
             return {"ok": True, "entry_kind": "STOP", "price": stp_fill_px or stop_p, "sanity_bps": None, "sanity_ok": True, "order": stp}
 
-        if time.time() - t0 >= escalate_after_s:
+        if time.time() - t0 >= escalate_after:
             cur = get_price(sym) or futures_mark_price(sym) or base_price
             slip_bps = abs(cur - limit_p) / max(limit_p, 1e-9) * 10000.0
             gate = _quality_gate(sym, side)
-            justified = (gate.get("enter_ok") is True) and (slip_bps >= escalate_slip_bps)
+            justified = (gate.get("enter_ok") is True) and (slip_bps >= escalate_slip)
             if ALLOW_MARKET_ENTRY and justified:
                 try:
                     if lim_id: futures_cancel_order(sym, lim_id)
@@ -681,7 +703,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 try:
                     if stp_id: futures_cancel_order(sym, stp_id)
                 except Exception: pass
-                order_common_mkt: Dict[str, Any] = {}
+                order_common_mkt = {}
                 if is_hedge:
                     order_common_mkt["positionSide"] = _pos_side_for_open(side)
                 mkt = futures_create_order(symbol=sym, side=side, type="MARKET", quantity=qty_str, **order_common_mkt)
@@ -690,7 +712,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
-
 # ─────────── Public API ───────────
 async def execute_trade_live(
     symbol: str, side: str, *,
@@ -717,9 +738,6 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # פרמטרים דינמיים למסחר
-    dyn = _effective_trade_params(sym, side)
-
     # Percent-Price Guard
     ref_for_guard = float(entry or base_price)
     mk = float(get_price(sym) or futures_mark_price(sym) or base_price)
@@ -735,7 +753,6 @@ async def execute_trade_live(
         qty_calc_error = str(e)
 
     gate = _quality_gate(sym, side)
-
     # ✅ Risk preview
     risk = pre_trade_risk_check(sym, side, leverage, entry)
 
@@ -745,6 +762,19 @@ async def execute_trade_live(
                     "entry_bucket": round(ref_for_guard, 5)}
     if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
         return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
+
+    # מדיניות דינמית לפי השוק
+    pol = _dynamic_policy(sym, side) if DYNAMIC_POLICY_ENABLE else {
+        "entry_band_bps": ENTRY_BAND_BPS,
+        "stop_band_bps": STOP_BAND_BPS,
+        "escalate_after_s": ESCALATE_AFTER_S,
+        "escalate_slip_bps": ESCALATE_SLIP_BPS,
+        "slippage_guard_bps": SLIPPAGE_GUARD_BPS,
+        "cancel_min_age_sec": CANCEL_MIN_AGE_SEC,
+        "cancel_max_age_sec": CANCEL_MAX_AGE_SEC,
+        "cancel_ttl_sec": int(CANCEL_TTL_SEC or 0),
+        "atr_pct": None, "vol_score": None,
+    }
 
     # הרחבת TP/SL מסטרינגים ב-ENV אם לא הגיעו מבחוץ
     if tp is None and not tp_targets and LADDER_TP_ENABLE:
@@ -769,12 +799,17 @@ async def execute_trade_live(
         plan: Dict[str, Any] = {
             "ok": True, "symbol": sym, "side": side, "leverage": leverage,
             "base_price": base_price, "dry_run": True,
-            "entry_policy": f"HYBRID_LIMIT_STOP({round(dyn['entry_bps'],2)}/{round(dyn['stop_bps'],2)}bps)+MARKET_ESCALATION",
+            "entry_policy": f"HYBRID_LIMIT_STOP({pol['entry_band_bps']}/{pol['stop_band_bps']}bps)+MARKET_ESCALATION",
             "gate": gate, "risk": risk, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
-            "guards": {"percent_price_bps": pp_bps, "slippage_guard_bps": dyn["slip_guard_bps"]},
+            "guards": {
+                "percent_price_bps": pp_bps,
+                "slippage_guard_bps": pol["slippage_guard_bps"],
+                "escalate_after_s": pol["escalate_after_s"],
+                "escalate_slip_bps": pol["escalate_slip_bps"],
+            },
             "position_mode": pos_mode, "position_side": ("LONG/SHORT" if is_hedge else "BOTH"),
             "reduce_only": reduce_only,
-            "dynamic": dyn,
+            "dynamic": {"enabled": DYNAMIC_POLICY_ENABLE, "atr_pct": pol.get("atr_pct"), "vol_score": pol.get("vol_score")},
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
@@ -782,10 +817,9 @@ async def execute_trade_live(
                                      ([sl] if sl is not None else sl_targets), sl_splits)
             plan.update({"qty": qty, **ladders})
             plan["entry_simulation"] = {
-                "limit_around": _offset_bps(entry or base_price, (-dyn["entry_bps"] if side=="BUY" else +dyn["entry_bps"]), +1),
-                "stop_around":  _offset_bps(entry or base_price, (+dyn["stop_bps"]  if side=="BUY" else -dyn["stop_bps"]), +1),
-                "escalate_after_sec": dyn["escalate_after_s"],
-                "escalate_slip_bps": dyn["escalate_slip_bps"],
+                "limit_around": _offset_bps(entry or base_price, (-pol["entry_band_bps"] if side=="BUY" else +pol["entry_band_bps"]), +1),
+                "stop_around":  _offset_bps(entry or base_price, (+pol["stop_band_bps"]  if side=="BUY" else -pol["stop_band_bps"]), +1),
+                "escalate_after_sec": pol["escalate_after_s"], "escalate_slip_bps": pol["escalate_slip_bps"],
                 "allow_market_entry": ALLOW_MARKET_ENTRY,
             }
         return plan
@@ -802,12 +836,15 @@ async def execute_trade_live(
             return {"ok": False, "reason": "telegram_chat_id_required"}
         approval = await require_approval(telegram_chat_id, {
             "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
-            "dyn_entry_bps": round(dyn["entry_bps"], 2), "dyn_stop_bps": round(dyn["stop_bps"], 2),
+            "entry_band_bps": pol["entry_band_bps"],
+            "stop_band_bps": pol["stop_band_bps"],
+            "escalate_after_s": pol["escalate_after_s"],
+            "escalate_slip_bps": pol["escalate_slip_bps"],
         })
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # Hygiene: בטל TP/SL קודמים לפי המדיניות החכמה
+    # Hygiene: בטל TP/SL קודמים לפי המדיניות החכמה/דינמית
     _cancel_old_closing_orders(sym)
 
     try:
@@ -815,7 +852,7 @@ async def execute_trade_live(
     except Exception as e:
         log.warning("set_leverage failed: %s", e)
 
-    entry_res = await _place_hybrid_entry(sym, side, qty, base_price, entry, is_hedge, dyn)
+    entry_res = await _place_hybrid_entry(sym, side, qty, base_price, entry, is_hedge, pol)
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
@@ -825,12 +862,12 @@ async def execute_trade_live(
     plan: Dict[str, Any] = {
         "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
         "base_price": base_price, "dry_run": False,
-        "entry_policy": f"HYBRID_LIMIT_STOP({round(dyn['entry_bps'],2)}/{round(dyn['stop_bps'],2)}bps)+MARKET_ESCALATION",
+        "entry_policy": f"HYBRID_LIMIT_STOP({pol['entry_band_bps']}/{pol['stop_band_bps']}bps)+MARKET_ESCALATION",
         "gate": gate, "risk": risk, "entry_result": entry_res,
         "tp_orders": [], "sl_orders": [],
         "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
         "position_mode": pos_mode,
-        "dynamic": dyn,
+        "dynamic": {"enabled": DYNAMIC_POLICY_ENABLE, "atr_pct": pol.get("atr_pct"), "vol_score": pol.get("vol_score")},
     }
 
     close_side = "SELL" if side=="BUY" else "BUY"
@@ -864,6 +901,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
