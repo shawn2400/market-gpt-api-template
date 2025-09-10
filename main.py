@@ -1,259 +1,269 @@
-# utils/runtime_counters.py
+# main.py
 from __future__ import annotations
-import os, time, logging
-from collections import deque
-from typing import Dict, Any, Optional, Tuple, List
+import os
+import asyncio
+import logging
+from pathlib import Path
+from typing import Any, Dict
 
-logger = logging.getLogger("algogpt.runtime")
+from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
+from prometheus_client import make_asgi_app
+import httpx
 
-ALPHA_WS   = float(os.getenv("WS_LAT_EWMA_ALPHA",  "0.2"))
-ALPHA_EXEC = float(os.getenv("EXEC_TICK_EWMA_ALPHA","0.2"))
+from utils.json_logger import setup_json_logging
+from utils.response_limits import ResponseSizeLimiter
+from utils.auth import extract_token, allow_all, token_matches
+from utils.binance_client import fapi_ping, futures_balance, get_price
+from utils.metrics_middleware import MetricsMiddleware
+from app.middlewares import InternalAuthMiddleware
+from utils.trade_executor import ConfirmStore
 
-TTL_ALERT_SEC           = int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC", "10"))
-TIMEOUT_BURST_ALERT     = int(os.getenv("EXEC_TIMEOUT_BURST_ALERT", "3"))
-OPS_TICK_ENABLE         = os.getenv("OPS_TICK_ENABLE","1").lower() in ("1","true","on","yes")
-
-DRIFT_BPS_ALERT         = float(os.getenv("PRICE_DRIFT_BPS_ALERT","25"))
-DRIFT_DEGRADE_ENABLE    = os.getenv("OPS_DRIFT_DEGRADE_ENABLE","1").lower() in ("1","true","on","yes")
-DRIFT_DEGRADE_MIN_BPS   = float(os.getenv("OPS_DRIFT_DEGRADE_MIN_BPS","30"))
-
-OPS_TTL_ALERT_TELEGRAM      = os.getenv("OPS_TTL_ALERT_TELEGRAM","1").lower() in ("1","true","on","yes")
-OPS_TIMEOUT_BURST_TELEGRAM  = os.getenv("OPS_TIMEOUT_BURST_TELEGRAM","1").lower() in ("1","true","on","yes")
-OPS_DRIFT_ALERT_TELEGRAM    = os.getenv("OPS_DRIFT_ALERT_TELEGRAM","1").lower() in ("1","true","on","yes")
-OPS_ALERT_COOLDOWN_SEC      = int(os.getenv("OPS_ALERT_COOLDOWN_SEC", "120"))
-
-DEGRADE_MAX_LEV         = int(os.getenv("OPS_DEGRADE_MAX_LEVERAGE","12"))
-ADX_SAFETY_MAX_LEV      = int(os.getenv("OPS_ADX_SAFETY_MAX_LEVERAGE","15"))
-
-HEALTH_SYMBOLS = [s.strip().upper() for s in os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
-
-# ---- Telegram helper ----
-async def _notify_tg(msg: str) -> None:
-    try:
-        from utils.telegram_notifier import notify_ops_alert
-        await notify_ops_alert(msg)
-        return
-    except Exception:
-        pass
-    try:
-        from utils.telegram_notifier import notify_scan_error
-        await notify_scan_error(msg)
-    except Exception:
-        logger.info({"event":"ops.alert", "msg": msg})
-
-_last_alert_ts: Dict[str,float] = {}
-def _cooldown_ok(key: str, cool_s: int) -> bool:
-    now = time.time()
-    ts  = _last_alert_ts.get(key, 0.0)
-    if now - ts >= cool_s:
-        _last_alert_ts[key] = now
-        return True
-    return False
-
-# ---- WS counters ----
-_ws_running = False
-_ws_reconnects = 0
-_ws_last_event_ts: Optional[float] = None
-_ws_ewma_inter_ms: Optional[float] = None
-
-def ws_on_connect():  # original
-    global _ws_running
-    _ws_running = True
-
-def ws_on_disconnect():  # original
-    global _ws_running
-    _ws_running = False
-
-def ws_on_reconnect():  # original
-    global _ws_reconnects
-    _ws_reconnects += 1
-
-def ws_on_event(latency_ms: Optional[float] = None):  # original
-    global _ws_last_event_ts, _ws_ewma_inter_ms
-    now = time.time()
-    if _ws_last_event_ts:
-        inter_ms = (now - _ws_last_event_ts) * 1000.0
-        _ws_ewma_inter_ms = inter_ms if _ws_ewma_inter_ms is None else (1.0 - ALPHA_WS) * _ws_ewma_inter_ms + ALPHA_WS * inter_ms
-    _ws_last_event_ts = now
-
-# aliases to match current ws_user_stream.py
-def ws_note_event(*, latency_ms: Optional[float] = None): ws_on_event(latency_ms)
-def ws_note_reconnect(): ws_on_reconnect()
-def ws_note_up(is_up: bool):
-    if is_up: ws_on_connect()
-    else: ws_on_disconnect()
-
-def ws_user_status() -> Dict[str, Any]:
-    ttl = None
-    if _ws_last_event_ts:
-        ttl = max(0.0, time.time() - _ws_last_event_ts)
-    return {
-        "running": bool(_ws_running),
-        "reconnects": int(_ws_reconnects),
-        "last_event_ts": int(_ws_last_event_ts or 0),
-        "ttl_sec": round(ttl or 0.0, 3),
-        "inter_event_ewma_ms": round(_ws_ewma_inter_ms or 0.0, 3),
+# ────────────────────────────────────────────────────────────────────────────────
+# Logging
+# ────────────────────────────────────────────────────────────────────────────────
+def _coerce_log_level(val):
+    import logging as _l
+    if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
+        return int(val)
+    m = {
+        "debug": _l.DEBUG,
+        "info": _l.INFO,
+        "warning": _l.WARNING, "warn": _l.WARNING,
+        "error": _l.ERROR, "critical": _l.CRITICAL
     }
+    return m.get(str(val).strip().lower(), _l.INFO)
 
-# ---- Executor counters ----
-_exec_last_tick_ms: Optional[float] = None
-_exec_ewma_ms: Optional[float] = None
-_exec_last_tick_ts: Optional[float] = None
-_exec_no_trade_streak: int = 0
-_exec_current_interval: int = int(os.getenv("SCAN_INTERVAL","60"))
-_timeout_events: deque[float] = deque(maxlen=512)
+logger = setup_json_logging()
+logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
-def exec_on_batch_timeout():
-    _timeout_events.append(time.time())
+# ────────────────────────────────────────────────────────────────────────────────
+# FS bootstrap
+# ────────────────────────────────────────────────────────────────────────────────
+for d in ("static", "logs"):
+    try:
+        Path(d).mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.warning({"event": "mkdir_failed", "dir": d, "error": str(e)})
 
-def exec_on_trade_sent(symbol: str):
-    pass
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
+app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
 
-def exec_on_tick_stop(dt_ms: float, current_interval: int, no_trade_streak: int):
-    global _exec_last_tick_ms, _exec_ewma_ms, _exec_last_tick_ts, _exec_current_interval, _exec_no_trade_streak
-    _exec_last_tick_ms = float(dt_ms)
-    _exec_last_tick_ts = time.time()
-    _exec_current_interval = int(current_interval)
-    _exec_no_trade_streak = int(no_trade_streak)
-    _exec_ewma_ms = _exec_last_tick_ms if _exec_ewma_ms is None else (1.0 - ALPHA_EXEC) * _exec_ewma_ms + ALPHA_EXEC * _exec_last_tick_ms
+# ────────────────────────────────────────────────────────────────────────────────
+# Middlewares
+# ────────────────────────────────────────────────────────────────────────────────
+app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-def executor_status() -> Dict[str, Any]:
-    burst_60s = sum(1 for t in _timeout_events if t >= time.time() - 60)
-    return {
-        "last_tick_ms": round(_exec_last_tick_ms or 0.0, 3),
-        "tick_ewma_ms": round(_exec_ewma_ms or 0.0, 3),
-        "last_tick_ts": int(_exec_last_tick_ts or 0),
-        "timeouts_last_60s": int(burst_60s),
-        "current_interval_sec": int(_exec_current_interval),
-        "no_trade_streak": int(_exec_no_trade_streak),
+UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
+CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o]
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
+)
+app.add_middleware(InternalAuthMiddleware)
+app.add_middleware(MetricsMiddleware)
+app.mount("/metrics", make_asgi_app())
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Auth gate (public paths vs. token)
+# ────────────────────────────────────────────────────────────────────────────────
+@app.middleware("http")
+async def validate_token(request: Request, call_next):
+    PUBLIC_PATHS = {
+        "/", "/openapi.json", "/health", "/healthz", "/readyz",
+        "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"
     }
+    PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk", "/metrics", "/status/ping", "/status/ws", "/status/executor", "/status/all"]
 
-# ---- Dynamic leverage cap (Degrade/Bump) ----
-_degrade_active = False
-_dynamic_max_lev: Optional[int] = None
+    path = request.url.path
+    if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+        return await call_next(request)
+    if allow_all():
+        return await call_next(request)
 
-def ops_gate_degrade_active(enable: bool = True, *, cap_leverage: Optional[int] = None):
-    global _degrade_active, _dynamic_max_lev
-    _degrade_active = bool(enable)
-    _dynamic_max_lev = int(cap_leverage or DEGRADE_MAX_LEV) if enable else None
-    logger.warning({"event":"ops.degrade", "active": _degrade_active, "max_lev": _dynamic_max_lev})
+    token = extract_token(request, request.headers.get("Authorization", ""), request.headers.get("X-API-Key"))
+    if not token_matches(token):
+        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    return await call_next(request)
 
-def ops_gate_bump():
-    ops_gate_degrade_active(False)
-
-def get_current_max_leverage(default_max: int) -> int:
-    if _dynamic_max_lev is None:
-        return int(default_max)
-    return int(max(1, min(_dynamic_max_lev, default_max)))
-
-# ---- Price feed TTL helper ----
-def _get_ws_price_ttl_sec() -> float:
+# ────────────────────────────────────────────────────────────────────────────────
+# Include routers (dynamic safe import)
+# ────────────────────────────────────────────────────────────────────────────────
+for module_path in (
+    "routes.trade",
+    "routes.analytics",
+    "routes.decision",
+    "routes.backtest",
+    "routes.executor",
+    "routes.binance_status",
+    "routes.telegram_webhook",     # אם קיים — לא חובה כי יש לנו כאן webhook מובנה
+    "routes.grid",
+    "routes.executor_control",
+    "routes.ws_user_stream",       # אם יש מודול כזה אצלך
+    "routes.ai_analyze",           # ✅ /ai/analyze עם Rate-Limit
+    "routes.ws_user_status",       # ✅ חדש: /status/ws, /status/all, /status/ping
+    "routes.executor_status",      # ✅ חדש: /status/executor
+):
     try:
-        from utils import ws_fallback  # must expose get_last_ts(sym)
-        now = time.time()
-        ttls: List[float] = []
-        for sym in HEALTH_SYMBOLS:
-            try:
-                ts = float(ws_fallback.get_last_ts(sym))
-                if ts > 0:
-                    ttls.append(max(0.0, now - ts))
-            except Exception:
-                pass
-        if ttls:
-            return max(ttls)
-    except Exception:
-        pass
-    if _ws_last_event_ts:
-        return max(0.0, time.time() - _ws_last_event_ts)
-    return 1e9
+        mod = __import__(module_path, fromlist=["router"])
+        if hasattr(mod, "router"):
+            app.include_router(mod.router)
+            logger.info({"event": "router_registered", "router": module_path})
+        else:
+            logger.warning({"event": "router_missing_router_attr", "router": module_path})
+    except Exception as e:
+        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
 
-# ---- Drift (Mark vs Index) ----
-def _index_price(symbol: str) -> Optional[float]:
+# ────────────────────────────────────────────────────────────────────────────────
+# Meta & Health
+# ────────────────────────────────────────────────────────────────────────────────
+@app.get("/")
+async def root():
+    return {"ok": True, "status": "ok", "service": "app_full", "title": "AlgoGPT API", "version": APP_VERSION}
+
+@app.get("/health")
+async def health():
+    return {"ok": True, "status": "ok"}
+
+@app.get("/debug/health", include_in_schema=False)
+async def debug_health():
+    return {"ok": True, "status": "ok", "env": os.getenv("ENV", "prod"), "version": APP_VERSION}
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Price (בדיקות)
+# ────────────────────────────────────────────────────────────────────────────────
+@app.get("/price/{symbol}")
+async def price(symbol: str):
     try:
-        from utils.binance_client import futures_index_price as _fip
-        p = _fip(symbol)
-        if p and p > 0:
-            return float(p)
+        p = get_price(symbol)
     except Exception:
-        pass
+        p = None
+    return {"symbol": symbol.upper(), "price": p, "fresh": bool(p and p > 0)}
+
+@app.get("/readyz")
+async def readyz():
     try:
-        from utils.binance_client import get_futures_client
-        c = get_futures_client()
-        data = c.futures_premium_index(symbol=symbol.upper())
-        p = float(data.get("indexPrice"))
-        if p > 0:
-            return p
+        ping_ok = bool(fapi_ping())
     except Exception:
-        return None
-    return None
-
-def _mark_price(symbol: str) -> Optional[float]:
+        ping_ok = False
     try:
-        from utils.binance_client import futures_mark_price
-        return futures_mark_price(symbol)
+        bal = futures_balance()
+        balance_ok = bool(bal and isinstance(bal, list))
     except Exception:
-        return None
+        balance_ok = False
+    prices: Dict[str, Any] = {}
+    for s in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
+        try:
+            prices[f"price_{s}"] = get_price(s)
+        except Exception:
+            prices[f"price_{s}"] = None
+    return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
-def _check_price_drift() -> Tuple[float, Optional[str], Optional[float], Optional[float]]:
-    max_bps = -1.0
-    max_sym: Optional[str] = None
-    max_m: Optional[float] = None
-    max_i: Optional[float] = None
-    for sym in HEALTH_SYMBOLS:
-        idx = _index_price(sym)
-        mrk = _mark_price(sym)
-        if not idx or not mrk or idx <= 0:
-            continue
-        bps = abs(mrk - idx) / idx * 10000.0
-        if bps > max_bps:
-            max_bps, max_sym, max_m, max_i = bps, sym, mrk, idx
-    return (max_bps if max_bps >= 0 else 0.0, max_sym, max_m, max_i)
+# ────────────────────────────────────────────────────────────────────────────────
+# Telegram webhook & ping (public)
+# ────────────────────────────────────────────────────────────────────────────────
+WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
 
-# ---- Ops tick (alerts) ----
-def _count_timeouts_last_60s() -> int:
-    now = time.time()
-    return sum(1 for t in _timeout_events if t >= now - 60)
-
-def _fmt_bps(x: float) -> str: return f"{x:.1f}bps"
-def _fmt_price(x: Optional[float]) -> str: return "NA" if x is None else f"{x:.6f}"
-
-def ops_tick_safe():
-    if not OPS_TICK_ENABLE:
+async def _tg_send(chat_id: int, text: str):
+    if not BOT_TOKEN:
         return
     try:
-        ttl = _get_ws_price_ttl_sec()
-        if OPS_TTL_ALERT_TELEGRAM and ttl > TTL_ALERT_SEC and _cooldown_ok("ttl", OPS_ALERT_COOLDOWN_SEC):
-            import asyncio; asyncio.create_task(_notify_tg(f"⚠️ TTL Alert: price_feed ttl={ttl:.1f}s > {TTL_ALERT_SEC}s"))
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/sendMessage", data={
+                "chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True
+            })
     except Exception as e:
-        logger.debug({"event":"ops.ttl_check_err", "err": str(e)})
+        logging.getLogger("algogpt.telegram").warning("telegram send failed: %s", e)
 
+@app.get("/telegram/ping", include_in_schema=False)
+async def tg_ping():
+    return {"ok": True, "src": "telegram", "ts_ms": int(asyncio.get_event_loop().time() * 1000)}
+
+@app.post("/telegram/webhook", include_in_schema=False)
+async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
+    if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
+        raise HTTPException(401, "Invalid telegram secret")
+    update = await request.json()
+
+    # Handle inline callback buttons: "CONFIRM:APPROVE:<cid>" / "CONFIRM:REJECT:<cid>"
+    cb = update.get("callback_query")
+    if cb:
+        data = str(cb.get("data", ""))  # e.g., "CONFIRM:APPROVE:<cid>"
+        chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
+        chat_id = int(chat.get("id", 0))
+        parts = data.split(":", 2)
+        if len(parts) == 3 and parts[0] == "CONFIRM":
+            action, cid = parts[1], parts[2]
+            approver = str(cb.get("from", {}).get("username") or chat_id)
+            if action == "APPROVE":
+                ConfirmStore.approve(cid, approver=approver)
+                await _tg_send(chat_id, "✅ אושר. מפעיל את הטרייד.")
+            else:
+                ConfirmStore.reject(cid, approver=approver)
+                await _tg_send(chat_id, "❌ בוטל. הטרייד לא יצא לפועל.")
+        return {"ok": True}
+
+    # Simple "/ping"
+    msg = update.get("message")
+    if msg and str(msg.get("text", "")).strip() == "/ping":
+        chat_id = int(msg.get("chat", {}).get("id", 0))
+        await _tg_send(chat_id, "pong ✅")
+        return {"ok": True}
+
+    return {"ok": True}
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Auto setWebhook (optional)
+# ────────────────────────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def _startup_webhook():
+    if not BOT_TOKEN or not TELEGRAM_AUTO_WEBHOOK:
+        return
+    public_host = os.getenv("PUBLIC_HOST", "").strip()
+    if not public_host:
+        return
     try:
-        burst = _count_timeouts_last_60s()
-        if OPS_TIMEOUT_BURST_TELEGRAM and burst >= TIMEOUT_BURST_ALERT and _cooldown_ok("timeout_burst", OPS_ALERT_COOLDOWN_SEC):
-            import asyncio; asyncio.create_task(_notify_tg(f"⏱️ Timeout Burst: last_60s={burst} (≥{TIMEOUT_BURST_ALERT})"))
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/setWebhook", data={
+                "url": f"{public_host}/telegram/webhook",
+                "secret_token": WEBHOOK_SECRET,
+                "drop_pending_updates": "true",
+                "max_connections": "40",
+            })
     except Exception as e:
-        logger.debug({"event":"ops.timeout_check_err", "err": str(e)})
+        logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# WS User-Data Stream autostart (Plug-and-Play)
+# ────────────────────────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def _startup_user_stream():
     try:
-        max_bps, sym, mrk, idx = _check_price_drift()
-        if sym and max_bps >= DRIFT_BPS_ALERT:
-            if OPS_DRIFT_ALERT_TELEGRAM and _cooldown_ok("drift", OPS_ALERT_COOLDOWN_SEC):
-                import asyncio
-                asyncio.create_task(_notify_tg(
-                    f"📉 Price-Drift: {sym} | drift={_fmt_bps(max_bps)} (mark={_fmt_price(mrk)} vs index={_fmt_price(idx)}) | thr={_fmt_bps(DRIFT_BPS_ALERT)}"
-                ))
-            if DRIFT_DEGRADE_ENABLE and max_bps >= max(DRIFT_BPS_ALERT, DRIFT_DEGRADE_MIN_BPS) and _dynamic_max_lev is None:
-                ops_gate_degrade_active(True, cap_leverage=DEGRADE_MAX_LEV)
-                logger.warning({"event":"ops.degrade_by_drift", "symbol": sym, "bps": round(max_bps,1), "cap": DEGRADE_MAX_LEV})
+        if os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1", "true", "yes", "on"):
+            from utils import ws_user_stream
+            ws_user_stream.start()
+            logger.info({"event": "ws_user_stream_autostart"})
     except Exception as e:
-        logger.debug({"event":"ops.drift_check_err", "err": str(e)})
+        logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
 
-__all__ = [
-    "exec_on_batch_timeout", "exec_on_trade_sent", "exec_on_tick_stop", "executor_status",
-    "ws_on_connect", "ws_on_disconnect", "ws_on_reconnect", "ws_on_event",
-    "ws_note_event", "ws_note_reconnect", "ws_note_up",
-    "ws_user_status", "ops_tick_safe", "ops_gate_degrade_active", "ops_gate_bump", "get_current_max_leverage",
-]
+# ────────────────────────────────────────────────────────────────────────────────
+# Main
+# ────────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
