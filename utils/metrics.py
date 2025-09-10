@@ -2,25 +2,25 @@
 from __future__ import annotations
 import time, threading
 from collections import deque
-from typing import Dict, Any, Deque, List, Optional
+from typing import Dict, Any, Deque, List
 
 class _Metrics:
     def __init__(self, window_size: int = 2000):
         self.boot_ts = int(time.time())
         self._lock = threading.Lock()
 
-        # Requests / API
+        # HTTP / system latency
         self.total_requests = 0
         self.total_errors = 0
         self.by_status: Dict[int, int] = {}
         self.latencies: Deque[float] = deque(maxlen=window_size)
         self.recent_ts: Deque[float] = deque(maxlen=5000)
 
-        # Trade costs / ops
+        # Trading ops
         self.slippages: Deque[float] = deque(maxlen=window_size)
-        self.order_latencies: Deque[float] = deque(maxlen=window_size)
+        self.order_latencies: Deque[float] = deque(maxlen=window_size)  # גם WS latency/tick latency
 
-        # General counters & gauges (free-form)
+        # Free-form counters & gauges
         self.counters: Dict[str, int] = {}
         self.gauges: Dict[str, float] = {}
 
@@ -35,8 +35,8 @@ class _Metrics:
     def _median(samples: List[float]) -> float:
         if not samples: return 0.0
         s, n = sorted(samples), len(samples)
-        mid = n//2
-        return float(s[mid]) if n%2 else float((s[mid-1]+s[mid])/2.0)
+        mid = n // 2
+        return float(s[mid]) if n % 2 else float((s[mid-1] + s[mid]) / 2.0)
 
     # ===== Observers =====
     def observe_request(self, status_code: int, duration_ms: float) -> None:
@@ -57,7 +57,7 @@ class _Metrics:
         with self._lock:
             self.order_latencies.append(float(ms))
 
-    # ===== Free-form counters & gauges =====
+    # ===== Free-form =====
     def inc(self, key: str, n: int = 1) -> None:
         with self._lock:
             self.counters[key] = self.counters.get(key, 0) + int(n)
@@ -84,8 +84,8 @@ class _Metrics:
                     "total": self.total_requests,
                     "errors_total": self.total_errors,
                     "by_status": dict(sorted(self.by_status.items())),
-                    "rps_5s": round(sum(1 for t in self.recent_ts if t >= time.time()-5)/5.0, 3),
-                    "rps_60s": round(sum(1 for t in self.recent_ts if t >= time.time()-60)/60.0, 3),
+                    "rps_5s": round(sum(1 for t in self.recent_ts if t >= time.time() - 5) / 5.0, 3),
+                    "rps_60s": round(sum(1 for t in self.recent_ts if t >= time.time() - 60) / 60.0, 3),
                 },
                 "latency_ms": {
                     "count": len(lat_list),
