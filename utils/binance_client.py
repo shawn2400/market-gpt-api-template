@@ -182,7 +182,6 @@ def futures_balance() -> List[Dict[str, Any]]:
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
         d = client.futures_mark_price(symbol=symbol.upper())
-        # חלק מהגרסאות מחזירות גם indexPrice; אנחנו מתעניינים רק ב-mark כאן
         return float(d.get("markPrice") or 0.0)
     except Exception as e:
         logger.error("Failed mark price for %s: %s", symbol, e)
@@ -190,11 +189,15 @@ def futures_mark_price(symbol: str) -> Optional[float]:
 
 def futures_index_price(symbol: str) -> Optional[float]:
     """
-    Index price (premiumIndex endpoint).
-    ננסה קודם מתודה רשמית, אח"כ API פנימי של ה-client, ולבסוף HTTP.
+    Index price for a futures symbol (premiumIndex endpoint).
+    Flow:
+      1) client.futures_premium_index(symbol=...)  ← API רשמי
+      2) client._request_futures_api('get','premiumIndex', ...) ← פולבק בספרייה
+      3) HTTP ישיר ל- /fapi/v1/premiumIndex  ← פולבק אחרון
+    מחזיר None אם הכול נכשל.
     """
     sym = symbol.upper()
-    # 1) מתודה רשמית אם קיימת
+    # 1) רשמי
     try:
         if hasattr(client, "futures_premium_index"):
             data = client.futures_premium_index(symbol=sym)
@@ -204,7 +207,7 @@ def futures_index_price(symbol: str) -> Optional[float]:
             return float(p) if p is not None else None
     except Exception as e:
         logger.debug("futures_premium_index method failed: %s", e)
-    # 2) API פנימי של ה-client
+    # 2) API פנימי בספרייה
     try:
         if hasattr(client, "_request_futures_api"):
             data = client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
@@ -214,7 +217,7 @@ def futures_index_price(symbol: str) -> Optional[float]:
             return float(p) if p is not None else None
     except Exception as e:
         logger.debug("_request_futures_api premiumIndex failed: %s", e)
-    # 3) HTTP fallback (httpx לא חובה; אם אין, נחזיר None)
+    # 3) HTTP ישיר
     try:
         import httpx  # type: ignore
         base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
@@ -570,7 +573,6 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
-
 
 
 
