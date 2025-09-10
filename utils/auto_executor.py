@@ -45,7 +45,7 @@ DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
-# Ladder config
+# Ladder config (מופיע גם ב-binance_client; נטען כאן לנוחות)
 LADDER_TP_ENABLE      = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
 LADDER_TP_KIND        = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()  # TAKE_PROFIT or TAKE_PROFIT_MARKET
 LADDER_TP_DEFAULT_PCTS= os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
@@ -57,24 +57,20 @@ TP_LADDER_COOLDOWN_SEC= int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 # Idempotency
 IDEMPOTENCY_TTL_SEC   = int(os.getenv("IDEMPOTENCY_TTL_SEC", "15"))
 
-# Prefix / Cancel policy (ברירת מחדל: אוטומטי)
-ORDER_ID_PREFIX             = os.getenv("ORDER_ID_PREFIX", "ALG").strip()
-CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "").strip().lower() in ("1","true","yes","on")
+# Prefix controls for cancels
+ORDER_ID_PREFIX             = os.getenv("ORDER_ID_PREFIX", "").strip()
+CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE      = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
-# ← אוטומטי: ב-ONEWAY נשתמש ב-prefix gate גם אם לא ביקשת מפורשות
-CANCEL_PREFIX_ONLY_IN_ONEWAY = os.getenv("CANCEL_PREFIX_ONLY_IN_ONEWAY", "1").lower() in ("1","true","yes","on")
+# 🧠 Cancel hygiene (חכם)
+CANCEL_ONLY_REDUCE_ONLY     = os.getenv("CANCEL_ONLY_REDUCE_ONLY", "1").lower() in ("1","true","yes","on")
+CANCEL_MIN_AGE_SEC          = int(os.getenv("CANCEL_MIN_AGE_SEC", "0"))      # אל תבטל צעירות מדי
+CANCEL_MAX_AGE_SEC          = int(os.getenv("CANCEL_MAX_AGE_SEC", "0"))      # אל תיגע בישנות מדי (0=ללא)
+CANCEL_ONLY_PREFIXED_IN_ONEWAY = os.getenv("CANCEL_ONLY_PREFIXED_IN_ONEWAY", "1").lower() in ("1","true","yes","on")
 
-# ← אוטומטי: נעדיף לבטל reduceOnly; אם לא — נבטל רק אם יש prefix שלנו
-CANCEL_ONLY_REDUCEONLY       = os.getenv("CANCEL_ONLY_REDUCEONLY", "").strip().lower() in ("1","true","yes","on")
-
-# ← TTL דינמי: אם 0/ריק, נגזור לפי ESCALATE_AFTER_S (עם גבולות בטוחים)
-CANCEL_TTL_SEC               = int(os.getenv("CANCEL_TTL_SEC", "0") or 0)
-AUTO_CANCEL_TTL_MIN          = int(os.getenv("AUTO_CANCEL_TTL_MIN", "60"))
-AUTO_CANCEL_TTL_MAX          = int(os.getenv("AUTO_CANCEL_TTL_MAX", "900"))
-
-# Position mode override: auto/hedge/oneway (דיפולט auto)
-POSITION_MODE_OVERRIDE = os.getenv("POSITION_MODE_OVERRIDE", "auto").strip().lower()
+# Position mode (auto/hedge/oneway)
+POSITION_SIDE_MODE = os.getenv("POSITION_SIDE_MODE", "auto").strip().lower()  # auto|hedge|oneway
+_POS_MODE_CACHE: Dict[str, Any] = {"mode": None, "ts": 0.0, "ttl": 30.0}
 
 # Telegram
 BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -88,6 +84,40 @@ try:
     _redis_available = bool(REDIS_URL)
 except Exception:
     _redis_available = False
+
+# ─────────── Position mode helpers ───────────
+def _detect_position_mode() -> str:
+    """
+    מחזיר "HEDGE" או "ONEWAY".
+    אם POSITION_SIDE_MODE=auto ננסה לשאוב מהחשבון; אחרת נכבד את ה־ENV.
+    """
+    now = time.time()
+    if _POS_MODE_CACHE["mode"] and now - _POS_MODE_CACHE["ts"] < _POS_MODE_CACHE["ttl"]:
+        return _POS_MODE_CACHE["mode"]  # type: ignore
+
+    mode = "ONEWAY"
+    try:
+        if POSITION_SIDE_MODE in ("hedge", "oneway"):
+            mode = "HEDGE" if POSITION_SIDE_MODE == "hedge" else "ONEWAY"
+        else:
+            cli = get_futures_client()
+            acc = cli.futures_account() or {}
+            dual = bool(acc.get("dualSidePosition"))
+            mode = "HEDGE" if dual else "ONEWAY"
+    except Exception as e:
+        log.warning("position mode detect failed (fallback ONEWAY): %s", e)
+
+    _POS_MODE_CACHE.update({"mode": mode, "ts": now})
+    return mode
+
+def _open_position_side_for(side: str, mode: Optional[str] = None) -> Optional[str]:
+    """
+    עבור HEDGE: BUY→LONG, SELL→SHORT. עבור ONEWAY: החזר None (לא שולחים positionSide).
+    """
+    mode = mode or _detect_position_mode()
+    if mode == "HEDGE":
+        return "LONG" if side == "BUY" else "SHORT"
+    return None
 
 # ─────────── Quantize helpers ───────────
 def _decimals(step_str: str) -> int:
@@ -160,10 +190,12 @@ class _Idem:
                 return bool(ok)
             except Exception as e:
                 log.warning("Idempotency redis error: %s", e)
+        # memory fallback
         ts = cls._mem.get(k, 0.0)
         if now - ts < ttl:
             return False
         cls._mem[k] = now
+        # cleanup (best-effort)
         for kk, vv in list(cls._mem.items()):
             if now - vv > ttl * 2:
                 cls._mem.pop(kk, None)
@@ -221,15 +253,38 @@ class ConfirmStore:
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
 
-    @classmethod
-    def flush_all(cls) -> None:
-        if cls._r:
-            try:
-                for k in cls._r.scan_iter("confirm:*", count=200):
-                    cls._r.delete(k)
-            except Exception as e:
-                log.warning("ConfirmStore.flush_all redis: %s", e)
-        cls._mem.clear()
+async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid: str) -> Dict[str, Any]:
+    if not BOT_TOKEN:
+        return {"ok": False, "error": "BOT_TOKEN missing"}
+    kb = {"inline_keyboard": [[
+        {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
+        {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
+    ]]}
+    text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
+    async with httpx.AsyncClient(timeout=10.0) as cli:
+        r = await cli.post(f"{API_BASE}/sendMessage", data={
+            "chat_id": chat_id, "text": text, "parse_mode": "HTML",
+            "disable_web_page_preview": True, "reply_markup": json.dumps(kb)
+        })
+        try: return r.json()
+        except Exception: return {"ok": False, "error": f"http {r.status_code}"}
+
+async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
+    title = "אישור טרייד"
+    summary = (
+        f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
+        f"qty={payload.get('qty')} lev={payload.get('leverage')}<br/>"
+        f"כניסה: HYBRID (Limit±{ENTRY_BAND_BPS}bps / Stop±{STOP_BAND_BPS}bps)"
+    )
+    await send_confirm_request(chat_id, title, summary, cid)
+    t0 = time.time()
+    while time.time() - t0 < CONFIRM_TTL_SEC:
+        rec = ConfirmStore.get(cid)
+        if rec and rec.get("status") in ("approved", "rejected", "expired"):
+            return {"cid": cid, "status": rec["status"]}
+        await asyncio.sleep(0.5)
+    return {"cid": cid, "status": "expired"}
 
 # ─────────── Light indicators (no pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
@@ -245,6 +300,7 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
         tr = (h-l) if prev is None else max(h-l, abs(h-prev), abs(l-prev))
         trs.append(tr); prev=c
     if len(trs) < period: return trs[-1] if trs else 0.0
+    # Wilder RMA via EMA(alpha=1/period)
     alpha = 1.0/period
     s=None
     for v in trs:
@@ -294,101 +350,66 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         log.warning("quality gate failed: %s", e)
         return {"enter_ok": False, "score": 0.0, "reasons": ["gate_error"]}
 
-# ─────────── Position mode detection ───────────
-def _detect_position_mode() -> str:
+# ─────────── Cancel old closing orders (TP/SL) ───────────
+def _cancel_old_closing_orders(symbol: str, position_side_for_close: Optional[str] = None) -> int:
     """
-    Returns 'hedge' or 'oneway'.
-    Priority: POSITION_MODE_OVERRIDE → API → 'oneway'
-    """
-    ov = POSITION_MODE_OVERRIDE
-    if ov in ("hedge", "oneway"):
-        return ov
-    try:
-        cli = get_futures_client()
-        info = cli.futures_get_position_mode()
-        dual = info.get("dualSidePosition")
-        if isinstance(dual, bool):
-            return "hedge" if dual else "oneway"
-        if isinstance(dual, str):
-            return "hedge" if dual.lower() == "true" else "oneway"
-    except Exception as e:
-        log.debug("detect position mode failed (fallback=oneway): %s", e)
-    return "oneway"
-
-def _auto_cancel_ttl() -> int:
-    if CANCEL_TTL_SEC > 0:
-        return int(CANCEL_TTL_SEC)
-    # TTL דינמי נגזר מהסקיילציה (פי 3), עם גבולות גזרות
-    ttl = int(max(AUTO_CANCEL_TTL_MIN, min(AUTO_CANCEL_TTL_MAX, 3 * ESCALATE_AFTER_S)))
-    return ttl
-
-# ─────────── Cancel old closing orders (TP/SL) — חכם ───────────
-def _cancel_old_closing_orders(symbol: str, mode: str = "oneway", pos_side: str = "BOTH") -> int:
-    """
-    ביטול הזמנות TP/SL פעילות ישנות בצורה אוטומטית-דינמית:
-      • HEDGE: לבטל רק לאותו positionSide (LONG/SHORT).
-      • ONEWAY: לבטל רק הזמנות עם prefix שלנו (גם אם CANCEL_ONLY_PREFIXED_ORDERS לא הופעל ידנית).
-      • העדפה לבטל reduceOnly; אם לא reduceOnly — נבטל רק אם יש prefix שלנו.
-      • אם CANCEL_TTL_SEC=0 → TTL מחושב דינמית לפי ESCALATE_AFTER_S (עם גבולות).
+    מבטל הוראות TP/SL פעילות בלבד. במצב ONEWAY – מבטל רק הזמנות עם prefix אם
+    CANCEL_ONLY_PREFIXED_IN_ONEWAY=1 (ברירת מחדל), כדי לא לפגוע בהוראות ידניות.
+    ניתן גם להגביל לפי positionSide (ב־HEDGE), אם השרת מחזיר שדה כזה בהזמנה.
+    מופעלים גם ספי גיל: CANCEL_MIN_AGE_SEC / CANCEL_MAX_AGE_SEC.
     """
     try:
-        orders = get_all_orders(symbol, limit=100) or []
+        orders = get_all_orders(symbol, limit=80) or []
         tps = ("TAKE_PROFIT", "TAKE_PROFIT_MARKET")
         sls = ("STOP", "STOP_MARKET")
-
         pref = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
-        have_pref = bool(pref)
 
-        def need_prefix_gate() -> bool:
-            if CANCEL_ONLY_PREFIXED_ORDERS:
-                return True
-            if mode == "oneway" and CANCEL_PREFIX_ONLY_IN_ONEWAY:
-                return True
-            return False
-
-        ttl = _auto_cancel_ttl()
-        now = time.time()
+        mode = _detect_position_mode()
+        only_pref_env = bool(CANCEL_ONLY_PREFIXED_ORDERS and pref)
+        only_pref_effective = only_pref_env or (mode == "ONEWAY" and CANCEL_ONLY_PREFIXED_IN_ONEWAY and bool(pref))
         count = 0
+        now = time.time()
 
         for o in orders:
             st = (o.get("status") or "").upper()
-            if st not in ("NEW","PARTIALLY_FILLED"):
+            if st not in ("NEW","PARTIALLY_FILLED"):  # cancel only active
                 continue
             typ = (o.get("type") or "").upper()
             if typ not in tps + sls:
                 continue
 
-            # HEDGE: סנן לצד המתאים
-            if mode == "hedge":
-                o_pos = (o.get("positionSide") or "").upper()
-                if o_pos and o_pos != pos_side.upper():
+            if CANCEL_ONLY_REDUCE_ONLY:
+                ro = o.get("reduceOnly")
+                if ro is not None and not bool(ro):
+                    # אם קיים שדה reduceOnly והוא False – דלג (כנראה הזמנה ידנית/פתיחה)
                     continue
 
-            coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
-            is_prefixed = have_pref and coid.startswith(pref)
-            is_reduce   = bool(o.get("reduceOnly"))
-
-            # העדפת reduceOnly; אם לא—חייב prefix שלנו כדי לא לפגוע בהוראות ידניות
-            if CANCEL_ONLY_REDUCEONLY:
-                if not is_reduce:
-                    continue
-            else:
-                if not (is_reduce or (need_prefix_gate() and is_prefixed)):
+            if only_pref_effective:
+                coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
+                if not coid.startswith(pref):
                     continue
 
-            # Prefix gate ב-ONEWAY/או לפי הגדרה מפורשת
-            if need_prefix_gate() and not is_prefixed:
-                continue
+            # פילטר לפי positionSide אם התקבל ואנחנו ב־HEDGE
+            if mode == "HEDGE" and position_side_for_close:
+                ps = str(o.get("positionSide") or "").upper() or None
+                if ps and ps != position_side_for_close:
+                    continue
 
-            # TTL gating
-            ts_ms = (o.get("updateTime") or o.get("time") or 0)
-            try:
-                ts_s = float(ts_ms) / 1000.0 if ts_ms else 0.0
-            except Exception:
-                ts_s = 0.0
-            age = now - ts_s if ts_s > 0 else 1e9
-            if age < float(ttl):
-                continue
+            # פילטר גיל (אם קיים field של time/workingTime/...) – הכל במילישניות לרוב
+            t_ms = None
+            for key in ("time", "workingTime", "updateTime"):
+                if o.get(key) is not None:
+                    try:
+                        t_ms = int(o[key])
+                        break
+                    except Exception:
+                        pass
+            if t_ms:
+                age = max(0.0, now - (t_ms / 1000.0))
+                if CANCEL_MIN_AGE_SEC > 0 and age < CANCEL_MIN_AGE_SEC:
+                    continue
+                if CANCEL_MAX_AGE_SEC > 0 and age > CANCEL_MAX_AGE_SEC:
+                    continue
 
             oid = o.get("orderId")
             if oid is None:
@@ -399,11 +420,9 @@ def _cancel_old_closing_orders(symbol: str, mode: str = "oneway", pos_side: str 
             except Exception as e:
                 log.warning("cancel failed %s/%s: %s", symbol, oid, e)
         return count
-
     except Exception as e:
         log.warning("cancel_old_closing_orders error: %s", e)
         return 0
-
 # ─────────── Ladders build ───────────
 def _parse_csv_floats(s: str) -> List[float]:
     out=[]
@@ -431,7 +450,7 @@ def _build_ladders(sym: str, side: str, qty: float,
             _, qalloc = _q_qty(sym, max(0.0, alloc))
             if qalloc <= 0: continue
             remain = max(0.0, remain - qalloc)
-            _, stop_p = _q_price(sym, float(t))
+            stop_str, stop_p = _q_price(sym, float(t))
 
             if kind == "TP":
                 if tp_kind_market:
@@ -450,6 +469,7 @@ def _build_ladders(sym: str, side: str, qty: float,
                         "qty": qalloc,
                     })
             else:  # SL
+                # SL: תמיד LIMIT כברירת מחדל כדי לשלוט במחיר
                 limit_p = _offset_bps(float(t), SL_LIMIT_OFFSET_BPS, limit_sign)
                 _, lim_p = _q_price(sym, limit_p)
                 plan["sl_orders"].append({
@@ -464,8 +484,7 @@ def _build_ladders(sym: str, side: str, qty: float,
     return plan
 
 # ─────────── Hybrid entry + escalation ───────────
-async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float, ref_entry: Optional[float],
-                              mode: str, pos_side: str) -> Dict[str, Any]:
+async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float, ref_entry: Optional[float]) -> Dict[str, Any]:
     ref = ref_entry if ref_entry is not None else base_price
     if side == "BUY":
         limit_price = _offset_bps(ref, -ENTRY_BAND_BPS, +1)
@@ -474,7 +493,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         limit_price = _offset_bps(ref, +ENTRY_BAND_BPS, +1)
         stop_price  = _offset_bps(ref, -STOP_BAND_BPS,  +1)
 
-    # Slippage guard
+    # Slippage guard מול המחיר העדכני לפני פתיחת הזמנות
     cur = get_price(sym) or futures_mark_price(sym) or base_price
     slip_bps_now = abs(cur - ref) / max(ref, 1e-9) * 10000.0
     if slip_bps_now >= SLIPPAGE_GUARD_BPS:
@@ -484,20 +503,25 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    order_kwargs = {}
-    if mode == "hedge":
-        order_kwargs["positionSide"] = pos_side  # LONG/SHORT
+    mode = _detect_position_mode()
+    open_ps = _open_position_side_for(side, mode)
 
-    lim = futures_create_order(symbol=sym, side=side, type="LIMIT",
-                               timeInForce="GTC", price=limit_str, quantity=qty_str, **order_kwargs)
+    lim_args: Dict[str, Any] = dict(symbol=sym, side=side, type="LIMIT",
+                                    timeInForce="GTC", price=limit_str, quantity=qty_str)
+    stp_args: Dict[str, Any] = dict(symbol=sym, side=side, type="STOP",
+                                    timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str)
+    if open_ps:  # HEDGE בלבד
+        lim_args["positionSide"] = open_ps
+        stp_args["positionSide"] = open_ps
+
+    lim = futures_create_order(**lim_args)
     lim_id = str(lim.get("orderId") or "")
-    stp = futures_create_order(symbol=sym, side=side, type="STOP",
-                               timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str, **order_kwargs)
+    stp = futures_create_order(**stp_args)
     stp_id = str(stp.get("orderId") or "")
 
     def _is_filled(oid: str) -> Tuple[bool, Optional[float]]:
         try:
-            lst = get_all_orders(sym, limit=15) or []
+            lst = get_all_orders(sym, limit=20) or []
             for o in lst:
                 if str(o.get("orderId")) == str(oid):
                     st = (o.get("status") or "").upper()
@@ -522,10 +546,10 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             mk = get_price(sym) or futures_mark_price(sym) or lim_fill_px or limit_p
             if mk and lim_fill_px:
                 bps = abs(lim_fill_px - mk) / max(mk, 1e-9) * 10000.0
-                return {"ok": True, "entry_kind": "LIMIT", "price": lim_fill_px,
-                        "sanity_bps": bps, "sanity_ok": bps <= POST_FILL_SANITY_BPS, "order": lim}
+                return {"ok": True, "entry_kind": "LIMIT", "price": lim_fill_px, "sanity_bps": bps,
+                        "sanity_ok": bps <= POST_FILL_SANITY_BPS, "order": lim, "open_position_side": open_ps}
             return {"ok": True, "entry_kind": "LIMIT", "price": lim_fill_px or limit_p,
-                    "sanity_bps": None, "sanity_ok": True, "order": lim}
+                    "sanity_bps": None, "sanity_ok": True, "order": lim, "open_position_side": open_ps}
 
         if stp_filled and not lim_filled:
             try: futures_cancel_order(sym, lim_id)
@@ -533,10 +557,10 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             mk = get_price(sym) or futures_mark_price(sym) or stp_fill_px or stop_p
             if mk and stp_fill_px:
                 bps = abs(stp_fill_px - mk) / max(mk, 1e-9) * 10000.0
-                return {"ok": True, "entry_kind": "STOP", "price": stp_fill_px,
-                        "sanity_bps": bps, "sanity_ok": bps <= POST_FILL_SANITY_BPS, "order": stp}
+                return {"ok": True, "entry_kind": "STOP", "price": stp_fill_px, "sanity_bps": bps,
+                        "sanity_ok": bps <= POST_FILL_SANITY_BPS, "order": stp, "open_position_side": open_ps}
             return {"ok": True, "entry_kind": "STOP", "price": stp_fill_px or stop_p,
-                    "sanity_bps": None, "sanity_ok": True, "order": stp}
+                    "sanity_bps": None, "sanity_ok": True, "order": stp, "open_position_side": open_ps}
 
         if time.time() - t0 >= ESCALATE_AFTER_S:
             cur = get_price(sym) or futures_mark_price(sym) or base_price
@@ -550,11 +574,15 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 try:
                     if stp_id: futures_cancel_order(sym, stp_id)
                 except Exception: pass
-                mkt = futures_create_order(symbol=sym, side=side, type="MARKET", quantity=qty_str, **order_kwargs)
+                mkt_args: Dict[str, Any] = dict(symbol=sym, side=side, type="MARKET", quantity=qty_str)
+                if open_ps:
+                    mkt_args["positionSide"] = open_ps
+                mkt = futures_create_order(**mkt_args)
                 mk = get_price(sym) or futures_mark_price(sym) or cur
                 bps = abs((cur or 0) - (mk or 0)) / max(mk or 1e-9, 1e-9) * 10000.0 if mk and cur else None
-                return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur),
-                        "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
+                return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps,
+                        "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt,
+                        "open_position_side": open_ps}
             t0 = time.time()
         await asyncio.sleep(1.0)
 
@@ -567,6 +595,7 @@ async def execute_trade_live(
     tp_targets: Optional[List[float]] = None, tp_splits: Optional[List[float]] = None,
     sl_targets: Optional[List[float]] = None, sl_splits: Optional[List[float]] = None,
     confirm_first: bool = True, telegram_chat_id: Optional[int] = None,
+    # תאימות ל-auto_executor שלך:
     position_side: str = "BOTH", reduce_only: bool = False,
 ) -> Dict[str, Any]:
 
@@ -579,7 +608,7 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # Percent-Price Guard
+    # Percent-Price Guard מול entry המבוקש (אם הוזן), אחרת מול base
     ref_for_guard = float(entry or base_price)
     mk = float(get_price(sym) or futures_mark_price(sym) or base_price)
     pp_bps = abs(mk - ref_for_guard) / max(ref_for_guard, 1e-9) * 10000.0
@@ -594,23 +623,22 @@ async def execute_trade_live(
         qty_calc_error = str(e)
 
     gate = _quality_gate(sym, side)
+
+    # ✅ Risk preview
     risk = pre_trade_risk_check(sym, side, leverage, entry)
 
-    # Mode & posSide auto
-    mode = _detect_position_mode()  # 'hedge'/'oneway'
-    pos_side_entry = "LONG" if side == "BUY" else "SHORT"
-
-    # Idempotency
+    # Idempotency Shield
     idem_payload = {"sym": sym, "side": side, "lev": int(leverage),
                     "qty": round(float(qty or 0), 10), "dry": bool(dry_run),
-                    "entry_bucket": round(ref_for_guard, 5), "mode": mode, "pos_side": pos_side_entry}
+                    "entry_bucket": round(ref_for_guard, 5)}
     if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
         return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
 
-    # Expand ladders from ENV if needed
+    # הרחבת TP/SL מסטרינגים ב-ENV אם לא הגיעו מבחוץ
     if tp is None and not tp_targets and LADDER_TP_ENABLE:
         try:
             tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
+            # המרות מאחוז ליעד מחיר סביב entry/base
             anchor = float(entry or base_price)
             sign = +1 if side=="BUY" else -1
             tp_targets = [anchor * (1.0 + sign * p/100.0) for p in tps]
@@ -626,6 +654,9 @@ async def execute_trade_live(
         except Exception:
             pass
 
+    mode = _detect_position_mode()
+    open_ps = _open_position_side_for(side, mode)  # LONG/SHORT או None
+
     if dry_run:
         plan: Dict[str, Any] = {
             "ok": True, "symbol": sym, "side": side, "leverage": leverage,
@@ -633,8 +664,8 @@ async def execute_trade_live(
             "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
             "gate": gate, "risk": risk, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
             "guards": {"percent_price_bps": pp_bps, "slippage_guard_bps": SLIPPAGE_GUARD_BPS},
+            "position_mode": mode, "position_side_open": open_ps,
             "position_side": position_side, "reduce_only": reduce_only,
-            "mode": mode, "auto_positionSide": pos_side_entry if mode=="hedge" else "BOTH",
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
@@ -665,20 +696,22 @@ async def execute_trade_live(
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # Hygiene: בטל TP/SL קודמים בבטיחות אוטומטית
-    _cancel_old_closing_orders(sym, mode=mode, pos_side=pos_side_entry)
+    # Hygiene: בטל TP/SL קודמים (למנוע התנגשויות) – לפי prefix/מצב/סף-זמן
+    _cancel_old_closing_orders(sym, position_side_for_close=open_ps if mode == "HEDGE" else None)
 
     try:
         set_leverage(sym, int(leverage))
     except Exception as e:
         log.warning("set_leverage failed: %s", e)
 
-    entry_res = await _place_hybrid_entry(sym, side, qty, base_price, entry, mode, pos_side_entry)
+    entry_res = await _place_hybrid_entry(sym, side, qty, base_price, entry)
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
+    # Post-fill sanity (חיזוק)
     sanity_ok = bool(entry_res.get("sanity_ok", True))
     sanity_bps = entry_res.get("sanity_bps")
+    open_ps = entry_res.get("open_position_side") or open_ps  # עדכון אם חזר מהפונקציה
 
     plan: Dict[str, Any] = {
         "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
@@ -687,8 +720,8 @@ async def execute_trade_live(
         "gate": gate, "risk": risk, "entry_result": entry_res,
         "tp_orders": [], "sl_orders": [],
         "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
+        "position_mode": mode, "position_side_open": open_ps,
         "position_side": position_side, "reduce_only": reduce_only,
-        "mode": mode, "auto_positionSide": pos_side_entry if mode=="hedge" else "BOTH",
     }
 
     close_side = "SELL" if side=="BUY" else "BUY"
@@ -697,7 +730,7 @@ async def execute_trade_live(
                              ([sl] if sl is not None else sl_targets), sl_splits)
     plan["tp_orders"] = ladders["tp_orders"]; plan["sl_orders"] = ladders["sl_orders"]
 
-    # שליחת TP/SL עם ReduceOnly + positionSide ב-HEDGE
+    # שליחת TP/SL עם ReduceOnly (+positionSide ב-HEDGE)
     for arr in (plan["tp_orders"], plan["sl_orders"]):
         for o in arr:
             typ = str(o.get("type")).upper()
@@ -705,15 +738,15 @@ async def execute_trade_live(
                 symbol=sym, side=close_side, type=typ,
                 reduceOnly=True, timeInForce="GTC",
             )
-            if mode == "hedge":
-                args["positionSide"] = pos_side_entry  # LONG/SHORT
+            if open_ps:  # ב־HEDGE חובה לייחס לצד הנכון
+                args["positionSide"] = open_ps
 
+            # STOP/TAKE_PROFIT (לימיט) צריכים גם price וגם stopPrice
             if "MARKET" in typ:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
             else:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
                 args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
-
             args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
             try:
                 resp = futures_create_order(**args)
@@ -722,6 +755,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
