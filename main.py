@@ -16,10 +16,21 @@ import httpx
 from utils.json_logger import setup_json_logging
 from utils.response_limits import ResponseSizeLimiter
 from utils.auth import extract_token, allow_all, token_matches
-from utils.binance_client import fapi_ping, futures_balance, get_price
+from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 from app.middlewares import InternalAuthMiddleware
 from utils.trade_executor import ConfirmStore
+
+# Optional runtime counters (לסטטוסי WS/Executor)
+try:
+    from utils.runtime_counters import ws_user_status, exec_get_counters
+except Exception:
+    def ws_user_status() -> Dict[str, Any]:
+        return {"running": False, "reconnects": None, "ttl_sec": None, "inter_event_ewma_ms": None}
+    def exec_get_counters() -> Dict[str, Any]:
+        return {"tick_ewma_ms": None, "tick_p95_ms": None, "tick_p99_ms": None,
+                "last_tick_age_sec": None, "timeouts_burst": 0, "no_trade_streak": 0,
+                "current_interval": int(os.getenv("SCAN_INTERVAL","60"))}
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -81,8 +92,8 @@ async def validate_token(request: Request, call_next):
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
         "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"
     }
-    PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk", "/metrics", "/status/ping", "/status/ws", "/status/executor", "/status/all"]
-
+    PUBLIC_PREFIXES = ["/price", "/static/", "/alerts", "/risk",
+                       "/metrics", "/status/ping", "/status/ws", "/status/executor", "/status/all"]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
@@ -97,6 +108,20 @@ async def validate_token(request: Request, call_next):
 # ────────────────────────────────────────────────────────────────────────────────
 # Include routers (dynamic safe import)
 # ────────────────────────────────────────────────────────────────────────────────
+def _try_include(module_path: str) -> bool:
+    try:
+        mod = __import__(module_path, fromlist=["router"])
+        if hasattr(mod, "router"):
+            app.include_router(mod.router)
+            logger.info({"event": "router_registered", "router": module_path})
+            return True
+        logger.warning({"event": "router_missing_router_attr", "router": module_path})
+    except Exception as e:
+        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
+    return False
+
+_registered_paths = set()
+
 for module_path in (
     "routes.trade",
     "routes.analytics",
@@ -104,23 +129,33 @@ for module_path in (
     "routes.backtest",
     "routes.executor",
     "routes.binance_status",
-    "routes.telegram_webhook",     # אם קיים — לא חובה כי יש לנו כאן webhook מובנה
+    "routes.telegram_webhook",     # אם קיים
     "routes.grid",
     "routes.executor_control",
-    "routes.ws_user_stream",       # אם יש מודול כזה אצלך
+    "routes.ws_user_stream",       # אם קיים
     "routes.ai_analyze",           # ✅ /ai/analyze עם Rate-Limit
-    "routes.ws_user_status",       # ✅ חדש: /status/ws, /status/all, /status/ping
-    "routes.executor_status",      # ✅ חדש: /status/executor
+    "routes.ws_user_status",       # ✅ אופציונלי: /status/ws
+    "routes.executor_status",      # ✅ אופציונלי: /status/executor
 ):
+    if _try_include(module_path):
+        try:
+            # שמור שבילים רשומים (למניעת כפילות אם נוסיף מקומי)
+            for r in app.router.routes:
+                try:
+                    _registered_paths.add(getattr(r, "path", None))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+def _route_exists(path: str) -> bool:
     try:
-        mod = __import__(module_path, fromlist=["router"])
-        if hasattr(mod, "router"):
-            app.include_router(mod.router)
-            logger.info({"event": "router_registered", "router": module_path})
-        else:
-            logger.warning({"event": "router_missing_router_attr", "router": module_path})
-    except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
+        for r in app.router.routes:
+            if getattr(r, "path", None) == path:
+                return True
+    except Exception:
+        pass
+    return False
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Meta & Health
@@ -136,6 +171,40 @@ async def health():
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health():
     return {"ok": True, "status": "ok", "env": os.getenv("ENV", "prod"), "version": APP_VERSION}
+
+# Simple ping
+@app.get("/status/ping")
+async def status_ping():
+    return {"ok": True, "ts_ms": int(asyncio.get_event_loop().time() * 1000)}
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Built-in status endpoints (רק אם אין ראוטר ייעודי)
+# ────────────────────────────────────────────────────────────────────────────────
+if not _route_exists("/status/ws"):
+    @app.get("/status/ws")
+    async def status_ws():
+        st = ws_user_status()
+        return {"ok": True, **st}
+
+if not _route_exists("/status/executor"):
+    @app.get("/status/executor")
+    async def status_executor():
+        st = exec_get_counters()
+        return {"ok": True, **st}
+
+if not _route_exists("/status/all"):
+    @app.get("/status/all")
+    async def status_all():
+        try:
+            ping_ok = bool(fapi_ping())
+        except Exception:
+            ping_ok = False
+        ws = ws_user_status()
+        ex = exec_get_counters()
+        return {
+            "ok": True, "version": APP_VERSION,
+            "ws": ws, "executor": ex, "binance_ping_ok": ping_ok,
+        }
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Price (בדיקות)
@@ -224,6 +293,45 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     return {"ok": True}
 
 # ────────────────────────────────────────────────────────────────────────────────
+# Kill-Switch /flush  (best-effort: מנקה תורים/אישורים אם קיים)
+# ────────────────────────────────────────────────────────────────────────────────
+@app.post("/flush")
+async def flush_kill_switch():
+    done = False
+    for name in ("flush_all", "flush", "reset"):
+        try:
+            fn = getattr(ConfirmStore, name, None)
+            if callable(fn):
+                fn()
+                done = True
+                break
+        except Exception as e:
+            logger.warning({"event": "flush_failed", "err": str(e)})
+    return {"ok": True, "flushed": done}
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Preflight Warmup on startup (Mark/Index + exchangeInfo + light klines)
+# ────────────────────────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def _startup_preflight_warmup():
+    try:
+        # exchangeInfo cache
+        _ = futures_exchange_info_safe(force_refresh=True)
+    except Exception as e:
+        logger.warning({"event": "warmup.exinfo_failed", "error": str(e)})
+    try:
+        # מחיר BTC + בדיקת קווים קלים
+        _ = get_price("BTCUSDT")
+        # הימנע מתלות הדדית: יבוא דינמי
+        try:
+            from utils.get_klines import get_klines_sync
+            _ = get_klines_sync("BTCUSDT", interval=os.getenv("DEFAULT_INTERVAL", "15m"), limit=50)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning({"event": "warmup.price_failed", "error": str(e)})
+
+# ────────────────────────────────────────────────────────────────────────────────
 # Auto setWebhook (optional)
 # ────────────────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
@@ -263,6 +371,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
