@@ -1,15 +1,14 @@
 # routes/telegram_webhook.py
 from __future__ import annotations
-import os, logging
-from typing import Any, Dict
+import os, logging, time, json
+from typing import Any, Dict, Optional, List
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 import httpx
-from utils.metrics_tracker import get_metrics_snapshot
 
 logger = logging.getLogger("algogpt.telegram.webhook")
 
-# שינוי קטן למניעת קונפליקט עם /telegram/webhook שקיים ב-main.py
+# לא מתנגש עם /telegram/webhook שב-main.py
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -21,30 +20,104 @@ def _allowed_user(uid: int) -> bool:
         return True
     return str(uid) in ADMIN_IDS
 
-async def _reply(chat_id: int, text: str):
+async def _reply(chat_id: int, text: str, *, html: bool = True):
     """שליחת תשובה למשתמש בטלגרם"""
     if not TG_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML" if html else "Markdown",
+        "disable_web_page_preview": True,
+    }
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
-            await cli.post(url, json=payload)
+            await cli.post(url, data=payload)
     except Exception as e:
         logger.warning(f"[tg] sendMessage failed: {e}")
 
+# ===== Fallback-safe status sources =====
+try:
+    from utils.runtime_counters import ws_get_counters as _ws_get_counters
+except Exception:
+    def _ws_get_counters() -> Dict[str, Any]:
+        return {"ws_up": 0, "reconnects": 0, "ewma_latency_ms": 0.0, "last_event_age_sec": None}
+
+try:
+    from utils.runtime_counters import exec_get_counters as _exec_get_counters
+except Exception:
+    def _exec_get_counters() -> Dict[str, Any]:
+        return {
+            "tick_ewma_ms": 0.0, "tick_p95_ms": None, "tick_p99_ms": None,
+            "last_tick_age_sec": None, "timeouts_burst": 0,
+            "no_trade_streak": 0, "current_interval": 0,
+        }
+
+try:
+    from utils.telegram_notifier import set_explain_enabled, get_explain_enabled
+except Exception:
+    def set_explain_enabled(v: bool) -> None: pass
+    def get_explain_enabled() -> bool: return False
+
+# אופציונלי — רשימת פוזיציות פתוחות
+try:
+    from utils.binance_client import get_open_positions as _get_open_positions
+except Exception:
+    def _get_open_positions() -> List[Dict[str, Any]]:
+        return []
+
 HELP_TEXT = (
-    "🤖 *AlgoGPT Bot* — Help / עזרה\n\n"
+    "🤖 <b>AlgoGPT Bot</b> — Help / עזרה\n\n"
     "• /help — עזרה\n"
-    "• /status — סטטוס מערכת\n"
-    "• /positions — פוזיציות פתוחות\n"
-    "• /pnl — סיכום PnL\n"
-    "• /scan SYMBOL [15m|1h|4h] — סריקה\n"
-    "• /exec_dry SYMBOL BUY|SELL QTY ENTRY SL TP LEV — סימולציה\n"
-    "• /system — ניטור משאבים\n"
+    "• /ping — פינג\n"
+    "• /status — סטטוס מערכת (WS+Executor)\n"
+    "• /positions — פוזיציות פתוחות (תמצית)\n"
+    "• /explain_on — הפעלת הסברי טריידים\n"
+    "• /explain_off — כיבוי הסברי טריידים\n"
 )
 
-# לא /webhook כדי לא להתנגש עם main.py; זה מסלול פקודות/מענה טקסטואליות
+def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return "אין פוזיציות פתוחות."
+    lines = []
+    for p in rows[:15]:
+        try:
+            sym = (p.get("symbol") or "").upper()
+            amt = float(p.get("positionAmt") or 0.0)
+            entry = float(p.get("entryPrice") or 0.0)
+            side = "LONG" if amt > 0 else "SHORT"
+            lines.append(f"• <b>{sym}</b> {side} qty={abs(amt):.4f} @ {entry:.4f}")
+        except Exception:
+            continue
+    extra = len(rows)-len(lines)
+    if extra > 0:
+        lines.append(f"… ועוד {extra} פריטים")
+    return "\n".join(lines)
+
+def _fmt_status() -> str:
+    ws = _ws_get_counters()
+    ex = _exec_get_counters()
+    def _n(v): 
+        try:
+            return f"{float(v):.2f}"
+        except Exception:
+            return str(v)
+    ws_state = "OK" if int(ws.get("ws_up") or 0) == 1 and (ws.get("last_event_age_sec") or 0) <= int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10")) else "WARN"
+    ex_state = "OK"
+    age = ex.get("last_tick_age_sec")
+    if isinstance(age, (int,float)) and age is not None and age > int(os.getenv("EXEC_TICK_STALE_WARN_SEC","30")):
+        ex_state = "WARN"
+    if int(ex.get("timeouts_burst") or 0) >= int(os.getenv("EXEC_TIMEOUT_BURST_ALERT","3")):
+        ex_state = "WARN"
+    combined = "PAUSE" if ws_state=="WARN" and (ws.get("last_event_age_sec") or 0) > int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10"))*3 else ("WARN" if ("WARN" in (ws_state, ex_state)) else "OK")
+    lines = [
+        f"📊 <b>Status</b> [{combined}]",
+        f"WS: up={ws.get('ws_up')} ttl={ws.get('last_event_age_sec')}s ewma={_n(ws.get('ewma_latency_ms'))}ms rc={ws.get('reconnects')}",
+        f"EXE: age={ex.get('last_tick_age_sec')}s ewma={_n(ex.get('tick_ewma_ms'))} p95={_n(ex.get('tick_p95_ms'))} tb={ex.get('timeouts_burst')} itv={ex.get('current_interval')}",
+    ]
+    return "\n".join(lines)
+
 @router.post("/commands")
 async def commands(req: Request):
     if not TG_TOKEN:
@@ -67,40 +140,37 @@ async def commands(req: Request):
         await _reply(chat_id, "⛔️ אין לך הרשאה להשתמש בבוט זה.")
         return {"ok": True}
 
-    if not text or text in ("/start", "/help"):
+    if not text or text.lower() in ("/start", "/help"):
         await _reply(chat_id, HELP_TEXT)
         return {"ok": True}
 
     parts = text.split()
     cmd = parts[0].lower()
 
+    if cmd == "/ping":
+        await _reply(chat_id, f"pong ✅ {int(time.time())}")
+        return {"ok": True}
+
     if cmd == "/status":
-        metrics = get_metrics_snapshot()
-        await _reply(chat_id, f"📊 *Status*\n```{metrics}```")
+        await _reply(chat_id, _fmt_status())
         return {"ok": True}
 
-    if cmd == "/pnl":
-        await _reply(chat_id, "💹 PnL Summary: (בשלב זה מחובר ל-/pnl/summary API)")
+    if cmd == "/positions":
+        rows = _get_open_positions() or []
+        await _reply(chat_id, _fmt_positions(rows))
         return {"ok": True}
 
-    if cmd == "/scan":
-        if len(parts) < 2:
-            await _reply(chat_id, "שימוש: /scan SYMBOL [15m|1h|4h]")
-            return {"ok": True}
-        sym = parts[1].upper()
-        interval = parts[2] if len(parts) > 2 else "15m"
-        await _reply(chat_id, f"🔎 Scan {sym} @ {interval} (placeholder)")
+    if cmd == "/explain_on":
+        set_explain_enabled(True)
+        await _reply(chat_id, "🟢 Explain-Trade: ON")
         return {"ok": True}
 
-    if cmd == "/exec_dry":
-        await _reply(chat_id, f"🧪 Dry run: {parts}")
+    if cmd == "/explain_off":
+        set_explain_enabled(False)
+        await _reply(chat_id, "⚪️ Explain-Trade: OFF")
         return {"ok": True}
 
-    if cmd == "/system":
-        metrics = get_metrics_snapshot()
-        await _reply(chat_id, f"🖥 System Metrics:\n```{metrics}```")
-        return {"ok": True}
-
+    # שמירה על תאימות: אפשר להרחיב בעתיד (scan/exec_dry) דרך API ייעודי.
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.")
     return {"ok": True}
 
