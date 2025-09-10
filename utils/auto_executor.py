@@ -248,11 +248,10 @@ async def auto_scan_and_trade():
     global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
     EXECUTOR_RUNNING = True
     try:
-        wl = load_watchlist_env_or_fallback()  # ✅ דינמי + Fallback
+        wl = load_watchlist_env_or_fallback()
         if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
 
-        # Auto-backoff state
         current_interval = SCAN_INTERVAL_BASE
         no_trade_streak = 0
 
@@ -278,7 +277,6 @@ async def auto_scan_and_trade():
             else:
                 no_trade_streak = 0
 
-            # Auto-backoff (עדין וללא שבירה)
             if AUTO_TUNE_ENABLE:
                 if no_trade_streak >= AUTO_TUNE_STREAK_NO_TRADES:
                     current_interval = int(min(AUTO_TUNE_MAX, max(current_interval * AUTO_TUNE_UP_FACTOR, current_interval + 5)))
@@ -288,10 +286,8 @@ async def auto_scan_and_trade():
                     _log("scan_interval_relax", new_interval=current_interval)
 
             dt = time.time() - tic
-            # ✅ חשיפת קאונטרים + Ops tick (כולל Price-Drift אם נתמך)
             exec_on_tick_stop(dt_ms=float(dt*1000.0), current_interval=int(current_interval), no_trade_streak=int(no_trade_streak))
             ops_tick_safe()
-
             sleep_s = max(0.0, current_interval - dt)
             await asyncio.sleep(sleep_s)
     finally:
@@ -321,6 +317,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
