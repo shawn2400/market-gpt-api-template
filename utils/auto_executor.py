@@ -13,7 +13,14 @@ from utils.anchor import evaluate_anchor
 from utils.trade_executor import execute_trade_live  # ✅ סינכרוני
 from utils.watchlist_utils import load_watchlist_env_or_fallback
 
-# Risk Gate (אופציונלי, לא שובר קוד)
+# Observability
+from utils.metrics import metrics_tracker as mx
+try:
+    from utils.ops_guard import ops_tick  # optional; לא שובר אם חסר
+except Exception:
+    async def ops_tick(*args, **kwargs): return None  # type: ignore
+
+# Risk Gate (אופציונלי)
 try:
     from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
 except Exception:
@@ -71,7 +78,7 @@ QUALITY_THRESHOLD = float(os.getenv("MIN_QUALITY_SCORE", str(getattr(cfg, "MIN_Q
 SCAN_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "4"))
 TIME_BUDGET_SEC = float(os.getenv("SCAN_TIME_BUDGET_SEC", "7.5"))
 
-# Auto-tune (עדין, ללא שבירה)
+# Auto-tune
 AUTO_TUNE_ENABLE = os.getenv("AUTO_TUNE_ENABLE", "1").lower() in ("1","true","yes","on")
 AUTO_TUNE_MIN = int(os.getenv("AUTO_TUNE_MIN_SCAN_INTERVAL", str(SCAN_INTERVAL_BASE)))
 AUTO_TUNE_MAX = int(os.getenv("AUTO_TUNE_MAX_SCAN_INTERVAL", str(max(SCAN_INTERVAL_BASE, 180))))
@@ -196,12 +203,15 @@ async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     )
     if resp.get("ok"):
         _last_trade_ts[plan["symbol"]] = time.time()
+        mx.inc("exec.trades_executed", 1)
     return resp
 
 async def _scan_batch(symbols: List[str], max_trades: int) -> int:
     trades_sent = 0
     sem = asyncio.Semaphore(SCAN_CONCURRENCY)
     results: List[Dict[str, Any]] = []
+
+    mx.set_gauge("exec.batch_size", len(symbols))
 
     async def worker(sym: str):
         async with sem:
@@ -213,8 +223,11 @@ async def _scan_batch(symbols: List[str], max_trades: int) -> int:
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=TIME_BUDGET_SEC)
     except asyncio.TimeoutError:
         _log("batch_timeout", count=len(symbols), level="WARNING")
+        mx.inc("exec.batch_timeouts", 1)
 
     results.sort(key=lambda p: p.get("score", 0.0), reverse=True)
+    mx.set_gauge("exec.candidates_found", len(results))
+
     for plan in results:
         if trades_sent >= max_trades: break
         resp = await _execute_plan(plan)
@@ -228,7 +241,7 @@ async def auto_scan_and_trade():
     global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
     EXECUTOR_RUNNING = True
     try:
-        wl = load_watchlist_env_or_fallback()  # ✅ דינמי + Fallback
+        wl = load_watchlist_env_or_fallback()
         if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
 
@@ -239,6 +252,8 @@ async def auto_scan_and_trade():
         while EXECUTOR_RUNNING:
             tic = time.time()
             EXECUTOR_LAST_TS = tic
+            mx.set_gauge("exec.current_interval_sec", current_interval)
+
             if circuit_breaker_open():
                 _log("circuit_open_skip_tick", level="WARNING")
                 await asyncio.sleep(current_interval)
@@ -255,10 +270,11 @@ async def auto_scan_and_trade():
             if sent == 0:
                 await notify_no_trades()
                 no_trade_streak += 1
+                mx.inc("exec.no_trades", 1)
             else:
                 no_trade_streak = 0
 
-            # Auto-backoff (עדין וללא שבירה)
+            # Auto-backoff (עדין)
             if AUTO_TUNE_ENABLE:
                 if no_trade_streak >= AUTO_TUNE_STREAK_NO_TRADES:
                     current_interval = int(min(AUTO_TUNE_MAX, max(current_interval * AUTO_TUNE_UP_FACTOR, current_interval + 5)))
@@ -266,9 +282,17 @@ async def auto_scan_and_trade():
                 elif sent > 0 and current_interval > AUTO_TUNE_MIN:
                     current_interval = int(max(AUTO_TUNE_MIN, current_interval * AUTO_TUNE_DOWN_FACTOR))
                     _log("scan_interval_relax", new_interval=current_interval)
-                # אם אין שינוי — שומר על המצב הנוכחי
 
             dt = time.time() - tic
+            mx.set_gauge("exec.last_tick_dt_sec", dt)
+            mx.inc("exec.ticks", 1)
+            mx.observe_order_latency(dt * 1000.0)  # משתמשים בזה גם כמדד tick-latency
+
+            try:
+                await ops_tick(current_interval=current_interval, last_tick_sec=dt)
+            except Exception:
+                pass
+
             sleep_s = max(0.0, current_interval - dt)
             await asyncio.sleep(sleep_s)
     finally:
@@ -298,6 +322,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
