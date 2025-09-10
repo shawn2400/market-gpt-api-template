@@ -4,7 +4,6 @@ import os, time, asyncio
 from typing import Optional, Tuple
 from fastapi import Request, HTTPException
 
-# Redis (אופציונלי)
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_PREFIX = os.getenv("REDIS_NAMESPACING", "algogpt:v2")
 try:
@@ -15,7 +14,6 @@ except Exception:
 
 _AI_RPM_DEFAULT = int(os.getenv("AI_ANALYZE_RPM", "5"))
 
-# In-memory fallback
 _mem_store = {}
 _mem_lock = asyncio.Lock()
 
@@ -26,19 +24,16 @@ def _extract_token_or_ip(req: Request, *, by_token_only: bool) -> str:
         tok = auth.split(" ", 1)[1].strip()
     tok = tok or req.headers.get("X-API-Key") or req.headers.get("X-Api-Key")
     if by_token_only and not tok:
-        # אם חייבים לפי טוקן – ואין טוקן – נחסום כמו חריגה
         raise HTTPException(401, "Missing API token for rate limit scope")
     if tok:
         return f"tok:{tok[:16]}"
-    # fallback: IP
     ip = (req.client.host if req.client else "0.0.0.0")
     return f"ip:{ip}"
 
 def _refill(tokens: float, last_ts: float, rpm: int) -> Tuple[float, float]:
-    # Leaky/Token bucket: ריענון טוקנים לפי קצב r = rpm/60
     now = time.time()
     rate = max(0.0, float(rpm) / 60.0)
-    new_tokens = min(1.0 * rpm, tokens + (now - last_ts) * rate)
+    new_tokens = min(float(rpm), tokens + (now - last_ts) * rate)
     return new_tokens, now
 
 async def _allow_mem(ns: str, ident: str, rpm: int, burst: int) -> bool:
@@ -58,7 +53,6 @@ def _allow_redis(ns: str, ident: str, rpm: int, burst: int) -> bool:
     if not _RED:
         return False
     key = f"{REDIS_PREFIX}:rl:{ns}:{ident}"
-    # fields: tok (float), ts (float)
     pipe = _RED.pipeline()
     pipe.hget(key, "tok")
     pipe.hget(key, "ts")
@@ -68,35 +62,26 @@ def _allow_redis(ns: str, ident: str, rpm: int, burst: int) -> bool:
         ts = float(ts_s) if ts_s is not None else time.time()
     except Exception:
         tok, ts = float(burst), time.time()
-
     tok, now = _refill(tok, ts, rpm)
     allowed = tok >= 1.0
     if allowed:
         tok -= 1.0
-
     _RED.hset(key, mapping={"tok": tok, "ts": now})
-    _RED.expire(key, max(60, int(2 * 60)))  # TTL סביר
+    _RED.expire(key, max(60, int(2 * 60)))
     return allowed
 
 def require_rate_limit(ns: str = "ai_analyze", *, rpm: Optional[int] = None,
                        burst: Optional[int] = None, by_token_only: bool = False):
-    """
-    שימוש: dependencies=[Depends(require_rate_limit("ai_analyze", rpm=5, burst=5))]
-    """
     _rpm = int(rpm or _AI_RPM_DEFAULT)
     _burst = int(burst or _rpm)
-
     async def _dep(req: Request):
         ident = _extract_token_or_ip(req, by_token_only=by_token_only)
-        if _RED:
-            ok = _allow_redis(ns, ident, _rpm, _burst)
-        else:
-            ok = await _allow_mem(ns, ident, _rpm, _burst)
+        ok = _allow_redis(ns, ident, _rpm, _burst) if _RED else await _allow_mem(ns, ident, _rpm, _burst)
         if not ok:
             raise HTTPException(429, f"Rate limit exceeded ({_rpm}/min)")
         return True
-
     return _dep
+
 
 
 
