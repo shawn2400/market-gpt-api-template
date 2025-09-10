@@ -1,6 +1,6 @@
 # utils/runtime_counters.py
 from __future__ import annotations
-import os, time, threading, math
+import os, time, threading
 from collections import deque
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -16,7 +16,33 @@ _OPS_TICK_ENABLE = os.getenv("OPS_TICK_ENABLE", "1").lower() in ("1","true","on"
 _PRICE_DRIFT_BPS_ALERT = float(os.getenv("PRICE_DRIFT_BPS_ALERT", "25"))
 _HEALTH_SYMBOLS = [s.strip().upper() for s in os.getenv("HEALTH_SYMBOLS","BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
 
-# ===== EWMA helpers =====
+# NEW: Telegram alerts defaults ON
+_OPS_TTL_ALERT_TELEGRAM = os.getenv("OPS_TTL_ALERT_TELEGRAM", "1").lower() in ("1","true","on","yes")
+_OPS_TIMEOUT_BURST_TELEGRAM = os.getenv("OPS_TIMEOUT_BURST_TELEGRAM", "1").lower() in ("1","true","on","yes")
+_OPS_ALERT_COOLDOWN_SEC = int(os.getenv("OPS_ALERT_COOLDOWN_SEC", "120"))
+
+_last_ttl_alert_ts = 0.0
+_last_timeout_alert_ts = 0.0
+
+def _notify_ops(msg: str) -> None:
+    """Best-effort notify to Telegram; no exception raising."""
+    try:
+        from utils import telegram_notifier as tn  # type: ignore
+    except Exception:
+        tn = None  # type: ignore
+    if not tn:
+        return
+    for fname in ("notify_ops_alert", "notify_text", "notify_admin", "notify_message"):
+        fn = getattr(tn, fname, None)
+        if callable(fn):
+            try:
+                # sync wrappers are fine; if async available, fire-and-forget
+                res = fn(msg)
+                return
+            except Exception:
+                continue
+
+# ===== EWMA =====
 def _ewma(prev: float, x: float, alpha: float) -> float:
     if prev <= 0: return float(x)
     return (1.0 - alpha) * prev + alpha * float(x)
@@ -46,18 +72,16 @@ _time_buckets: deque = deque(maxlen=1000)  # ts of timeouts
 _trade_buckets: deque = deque(maxlen=2000) # ts of sent trades
 
 # ===== Ops flags =====
-_degrade_active = False  # במצב זה: מחמירים שערים, מקשיחים מינוף
+_degrade_active = False
 _last_ops_eval = 0.0
 
-# ===== Price TTL helpers (optional WS cache) =====
+# ===== Price TTL helpers (WS cache optional) =====
 def _price_ttl_sec() -> float:
-    # Optional dependency on ws_fallback; fallback to 0 if not available.
     try:
         from utils import ws_fallback
-        # אם יש פונקציה ייעודית:
         if hasattr(ws_fallback, "get_global_ttl_sec"):
-            return float(ws_fallback.get_global_ttl_sec() or 0.0)
-        # אחרת ננסה על אחד הסימבולים
+            v = ws_fallback.get_global_ttl_sec()
+            return float(v or 0.0)
         now = time.time()
         if hasattr(ws_fallback, "get_last_update_ts"):
             ts = ws_fallback.get_last_update_ts()
@@ -69,19 +93,15 @@ def _price_ttl_sec() -> float:
 # ===== Price Drift (Mark vs Index) =====
 def _try_get_index_price(symbol: str) -> Optional[float]:
     try:
-        # אם תוסיף פונקציה רשמית בעתיד (למשל futures_index_price) — נשתמש בה מיד
         from utils.binance_client import futures_index_price  # type: ignore
-        try:
-            return float(futures_index_price(symbol) or 0.0)  # type: ignore
-        except Exception:
-            return None
+        return float(futures_index_price(symbol) or 0.0) or None
     except Exception:
         return None
 
 def _get_mark_price(symbol: str) -> Optional[float]:
     try:
         from utils.binance_client import futures_mark_price
-        return float(futures_mark_price(symbol) or 0.0)
+        return float(futures_mark_price(symbol) or 0.0) or None
     except Exception:
         return None
 
@@ -93,7 +113,7 @@ def _drift_bps(mark: float, index: float) -> float:
     except Exception:
         return 0.0
 
-_price_drift_alerts: deque = deque(maxlen=100)  # (ts, symbol, bps)
+_price_drift_alerts: deque = deque(maxlen=100)
 
 def _scan_price_drift() -> Dict[str, Any]:
     worst = {"symbol": None, "bps": 0.0}
@@ -113,7 +133,7 @@ def _scan_price_drift() -> Dict[str, Any]:
             alerts_new += 1
     return {"worst": worst, "alerts": alerts_new}
 
-# ===== Public WS notifiers (optional to call from ws layer) =====
+# ===== Public WS notifiers =====
 def ws_note_event(latency_ms: Optional[float] = None) -> None:
     with _ws_lock:
         if latency_ms is not None:
@@ -138,10 +158,9 @@ def get_ws_status() -> Dict[str, Any]:
     st["ts"] = int(time.time())
     return st
 
-# ===== Executor notifiers (from auto_executor) =====
+# ===== Executor notifiers =====
 def exec_on_trade_sent(symbol: str) -> None:
-    now = time.time()
-    _trade_buckets.append(now)
+    _trade_buckets.append(time.time())
 
 def exec_on_batch_timeout() -> None:
     _time_buckets.append(time.time())
@@ -154,14 +173,10 @@ def exec_on_tick_stop(dt_ms: float, current_interval: int, no_trade_streak: int)
         _exec_state["no_trade_streak"] = int(no_trade_streak)
         _exec_state["current_interval"] = int(current_interval)
         _exec_tick_ms.append(float(dt_ms))
-
-    # timeouts in last 60s
     cutoff = now - 60.0
     while _time_buckets and _time_buckets[0] < cutoff:
         _time_buckets.popleft()
     _exec_state["timeouts_last_60s"] = len(_time_buckets)
-
-    # trades sent last 60s
     while _trade_buckets and _trade_buckets[0] < cutoff:
         _trade_buckets.popleft()
     _exec_state["trades_sent_60s"] = len(_trade_buckets)
@@ -176,25 +191,21 @@ def get_executor_status() -> Dict[str, Any]:
     with _exec_lock:
         ms = list(_exec_tick_ms)
         st = dict(_exec_state)
-    p95 = _pctl(ms, 95.0)
-    p99 = _pctl(ms, 99.0)
     st.update({
         "p50_ms": _pctl(ms, 50.0),
-        "p95_ms": p95,
-        "p99_ms": p99,
+        "p95_ms": _pctl(ms, 95.0),
+        "p99_ms": _pctl(ms, 99.0),
         "count": len(ms),
     })
     st["degrade_active"] = bool(_degrade_active)
     st["ts"] = int(time.time())
     return st
 
-# ===== Ops logic (called every executor tick) =====
+# ===== Ops logic =====
 def _should_degrade() -> bool:
-    # קריטריונים פשוטים: TTL גבוה, פרצי timeouts, או P99 חריג
     ttl = _price_ttl_sec()
     timeouts = int(_exec_state.get("timeouts_last_60s", 0))
     ewma_ms = float(_exec_state.get("ewma_ms", 0.0))
-    # אם אין דגימות — אל נכנס
     if ewma_ms <= 0:
         return False
     cond_ttl = bool(_STATUS_PRICE_TTL_ALERT and ttl >= _STATUS_PRICE_TTL_ALERT)
@@ -205,28 +216,39 @@ def ops_is_degraded() -> bool:
     return bool(_degrade_active)
 
 def ops_tick_safe() -> None:
-    """
-    נקרא בסוף כל tick של הסורק.
-    - מחשב TTL
-    - בודק Price-Drift (אם יש פונקציית index)
-    - מעדכן דגל degrade_active אוטומטי
-    - ניתן להדליק כאן גם התראות לטלגרם (TTL/Timeout burst) — בהמשך
-    """
+    """נקרא בסוף כל tick; מפעיל Price-Drift scan + TTL/Timeout alerts לטלגרם + דגל degrade."""
     if not _OPS_TICK_ENABLE:
         return
     now = time.time()
-    global _degrade_active, _last_ops_eval
-    # עדכון TTL בסטטוס WS
+    global _degrade_active, _last_ops_eval, _last_ttl_alert_ts, _last_timeout_alert_ts
+
+    # update TTL snapshot
     with _ws_lock:
         _ws_state["ttl_sec"] = _price_ttl_sec()
 
-    # Price drift scan
+    # price drift (לא שולח טלגרם כברירת מחדל; נשאיר למדיניות אופרטיבית)
     _ = _scan_price_drift()
 
-    # Evaluate degrade only פעם ב-3ש׳׳
+    # degrade state כל ~3ש׳׳
     if now - _last_ops_eval > 3.0:
         _degrade_active = _should_degrade()
         _last_ops_eval = now
+
+    # ===== Alerts to Telegram (default ON)
+    st_ws = get_ws_status()
+    st_ex = get_executor_status()
+
+    # TTL Alert
+    if _OPS_TTL_ALERT_TELEGRAM and st_ws.get("ttl_alert"):
+        if now - _last_ttl_alert_ts >= _OPS_ALERT_COOLDOWN_SEC:
+            _notify_ops(f"⚠️ TTL Alert: price_feed.ttl_sec={st_ws.get('ttl_sec')}s (>= { _STATUS_PRICE_TTL_ALERT }s)")
+            _last_ttl_alert_ts = now
+
+    # Timeout Burst Alert
+    if _OPS_TIMEOUT_BURST_TELEGRAM and int(st_ex.get("timeouts_last_60s", 0)) >= _EXEC_TIMEOUT_BURST_ALERT:
+        if now - _last_timeout_alert_ts >= _OPS_ALERT_COOLDOWN_SEC:
+            _notify_ops(f"⚠️ Timeout Burst: timeouts_last_60s={st_ex.get('timeouts_last_60s')} (>= { _EXEC_TIMEOUT_BURST_ALERT })")
+            _last_timeout_alert_ts = now
 
 
 
