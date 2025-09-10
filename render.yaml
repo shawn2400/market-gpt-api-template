@@ -1,5 +1,6 @@
-# render.yaml
+# FILE: render.yaml
 services:
+  # ---- שירות ה-Web הראשי (Docker) ----
   - type: web
     name: algogpt-docker
     runtime: docker
@@ -82,6 +83,24 @@ services:
       mountPath: /app/data
       sizeGB: 1
 
+  # ---- שירות ה-Worker של Ops Supervisor (Python) ----
+  - type: worker
+    name: ops-supervisor
+    env: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python -u utils/ops_supervisor.py"
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: AIX_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPS_POLICY_PATH
+        value: policies/ops_policy.yaml
 
 
 
