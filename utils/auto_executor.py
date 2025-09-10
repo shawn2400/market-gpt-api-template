@@ -16,13 +16,16 @@ from utils.watchlist_utils import load_watchlist_env_or_fallback
 # NEW: counters exposure
 try:
     from utils.runtime_counters import (
-        exec_on_tick_stop, exec_on_batch_timeout, exec_on_trade_sent, ops_tick_safe
+        exec_on_tick_stop, exec_on_batch_timeout, exec_on_trade_sent, ops_tick_safe,
+        ws_user_status, exec_get_counters
     )
 except Exception:
     def exec_on_tick_stop(*a, **k): pass
     def exec_on_batch_timeout(*a, **k): pass
     def exec_on_trade_sent(*a, **k): pass
     def ops_tick_safe(): pass
+    def ws_user_status() -> Dict[str, Any]: return {"running": False, "ttl_sec": None, "reconnects": None, "inter_event_ewma_ms": None}
+    def exec_get_counters() -> Dict[str, Any]: return {"tick_p95_ms": None, "timeouts_burst": 0}
 
 # NEW: leverage policy
 try:
@@ -30,6 +33,14 @@ try:
 except Exception:
     def adjust_leverage(adx: float, proposed_leverage: int, symbol: Optional[str] = None) -> int:  # type: ignore
         return int(proposed_leverage)
+
+# NEW: optional risk gate (pre-trade)
+RISK_CHECK_ENABLE = os.getenv("RISK_CHECK_ENABLE", "0").lower() in ("1","true","yes","on")
+if RISK_CHECK_ENABLE:
+    try:
+        from utils.risk import pre_trade_risk_check  # pre_trade_risk_check(symbol, side, leverage, ref_price) -> {"ok": bool, ...}
+    except Exception:
+        RISK_CHECK_ENABLE = False
 
 # Notifications (כולל Explain)
 try:
@@ -67,6 +78,14 @@ except Exception:
                 self.i = j
             return out
 
+# Optional: Binance preflight helpers
+try:
+    from utils.binance_client import fapi_ping, futures_exchange_info_safe, get_price
+except Exception:
+    def fapi_ping() -> bool: return False
+    def futures_exchange_info_safe(*a, **k): return None
+    def get_price(symbol: str): return None
+
 logger = logging.getLogger("algogpt.autoexec")
 
 EXECUTOR_RUNNING = False
@@ -81,6 +100,23 @@ SYMBOL_COOLDOWN_SEC = int(os.getenv("SYMBOL_COOLDOWN_SEC", "600"))
 QUALITY_THRESHOLD = float(os.getenv("MIN_QUALITY_SCORE", str(getattr(cfg, "MIN_QUALITY_SCORE", 8.5))))
 SCAN_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "4"))
 TIME_BUDGET_SEC = float(os.getenv("SCAN_TIME_BUDGET_SEC", "7.5"))
+
+# ===== Preflight / Health-SLA =====
+PRE_FLIGHT_ENABLE = os.getenv("PRE_FLIGHT_ENABLE", "1").lower() in ("1","true","yes","on")
+PREFLIGHT_MAX_SKEW_MS = int(os.getenv("PREFLIGHT_MAX_SKEW_MS", "2500"))
+HEALTH_SLA_ENABLE = os.getenv("HEALTH_SLA_ENABLE", "1").lower() in ("1","true","yes","on")
+HEALTH_TTL_MAX_SEC = int(os.getenv("HEALTH_TTL_MAX_SEC", "15"))
+HEALTH_MAX_TIMEOUT_BURST = int(os.getenv("HEALTH_MAX_TIMEOUT_BURST", "5"))
+HEALTH_MAX_TICK_P95_MS = int(os.getenv("HEALTH_MAX_TICK_P95_MS", "2200"))
+HEALTH_PAUSE_SEC = int(os.getenv("HEALTH_PAUSE_SEC", "20"))
+
+# ===== Canary Mode =====
+CANARY_ENABLE = os.getenv("CANARY_ENABLE", "1").lower() in ("1","true","yes","on")
+CANARY_MODE = os.getenv("CANARY_MODE", "DRY").upper()  # DRY | LIVE
+CANARY_MAX_TRADES = int(os.getenv("CANARY_MAX_TRADES", "1"))
+CANARY_WINDOW_SEC = int(os.getenv("CANARY_WINDOW_SEC", "1800"))
+_canary_window_start: float = 0.0
+_canary_trades: int = 0
 
 # ===== Auto-tune (בסיס) =====
 AUTO_TUNE_ENABLE = os.getenv("AUTO_TUNE_ENABLE", "1").lower() in ("1","true","yes","on")
@@ -162,6 +198,72 @@ def _derive_sl_tp(entry: float, atr_v: float, side: str, adx_v: float) -> tuple[
         tp = entry - tp_mult * atr_v
     return float(sl), float(tp)
 
+# -------------------- Preflight & Health --------------------
+def _time_skew_ok() -> bool:
+    try:
+        from utils.binance_client import get_futures_client
+        cli = get_futures_client()
+        offset = getattr(cli, "TIME_OFFSET", 0)
+        return abs(int(offset)) <= PREFLIGHT_MAX_SKEW_MS
+    except Exception:
+        return True  # לא חוסם אם אין גישה למדידה
+
+def _ws_ok() -> bool:
+    try:
+        status = ws_user_status()
+        ttl = status.get("ttl_sec")
+        running = bool(status.get("running"))
+        if ttl is None:
+            return running
+        return running and (float(ttl) <= HEALTH_TTL_MAX_SEC)
+    except Exception:
+        return True
+
+def _exchange_info_ok() -> bool:
+    try:
+        info = futures_exchange_info_safe()
+        return bool(info and info.get("symbols"))
+    except Exception:
+        return False
+
+async def _warmup():
+    try:
+        # מחמם מחירים/אינדיקטורים ל־BTC
+        _ = get_price("BTCUSDT")
+        _ = get_klines_sync("BTCUSDT", interval=INTERVAL, limit=100)
+    except Exception:
+        pass
+
+async def _preflight_gate() -> bool:
+    if not PRE_FLIGHT_ENABLE:
+        return True
+    ok = True
+    if not fapi_ping():
+        _log("preflight_ping_fail", level="ERROR"); ok = False
+    if not _time_skew_ok():
+        _log("preflight_time_skew", max_skew_ms=PREFLIGHT_MAX_SKEW_MS, level="ERROR"); ok = False
+    if not _exchange_info_ok():
+        _log("preflight_exchange_info_fail", level="ERROR"); ok = False
+    if not _ws_ok():
+        _log("preflight_ws_ttl_fail", ttl_max=HEALTH_TTL_MAX_SEC, level="ERROR"); ok = False
+    if ok:
+        await _warmup()
+        _log("preflight_ok")
+    return ok
+
+def _health_ok() -> bool:
+    if not HEALTH_SLA_ENABLE:
+        return True
+    try:
+        ws_ok = _ws_ok()
+        ex = exec_get_counters()
+        p95 = ex.get("tick_p95_ms") or 0
+        burst = int(ex.get("timeouts_burst") or 0)
+        return ws_ok and (p95 <= HEALTH_MAX_TICK_P95_MS or p95 == 0) and (burst < HEALTH_MAX_TIMEOUT_BURST)
+    except Exception:
+        return True
+
+# -------------------- Scan / Build Plan --------------------
 async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
     try:
         last = _last_trade_ts.get(symbol, 0.0)
@@ -224,7 +326,36 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         _log("scan_error", symbol=symbol, error=str(e), level="ERROR")
         return None
 
+# -------------------- Execution (w/ Canary) --------------------
+def _canary_allow() -> Tuple[bool, str]:
+    if not CANARY_ENABLE:
+        return (True, "disabled")
+    now = time.time()
+    global _canary_window_start, _canary_trades
+    if _canary_window_start == 0.0 or (now - _canary_window_start) > CANARY_WINDOW_SEC:
+        _canary_window_start = now
+        _canary_trades = 0
+    if CANARY_MODE == "DRY":
+        return (False, "dry")
+    # LIVE: טרייד אחד בלבד בחלון
+    if _canary_trades >= CANARY_MAX_TRADES:
+        return (False, "limit")
+    return (True, "live")
+
 async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+    allowed, reason = _canary_allow()
+    if not allowed:
+        if reason == "dry":
+            # DRY-Run → הסבר בלבד
+            try:
+                await notify_explain_trade(plan)
+            except Exception:
+                pass
+            _log("canary_dry_skip", symbol=plan["symbol"], reason="canary_dry")
+            return {"ok": True, "dry": True, "reason": "canary_dry"}
+        _log("canary_live_block", symbol=plan["symbol"], reason="limit")
+        return {"ok": False, "error": "canary_limit"}
+
     loop = asyncio.get_event_loop()
     resp = await loop.run_in_executor(
         None,
@@ -244,8 +375,13 @@ async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             await notify_explain_trade(plan)  # ✅ Explain (עם קירור/Rate Limit פנימי)
         except Exception:
             pass
+        if CANARY_ENABLE and CANARY_MODE == "LIVE":
+            # ספירת טריידים בחלון
+            global _canary_trades
+            _canary_trades += 1
     return resp
 
+# -------------------- Batch --------------------
 async def _scan_batch(symbols: List[str], max_trades: int, concurrency: int) -> Tuple[int, bool, int]:
     trades_sent = 0
     sem = asyncio.Semaphore(max(1, int(concurrency)))
@@ -276,12 +412,19 @@ async def _scan_batch(symbols: List[str], max_trades: int, concurrency: int) -> 
         if resp.get("ok"): trades_sent += 1
     return trades_sent, timed_out, viable_count
 
+# -------------------- Main Loop --------------------
 async def auto_scan_and_trade():
     global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
     global _timeout_burst_count, _burst_mode_until, _effective_concurrency, _opp_boost_until
 
     EXECUTOR_RUNNING = True
     try:
+        if PRE_FLIGHT_ENABLE:
+            ok = await _preflight_gate()
+            if not ok:
+                _log("preflight_block_start", level="ERROR")
+                return
+
         wl = load_watchlist_env_or_fallback()
         if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
@@ -298,6 +441,13 @@ async def auto_scan_and_trade():
             if circuit_breaker_open():
                 _log("circuit_open_skip_tick", level="WARNING")
                 await asyncio.sleep(current_interval)
+                continue
+
+            # Health-Gate (PAUSE)
+            if not _health_ok():
+                _log("health_pause", ttl_max=HEALTH_TTL_MAX_SEC, p95_max=HEALTH_MAX_TICK_P95_MS,
+                     timeout_burst_max=HEALTH_MAX_TIMEOUT_BURST, level="WARNING")
+                await asyncio.sleep(HEALTH_PAUSE_SEC)
                 continue
 
             now = time.time()
