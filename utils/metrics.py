@@ -1,121 +1,102 @@
 # utils/metrics.py
 from __future__ import annotations
-import os, time
+import os
+import time, threading
 from collections import deque
-from typing import Optional, Dict, Any
+from typing import Dict, Any, Deque, List
 
-try:
-    from prometheus_client import Histogram, Counter, Gauge
-except Exception:
-    Histogram = Counter = Gauge = None  # type: ignore
+def _coerce_int(env_key: str, default: int) -> int:
+    try:
+        return int(os.getenv(env_key, str(default)))
+    except Exception:
+        return default
 
-def _percentile(values: deque[float], q: float) -> Optional[float]:
-    if not values:
-        return None
-    arr = sorted(values)
-    k = max(0, min(len(arr) - 1, int(round(q * (len(arr) - 1)))))
-    return float(arr[k])
+class _Metrics:
+    def __init__(self, window_size: int = 1000):
+        self.boot_ts = int(time.time())
+        self._lock = threading.Lock()
+        self.total_requests = 0
+        self.total_errors = 0
+        self.by_status: Dict[int, int] = {}
+        self.latencies: Deque[float] = deque(maxlen=window_size)
+        self.recent_ts: Deque[float] = deque(maxlen=5000)
+        # NEW: trade cost metrics
+        self.slippages: Deque[float] = deque(maxlen=window_size)
+        self.order_latencies: Deque[float] = deque(maxlen=window_size)
 
-class _Noop:
-    def labels(self, *a, **k): return self
-    def observe(self, *a, **k): pass
-    def inc(self, *a, **k): pass
-    def set(self, *a, **k): pass
+    @staticmethod
+    def _percentile(samples: List[float], p: float) -> float:
+        if not samples: return 0.0
+        s = sorted(samples)
+        k = max(0, min(len(s)-1, int(round((p/100.0)*(len(s)-1)))))
+        return float(s[k])
 
-class MetricsTracker:
-    def __init__(self):
-        self.rolling_n = int(os.getenv("METRICS_ROLLING_N", "4096"))
+    @staticmethod
+    def _median(samples: List[float]) -> float:
+        if not samples: return 0.0
+        s, n = sorted(samples), len(samples)
+        mid = n//2
+        return float(s[mid]) if n%2 else float((s[mid-1]+s[mid])/2.0)
 
-        # Histograms (Prometheus). אפשר חישוב P95/P99 בצד PromQL (histogram_quantile)
-        if Histogram:
-            self.order_latency_ms = Histogram(
-                "order_latency_ms",
-                "Latency per order (ms)",
-                buckets=(5,10,20,30,50,75,100,150,200,300,500,750,1000,2000,5000)
-            )
-            self.request_duration_ms = Histogram(
-                "request_duration_ms",
-                "Scan/request duration (ms)",
-                ["status_code"],
-                buckets=(10,20,30,50,75,100,150,200,300,500,750,1000,2000,5000,8000,12000)
-            )
-            self.order_latency_p95 = Gauge("order_latency_p95_ms", "Rolling P95 order latency (ms)")
-            self.order_latency_p99 = Gauge("order_latency_p99_ms", "Rolling P99 order latency (ms)")
-            self.request_p95 = Gauge("request_duration_p95_ms", "Rolling P95 request (ms)")
-            self.request_p99 = Gauge("request_duration_p99_ms", "Rolling P99 request (ms)")
-        else:
-            self.order_latency_ms = self.request_duration_ms = _Noop()
-            self.order_latency_p95 = self.order_latency_p99 = _Noop()
-            self.request_p95 = self.request_p99 = _Noop()
+    def observe_request(self, status_code: int, duration_ms: float) -> None:
+        with self._lock:
+            self.total_requests += 1
+            self.by_status[status_code] = self.by_status.get(status_code, 0)+1
+            self.latencies.append(float(duration_ms))
+            self.recent_ts.append(time.time())
+            if status_code >= 500: self.total_errors += 1
 
-        # Rolling windows (לגייג'ים)
-        self._order_lat_samples: deque[float] = deque(maxlen=self.rolling_n)
-        self._req_samples: deque[float] = deque(maxlen=self.rolling_n)
+    def observe_slippage(self, bps: float) -> None:
+        with self._lock: self.slippages.append(float(bps))
 
-        # Counters כלליים
-        if Counter:
-            self.requests_total = Counter("requests_total", "Total requests", ["status_code"])
-            self.orders_total = Counter("orders_total", "Total orders", ["result"])
-        else:
-            self.requests_total = self.orders_total = _Noop()
+    def observe_order_latency(self, ms: float) -> None:
+        with self._lock: self.order_latencies.append(float(ms))
 
-    def observe_order_latency(self, ms: float, result: str = "sent") -> None:
-        try:
-            self.order_latency_ms.observe(ms)
-        except Exception:
-            pass
-        self._order_lat_samples.append(float(ms))
-        # Rolling p95/p99
-        p95 = _percentile(self._order_lat_samples, 0.95)
-        p99 = _percentile(self._order_lat_samples, 0.99)
-        if p95 is not None:
-            try: self.order_latency_p95.set(p95)
-            except Exception: pass
-        if p99 is not None:
-            try: self.order_latency_p99.set(p99)
-            except Exception: pass
-        try:
-            self.orders_total.labels(result=result).inc()
-        except Exception:
-            pass
+    def inc_err(self) -> None:
+        with self._lock: self.total_errors += 1
 
-    def observe_request(self, status_code: int, ms: float) -> None:
-        try:
-            self.request_duration_ms.labels(status_code=str(status_code)).observe(ms)
-        except Exception:
-            pass
-        self._req_samples.append(float(ms))
-        p95 = _percentile(self._req_samples, 0.95)
-        p99 = _percentile(self._req_samples, 0.99)
-        if p95 is not None:
-            try: self.request_p95.set(p95)
-            except Exception: pass
-        if p99 is not None:
-            try: self.request_p99.set(p99)
-            except Exception: pass
-        try:
-            self.requests_total.labels(status_code=str(status_code)).inc()
-        except Exception:
-            pass
+    def get_metrics(self) -> Dict[str, Any]:
+        now = int(time.time())
+        with self._lock:
+            lat_list = list(self.latencies)
+            slip_list = list(self.slippages)
+            ord_lat = list(self.order_latencies)
+            avg_lat = sum(lat_list)/len(lat_list) if lat_list else 0.0
+            mn, mx = (min(lat_list), max(lat_list)) if lat_list else (0.0,0.0)
+            return {
+                "boot_ts": self.boot_ts,
+                "uptime_sec": now-self.boot_ts,
+                "requests": {
+                    "total": self.total_requests,
+                    "errors_total": self.total_errors,
+                    "by_status": dict(sorted(self.by_status.items())),
+                    "rps_5s": round(sum(1 for t in self.recent_ts if t>=time.time()-5)/5.0,3),
+                    "rps_60s": round(sum(1 for t in self.recent_ts if t>=time.time()-60)/60.0,3),
+                },
+                "latency_ms": {
+                    "count": len(lat_list),
+                    "avg": round(avg_lat,3),
+                    "min": round(mn,3),
+                    "max": round(mx,3),
+                    "p50": round(self._median(lat_list),3),
+                    "p95": round(self._percentile(lat_list,95),3),
+                    "p99": round(self._percentile(lat_list,99),3),  # ✅ NEW: P99
+                },
+                "slippage_bps": {
+                    "avg": round(sum(slip_list)/len(slip_list),3) if slip_list else 0.0,
+                    "p95": round(self._percentile(slip_list,95),3) if slip_list else 0.0,
+                },
+                "order_latency_ms": {
+                    "avg": round(sum(ord_lat)/len(ord_lat),2) if ord_lat else 0.0,
+                    "p95": round(self._percentile(ord_lat,95),2) if ord_lat else 0.0,
+                    "p99": round(self._percentile(ord_lat,99),2) if ord_lat else 0.0,  # ✅ NEW: P99
+                }
+            }
 
-    def get_snapshot(self) -> Dict[str, Any]:
-        return {
-            "order_latency_ms": {
-                "p50": _percentile(self._order_lat_samples, 0.50),
-                "p95": _percentile(self._order_lat_samples, 0.95),
-                "p99": _percentile(self._order_lat_samples, 0.99),
-                "n": len(self._order_lat_samples),
-            },
-            "request_duration_ms": {
-                "p50": _percentile(self._req_samples, 0.50),
-                "p95": _percentile(self._req_samples, 0.95),
-                "p99": _percentile(self._req_samples, 0.99),
-                "n": len(self._req_samples),
-            },
-        }
+# גודל חלון ניתן לשליטה ב-ENV
+_window = _coerce_int("METRICS_WINDOW_SIZE", 1000)
+metrics_tracker = _Metrics(window_size=_window)
 
-# אינסטנס יחיד
-metrics_tracker = MetricsTracker()
 
 
 
