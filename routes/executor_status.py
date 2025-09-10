@@ -1,37 +1,22 @@
 # routes/executor_status.py
 from __future__ import annotations
-import time
 from fastapi import APIRouter
+from typing import Dict, Any
+
+router = APIRouter(prefix="/executor", tags=["status"])
 
 try:
-    from utils.runtime_counters import (
-        exec_get_counters,
-        get_degrade_cap,
-        get_last_drift_snapshot,
-    )
+    from utils.runtime_counters import exec_get_counters
 except Exception:
-    def exec_get_counters(): return {}
-    def get_degrade_cap(): return None
-    def get_last_drift_snapshot(): return {}
-
-router = APIRouter(prefix="/executor", tags=["executor"])
-
-@router.get("/ping", include_in_schema=False)
-async def ping():
-    return {"ok": True, "ts_ms": int(time.time() * 1000)}
+    def exec_get_counters() -> Dict[str, Any]:
+        return {
+            "tick_ewma_ms": 0.0, "tick_p95_ms": None, "tick_p99_ms": None,
+            "last_tick_age_sec": None, "timeouts_burst": 0, "no_trade_streak": 0,
+            "current_interval": 0,
+        }
 
 @router.get("/status")
-async def status():
-    try:
-        counters = exec_get_counters()
-    except Exception:
-        counters = {}
-    # מוסיף קצת נוחות למי שצורך את ה־API
-    return {
-        "ok": True,
-        **counters,
-        "degrade_cap": get_degrade_cap(),
-        "drift": get_last_drift_snapshot(),
-    }
+def exec_status():
+    return {"ok": True, "counters": exec_get_counters()}
 
   
