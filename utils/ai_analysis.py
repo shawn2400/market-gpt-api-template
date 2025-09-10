@@ -153,7 +153,7 @@ async def analyze_with_ai(features: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "analysis": f"[AI error: {e}]"}
 
 
-# -------- analyze_with_ai_and_filter (שומר קיים, משופר קלות) --------
+# -------- analyze_with_ai_and_filter --------
 async def analyze_with_ai_and_filter(
     *,
     symbols: List[str],
@@ -195,6 +195,7 @@ async def analyze_with_ai_and_filter(
             rejected.append({"symbol": su, "reason": f"filter_error: {e}"})
 
     return {"accepted": accepted, "rejected": rejected}
+
 
 
 
