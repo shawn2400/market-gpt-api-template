@@ -1,7 +1,7 @@
 # utils/binance_client.py
 from __future__ import annotations
-import os, time, math, logging
-from typing import Any, Dict, List, Optional, Iterable
+import os, time, math, logging, threading
+from typing import Any, Dict, List, Optional, Iterable, Tuple
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -29,6 +29,16 @@ BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "6"))
 DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP", "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
+
+# Percent-Guard
+PERCENT_GUARD_ENABLE = os.getenv("PERCENT_GUARD_ENABLE", "1") in ("1","true","yes","on")
+PERCENT_GUARD_BPS = int(os.getenv("PERCENT_GUARD_BPS", "50"))  # ±0.50% ברירת מחדל
+
+# Idempotency
+IDEMP_TTL_SEC = int(os.getenv("IDEMP_TTL_SEC", "900"))
+
+# Price coalescing
+PRICE_CACHE_TTL_MS = int(os.getenv("PRICE_CACHE_TTL_MS", "250"))
 
 # ===== Account/Positions cache =====
 ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))
@@ -88,6 +98,7 @@ def _kind_from_kwargs(kwargs: dict) -> str:
     return "ORD"
 
 # ===== Init Futures client (+ timeout) =====
+_client_lock = threading.RLock()
 client = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
 client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
@@ -120,8 +131,20 @@ except Exception:
 _exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
 
+# price cache (coalescing)
+_price_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, mark)
+_index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
+
+# idempotency cache
+_idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_idem_lock = threading.RLock()
+
+# ===== Helpers =====
 def _now() -> float:
     return time.time()
+
+def _ms() -> int:
+    return int(time.time() * 1000)
 
 def _get_exchange_info_cached(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     ts = _now()
@@ -135,7 +158,6 @@ def _get_exchange_info_cached(force_refresh: bool=False) -> Optional[Dict[str, A
         logger.error("futures_exchange_info failed: %s", e)
         return _exinfo_cache["data"]
 
-# ========== Core ==========
 def fapi_ping() -> bool:
     try:
         client.futures_ping()
@@ -147,6 +169,7 @@ def fapi_ping() -> bool:
 def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     return _get_exchange_info_cached(force_refresh=force_refresh)
 
+# ===== Account & Positions =====
 def _get_account_cached() -> Optional[Dict[str, Any]]:
     now = _now()
     if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
@@ -179,61 +202,29 @@ def futures_balance() -> List[Dict[str, Any]]:
         logger.error("Failed to fetch futures_balance: %s", e)
         return []
 
-def futures_mark_price(symbol: str) -> Optional[float]:
+def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
-        d = client.futures_mark_price(symbol=symbol.upper())
-        return float(d.get("markPrice") or 0.0)
+        acc_info = _get_account_cached() or {}
+        positions = acc_info.get("positions", []) or []
+        out = []
+        su = symbol.upper() if symbol else None
+        for pos in positions:
+            amt = float(pos.get("positionAmt", "0") or 0.0)
+            if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
+                out.append(pos)
+        return out
     except Exception as e:
-        logger.error("Failed mark price for %s: %s", symbol, e)
-        return None
+        logger.error("Failed to get open positions: %s", e); return []
 
-def futures_index_price(symbol: str) -> Optional[float]:
-    """
-    Index price for a futures symbol (premiumIndex endpoint).
-    Flow:
-      1) client.futures_premium_index(symbol=...)  ← API רשמי
-      2) client._request_futures_api('get','premiumIndex', ...) ← פולבק בספרייה
-      3) HTTP ישיר ל- /fapi/v1/premiumIndex  ← פולבק אחרון
-    מחזיר None אם הכול נכשל.
-    """
-    sym = symbol.upper()
-    # 1) רשמי
-    try:
-        if hasattr(client, "futures_premium_index"):
-            data = client.futures_premium_index(symbol=sym)
-            if isinstance(data, list) and data:
-                data = data[0]
-            p = data.get("indexPrice")
-            return float(p) if p is not None else None
-    except Exception as e:
-        logger.debug("futures_premium_index method failed: %s", e)
-    # 2) API פנימי בספרייה
-    try:
-        if hasattr(client, "_request_futures_api"):
-            data = client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
-            if isinstance(data, list) and data:
-                data = data[0]
-            p = data.get("indexPrice")
-            return float(p) if p is not None else None
-    except Exception as e:
-        logger.debug("_request_futures_api premiumIndex failed: %s", e)
-    # 3) HTTP ישיר
-    try:
-        import httpx  # type: ignore
-        base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-        url = f"{base}/fapi/v1/premiumIndex"
-        with httpx.Client(timeout=float(os.getenv('BINANCE_HTTP_TIMEOUT', '10.0'))) as cli:
-            r = cli.get(url, params={"symbol": sym})
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, list) and data:
-                data = data[0]
-            p = data.get("indexPrice")
-            return float(p) if p is not None else None
-    except Exception as e:
-        logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
+def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    return get_open_positions(symbol)
+
+def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
+    for p in get_open_positions(symbol):
+        return p
     return None
 
+# ===== Filters & Rounding =====
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     info = futures_exchange_info_safe()
     if not info: return None
@@ -355,6 +346,129 @@ def _backoff_sleep(attempt: int) -> None:
     delay_ms = min(BACKOFF_MAX_MS, _dyn_backoff_base * (2 ** max(0, attempt - 1)))
     time.sleep(delay_ms / 1000.0)
 
+# ===== Mark / Index price with coalescing =====
+def _cache_get(cache: Dict[str, Tuple[float, float]], symbol: str) -> Optional[float]:
+    ts_ms, val = cache.get(symbol.upper(), (0.0, 0.0))
+    if _ms() - ts_ms <= PRICE_CACHE_TTL_MS:
+        return val
+    return None
+
+def _cache_put(cache: Dict[str, Tuple[float, float]], symbol: str, value: float) -> None:
+    cache[symbol.upper()] = (_ms(), float(value))
+
+def futures_mark_price(symbol: str) -> Optional[float]:
+    sym = symbol.upper()
+    try:
+        cached = _cache_get(_price_cache, sym)
+        if cached is not None: return cached
+        d = client.futures_mark_price(symbol=sym)
+        p = float(d.get("markPrice") or 0.0)
+        if p > 0: _cache_put(_price_cache, sym, p)
+        return p if p > 0 else None
+    except Exception as e:
+        logger.error("Failed mark price for %s: %s", sym, e)
+        return None
+
+def futures_index_price(symbol: str) -> Optional[float]:
+    """
+    Index price (premiumIndex). עם coalescing קל.
+    """
+    sym = symbol.upper()
+    try:
+        cached = _cache_get(_index_cache, sym)
+        if cached is not None: return cached
+    except Exception:
+        pass
+
+    # 1) מתודה רשמית בספרייה
+    try:
+        if hasattr(client, "futures_premium_index"):
+            data = client.futures_premium_index(symbol=sym)
+            if isinstance(data, list) and data:
+                data = data[0]
+            p = data.get("indexPrice")
+            if p is not None:
+                val = float(p)
+                _cache_put(_index_cache, sym, val)
+                return val
+    except Exception as e:
+        logger.debug("futures_premium_index method failed: %s", e)
+    # 2) API פנימי בספרייה
+    try:
+        if hasattr(client, "_request_futures_api"):
+            data = client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
+            if isinstance(data, list) and data:
+                data = data[0]
+            p = data.get("indexPrice")
+            if p is not None:
+                val = float(p)
+                _cache_put(_index_cache, sym, val)
+                return val
+    except Exception as e:
+        logger.debug("_request_futures_api premiumIndex failed: %s", e)
+    # 3) HTTP ישיר
+    try:
+        import httpx  # type: ignore
+        base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+        url = f"{base}/fapi/v1/premiumIndex"
+        with httpx.Client(timeout=float(os.getenv('BINANCE_HTTP_TIMEOUT', '10.0'))) as cli:
+            r = cli.get(url, params={"symbol": sym})
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, list) and data:
+                data = data[0]
+            p = data.get("indexPrice")
+            if p is not None:
+                val = float(p)
+                _cache_put(_index_cache, sym, val)
+                return val
+    except Exception as e:
+        logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
+    return None
+
+# ===== Open orders / history =====
+def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    try:
+        if symbol: return client.futures_get_open_orders(symbol=symbol.upper()) or []
+        return client.futures_get_open_orders() or []
+    except Exception as e:
+        logger.error("Failed to get open orders: %s", e); return []
+
+def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
+    if not symbol or not symbol.strip():
+        return []
+    limit = max(1, min(int(limit), 1000))
+    try:
+        return client.futures_get_all_orders(symbol=symbol.upper(), limit=limit, **kwargs) or []
+    except BinanceAPIException as e:
+        logger.error("get_all_orders failed: %s", e); return []
+    except Exception as e:
+        logger.error("get_all_orders error: %s", e); return []
+
+# ===== Price guard =====
+def _percent_guard_ok(symbol: str, price: float) -> bool:
+    if not PERCENT_GUARD_ENABLE: 
+        return True
+    mark = futures_mark_price(symbol)
+    if not mark or mark <= 0:
+        return True
+    # שימוש ב־percentPrice filters אם קיימים; אחרת ב־PERCENT_GUARD_BPS
+    f = get_symbol_filters(symbol) or {}
+    pp = (f.get("percentPrice") or {}) if f else {}
+    try:
+        up = float(pp.get("up")) if pp.get("up") is not None else None
+        down = float(pp.get("down")) if pp.get("down") is not None else None
+    except Exception:
+        up = down = None
+    if up and down and up > 0 and down > 0:
+        lo = mark * float(down)
+        hi = mark * float(up)
+        return (price >= lo) and (price <= hi)
+    # fallback — ביפסים סביב mark
+    bps = max(1, int(PERCENT_GUARD_BPS))
+    dev_bps = abs(price - mark) / mark * 10000.0
+    return dev_bps <= bps
+
 # ===== Orders / Positions / Helpers =====
 def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
     if not prefix:
@@ -385,27 +499,19 @@ def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
                     logger.warning("Cancel order failed %s/%s: %s", symbol, oid, e)
     return count
 
-def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     try:
-        acc_info = _get_account_cached() or {}
-        positions = acc_info.get("positions", []) or []
-        out = []
-        su = symbol.upper() if symbol else None
-        for pos in positions:
-            amt = float(pos.get("positionAmt", "0") or 0.0)
-            if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
-                out.append(pos)
-        return out
+        return client.futures_cancel_all_open_orders(symbol=symbol.upper())
     except Exception as e:
-        logger.error("Failed to get open positions: %s", e); return []
+        logger.error("Failed to cancel orders for %s: %s", symbol, e)
+        return {"ok": False, "error": str(e)}
 
-def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    return get_open_positions(symbol)
-
-def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
-    for p in get_open_positions(symbol):
-        return p
-    return None
+def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
+    try:
+        return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
+    except Exception as e:
+        logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e)
+        return {"ok": False, "error": str(e)}
 
 def _position_side_from_amt(amt: float) -> str:
     return "LONG" if amt > 0 else "SHORT"
@@ -416,6 +522,31 @@ def _order_side_for_close(pos_side: str) -> str:
     if ps == "SHORT": return "BUY"
     return "SELL"
 
+# ===== Idempotency =====
+def _idem_get(coid: str) -> Optional[Dict[str, Any]]:
+    with _idem_lock:
+        ts_res = _idem_cache.get(coid)
+        if not ts_res:
+            return None
+        ts, res = ts_res
+        if (_now() - ts) <= IDEMP_TTL_SEC:
+            return res
+        try:
+            del _idem_cache[coid]
+        except Exception:
+            pass
+        return None
+
+def _idem_put(coid: str, res: Dict[str, Any]) -> None:
+    with _idem_lock:
+        _idem_cache[coid] = (_now(), res)
+        # prune light
+        if len(_idem_cache) > 2048:
+            dead = [k for k,(t,_) in _idem_cache.items() if (_now() - t) > IDEMP_TTL_SEC]
+            for k in dead[:512]:
+                _idem_cache.pop(k, None)
+
+# ===== Create/Modify Orders =====
 def _safe_create_order(**kwargs) -> Dict[str, Any]:
     kwargs.setdefault("workingType", WORKING_TYPE)
     kwargs.setdefault("recvWindow", RECV_WINDOW)
@@ -425,26 +556,79 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
         kind = _kind_from_kwargs(kwargs)
         kwargs["newClientOrderId"] = _coid(kind, sym)
 
+    # Percent-guard for price/stopPrice
+    try:
+        sym = str(kwargs.get("symbol", "UNK")).upper()
+        if "price" in kwargs and kwargs["price"] is not None:
+            price_val = float(kwargs["price"])
+            if not _percent_guard_ok(sym, price_val):
+                return {"ok": False, "error": f"percent_guard price out-of-bounds for {sym}"}
+        if "stopPrice" in kwargs and kwargs["stopPrice"] is not None:
+            sprice_val = float(kwargs["stopPrice"])
+            if not _percent_guard_ok(sym, sprice_val):
+                return {"ok": False, "error": f"percent_guard stopPrice out-of-bounds for {sym}"}
+    except Exception as _e:
+        logger.debug("percent-guard skipped: %s", _e)
+
+    coid = str(kwargs.get("newClientOrderId"))
+    if coid:
+        idem_hit = _idem_get(coid)
+        if idem_hit is not None:
+            return idem_hit
+
     for attempt in range(1, BINANCE_MAX_RETRIES + 1):
         if not _rate_allow():
             _backoff_sleep(attempt); continue
         try:
-            return client.futures_create_order(**kwargs)
+            res = client.futures_create_order(**kwargs)
+            if coid:
+                _idem_put(coid, res if isinstance(res, dict) else {"ok": True, "res": res})
+            return res
         except BinanceAPIException as e:
             s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
             if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
                 logger.warning("Rate-limited, attempt=%s; qps=%s base=%sms", attempt, _dyn_qps, _dyn_backoff_base)
                 _note_rate_limit_hit(); _backoff_sleep(attempt); continue
             logger.error("BinanceAPIException: %s", e)
-            return {"ok": False, "error": str(e)}
+            err = {"ok": False, "error": str(e)}
+            if coid: _idem_put(coid, err)
+            return err
         except Exception as e:
             logger.error("futures_create_order failed: %s", e)
             _backoff_sleep(attempt)
             if attempt == BINANCE_MAX_RETRIES:
-                return {"ok": False, "error": str(e)}
-    return {"ok": False, "error": "max_retries_exceeded"}
+                err = {"ok": False, "error": str(e)}
+                if coid: _idem_put(coid, err)
+                return err
+    err = {"ok": False, "error": "max_retries_exceeded"}
+    if coid: _idem_put(coid, err)
+    return err
 
 def futures_create_order(**kwargs) -> Dict[str, Any]:
+    """
+    עטיפה בטוחה ליצירת הזמנה — עם Idempotency, Percent-Guard, Backoff, WorkingType/recvWindow.
+    """
+    # Quantize מחיר/כמות אם ניתנו כ-float
+    sym = str(kwargs.get("symbol", "UNK")).upper()
+    if "price" in kwargs and kwargs["price"] is not None:
+        kwargs["price"] = _quantize_price(sym, float(kwargs["price"]))
+    if "stopPrice" in kwargs and kwargs["stopPrice"] is not None:
+        kwargs["stopPrice"] = _quantize_price(sym, float(kwargs["stopPrice"]))
+    if "quantity" in kwargs and kwargs["quantity"] is not None:
+        qty_q = _quantize_qty(sym, float(kwargs["quantity"]))
+        # אם יש price ידוע — בדוק מינימום notional
+        ref_price = None
+        if kwargs.get("price") is not None:
+            ref_price = float(kwargs["price"])
+        else:
+            try:
+                ref_price = futures_mark_price(sym) or futures_index_price(sym)
+            except Exception:
+                ref_price = None
+        if ref_price:
+            qty_q = _ensure_min_notional_qty(sym, float(ref_price), qty_q)
+        kwargs["quantity"] = qty_q
+
     return _safe_create_order(**kwargs)
 
 def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *,
@@ -462,51 +646,128 @@ def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float
         kwargs["closePosition"] = True
     else:
         kwargs["quantity"] = qqty
-    if client_order_id:
-        kwargs["newClientOrderId"] = _sanitize_coid(client_order_id)
-    else:
-        kwargs["newClientOrderId"] = _coid("SL", sym)
+    kwargs["newClientOrderId"] = _sanitize_coid(client_order_id) if client_order_id else _coid("SL", sym)
     return _safe_create_order(**kwargs)
 
-def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
-    try:
-        return client.futures_cancel_all_open_orders(symbol=symbol.upper())
-    except Exception as e:
-        logger.error("Failed to cancel orders for %s: %s", symbol, e)
-        return {"ok": False, "error": str(e)}
+def modify_stop_loss(symbol: str, new_stop_price: float, *,
+                     side: Optional[str]=None,
+                     client_order_id_prefix: Optional[str]=None,
+                     close_position: bool=True,
+                     quantity: Optional[float]=None) -> Dict[str, Any]:
+    """
+    Modify SL ע"י cancel&replace בטוח.
+    אם side לא ניתן — נגזר מהפוזיציה.
+    """
+    sym = symbol.upper()
+    # בטל SL קיימים
+    _cancel_closing_orders(sym, types=("STOP", "STOP_MARKET"))
+    # קבע צד
+    if not side:
+        pos = get_single_position(sym)
+        if not pos:
+            return {"ok": False, "error": "no_position"}
+        amt = float(pos.get("positionAmt","0"))
+        side = "SELL" if amt > 0 else "BUY"
+    # צור חדש
+    coid = (client_order_id_prefix + "_SL") if client_order_id_prefix else None
+    qty = quantity
+    if close_position and qty is None:
+        pos = get_single_position(sym)
+        if not pos:
+            return {"ok": False, "error": "no_position_for_close"}
+        qty = abs(float(pos.get("positionAmt","0")))
+    if qty is None or qty <= 0:
+        return {"ok": False, "error": "invalid_qty"}
+    return place_stop_market(sym, side, float(new_stop_price), float(qty),
+                             reduce_only=True, close_position=bool(close_position),
+                             client_order_id=coid)
 
-def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
-    try:
-        return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
-    except Exception as e:
-        logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e)
-        return {"ok": False, "error": str(e)}
+def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: float,
+                    tp_percents: Optional[List[float]]=None,
+                    splits: Optional[List[float]]=None,
+                    reduce_only: bool=True,
+                    client_order_id_prefix: Optional[str]=None) -> Dict[str, Any]:
+    """
+    בונה סולם TP כ-TAKE_PROFIT_MARKET/ReduceOnly.
+    """
+    if not LADDER_TP_ENABLE:
+        return {"ok": False, "error": "ladder_disabled"}
+    now = _now()
+    last = _tp_ladder_last_at.get(symbol.upper(), 0.0)
+    if (now - last) < TP_LADDER_COOLDOWN_SEC:
+        return {"ok": False, "error": "ladder_cooldown"}
+    _tp_ladder_last_at[symbol.upper()] = now
 
-def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    try:
-        if symbol: return client.futures_get_open_orders(symbol=symbol.upper()) or []
-        return client.futures_get_open_orders() or []
-    except Exception as e:
-        logger.error("Failed to get open orders: %s", e); return []
+    sym = symbol.upper()
+    side = "SELL" if entry_side.upper() == "BUY" else "BUY"
+    if not tp_percents:
+        tp_percents = [float(x) for x in LADDER_TP_DEFAULT_PCTS.split(",") if x.strip()]
+    if not splits:
+        splits = [float(x) for x in LADDER_TP_DEFAULT_SPLITS.split(",") if x.strip()]
+    tp_percents = tp_percents[:LADDER_TP_MAX_LEVELS]
+    splits = splits[:len(tp_percents)]
+    if abs(sum(splits) - 1.0) > 1e-6:
+        # נרמל
+        s = sum(splits); splits = [x/s for x in splits]
 
-def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
-    if not symbol or not symbol.strip():
-        return []
-    limit = max(1, min(int(limit), 1000))
-    try:
-        return client.futures_get_all_orders(symbol=symbol.upper(), limit=limit, **kwargs) or []
-    except BinanceAPIException as e:
-        logger.error("get_all_orders failed: %s", e); return []
-    except Exception as e:
-        logger.error("get_all_orders error: %s", e); return []
+    placed = []; errors = []
+    for i, (pct, frac) in enumerate(zip(tp_percents, splits), start=1):
+        qty_i = max(0.0, float(quantity) * float(frac))
+        if qty_i <= 0: 
+            continue
+        # stopPrice כיעד TP (MARK_PRICE trigger)
+        if entry_side.upper() == "BUY":
+            tprice = entry_price * (1.0 + pct/100.0)
+        else:
+            tprice = entry_price * (1.0 - pct/100.0)
+        kwargs = dict(
+            symbol=sym,
+            side=side,
+            type=LADDER_TP_KIND,  # TAKE_PROFIT_MARKET
+            stopPrice=_quantize_price(sym, float(tprice)),
+            reduceOnly=bool(reduce_only),
+            closePosition=False,
+            quantity=_ensure_min_notional_qty(sym, float(tprice), _quantize_qty(sym, qty_i)),
+            workingType=WORKING_TYPE,
+            recvWindow=RECV_WINDOW,
+            newClientOrderId=_sanitize_coid((client_order_id_prefix or ORDER_ID_PREFIX or "TP") + f"_TP{i}_{sym}")
+        )
+        res = _safe_create_order(**kwargs)
+        if isinstance(res, dict) and res.get("ok") is False:
+            errors.append({"level": i, "error": res.get("error")})
+        else:
+            placed.append(res)
+    return {"ok": len(errors) == 0, "placed": placed, "errors": errors}
 
-def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
-    try:
-        return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
-    except Exception as e:
-        logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
-        return {"ok": False, "error": str(e)}
+def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str, Any]:
+    """
+    מציב SL ב-BE (entryPrice) עם התאמת טיק קטנה לצד הבטוח.
+    """
+    sym = symbol.upper()
+    pos = get_single_position(sym)
+    if not pos:
+        return {"ok": False, "error": "no_position"}
+    amt = float(pos.get("positionAmt","0"))
+    if abs(amt) <= 0:
+        return {"ok": False, "error": "zero_amt"}
+    entry = float(pos.get("entryPrice") or 0.0)
+    if entry <= 0:
+        return {"ok": False, "error": "no_entry_price"}
 
+    # adjust entry by small tick to avoid immediate trigger
+    f = get_symbol_filters(sym) or {}
+    tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
+    if amt > 0:  # LONG → SL slightly below entry
+        sprice = entry - tick * max(1, tick_adjust)
+        side = "SELL"
+    else:       # SHORT → SL slightly above entry
+        sprice = entry + tick * max(1, tick_adjust)
+        side = "BUY"
+
+    _cancel_closing_orders(sym, types=("STOP", "STOP_MARKET"))
+    return place_stop_market(sym, side, sprice, abs(amt), reduce_only=True, close_position=True)
+
+# ===== Klines =====
 def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
     try:
         import pandas as pd
@@ -528,6 +789,7 @@ def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
     except Exception as e:
         logger.error("get_klines_df failed: %s", e); return None
 
+# ===== Close-all helper =====
 def close_all_positions() -> Dict[str,Any]:
     out = {"closed":[],"errors":[]}
     try:
@@ -546,6 +808,7 @@ def close_all_positions() -> Dict[str,Any]:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+# ===== Price facade with WS + coalescing =====
 def get_price(symbol: str) -> Optional[float]:
     try:
         if ws_is_fresh and ws_get_price and ws_is_fresh(symbol, int(os.getenv("PRICE_WS_FRESH_TTL", "20"))):
@@ -562,17 +825,46 @@ def get_price(symbol: str) -> Optional[float]:
         pass
     return p
 
+def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
+    try:
+        return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
+    except Exception as e:
+        logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
+        return {"ok": False, "error": str(e)}
+
+def futures_cancel_and_replace_limit(symbol: str, side: str, price: float, quantity: float, *, reduce_only: bool=False,
+                                     client_order_id: Optional[str]=None, time_in_force: str="GTC") -> Dict[str, Any]:
+    """
+    כלי עזר: ביטול כל LIMIT קודמים (אופציונלי לפי prefix) והצבת LIMIT חדש.
+    """
+    _cancel_closing_orders(symbol, types=("LIMIT",))
+    sym = symbol.upper()
+    return futures_create_order(
+        symbol=sym,
+        side=side.upper(),
+        type="LIMIT",
+        price=_quantize_price(sym, float(price)),
+        quantity=_ensure_min_notional_qty(sym, float(price), _quantize_qty(sym, float(quantity))),
+        reduceOnly=bool(reduce_only),
+        timeInForce=time_in_force,
+        newClientOrderId=_sanitize_coid(client_order_id) if client_order_id else _coid("LMT", sym)
+    )
+
+# ===== Public export =====
 def get_futures_client() -> Client:
     return client
 
 __all__ = [
-    "client","fapi_ping","futures_exchange_info_safe","futures_balance","futures_mark_price","futures_index_price","get_price",
+    "client","fapi_ping","futures_exchange_info_safe","futures_balance",
+    "futures_mark_price","futures_index_price","get_price",
     "get_symbol_info","get_symbol_filters","get_open_positions","futures_open_positions_safe","get_single_position",
-    "futures_create_order","place_stop_market",
+    "futures_create_order","place_stop_market","modify_stop_loss","place_tp_ladder","set_breakeven_stop",
     "futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
+    "futures_cancel_and_replace_limit",
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
