@@ -1,132 +1,105 @@
 # utils/leverage_policy.py
 from __future__ import annotations
 import os, json, logging
-from typing import Optional, Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger("algogpt.leverage")
 
-# גבולות כלליים מהסביבה
+# ==== ENV / defaults ====
+_DEF_LEV_BY_ADX = {30: 15, 25: 12, 20: 9, 0: 7}
 _MIN_LEV = int(os.getenv("MIN_LEVERAGE", "5"))
 _MAX_LEV = int(os.getenv("MAX_LEVERAGE", "35"))
 
-# ADX safety
-_ADX_SAFETY_MAX = int(os.getenv("OPS_ADX_SAFETY_MAX_LEVERAGE", "15"))
-# cutoff אחרון הוא "גבוה" – רק מעליו אפשר לשחרר מעבר ל־_ADX_SAFETY_MAX
-try:
-    _ADX_CUTOFFS = [int(x) for x in os.getenv("OPS_ADX_LEVERAGE_CUTOFFS", "20,25,30").split(",") if x.strip()]
-except Exception:
-    _ADX_CUTOFFS = [20, 25, 30]
-_LAST_CUTOFF = max(_ADX_CUTOFFS) if _ADX_CUTOFFS else 30
-
-# מפת ADX→מינוף מומלץ (JSON באותו פורמט שסיפקת)
-# דוגמה ברירת מחדל בטוחה אם אין ENV
-try:
-    _LEV_ADX_MAP = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
-    # ודא שמפתחות הם ints
-    _LEV_ADX_MAP = {int(k): int(v) for k, v in _LEV_ADX_MAP.items()}
-except Exception:
-    _LEV_ADX_MAP = {30: 15, 25: 12, 20: 9, 0: 7}
-
-# Caps פר־סימבול
-try:
-    _SYMBOL_CAPS = json.loads(os.getenv("LEVERAGE_SYMBOL_CAPS", '{}'))
-    _SYMBOL_CAPS = {str(k).upper(): int(v) for k, v in _SYMBOL_CAPS.items()}
-except Exception:
-    _SYMBOL_CAPS = {}
-
-# "שחקנים בעייתיים" – cap כללי (אם תרצה לחבר ל־bad_actor_store)
-_BAD_ACTOR_MAX = int(os.getenv("BAD_ACTOR_MAX_LEVERAGE", "8"))
-
-# Degrade דינמי ממנגנון ה־ops (drift וכו')
-def _get_degrade_cap() -> Optional[int]:
+def _parse_json_env(name: str, default: Dict[str, Any]) -> Dict[str, Any]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
     try:
-        from utils.runtime_counters import get_degrade_cap  # type: ignore
-        return get_degrade_cap()
-    except Exception:
-        return None
-
-def _bad_actor_cap(symbol: Optional[str]) -> Optional[int]:
-    """אם קיים מודול bad_actor_store, ננסה למשוך ממנו cap; אחרת כלום."""
-    if not symbol:
-        return None
-    try:
-        from utils.bad_actor_store import get_symbol_cap, is_bad_actor  # type: ignore
-        cap = get_symbol_cap(symbol)
-        if cap is not None:
-            return int(cap)
-        # אם רק "בעייתי" ללא cap ספציפי – החזר ברירת מחדל
-        if is_bad_actor(symbol):
-            return _BAD_ACTOR_MAX
+        d = json.loads(raw)
+        if isinstance(d, dict):
+            return d
     except Exception:
         pass
-    return None
+    return default
 
-def _apply_adx_map(adx: float, proposed: int) -> int:
-    """
-    מצא את המפתח הגדול ביותר <= ADX וקבע cap בהתאם למפה; החזר המינימום בין המוצע ל־cap.
-    """
-    best_key = max((k for k in _LEV_ADX_MAP.keys() if adx >= k), default=None)
-    if best_key is None:
-        return int(proposed)
-    cap = int(_LEV_ADX_MAP.get(best_key, proposed))
-    return int(min(proposed, cap))
+LEV_BY_ADX: Dict[int,int] = {int(k): int(v) for k, v in _parse_json_env("LEV_ADX_MAP_JSON", _DEF_LEV_BY_ADX).items()}
+SYMBOL_CAPS: Dict[str,int] = {str(k).upper(): int(v) for k, v in _parse_json_env("LEVERAGE_SYMBOL_CAPS", {}).items()}
 
-def _apply_adx_safety(adx: float, current: int) -> int:
-    """
-    אם ADX נמוך מה-cutoff הגבוה, אל תחרוג מ־_ADX_SAFETY_MAX.
-    רק כש־ADX >= cutoff הגבוה – מותר לעבור את ה־_ADX_SAFETY_MAX (עד MAX_LEVERAGE).
-    """
-    if adx < _LAST_CUTOFF:
-        return int(min(current, _ADX_SAFETY_MAX))
-    return int(current)
+BAD_ACTOR_MAX_LEVERAGE = os.getenv("BAD_ACTOR_MAX_LEVERAGE", "").strip()
+BAD_ACTOR_MAX_LEVERAGE = int(BAD_ACTOR_MAX_LEVERAGE) if BAD_ACTOR_MAX_LEVERAGE else None
 
-def _clamp(v: int, lo: int, hi: int) -> int:
-    return max(lo, min(hi, v))
+OPS_DEGRADE_MAX_LEVERAGE = int(os.getenv("OPS_DEGRADE_MAX_LEVERAGE", "12"))
+OPS_DRIFT_DEGRADE_ENABLE = os.getenv("OPS_DRIFT_DEGRADE_ENABLE", "1").lower() in ("1","true","yes","on")
+OPS_DRIFT_DEGRADE_MIN_BPS = float(os.getenv("OPS_DRIFT_DEGRADE_MIN_BPS", "30"))
 
-def adjust_leverage(adx: float, proposed_leverage: int, *, symbol: Optional[str] = None) -> int:
-    """
-    מדיניות מינוף דינמית:
-      1) התחלה: proposed_leverage מהסקנר/לוגיקה שלך
-      2) cap לפי מפה ADX→LEV (ENV)
-      3) ADX safety: אם adx < cutoff הגבוה – cap ל־OPS_ADX_SAFETY_MAX_LEVERAGE
-      4) cap פר־סימבול (ENV)
-      5) cap "שחקן בעייתי" (מודול חיצוני/ENV)
-      6) cap Degrade דינמי (ops: drift/vitals)
-      7) clamp ל־[MIN_LEVERAGE, MAX_LEVERAGE]
-    """
-    lev = int(proposed_leverage)
+# אופציונלי: “תקרת בטיחות” קשיחה כש־ADX נמוך (אם רוצים מעבר למפה)
+OPS_ADX_SAFETY_MAX_LEVERAGE = int(os.getenv("OPS_ADX_SAFETY_MAX_LEVERAGE", "15"))
 
-    # 2) מפה ADX
-    lev = _apply_adx_map(float(adx), lev)
+# מקור לדריפט (ממודול המונים)
+try:
+    from utils.runtime_counters import price_get_last_drift_bps
+except Exception:
+    def price_get_last_drift_bps(*a, **k): return 0.0  # type: ignore
 
-    # 3) ADX safety
-    lev = _apply_adx_safety(float(adx), lev)
+def _cap_by_adx(adx: float) -> int:
+    # בחר את ה-threshold הגבוה ביותר ש<= ADX
+    best_cap = _MAX_LEV
+    best_thr = -1
+    for thr, cap in LEV_BY_ADX.items():
+        if adx >= thr and thr >= best_thr:
+            best_thr = thr
+            best_cap = int(cap)
+    return int(best_cap)
 
-    # 4) סימבול קאפ
-    if symbol:
-        cap_sym = _SYMBOL_CAPS.get(str(symbol).upper())
-        if cap_sym is not None:
-            lev = min(lev, int(cap_sym))
+def adjust_leverage(adx: float, proposed: int, symbol: Optional[str] = None) -> int:
+    """החזרת מינוף אחרי קאפ לפי ADX/סימבול/דריפט/בטיחות. לוג INFO על כל שינוי."""
+    reasons = []
+    before = int(proposed)
+    out = int(proposed)
 
-    # 5) bad-actor cap (אם יש)
-    bac = _bad_actor_cap(symbol)
-    if bac is not None:
-        lev = min(lev, int(bac))
+    # 1) מפה לפי ADX
+    cap_adx = _cap_by_adx(float(adx))
+    if out > cap_adx:
+        reasons.append(f"ADX_MAP({adx:.1f}→{cap_adx})")
+        out = cap_adx
 
-    # 6) Degrade דינמי
-    dcap = _get_degrade_cap()
-    if dcap is not None:
-        lev = min(lev, int(dcap))
+    # 2) תקרת בטיחות אופציונלית
+    if out > OPS_ADX_SAFETY_MAX_LEVERAGE:
+        reasons.append(f"SAFETY_MAX({OPS_ADX_SAFETY_MAX_LEVERAGE})")
+        out = OPS_ADX_SAFETY_MAX_LEVERAGE
 
-    # 7) Clamp סופי
-    lev = _clamp(lev, _MIN_LEV, _MAX_LEV)
+    # 3) קאפ פר-סימבול
+    su = str(symbol or "").upper()
+    if su and su in SYMBOL_CAPS and out > SYMBOL_CAPS[su]:
+        reasons.append(f"SYMBOL_CAP({su}:{SYMBOL_CAPS[su]})")
+        out = SYMBOL_CAPS[su]
 
-    logger.debug({"event": "adjust_leverage",
-                  "symbol": symbol, "adx": adx, "proposed": proposed_leverage,
-                  "final": lev})
-    return int(lev)
+    # 4) BAD_ACTOR גלובלי (אם הוגדר)
+    if BAD_ACTOR_MAX_LEVERAGE is not None and out > BAD_ACTOR_MAX_LEVERAGE:
+        reasons.append(f"BAD_ACTOR({BAD_ACTOR_MAX_LEVERAGE})")
+        out = BAD_ACTOR_MAX_LEVERAGE
 
-__all__ = ["adjust_leverage"]
+    # 5) Degrade על דריפט מחיר
+    if OPS_DRIFT_DEGRADE_ENABLE:
+        drift_bps = float(price_get_last_drift_bps(max_age_sec=60))
+        if drift_bps >= OPS_DRIFT_DEGRADE_MIN_BPS and out > OPS_DEGRADE_MAX_LEVERAGE:
+            reasons.append(f"DRIFT_DEGRADE({drift_bps:.1f}bps→{OPS_DEGRADE_MAX_LEVERAGE})")
+            out = OPS_DEGRADE_MAX_LEVERAGE
+
+    # גבולות סופיים
+    out = max(_MIN_LEV, min(out, _MAX_LEV))
+
+    if out != before:
+        logger.info({
+            "event": "leverage_adjust",
+            "symbol": su or None,
+            "adx": float(adx),
+            "proposed": before,
+            "final": out,
+            "reasons": reasons,
+        })
+    return int(out)
+
 
 
 
