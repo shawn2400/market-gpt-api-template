@@ -76,18 +76,19 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ── Include routers (ודא שמודולים קיימים)
+# ── Include routers
 for module_path in (
     "routes.trade",
-    "routes.analytics",        # אופציונלי: אם קיים
-    "routes.decision",         # אופציונלי: אם קיים
-    "routes.backtest",         # אופציונלי: אם קיים
+    "routes.analytics",
+    "routes.decision",
+    "routes.backtest",
     "routes.executor",
-    "routes.binance_status",   # אופציונלי: אם קיים
-    "routes.telegram_webhook", # ✅
-    "routes.grid",             # ✅ Grid API
-    "routes.executor_control", # ✅ /executor/start|stop|status (מוחבא מה-Docs או גלוי – לבחירתך בקובץ)
-    "routes.ws_user_stream",   # ✅ /ws-user/status|start|stop
+    "routes.binance_status",
+    "routes.telegram_webhook",
+    "routes.grid",
+    "routes.executor_control",
+    "routes.ws_user_stream",
+    "routes.ai_analyze",           # ✅ חדש: /ai/analyze עם Rate-Limit
 ):
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -108,7 +109,8 @@ async def root():
 async def health():
     return {"ok": True, "status": "ok"}
 
-@app.get("/debug/health")
+# ↓↓↓ צמצום אופרציות ב-OpenAPI: מסמנים Off לסכמה היכן שלא צריך ↓↓↓
+@app.get("/debug/health", include_in_schema=False)
 async def debug_health():
     return {"ok": True, "status": "ok", "env": os.getenv("ENV","prod"), "version": APP_VERSION}
 
@@ -121,7 +123,6 @@ async def price(symbol: str):
         p = None
     return {"symbol": symbol.upper(), "price": p, "fresh": bool(p and p > 0)}
 
-# ── Readyz
 @app.get("/readyz")
 async def readyz():
     try:
@@ -142,6 +143,7 @@ async def readyz():
     return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
 
 # ── Telegram webhook & ping (public)
+from fastapi import HTTPException, Header  # keep types
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -157,11 +159,11 @@ async def _tg_send(chat_id: int, text: str):
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("telegram send failed: %s", e)
 
-@app.get("/telegram/ping")
+@app.get("/telegram/ping", include_in_schema=False)  # ✅ הוצאנו מהסכמה
 async def tg_ping():
     return {"ok": True, "src": "telegram", "ts_ms": int(asyncio.get_event_loop().time()*1000)}
 
-@app.post("/telegram/webhook")
+@app.post("/telegram/webhook", include_in_schema=False)  # ✅ הוצאנו מהסכמה
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(401, "Invalid telegram secret")
@@ -219,7 +221,7 @@ async def _startup_user_stream():
     try:
         if os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1","true","yes","on"):
             from utils import ws_user_stream
-            ws_user_stream.start()  # sync wrapper → יוצר task; נופל רך אם חסר websockets
+            ws_user_stream.start()
             logger.info({"event": "ws_user_stream_autostart"})
     except Exception as e:
         logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
@@ -227,6 +229,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
