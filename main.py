@@ -84,10 +84,10 @@ for module_path in (
     "routes.backtest",         # אופציונלי: אם קיים
     "routes.executor",
     "routes.binance_status",   # אופציונלי: אם קיים
-    "routes.telegram_webhook", # ✅ השם הנכון
+    "routes.telegram_webhook", # ✅
     "routes.grid",             # ✅ Grid API
-    "routes.executor_control", # ✅ חדש: /executor/start|stop
-    "routes.ws_user_stream",   # ✅ חדש: /ws-user/status|start|stop
+    "routes.executor_control", # ✅ /executor/start|stop|status (מוחבא מה-Docs או גלוי – לבחירתך בקובץ)
+    "routes.ws_user_stream",   # ✅ /ws-user/status|start|stop
 ):
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -219,7 +219,7 @@ async def _startup_user_stream():
     try:
         if os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1","true","yes","on"):
             from utils import ws_user_stream
-            ws_user_stream.start()
+            ws_user_stream.start()  # sync wrapper → יוצר task; נופל רך אם חסר websockets
             logger.info({"event": "ws_user_stream_autostart"})
     except Exception as e:
         logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
@@ -227,6 +227,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 
