@@ -26,7 +26,7 @@ except Exception:
 
 # NEW: leverage policy
 try:
-    # מומלץ שהחתימה תהיה: adjust_leverage(adx: float, proposed: int, symbol: Optional[str] = None) -> int
+    # מומלץ: adjust_leverage(adx: float, proposed: int, symbol: Optional[str] = None) -> int
     from utils.leverage_policy import adjust_leverage
 except Exception:
     def adjust_leverage(adx: float, proposed_leverage: int, symbol: Optional[str] = None) -> int:  # type: ignore
@@ -90,7 +90,7 @@ QUALITY_THRESHOLD = float(os.getenv("MIN_QUALITY_SCORE", str(getattr(cfg, "MIN_Q
 SCAN_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "4"))
 TIME_BUDGET_SEC = float(os.getenv("SCAN_TIME_BUDGET_SEC", "7.5"))
 
-# Auto-tune (עדין)
+# ===== Auto-tune (בסיס) =====
 AUTO_TUNE_ENABLE = os.getenv("AUTO_TUNE_ENABLE", "1").lower() in ("1","true","yes","on")
 AUTO_TUNE_MIN = int(os.getenv("AUTO_TUNE_MIN_SCAN_INTERVAL", str(SCAN_INTERVAL_BASE)))
 AUTO_TUNE_MAX = int(os.getenv("AUTO_TUNE_MAX_SCAN_INTERVAL", str(max(SCAN_INTERVAL_BASE, 180))))
@@ -98,13 +98,22 @@ AUTO_TUNE_UP_FACTOR = float(os.getenv("AUTO_TUNE_UP_FACTOR", "1.5"))
 AUTO_TUNE_DOWN_FACTOR = float(os.getenv("AUTO_TUNE_DOWN_FACTOR", "0.85"))
 AUTO_TUNE_STREAK_NO_TRADES = int(os.getenv("AUTO_TUNE_STREAK_NO_TRADES", "3"))
 
-# NEW: Burst-aware tuning (דיפולטים שמרניים; ניתן לעדכן ב-.env)
-AUTO_TUNE_BURST_DOWN_FACTOR = float(os.getenv("AUTO_TUNE_BURST_DOWN_FACTOR", "0.6"))   # אגרסיבי יותר כשיש הזדמנויות רבות
-AUTO_TUNE_TIMEOUT_UP_FACTOR = float(os.getenv("AUTO_TUNE_TIMEOUT_UP_FACTOR", "1.25"))  # העלאה עדינה כשיש עומס/timeout
-AUTO_TUNE_BURST_COOLDOWN_SEC = int(os.getenv("AUTO_TUNE_BURST_COOLDOWN_SEC", "45"))
+# ===== Burst הזדמנויות (הגענו לתקרת הטריידים) – קיצור מרווח =====
+AUTO_TUNE_BURST_DOWN_FACTOR = float(os.getenv("AUTO_TUNE_BURST_DOWN_FACTOR", "0.6"))  # קטן=מהיר יותר
+
+# ===== Burst של TIMEOUTS – backoff + הורדת concurrency אפקטיבי =====
+TIMEOUTS_BURST_AGGR_THRESHOLD = int(os.getenv("TIMEOUTS_BURST_AGGR_THRESHOLD", "3"))  # כמה טיימאאוטים רצופים עד למצב אגרסיבי
+BURST_BACKOFF_FACTOR = float(os.getenv("BURST_BACKOFF_FACTOR", "1.35"))                # להגדיל מרווח סריקה
+BURST_CONC_FRACTION = float(os.getenv("BURST_CONC_FRACTION", "0.7"))                   # להוריד concurrency
+BURST_MIN_CONC = int(os.getenv("BURST_MIN_CONC", "2"))
+BURST_COOLDOWN_SEC = int(os.getenv("BURST_COOLDOWN_SEC", "120"))
 
 _last_trade_ts: Dict[str, float] = {}
-_last_burst_ts: float = 0.0
+
+# Burst/Timeout state
+_timeout_burst_count: int = 0
+_burst_mode_until: float = 0.0
+_effective_concurrency: int = SCAN_CONCURRENCY  # יתעדכן במצב burst של timeouts
 
 def _log(event: str, level: str = "INFO", **kw):
     rec = {"event": event, **kw, "ts": time.time(), "level": level}
@@ -209,30 +218,13 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         _log("scan_error", symbol=symbol, error=str(e), level="ERROR")
         return None
 
-async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    loop = asyncio.get_event_loop()
-    resp = await loop.run_in_executor(
-        None,
-        lambda: execute_trade_live(
-            symbol=plan["symbol"], side="BUY" if plan["side"] == "LONG" else "SELL",
-            budget=float(getattr(cfg, "MAX_TRADE_BUDGET", 100.0)),
-            leverage=int(plan["leverage"]),
-            sl=float(plan["sl"]), tp=float(plan["tp"]),
-            position_side="BOTH",
-            reduce_only=False,
-        ),
-    )
-    if resp.get("ok"):
-        _last_trade_ts[plan["symbol"]] = time.time()
-        exec_on_trade_sent(plan["symbol"])  # ✅ expose
-    return resp
-
-async def _scan_batch(symbols: List[str], max_trades: int) -> Tuple[int, bool]:
+async def _scan_batch(symbols: List[str], max_trades: int, concurrency: int) -> Tuple[int, bool]:
     """
     מחזיר: (מס' טריידים שנשלחו, האם היה timeout על הקבוצה)
+    concurrency פר-טיק — מאפשר להוריד/להעלות דינמית.
     """
     trades_sent = 0
-    sem = asyncio.Semaphore(SCAN_CONCURRENCY)
+    sem = asyncio.Semaphore(max(1, int(concurrency)))
     results: List[Dict[str, Any]] = []
     timed_out = False
 
@@ -246,7 +238,7 @@ async def _scan_batch(symbols: List[str], max_trades: int) -> Tuple[int, bool]:
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=TIME_BUDGET_SEC)
     except asyncio.TimeoutError:
         timed_out = True
-        _log("batch_timeout", count=len(symbols), level="WARNING")
+        _log("batch_timeout", count=len(symbols), conc=int(concurrency), level="WARNING")
         exec_on_batch_timeout()  # ✅ expose
 
     results.sort(key=lambda p: p.get("score", 0.0), reverse=True)
@@ -260,7 +252,9 @@ async def _scan_batch(symbols: List[str], max_trades: int) -> Tuple[int, bool]:
 
 # ======================== Main Loop ========================
 async def auto_scan_and_trade():
-    global EXECUTOR_RUNNING, EXECUTOR_LAST_TS, _last_burst_ts
+    global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
+    global _timeout_burst_count, _burst_mode_until, _effective_concurrency
+
     EXECUTOR_RUNNING = True
     try:
         wl = load_watchlist_env_or_fallback()  # ✅ דינמי + Fallback
@@ -270,6 +264,8 @@ async def auto_scan_and_trade():
         # Auto-backoff state
         current_interval = SCAN_INTERVAL_BASE
         no_trade_streak = 0
+        _effective_concurrency = SCAN_CONCURRENCY
+        last_burst_trades_ts = 0.0  # burst של “הגענו לתקרה”
 
         while EXECUTOR_RUNNING:
             tic = time.time()
@@ -279,58 +275,88 @@ async def auto_scan_and_trade():
                 await asyncio.sleep(current_interval)
                 continue
 
+            # האם אנחנו עדיין במצב burst-Timeouts?
+            now = time.time()
+            if _burst_mode_until and now >= _burst_mode_until:
+                # יציאה ממצב burst – חזרה ל־concurrency המקורי
+                prev = _effective_concurrency
+                _effective_concurrency = SCAN_CONCURRENCY
+                _burst_mode_until = 0.0
+                _timeout_burst_count = 0
+                _log("timeout_burst_cleared", conc_prev=prev, conc_new=_effective_concurrency)
+
             batch = sched.next_batch()
+
             try:
-                sent, timed_out = await _scan_batch(batch, MAX_TRADES_PER_TICK)
+                sent, timed_out = await _scan_batch(batch, MAX_TRADES_PER_TICK, _effective_concurrency)
             except Exception as e:
                 _log("scan_batch_error", error=str(e), level="ERROR")
                 await notify_scan_error(str(e))
                 sent, timed_out = 0, False
 
-            # עדכון streak + נוטיפיקציות
+            # סטטוס
             if sent == 0:
                 await notify_no_trades()
                 no_trade_streak += 1
             else:
                 no_trade_streak = 0
 
-            # ===== Burst-aware Auto-Tune =====
+            # ===== Burst הזדמנויות (הגענו לתקרה) – לקצר מרווח =====
+            if AUTO_TUNE_ENABLE and sent >= MAX_TRADES_PER_TICK and (now - last_burst_trades_ts) >= 45:
+                prev_interval = current_interval
+                current_interval = int(max(AUTO_TUNE_MIN, current_interval * AUTO_TUNE_BURST_DOWN_FACTOR))
+                last_burst_trades_ts = now
+                _log("burst_trades_cap_hit",
+                     prev_interval=prev_interval, new_interval=current_interval,
+                     sent=sent, cap=MAX_TRADES_PER_TICK)
+
+            # ===== Burst של TIMEOUTS – backoff + הורדת concurrency =====
             if AUTO_TUNE_ENABLE:
-                # 1) Burst הזדמנויות – הגענו לתקרת טריידים/טיק → נרד אגרסיבי בזמן
-                now = time.time()
-                if sent >= MAX_TRADES_PER_TICK and (now - _last_burst_ts) >= AUTO_TUNE_BURST_COOLDOWN_SEC:
-                    prev_interval = current_interval
-                    current_interval = int(max(
-                        AUTO_TUNE_MIN,
-                        current_interval * AUTO_TUNE_BURST_DOWN_FACTOR
-                    ))
-                    _last_burst_ts = now
-                    _log("burst_detected", prev_interval=prev_interval, new_interval=current_interval,
-                         sent=sent, cap=MAX_TRADES_PER_TICK)
+                if timed_out:
+                    _timeout_burst_count += 1
+                else:
+                    _timeout_burst_count = 0
 
-                # 2) timeout בקבוצה – להגדיל בעדינות כדי להקל עומס
-                elif timed_out:
+                if _timeout_burst_count >= TIMEOUTS_BURST_AGGR_THRESHOLD and _burst_mode_until == 0.0:
+                    # כניסה למצב burst-Timeouts
                     prev_interval = current_interval
+                    prev_conc = _effective_concurrency
+
+                    # 1) backoff במרווח סריקה
                     current_interval = int(min(
                         AUTO_TUNE_MAX,
-                        max(AUTO_TUNE_MIN, current_interval * AUTO_TUNE_TIMEOUT_UP_FACTOR) + 2
+                        max(AUTO_TUNE_MIN, int(current_interval * BURST_BACKOFF_FACTOR))
                     ))
-                    _log("timeout_detected", prev_interval=prev_interval, new_interval=current_interval)
+                    # 2) הורדת concurrency אפקטיבי
+                    _effective_concurrency = max(
+                        BURST_MIN_CONC,
+                        int(max(1, round(SCAN_CONCURRENCY * BURST_CONC_FRACTION)))
+                    )
+                    _burst_mode_until = now + BURST_COOLDOWN_SEC
 
-                # 3) לוגיקת הבסיס הקיימת
-                elif no_trade_streak >= AUTO_TUNE_STREAK_NO_TRADES:
-                    prev_interval = current_interval
-                    current_interval = int(min(
-                        AUTO_TUNE_MAX,
-                        max(current_interval * AUTO_TUNE_UP_FACTOR, current_interval + 5)
-                    ))
-                    _log("scan_interval_backoff", prev_interval=prev_interval, new_interval=current_interval)
-                elif sent > 0 and current_interval > AUTO_TUNE_MIN:
-                    prev_interval = current_interval
-                    current_interval = int(max(AUTO_TUNE_MIN, current_interval * AUTO_TUNE_DOWN_FACTOR))
-                    _log("scan_interval_relax", prev_interval=prev_interval, new_interval=current_interval)
+                    _log("timeout_burst_enter",
+                         prev_interval=prev_interval, new_interval=current_interval,
+                         conc_prev=prev_conc, conc_new=_effective_concurrency,
+                         cooldown_sec=BURST_COOLDOWN_SEC,
+                         timeouts_in_row=_timeout_burst_count)
 
-            # דיווח אופרציונלי + Ops tick (כולל Price-Drift אם נתמך במודול)
+                # אם לא timeout-burst, הפעל לוגיקת בסיס רגילה
+                elif _burst_mode_until == 0.0:
+                    if no_trade_streak >= AUTO_TUNE_STREAK_NO_TRADES:
+                        prev_interval = current_interval
+                        current_interval = int(min(
+                            AUTO_TUNE_MAX,
+                            max(current_interval * AUTO_TUNE_UP_FACTOR, current_interval + 5)
+                        ))
+                        _log("scan_interval_backoff",
+                             prev_interval=prev_interval, new_interval=current_interval,
+                             reason="no_trades_streak", streak=no_trade_streak)
+                    elif sent > 0 and current_interval > AUTO_TUNE_MIN:
+                        prev_interval = current_interval
+                        current_interval = int(max(AUTO_TUNE_MIN, current_interval * AUTO_TUNE_DOWN_FACTOR))
+                        _log("scan_interval_relax", prev_interval=prev_interval, new_interval=current_interval)
+
+            # דיווח אופרציונלי + Ops tick (כולל Price-Drift אם נתמך במודול runtime_counters)
             dt = time.time() - tic
             exec_on_tick_stop(
                 dt_ms=float(dt * 1000.0),
