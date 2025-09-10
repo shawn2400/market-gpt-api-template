@@ -1,10 +1,8 @@
 # utils/trade_manager.py
 from __future__ import annotations
-import time, logging, asyncio, json, os
+import time, logging, asyncio, json, os, math
 from pathlib import Path
 from typing import Dict, Any, List
-
-import math
 import pandas as pd
 
 from utils import ws_fallback
@@ -27,6 +25,18 @@ try:
 except Exception:
     _set_be_native = None  # type: ignore
 
+# Ops-guard (רשות)
+try:
+    from utils.ops_guard import ops_tick
+except Exception:
+    async def ops_tick(**kwargs): return None  # type: ignore
+
+# גיל מחיר (אופציונלי)
+try:
+    get_price_age = ws_fallback.get_price_age  # type: ignore
+except Exception:
+    def get_price_age(symbol: str): return None  # type: ignore
+
 from utils.config import ALLOW_MANAGE_OPEN_TRADES, AUTO_RUN
 from utils.telegram_notifier import (
     notify_sl_tp_update, notify_info,
@@ -48,10 +58,8 @@ TP_BE_OFFSET_BPS = float(os.getenv("TP_BE_OFFSET_BPS", "5"))
 _TRAIL_FREEZE_ENABLE = os.getenv("TRAIL_FREEZE_ENABLE","0").lower() in ("1","true","yes","on")
 _TRAIL_FREEZE_MIN_SEC = int(os.getenv("TRAIL_FREEZE_MIN_SEC","60"))
 _TRAIL_FREEZE_MAX_SEC = int(os.getenv("TRAIL_FREEZE_MAX_SEC","180"))
-# כאשר מזהים תנופה/ספייק – נקבע עד מתי "מוקפא" הידוק ה-trailing לכל סימבול
 _last_trail_freeze_until: Dict[str,float] = {}
 
-# ספי Freeze (טיפוסיים)
 _TRAIL_FREEZE_SPIKE_ATR_MULT = float(os.getenv("TRAIL_FREEZE_SPIKE_ATR_MULT", "1.8"))
 _TRAIL_FREEZE_ADX_WEAK = float(os.getenv("TRAIL_FREEZE_ADX_WEAK", "20"))
 
@@ -69,13 +77,11 @@ REVIEW_PATH = Path("static/cache/trade_reviews.json")
 
 _last_update: Dict[str, float] = {}
 _last_be_guard = 0.0
-_be_set_once: set[str] = set()  # symbols שקיבלו BE במחזור חיי הפוזיציה
+_be_set_once: set[str] = set()
 
-# === מעקב מצב פוזיציות פתוחות לצורך זיהוי סגירה ===
 _prev_open_positions: Dict[str, Dict[str, Any]] = {}
 
 def _tp1_pct_default() -> float:
-    """שולף את TP1 ברירת-המחדל מתוך LADDER_TP_DEFAULT_PCTS (ב-ENV)."""
     csv = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
     try:
         arr = [float(x) for x in csv.split(",") if x.strip()]
@@ -84,42 +90,26 @@ def _tp1_pct_default() -> float:
         return 1.8
 
 def _price_now(symbol: str) -> float:
-    """
-    HTTP Fallback אם WS לא פעיל:
-    1) נסה cache פנימי/WS (ws_fallback.get_price)
-    2) פולי־בק ל־futures_mark_price (HTTP)
-    """
     try:
         px = ws_fallback.get_price(symbol)
-        if px: 
-            return float(px)
+        if px: return float(px)
     except Exception:
         pass
     try:
         if futures_mark_price:
             px2 = futures_mark_price(symbol)
-            if px2: 
-                return float(px2)
+            if px2: return float(px2)
     except Exception:
         pass
     return 0.0
 
 def _is_finite_number(x: Any) -> bool:
     try:
-        xf = float(x)
-        return math.isfinite(xf)
+        xf = float(x); return math.isfinite(xf)
     except Exception:
         return False
 
-def _safe_last(series_like) -> float:
-    try:
-        v = float(series_like.iloc[-1])
-        return v if math.isfinite(v) else float("nan")
-    except Exception:
-        return float("nan")
-
 async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> None:
-    """מזהה פוזיציות שנסגרו מול הסבב הקודם → מזניק ביקורת AI (רכה, לא שוברת כלום)."""
     global _prev_open_positions
     try:
         curr_open: Dict[str, Dict[str, Any]] = {}
@@ -146,14 +136,8 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                 entry = float(prev.get("entryPrice") or 0) or 0.0
                 side = "LONG" if float(prev.get("positionAmt") or 0) > 0 else "SHORT"
                 exit_px = _price_now(s) or entry
-                ctx = {
-                    "entry": entry,
-                    "exit": exit_px,
-                    "pnl_usd": None,
-                    "rr": None,
-                    "indicators": {},
-                    "reasons": ["auto_detected_closure"],
-                }
+                ctx = {"entry": entry, "exit": exit_px, "pnl_usd": None, "rr": None,
+                       "indicators": {}, "reasons": ["auto_detected_closure"]}
                 try:
                     await review_trade_async(s, side, ctx, to_telegram=True)
                 except Exception as e:
@@ -164,48 +148,31 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
         logger.debug("[ai_review] closure detect error: %s", e)
 
 def _maybe_freeze_trailing(symbol: str, df: pd.DataFrame, atr_now: float, adx_now: float, macd_diff_now: float) -> bool:
-    """
-    מזהה spike ביחס ל-ATR ומחיל חלון Freeze דינמי שבו לא מעדכנים Trailing.
-    מחזיר True אם יש Freeze פעיל כרגע.
-    """
     if not _TRAIL_FREEZE_ENABLE:
         return False
-
     now = time.time()
-    # אם כבר קיים Freeze פעיל — בדוק אם הסתיים
     t_until = _last_trail_freeze_until.get(symbol, 0.0)
     if now < t_until:
         return True
-
-    # הערכת spike: רוחב נר אחרון / ATR
     try:
-        last_high = float(df["high"].iloc[-1])
-        last_low  = float(df["low"].iloc[-1])
-        last_range = abs(last_high - last_low)
+        last_high = float(df["high"].iloc[-1]); last_low = float(df["low"].iloc[-1])
     except Exception:
         return False
-
+    last_range = abs(last_high - last_low)
     if atr_now <= 0 or not math.isfinite(atr_now) or not math.isfinite(last_range):
         return False
-
     spike_mult = last_range / float(atr_now)
-
     if spike_mult >= _TRAIL_FREEZE_SPIKE_ATR_MULT:
-        # משך Freeze אדפטיבי: גבוה יותר כשה-spike גדול יותר וכש-ADX חלש
-        base = _TRAIL_FREEZE_MIN_SEC + int((spike_mult - 1.0) * 30)  # כל 1x ATR מעבר ל-1 מוסיף ~30 שניות
-        if adx_now < _TRAIL_FREEZE_ADX_WEAK:
-            base = int(base * 1.25)  # אדקס חלש → עוד קצת זמן להתייצבות
-        if abs(macd_diff_now) > 0.5:
-            base += 20  # תנופה חזקה → תן עוד קצת זמן
+        base = _TRAIL_FREEZE_MIN_SEC + int((spike_mult - 1.0) * 30)
+        if adx_now < _TRAIL_FREEZE_ADX_WEAK: base = int(base * 1.25)
+        if abs(macd_diff_now) > 0.5: base += 20
         dur = max(_TRAIL_FREEZE_MIN_SEC, min(_TRAIL_FREEZE_MAX_SEC, base))
         _last_trail_freeze_until[symbol] = now + dur
         logger.info(f"[trail_freeze] {symbol} freeze {dur}s (spike={spike_mult:.2f}xATR, adx={adx_now:.1f}, macdΔ={macd_diff_now:.2f})")
         return True
-
     return False
 
 async def manage_open_trades():
-    """ניהול דינמי חי של טריידים פתוחים (SL, TP, BE, Trailing)."""
     global _daily_pnl, _cap_triggered
     if not ALLOW_MANAGE_OPEN_TRADES or _cap_triggered:
         return
@@ -233,24 +200,19 @@ async def manage_open_trades():
                 if df is None or getattr(df, "empty", False):
                     continue
 
-                # אינדיקטורים (עם בלמי NaN/inf)
-                atr_series = atr(df)
+                atr_series = atr(df); adx_series = adx(df)
                 current_atr = float(atr_series.iloc[-1]) if hasattr(atr_series, "iloc") else float(atr_series[-1])
-                adx_series = adx(df)
                 current_adx = float(adx_series.iloc[-1]) if hasattr(adx_series, "iloc") else float(adx_series[-1])
                 macd_line, macd_signal, _ = macd(df["close"])
                 macd_now = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
 
-                if not (_is_finite_number(current_atr) and current_atr > 0):
-                    continue
-                if not _is_finite_number(current_adx):
-                    continue
-                if not _is_finite_number(macd_now):
-                    continue
+                if not (_is_finite_number(current_atr) and current_atr > 0): continue
+                if not _is_finite_number(current_adx): continue
+                if not _is_finite_number(macd_now): continue
 
                 profit_pct = abs((price - entry) / entry) * 100.0
 
-                # === Breakeven SL (תנאים רכים) ===
+                # Breakeven SL (רך)
                 be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "1.5"))
                 if (profit_pct >= be_trigger) and (macd_now > 0 or current_adx > 20):
                     if not TP_BE_ONLY_AFTER_TP1:
@@ -267,13 +229,12 @@ async def manage_open_trades():
                             except Exception as e:
                                 logger.error("[manage] BE fallback failed: %s", e)
 
-                # === Trailing SL (עם Freeze אדפטיבי) ===
-                # אם יש spike/תנופה – דלג על הידוק SL בסבב זה
+                # Trailing (עם Freeze אדפטיבי)
                 if _maybe_freeze_trailing(sym, df, current_atr, current_adx, macd_now):
                     _last_update[sym] = now
                     continue
 
-                # חישוב טריילינג בפועל (ClosePosition מלא, לא חלקי)
+                # חישוב Trailing בפועל
                 try:
                     if side == "LONG":
                         recent_low = float(df["low"].iloc[-3:].min())
@@ -281,20 +242,16 @@ async def manage_open_trades():
                     else:
                         recent_high = float(df["high"].iloc[-3:].max())
                         trail_sl = recent_high + 0.6 * current_atr
-
                     if _is_finite_number(trail_sl):
                         modify_stop_loss(sym, trail_sl, position_side=side)
                         await notify_sl_tp_update(sym, side, "trailing", trail_sl)
                 except Exception as e:
                     logger.error("[manage] trailing update failed for %s: %s", sym, e)
 
-                # === Dynamic TP (מותאם תנופה) === — ClosePosition מלא
+                # Dynamic TP
                 try:
                     if current_adx > 25 and macd_now > 0:
-                        if side == "LONG":
-                            new_tp = price + 4.5 * current_atr
-                        else:
-                            new_tp = price - 4.5 * current_atr
+                        new_tp = (price + 4.5 * current_atr) if side == "LONG" else (price - 4.5 * current_atr)
                         if _is_finite_number(new_tp):
                             modify_take_profit(sym, new_tp, position_side=side)
                             await notify_sl_tp_update(sym, side, "tp", new_tp)
@@ -306,14 +263,21 @@ async def manage_open_trades():
             except Exception as ie:
                 logger.error("[manage] per-position error %s: %s", pos.get("symbol"), ie)
 
-        # === שומר Breakeven “דליל” (אופציונלי) ===
+        # שומר BE “דליל”
         if _BE_GUARD_ENABLE:
             await _be_guard_tick()
 
-        # === Hook: זיהוי סגירות + ביקורת AI ===
+        # Hook: זיהוי סגירות + ביקורת AI
         await _detect_closures_and_review(positions)
 
-        # === Daily Cap ===
+        # Ops-tick: TTL (אם קיים API לגיל מחיר)
+        try:
+            ttl = get_price_age("BTCUSDT")
+            await ops_tick(price_ttl_sec=float(ttl) if ttl is not None else None)
+        except Exception:
+            pass
+
+        # Daily Cap
         if _daily_pnl <= DAILY_LOSS_CAP and not _cap_triggered:
             _cap_triggered = True
             await panic_close_all()
@@ -325,34 +289,26 @@ async def manage_open_trades():
         await notify_error(f"⚠️ TradeManager Error: {e}")
 
 async def manage_open_trades_loop(interval: int = 20):
-    """לולאת ניהול חי ברקע"""
     while True:
         await manage_open_trades()
         await asyncio.sleep(interval)
 
 async def daily_summary():
-    """סיכום יומי: רווח/הפסד, טריידים, הערות"""
     try:
-        summary = {
-            "pnl": _daily_pnl,
-            "trades": _trades_today,
-            "time": time.strftime("%d/%m/%Y %H:%M"),
-        }
-        REVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(REVIEW_PATH, "a", encoding="utf-8") as f:
+        summary = {"pnl": _daily_pnl, "trades": _trades_today, "time": time.strftime("%d/%m/%Y %H:%M")}
+        Path("static/cache").mkdir(parents=True, exist_ok=True)
+        with open(Path("static/cache/trade_reviews.json"), "a", encoding="utf-8") as f:
             f.write(json.dumps(summary, ensure_ascii=False) + "\n")
         await notify_daily_summary(summary)
     except Exception as e:
         await notify_error(f"Daily summary failed: {e}")
 
 async def heartbeat_loop(interval: int = 3600):
-    """כל שעה שולח Heartbeat"""
     while True:
         await notify_heartbeat()
         await asyncio.sleep(interval)
 
 async def panic_close_all():
-    """סוגר את כל הפוזיציות מיידית"""
     try:
         close_all_positions()
         await notify_info("🛑 Panic Button: כל הפוזיציות נסגרו!")
@@ -360,7 +316,6 @@ async def panic_close_all():
         await notify_error(f"Panic close failed: {e}")
 
 def record_health(ok: bool):
-    """רישום כשלי /health → KillSwitch"""
     global _health_fails, _cap_triggered
     if ok:
         _health_fails = 0
@@ -373,7 +328,6 @@ def record_health(ok: bool):
 
 # ===================== אירוע מילוי פקודה (TP1 Tag) =====================
 async def handle_order_filled(event: Dict[str, Any]):
-    """אם clientOrderId מכיל תגית TP1 → מרים BE אוטומטי."""
     try:
         clid = (event.get("clientOrderId") or "").upper()
         symbol = (event.get("symbol") or "").upper()
@@ -383,7 +337,6 @@ async def handle_order_filled(event: Dict[str, Any]):
         if not is_tp1:
             return
 
-        # קודם ננסה BE native אם קיים
         if _set_be_native:
             try:
                 _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
@@ -392,31 +345,24 @@ async def handle_order_filled(event: Dict[str, Any]):
             except Exception as e:
                 logger.error("[tm.order_filled] native BE failed: %s", e)
 
-        # אחרת – BE לוקלי לפי פוזיציה פתוחה לסימבול
         open_positions = get_open_positions() or []
         for pos in open_positions:
             try:
-                if (pos.get("symbol") or "").upper() != symbol:
-                    continue
+                if (pos.get("symbol") or "").upper() != symbol: continue
                 amt = float(pos.get("positionAmt", "0"))
-                if abs(amt) < 1e-12:
-                    continue
+                if abs(amt) < 1e-12: continue
                 side = "LONG" if amt > 0 else "SHORT"
-                entry = float(pos.get("entryPrice", "0"))
-                if entry <= 0:
-                    continue
+                entry = float(pos.get("entryPrice", "0")); if entry <= 0: continue
                 modify_stop_loss(symbol, entry, position_side=side)
                 await notify_sl_tp_update(symbol, side, "breakeven", entry)
                 break
             except Exception:
                 continue
-
     except Exception as e:
         logger.error("[tm.order_filled] error: %s", e)
 
 # ===================== “שומר BE” אופציונלי ודליל =====================
 async def _be_guard_tick():
-    """אם המחיר עבר TP1% ועדיין אין BE → נרים BE פעם אחת."""
     global _last_be_guard
     now = time.time()
     if now - _last_be_guard < _BE_GUARD_EVERY_SEC:
@@ -431,40 +377,30 @@ async def _be_guard_tick():
     for pos in positions:
         try:
             symbol = (pos.get("symbol") or "").upper()
-            if not symbol:
-                continue
+            if not symbol: continue
             amt = float(pos.get("positionAmt", "0"))
-            if abs(amt) < 1e-12:
-                continue
+            if abs(amt) < 1e-12: continue
             entry = float(pos.get("entryPrice", "0"))
-            if entry <= 0:
-                continue
+            if entry <= 0: continue
             side = "LONG" if amt > 0 else "SHORT"
 
             mark = futures_mark_price(symbol) or 0.0
-            if mark <= 0:
-                continue
+            if mark <= 0: continue
 
             reached = (mark >= entry * (1.0 + tp1_pct)) if side == "LONG" else (mark <= entry * (1.0 - tp1_pct))
-            if not reached:
-                continue
+            if not reached: continue
 
             orders = get_open_orders(symbol) or []
             be_like = False
             for o in orders:
                 otype = (o.get("type") or "").upper()
-                if "STOP" not in otype:
-                    continue
+                if "STOP" not in otype: continue
                 stop_px = float(o.get("stopPrice") or o.get("price") or 0)
-                if side == "LONG" and stop_px >= entry:
-                    be_like = True
-                if side == "SHORT" and stop_px <= entry:
-                    be_like = True
-            if be_like:
-                continue
+                if side == "LONG" and stop_px >= entry: be_like = True
+                if side == "SHORT" and stop_px <= entry: be_like = True
+            if be_like: continue
 
-            if symbol in _be_set_once:
-                continue
+            if symbol in _be_set_once: continue
 
             if _set_be_native:
                 _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
@@ -475,9 +411,9 @@ async def _be_guard_tick():
 
             _be_set_once.add(symbol)
             logger.info("[tm.be_guard] %s BE set", symbol)
-
         except Exception as e:
             logger.error("[tm.be_guard] error: %s", e)
+
 
 
 
