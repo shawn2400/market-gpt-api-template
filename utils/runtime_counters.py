@@ -16,7 +16,7 @@ TIMEOUT_BURST_ALERT      = int(os.getenv("EXEC_TIMEOUT_BURST_ALERT", "3"))
 OPS_TICK_ENABLE          = os.getenv("OPS_TICK_ENABLE","1").lower() in ("1","true","on","yes")
 
 DRIFT_BPS_ALERT          = float(os.getenv("PRICE_DRIFT_BPS_ALERT","25"))
-DRIFT_DEGRADE_ENABLE     = os.getenv("OPS_DRIFT_DEGRADE_ENABLE","1").lower() in ("1","true","on","yes"))
+DRIFT_DEGRADE_ENABLE     = os.getenv("OPS_DRIFT_DEGRADE_ENABLE","1").lower() in ("1","true","on","yes")
 DRIFT_DEGRADE_MIN_BPS    = float(os.getenv("OPS_DRIFT_DEGRADE_MIN_BPS","30"))
 DEGRADE_MAX_LEV          = int(os.getenv("OPS_DEGRADE_MAX_LEVERAGE","12"))
 ADX_SAFETY_MAX_LEV       = int(os.getenv("OPS_ADX_SAFETY_MAX_LEVERAGE","15"))
@@ -59,6 +59,7 @@ _ws_last_event_ts: float = 0.0
 _ws_ewma_inter_ms: float = 0.0
 
 def ws_note_up(is_up: bool) -> None:
+    global _ws_up
     with _ws_lock:
         _ws_up = 1 if is_up else 0
 
@@ -108,6 +109,7 @@ _exec_no_trade_streak: int = 0
 _exec_current_interval: int = int(os.getenv("SCAN_INTERVAL","60"))
 
 def exec_on_tick_stop(*, dt_ms: float, current_interval: int, no_trade_streak: int) -> None:
+    global _exec_last_tick_ts, _exec_ewma_dt_ms, _exec_no_trade_streak, _exec_current_interval
     now = time.time()
     with _exec_lock:
         _exec_last_tick_ts = now
@@ -273,7 +275,6 @@ __all__ = [
     # Drift store (used by leverage_policy)
     "price_set_last_drift_bps", "price_get_last_drift_bps",
 ]
-
 
 
 
