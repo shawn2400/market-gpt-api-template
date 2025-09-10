@@ -17,44 +17,55 @@ except Exception:
 _WS_CACHE_PATH = Path(os.getenv("WS_CACHE_PATH", "static/cache/ws_prices.json"))
 _FRESH_TTL = int(os.getenv("PRICE_WS_FRESH_TTL", "20"))
 
-def _from_cache(symbol: str) -> Optional[float]:
+def _read_cache() -> dict:
     try:
         if not _WS_CACHE_PATH.exists():
-            return None
-        data = json.loads(_WS_CACHE_PATH.read_text(encoding="utf-8"))
-        rec = data.get(symbol.upper())
-        if not rec:
-            return None
-        px = float(rec.get("price") or 0.0)
-        ts = float(rec.get("ts") or 0.0)
-        if px > 0 and (time.time() - ts) <= _FRESH_TTL:
-            return px
+            return {}
+        return json.loads(_WS_CACHE_PATH.read_text(encoding="utf-8"))
     except Exception:
-        return None
-    return None
+        return {}
+
+def is_price_fresh(symbol: str, max_age_sec: int = None) -> bool:
+    """בודק אם המחיר ב-WS cache טרי מספיק."""
+    max_age = _FRESH_TTL if max_age_sec is None else int(max_age_sec)
+    sym = symbol.upper()
+    data = _read_cache()
+    rec = data.get(sym)
+    if not rec:
+        return False
+    ts = float(rec.get("ts") or 0.0)
+    return (time.time() - ts) <= max_age
 
 def get_price(symbol: str) -> Optional[float]:
     """מחזיר מחיר אחרון: קודם Cache מ-WS (אם טרי), אחרת Mark/HTTP."""
-    symbol = symbol.upper()
-    px = _from_cache(symbol)
-    if px:
-        return px
+    sym = symbol.upper()
+    data = _read_cache()
+    rec = data.get(sym)
+    if rec:
+        try:
+            px = float(rec.get("price") or 0.0)
+            ts = float(rec.get("ts") or 0.0)
+            if px > 0 and (time.time() - ts) <= _FRESH_TTL:
+                return px
+        except Exception:
+            pass
     # Fallback ל-HTTP
     if _mark:
         try:
-            m = _mark(symbol)
+            m = _mark(sym)
             if m:
                 return float(m)
         except Exception:
             pass
     if _http_price:
         try:
-            p = _http_price(symbol)
+            p = _http_price(sym)
             if p:
                 return float(p)
         except Exception:
             pass
     return None
+
 
 
 
