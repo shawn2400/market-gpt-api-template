@@ -1,3 +1,4 @@
+# FILE: Dockerfile
 # ============================
 # === Stage 1: Build layer ===
 # ============================
@@ -6,7 +7,8 @@ FROM python:3.11-slim AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECKTOOLS=1 \
+    DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     build-essential curl ca-certificates \
@@ -31,10 +33,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GUNICORN_TIMEOUT=120 \
     PYTHONPATH=/app \
     APP_MODULE=main:app \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MPLCONFIGDIR=/app/.cache/matplotlib \
+    TZ=Asia/Jerusalem \
+    DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    curl tini ca-certificates \
+    curl tini ca-certificates tzdata \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
     procps psmisc \
@@ -70,11 +75,12 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # מריצים את main:app דרך Gunicorn+UvicornWorker
 CMD bash -lc "bash /app/prestart.sh 2>/dev/null || true && \
-  gunicorn main:app \
+  gunicorn ${APP_MODULE} \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
