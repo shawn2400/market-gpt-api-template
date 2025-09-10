@@ -1,6 +1,6 @@
 # utils/ai_analysis.py
 from __future__ import annotations
-import os, asyncio, random, math
+import os, asyncio, random
 from typing import Dict, Any, List, Optional
 
 import httpx
@@ -12,11 +12,11 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstr
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
 OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "4"))
 
-# thresholds (השארתי 8.5 כפי שביקשת)
+# thresholds (ברירת מחדל: 8.5 ו-0.2)
 AI_MIN_QUALITY = float(os.getenv("AI_MIN_QUALITY", "8.5"))
 AI_CONFLICT_MIN = float(os.getenv("AI_CONFLICT_MIN", "0.2"))
 
-# Retry
+# Retry / Backoff
 AI_HTTP_RETRIES = int(os.getenv("AI_HTTP_RETRIES", "3"))
 AI_HTTP_BACKOFF_BASE = float(os.getenv("AI_HTTP_BACKOFF_BASE", "0.6"))
 AI_HTTP_BACKOFF_MAX = float(os.getenv("AI_HTTP_BACKOFF_MAX", "4.0"))
@@ -35,7 +35,6 @@ def _to_float_safe(v: Any, default: float = 0.0) -> float:
 def _build(features: Dict[str, Any]) -> Dict[str, Any]:
     """בונה payload ‘עמיד’ עבור chat.completions – קצר וקונסיסטנטי."""
     sym = str(features.get("symbol") or "?").upper()
-    # סיכום קצר ועמיד לסוגי ערכים משונים
     parts = []
     for k, v in features.items():
         if v is None:
@@ -94,13 +93,15 @@ async def _post_json_with_retry(url: str, *, headers: Dict[str, str], json_paylo
     attempt = 0
     backoff = AI_HTTP_BACKOFF_BASE
     last_err: Optional[Exception] = None
-    while attempt < max(1, AI_HTTP_RETRIES):
+    max_attempts = max(1, AI_HTTP_RETRIES)
+
+    while attempt < max_attempts:
         attempt += 1
         try:
             async with httpx.AsyncClient(timeout=OPENAI_TIMEOUT) as client:
                 r = await client.post(url, headers=headers, json=json_payload)
-                # על 429/5xx ננסה שוב
                 if r.status_code in (429, 500, 502, 503, 504):
+                    # retryable
                     last_err = httpx.HTTPStatusError("AI upstream retryable", request=r.request, response=r)
                     await asyncio.sleep(_jitter(min(backoff, AI_HTTP_BACKOFF_MAX)))
                     backoff = min(AI_HTTP_BACKOFF_MAX, backoff * 1.7)
@@ -114,7 +115,7 @@ async def _post_json_with_retry(url: str, *, headers: Dict[str, str], json_paylo
         except Exception as e:
             # שגיאה לא צפויה – לא ננסה שוב כדי לא “להילחם” בבעיית תוכן
             raise e
-    # אם לא הצלחנו – נרים שגיאה חוצה ופוקדים למעלה לייצר הודעת כשל רכה
+
     if last_err:
         raise last_err
     raise RuntimeError("AI request failed with unknown error")
@@ -148,7 +149,8 @@ async def analyze_with_ai(features: Dict[str, Any]) -> Dict[str, Any]:
             txt = (msg.get("content") or "").strip()
             return {"ok": True, "analysis": txt or "[AI empty]"}
         except Exception as e:
-            return {"ok": False, "analysis": f"[AI error: {e}]"}  # כשל רך שלא שובר זרימה
+            # כשל רך שלא שובר זרימה
+            return {"ok": False, "analysis": f"[AI error: {e}]"}
 
 
 # -------- analyze_with_ai_and_filter (שומר קיים, משופר קלות) --------
@@ -161,12 +163,11 @@ async def analyze_with_ai_and_filter(
     run_early_approvals: bool = True,
 ) -> Dict[str, Any]:
     """
-    מחזיר מבנה:
+    מחזיר:
       {
         "accepted": [ {symbol, side, entry, sl, tp1, leverage, success_pct, reason} ... ],
         "rejected": [ {symbol, reason} ... ]
       }
-    סינון Placeholder — שמרני ופשוט כדי שהראוטים ירוצו חלק. אפשר להקשיח בעתיד.
     """
     accepted: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
@@ -194,6 +195,7 @@ async def analyze_with_ai_and_filter(
             rejected.append({"symbol": su, "reason": f"filter_error: {e}"})
 
     return {"accepted": accepted, "rejected": rejected}
+
 
 
 
