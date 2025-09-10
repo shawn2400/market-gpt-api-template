@@ -1,148 +1,101 @@
 # utils/rate_limit.py
 from __future__ import annotations
 import os, time, asyncio
-from typing import Tuple, Optional, Callable
+from typing import Optional, Tuple
 from fastapi import Request, HTTPException
 
-# ננסה Redis אסינכרוני; אם אין/נכשל – נשתמש בזיכרון
+# Redis (אופציונלי)
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_PREFIX = os.getenv("REDIS_NAMESPACING", "algogpt:v2")
 try:
-    from redis.asyncio import Redis  # redis==5 כולל asyncio
+    import redis  # type: ignore
+    _RED = redis.from_url(REDIS_URL, decode_responses=True) if REDIS_URL else None
 except Exception:
-    Redis = None  # type: ignore
+    _RED = None
 
-_REDIS_URL = os.getenv("REDIS_URL", "").strip()
-_REDIS: Optional["Redis"] = None
-if Redis and _REDIS_URL:
-    try:
-        _REDIS = Redis.from_url(_REDIS_URL, decode_responses=True)
-    except Exception:
-        _REDIS = None
+_AI_RPM_DEFAULT = int(os.getenv("AI_ANALYZE_RPM", "5"))
 
-# ===== In-memory fallback (פר-פרוסס) =====
+# In-memory fallback
+_mem_store = {}
 _mem_lock = asyncio.Lock()
-_mem_state: dict[str, Tuple[float, float]] = {}  # key -> (tokens, ts)
 
-def _now() -> float:
-    return time.time()
+def _extract_token_or_ip(req: Request, *, by_token_only: bool) -> str:
+    tok = None
+    auth = req.headers.get("Authorization") or ""
+    if auth.startswith("Bearer "):
+        tok = auth.split(" ", 1)[1].strip()
+    tok = tok or req.headers.get("X-API-Key") or req.headers.get("X-Api-Key")
+    if by_token_only and not tok:
+        # אם חייבים לפי טוקן – ואין טוקן – נחסום כמו חריגה
+        raise HTTPException(401, "Missing API token for rate limit scope")
+    if tok:
+        return f"tok:{tok[:16]}"
+    # fallback: IP
+    ip = (req.client.host if req.client else "0.0.0.0")
+    return f"ip:{ip}"
 
-async def _bucket_take_redis(key: str, rpm: int, burst_factor: float) -> Tuple[bool, float]:
-    """
-    Token-bucket ב-Redis: שומר HSET עם fields: tokens, ts
-    מחזיר (allowed, retry_after_seconds)
-    """
-    assert _REDIS is not None
-    capacity = max(1.0, float(rpm) * float(burst_factor))
-    refill_per_sec = float(rpm) / 60.0
-    ts = _now()
+def _refill(tokens: float, last_ts: float, rpm: int) -> Tuple[float, float]:
+    # Leaky/Token bucket: ריענון טוקנים לפי קצב r = rpm/60
+    now = time.time()
+    rate = max(0.0, float(rpm) / 60.0)
+    new_tokens = min(1.0 * rpm, tokens + (now - last_ts) * rate)
+    return new_tokens, now
 
-    # נטען מצב קיים
-    h = await _REDIS.hgetall(key) or {}
-    tokens = float(h.get("tokens") or capacity)
-    last_ts = float(h.get("ts") or ts)
-
-    # מילוי מחדש לפי זמן שחלף
-    elapsed = max(0.0, ts - last_ts)
-    tokens = min(capacity, tokens + elapsed * refill_per_sec)
-
-    allowed = tokens >= 1.0
-    if allowed:
-        tokens -= 1.0
-        retry_after = 0.0
-    else:
-        # כמה זמן עד שיצטבר טוקן
-        need = 1.0 - tokens
-        retry_after = max(0.0, need / refill_per_sec)
-
-    pipe = _REDIS.pipeline(transaction=False)
-    pipe.hset(key, mapping={"tokens": tokens, "ts": ts})
-    pipe.expire(key, max(120, int(2 * 60)))  # TTL הגנתי
-    await pipe.execute()
-
-    return allowed, retry_after
-
-async def _bucket_take_mem(key: str, rpm: int, burst_factor: float) -> Tuple[bool, float]:
-    capacity = max(1.0, float(rpm) * float(burst_factor))
-    refill_per_sec = float(rpm) / 60.0
-    ts = _now()
-
+async def _allow_mem(ns: str, ident: str, rpm: int, burst: int) -> bool:
+    key = f"{ns}:{ident}"
     async with _mem_lock:
-        tokens, last_ts = _mem_state.get(key, (capacity, ts))
-        elapsed = max(0.0, ts - last_ts)
-        tokens = min(capacity, tokens + elapsed * refill_per_sec)
+        rec = _mem_store.get(key, {"tok": float(burst), "ts": time.time()})
+        tok, ts = float(rec["tok"]), float(rec["ts"])
+        tok, now = _refill(tok, ts, rpm)
+        if tok >= 1.0:
+            tok -= 1.0
+            _mem_store[key] = {"tok": tok, "ts": now}
+            return True
+        _mem_store[key] = {"tok": tok, "ts": now}
+        return False
 
-        allowed = tokens >= 1.0
-        if allowed:
-            tokens -= 1.0
-            retry_after = 0.0
+def _allow_redis(ns: str, ident: str, rpm: int, burst: int) -> bool:
+    if not _RED:
+        return False
+    key = f"{REDIS_PREFIX}:rl:{ns}:{ident}"
+    # fields: tok (float), ts (float)
+    pipe = _RED.pipeline()
+    pipe.hget(key, "tok")
+    pipe.hget(key, "ts")
+    tok_s, ts_s = pipe.execute()
+    try:
+        tok = float(tok_s) if tok_s is not None else float(burst)
+        ts = float(ts_s) if ts_s is not None else time.time()
+    except Exception:
+        tok, ts = float(burst), time.time()
+
+    tok, now = _refill(tok, ts, rpm)
+    allowed = tok >= 1.0
+    if allowed:
+        tok -= 1.0
+
+    _RED.hset(key, mapping={"tok": tok, "ts": now})
+    _RED.expire(key, max(60, int(2 * 60)))  # TTL סביר
+    return allowed
+
+def require_rate_limit(ns: str = "ai_analyze", *, rpm: Optional[int] = None,
+                       burst: Optional[int] = None, by_token_only: bool = False):
+    """
+    שימוש: dependencies=[Depends(require_rate_limit("ai_analyze", rpm=5, burst=5))]
+    """
+    _rpm = int(rpm or _AI_RPM_DEFAULT)
+    _burst = int(burst or _rpm)
+
+    async def _dep(req: Request):
+        ident = _extract_token_or_ip(req, by_token_only=by_token_only)
+        if _RED:
+            ok = _allow_redis(ns, ident, _rpm, _burst)
         else:
-            need = 1.0 - tokens
-            retry_after = max(0.0, need / refill_per_sec)
+            ok = await _allow_mem(ns, ident, _rpm, _burst)
+        if not ok:
+            raise HTTPException(429, f"Rate limit exceeded ({_rpm}/min)")
+        return True
 
-        _mem_state[key] = (tokens, ts)
-
-    return allowed, retry_after
-
-async def take(bucket: str, identity: str, rpm: int, burst_factor: float = 1.0) -> Tuple[bool, float]:
-    if rpm <= 0:
-        return True, 0.0
-    key = f"rl:{bucket}:{identity}"
-    if _REDIS is not None:
-        try:
-            return await _bucket_take_redis(key, rpm, burst_factor)
-        except Exception:
-            # נפל Redis → נגלוש לזיכרון
-            pass
-    return await _bucket_take_mem(key, rpm, burst_factor)
-
-def _client_identity(request: Request, by: str) -> str:
-    """
-    by: "ip" | "token" | "token_or_ip"
-    """
-    if by == "ip":
-        xfwd = request.headers.get("x-forwarded-for")
-        if xfwd:
-            return xfwd.split(",")[0].strip()
-        return (request.client.host if request.client else "unknown")
-    auth = (request.headers.get("authorization") or "").strip()
-    api_key = (request.headers.get("x-api-key") or "").strip()
-    token = ""
-    if auth.lower().startswith("bearer "):
-        token = auth[7:].strip()
-    if by == "token" and token:
-        return f"t:{token}"
-    if by == "token" and api_key:
-        return f"k:{api_key}"
-    if by == "token_or_ip":
-        if token:
-            return f"t:{token}"
-        if api_key:
-            return f"k:{api_key}"
-        return _client_identity(request, "ip")
-    return _client_identity(request, "ip")
-
-def require(bucket: str, rpm_env_or_int: int | str = "AI_ANALYZE_RPM", *, burst: float = 1.0, by: str = "token_or_ip") -> Callable:
-    """
-    שימוש: dependencies=[Depends(rate_limit.require("ai_analyze", "AI_ANALYZE_RPM", burst=1.3))]
-    """
-    async def _dep(request: Request):
-        # שליפת RPM מה-ENV אם התקבל מחרוזת
-        if isinstance(rpm_env_or_int, str):
-            raw = os.getenv(rpm_env_or_int, "5")
-            try:
-                rpm = int(raw)
-            except Exception:
-                rpm = 5
-        else:
-            rpm = int(rpm_env_or_int)
-
-        identity = _client_identity(request, by)
-        allowed, retry_after = await take(bucket, identity, rpm, burst)
-        if not allowed:
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded",
-                headers={"Retry-After": str(int(retry_after + 0.5))},
-            )
     return _dep
 
 
