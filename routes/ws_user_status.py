@@ -1,35 +1,55 @@
+# routes/ws_user_status.py
 from __future__ import annotations
 import time
-from typing import Any, Dict
 from fastapi import APIRouter
 
-router = APIRouter(prefix="", tags=["status"])
+router = APIRouter(prefix="/ws-user", tags=["status"])
 
-# runtime counters (WS)
-try:
-    from utils.runtime_counters import ws_status
-except Exception:
-    def ws_status() -> Dict[str, Any]:
-        return {}
+def _rc_ws_snapshot():
+    """
+    מנסה למשוך counters מ-runtime_counters אם קיים; נופל חן אם לא.
+    מחזיר dict או None.
+    """
+    try:
+        # תקרא לכל אחת מהאופציות הנפוצות; מי שקיים – ירוץ.
+        from utils.runtime_counters import ws_get_counters as _f  # type: ignore
+        return _f()
+    except Exception:
+        pass
+    try:
+        from utils.runtime_counters import ws_snapshot as _f  # type: ignore
+        return _f()
+    except Exception:
+        pass
+    try:
+        from utils.runtime_counters import get_ws_counters as _f  # type: ignore
+        return _f()
+    except Exception:
+        return None
 
-# optional: local WS user-stream status()
-try:
-    from utils import ws_user_stream  # has status(): Dict[str, Any]
-except Exception:
-    ws_user_stream = None  # type: ignore
+def _ws_basic_status():
+    try:
+        from utils import ws_user_stream
+        return ws_user_stream.status()
+    except Exception:
+        return {"running": False, "have_listen_key": False, "ws_up": 0}
 
-@router.get("/ws-user/status")
-async def get_ws_user_status():
-    out: Dict[str, Any] = {
-        "ts": int(time.time()),
-        "runtime": ws_status(),  # EWMA latency, reconnects, ws_up וכו'
+@router.get("/status")
+def ws_user_status():
+    """
+    מחזיר סטטוס חי של ה-User-Data Stream:
+    - בסיס: running/listen_key/ws_up
+    - אם יש runtime_counters: יכלול EWMA, reconnects, events, latency מדדים וכו'.
+    """
+    snap = _rc_ws_snapshot() or {}
+    base = _ws_basic_status()
+    return {
+        "ok": True,
+        "ts_ms": int(time.time() * 1000),
+        "base": base,
+        "counters": snap,
     }
-    if ws_user_stream and hasattr(ws_user_stream, "status"):
-        try:
-            out["stream"] = ws_user_stream.status()  # running/have_listen_key/ws_up (Gauge)
-        except Exception:
-            out["stream"] = {"running": False, "have_listen_key": False, "ws_up": 0}
-    return out
+
 
 
 
