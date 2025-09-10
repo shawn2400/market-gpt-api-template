@@ -13,23 +13,21 @@ from utils.anchor import evaluate_anchor
 from utils.trade_executor import execute_trade_live  # ✅ סינכרוני
 from utils.watchlist_utils import load_watchlist_env_or_fallback
 
-# NEW: counters exposure (no-op fallbacks if module is missing)
+# NEW: counters exposure
 try:
-    from utils.runtime_counters import (
-        exec_on_tick_stop,       # (dt_ms, current_interval, no_trade_streak)
-        exec_on_batch_timeout,   # ()
-        exec_on_trade_sent,      # (symbol)
-        ops_tick_safe,           # ()
-    )
+    from utils.runtime_counters import exec_on_tick_stop, exec_on_batch_timeout, exec_on_trade_sent, ops_tick_safe
 except Exception:
-    def exec_on_tick_stop(*a, **k):  # type: ignore
-        pass
-    def exec_on_batch_timeout(*a, **k):  # type: ignore
-        pass
-    def exec_on_trade_sent(*a, **k):  # type: ignore
-        pass
-    def ops_tick_safe():  # type: ignore
-        pass
+    def exec_on_tick_stop(*a, **k): pass
+    def exec_on_batch_timeout(*a, **k): pass
+    def exec_on_trade_sent(*a, **k): pass
+    def ops_tick_safe(): pass
+
+# NEW: leverage policy
+try:
+    from utils.leverage_policy import adjust_leverage
+except Exception:
+    def adjust_leverage(adx: float, proposed_leverage: int) -> int:
+        return int(proposed_leverage)
 
 # Risk Gate (אופציונלי)
 try:
@@ -192,7 +190,9 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
                 return None
 
         sl, tp = _derive_sl_tp(entry, atr_v, side, adx_v)
-        lev = _pick_leverage(adx_v)
+        lev_raw = _pick_leverage(adx_v)
+        lev = adjust_leverage(adx_v, lev_raw)  # ✅ קשיחה/הקלה דינמית
+
         return {"symbol": symbol, "side": side, "entry": entry, "sl": sl, "tp": tp,
                 "leverage": lev, "score": q, "adx": adx_v, "atr": atr_v}
     except Exception as e:
@@ -214,7 +214,7 @@ async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     )
     if resp.get("ok"):
         _last_trade_ts[plan["symbol"]] = time.time()
-        exec_on_trade_sent(plan["symbol"])  # ✅ expose successful trade attempt
+        exec_on_trade_sent(plan["symbol"])  # ✅ expose
     return resp
 
 async def _scan_batch(symbols: List[str], max_trades: int) -> int:
@@ -288,11 +288,8 @@ async def auto_scan_and_trade():
                     _log("scan_interval_relax", new_interval=current_interval)
 
             dt = time.time() - tic
-
-            # ✅ expose counters + Ops tick (includes Price-Drift, TTL alerts, etc. if enabled in runtime_counters)
-            exec_on_tick_stop(dt_ms=float(dt * 1000.0),
-                              current_interval=int(current_interval),
-                              no_trade_streak=int(no_trade_streak))
+            # ✅ חשיפת קאונטרים + Ops tick (כולל Price-Drift אם נתמך)
+            exec_on_tick_stop(dt_ms=float(dt*1000.0), current_interval=int(current_interval), no_trade_streak=int(no_trade_streak))
             ops_tick_safe()
 
             sleep_s = max(0.0, current_interval - dt)
@@ -324,6 +321,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
