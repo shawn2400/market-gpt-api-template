@@ -9,7 +9,6 @@ from utils.telegram_notifier import notify_trade_review
 
 logger = logging.getLogger("algogpt.ai_reviewer")
 
-# Flags / Config
 ENABLE_AI_ROUTES = str(os.getenv("ENABLE_AI_ROUTES", "false")).lower() in ("1","true","yes","on")
 AI_REVIEW_ENABLE = str(os.getenv("AI_REVIEW_ENABLE", "1")).lower() in ("1","true","yes","on")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -20,7 +19,6 @@ RATE_PER_MIN = int(os.getenv("AI_REVIEW_RATE_PER_MIN", "12"))
 MAX_TOKENS   = int(os.getenv("AI_REVIEW_MAX_TOKENS", "400"))
 IDEMP_TTL    = float(os.getenv("AI_REVIEW_IDEMP_TTL_SEC", "900"))
 
-# Prometheus (אופציונלי)
 try:
     from prometheus_client import Counter
     _C_REVIEWS           = Counter("ai_reviews_total", "Total trade reviews attempted")
@@ -34,7 +32,7 @@ except Exception:
     _C_REVIEWS=_C_OPENAI_CALLS=_C_RATE_LIMITED=_C_DEDUP_SKIPPED=_C_FALLBACK_USED=_N()
 
 _rl_hits = deque()  # timestamps (sec)
-_seen: Dict[str, float] = {}  # idempotency key -> ts
+_seen: Dict[str, float] = {}
 
 def _rl_allow() -> bool:
     now = time.time()
@@ -125,6 +123,7 @@ async def review_trade_async(symbol: str, side: str, context: Dict[str, Any], *,
             pass
 
     return {"ok": True, "symbol": sym, "side": sd, "review": text}
+
 
 
 
