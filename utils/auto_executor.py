@@ -220,7 +220,7 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
 
         sl, tp = _derive_sl_tp(entry, atr_v, side, adx_v)
         lev_raw = _pick_leverage(adx_v)
-        # ✅ קשיחה/הקלה דינמית + תמיכה ב-cap פר-סימבול
+        # ✅ קשיחה/הקלה דינמית + תמיכה ב-cap פר-סימבול/Degrade
         lev = adjust_leverage(adx_v, lev_raw, symbol=symbol)
 
         return {"symbol": symbol, "side": side, "entry": entry, "sl": sl, "tp": tp,
@@ -463,6 +463,7 @@ def stop_executor():
         _log("executor_stopping")
     else:
         _log("executor_not_running")
+
 
 
 
