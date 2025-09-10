@@ -8,17 +8,23 @@ logger = logging.getLogger("algogpt.tg")
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID        = int(os.getenv("TELEGRAM_CHAT_ID", "0") or 0)
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
-ADMIN_ONLY     = os.getenv("TELEGRAM_ADMIN_ONLY", "1").lower() in ("1","true","yes","on")
 
-# Explain flags
-EXPLAIN_ON              = os.getenv("OPS_EXPLAIN_TRADE_TELEGRAM", "1").lower() in ("1","true","yes","on")
-EXPLAIN_COOLDOWN_SEC    = int(os.getenv("OPS_EXPLAIN_COOLDOWN_SEC", "45"))
-EXPLAIN_MAX_PER_MIN     = int(os.getenv("OPS_EXPLAIN_MAX_PER_MIN", "6"))
-EXPLAIN_MIN_SCORE       = float(os.getenv("OPS_EXPLAIN_MIN_SCORE", "0"))
+# Explain flags (ניתנים לטוגל בזמן אמת)
+_EXPLAIN_ON              = os.getenv("OPS_EXPLAIN_TRADE_TELEGRAM", "1").lower() in ("1","true","yes","on")
+EXPLAIN_COOLDOWN_SEC     = int(os.getenv("OPS_EXPLAIN_COOLDOWN_SEC", "45"))
+EXPLAIN_MAX_PER_MIN      = int(os.getenv("OPS_EXPLAIN_MAX_PER_MIN", "6"))
+EXPLAIN_MIN_SCORE        = float(os.getenv("OPS_EXPLAIN_MIN_SCORE", "0"))
 
 _last_explain_ts: float = 0.0
 _win_start: float = 0.0
 _sent_in_win: int = 0
+
+def set_explain_enabled(v: bool) -> None:
+    global _EXPLAIN_ON
+    _EXPLAIN_ON = bool(v)
+
+def get_explain_enabled() -> bool:
+    return bool(_EXPLAIN_ON)
 
 async def _tg_send(text: str, chat_id: Optional[int] = None):
     if not BOT_TOKEN or (chat_id is None and CHAT_ID == 0):
@@ -26,7 +32,7 @@ async def _tg_send(text: str, chat_id: Optional[int] = None):
         return
     cid = chat_id if chat_id is not None else CHAT_ID
     try:
-        import httpx  # local import
+        import httpx
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/sendMessage", data={
                 "chat_id": cid,
@@ -45,19 +51,13 @@ def _win_tick():
         _sent_in_win = 0
 
 async def notify_no_trades():
-    # שקט כברירת מחדל – השארנו hook ריק כדי לא להציף
     return None
 
 async def notify_scan_error(reason: str):
     await _tg_send(f"⚠️ <b>Scan error</b>\n<code>{reason}</code>")
 
 async def notify_explain_trade(plan: Dict[str, Any]):
-    """
-    נשלח רק אחרי ביצוע טרייד מוצלח (resp.ok), עם קירור ואנטי-ספאם.
-    plan צפוי להכיל:
-    symbol, side, leverage, entry, sl, tp, adx, atr, score, ema_21, ema_50, macd_hist, rsi
-    """
-    if not EXPLAIN_ON:
+    if not _EXPLAIN_ON:
         return
     if float(plan.get("score", 0.0)) < EXPLAIN_MIN_SCORE:
         return
@@ -96,7 +96,7 @@ async def notify_explain_trade(plan: Dict[str, Any]):
     if ema21 is not None and ema50 is not None:
         lines.append(f"EMA21{'>' if float(ema21)>float(ema50) else '<'}EMA50 {trend_ok}")
     if macdh is not None:
-        lines.append(f"MACD hist {macdh:+.4f} {macd_ok}")
+        lines.append(f"MACD hist {float(macdh):+.4f} {macd_ok}")
     lines.append(f"ADX {adx:.0f} | ATR {atr:.4f}")
     if rsi is not None:
         lines.append(f"RSI {float(rsi):.1f}")
@@ -107,6 +107,7 @@ async def notify_explain_trade(plan: Dict[str, Any]):
     await _tg_send("\n".join(lines))
     _last_explain_ts = now
     _sent_in_win += 1
+
 
 
 
