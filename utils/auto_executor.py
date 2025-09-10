@@ -46,11 +46,11 @@ DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
 # Ladder config
-LADDER_TP_ENABLE      = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
+LADDER_TP_ENABLE      = os.getenv("LADDER_TP_ENABLE", "1").lower() in ("1","true","yes","on")
 LADDER_TP_KIND        = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()  # TAKE_PROFIT or TAKE_PROFIT_MARKET
 LADDER_TP_DEFAULT_PCTS= os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 LADDER_TP_DEFAULT_SPLITS=os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
-LADDER_SL_ENABLE      = os.getenv("LADDER_SL_ENABLE", "0") in ("1","true","yes","on")
+LADDER_SL_ENABLE      = os.getenv("LADDER_SL_ENABLE", "0").lower() in ("1","true","yes","on")
 LADDER_SL_DEFAULT_PCTS= os.getenv("LADDER_SL_DEFAULT_PCTS", "").strip()
 TP_LADDER_COOLDOWN_SEC= int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 
@@ -59,13 +59,13 @@ IDEMPOTENCY_TTL_SEC   = int(os.getenv("IDEMPOTENCY_TTL_SEC", "15"))
 
 # Prefix controls for cancels
 ORDER_ID_PREFIX                  = os.getenv("ORDER_ID_PREFIX", "").strip()
-CANCEL_ONLY_PREFIXED_ORDERS      = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
+CANCEL_ONLY_PREFIXED_ORDERS      = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE           = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
 # ✅ ביטול חכם (ENV חדשים/נתמכים)
 CANCEL_ONLY_PREFIXED_IN_ONEWAY   = os.getenv("CANCEL_ONLY_PREFIXED_IN_ONEWAY", os.getenv("CANCEL_PREFIX_ONLY_IN_ONEWAY","0")).lower() in ("1","true","yes","on")
-# תמיכה גם בגרסאות שם שונות:
-CANCEL_ONLY_REDUCE_ONLY          = (os.getenv("CANCEL_ONLY_REDUCE_ONLY", os.getenv("CANCEL_ONLY_REDUCEONLY","0")).lower() in ("1","true","yes","on"))
+# תמיכה גם בשמות חלופיים:
+CANCEL_ONLY_REDUCE_ONLY          = os.getenv("CANCEL_ONLY_REDUCE_ONLY", os.getenv("CANCEL_ONLY_REDUCEONLY","0","")).lower() in ("1","true","yes","on")
 CANCEL_MIN_AGE_SEC               = int(os.getenv("CANCEL_MIN_AGE_SEC", "0"))
 CANCEL_MAX_AGE_SEC               = int(os.getenv("CANCEL_MAX_AGE_SEC", "0"))
 
@@ -137,7 +137,7 @@ _pos_mode_cache: Optional[str] = None
 _pos_mode_cache_ts: float = 0.0
 
 def _detect_position_mode() -> str:
-    """מחזיר 'HEDGE' או 'ONEWAY'."""
+    """מחזיר 'HEDGE' או 'ONEWAY' לפי ENV/זיהוי API/ברירת מחדל."""
     global _pos_mode_cache, _pos_mode_cache_ts
     now = time.time()
     if _pos_mode_cache and (now - _pos_mode_cache_ts < 10.0):
@@ -157,7 +157,6 @@ def _detect_position_mode() -> str:
     # 3) auto-detect via API (best-effort)
     try:
         cli = get_futures_client()
-        # most python-binance versions: futures_get_position_mode -> {'dualSidePosition': True/False}
         for m in ("futures_get_position_mode", "futures_position_mode"):
             fn = getattr(cli, m, None)
             if callable(fn):
@@ -172,7 +171,7 @@ def _detect_position_mode() -> str:
     except Exception as e:
         log.debug("position mode detect failed: %s", e)
 
-    # fallback default
+    # fallback
     _pos_mode_cache, _pos_mode_cache_ts = "ONEWAY", now
     return "ONEWAY"
 
@@ -261,7 +260,7 @@ class ConfirmStore:
 
     @classmethod
     def approve(cls, cid: str, approver: str = "") -> None:
-        rec = cls.get(cid); 
+        rec = cls.get(cid)
         if not rec: return
         rec["status"] = "approved"; rec["approver"] = approver; cls._save(cid, rec)
 
@@ -368,7 +367,7 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         log.warning("quality gate failed: %s", e)
         return {"enter_ok": False, "score": 0.0, "reasons": ["gate_error"]}
 
-# ─────────── Cancel old closing orders (TP/SL) — חכם ───────────
+# ─────────── Cancel old closing orders (TP/SL) — דינמי ───────────
 def _order_age_sec(o: Dict[str, Any]) -> Optional[float]:
     now_ms = int(time.time() * 1000)
     ts_ms = None
@@ -380,13 +379,58 @@ def _order_age_sec(o: Dict[str, Any]) -> Optional[float]:
         return max(0.0, (now_ms - ts_ms) / 1000.0)
     return None
 
+# --- Dynamic cancel age (ENV) ---
+DYNAMIC_POLICY_ENABLE = os.getenv("DYNAMIC_POLICY_ENABLE", "1").lower() in ("1","true","yes","on")
+DYN_CANCEL_BASE_SEC = int(os.getenv("DYN_CANCEL_BASE_SEC", "15"))
+DYN_CANCEL_MIN_SEC  = int(os.getenv("DYN_CANCEL_MIN_SEC",  "5"))
+DYN_CANCEL_MAX_SEC  = int(os.getenv("DYN_CANCEL_MAX_SEC",  "60"))
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+def _market_snapshot_for_cancel(symbol: str) -> Dict[str, float]:
+    """לייט: ATR% ומומנטום קצר מ־1m klines."""
+    kl = _fetch_klines_raw(symbol, "1m", 60) or []
+    closes = [float(r[4]) for r in kl]
+    last = closes[-1] if closes else (get_price(symbol) or futures_mark_price(symbol) or 0.0)
+    atr = _atr_from_klines(kl, 14) if kl else 0.0
+    atr_pct = (atr / last) * 100.0 if last > 0 else 0.0
+    mom_pct = ((last / closes[-4] - 1.0) * 100.0) if len(closes) >= 4 and last > 0 else 0.0
+    return {"atr_pct": atr_pct, "mom_pct": mom_pct}
+
+def _effective_cancel_min_age_sec(symbol: str) -> int:
+    """
+    גיל-ביטול דינמי: שוק מהיר (ATR% גבוה/מומנטום) => מחכים יותר לפני ביטול
+    כדי לא לבטל הזמנות טריות שעשויות להתמלא.
+    """
+    if not DYNAMIC_POLICY_ENABLE:
+        return int(CANCEL_MIN_AGE_SEC)
+
+    snap = _market_snapshot_for_cancel(symbol)
+    atr = float(snap["atr_pct"])
+    mom = abs(float(snap["mom_pct"]))
+
+    # heat 0..1.5 בקירוב: ATR% עד ~1% + בונוס מהמומנטום
+    heat = _clamp((atr / 1.0) + (mom / 100.0) * 0.5, 0.0, 1.5)
+
+    dyn = int(round(DYN_CANCEL_BASE_SEC * (1.0 + 0.8 * heat)))
+    dyn = int(_clamp(dyn, float(DYN_CANCEL_MIN_SEC), float(DYN_CANCEL_MAX_SEC)))
+
+    if CANCEL_MIN_AGE_SEC > 0:
+        dyn = max(dyn, int(CANCEL_MIN_AGE_SEC))
+    return dyn
+
+def _effective_cancel_max_age_sec() -> int:
+    """אם ב־ENV הוגדר מקסימום (>0) נכבד אותו; אחרת 0 = ללא מקסימום."""
+    return int(CANCEL_MAX_AGE_SEC)
+
 def _cancel_old_closing_orders(symbol: str) -> int:
     """
-    מכניס לוגיקה:
-      • אם CANCEL_ONLY_PREFIXED_IN_ONEWAY=1 ובפועל המצב ONEWAY → נבטל רק עם prefix.
-      • אחרת אם CANCEL_ONLY_PREFIXED_ORDERS=1 → תמיד נבטל רק עם prefix.
-      • אם CANCEL_ONLY_REDUCE_ONLY=1 → נבטל רק הזמנות עם reduceOnly=true.
-      • סף גיל: CANCEL_MIN_AGE_SEC / CANCEL_MAX_AGE_SEC (אם >0, חייב לעמוד בסף).
+    ביטול TP/SL אקטיביים לפי מדיניות:
+      • ONEWAY+only_pref_in_oneway → לבטל רק עם prefix.
+      • CANCEL_ONLY_PREFIXED_ORDERS=1 → תמיד רק עם prefix.
+      • CANCEL_ONLY_REDUCE_ONLY=1 → לבטל רק reduceOnly=true.
+      • חלון גיל דינמי: eff_min/eff_max.
     """
     try:
         orders = get_all_orders(symbol, limit=100) or []
@@ -395,16 +439,20 @@ def _cancel_old_closing_orders(symbol: str) -> int:
         pref = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
         pos_mode = _detect_position_mode()   # 'HEDGE' / 'ONEWAY'
         is_oneway = (pos_mode == "ONEWAY")
+
         only_pref = False
-        if CANCEL_ONLY_PREFIXED_IN_ONEWAY and is_oneway:
+        if CANCEL_ONLY_PREFIXED_IN_ONEWAY and is_oneway and pref:
             only_pref = True
         elif CANCEL_ONLY_PREFIXED_ORDERS and pref:
             only_pref = True
 
+        eff_min = _effective_cancel_min_age_sec(symbol)
+        eff_max = _effective_cancel_max_age_sec()
+
         count = 0
         for o in orders:
             st = (o.get("status") or "").upper()
-            if st not in ("NEW","PARTIALLY_FILLED"):  # cancel only active
+            if st not in ("NEW","PARTIALLY_FILLED"):
                 continue
             typ = (o.get("type") or "").upper()
             if typ not in tps + sls:
@@ -416,12 +464,12 @@ def _cancel_old_closing_orders(symbol: str) -> int:
                 if not ro:
                     continue
 
-            # Age window filter
+            # Age window (דינמי)
             age = _order_age_sec(o)
             if age is not None:
-                if CANCEL_MIN_AGE_SEC > 0 and age < CANCEL_MIN_AGE_SEC:
+                if eff_min > 0 and age < eff_min:
                     continue
-                if CANCEL_MAX_AGE_SEC > 0 and age > CANCEL_MAX_AGE_SEC:
+                if eff_max > 0 and age > eff_max:
                     continue
 
             # Prefix filter
@@ -442,6 +490,7 @@ def _cancel_old_closing_orders(symbol: str) -> int:
     except Exception as e:
         log.warning("cancel_old_closing_orders error: %s", e)
         return 0
+
 # ─────────── Ladders build ───────────
 def _parse_csv_floats(s: str) -> List[float]:
     out=[]
@@ -500,7 +549,6 @@ def _build_ladders(sym: str, side: str, qty: float,
     if tp_targets: _prep("TP", tp_targets, tp_splits, +1 if side=="BUY" else -1)
     if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
     return plan
-
 # ─────────── Hybrid entry + escalation (עם positionSide ב-HEDGE) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
                               ref_entry: Optional[float], is_hedge: bool) -> Dict[str, Any]:
@@ -522,7 +570,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    order_common_open = {}
+    order_common_open: Dict[str, Any] = {}
     if is_hedge:
         order_common_open["positionSide"] = _pos_side_for_open(side)
 
@@ -586,7 +634,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 try:
                     if stp_id: futures_cancel_order(sym, stp_id)
                 except Exception: pass
-                order_common_mkt = {}
+                order_common_mkt: Dict[str, Any] = {}
                 if is_hedge:
                     order_common_mkt["positionSide"] = _pos_side_for_open(side)
                 mkt = futures_create_order(symbol=sym, side=side, type="MARKET", quantity=qty_str, **order_common_mkt)
@@ -762,6 +810,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
