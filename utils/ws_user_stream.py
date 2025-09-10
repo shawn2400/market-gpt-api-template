@@ -13,7 +13,7 @@ except Exception:
 import httpx
 from prometheus_client import Counter, Gauge
 
-# runtime counters hooks
+# runtime counters hooks (aliases קיימים ב-runtime_counters)
 try:
     from utils.runtime_counters import ws_note_event, ws_note_reconnect, ws_note_up
 except Exception:
@@ -203,4 +203,5 @@ async def stop_async():
             _task.cancel()
         except: pass
     logger.info({"event":"ws.stopped"})
+
 
