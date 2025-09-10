@@ -2,35 +2,28 @@
 from __future__ import annotations
 import time, threading, os
 from typing import Dict, Any, Optional
+from collections import deque
 from .metrics import metrics_tracker as mx
 
 _LOCK = threading.Lock()
-
-# rolling counters / stamps
 _LAST_EVENT_TS: Optional[float] = None
 _LAST_HEARTBEAT_TS: Optional[float] = None
-_RECONNECTS: Deque[float] = None  # lazy
-try:
-    from collections import deque
-    _RECONNECTS = deque(maxlen=1024)
-except Exception:  # extremely unlikely
-    _RECONNECTS = []
+_RECONNECTS = deque(maxlen=1024)
 
-# Degrade mode (mark-price only) TTL
+# Degrade→Mark-only TTL
 _DEGRADE_UNTIL_TS: float = 0.0
 
-def _now() -> float:
-    return time.time()
+def _now() -> float: return time.time()
 
 def record_event(server_ts_ms: Optional[float] = None) -> None:
+    """לקרוא כשמגיע אירוע WS (מחיר/הזמנה)."""
     global _LAST_EVENT_TS
     now = _now()
     with _LOCK:
         _LAST_EVENT_TS = now
-        # latency (אם קיבלנו timestamp מהבורסה, כמו msg["E"])
         if server_ts_ms is not None:
-            lag_ms = max(0.0, now*1000.0 - float(server_ts_ms))
-            mx.observe_order_latency(lag_ms)  # שימוש חוזר ב־order_latency כ"WS latency"
+            lag_ms = max(0.0, now * 1000.0 - float(server_ts_ms))
+            mx.observe_order_latency(lag_ms)  # משתמשים בזה גם ל־WS latency
         mx.inc("ws.events", 1)
 
 def record_heartbeat() -> None:
@@ -41,26 +34,21 @@ def record_heartbeat() -> None:
 
 def record_reconnect() -> None:
     with _LOCK:
-        ts = _now()
-        _RECONNECTS.append(ts)
+        _RECONNECTS.append(_now())
         mx.inc("ws.reconnects", 1)
 
 def set_price_ttl(ttl_sec: float) -> None:
     mx.set_gauge("ws.price_ttl_sec", float(ttl_sec))
 
 def _reconnects_in_window(window_sec: int) -> int:
-    if not _RECONNECTS: return 0
     ref = _now() - window_sec
-    return sum(1 for t in _RECONNECTS if t >= ref)
+    return sum(1 for t in list(_RECONNECTS) if t >= ref)
 
 def maybe_activate_degrade() -> bool:
-    """
-    מפעיל מצב 'mark-price only' זמני על בסיס reconnects ב־window.
-    """
+    """מפעיל Mark-only אוטומטי על סמך כמות reconnects בחלון זמן."""
     global _DEGRADE_UNTIL_TS
-    if os.getenv("WS_DEGRADE_MARK_ONLY", "1").lower() not in ("1","true","yes","on"):
+    if os.getenv("WS_DEGRADE_MARK_ONLY", "1").lower() not in ("1", "true", "yes", "on"):
         return False
-
     lim = int(os.getenv("WS_DEGRADE_RECONNECTS", "6"))
     win = int(os.getenv("WS_DEGRADE_WINDOW_SEC", "300"))
     ttl = int(os.getenv("WS_DEGRADE_TTL_SEC", "180"))
@@ -82,6 +70,6 @@ def status() -> Dict[str, Any]:
         "reconnects_30m": _reconnects_in_window(1800),
         "degrade_active": mark_only_mode_active(),
         "degrade_until": _DEGRADE_UNTIL_TS if mark_only_mode_active() else None,
-        "metrics": mx.get_metrics(),  # כולל gauges/counters
+        "metrics": mx.get_metrics(),
     }
 
