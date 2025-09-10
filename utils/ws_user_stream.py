@@ -13,6 +13,14 @@ except Exception:
 import httpx
 from prometheus_client import Counter, Gauge
 
+# runtime counters hooks
+try:
+    from utils.runtime_counters import ws_note_event, ws_note_reconnect, ws_note_up
+except Exception:
+    def ws_note_event(*a, **k): pass
+    def ws_note_reconnect(*a, **k): pass
+    def ws_note_up(*a, **k): pass
+
 WS_EVENTS_TOTAL = Counter("ws_user_events_total", "User-Stream events", ["type"])
 WS_ERRORS_TOTAL = Counter("ws_user_errors_total", "User-Stream errors", ["stage"])
 WS_UP = Gauge("ws_user_up", "Is WS user stream up (1/0)")
@@ -81,8 +89,18 @@ def _jitter(base: float, pct: float = 0.1) -> float:
 async def _handle_event(msg: Dict[str, Any]):
     etype = (msg.get("e") or msg.get("eventType") or "").upper() or "UNKNOWN"
     WS_EVENTS_TOTAL.labels(etype).inc()
+
+    # latency from event-time (E) to now
+    lat_ms = None
+    try:
+        if "E" in msg:
+            lat_ms = max(0.0, (time.time() * 1000.0) - float(msg.get("E", 0)))
+    except Exception:
+        lat_ms = None
+    ws_note_event(latency_ms=lat_ms)
+
     if _sample_ok():
-        logger.debug({"event":"ws.recv", "etype": etype})
+        logger.debug({"event":"ws.recv", "etype": etype, "lat_ms": lat_ms})
 
     if etype in ("ORDER_TRADE_UPDATE","ORDER_UPDATE","ACCOUNT_UPDATE"):
         uniq = str(msg.get("E") or msg.get("T") or msg.get("t") or json.dumps(msg, sort_keys=True)[:64])
@@ -132,8 +150,10 @@ async def _ws_loop():
             if _sample_ok():
                 logger.debug({"event":"ws.connecting", "url": url})
             WS_UP.set(0)
+            ws_note_up(False)
             async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=10) as ws:
                 WS_UP.set(1)
+                ws_note_up(True)
                 backoff = float(os.getenv("USER_STREAM_RECONNECT_BACKOFF","3.0"))
                 ka_task = asyncio.create_task(_keepalive_loop())
                 try:
@@ -151,6 +171,8 @@ async def _ws_loop():
             logger.warning({"event":"ws.error", "error": str(e)})
         finally:
             WS_UP.set(0)
+            ws_note_up(False)
+            ws_note_reconnect()
             await asyncio.sleep(_jitter(backoff))
             backoff = min(backoff * 1.6, backoff_max)
             _listen_key = None  # מביאים listenKey חדש אחרי שגיאת WS
@@ -181,3 +203,4 @@ async def stop_async():
             _task.cancel()
         except: pass
     logger.info({"event":"ws.stopped"})
+
