@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, time, threading
 from collections import deque
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional
 
 # טלגרם (אופציונלי)
 try:
@@ -53,7 +53,9 @@ class _WSCounters:
         self.drift_supported = False
         self.drift_bps_max: float = 0.0
         self.drift_alert: bool = False
-        self._last_drift_alert_ts: float = 0.0
+
+        # Degrade suggestion (WS noisy)
+        self.degrade_suggested: bool = False
 
     # --- Mutations from WS code ---
     def on_connect(self):
@@ -122,6 +124,9 @@ class _WSCounters:
                     "max_bps": round(self.drift_bps_max, 2),
                     "alert": self.drift_alert,
                 },
+                "degrade": {
+                    "suggested": bool(self.degrade_suggested)
+                }
             }
 
 # ===================== Executor counters =====================
@@ -140,10 +145,6 @@ class _ExecCounters:
         self.no_trade_streak = 0
         self.scan_interval_current = _env_int("SCAN_INTERVAL", 60)
         self.time_budget_ms = int(_env_float("SCAN_TIME_BUDGET_SEC", 7.5) * 1000)
-
-    def on_tick_start(self):
-        # נשמר דרך ה-Loop עצמו (מודד dt שם)
-        pass
 
     def on_tick_stop(self, dt_ms: float, current_interval: int, no_trade_streak: int):
         with self._lock:
@@ -193,19 +194,33 @@ class _ExecCounters:
                 },
             }
 
-# ===================== Ops Guard (Price Drift) =====================
+# ===================== Ops Guard (Drift + TTL + Burst) =====================
 class _Ops:
     def __init__(self, ws: _WSCounters):
         self.ws = ws
         self.enabled = _env_bool("OPS_TICK_ENABLE", True)
+
+        # Drift
         self.drift_thr_bps = _env_float("PRICE_DRIFT_BPS_ALERT", 25.0)
-        self.last_run_ts = 0.0
-        self.cooldown_sec = 20.0
-        self._alert_ttl_sec = 120.0
-        self._last_alert_ts = 0.0
+        self._last_drift_alert_ts: float = 0.0
+        self._drift_alert_ttl_sec = 120.0
+
+        # TTL Alert
+        self.ttl_thr_sec = _env_float("STATUS_PRICE_TTL_ALERT_SEC", 10.0)
+        self._last_ttl_alert_ts = 0.0
+        self._ttl_alert_ttl_sec = 90.0
+
+        # Timeout Burst (executor)
+        self.timeout_burst_thr = _env_int("EXEC_TIMEOUT_BURST_ALERT", 3)
+        self._last_burst_alert_ts = 0.0
+        self._burst_alert_ttl_sec = 120.0
+
+        # Backpressure hint & degrade suggestion
+        self._last_bp_hint_ts = 0.0
+        self._bp_hint_ttl_sec = 120.0
 
         try:
-            # נשתמש רק אם קיימות פונקציות Mark+Index
+            # נשתמש רק אם יש Mark+Index
             from utils.binance_client import futures_mark_price, futures_index_price  # type: ignore
             self._mark = futures_mark_price  # type: ignore
             self._index = futures_index_price  # type: ignore
@@ -217,14 +232,10 @@ class _Ops:
 
         self.health_symbols = [s.strip().upper() for s in os.getenv("HEALTH_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
 
-    def tick(self):
-        if not self.enabled or not (self._mark and self._index):
+    def _check_price_drift(self):
+        if not (self._mark and self._index):
             return
         now = time.time()
-        if now - self.last_run_ts < self.cooldown_sec:
-            return
-        self.last_run_ts = now
-
         max_bps = 0.0
         for sym in self.health_symbols:
             try:
@@ -239,16 +250,64 @@ class _Ops:
 
         self.ws.drift_bps_max = max_bps
         self.ws.drift_alert = bool(max_bps >= self.drift_thr_bps)
-
-        # אפשר להחמיר Gate באופן רך (המלצה בלבד) — כאן רק אלרט
-        if self.ws.drift_alert and now - self._last_alert_ts > self._alert_ttl_sec:
+        if self.ws.drift_alert and now - self._last_drift_alert_ts > self._drift_alert_ttl_sec:
             try:
-                # “Gate bump” hint — לא מפעיל אוטומטית פיצ’רים, רק מודיע
                 import asyncio
-                asyncio.create_task(_tg_err(f"⚠️ Price Drift high: {max_bps:.1f} bps. מומלץ להפעיל FEAT_MARK_INDEX_SANITY / לעבור Mark-only זמנית."))
+                asyncio.create_task(_tg_err(f"⚠️ Price Drift high: {max_bps:.1f} bps. מומלץ להפעיל FEAT_MARK_INDEX_SANITY / לעבוד Mark-only זמנית."))
             except Exception:
                 pass
-            self._last_alert_ts = now
+            self._last_drift_alert_ts = now
+            self.ws.degrade_suggested = True
+
+    def _check_price_ttl(self):
+        # מפיק TTL על סמך ה־latest tick מכל הסימבולים
+        st = self.ws.status()
+        ttl = st.get("price_feed", {}).get("ttl_sec")
+        if ttl is None:
+            return
+        now = time.time()
+        if ttl > self.ttl_thr_sec and now - self._last_ttl_alert_ts > self._ttl_alert_ttl_sec:
+            try:
+                import asyncio
+                asyncio.create_task(_tg_err(f"⏱️ Price TTL high: {ttl:.1f}s (>{self.ttl_thr_sec:.1f}s). מומלץ לעבור זמנית Mark-only ולהדליק Sanity checks ל־WS."))
+            except Exception:
+                pass
+            self._last_ttl_alert_ts = now
+            self.ws.degrade_suggested = True
+
+    def _check_timeout_burst(self):
+        # מציץ בסטטוס ה־Executor (מייצר אותו כאן באופן מקומי)
+        st = get_exec_status()
+        last_60 = st.get("status", st).get("timeouts", {}).get("last_60s", 0)
+        tick = st.get("status", st).get("tick_ms", {})
+        ewma = float(tick.get("ewma") or 0.0)
+        budget = float(tick.get("budget_ms") or 0.0)
+
+        now = time.time()
+        if last_60 >= self.timeout_burst_thr and now - self._last_burst_alert_ts > self._burst_alert_ttl_sec:
+            try:
+                import asyncio
+                asyncio.create_task(_tg_err(f"🚨 Timeout burst: {last_60} timeouts ב־60ש׳. tick_ewma={ewma:.0f}ms budget={budget:.0f}ms. שקול להגדיל SCAN_INTERVAL / להוריד SCAN_CONCURRENCY."))
+            except Exception:
+                pass
+            self._last_burst_alert_ts = now
+
+        # Backpressure hint אם ewma חורג משמעותית מה־budget
+        if budget > 0 and ewma > 1.3 * budget and now - self._last_bp_hint_ts > self._bp_hint_ttl_sec:
+            try:
+                import asyncio
+                asyncio.create_task(_tg_info(f"ℹ️ Backpressure: tick EWMA {ewma:.0f}ms > budget {budget:.0f}ms. Auto-Tune יאט בסבבים הבאים; אפשר גם לשפר ידנית את SCAN_INTERVAL."))
+            except Exception:
+                pass
+            self._last_bp_hint_ts = now
+
+    def tick(self):
+        if not self.enabled:
+            return
+        # בדיקות קלילות, בלי לולאות כבדות
+        self._check_price_drift()
+        self._check_price_ttl()
+        self._check_timeout_burst()
 
 # ========= Singletons & Facade =========
 _WS = _WSCounters()
@@ -276,3 +335,4 @@ def get_ws_status() -> Dict[str, Any]:
 
 def get_exec_status() -> Dict[str, Any]:
     return _EXEC.status()
+
