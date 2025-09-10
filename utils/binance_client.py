@@ -1,7 +1,7 @@
 # utils/binance_client.py
 from __future__ import annotations
 import os, time, math, logging
-from typing import Any, Dict, List, Optional, Iterable, Tuple
+from typing import Any, Dict, List, Optional, Iterable
 
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -91,7 +91,7 @@ def _kind_from_kwargs(kwargs: dict) -> str:
 client = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
 client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
-# Time sync to avoid INVALID_TIMESTAMP
+# Time sync
 try:
     try:
         server_time = client.futures_time().get("serverTime")  # type: ignore
@@ -108,7 +108,7 @@ try:
 except Exception as e:
     logger.warning("Time sync failed: %s", e)
 
-# ===== Optional WS fallback for price =====
+# Optional WS fallback
 try:
     from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
 except Exception:
@@ -181,10 +181,55 @@ def futures_balance() -> List[Dict[str, Any]]:
 
 def futures_mark_price(symbol: str) -> Optional[float]:
     try:
-        return float(client.futures_mark_price(symbol=symbol.upper())["markPrice"])
+        d = client.futures_mark_price(symbol=symbol.upper())
+        # חלק מהגרסאות מחזירות גם indexPrice; אנחנו מתעניינים רק ב-mark כאן
+        return float(d.get("markPrice") or 0.0)
     except Exception as e:
         logger.error("Failed mark price for %s: %s", symbol, e)
         return None
+
+def futures_index_price(symbol: str) -> Optional[float]:
+    """
+    Index price (premiumIndex endpoint).
+    ננסה קודם מתודה רשמית, אח"כ API פנימי של ה-client, ולבסוף HTTP.
+    """
+    sym = symbol.upper()
+    # 1) מתודה רשמית אם קיימת
+    try:
+        if hasattr(client, "futures_premium_index"):
+            data = client.futures_premium_index(symbol=sym)
+            if isinstance(data, list) and data:
+                data = data[0]
+            p = data.get("indexPrice")
+            return float(p) if p is not None else None
+    except Exception as e:
+        logger.debug("futures_premium_index method failed: %s", e)
+    # 2) API פנימי של ה-client
+    try:
+        if hasattr(client, "_request_futures_api"):
+            data = client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
+            if isinstance(data, list) and data:
+                data = data[0]
+            p = data.get("indexPrice")
+            return float(p) if p is not None else None
+    except Exception as e:
+        logger.debug("_request_futures_api premiumIndex failed: %s", e)
+    # 3) HTTP fallback (httpx לא חובה; אם אין, נחזיר None)
+    try:
+        import httpx  # type: ignore
+        base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+        url = f"{base}/fapi/v1/premiumIndex"
+        with httpx.Client(timeout=float(os.getenv('BINANCE_HTTP_TIMEOUT', '10.0'))) as cli:
+            r = cli.get(url, params={"symbol": sym})
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, list) and data:
+                data = data[0]
+            p = data.get("indexPrice")
+            return float(p) if p is not None else None
+    except Exception as e:
+        logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
+    return None
 
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     info = futures_exchange_info_safe()
@@ -196,14 +241,6 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     return None
 
 def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
-    """
-    מחזיר מילון פילטרים מנורמל:
-    - tickSize, minPrice, maxPrice
-    - stepSize, minQty, maxQty
-    - mMinQty/mMaxQty (MARKET_LOT_SIZE)
-    - minNotional (נתמך: MIN_NOTIONAL/NOTIONAL)
-    - percentPrice (multiplierUp/Down/Decimal)
-    """
     try:
         si = get_symbol_info(symbol)
         if not si: return None
@@ -235,7 +272,6 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
                     "down": f.get("multiplierDown"),
                     "decimals": f.get("multiplierDecimal"),
                 }
-        # ברירות מחדל סבירות אם חסר
         if not filters["tickSize"]:
             filters["tickSize"] = DEFAULT_PRICE_TICK_STR
         if not filters["stepSize"]:
@@ -247,7 +283,6 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
         logger.error("Failed get_symbol_filters: %s", e)
         return None
 
-# ===== Precision =====
 def _decimals_from_step(step_str: str) -> int:
     if "." not in step_str: return 0
     frac = step_str.split(".")[1]
@@ -509,7 +544,6 @@ def close_all_positions() -> Dict[str,Any]:
         return {"ok": False, "error": str(e)}
 
 def get_price(symbol: str) -> Optional[float]:
-    # Prefer WS cache if fresh
     try:
         if ws_is_fresh and ws_get_price and ws_is_fresh(symbol, int(os.getenv("PRICE_WS_FRESH_TTL", "20"))):
             p = ws_get_price(symbol)
@@ -517,7 +551,6 @@ def get_price(symbol: str) -> Optional[float]:
                 return float(p)
     except Exception:
         pass
-    # Fallback to REST (mark price)
     p = futures_mark_price(symbol)
     try:
         if p and ws_update_price:
@@ -530,14 +563,13 @@ def get_futures_client() -> Client:
     return client
 
 __all__ = [
-    "client","fapi_ping","futures_exchange_info_safe","futures_balance","futures_mark_price","get_price",
+    "client","fapi_ping","futures_exchange_info_safe","futures_balance","futures_mark_price","futures_index_price","get_price",
     "get_symbol_info","get_symbol_filters","get_open_positions","futures_open_positions_safe","get_single_position",
     "futures_create_order","place_stop_market",
     "futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
-
 
 
 
