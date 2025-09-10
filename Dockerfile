@@ -7,7 +7,7 @@ FROM python:3.11-slim AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECKTOOLS=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
@@ -80,6 +80,7 @@ CMD bash -lc "bash /app/prestart.sh 2>/dev/null || true && \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
