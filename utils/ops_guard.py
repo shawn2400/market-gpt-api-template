@@ -1,81 +1,96 @@
 # utils/ops_guard.py
 from __future__ import annotations
-import os, time
+import os, time, logging
+from collections import deque
 from typing import Optional
-from utils.metrics import metrics_tracker as mx
-from utils.telegram_notifier import notify_error, notify_info
 
-_last_ttl_alert_ts: float = 0.0
-_last_to_timeout_alert_ts: float = 0.0
-_last_backpressure_notice_ts: float = 0.0
-_last_drift_alert_ts: float = 0.0
+logger = logging.getLogger("algogpt.ops_guard")
 
-def _suppress(last_ts: float, cool_sec: int) -> bool:
-    return (time.time() - last_ts) < cool_sec
+# ===== ENV / Switches =====
+OPS_ENABLE = os.getenv("OPS_ENABLE", "1").lower() in ("1","true","yes","on")
 
-async def ops_tick(*, current_interval: int, last_tick_sec: float) -> None:
+# Alerts
+OPS_TTL_ALERT_SEC = float(os.getenv("OPS_TTL_ALERT_SEC", "10"))
+OPS_TIMEOUT_BURST_N = int(os.getenv("OPS_TIMEOUT_BURST_N", "3"))
+OPS_TIMEOUT_BURST_WINDOW_SEC = int(os.getenv("OPS_TIMEOUT_BURST_WINDOW_SEC", "60"))
+OPS_ALERT_COOLDOWN_SEC = int(os.getenv("OPS_ALERT_COOLDOWN_SEC", "120"))
+
+# Degrade Mode thresholds
+OPS_DEGRADE_TTL_SEC = float(os.getenv("OPS_DEGRADE_TTL_SEC", "10"))
+OPS_DEGRADE_WS_RECONNECTS = int(os.getenv("OPS_DEGRADE_WS_RECONNECTS", "6"))
+
+# Notifiers (אופציונלי)
+try:
+    from utils.telegram_notifier import notify_error, notify_info
+except Exception:
+    async def notify_error(msg: str): return None
+    async def notify_info(msg: str): return None
+
+# State
+_degrade_active: bool = False
+_timeout_hits: deque[float] = deque(maxlen=200)
+_last_alert_ts: dict[str, float] = {}
+
+def _cooldown(key: str, sec: int) -> bool:
+    now = time.time()
+    last = _last_alert_ts.get(key, 0.0)
+    if now - last >= sec:
+        _last_alert_ts[key] = now
+        return True
+    return False
+
+async def ops_tick(
+    *,
+    ws_reconnects: Optional[int] = None,
+    price_ttl_sec: Optional[float] = None,
+    exec_batch_timeout: bool = False,
+) -> None:
     """
-    נקרא פעם לטיק של ה-Executor:
-      1) Alerting: WS TTL, burst של timeouts.
-      2) Backpressure: אם זמן טיק בפועל גבוה מה-Hi watermark -> הודעה (האוטוטיון שלך יעלה מרווח).
-      3) Anchors Sticking: מעבר זמני ל-Mark-only + FEAT_MARK_INDEX_SANITY=1 כש-WS בעייתי.
-      4) Price Drift Monitor (אם קיימים API מתאימים).
+    נקודת איסוף רכה (לא שוברת קוד):
+      - TTL Alerts
+      - Timeout Burst Alerts
+      - Degrade Mode ON/OFF (MARK_PRICE בלבד + החמרת שערי sanity)
     """
-    global _last_ttl_alert_ts, _last_to_timeout_alert_ts, _last_backpressure_notice_ts, _last_drift_alert_ts
+    if not OPS_ENABLE:
+        return
 
-    cool = int(os.getenv("ALERT_COOLDOWN_SEC", "120"))
+    now = time.time()
 
-    # (1) TTL Alerts
-    ttl = float(mx.get_metrics()["gauges"].get("ws.price_ttl_sec", 0.0))
-    ttl_lim = float(os.getenv("PRICE_TTL_ALERT_SEC", "10"))
-    if ttl > ttl_lim and not _suppress(_last_ttl_alert_ts, cool):
-        _last_ttl_alert_ts = time.time()
-        await notify_error(f"⚠️ מחירי WS לא רעננים: TTL≈{ttl:.1f}s (> {ttl_lim}s) — בדוק רשת/פיד")
+    # Timeout-burst bookkeeping
+    if exec_batch_timeout:
+        _timeout_hits.append(now)
 
-    # (1b) Timeout bursts
-    to_count = int(mx.get_metrics()["counters"].get("exec.batch_timeouts", 0))
-    burst = int(os.getenv("EXEC_TIMEOUT_ALERT_BURST", "3"))
-    if to_count >= burst and not _suppress(_last_to_timeout_alert_ts, cool):
-        _last_to_timeout_alert_ts = time.time()
-        await notify_error(f"⚠️ עומס סורק: {to_count} timeouts — שקול להעלות interval/להוריד concurrency")
+    # 1) TTL Alerts
+    if price_ttl_sec is not None and price_ttl_sec > OPS_TTL_ALERT_SEC:
+        if _cooldown("ttl_alert", OPS_ALERT_COOLDOWN_SEC):
+            await notify_error(f"⚠️ WS price TTL גבוה: {price_ttl_sec:.1f}s — יתכן שהזרם לא רענן.")
 
-    # (2) Backpressure notice
-    ew = last_tick_sec * 1000.0
-    hi = float(os.getenv("BACKPRESSURE_HI_WATERMARK_MS", "7500"))
-    if ew > hi and not _suppress(_last_backpressure_notice_ts, cool):
-        _last_backpressure_notice_ts = time.time()
-        await notify_info(f"ℹ️ Scan tick ~{ew:.0f}ms > {hi:.0f}ms — Auto-Tune יגדיל מרווח (ניטור)")
+    # 2) Timeout-burst Alerts
+    if OPS_TIMEOUT_BURST_N > 0:
+        burst = sum(1 for t in _timeout_hits if now - t <= OPS_TIMEOUT_BURST_WINDOW_SEC)
+        if burst >= OPS_TIMEOUT_BURST_N and _cooldown("timeout_burst", OPS_ALERT_COOLDOWN_SEC):
+            await notify_error(f"⚠️ עומס בסורק: {burst} timeouts ב-{OPS_TIMEOUT_BURST_WINDOW_SEC}s.")
 
-    # (3) Anchors Sticking → Degrade Mode
-    try:
-        from utils.ws_user_stats import maybe_activate_degrade, mark_only_mode_active
-        activated = maybe_activate_degrade()
-        if activated or mark_only_mode_active():
-            os.environ["FEAT_MARK_INDEX_SANITY"] = os.getenv("FEAT_MARK_INDEX_SANITY", "0") or "1"
-            os.environ["WS_PRICE_MODE"] = "mark"
-    except Exception:
-        pass
+    # 3) Degrade Mode (on/off)
+    unhealthy = False
+    if price_ttl_sec is not None and price_ttl_sec > OPS_DEGRADE_TTL_SEC:
+        unhealthy = True
+    if ws_reconnects is not None and ws_reconnects >= OPS_DEGRADE_WS_RECONNECTS:
+        unhealthy = True
 
-    # (4) Price Drift Monitor (אופציונלי; ירוץ רק אם קיים API ל-index)
-    try:
-        DRIFT_BPS_ALERT = float(os.getenv("PRICE_DRIFT_ALERT_BPS", "25.0"))
-        from utils.binance_client import futures_mark_price as _mark
-        try:
-            from utils.binance_client import futures_index_price as _index  # אם קיים אצלך
-        except Exception:
-            _index = None  # אין — מדלגים
-        if _index:
-            # בוחרים סימבול מייצג (אפשר לשנות ל-HEALTH_SYMBOLS/Watchlist ראשון)
-            sym = os.getenv("DRIFT_MONITOR_SYMBOL", "BTCUSDT").upper()
-            mp = float(_mark(sym) or 0.0)
-            ip = float(_index(sym) or 0.0)
-            if mp > 0 and ip > 0:
-                drift_bps = abs(mp - ip) / ip * 10_000.0
-                mx.set_gauge("price.drift_bps", drift_bps)
-                if drift_bps >= DRIFT_BPS_ALERT and not _suppress(_last_drift_alert_ts, cool):
-                    _last_drift_alert_ts = time.time()
-                    await notify_error(f"⚠️ Price drift גבוה ב-{sym}: ~{drift_bps:.1f}bps — sanity מחמיר, שקול השהיה")
-                    os.environ["FEAT_MARK_INDEX_SANITY"] = "1"
-    except Exception:
-        pass
+    global _degrade_active
+    if unhealthy and not _degrade_active:
+        _degrade_active = True
+        # החמרת שערים + עבודה על MARK_PRICE בלבד
+        os.environ["FEAT_MARK_INDEX_SANITY"] = "1"
+        os.environ["BINANCE_WORKING_TYPE"] = "MARK_PRICE"
+        logger.warning({"event": "degrade_on", "ttl": price_ttl_sec, "reconnects": ws_reconnects})
+        if _cooldown("degrade_on", OPS_ALERT_COOLDOWN_SEC):
+            await notify_error("🚨 Degrade Mode ON — מעבר ל-MARK_PRICE בלבד + Sanity Gate הוחמר.")
+    elif _degrade_active and not unhealthy:
+        _degrade_active = False
+        logger.info({"event": "degrade_off"})
+        if _cooldown("degrade_off", OPS_ALERT_COOLDOWN_SEC):
+            await notify_info("✅ Degrade Mode OFF — חזרה למצב עבודה רגיל.")
+
 
