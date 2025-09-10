@@ -13,14 +13,22 @@ from utils.anchor import evaluate_anchor
 from utils.trade_executor import execute_trade_live  # ✅ סינכרוני
 from utils.watchlist_utils import load_watchlist_env_or_fallback
 
-# Observability
-from utils.metrics import metrics_tracker as mx
+# Metrics (רשות)
 try:
-    from utils.ops_guard import ops_tick  # optional; לא שובר אם חסר
+    from utils.metrics import metrics_tracker
 except Exception:
-    async def ops_tick(*args, **kwargs): return None  # type: ignore
+    class _M:  # no-op
+        def observe_order_latency(self, *a, **k): pass
+        def observe_request(self, *a, **k): pass
+    metrics_tracker = _M()  # type: ignore
 
-# Risk Gate (אופציונלי)
+# Ops-guard (חדש, רשות)
+try:
+    from utils.ops_guard import ops_tick
+except Exception:
+    async def ops_tick(**kwargs): return None  # type: ignore
+
+# Risk Gate (אופציונלי, לא שובר קוד)
 try:
     from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
 except Exception:
@@ -63,6 +71,13 @@ except Exception:
                 self.i = j
             return out
 
+# אופציונלי: גיל ה-WS (אם קיים)
+try:
+    from utils.ws_fallback import get_price_age  # מחזיר גיל ב-שניות לסימבול
+except Exception:
+    def get_price_age(symbol: str) -> Optional[float]:  # type: ignore
+        return None
+
 logger = logging.getLogger("algogpt.autoexec")
 
 EXECUTOR_RUNNING = False
@@ -78,13 +93,24 @@ QUALITY_THRESHOLD = float(os.getenv("MIN_QUALITY_SCORE", str(getattr(cfg, "MIN_Q
 SCAN_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "4"))
 TIME_BUDGET_SEC = float(os.getenv("SCAN_TIME_BUDGET_SEC", "7.5"))
 
-# Auto-tune
+# Auto-tune (עדין, ללא שבירה)
 AUTO_TUNE_ENABLE = os.getenv("AUTO_TUNE_ENABLE", "1").lower() in ("1","true","yes","on")
 AUTO_TUNE_MIN = int(os.getenv("AUTO_TUNE_MIN_SCAN_INTERVAL", str(SCAN_INTERVAL_BASE)))
 AUTO_TUNE_MAX = int(os.getenv("AUTO_TUNE_MAX_SCAN_INTERVAL", str(max(SCAN_INTERVAL_BASE, 180))))
 AUTO_TUNE_UP_FACTOR = float(os.getenv("AUTO_TUNE_UP_FACTOR", "1.5"))
 AUTO_TUNE_DOWN_FACTOR = float(os.getenv("AUTO_TUNE_DOWN_FACTOR", "0.85"))
 AUTO_TUNE_STREAK_NO_TRADES = int(os.getenv("AUTO_TUNE_STREAK_NO_TRADES", "3"))
+
+# Backpressure EWMA
+BACKPRESSURE_ENABLE = os.getenv("BACKPRESSURE_ENABLE", "1").lower() in ("1","true","yes","on")
+EXEC_EWMA_ALPHA = float(os.getenv("EXEC_EWMA_ALPHA", "0.3"))
+_exec_ewma_ms: Optional[float] = None
+
+# Bad actors (כשלי ביצוע רצופים → cooldown)
+BAD_ACTOR_STREAK = int(os.getenv("BAD_ACTOR_STREAK", "3"))
+BAD_ACTOR_COOLDOWN_SEC = int(os.getenv("BAD_ACTOR_COOLDOWN_SEC", "900"))
+_symbol_fail_streak: Dict[str, int] = {}
+_bad_cooldown_until: Dict[str, float] = {}
 
 _last_trade_ts: Dict[str, float] = {}
 
@@ -133,8 +159,16 @@ def _derive_sl_tp(entry: float, atr_v: float, side: str, adx_v: float) -> tuple[
         tp = entry - tp_mult * atr_v
     return float(sl), float(tp)
 
+def _is_bad_actor(symbol: str) -> bool:
+    until = _bad_cooldown_until.get(symbol, 0.0)
+    return until > time.time()
+
 async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
     try:
+        if _is_bad_actor(symbol):
+            _log("bad_actor_cooldown_skip", symbol=symbol, until=_bad_cooldown_until.get(symbol))
+            return None
+
         last = _last_trade_ts.get(symbol, 0.0)
         if (time.time() - last) < SYMBOL_COOLDOWN_SEC:
             return None
@@ -189,6 +223,7 @@ async def _scan_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         return None
 
 async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+    t0 = time.time()
     loop = asyncio.get_event_loop()
     resp = await loop.run_in_executor(
         None,
@@ -201,17 +236,29 @@ async def _execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             reduce_only=False,
         ),
     )
+    # מדידת latency להזמנה
+    try:
+        metrics_tracker.observe_order_latency((time.time() - t0) * 1000.0)
+    except Exception:
+        pass
+
+    sym = plan["symbol"]
     if resp.get("ok"):
-        _last_trade_ts[plan["symbol"]] = time.time()
-        mx.inc("exec.trades_executed", 1)
+        _last_trade_ts[sym] = time.time()
+        _symbol_fail_streak[sym] = 0
+    else:
+        _symbol_fail_streak[sym] = _symbol_fail_streak.get(sym, 0) + 1
+        if _symbol_fail_streak[sym] >= BAD_ACTOR_STREAK:
+            _bad_cooldown_until[sym] = time.time() + BAD_ACTOR_COOLDOWN_SEC
+            _log("bad_actor_quarantined", symbol=sym, streak=_symbol_fail_streak[sym], cooldown_sec=BAD_ACTOR_COOLDOWN_SEC)
+
     return resp
 
 async def _scan_batch(symbols: List[str], max_trades: int) -> int:
     trades_sent = 0
     sem = asyncio.Semaphore(SCAN_CONCURRENCY)
     results: List[Dict[str, Any]] = []
-
-    mx.set_gauge("exec.batch_size", len(symbols))
+    timed_out = False
 
     async def worker(sym: str):
         async with sem:
@@ -222,26 +269,32 @@ async def _scan_batch(symbols: List[str], max_trades: int) -> int:
     try:
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=TIME_BUDGET_SEC)
     except asyncio.TimeoutError:
+        timed_out = True
         _log("batch_timeout", count=len(symbols), level="WARNING")
-        mx.inc("exec.batch_timeouts", 1)
 
     results.sort(key=lambda p: p.get("score", 0.0), reverse=True)
-    mx.set_gauge("exec.candidates_found", len(results))
-
     for plan in results:
         if trades_sent >= max_trades: break
         resp = await _execute_plan(plan)
         _log("trade_attempt", symbol=plan["symbol"], plan={"side": plan["side"], "entry": plan["entry"]},
              resp_ok=bool(resp.get("ok")))
         if resp.get("ok"): trades_sent += 1
+
+    # Ops tick: TTL + burst timeout signal (אם יש פונקציית גיל מחיר)
+    try:
+        ttl = get_price_age("BTCUSDT")
+        await ops_tick(price_ttl_sec=float(ttl) if ttl is not None else None, exec_batch_timeout=timed_out)
+    except Exception:
+        pass
+
     return trades_sent
 
 # ======================== Main Loop ========================
 async def auto_scan_and_trade():
-    global EXECUTOR_RUNNING, EXECUTOR_LAST_TS
+    global EXECUTOR_RUNNING, EXECUTOR_LAST_TS, _exec_ewma_ms
     EXECUTOR_RUNNING = True
     try:
-        wl = load_watchlist_env_or_fallback()
+        wl = load_watchlist_env_or_fallback()  # ✅ דינמי + Fallback
         if "BTCUSDT" not in wl: wl.insert(0, "BTCUSDT")
         sched = SymbolScheduler(wl)
 
@@ -252,8 +305,6 @@ async def auto_scan_and_trade():
         while EXECUTOR_RUNNING:
             tic = time.time()
             EXECUTOR_LAST_TS = tic
-            mx.set_gauge("exec.current_interval_sec", current_interval)
-
             if circuit_breaker_open():
                 _log("circuit_open_skip_tick", level="WARNING")
                 await asyncio.sleep(current_interval)
@@ -270,11 +321,10 @@ async def auto_scan_and_trade():
             if sent == 0:
                 await notify_no_trades()
                 no_trade_streak += 1
-                mx.inc("exec.no_trades", 1)
             else:
                 no_trade_streak = 0
 
-            # Auto-backoff (עדין)
+            # Auto-backoff (עדין וללא שבירה)
             if AUTO_TUNE_ENABLE:
                 if no_trade_streak >= AUTO_TUNE_STREAK_NO_TRADES:
                     current_interval = int(min(AUTO_TUNE_MAX, max(current_interval * AUTO_TUNE_UP_FACTOR, current_interval + 5)))
@@ -283,17 +333,27 @@ async def auto_scan_and_trade():
                     current_interval = int(max(AUTO_TUNE_MIN, current_interval * AUTO_TUNE_DOWN_FACTOR))
                     _log("scan_interval_relax", new_interval=current_interval)
 
-            dt = time.time() - tic
-            mx.set_gauge("exec.last_tick_dt_sec", dt)
-            mx.inc("exec.ticks", 1)
-            mx.observe_order_latency(dt * 1000.0)  # משתמשים בזה גם כמדד tick-latency
-
+            # Backpressure (EWMA מול time budget)
+            tick_ms = (time.time() - tic) * 1000.0
             try:
-                await ops_tick(current_interval=current_interval, last_tick_sec=dt)
+                metrics_tracker.observe_request(200, tick_ms)  # שימוש קל כניטור כללי
             except Exception:
                 pass
 
-            sleep_s = max(0.0, current_interval - dt)
+            if BACKPRESSURE_ENABLE:
+                if _exec_ewma_ms is None:
+                    _exec_ewma_ms = tick_ms
+                else:
+                    _exec_ewma_ms = (EXEC_EWMA_ALPHA * tick_ms) + (1 - EXEC_EWMA_ALPHA) * _exec_ewma_ms
+                budget_ms = TIME_BUDGET_SEC * 1000.0
+                if _exec_ewma_ms > budget_ms * 1.05:  # חריגה עקבית
+                    bumped = int(min(AUTO_TUNE_MAX, max(current_interval + 5, int(current_interval * 1.10))))
+                    if bumped != current_interval:
+                        current_interval = bumped
+                        _log("backpressure_up", ewma_ms=_exec_ewma_ms, budget_ms=budget_ms, new_interval=current_interval)
+
+            # Sleep עד מפגש הבא
+            sleep_s = max(0.0, current_interval - (time.time() - tic))
             await asyncio.sleep(sleep_s)
     finally:
         EXECUTOR_RUNNING = False
