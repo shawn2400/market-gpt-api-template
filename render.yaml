@@ -1,9 +1,10 @@
 # FILE: render.yaml
 services:
-  # ---- שירות ה-Web הראשי (Docker) ----
+  # ── Web (Docker) ───────────────────────────────────────────
   - type: web
     name: algogpt-docker
-    runtime: docker
+    env: docker                # סטנדרט יציב (עדיף על runtime: docker)
+    region: frankfurt
     plan: pro
     autoDeploy: false
     pullRequestPreviewsEnabled: false
@@ -13,6 +14,10 @@ services:
     healthCheckPath: /health
 
     envVars:
+      # מומלץ: קבוצה מרכזית לכל ה-envs. ערוך אותם ב-UI של Environment Groups.
+      - fromGroup: algogpt-prod
+
+      # ערכים “קשיחים” לשירות (נוחים לגיט/בקרת תצורה):
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -22,19 +27,29 @@ services:
       - key: GUNICORN_TIMEOUT
         value: "120"
       - key: LOG_LEVEL
-        value: info
+        value: INFO
 
       # AlgoGPT
       - key: ALGOGPT_VERSION
         value: "2.18.0"
-      - key: ENABLE_AI_ROUTES
+      - key: PUBLIC_HOST
+        value: "https://algogpt-docker.onrender.com"
+      - key: METRICS_PUBLIC
         value: "1"
-      - key: EXECUTE_TRADES
-        value: "true"
-      - key: ALLOW_MANAGE_OPEN_TRADES
-        value: "true"
+      - key: USER_STREAM_ENABLE
+        value: "1"
 
-      # WS / Watchlist
+      # AI shim (/ai/analyze)
+      - key: AI_ANALYZE_ENABLE
+        value: "1"
+      - key: AI_ANALYZE_LIMIT
+        value: "60"
+      - key: AI_ANALYZE_WINDOW_SEC
+        value: "60"
+      - key: AI_ANALYZE_MAX_TEXT
+        value: "5000"
+
+      # סריקה/ווטשליסט
       - key: WATCHLIST
         value: "BTCUSDT,ETHUSDT,SOLUSDT"
       - key: INDICATOR_INTERVALS
@@ -50,30 +65,22 @@ services:
       - key: BINANCE_FUTURES_WS_BASE
         value: "wss://fstream.binance.com"
 
-      # Telegram/Webhook
-      - key: PUBLIC_HOST
-        value: "https://algogpt-docker.onrender.com"
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        sync: false
-      - key: TELEGRAM_TEST_CHAT_ID
-        sync: false
-
-      # CORS
-      - key: CORS_ALLOW_ORIGINS
-        value: "*"
-      - key: CORS_ALLOW_CREDENTIALS
-        value: "0"
-
-      # DB / Keys
+      # DB
       - key: DATABASE_URL
         value: "sqlite:////app/data/algogpt.db"
+
+      # סודות (ניתנים לעריכה ב-UI גם ב-Blueprint בזכות sync:false)
       - key: API_BEARER_TOKEN
         sync: false
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: TELEGRAM_TEST_CHAT_ID
         sync: false
       - key: REDIS_URL
         sync: false
@@ -83,14 +90,23 @@ services:
       mountPath: /app/data
       sizeGB: 1
 
-  # ---- שירות ה-Worker של Ops Supervisor (Python) ----
+  # ── Worker (Python) ────────────────────────────────────────
   - type: worker
     name: ops-supervisor
     env: python
+    region: oregon
     plan: starter
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python -u utils/ops_supervisor.py"
+
     envVars:
+      - fromGroup: algogpt-prod
+
+      # קובץ מדיניות ברירת מחדל
+      - key: OPS_POLICY_PATH
+        value: policies/ops_policy.yaml
+
+      # סודות הוורקר
       - key: TELEGRAM_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
@@ -99,8 +115,7 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: OPS_POLICY_PATH
-        value: policies/ops_policy.yaml
+
 
 
 
