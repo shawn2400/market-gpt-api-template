@@ -1,94 +1,30 @@
 {
   "id": null,
-  "title": "AlgoGPT – AI & API",
-  "tags": ["algogpt", "ai", "api"],
-  "timezone": "browser",
+  "title": "AlgoGPT – AI API",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "10s",
   "panels": [
     {
       "type": "stat",
-      "title": "AI Requests Success",
+      "title": "AI Requests OK",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "sum(algogpt_ai_requests_total{status=\"success\"})"}
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {"mode": "fixed", "fixedColor": "green"}
-        }
-      }
+      "targets": [{"expr": "sum(algogpt_ai_requests_total{status=\"ok\"})"}]
     },
     {
       "type": "stat",
-      "title": "AI Requests Errors",
+      "title": "AI Requests Failed",
       "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "sum(algogpt_ai_requests_total{status=\"error\"})"}
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {"mode": "fixed", "fixedColor": "red"}
-        }
-      }
+      "targets": [{"expr": "sum(algogpt_ai_requests_total{status=\"fail\"})"}]
     },
     {
       "type": "timeseries",
-      "title": "AI Latency (seconds)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "title": "AI Latency (p95)",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 4},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "histogram_quantile(0.95, sum(rate(algogpt_ai_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.99, sum(rate(algogpt_ai_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p99"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "s"}}
-    },
-    {
-      "type": "timeseries",
-      "title": "API Request Rate (by status)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "rate(algogpt_api_requests_total[5m])", "legendFormat": "{{status}}"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "palette-classic"}}}
-    },
-    {
-      "type": "stat",
-      "title": "5xx Error Rate (last 5m)",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 12},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "sum(rate(algogpt_api_requests_total{status=~\"5..\"}[5m]))"}
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 0.1},
-              {"color": "red", "value": 0.5}
-            ]
-          }
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "API Latency (p95 / p99)",
-      "gridPos": {"h": 8, "w": 12, "x": 6, "y": 12},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le,path))", "legendFormat": "{{path}} p95"},
-        {"expr": "histogram_quantile(0.99, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le,path))", "legendFormat": "{{path}} p99"}
-      ],
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(algogpt_ai_latency_seconds_bucket[5m])) by (le))"}],
       "fieldConfig": {"defaults": {"unit": "s"}}
     }
   ]
