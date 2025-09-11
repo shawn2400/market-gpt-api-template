@@ -36,9 +36,7 @@ components:
     Error:
       type: object
       properties:
-        detail:
-          type: string
-          example: Invalid API key
+        detail: { type: string, example: Invalid API key }
 
     BasicStatus:
       type: object
@@ -280,7 +278,6 @@ components:
         analysis: { type: string, example: "[Quick] BTCUSDT 15m: ..." }
         fallback: { type: boolean, example: false }
 
-    # ====== NEW: concrete response schemas to satisfy validator ======
     GridTradeResponse:
       type: object
       required: [ ok, mode, symbol, side, market, account_id, budget ]
@@ -327,9 +324,7 @@ components:
         order_ids:
           type: array
           items:
-            oneOf:
-              - { type: string }
-              - { type: number }
+            oneOf: [ { type: string }, { type: number } ]
         meta:
           type: object
           additionalProperties: true
@@ -354,15 +349,12 @@ components:
           type: object
           nullable: true
           additionalProperties: true
-          description: Present when using routes.telegram_bot.set_telegram_webhook
         telegram_response:
           type: object
           nullable: true
           additionalProperties: true
-          description: Present when using routes.telegram_routes.set_webhook
 
 paths:
-
   /:
     get:
       operationId: getRootStatus
@@ -419,8 +411,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PriceResponse" }
-        "502":
-          description: Upstream error
+        "502": { description: Upstream error }
 
   /trade/execute:
     post:
@@ -684,9 +675,7 @@ paths:
       operationId: getOpenPositions
       summary: Open futures positions
       tags: [ Executor ]
-      x-aliases:
-        - /executor/positions
-        - /executor/positions/open
+      x-aliases: [ /executor/positions, /executor/positions/open ]
       responses:
         "200":
           description: OK
@@ -743,8 +732,7 @@ paths:
       operationId: getExecutorSymbols
       summary: Tradable symbols (derived)
       tags: [ Executor ]
-      x-aliases:
-        - /executor/symbols/allowed
+      x-aliases: [ /executor/symbols/allowed ]
       responses:
         "200":
           description: OK
@@ -825,8 +813,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AIAnalyzeResponse" }
-      x-aliases:
-        - POST /ai/analyze
+      x-aliases: [ POST /ai/analyze ]
 
   /metrics-json:
     get:
@@ -887,76 +874,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/LongShortRatioResponse" }
 
-  /telegram/mute:
-    post:
-      operationId: setTelegramMute
-      summary: Set mute state
-      tags: [ Telegram ]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                state: { type: boolean, example: true }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  mute: { type: boolean }
-
-  /telegram/set-webhook:
-    post:
-      operationId: setTelegramWebhook
-      summary: Set Telegram webhook
-      tags: [ Telegram ]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                url: { type: string, example: "https://algogpt-docker.onrender.com/telegram/webhook" }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/TelegramSetWebhookResponse' }
-        "500":
-          description: Error setting webhook
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /telegram/webhook:
-    post:
-      operationId: telegramWebhook
-      summary: Telegram webhook endpoint (public)
-      tags: [ Telegram ]
-      security: []
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean, example: true }
-        "400":
-          description: Bad payload
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
   /market/tickers:
     get:
       operationId: getMarketTickers
@@ -979,6 +896,7 @@ paths:
                   properties:
                     symbol: { type: string, example: "BTCUSDT" }
                     markPrice: { type: number, example: 108500.12 }
+
 
 
 
