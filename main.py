@@ -101,9 +101,12 @@ async def validate_token(request: Request, call_next):
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
         "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"
     }
-    # ⚠️ הורדתי את "/alerts" מה־PUBLIC_PREFIXES כדי למנוע Post ללא טוקן
-    PUBLIC_PREFIXES = ["/price", "/static/", "/risk",
-                       "/metrics", "/status/ping", "/status/ws", "/status/executor", "/status/all"]
+    # שים לב: /alerts מוסר – מוגן ע"י טוקן; Webhooks לגורמי חוץ מקבלים חריג מפורש
+    PUBLIC_PREFIXES = [
+        "/price", "/static/", "/risk", "/metrics",
+        "/status/ping", "/status/ws", "/status/executor", "/status/all",
+        "/provider/cryptopanic"  # ← Webhook חתום בלבד
+    ]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
@@ -146,6 +149,7 @@ for module_path in (
     "routes.ai_analyze",           # ✅ /ai/analyze עם Rate-Limit
     "routes.ws_user_status",       # ✅ אופציונלי: /status/ws
     "routes.executor_status",      # ✅ אופציונלי: /status/executor
+    "routes.provider_cryptopanic", # ✅ webhook חתום
 ):
     if _try_include(module_path):
         try:
@@ -187,7 +191,7 @@ async def status_ping():
     return {"ok": True, "ts_ms": int(asyncio.get_event_loop().time() * 1000)}
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Built-in status endpoints (רק אם אין ראוטר ייעודי)
+# Built-in status endpoints (fallback)
 # ────────────────────────────────────────────────────────────────────────────────
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
@@ -295,7 +299,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
             else:
                 ConfirmStore.reject(cid, approver=approver)
                 await _tg_send(chat_id, "❌ בוטל. הטרייד לא יצא לפועל.")
-        # answerCallbackQuery (מסיר spinner)
+        # answerCallbackQuery
         try:
             cb_id = cb.get("id")
             if BOT_TOKEN and cb_id:
@@ -315,7 +319,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     return {"ok": True}
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Kill-Switch /flush  (best-effort: מנקה תורים/אישורים אם קיים)
+# Kill-Switch /flush
 # ────────────────────────────────────────────────────────────────────────────────
 @app.post("/flush")
 async def flush_kill_switch():
@@ -332,7 +336,7 @@ async def flush_kill_switch():
     return {"ok": True, "flushed": done}
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Preflight Warmup on startup (Mark/Index + exchangeInfo + light klines)
+# Preflight Warmup on startup
 # ────────────────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def _startup_preflight_warmup():
@@ -372,7 +376,7 @@ async def _startup_webhook():
         logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# WS User-Data Stream autostart (Plug-and-Play)
+# WS User-Data Stream autostart
 # ────────────────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def _startup_user_stream():
@@ -390,6 +394,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
