@@ -1,49 +1,121 @@
 groups:
-- name: algogpt.rules
-  interval: 15s
-  rules:
-  - alert: AlgoGPTHealthDown
-    expr: up{job="algogpt-render-health"} == 0
-    for: 1m
-    labels:
-      severity: critical
-    annotations:
-      summary: "AlgoGPT Health Down"
-      description: "לא עונה ב-URL הציבורי"
+  - name: algogpt-core
+    interval: 30s
+    rules:
+      # ====== CPU ======
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 2m
+        labels:
+          severity: warning
+          service: algogpt
+        annotations:
+          summary: "CPU גבוה בשרת"
+          description: "CPU חצה 85% במשך 2 דקות"
 
-  - alert: HighCPU
-    expr: rate(process_cpu_seconds_total[1m]) > 0.85
-    for: 2m
-    labels:
-      severity: warning
-    annotations:
-      summary: "CPU > 85%"
+      - alert: CriticalCPUUsage
+        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 95
+        for: 1m
+        labels:
+          severity: critical
+          service: algogpt
+        annotations:
+          summary: "CPU קריטי"
+          description: "CPU חצה 95% במשך דקה"
 
-  - alert: HighMemory
-    expr: process_resident_memory_bytes / process_virtual_memory_bytes > 0.8
-    for: 2m
-    labels:
-      severity: warning
-    annotations:
-      summary: "Memory > 80%"
+      # ====== Memory ======
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 80
+        for: 3m
+        labels:
+          severity: warning
+          service: algogpt
+        annotations:
+          summary: "Memory גבוה"
+          description: "שימוש בזיכרון חצה 80% במשך 3 דקות"
 
-  - alert: API5xxHigh
-    expr: rate(algogpt_api_requests_total{status=~"5.."}[5m]) > 0.5
-    for: 2m
-    labels:
-      severity: critical
-    annotations:
-      summary: "שגיאות 5xx API"
-      description: "יותר מ-0.5 לשנייה"
+      - alert: CriticalMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 1m
+        labels:
+          severity: critical
+          service: algogpt
+        annotations:
+          summary: "Memory קריטי"
+          description: "שימוש בזיכרון חצה 90% במשך דקה"
 
-  - alert: PnLNegative
-    expr: algogpt_pnl_total_usdt < -50
-    for: 5m
-    labels:
-      severity: warning
-    annotations:
-      summary: "PnL מצטבר שלילי"
-      description: "PnL ירד מתחת ל-50- USDT"
+      # ====== Health ======
+      - alert: ServiceDown
+        expr: probe_success{job="algogpt-health"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: algogpt
+        annotations:
+          summary: "שירות נפל"
+          description: "/health של AlgoGPT לא מגיב מתוך הרשת"
+
+      - alert: ExternalHealthDown
+        expr: probe_success{job="algogpt-render-health"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: algogpt
+        annotations:
+          summary: "שירות לא נגיש ציבורית"
+          description: "/health של AlgoGPT לא מגיב מבחוץ (Render URL)"
+
+      # ====== API Errors ======
+      - alert: High5xxRate
+        expr: sum(rate(algogpt_api_requests_total{status=~"5.."}[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: algogpt
+        annotations:
+          summary: "שגיאות 5xx גבוהות"
+          description: "יותר מ־1 בקשות שגיאה בשנייה (ממוצע 5 דקות)"
+
+      - alert: Critical5xxRate
+        expr: sum(rate(algogpt_api_requests_total{status=~"5.."}[1m])) > 5
+        for: 1m
+        labels:
+          severity: critical
+          service: algogpt
+        annotations:
+          summary: "שגיאות 5xx קריטיות"
+          description: "יותר מ־5 שגיאות בשנייה (ממוצע דקה)"
+
+      # ====== Trades ======
+      - alert: TradePnLNegative
+        expr: algogpt_pnl_total_usdt < -50
+        for: 5m
+        labels:
+          severity: warning
+          service: algogpt
+        annotations:
+          summary: "PnL שלילי"
+          description: "הפסד מצטבר גדול מ־50 USDT"
+
+      - alert: TradePnLCritical
+        expr: algogpt_pnl_total_usdt < -150
+        for: 2m
+        labels:
+          severity: critical
+          service: algogpt
+        annotations:
+          summary: "PnL שלילי חמור"
+          description: "הפסד מצטבר גדול מ־150 USDT"
+
+      - alert: TradesStuck
+        expr: algogpt_trades_open_total > 0 and increase(algogpt_trades_closed_total[30m]) == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: algogpt
+        annotations:
+          summary: "פוזיציות תקועות"
+          description: "יש פוזיציות פתוחות כבר 30 דקות בלי סגירה"
 
 
 
