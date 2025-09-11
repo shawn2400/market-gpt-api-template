@@ -1,0 +1,58 @@
+{
+  "id": null,
+  "title": "AlgoGPT – Overview",
+  "tags": ["algogpt", "overview"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {"type":"row","title":"System","gridPos":{"h":1,"w":24,"x":0,"y":0}},
+    {
+      "type": "stat",
+      "title": "CPU (%)",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "avg(rate(container_cpu_usage_seconds_total{container=\"algogpt\"}[5m]))*100"}]
+    },
+    {
+      "type": "stat",
+      "title": "Memory (MB)",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "container_memory_usage_bytes{container=\"algogpt\"}/1024/1024"}]
+    },
+    {"type":"row","title":"Trading","gridPos":{"h":1,"w":24,"x":0,"y":6}},
+    {
+      "type": "stat",
+      "title": "PnL (USDT)",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 7},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "algogpt_pnl_total_usdt"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "TP/SL Events",
+      "gridPos": {"h": 8, "w": 12, "x": 6, "y": 7},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "increase(algogpt_tp_hits_total[1h])","legendFormat":"TP"},
+        {"expr": "increase(algogpt_sl_hits_total[1h])","legendFormat":"SL"}
+      ]
+    },
+    {"type":"row","title":"Alerts & Telegram","gridPos":{"h":1,"w":24,"x":0,"y":15}},
+    {
+      "type": "stat",
+      "title": "Telegram Failures",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(algogpt_telegram_messages_failed_total)"}]
+    },
+    {
+      "type": "table",
+      "title": "Active Alerts",
+      "gridPos": {"h": 8, "w": 12, "x": 6, "y": 16},
+      "datasource": {"type": "alertmanager", "uid": "alertmanager"}
+    }
+  ]
+}
