@@ -3,7 +3,7 @@ services:
   # ── Web (Docker) ───────────────────────────────────────────
   - type: web
     name: algogpt-docker
-    env: docker                # סטנדרט יציב (עדיף על runtime: docker)
+    env: docker
     region: frankfurt
     plan: pro
     autoDeploy: false
@@ -14,10 +14,10 @@ services:
     healthCheckPath: /health
 
     envVars:
-      # מומלץ: קבוצה מרכזית לכל ה-envs. ערוך אותם ב-UI של Environment Groups.
+      # כל הקונפיג והסודות מגיעים מקבוצה אחת מרכזית:
       - fromGroup: algogpt-prod
 
-      # ערכים “קשיחים” לשירות (נוחים לגיט/בקרת תצורה):
+      # קבועים “טכניים” של השרת (אפשר להשאיר בקובץ):
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -26,64 +26,6 @@ services:
         value: "1"
       - key: GUNICORN_TIMEOUT
         value: "120"
-      - key: LOG_LEVEL
-        value: INFO
-
-      # AlgoGPT
-      - key: ALGOGPT_VERSION
-        value: "2.18.0"
-      - key: PUBLIC_HOST
-        value: "https://algogpt-docker.onrender.com"
-      - key: METRICS_PUBLIC
-        value: "1"
-      - key: USER_STREAM_ENABLE
-        value: "1"
-
-      # AI shim (/ai/analyze)
-      - key: AI_ANALYZE_ENABLE
-        value: "1"
-      - key: AI_ANALYZE_LIMIT
-        value: "60"
-      - key: AI_ANALYZE_WINDOW_SEC
-        value: "60"
-      - key: AI_ANALYZE_MAX_TEXT
-        value: "5000"
-
-      # סריקה/ווטשליסט
-      - key: WATCHLIST
-        value: "BTCUSDT,ETHUSDT,SOLUSDT"
-      - key: INDICATOR_INTERVALS
-        value: "15m,1h"
-
-      # Binance
-      - key: BINANCE_WORKING_TYPE
-        value: "MARK_PRICE"
-      - key: BINANCE_TESTNET
-        value: "false"
-      - key: BINANCE_FUTURES_HTTP_BASE
-        value: "https://fapi.binance.com"
-      - key: BINANCE_FUTURES_WS_BASE
-        value: "wss://fstream.binance.com"
-
-      # DB
-      - key: DATABASE_URL
-        value: "sqlite:////app/data/algogpt.db"
-
-      # סודות (ניתנים לעריכה ב-UI גם ב-Blueprint בזכות sync:false)
-      - key: API_BEARER_TOKEN
-        sync: false
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        sync: false
-      - key: TELEGRAM_TEST_CHAT_ID
-        sync: false
-      - key: REDIS_URL
-        sync: false
 
     disk:
       name: data
@@ -101,20 +43,10 @@ services:
 
     envVars:
       - fromGroup: algogpt-prod
-
-      # קובץ מדיניות ברירת מחדל
+      # קובץ מדיניות ברירת מחדל (לא רגיש):
       - key: OPS_POLICY_PATH
         value: policies/ops_policy.yaml
 
-      # סודות הוורקר
-      - key: TELEGRAM_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
-      - key: AIX_API_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
 
 
 
