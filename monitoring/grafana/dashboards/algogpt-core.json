@@ -1,46 +1,57 @@
 {
   "id": null,
-  "title": "AlgoGPT – Core Metrics",
+  "title": "AlgoGPT – Core System",
+  "tags": ["algogpt", "core"],
+  "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "10s",
   "panels": [
     {
-      "type": "stat",
-      "title": "CPU Usage %",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "avg(rate(process_cpu_seconds_total[1m])) * 100"}],
-      "fieldConfig": {"defaults": {"unit": "percent"}}
-    },
-    {
-      "type": "stat",
-      "title": "Memory Usage MB",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "process_resident_memory_bytes / 1024 / 1024"}],
-      "fieldConfig": {"defaults": {"unit": "megabytes"}}
-    },
-    {
       "type": "timeseries",
       "title": "API Latency (p95)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "targets": [
         {"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "s"}}
+      ]
     },
     {
-      "type": "timeseries",
-      "title": "5xx Errors Rate",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "type": "stat",
+      "title": "API Errors (5xx / 5m)",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "rate(algogpt_api_requests_total{status=~\"5..\"}[5m])"}],
-      "fieldConfig": {"defaults": {"unit": "req/s"}}
+      "targets": [
+        {"expr": "sum(rate(algogpt_api_5xx_total[5m]))"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": {"mode": "absolute","steps":[{"color":"green"},{"color":"red","value":0.1}]}
+        }
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "CPU Usage (%)",
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "avg(rate(container_cpu_usage_seconds_total{container=\"algogpt\"}[5m])) * 100"}
+      ]
+    },
+    {
+      "type": "gauge",
+      "title": "Memory Usage (MB)",
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "container_memory_usage_bytes{container=\"algogpt\"} / 1024 / 1024"}
+      ]
     }
   ]
 }
+
 
 
 
