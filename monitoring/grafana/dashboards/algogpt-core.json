@@ -1,45 +1,44 @@
 {
   "id": null,
   "title": "AlgoGPT – Core Metrics",
-  "tags": ["algogpt", "core"],
-  "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "10s",
   "panels": [
     {
       "type": "stat",
-      "title": "Open Trades",
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "title": "CPU Usage %",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "algogpt_trades_open_total"}],
-      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
-    },
-    {
-      "type": "stat",
-      "title": "PnL Total (USDT)",
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "algogpt_pnl_total_usdt"}],
-      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "continuous-GrYlRd"}}}
-    },
-    {
-      "type": "timeseries",
-      "title": "CPU Usage",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "rate(process_cpu_seconds_total[1m])"}],
+      "targets": [{"expr": "avg(rate(process_cpu_seconds_total[1m])) * 100"}],
       "fieldConfig": {"defaults": {"unit": "percent"}}
     },
     {
+      "type": "stat",
+      "title": "Memory Usage MB",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "process_resident_memory_bytes / 1024 / 1024"}],
+      "fieldConfig": {"defaults": {"unit": "megabytes"}}
+    },
+    {
       "type": "timeseries",
-      "title": "Memory Usage",
+      "title": "API Latency (p95)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))"}],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "5xx Errors Rate",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "process_resident_memory_bytes"}],
-      "fieldConfig": {"defaults": {"unit": "bytes"}}
+      "targets": [{"expr": "rate(algogpt_api_requests_total{status=~\"5..\"}[5m])"}],
+      "fieldConfig": {"defaults": {"unit": "req/s"}}
     }
   ]
 }
+
 
 
