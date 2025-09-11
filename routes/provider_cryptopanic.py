@@ -8,12 +8,13 @@ from pydantic import BaseModel
 
 from utils.idempotency import claim as idem_claim
 from utils.rate_limit import require_rate_limit
-from utils.telegram_api import send_message as telegram_send
+from utils.telegram_api import send_message as telegram_send  # ודא שקיים utils/telegram_api.py עם send_message
 
 router = APIRouter(
     prefix="/provider/cryptopanic",
     tags=["Provider: CryptoPanic"],
-    dependencies=[Depends(require_rate_limit(ns="provider_cp", rpm=int(os.getenv("CP_RPM", "60")),
+    dependencies=[Depends(require_rate_limit(ns="provider_cp",
+                                            rpm=int(os.getenv("CP_RPM", "60")),
                                             burst=int(os.getenv("CP_BURST", os.getenv("CP_RPM", "60"))),
                                             by_token_only=False))]
 )
@@ -31,12 +32,10 @@ def _ip_allowed(req: Request) -> bool:
     return ip in CP_IP_ALLOW
 
 def _verify_hmac(signature_hex: Optional[str], timestamp: Optional[str], raw: bytes) -> bool:
-    # אם אין סוד – לא מאמתים (פועל במצב פיתוח בלבד)
     if not CP_SECRET:
-        return True
+        return True  # פיתוח בלבד
     if not signature_hex or not timestamp:
         return False
-    # anti-replay על timestamp
     try:
         ts = int(timestamp)
         if abs(int(time.time()) - ts) > CP_MAX_SKEW:
@@ -56,9 +55,9 @@ def _idem_key(sig: Optional[str], ts: Optional[str], provided: Optional[str]) ->
     base = (sig or "nosig") + ":" + (ts or "nots")
     return f"cp:{hashlib.sha256(base.encode('utf-8')).hexdigest()[:32]}"
 
-# ---- Pydantic (payload גנרי של CryptoPanic) ----
+# ---- Pydantic payloads ----
 class CPCurrency(BaseModel):
-    code: Optional[str] = None   # למשל 'BTC'
+    code: Optional[str] = None
     title: Optional[str] = None
 
 class CPItem(BaseModel):
@@ -71,13 +70,10 @@ class CPItem(BaseModel):
     published_at: Optional[str] = None
 
 class CPEnvelope(BaseModel):
-    # חלק מהאינטגרציות שולחות ישירות item; אחרות עוטפות במעטפה
     item: Optional[CPItem] = None
-    # תמיכה גם ב־pass-through raw dict:
     __root__: Optional[Dict[str, Any]] = None
 
 def _pull_item(d: Dict[str, Any]) -> Dict[str, Any]:
-    # תומך בשני פורמטים: { item: {...} } או המודל עצמו
     if "item" in d and isinstance(d["item"], dict):
         return d["item"]
     return d
@@ -89,10 +85,10 @@ async def ping():
 @router.post("/webhook")
 async def webhook(
     request: Request,
-    x_provider_signature: Optional[str] = Header(None),  # מומלץ
-    x_signature: Optional[str] = Header(None),            # אליאס
-    x_timestamp: Optional[str] = Header(None),            # חובה אם יש HMAC
-    x_idempotency_key: Optional[str] = Header(None),      # אופציונלי
+    x_provider_signature: Optional[str] = Header(None),
+    x_signature: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None),
+    x_idempotency_key: Optional[str] = Header(None),
 ):
     # 1) IP allowlist
     if not _ip_allowed(request):
@@ -125,7 +121,7 @@ async def webhook(
     else:
         assets = []
 
-    # 5) Notify Telegram (פורמט קומפקטי)
+    # 5) Notify Telegram
     assets_str = ", ".join(assets) if assets else "-"
     url_line = f"\n🔗 <a href=\"{url}\">link</a>" if url else ""
     kind_tag = f" [{kind}]" if kind else ""
@@ -140,5 +136,4 @@ async def webhook(
     except Exception:
         pass
 
-    # (אופציונלי) כאן ניתן להזרים את האירוע לעיבוד פנימי נוסף / אנליזה / סיווג סנטימנט
     return {"ok": True, "assets": assets, "title": title[:80]}
