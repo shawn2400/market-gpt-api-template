@@ -251,7 +251,8 @@ async def debug_health():
 
 @app.get("/status/ping")
 async def status_ping():
-    return {"ok": True, "ts_ms": int(asyncio.get_event_loop().time() * 1000)}
+    # שימוש ב-epoch ms לשמירה על עקביות עם שאר ה־API
+    return {"ok": True, "ts_ms": int(time.time() * 1000)}
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Built-in status endpoints (fallback)
@@ -358,7 +359,7 @@ async def _tg_send(chat_id: int, text: str):
 
 @app.get("/telegram/ping", include_in_schema=False)
 async def tg_ping():
-    return {"ok": True, "src": "telegram", "ts_ms": int(asyncio.get_event_loop().time() * 1000)}
+    return {"ok": True, "src": "telegram", "ts_ms": int(time.time() * 1000)}
 
 @app.post("/telegram/webhook", include_in_schema=False)
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
@@ -478,6 +479,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
