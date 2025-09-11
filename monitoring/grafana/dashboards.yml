@@ -3,13 +3,13 @@ apiVersion: 1
 providers:
   - name: 'AlgoGPT Dashboards'
     orgId: 1
-    folder: 'AlgoGPT'
+    folder: ''
     type: file
     disableDeletion: false
-    editable: true
     updateIntervalSeconds: 30
     options:
       path: /etc/grafana/provisioning/dashboards
+
 
 
 
