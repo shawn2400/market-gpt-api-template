@@ -11,6 +11,7 @@ from utils.hmac_utils import build_signed_outbound, generate_idempotency_key
 from utils.redis_client import redis_client as RED
 from utils.hours_profile import hours_profile_now
 from utils.risk_rules import gate_trade, rr_from_levels, entry_gap_ok
+from utils.budget import get_trade_budget_usdt  # ← תקציב דינמי
 
 # Grid helper
 try:
@@ -70,7 +71,8 @@ CAP_PER_CYCLE_ENV = int(os.getenv("SUGGEST_CAP_PER_CYCLE","5"))
 
 SUCCESS_PCT_MIN   = float(os.getenv("SUCCESS_PCT_MIN","70"))
 
-BUDGET_USD        = float(os.getenv("MAX_TRADE_BUDGET","100"))
+# תקציב בסיס (ישמש כפולבק אם הדינמי כבוי)
+BUDGET_USD_FALLBK = float(os.getenv("MAX_TRADE_BUDGET","100"))
 
 # סוגי הצעות להפעלה
 SUGGEST_FUTURES   = os.getenv("SUGGEST_FUTURES","1").lower() in ("1","true","yes")
@@ -81,6 +83,10 @@ DEFAULT_INTERVAL  = os.getenv("DEFAULT_INTERVAL","15m")
 
 MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.6"))
 MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.9"))
+
+# גג מינוף להצעות GPT (ביטחון)
+SUGGEST_MAX_LEVERAGE = int(os.getenv("SUGGEST_MAX_LEVERAGE","10"))
+SUGGEST_MIN_LEVERAGE = max(1, int(os.getenv("SUGGEST_MIN_LEVERAGE","1")))
 
 # ---------------- Helpers ----------------
 def _hash_proposal(key_fields: Dict[str, Any]) -> str:
@@ -93,13 +99,17 @@ async def _fetch_context_batch(symbols: List[str], interval: str = DEFAULT_INTER
         LOGGER.warning("CONTEXT_URL not set – worker running without context (reduced gating).")
         return {}
     payload = {"symbols": symbols, "interval": interval, "compact": True}
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload)
-        r.raise_for_status()
-        out = {}
-        for it in r.json().get("items", []):
-            out[it["symbol"]] = it
-        return out
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload)
+            r.raise_for_status()
+            out = {}
+            for it in r.json().get("items", []):
+                out[it["symbol"]] = it
+            return out
+    except Exception as e:
+        LOGGER.warning("context batch failed: %s", e)
+        return {}
 
 def _cooldown_key(symbol: str, ttype: str) -> str:
     return f"algogpt:cooldown:{ttype}:{symbol.upper()}"
@@ -124,6 +134,29 @@ def _pass_dedup(h: str, ttl_sec: int) -> bool:
         RED.setex(k, ttl_sec, "1")
         return True
     return True
+
+def _quality_from_ctx(ctx: Dict[str, Any]) -> Optional[float]:
+    flt = (ctx or {}).get("filters") or {}
+    for k in ("quality", "quality_score", "q", "score"):
+        v = flt.get(k)
+        try:
+            if v is None: 
+                continue
+            return float(v)
+        except Exception:
+            continue
+    return None
+
+def _maybe_float(d: Dict[str, Any], *keys: str) -> Optional[float]:
+    for k in keys:
+        v = d.get(k)
+        try:
+            if v is None: 
+                continue
+            return float(v)
+        except Exception:
+            continue
+    return None
 
 # ---------------- GPT ----------------
 _client: Optional[OpenAI] = None
@@ -173,15 +206,22 @@ async def _emit(payload: Dict[str, Any]) -> bool:
     if not WEBHOOK_HMAC_SECRET:
         LOGGER.error("WEBHOOK_HMAC_SECRET not set")
         return False
-    body, headers = build_signed_outbound(
-        WEBHOOK_HMAC_SECRET, payload,
-        idempotency_key=generate_idempotency_key(),
-        extra_headers={"Content-Type":"application/json"},
-    )
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(ALERT_INGEST_URL, content=body, headers=headers)
-        r.raise_for_status()
-        return True
+    if not ALERT_INGEST_URL:
+        LOGGER.error("ALERT_INGEST_URL not set")
+        return False
+    try:
+        body, headers = build_signed_outbound(
+            WEBHOOK_HMAC_SECRET, payload,
+            idempotency_key=generate_idempotency_key(),
+            extra_headers={"Content-Type":"application/json"},
+        )
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(ALERT_INGEST_URL, content=body, headers=headers)
+            r.raise_for_status()
+            return True
+    except Exception as e:
+        LOGGER.warning("emit failed: %s", e)
+        return False
 
 # ---------------- Proposers ----------------
 def _min_rr_for(symbol: str, ctx_filters: Dict[str, Any]) -> float:
@@ -229,6 +269,8 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
         side = str(data.get("side","")).upper()
         if for_spot and side != "LONG":  # SPOT always LONG
             side = "LONG"
+        lev = _to_int(data.get("leverage"), default=10) or 10
+        lev = max(SUGGEST_MIN_LEVERAGE, min(SUGGEST_MAX_LEVERAGE, lev))
         prop = {
             "symbol": symbol,
             "side": side if side in ("LONG","SHORT") else None,
@@ -237,7 +279,7 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
             "tp1": _to_float(data.get("tp1")),
             "tp2": _to_float(data.get("tp2")),
             "tp3": _to_float(data.get("tp3")),
-            "leverage": (1 if for_spot else _to_int(data.get("leverage"), default=10)),
+            "leverage": (1 if for_spot else lev),
             "success_pct": _to_float(data.get("success_pct")),
             "reason": data.get("reason") or "",
         }
@@ -249,6 +291,22 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
     except Exception as e:
         LOGGER.warning("gpt error %s", e)
         return None
+
+def _calc_dynamic_budget(symbol: str, ctx: Dict[str, Any]) -> float:
+    """
+    משתמש ב־get_trade_budget_usdt; אם דינמי כבוי נחזור לערך ENV.
+    נעשה ניסיון להעביר quality/ATR/price מה־context אם קיימים.
+    """
+    price = _maybe_float(ctx, "price") or _maybe_float(ctx.get("filters", {}), "price") or None
+    atr   = _maybe_float(ctx, "atr", "atr14", "atr_abs") or _maybe_float(ctx.get("filters", {}), "atr", "atr14") or None
+    quality = _quality_from_ctx(ctx)
+    try:
+        b = float(get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price))
+        if b > 0:
+            return b
+    except Exception as e:
+        LOGGER.debug("dynamic budget failed, fallback to ENV: %s", e)
+    return float(BUDGET_USD_FALLBK)
 
 async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float) -> Optional[Dict[str, Any]]:
     prop = await _gpt_suggest(symbol, ctx, for_spot=False)
@@ -269,13 +327,18 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     vol_reg = ((ctx.get("filters") or {}).get("vol_regime","mid")) if ctx else "mid"
     g = gate_trade(symbol, prop["side"], price, prop["entry"], prop["sl"], prop["tp1"],
                    vol_regime=vol_reg, success_pct=prop.get("success_pct"), leverage=prop.get("leverage"))
-    if not g["ok"]: return None
+    if not g["ok"]:
+        return None
 
     if (prop.get("success_pct") or 0) < success_req:  # סף הצלחה דינמי
         return None
 
-    # נזילות (סליפג') לנוטיונל ≈ budget*lev
-    notional = float(BUDGET_USD) * float(prop.get("leverage") or 10)
+    # תקציב דינמי → נוטיונל ≈ budget*lev
+    budget = _calc_dynamic_budget(symbol, ctx)
+    leverage = int(prop.get("leverage") or 10)
+    notional = float(budget) * float(leverage)
+
+    # נזילות (סליפג')
     lg = await liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
@@ -292,8 +355,8 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         "tp3": float(prop["tp3"]) if prop.get("tp3") else None,
         "success_pct": float(prop.get("success_pct") or 0.0),
         "reason": (prop.get("reason") or "") + (f" [{fb_note}]" if fb_note else ""),
-        "leverage": int(prop.get("leverage") or 10),
-        "budget_usd": float(BUDGET_USD),
+        "leverage": leverage,
+        "budget_usd": float(budget),
         "notional_usd": float(notional),
         "qty": None,
         "chat_id": TELEGRAM_CHAT_ID or None,
@@ -317,8 +380,9 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
     if (prop.get("success_pct") or 0) < success_req:
         return None
 
+    budget = _calc_dynamic_budget(symbol, ctx)
     # נזילות לנוטיונל = budget בלבד
-    lg = await liquidity_gate_safe(symbol, "LONG", notional_usd=BUDGET_USD)
+    lg = await liquidity_gate_safe(symbol, "LONG", notional_usd=budget)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
@@ -335,8 +399,8 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
         "success_pct": float(prop.get("success_pct") or 0.0),
         "reason": (prop.get("reason") or "") + " [SPOT]" + (f" [{fb_note}]" if fb_note else ""),
         "leverage": 1,
-        "budget_usd": float(BUDGET_USD),
-        "notional_usd": float(BUDGET_USD),
+        "budget_usd": float(budget),
+        "notional_usd": float(budget),
         "qty": None,
         "chat_id": TELEGRAM_CHAT_ID or None,
     }
@@ -347,12 +411,13 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         return None
     price = ctx.get("price") if ctx else None
     flags = (ctx.get("filters") or {}) if ctx else {}
-    plan = build_grid_plan(symbol=symbol, price=price, flags=flags, budget_usd=BUDGET_USD)
+    plan = build_grid_plan(symbol=symbol, price=price, flags=flags, budget_usd=_calc_dynamic_budget(symbol, ctx))
     if not plan:
         return None
 
     # נזילות לנוטיונל ≈ budget (גריד לא ממונף כאן)
-    lg = await liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=BUDGET_USD)
+    budget = float(plan.get("budget_usd") or _calc_dynamic_budget(symbol, ctx))
+    lg = await liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
@@ -368,8 +433,8 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         "grid_take_profit_pct": float(plan["grid_take_profit_pct"]),
         "grid_side": plan["grid_side"],
         "reason": plan["reason"],
-        "budget_usd": float(BUDGET_USD),
-        "notional_usd": float(BUDGET_USD),
+        "budget_usd": float(budget),
+        "notional_usd": float(budget),
         "chat_id": TELEGRAM_CHAT_ID or None,
     }
     return payload
@@ -394,66 +459,86 @@ async def process_cycle():
     symbols = pool_syms[:max(1, min(POOL_PER_CYCLE, len(pool_syms)))]
 
     # Context batch
-    ctx_map = {}
-    try:
-        ctx_map = await _fetch_context_batch(symbols, interval=DEFAULT_INTERVAL)
-    except Exception as e:
-        LOGGER.warning("context batch failed: %s", e)
-        ctx_map = {}
+    ctx_map = await _fetch_context_batch(symbols, interval=DEFAULT_INTERVAL)
 
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     accepted = 0
-    # קאפ דינמי — ניקח המינימום בין env לבין topk/3 כדי לא להציף
+    accepted_lock = asyncio.Lock()
+
+    # קאפ דינמי — המינימום בין env לבין topk/3 כדי לא להציף
     cap_per_cycle = max(1, min(CAP_PER_CYCLE_ENV, max(1, topk // 3)))
 
     async def maybe_emit(ttype: str, payload: Optional[Dict[str, Any]]):
         nonlocal accepted
-        if not payload or accepted >= cap_per_cycle:
+        if not payload:
             return
-        # Cooldown per (symbol,type)
-        if not _pass_cooldown_dyn(payload["symbol"], ttype, cooldown_sec):
-            return
-        # Dedup (24h)
-        dedup_ttl = int(float(os.getenv("DEDUP_TTL_SEC","86400")))
-        h = _hash_proposal({
-            "trade_type": ttype,
-            "symbol": payload["symbol"],
-            "side": payload.get("side"),
-            "entry": payload.get("entry"),
-            "sl": payload.get("sl"),
-            "tp1": payload.get("tp1"),
-            "tp2": payload.get("tp2"),
-            "tp3": payload.get("tp3"),
-        })
-        if not _pass_dedup(h, dedup_ttl):
-            return
-        ok = await _emit(payload)
-        if ok:
+        # שמירת "טוקן" נסיונות כדי להגביל כמות שליחות בפועל
+        async with accepted_lock:
+            if accepted >= cap_per_cycle:
+                return
+            # שומרים מקום; אם תיכשל השליחה נחזיר
             accepted += 1
+            reserved = True
+        ok = False
+        try:
+            # Cooldown per (symbol,type)
+            if not _pass_cooldown_dyn(payload["symbol"], ttype, cooldown_sec):
+                return
+            # Dedup (24h)
+            dedup_ttl = int(float(os.getenv("DEDUP_TTL_SEC","86400")))
+            h = _hash_proposal({
+                "trade_type": ttype,
+                "symbol": payload["symbol"],
+                "side": payload.get("side"),
+                "entry": payload.get("entry"),
+                "sl": payload.get("sl"),
+                "tp1": payload.get("tp1"),
+                "tp2": payload.get("tp2"),
+                "tp3": payload.get("tp3"),
+            })
+            if not _pass_dedup(h, dedup_ttl):
+                return
+            ok = await _emit(payload)
+        finally:
+            if not ok:
+                # החזרה של הטוקן אם נכשלנו בכל זאת
+                async with accepted_lock:
+                    accepted = max(0, accepted - 1)
 
     async def handle_symbol(sym: str):
         ctx = ctx_map.get(sym) or {}
         success_floor = SUCCESS_PCT_MIN
-        # לכל סימבול ייתכן התאמת funding ב-proposers
 
         # FUTURES
-        if SUGGEST_FUTURES and accepted < cap_per_cycle:
-            p = await propose_futures(sym, ctx, success_floor)
-            await maybe_emit("FUTURES", p)
+        if SUGGEST_FUTURES:
+            try:
+                p = await propose_futures(sym, ctx, success_floor)
+                await maybe_emit("FUTURES", p)
+            except Exception as e:
+                LOGGER.debug("propose_futures error %s: %s", sym, e)
+
         # SPOT
-        if SUGGEST_SPOT and accepted < cap_per_cycle:
-            p = await propose_spot(sym, ctx, success_floor)
-            await maybe_emit("SPOT", p)
+        if SUGGEST_SPOT:
+            try:
+                p = await propose_spot(sym, ctx, success_floor)
+                await maybe_emit("SPOT", p)
+            except Exception as e:
+                LOGGER.debug("propose_spot error %s: %s", sym, e)
+
         # GRID
-        if SUGGEST_GRID and accepted < cap_per_cycle:
-            p = await propose_grid(sym, ctx)
-            await maybe_emit("GRID", p)
+        if SUGGEST_GRID:
+            try:
+                p = await propose_grid(sym, ctx)
+                await maybe_emit("GRID", p)
+            except Exception as e:
+                LOGGER.debug("propose_grid error %s: %s", sym, e)
 
     async def worker(sym: str):
         async with sem:
             await handle_symbol(sym)
 
-    await asyncio.gather(*(worker(s) for s in symbols))
+    await asyncio.gather(*(worker(s) for s in symbols), return_exceptions=True)
+    LOGGER.info("cycle finished: symbols=%d accepted=%d cap=%d", len(symbols), accepted, cap_per_cycle)
 
 async def main():
     if not SUGGEST_ENABLED:
@@ -470,6 +555,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
