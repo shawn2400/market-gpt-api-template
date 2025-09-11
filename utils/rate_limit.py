@@ -42,12 +42,11 @@ async def _allow_mem(ns: str, ident: str, rpm: int, burst: int) -> bool:
         rec = _mem_store.get(key, {"tok": float(burst), "ts": time.time()})
         tok, ts = float(rec["tok"]), float(rec["ts"])
         tok, now = _refill(tok, ts, rpm)
-        if tok >= 1.0:
+        allowed = tok >= 1.0
+        if allowed:
             tok -= 1.0
-            _mem_store[key] = {"tok": tok, "ts": now}
-            return True
         _mem_store[key] = {"tok": tok, "ts": now}
-        return False
+        return allowed
 
 def _allow_redis(ns: str, ident: str, rpm: int, burst: int) -> bool:
     if not _RED:
@@ -81,6 +80,7 @@ def require_rate_limit(ns: str = "ai_analyze", *, rpm: Optional[int] = None,
             raise HTTPException(429, f"Rate limit exceeded ({_rpm}/min)")
         return True
     return _dep
+
 
 
 
