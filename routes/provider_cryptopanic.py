@@ -1,238 +1,198 @@
 # routes/provider_cryptopanic.py
 from __future__ import annotations
-import os
-import hmac
-import hashlib
-import logging
-import time
-import json
-from typing import Optional, Tuple, Dict, Any
+import os, hmac, hashlib, time, json, ipaddress, logging
+from typing import Optional, List
 
-import httpx
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Header
 
-logger = logging.getLogger("provider.cryptopanic")
-router = APIRouter(prefix="/provider/cryptopanic", tags=["provider:cryptopanic"])
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Redis (optional) – fallback to in-memory
-# ────────────────────────────────────────────────────────────────────────────────
-_redis = None
+# Redis אופציונלי לאידמפוטנציה ו-RL
 try:
-    from redis.asyncio import from_url as redis_from_url  # type: ignore
-    _REDIS_URL = os.getenv("REDIS_URL", "").strip()
-    if _REDIS_URL:
-        _redis = redis_from_url(_REDIS_URL, decode_responses=True)
-except Exception as _e:
-    logger.info("Redis not available, falling back to in-memory. err=%s", _e)
+    import redis as _redis
+except Exception:
+    _redis = None
 
-# In-memory fallback stores
-_idem_mem: Dict[str, float] = {}
-_rate_mem: Dict[str, Tuple[int, float]] = {}  # key -> (count, window_expiry_ts)
+# האם להציג את ה-webhook ב-OpenAPI (נשלט מה-ENV, ברירת מחדל = לא)
+SHOW_DOCS = os.getenv("SHOW_WEBHOOKS_IN_DOCS", "0").lower() in ("1", "true", "yes", "on")
+router = APIRouter(
+    prefix="/provider/cryptopanic",
+    tags=["Provider", "Webhook"],
+    include_in_schema=SHOW_DOCS,
+)
 
+# ────────────────────────────────────────────────────────────────────────────────
+# ENV
+# ────────────────────────────────────────────────────────────────────────────────
+def _split_csv(val: str) -> List[str]:
+    return [x.strip() for x in val.split(",") if x.strip()]
+
+HMAC_SECRET = (os.getenv("CP_HMAC_SECRET", "")).encode("utf-8")
+ALLOWLIST   = _split_csv(os.getenv("CP_IP_ALLOWLIST", ""))  # דוגמה: "1.2.3.4,10.0.0.0/8"
+RPM         = int(os.getenv("CP_RPM", "60"))
+BURST       = int(os.getenv("CP_BURST", "60"))
+IDEMP_TTL   = int(os.getenv("CP_IDEMP_TTL_SEC", "600"))
+SKEW        = int(os.getenv("CP_MAX_SKEW_SEC", "180"))
+
+# Redis (אם ניתן)
+_redis_cli = None
+if _redis:
+    try:
+        url = os.getenv("REDIS_URL", "")
+        if url:
+            _redis_cli = _redis.Redis.from_url(url, decode_responses=True)
+    except Exception:
+        _redis_cli = None
+
+_mem = {"rl": {}, "seen": {}}  # נפילה חזרה לזיכרון אם אין Redis
+
+log = logging.getLogger("algogpt.cryptopanic")
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Utilities
+# ────────────────────────────────────────────────────────────────────────────────
 def _now() -> int:
     return int(time.time())
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Helpers: allowlist / client IP
-# ────────────────────────────────────────────────────────────────────────────────
-def _parse_allowlist(raw: str | None) -> set[str]:
-    if not raw:
-        return set()
-    s = raw.strip().strip('"').strip("'")
-    parts = []
-    for sep in [",", "\n", " "]:
-        if sep in s:
-            parts = [p for p in (x.strip() for x in s.split(sep)) if p]
-            # keep splitting cascade to catch weird mixes
-            s = ",".join(parts)
-    if not parts:
-        parts = [s] if s else []
-    return set(parts)
+def _client_ip(request: Request) -> str:
+    # מאחורי פרוקסי:
+    xf = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    if xf:
+        return xf.split(",")[0].strip()
+    return request.client.host if request.client else "0.0.0.0"
 
-def _real_ip(request: Request) -> str:
-    # Behind proxies, Render וכו' – נעדיף X-Forwarded-For ראשון אם קיים
-    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
-    if xff:
-        # יכול להכיל "client, proxy1, proxy2"
-        return xff.split(",")[0].strip()
-    # אחרת socket
-    try:
-        return request.client.host  # type: ignore
-    except Exception:
-        return "0.0.0.0"
-
-def _ip_allowed(request: Request) -> bool:
-    allowlist = _parse_allowlist(os.getenv("CP_IP_ALLOWLIST"))
-    if not allowlist:
-        # אם לא הוגדר – לא מחסום IP
+def _ip_allowed(ip: str) -> bool:
+    if not ALLOWLIST:
         return True
-    ip = _real_ip(request)
-    return ip in allowlist
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Helpers: HMAC Signature
-# ────────────────────────────────────────────────────────────────────────────────
-def _extract_headers(request: Request) -> Tuple[str, str]:
-    ts = request.headers.get("X-CP-Timestamp") or request.headers.get("x-cp-timestamp") or ""
-    sig = request.headers.get("X-CP-Signature") or request.headers.get("x-cp-signature") or ""
-    return ts.strip(), sig.strip()
-
-def _verify_hmac(ts: str, body: bytes) -> None:
-    secret = (os.getenv("CP_HMAC_SECRET") or "").strip()
-    if not secret:
-        raise HTTPException(status_code=401, detail="CP_HMAC_SECRET not configured")
-
-    # Validate timestamp skew
-    max_skew = int(os.getenv("CP_MAX_SKEW_SEC", "180") or "180")
     try:
-        ts_int = int(ts)
+        ip_obj = ipaddress.ip_address(ip)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid X-CP-Timestamp")
-
-    if abs(_now() - ts_int) > max_skew:
-        raise HTTPException(status_code=401, detail="Timestamp skew too large")
-
-    # Signature format: "sha256=<hex>"
-    # We accept with or without the "sha256=" prefix
-    provided = (_extract_sig_hex := (lambda s: s.split("=", 1)[-1]))(request_state.sig)  # type: ignore[name-defined]
-    raw = f"{ts}.{body.decode('utf-8')}"
-    calc = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
-
-    if not hmac.compare_digest(calc, provided):
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Helpers: Idempotency
-# ────────────────────────────────────────────────────────────────────────────────
-async def _already_processed(key: str, ttl: int) -> bool:
-    if _redis:
+        return False
+    for entry in ALLOWLIST:
         try:
-            # SET key 1 NX EX ttl
-            ok = await _redis.set(key, "1", ex=ttl, nx=True)
-            return not bool(ok)
-        except Exception as e:
-            logger.warning("Redis idempotency failed, fallback to memory: %s", e)
-
-    # Fallback – memory
-    now = time.time()
-    # purge small
-    dead = [k for k, exp in _idem_mem.items() if exp < now]
-    for k in dead:
-        _idem_mem.pop(k, None)
-    if key in _idem_mem:
-        return True
-    _idem_mem[key] = now + ttl
+            if "/" in entry:
+                if ip_obj in ipaddress.ip_network(entry, strict=False):
+                    return True
+            else:
+                if ip == entry:
+                    return True
+        except Exception:
+            continue
     return False
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Helpers: Rate limit
-# ────────────────────────────────────────────────────────────────────────────────
-async def _rate_limit(key: str, limit: int, window: int) -> None:
-    """
-    Sliding window via Redis INCR + EXPIRE, else in-memory.
-    """
-    if limit <= 0:
+def _hmac_hex(data: bytes) -> str:
+    return hmac.new(HMAC_SECRET, data, hashlib.sha256).hexdigest()
+
+def _secure_eq(a: str, b: str) -> bool:
+    try:
+        return hmac.compare_digest(a, b)
+    except Exception:
+        return a == b
+
+async def _rate_limit(ip: str):
+    if not RPM:
         return
-    if _redis:
-        try:
-            cnt = await _redis.incr(key)
-            if cnt == 1:
-                await _redis.expire(key, window)
-            if cnt > limit:
-                raise HTTPException(status_code=429, detail="Rate limit exceeded")
-            return
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning("Redis rate-limit failed, fallback to memory: %s", e)
+    if _redis_cli:
+        k = f"cp:rl:{ip}:{_now()//60}"
+        cnt = _redis_cli.incr(k)
+        if cnt == 1:
+            _redis_cli.expire(k, 70)
+        if cnt > max(RPM, BURST):
+            raise HTTPException(429, "rate limit exceeded")
+    else:
+        minute_key = (_now()//60, ip)
+        bucket = _mem["rl"].get(minute_key, 0) + 1
+        _mem["rl"][minute_key] = bucket
+        # ניקוי ישן
+        for (m, i) in list(_mem["rl"].keys()):
+            if m < _now()//60:
+                _mem["rl"].pop((m, i), None)
+        if bucket > max(RPM, BURST):
+            raise HTTPException(429, "rate limit exceeded")
 
-    # In-memory fallback
-    now = time.time()
-    cnt, exp = _rate_mem.get(key, (0, 0.0))
-    if exp < now:
-        cnt, exp = 0, now + window
-    cnt += 1
-    _rate_mem[key] = (cnt, exp)
-    if cnt > limit:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+def _idem_check(event_id: str) -> bool:
+    """True = חדש; False = כפול"""
+    if _redis_cli:
+        k = f"cp:idem:{event_id}"
+        ok = _redis_cli.set(k, "1", ex=IDEMP_TTL, nx=True)
+        return bool(ok)
+    # זיכרון מקומי
+    now = _now()
+    # ניקוי ישן
+    for k, ts in list(_mem["seen"].items()):
+        if ts < now - IDEMP_TTL:
+            _mem["seen"].pop(k, None)
+    if event_id in _mem["seen"]:
+        return False
+    _mem["seen"][event_id] = now
+    return True
+
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Request-scoped state (to pass sig safely)
+# Routes
 # ────────────────────────────────────────────────────────────────────────────────
-class _ReqState:
-    def __init__(self):
-        self.sig = ""
-
-request_state = _ReqState()
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Public endpoints
-# ────────────────────────────────────────────────────────────────────────────────
-@router.get("/ping", summary="CryptoPanic ping")
+@router.get("/ping")
 async def ping():
     return {"ok": True, "src": "cryptopanic", "ts": _now()}
 
-@router.post("/webhook", summary="CryptoPanic Webhook (HMAC + IP allowlist)")
-async def webhook(request: Request):
-    # 1) IP allowlist
-    if not _ip_allowed(request):
-        raise HTTPException(status_code=401, detail="IP not allowed")
+@router.post("/webhook")
+async def webhook(
+    request: Request,
+    x_cp_signature: Optional[str] = Header(default=None, convert_underscores=False),
+    x_cryptopanic_signature: Optional[str] = Header(default=None, convert_underscores=False),
+    x_cp_timestamp: Optional[str] = Header(default=None, convert_underscores=False),
+    x_event_id: Optional[str] = Header(default=None, convert_underscores=False),
+):
+    if not HMAC_SECRET:
+        raise HTTPException(500, "HMAC secret not configured")
 
-    # 2) Read raw body
+    ip = _client_ip(request)
+    if not _ip_allowed(ip):
+        raise HTTPException(403, "ip not allowed")
+
+    await _rate_limit(ip)
+
+    raw = await request.body()
+
+    # אימות חתימה
+    provided = (x_cp_signature or x_cryptopanic_signature or "").strip().lower()
+    if not provided:
+        raise HTTPException(401, "missing signature")
+
+    # A) חותמים גוף RAW
+    expected_a = _hmac_hex(raw)
+
+    # B) חותמים "<timestamp>.<body>"
+    expected_b = None
+    if x_cp_timestamp:
+        expected_b = _hmac_hex((x_cp_timestamp.strip() + ".").encode("utf-8") + raw)
+
+    if not (_secure_eq(provided, expected_a) or (expected_b and _secure_eq(provided, expected_b))):
+        raise HTTPException(401, "bad signature")
+
+    # JSON
     try:
-        body = await request.body()
-        # Keep original body for HMAC; also parse JSON for processing
-        payload = json.loads(body.decode("utf-8") or "{}")
+        payload = json.loads(raw.decode("utf-8"))
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+        raise HTTPException(400, "invalid json")
 
-    # 3) Headers (timestamp + signature)
-    ts, sig = _extract_headers(request)
-    request_state.sig = sig  # make available to HMAC helper
+    # בדיקת skew לפי כותרת או שדה ts בגוף
+    ts = None
+    if x_cp_timestamp and x_cp_timestamp.isdigit():
+        ts = int(x_cp_timestamp)
+    elif isinstance(payload, dict) and isinstance(payload.get("ts"), (int, float)):
+        ts = int(payload["ts"])
+    if ts is not None and SKEW > 0 and abs(_now() - ts) > SKEW:
+        raise HTTPException(400, "timestamp skew too large")
 
-    # 4) Rate limit (global + per IP)
-    rpm = int(os.getenv("CP_RPM", "60") or "60")
-    burst = int(os.getenv("CP_BURST", "60") or "60")
-    window_rpm = 60
-    window_burst = 10
-    ip = _real_ip(request)
-    await _rate_limit("rl:cp:global:1m", rpm, window_rpm)
-    await _rate_limit(f"rl:cp:ip:{ip}:1m", max(1, rpm // 2), window_rpm)
-    await _rate_limit("rl:cp:global:burst", burst, window_burst)
+    # אידמפוטנציה
+    body_hash = hashlib.sha256(raw).hexdigest()
+    event_id = x_event_id or str(payload.get("id") or body_hash)
+    if not _idem_check(event_id):
+        return {"ok": True, "duplicate": True, "event_id": event_id}
 
-    # 5) HMAC
-    _verify_hmac(ts, body)
+    # כאן תוכל לבצע את הלוגיקה העסקית שלך (דחיפה לתור, אנליזה, פתיחת טרייד, לוג וכו')
+    log.info("cryptopanic_event", extra={"event_id": event_id, "ip": ip, "payload": payload})
 
-    # 6) Idempotency
-    idem_ttl = int(os.getenv("CP_IDEMP_TTL_SEC", "600") or "600")
-    idem_key = "idem:cp:" + hashlib.sha256(body).hexdigest()
-    if await _already_processed(idem_key, idem_ttl):
-        return {"ok": True, "duplicate": True}
+    return {"ok": True, "accepted": True, "event_id": event_id}
 
-    # 7) Optional: forward to sink (if configured)
-    sink = (os.getenv("ALERTS_INGEST_URL") or "").strip()
-    forwarded = False
-    status = None
-    if sink:
-        try:
-            # enrich minimal metadata
-            enrich = {
-                "source": "cryptopanic",
-                "received_ts": _now(),
-                "ip": ip,
-            }
-            merged: Dict[str, Any] = {**payload, **{"_meta": enrich}}
-            async with httpx.AsyncClient(timeout=10.0) as cli:
-                r = await cli.post(sink, json=merged)
-                status = r.status_code
-                forwarded = r.status_code < 400
-        except Exception as e:
-            logger.warning("Forward to sink failed: %s", e)
-
-    return {
-        "ok": True,
-        "forwarded": forwarded,
-        "sink_status": status,
-    }
 
