@@ -10,8 +10,7 @@ from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 
 try:
-    # מדידות (תאימות גם ל-lat וגם ל-latency)
-    from utils.metrics_middleware import metrics_exporter  # אם המידלוור טוען אובייקט גלובלי
+    from utils.metrics_middleware import metrics_exporter  # אם קיים אובייקט גלובלי
 except Exception:
     metrics_exporter = None
 
@@ -21,27 +20,21 @@ except Exception:
     me = None
 
 logger = logging.getLogger("algogpt.ai_analyze")
-
 router = APIRouter(prefix="/ai", tags=["ai"])
 
-# ────────────────────────────────────────────────────────────────────────────────
-# קונפיג
-# ────────────────────────────────────────────────────────────────────────────────
+# ── Config
 AI_ANALYZE_ENABLE = os.getenv("AI_ANALYZE_ENABLE", "1").lower() in ("1", "true", "yes", "on")
-RL_WINDOW_SEC = int(os.getenv("AI_ANALYZE_WINDOW_SEC", "60"))   # חלון זמן לרייט לימיט
-RL_LIMIT = int(os.getenv("AI_ANALYZE_LIMIT", "60"))             # בקשות / חלון
-MAX_TEXT_CHARS = int(os.getenv("AI_ANALYZE_MAX_TEXT", "5000"))  # חיתוך טקסט מקסימלי לניתוח
+RL_WINDOW_SEC = int(os.getenv("AI_ANALYZE_WINDOW_SEC", "60"))
+RL_LIMIT = int(os.getenv("AI_ANALYZE_LIMIT", "60"))
+MAX_TEXT_CHARS = int(os.getenv("AI_ANALYZE_MAX_TEXT", "5000"))
 
-# Rate limit cache (in-memory)
 _rl_cache: Dict[str, deque] = {}
 
-# ────────────────────────────────────────────────────────────────────────────────
-# מודלים
-# ────────────────────────────────────────────────────────────────────────────────
+# ── Models
 class AnalyzeIn(BaseModel):
     text: str = Field(..., description="טקסט/תיאור לניתוח")
-    symbol: Optional[str] = Field(None, description="סימבול רלוונטי (אופציונלי)")
-    context: Optional[dict] = Field(None, description="קונטקסט נוסף")
+    symbol: Optional[str] = Field(None, description="סימבול (אופציונלי)")
+    context: Optional[dict] = Field(None)
     temperature: Optional[float] = Field(0.2, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(512, ge=16, le=8192)
 
@@ -54,11 +47,8 @@ class AnalyzeOut(BaseModel):
     score: float
     notes: Optional[str] = None
 
-# ────────────────────────────────────────────────────────────────────────────────
-# עזר
-# ────────────────────────────────────────────────────────────────────────────────
+# ── Helpers
 def _client_key(request: Request) -> str:
-    # נסה קודם X-Forwarded-For / X-Real-IP (עובד מאחורי פרוקסי), אחרת client.host
     xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     if xff:
         return f"ip:{xff}"
@@ -76,7 +66,6 @@ def _rate_limit_allow(key: str) -> bool:
     if dq is None:
         dq = deque()
         _rl_cache[key] = dq
-    # נקה פריטים ישנים
     boundary = now - RL_WINDOW_SEC
     while dq and dq[0] < boundary:
         dq.popleft()
@@ -87,14 +76,12 @@ def _rate_limit_allow(key: str) -> bool:
 
 def _record_ai_metric(status: str, start: float) -> None:
     dur = max(0.0, time.time() - start)
-    # העדפה: אובייקט מהמידלוור (אם קיים)
     if metrics_exporter and hasattr(metrics_exporter, "record_ai_call"):
         try:
             metrics_exporter.record_ai_call(status=status, latency=dur)
             return
         except Exception:
             pass
-    # גיבוי: המודול הישיר
     if me:
         try:
             me.record_ai_call(status=status, latency=dur)
@@ -102,10 +89,6 @@ def _record_ai_metric(status: str, start: float) -> None:
             pass
 
 def _naive_sentiment(text: str) -> tuple[str, float, float, str]:
-    """
-    מנתח בסיסי ללא תלות בספק חיצוני:
-    מחזיר (sentiment, confidence[0..1], score[-1..1], notes)
-    """
     t = text.lower()
     bull = ("bull", "breakout", "buy", "long", "uptrend", "pump", "support hold", "accumulate")
     bear = ("bear", "breakdown", "sell", "short", "downtrend", "dump", "resistance reject", "distribute")
@@ -122,28 +105,16 @@ def _naive_sentiment(text: str) -> tuple[str, float, float, str]:
         conf = min(0.9, 0.55 + 0.1 * (s_hits - b_hits))
         score = -min(1.0, 0.15 * (s_hits - b_hits))
         return "bearish", conf, score, f"bearish_hits={s_hits}, bullish_hits={b_hits}"
-    # tie
     return "neutral", 0.4, 0.0, f"tie_hits={b_hits}"
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Endpoints
-# ────────────────────────────────────────────────────────────────────────────────
-@router.get("/ping", summary="AI ping", include_in_schema=False)
+# ── Endpoints
+@router.get("/ping", include_in_schema=False)
 async def ai_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000), "enabled": bool(AI_ANALYZE_ENABLE)}
 
-@router.post(
-    "/analyze",
-    response_model=AnalyzeOut,
-    summary="נתח טקסט/קונטקסט והחזר סנטימנט בסיסי (shim)",
-    responses={
-        429: {"description": "Rate limit"},
-        503: {"description": "AI analyze disabled"},
-    },
-)
+@router.post("/analyze", response_model=AnalyzeOut, summary="ניתוח סנטימנט בסיסי (shim)")
 async def ai_analyze(request: Request, payload: AnalyzeIn):
     t0 = time.time()
-
     if not AI_ANALYZE_ENABLE:
         _record_ai_metric("disabled", t0)
         raise HTTPException(status_code=503, detail="AI analyze disabled by config (AI_ANALYZE_ENABLE=0)")
@@ -157,11 +128,9 @@ async def ai_analyze(request: Request, payload: AnalyzeIn):
     if not txt:
         _record_ai_metric("bad_request", t0)
         raise HTTPException(status_code=400, detail="text is required")
-
     if len(txt) > MAX_TEXT_CHARS:
         txt = txt[:MAX_TEXT_CHARS]
 
-    # ניתוח בסיסי (ללא ספק חיצוני) — מיידי
     try:
         sentiment, confidence, score, notes = _naive_sentiment(txt)
         out = AnalyzeOut(
@@ -179,6 +148,7 @@ async def ai_analyze(request: Request, payload: AnalyzeIn):
         logger.exception("ai_analyze failed: %s", e)
         _record_ai_metric("error", t0)
         raise HTTPException(status_code=500, detail="analysis failed")
+
 
 
 
