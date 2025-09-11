@@ -8,271 +8,20 @@ services:
     plan: pro
     autoDeploy: false
     pullRequestPreviewsEnabled: false
+
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
 
     envVars:
-      # --- Core / Security ---
-      - key: ALGOGPT_VERSION              ; value: "2.18.0"
-      - key: SECURITY_ALLOW_ALL           ; value: "0"
-      - key: LOG_LEVEL                    ; value: "INFO"
-      - key: RESPONSE_MAX_BYTES           ; value: "5242880"
-      - key: CORS_ALLOW_ORIGINS           ; value: "*"
-      - key: CORS_ALLOW_CREDENTIALS       ; value: "0"
-      - key: PUBLIC_HOST                  ; value: "https://algogpt-docker.onrender.com"
-      - key: WEBHOOK_HOST                 ; value: "https://algogpt-docker.onrender.com"
-
-      # --- Auth (מפתחות תחליף ידנית ב-Render) ---
-      - key: API_BEARER_TOKEN             ; value: "REPLACE_ME"
-      # אופציונלי: להשתמש בטוקנים מרובים בפורמט מקובל-עליך
-      - key: ALGOGPT_TOKENS               ; value: ""
-
-      # --- Admin / Telegram (אישור טריידים חובה) ---
-      - key: ADMIN_CHAT_ID                ; value: "449087907"
-      - key: TELEGRAM_ADMIN_IDS           ; value: "449087907"
-      - key: TELEGRAM_ADMIN_ONLY          ; value: "1"
-      - key: TELEGRAM_BOT_TOKEN           ; value: "REPLACE_ME_TELEGRAM_BOT_TOKEN"
-      - key: TELEGRAM_WEBHOOK_SECRET      ; value: "REPLACE_ME_TELEGRAM_HMAC"
-      - key: TELEGRAM_CHAT_ID             ; value: "449087907"
-      - key: TELEGRAM_AUTO_WEBHOOK        ; value: "1"
-
-      # --- Approvals / Preflight (לנעול שהכול עובר אישור) ---
-      - key: APPROVAL_ENABLED             ; value: "1"
-      - key: SINK_ENFORCE_APPROVALS       ; value: "1"
-      - key: AUTO_OPEN_ON_APPROVE         ; value: "1"
-      - key: APPROVAL_REQUIRE_WATCHLIST   ; value: "0"
-      - key: APPROVAL_SUCCESS_MIN         ; value: "60"
-      - key: APPROVAL_RR_MIN              ; value: "1.30"
-      - key: APPROVAL_MAX_SL_PCT          ; value: "3.0"
-      - key: APPROVAL_DUP_COOLDOWN_SEC    ; value: "300"
-      - key: CONFIRM_TTL_SEC              ; value: "180"
-
-      # --- Server (Uvicorn/Gunicorn) ---
-      - key: PORT                         ; value: "10000"
-      - key: APP_MODULE                   ; value: "main:app"
-      - key: WEB_CONCURRENCY              ; value: "1"
-      - key: GUNICORN_TIMEOUT             ; value: "120"
-      - key: UVICORN_LOG_LEVEL            ; value: "info"
-      - key: UVICORN_RELOAD               ; value: "0"
-      - key: UVICORN_ACCESS_LOG           ; value: "false"
-      - key: PYTHONPATH                   ; value: "/app"
-
-      # --- DB / Redis ---
-      - key: DATABASE_URL                 ; value: "sqlite:////app/data/algogpt.db"
-      - key: REDIS_URL                    ; value: "REPLACE_ME_REDIS_URL"
-      - key: REDIS_NAMESPACING            ; value: "algogpt:v2"
-      - key: USE_DB                       ; value: "1"
-      - key: USE_REDIS_IDEM               ; value: "1"
-
-      # --- OpenAPI (פשוט) ---
-      - key: OPENAPI_PUBLIC_MAX_OPS       ; value: "30"
-      - key: OPENAPI_HIDE_PATTERNS        ; value: "/telegram/*,/executor/bulk,/manage-once,/grid/dashboard/data"
-
-      # --- Trading defaults / Scan ---
-      - key: AUTO_RUN                     ; value: "true"
-      - key: EXECUTE_TRADES               ; value: "true"
-      - key: DEFAULT_INTERVAL             ; value: "15m"
-      - key: DEFAULT_MARKET               ; value: "futures"
-      - key: DEFAULT_VOL_REGIME           ; value: "mid"
-      - key: MIN_QUALITY_SCORE            ; value: "8"
-      - key: TOP_SYMBOLS                  ; value: "30"
-      - key: MAX_TRADES_PER_TICK          ; value: "1"
-      - key: MAX_TRADE_BUDGET             ; value: "100"
-      - key: MIN_VOLUME                   ; value: "1000000"
-      - key: TRENDING_ONLY                ; value: "false"
-      - key: TRENDING_SOURCE              ; value: "coingecko"
-      - key: MAX_LEVERAGE                 ; value: "35"
-      - key: MIN_LEVERAGE                 ; value: "5"
-      - key: SYMBOL_COOLDOWN_SEC          ; value: "600"
-      - key: SCAN_INTERVAL                ; value: "90"
-      - key: SCAN_MAX_LIMIT               ; value: "10"
-      - key: SCAN_CONCURRENCY             ; value: "4"
-      - key: SCAN_TIME_BUDGET_SEC         ; value: "7.5"
-
-      # --- Auto-Tune ---
-      - key: AUTO_TUNE_ENABLE             ; value: "1"
-      - key: AUTO_TUNE_MIN_SCAN_INTERVAL  ; value: "60"
-      - key: AUTO_TUNE_MAX_SCAN_INTERVAL  ; value: "180"
-
-      # --- Watchlist / WS ---
-      - key: WATCHLIST                    ; value: "BTCUSDT,ETHUSDT,SOLUSDT"
-      - key: WATCHLIST_PATH               ; value: "watchlist.json"
-      - key: WATCHLIST_FALLBACK_PATH      ; value: "watchlist_fallback.json"
-      - key: INDICATOR_INTERVALS          ; value: "15m,1h"
-      - key: BINANCE_MARGIN_TYPE_DEFAULT  ; value: "ISOLATED"
-      - key: TOP10_SYMBOLS                ; value: "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,TRXUSDT,TONUSDT,LTCUSDT"
-
-      # --- Binance (HTTP/WS) ---
-      - key: BINANCE_API_KEY              ; value: "REPLACE_ME_BINANCE_KEY"
-      - key: BINANCE_API_SECRET           ; value: "REPLACE_ME_BINANCE_SECRET"
-      - key: BINANCE_TESTNET              ; value: "false"
-      - key: BINANCE_FUTURES_HTTP_BASE    ; value: "https://fapi.binance.com"
-      - key: BINANCE_SPOT_HTTP_BASE       ; value: "https://api.binance.com"
-      - key: BINANCE_FUTURES_WS_BASE      ; value: "wss://fstream.binance.com"
-      - key: BINANCE_WS_STREAM_SUFFIX     ; value: "/stream?streams="
-      - key: BINANCE_WORKING_TYPE         ; value: "MARK_PRICE"
-      - key: BINANCE_PRICE_PROTECT        ; value: "false"
-      - key: BINANCE_RECV_WINDOW          ; value: "45000"
-      - key: BINANCE_TIME_SYNC_INTERVAL_SEC ; value: "900"
-      - key: TIME_SYNC_TIMEOUT_SEC        ; value: "3.0"
-      - key: TIME_SYNC_SKEW_LIMIT_MS      ; value: "2000"
-      - key: BINANCE_HTTP_TIMEOUT         ; value: "10.0"
-      - key: BINANCE_MAX_RETRIES          ; value: "6"
-      - key: ORDERS_QPS_BUCKET            ; value: "8"
-      - key: ORDERS_BUCKET_WINDOW_SEC     ; value: "10"
-      - key: ORDER_BACKOFF_BASE_MS        ; value: "120"
-      - key: ORDER_BACKOFF_MAX_MS         ; value: "1600"
-      - key: SUPPRESS_BINANCE_WARNINGS    ; value: "1"
-      - key: BINANCE_ALLOWED_EGRESS_IPS   ; value: "18.156.158.53,18.156.42.200,52.59.103.54"
-      - key: BINANCE_SKIP_ACCOUNT_MUTATIONS ; value: "false"
-      - key: BINANCE_FORCE_HEDGE_MODE     ; value: "true"
-      - key: POSITION_MODE_OVERRIDE       ; value: "hedge"
-
-      # --- Health / Prices ---
-      - key: LISTENKEY_KEEPALIVE_SEC      ; value: "1800"
-      - key: HEALTH_SYMBOLS               ; value: "BTCUSDT,ETHUSDT,SOLUSDT"
-      - key: HEALTH_PRICE_MAX_AGE         ; value: "30"
-      - key: PRICE_SCAN_INTERVAL          ; value: "15"
-      - key: WS_KEEPALIVE_SEC             ; value: "25"
-      - key: PRICE_WS_FRESH_TTL           ; value: "20"
-
-      # --- ExchangeInfo Fallbacks ---
-      - key: DEFAULT_QTY_STEP             ; value: "0.001"
-      - key: DEFAULT_PRICE_TICK           ; value: "0.01"
-      - key: MIN_NOTIONAL_USDT            ; value: "5"
-      - key: EXCHANGE_INFO_TTL_SEC        ; value: "900"
-
-      # --- Positions cache / RL ---
-      - key: ACCOUNT_TTL_SEC              ; value: "3"
-      - key: ACCOUNT_ON_BAN_BACKOFF_SEC   ; value: "60"
-
-      # --- ClientOrderId / Cancels ---
-      - key: ORDER_ID_PREFIX              ; value: "ALG_MAIN"
-      - key: ORDER_ID_SUFFIX              ; value: ""
-      - key: ORDER_ID_INCLUDE_TS          ; value: "1"
-      - key: ORDER_ID_MAXLEN              ; value: "36"
-      - key: CANCEL_ONLY_PREFIXED_ORDERS  ; value: "1"
-      - key: CANCEL_ONLY_PREFIXED_IN_ONEWAY ; value: "1"
-      - key: CANCEL_ONLY_REDUCE_ONLY      ; value: "0"
-      - key: CANCEL_PREFIX_OVERRIDE       ; value: ""
-
-      # --- TP/SL Ladder ---
-      - key: LADDER_TP_ENABLE             ; value: "1"
-      - key: LADDER_TP_KIND               ; value: "TAKE_PROFIT_MARKET"
-      - key: LADDER_TP_DEFAULT_PCTS       ; value: "1.8,3.2,5.5"
-      - key: LADDER_TP_DEFAULT_SPLITS     ; value: "0.4,0.35,0.25"
-      - key: LADDER_TP_MAX_LEVELS         ; value: "5"
-      - key: LADDER_SL_ENABLE             ; value: "0"
-      - key: LADDER_SL_DEFAULT_PCTS       ; value: ""
-      - key: LADDER_SL_MAX_LEVELS         ; value: "3"
-      - key: TP_LADDER_COOLDOWN_SEC       ; value: "60"
-
-      # --- SOP / Gates ---
-      - key: FEAT_BTC_GATE                ; value: "1"
-      - key: FEAT_TF_ALIGN                ; value: "1"
-      - key: FEAT_SPREAD_DEPTH            ; value: "1"
-      - key: FEAT_MARK_INDEX_SANITY       ; value: "1"
-      - key: FEAT_VOLUME_GATE             ; value: "1"
-      - key: FEAT_PUMP_NUKE               ; value: "1"
-      - key: FEAT_QUALITY_ENFORCE         ; value: "1"
-      - key: FEAT_DAILY_CAPS              ; value: "1"
-      - key: FEAT_COOLDOWN                ; value: "1"
-      - key: FEAT_DEBOUNCE_LIMIT          ; value: "1"
-      - key: SOP_MAX_SPREAD_BPS           ; value: "3.0"
-      - key: SOP_MIN_TOP_QTY              ; value: "0"
-      - key: SOP_MARK_INDEX_MAX_GAP_BPS   ; value: "20.0"
-      - key: SOP_PUMP_NUKE_MAX_5M_PCT     ; value: "1.0"
-      - key: SOP_VOLUME_MIN_RATIO         ; value: "1.2"
-
-      # --- Risk Rules (RR / Entry Gap) ---
-      - key: ENTRY_GAP_MAX_PCT            ; value: "0.80"
-      - key: ENTRY_GAP_WARN_PCT           ; value: "0.50"
-      - key: RR_MIN_LOW_VOL               ; value: "1.5"
-      - key: RR_MIN_MID_VOL               ; value: "1.6"
-      - key: RR_MIN_HIGH_VOL              ; value: "1.8"
-      - key: LEV_HARD_CAP                 ; value: "50"
-      - key: SUCCESS_WARN_PCT             ; value: "60"
-
-      # --- Trade Executor (HYBRID + דינמי) ---
-      - key: DYNAMIC_POLICY_ENABLE        ; value: "1"
-      - key: DYN_ATR_LOW_PCT              ; value: "0.5"
-      - key: DYN_ATR_HIGH_PCT             ; value: "3.5"
-      - key: DYN_ENTRY_MIN_BPS            ; value: "5"
-      - key: DYN_ENTRY_MAX_BPS            ; value: "20"
-      - key: DYN_STOP_MIN_BPS             ; value: "6"
-      - key: DYN_STOP_MAX_BPS             ; value: "25"
-      - key: DYN_ESCALATE_AFTER_MIN       ; value: "5"
-      - key: DYN_ESCALATE_AFTER_MAX       ; value: "25"
-      - key: DYN_ESCALATE_SLIP_MIN_BPS    ; value: "5"
-      - key: DYN_ESCALATE_SLIP_MAX_BPS    ; value: "60"
-      - key: DYN_SLIP_GUARD_MIN_BPS       ; value: "20"
-      - key: DYN_SLIP_GUARD_MAX_BPS       ; value: "80"
-      - key: DYN_CANCEL_MIN_SEC           ; value: "5"
-      - key: DYN_CANCEL_BASE_SEC          ; value: "15"
-      - key: DYN_CANCEL_MAX_SEC           ; value: "60"
-
-      - key: ALLOW_MARKET_ENTRY           ; value: "1"
-      - key: ENTRY_BAND_BPS               ; value: "8"
-      - key: STOP_BAND_BPS                ; value: "10"
-      - key: ESCALATE_AFTER_SEC           ; value: "10"
-      - key: ESCALATE_SLIPPAGE_BPS        ; value: "15"
-      - key: SLIPPAGE_GUARD_BPS           ; value: "35"
-      - key: PERCENT_GUARD_ENABLE         ; value: "1"
-      - key: PERCENT_GUARD_BPS            ; value: "50"
-      - key: PERCENT_PRICE_GUARD_BPS      ; value: "45"
-      - key: POST_FILL_SANITY_BPS         ; value: "40"
-      - key: SL_LIMIT_OFFSET_BPS          ; value: "8"
-      - key: TP_LIMIT_OFFSET_BPS          ; value: "8"
-      - key: IDEMPOTENCY_TTL_SEC          ; value: "15"
-      - key: CANCEL_MIN_AGE_SEC           ; value: "0"
-      - key: CANCEL_MAX_AGE_SEC           ; value: "0"
-      - key: CANCEL_TTL_SEC               ; value: "0"
-      - key: AUTO_CANCEL_TTL_MIN          ; value: "60"
-      - key: AUTO_CANCEL_TTL_MAX          ; value: "900"
-
-      # --- Liquidity Gate ---
-      - key: LIQ_USE_SLIPPAGE             ; value: "0"
-      - key: LIQ_MAX_NOTIONAL_TOP10       ; value: "200000"
-      - key: LIQ_MAX_NOTIONAL_OTHERS      ; value: "50000"
-      - key: SLIPPAGE_MAX_PCT_TOP10       ; value: "0.40"
-      - key: SLIPPAGE_MAX_PCT_OTHERS      ; value: "0.80"
-
-      # --- OpenAI (אופציונלי) ---
-      - key: ENABLE_AI_ROUTES             ; value: "true"
-      - key: OPENAI_API_KEY               ; value: "REPLACE_ME_OPENAI_KEY"
-      - key: OPENAI_MODEL                 ; value: "gpt-4o"
-      - key: OPENAI_MAX_CONCURRENCY       ; value: "4"
-      - key: OPENAI_TIMEOUT_SECONDS       ; value: "30.0"
-      - key: OPENAI_BASE_URL              ; value: "https://api.openai.com/v1"
-      - key: OPENAI_BASE                  ; value: "https://api.openai.com"
-
-      # --- Alerts / Sink endpoints ---
-      - key: ALERTS_ACTIVE_URL            ; value: "https://algogpt-docker.onrender.com/alerts/trades/active"
-      - key: ALERTS_UPDATE_URL            ; value: "https://algogpt-docker.onrender.com/alerts/trades/update"
-      - key: ALERTS_ANALYSIS_URL          ; value: "https://algogpt-docker.onrender.com/alerts/analysis"
-      - key: ALERTS_INGEST_URL            ; value: "https://algogpt-docker.onrender.com/alerts/trade-ingest"
-      - key: RISK_QUICK_URL               ; value: "https://algogpt-docker.onrender.com/risk/quick"
-      - key: WEBHOOK_HMAC_SECRET          ; value: "REPLACE_ME_WEBHOOK_HMAC"
-
-      # --- Suggest/Auto (עובד גם כשדורש אישור) ---
-      - key: TRADE_AUTO_SUGGEST           ; value: "1"
-      - key: CONTEXT_URL                  ; value: "https://algogpt-docker.onrender.com"
-      - key: SYMBOLS_PER_CYCLE            ; value: "10"
-      - key: SUGGEST_CAP_PER_CYCLE        ; value: "5"
-      - key: SUGGEST_INTERVAL_SEC         ; value: "600"
-      - key: SUGGEST_FUTURES              ; value: "1"
-      - key: SUGGEST_SPOT                 ; value: "0"
-      - key: SUGGEST_GRID                 ; value: "0"
-      - key: SUCCESS_PCT_MIN              ; value: "70"
-
-      # --- User-Data Stream / WS ---
-      - key: USER_STREAM_ENABLE           ; value: "1"
-      - key: USER_STREAM_RECONNECT_BACKOFF ; value: "3.0"
-      - key: USER_STREAM_RECONNECT_MAX_BACKOFF ; value: "60.0"
-      - key: WS_LOG_SAMPLE_N              ; value: "20"
-      - key: STREAM_TP_BE                 ; value: "true"
-      - key: STREAM_WS_KEEPALIVE_SEC      ; value: "25"
+      - key: PORT
+        value: "10000"
+      - key: APP_MODULE
+        value: main:app
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: GUNICORN_TIMEOUT
+        value: "120"
 
     disk:
       name: data
@@ -281,7 +30,7 @@ services:
 
   # ── Worker (Python) ────────────────────────────────────────
   - type: worker
-    name: ops-supervisor
+    name: ops-supervisor-eu     # שם זמני כדי לא להתנגש בקיים ב-Oregon
     env: python
     region: frankfurt
     plan: starter
@@ -289,29 +38,8 @@ services:
     startCommand: "python -u utils/ops_supervisor.py"
 
     envVars:
-      # חשובים לעבודה ולדיווחי טלגרם
-      - key: OPS_POLICY_PATH              ; value: "policies/ops_policy.yaml"
-      - key: TELEGRAM_BOT_TOKEN           ; value: "REPLACE_ME_TELEGRAM_BOT_TOKEN"
-      - key: TELEGRAM_CHAT_ID             ; value: "449087907"
-      - key: ADMIN_CHAT_ID                ; value: "449087907"
-      - key: PUBLIC_HOST                  ; value: "https://algogpt-docker.onrender.com"
-
-      # חיבור ל-DB/Redis ולשאר השירותים
-      - key: DATABASE_URL                 ; value: "sqlite:////app/data/algogpt.db"
-      - key: REDIS_URL                    ; value: "REPLACE_ME_REDIS_URL"
-
-      # אותן מדיניות/אישורים כמו ב-Web (מינימום)
-      - key: APPROVAL_ENABLED             ; value: "1"
-      - key: SINK_ENFORCE_APPROVALS       ; value: "1"
-      - key: AUTO_OPEN_ON_APPROVE         ; value: "1"
-      - key: TRADE_AUTO_SUGGEST           ; value: "1"
-      - key: CONTEXT_URL                  ; value: "https://algogpt-docker.onrender.com"
-      - key: ALERTS_INGEST_URL            ; value: "https://algogpt-docker.onrender.com/alerts/trade-ingest"
-      - key: WEBHOOK_HMAC_SECRET          ; value: "REPLACE_ME_WEBHOOK_HMAC"
-
-      # Binance (לבריאות/מחירים אם צריך)
-      - key: BINANCE_FUTURES_HTTP_BASE    ; value: "https://fapi.binance.com"
-      - key: BINANCE_HTTP_TIMEOUT         ; value: "10.0"
+      - key: OPS_POLICY_PATH
+        value: policies/ops_policy.yaml
 
 
 
