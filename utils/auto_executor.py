@@ -332,6 +332,7 @@ class _Idem:
             if now - vv > ttl * 2:
                 cls._mem.pop(kk, None)
         return True
+
 # ─────────── Telegram Confirm Store ───────────
 class ConfirmStore:
     _mem: Dict[str, Dict[str, Any]] = {}
@@ -599,7 +600,6 @@ def _build_ladders(sym: str, side: str, qty: float,
     if tp_targets: _prep("TP", tp_targets, tp_splits, +1 if side=="BUY" else -1)
     if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
     return plan
-
 # ─────────── Hybrid entry + escalation (עם מדיניות דינמית + positionSide ב-HEDGE) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
                               ref_entry: Optional[float], is_hedge: bool,
