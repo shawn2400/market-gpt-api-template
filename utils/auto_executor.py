@@ -1,4 +1,4 @@
-# utils/trade_executor.py
+# utils/auto_executor.py
 from __future__ import annotations
 import os, math, time, logging, asyncio, json, hashlib
 from typing import Optional, Dict, Any, List, Tuple
@@ -10,6 +10,22 @@ from utils.binance_client import (
     get_symbol_filters, get_all_orders, futures_cancel_order, get_futures_client
 )
 
+# ✅ Dynamic budget (תאימות לשמות שונים במודול התקציב)
+try:
+    # אם יש עטיפה בשם הזה
+    from utils.budget import get_budget_usdt as _get_budget
+except Exception:
+    try:
+        # השם שקיים בקובץ budget ששלחת: get_trade_budget_usdt
+        from utils.budget import get_trade_budget_usdt as _get_budget  # type: ignore
+    except Exception:
+        def _get_budget(symbol: Optional[str] = None, *, quality: Optional[float] = None,
+                        atr: Optional[float] = None, price: Optional[float] = None) -> float:  # type: ignore
+            try:
+                return float(os.getenv("MAX_TRADE_BUDGET", "100"))
+            except Exception:
+                return 100.0
+
 # ✅ Risk (אופציונלי)
 try:
     from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
@@ -18,7 +34,7 @@ except Exception:
     def pre_trade_risk_check(*args, **kwargs):  # type: ignore
         return {"ok": True, "score": 100.0, "reasons": ["risk_module_missing"], "metrics": {}}
 
-log = logging.getLogger("algogpt.trade_executor")
+log = logging.getLogger("algogpt.auto_executor")
 
 # ─────────── Policy & Defaults (ENV) ───────────
 ALLOW_MARKET_ENTRY    = os.getenv("ALLOW_MARKET_ENTRY", "1").lower() in ("1","true","yes","on")
@@ -201,6 +217,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
     מחשב פרמטרים דינמיים לפי ATR% של 1m/14:
       t = נורמליזציה של ATR% בין DYN_ATR_LOW_PCT .. DYN_ATR_HIGH_PCT (תחום [0..1])
       ואז LERP בין המינימום למקסימום לכל פרמטר.
+      מחזיר גם atr, atr_pct, last_price לשימוש בתקציב.
     """
     if not DYNAMIC_POLICY_ENABLE:
         return {
@@ -212,6 +229,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
             "cancel_min_age": float(CANCEL_MIN_AGE_SEC_FBK or 0),
             "cancel_max_age": float(CANCEL_MAX_AGE_SEC_FBK or 0),
             "cancel_ttl": float(CANCEL_TTL_SEC_FBK or 0),
+            "atr": None, "atr_pct": None, "last_price": None,
         }
 
     try:
@@ -230,6 +248,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
             "cancel_min_age": float(CANCEL_MIN_AGE_SEC_FBK or 0),
             "cancel_max_age": float(CANCEL_MAX_AGE_SEC_FBK or 0),
             "cancel_ttl": float(CANCEL_TTL_SEC_FBK or 0),
+            "atr": None, "atr_pct": None, "last_price": None,
         }
 
     # נורמליזציה ל-[0..1]
@@ -260,6 +279,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
         "cancel_min_age": float(cmin),
         "cancel_max_age": float(cmax),
         "cancel_ttl": float(cttl),
+        "atr": float(atr), "atr_pct": float(atr_pct), "last_price": float(last),
     }
 
 # ─────────── Position mode (auto/hedge/oneway) ───────────
@@ -393,7 +413,7 @@ class ConfirmStore:
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
 
-    # ✅ תאימות עם /flush
+    # תאימות עם /flush
     @classmethod
     def flush_all(cls) -> None:
         cls._mem.clear()
@@ -735,7 +755,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
-
 # ─────────── Public API ───────────
 async def execute_trade_live(
     symbol: str, side: str, *,
@@ -772,15 +791,25 @@ async def execute_trade_live(
     if pp_bps >= PERCENT_PRICE_GUARD_BPS:
         return {"ok": False, "reason": "percent_price_guard", "bps": pp_bps, "mk": mk, "ref": ref_for_guard}
 
+    # איכות/תנודתיות — בשביל תקציב דינמי
+    gate = _quality_gate(sym, side)
+    score_for_budget: Optional[float] = None
+    try:
+        score_for_budget = float(gate.get("score")) if isinstance(gate, dict) and gate.get("score") is not None else None
+    except Exception:
+        score_for_budget = None
+
+    # אם התקציב לא הגיע מבחוץ — נקבע דינמית/סטטית דרך מודול התקציב
+    if budget is None or float(budget) <= 0:
+        budget = _get_budget(symbol=sym, quality=score_for_budget, atr=pol.get("atr"), price=pol.get("last_price"))
+
     # חישוב כמות
     qty_calc_error = None
     qty: Optional[float] = None
     try:
-        qty = _calc_qty(sym, base_price, budget, leverage, quantity)
+        qty = _calc_qty(sym, float(base_price), budget, leverage, quantity)
     except Exception as e:
         qty_calc_error = str(e)
-
-    gate = _quality_gate(sym, side)
 
     # ✅ Risk preview
     risk = pre_trade_risk_check(sym, side, leverage, entry)
@@ -814,13 +843,14 @@ async def execute_trade_live(
     if dry_run:
         plan: Dict[str, Any] = {
             "ok": True, "symbol": sym, "side": side, "leverage": leverage,
-            "base_price": base_price, "dry_run": True,
+            "base_price": float(base_price), "dry_run": True,
             "entry_policy": f"HYBRID_LIMIT_STOP(dyn {pol['entry_bps']:.2f}/{pol['stop_bps']:.2f}bps)+MARKET_ESCALATE(after~{pol['escalate_after_s']:.0f}s, slip≥{pol['escalate_slip_bps']:.0f}bps)",
             "gate": gate, "risk": risk, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
             "guards": {"percent_price_bps": pp_bps, "slippage_guard_bps": pol["slip_guard_bps"]},
             "position_mode": pos_mode, "position_side": ("LONG/SHORT" if is_hedge else "BOTH"),
             "reduce_only": reduce_only,
             "cancel_policy": {"min_age": pol["cancel_min_age"], "max_age": pol["cancel_max_age"]},
+            "budget_used": float(budget or 0.0),
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
@@ -859,7 +889,7 @@ async def execute_trade_live(
     except Exception as e:
         log.warning("set_leverage failed: %s", e)
 
-    entry_res = await _place_hybrid_entry(sym, side, qty, base_price, entry, is_hedge, pol)
+    entry_res = await _place_hybrid_entry(sym, side, qty, float(base_price), entry, is_hedge, pol)
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
@@ -868,11 +898,12 @@ async def execute_trade_live(
 
     plan: Dict[str, Any] = {
         "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
-        "base_price": base_price, "dry_run": False,
+        "base_price": float(base_price), "dry_run": False,
         "entry_policy": f"HYBRID_LIMIT_STOP(dyn {pol['entry_bps']:.2f}/{pol['stop_bps']:.2f}bps)+MARKET_ESCALATE(after~{pol['escalate_after_s']:.0f}s, slip≥{pol['escalate_slip_bps']:.0f}bps)",
         "gate": gate, "risk": risk, "entry_result": entry_res,
         "tp_orders": [], "sl_orders": [], "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
         "position_mode": pos_mode, "cancel_policy": {"min_age": pol["cancel_min_age"], "max_age": pol["cancel_max_age"]},
+        "budget_used": float(budget or 0.0),
     }
 
     close_side = "SELL" if side=="BUY" else "BUY"
@@ -914,6 +945,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
