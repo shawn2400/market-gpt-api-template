@@ -1,51 +1,50 @@
 groups:
-  - name: algogpt.rules
-    interval: 30s
-    rules:
-      - alert: HealthDown
-        expr: probe_success{job="algogpt-render-health"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "AlgoGPT Health Down"
-          description: "ה־/health החיצוני מחזיר כשל."
+- name: algogpt.rules
+  interval: 15s
+  rules:
+  - alert: AlgoGPTHealthDown
+    expr: up{job="algogpt-render-health"} == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "AlgoGPT Health Down"
+      description: "לא עונה ב-URL הציבורי"
 
-      - alert: HighCPU
-        expr: rate(container_cpu_usage_seconds_total{container="algogpt"}[2m]) > 0.85
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "CPU שימוש גבוה"
-          description: "מעבר ל־85% CPU."
+  - alert: HighCPU
+    expr: rate(process_cpu_seconds_total[1m]) > 0.85
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "CPU > 85%"
 
-      - alert: HighMemory
-        expr: container_memory_working_set_bytes{container="algogpt"} / container_spec_memory_limit_bytes{container="algogpt"} > 0.8
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Memory שימוש גבוה"
-          description: "מעבר ל־80% זיכרון."
+  - alert: HighMemory
+    expr: process_resident_memory_bytes / process_virtual_memory_bytes > 0.8
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Memory > 80%"
 
-      - alert: HighErrorRate
-        expr: sum(rate(algogpt_api_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(algogpt_api_requests_total[5m])), 1) > 0.05
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "שיעור שגיאות 5xx גבוה"
-          description: "יותר מ־5% מהקריאות נכשלות."
+  - alert: API5xxHigh
+    expr: rate(algogpt_api_requests_total{status=~"5.."}[5m]) > 0.5
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "שגיאות 5xx API"
+      description: "יותר מ-0.5 לשנייה"
 
-      - alert: TelegramFailures
-        expr: rate(algogpt_telegram_messages_failed_total[1m]) > 3
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "כשלונות טלגרם"
-          description: "יותר מ־3 הודעות לדקה נכשלות."
+  - alert: PnLNegative
+    expr: algogpt_pnl_total_usdt < -50
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "PnL מצטבר שלילי"
+      description: "PnL ירד מתחת ל-50- USDT"
+
 
 
 
