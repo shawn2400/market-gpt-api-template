@@ -255,7 +255,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
                 filters["minQty"] = f.get("minQty")
                 filters["maxQty"] = f.get("maxQty")
                 filters["stepSize"] = f.get("stepSize")
-            elif t == "MARKET_LOT_SIZE":
+            elif t == "MARKET_Lot_SIZE" or t == "MARKET_LOT_SIZE":
                 filters["mMinQty"] = f.get("minQty")
                 filters["mMaxQty"] = f.get("maxQty")
             elif t in ("MIN_NOTIONAL", "NOTIONAL"):
@@ -850,6 +850,56 @@ def futures_cancel_and_replace_limit(symbol: str, side: str, price: float, quant
         newClientOrderId=_sanitize_coid(client_order_id) if client_order_id else _coid("LMT", sym)
     )
 
+# --- Compatibility wrapper for legacy callers (used by routes.grid) ---
+def place_limit_order(
+    symbol: str,
+    side: str,
+    quantity: float | str | None = None,
+    price: float | str | None = None,
+    *,
+    size_usdt: float | str | None = None,
+    time_in_force: str = "GTC",
+    tif: str | None = None,
+    reduce_only: bool = False,
+    client=None,
+    **kwargs,
+):
+    """
+    Backward-compatible LIMIT order helper.
+    Accepts either (quantity + price) or (size_usdt + price). Uses futures_create_order.
+    """
+    sym = symbol.upper()
+    if price is None:
+        raise ValueError("place_limit_order requires price")
+
+    p_float = float(price)
+    qty_str: str | None = None
+
+    if quantity is not None:
+        qty_str = _quantize_qty(sym, float(quantity))
+    elif size_usdt is not None:
+        notional = float(size_usdt)
+        computed_qty = max(0.0, notional / max(p_float, 1e-12))
+        qty_str = _ensure_min_notional_qty(sym, p_float, _quantize_qty(sym, computed_qty))
+    else:
+        raise ValueError("place_limit_order requires either quantity or size_usdt")
+
+    if qty_str is None or float(qty_str) <= 0:
+        raise ValueError("invalid computed quantity")
+
+    tif_final = (tif or time_in_force or "GTC").upper()
+
+    return futures_create_order(
+        symbol=sym,
+        side=side.upper(),
+        type="LIMIT",
+        price=_quantize_price(sym, p_float),
+        quantity=qty_str,
+        reduceOnly=bool(reduce_only),
+        timeInForce=tif_final,
+        **{k: v for k, v in kwargs.items() if k not in {"tif"}}
+    )
+
 # ===== Public export =====
 def get_futures_client() -> Client:
     return client
@@ -858,12 +908,13 @@ __all__ = [
     "client","fapi_ping","futures_exchange_info_safe","futures_balance",
     "futures_mark_price","futures_index_price","get_price",
     "get_symbol_info","get_symbol_filters","get_open_positions","futures_open_positions_safe","get_single_position",
-    "futures_create_order","place_stop_market","modify_stop_loss","place_tp_ladder","set_breakeven_stop",
+    "futures_create_order","place_limit_order","place_stop_market","modify_stop_loss","place_tp_ladder","set_breakeven_stop",
     "futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
     "futures_cancel_and_replace_limit",
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
