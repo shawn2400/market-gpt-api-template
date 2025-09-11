@@ -10,25 +10,35 @@ from utils.binance_client import (
 
 logger = logging.getLogger("algogpt.budget")
 
+__all__ = [
+    "get_trade_budget_usdt",
+    "get_dynamic_budget_for",
+    "get_budget_usdt",
+]
+
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV helpers
 # ──────────────────────────────────────────────────────────────────────────────
-def _b(v: str, default: bool=False) -> bool:
+def _b(v: str, default: bool = False) -> bool:
     s = str(os.getenv(v, str(int(default)))).strip().lower()
-    return s in ("1","true","yes","on")
+    return s in ("1", "true", "yes", "on")
 
-def _i(v: str, default: int=0) -> int:
-    try: return int(os.getenv(v, str(default)))
-    except Exception: return default
+def _i(v: str, default: int = 0) -> int:
+    try:
+        return int(os.getenv(v, str(default)))
+    except Exception:
+        return default
 
-def _f(v: str, default: float=0.0) -> float:
-    try: return float(os.getenv(v, str(default)))
-    except Exception: return default
+def _f(v: str, default: float = 0.0) -> float:
+    try:
+        return float(os.getenv(v, str(default)))
+    except Exception:
+        return default
 
-def _s(v: str, default: str="") -> str:
+def _s(v: str, default: str = "") -> str:
     return os.getenv(v, default)
 
-def _load_json_env(v: str, default: Dict[str, Any] | None=None) -> Dict[str, Any]:
+def _load_json_env(v: str, default: Dict[str, Any] | None = None) -> Dict[str, Any]:
     s = _s(v, "").strip()
     if not s:
         return default or {}
@@ -41,11 +51,11 @@ def _load_json_env(v: str, default: Dict[str, Any] | None=None) -> Dict[str, Any
 # ──────────────────────────────────────────────────────────────────────────────
 # Equity (USDT) from futures balance
 # ──────────────────────────────────────────────────────────────────────────────
-def _get_equity_usdt(*, use_available: bool=True) -> float:
+def _get_equity_usdt(*, use_available: bool = True) -> float:
     """
-    מנסה להביא Equity ב־USDT מחשבון Futures:
-    - אם futures_account() בקאש: מחפש ב-'assets' שדה walletBalance/availableBalance
-    - אחרת futures_account_balance(): balance/withdrawAvailable
+    מביא Equity ב־USDT מחשבון Futures:
+      • קודם מנסה availableBalance/withdrawAvailable
+      • אם לא קיים — משתמש ב־walletBalance/balance/total
     """
     try:
         bals = futures_balance() or []
@@ -56,13 +66,17 @@ def _get_equity_usdt(*, use_available: bool=True) -> float:
             if use_available:
                 for k in ("availableBalance", "withdrawAvailable", "available"):
                     if k in a and a[k] is not None:
-                        try: return float(a[k])
-                        except Exception: pass
+                        try:
+                            return float(a[k])
+                        except Exception:
+                            pass
             # fallback total/wallet
             for k in ("walletBalance", "balance", "cashBalance", "total"):
                 if k in a and a[k] is not None:
-                    try: return float(a[k])
-                    except Exception: pass
+                    try:
+                        return float(a[k])
+                    except Exception:
+                        pass
     except Exception as e:
         logger.error("equity fetch failed: %s", e)
     return 0.0
@@ -87,9 +101,10 @@ def _min_notional_for(symbol: Optional[str]) -> float:
 # ──────────────────────────────────────────────────────────────────────────────
 def _quality_multiplier(q: Optional[float]) -> float:
     """
-    טבלת איכות דיפולטיבית: אפשר להחליף דרך BUDGET_QUALITY_TABLE_JSON
-    המבנה: { "10": 2.0, "9": 1.6, "8": 1.3, "7": 1.0, "0": 0.7 }
-    המשמעות: אם q >= key → הכפל בפקטור.
+    טבלת איכות דיפולטיבית — ניתנת להחלפה דרך BUDGET_QUALITY_TABLE_JSON.
+    מבנה צפוי:
+      { "10": 2.0, "9": 1.6, "8": 1.3, "7": 1.0, "0": 0.8 }
+    לוגיקה: אם q>=key → מכפיל = value.
     """
     table = _load_json_env("BUDGET_QUALITY_TABLE_JSON", {
         "10": 2.0, "9": 1.6, "8": 1.3, "7": 1.0, "0": 0.8
@@ -98,7 +113,7 @@ def _quality_multiplier(q: Optional[float]) -> float:
         return 1.0
     try:
         # thresholds יורדים (גבוה→נמוך)
-        tiers = sorted((int(k), float(v)) for k,v in table.items())
+        tiers = sorted((int(k), float(v)) for k, v in table.items())
         tiers.sort(key=lambda kv: kv[0], reverse=True)
         qi = int(round(float(q)))
         for thr, mult in tiers:
@@ -115,10 +130,11 @@ def _quality_multiplier(q: Optional[float]) -> float:
 # ──────────────────────────────────────────────────────────────────────────────
 def _vol_multiplier(atr: Optional[float], price: Optional[float]) -> float:
     """
-    התאמה לפי תנודתיות (ATR%): factor = 1 / (1 + sens * min(atr_pct, cap))
-    כאשר:
-      VOL_SENSITIVITY = [0..3] (דיפולט 0=כבוי)
-      VOL_PCT_CAP = 0.05 (5%) דיפולט
+    התאמה לפי תנודתיות (ATR%):
+      factor = 1 / (1 + sens * min(atr_pct, cap))
+    ENV:
+      • BUDGET_VOL_SENSITIVITY ∈ [0..3] (0=כבוי)
+      • BUDGET_VOL_PCT_CAP (דיפולט 0.05 = 5%)
     """
     sens = _f("BUDGET_VOL_SENSITIVITY", 0.0)  # 0=כבוי
     if sens <= 0.0 or atr is None or price is None or price <= 0:
@@ -143,26 +159,28 @@ def get_trade_budget_usdt(
     price: Optional[float] = None,
 ) -> float:
     """
-    מחזיר תקציב USDT לטרייד (כ־MARGIN, לא נומינלי!), דינמי או סטטי.
-    קונבנציה: התקציב הוא 'margin' התחלתי; הנומינלי = margin * leverage.
+    מחזיר תקציב USDT לטרייד (margin, לא notional), דינמי או סטטי:
+      • אם DYNAMIC_BUDGET_ENABLE=1 → דינמי לפי אחוז מההון + איכות + תנודתיות.
+      • אחרת → חוזר לערך סטטי MAX_TRADE_BUDGET (תאימות לאחור).
+    התקציב מוחל באופן אחיד על כל הסימבולים (דינמיקה גלובלית), למעט רצפת ה-minNotional.
     """
-    # אם כבוי — חזור לערך הסטטי הקלאסי (תאימות לאחור)
+    # כבוי — סטטי
     if not _b("DYNAMIC_BUDGET_ENABLE", False):
         return _f("MAX_TRADE_BUDGET", 100.0)
 
-    # בסיס: אחוז מההון
+    # בסיס: אחוז מההון הזמין/כולל
     use_avail = _b("BUDGET_USE_AVAILABLE_BALANCE", True)
     equity = _get_equity_usdt(use_available=use_avail)
     base_pct = _f("BUDGET_PCT_OF_EQUITY", 1.0)  # אחוז
     base = float(equity) * (float(base_pct) / 100.0)
 
-    # מכפלה לפי איכות
+    # מכפלה לפי איכות (אם יש ציון)
     q_mult = _quality_multiplier(quality)
 
     # התאמה לפי תנודתיות (אם סופק ATR+price)
     v_mult = _vol_multiplier(atr, price)
 
-    # מכפלה גלובלית (סיכון חיצוני)
+    # מכפלה גלובלית חיצונית (לפי רמת סיכון ידנית)
     risk_mult = _f("BUDGET_RISK_MULTIPLIER", 1.0)
 
     raw = base * q_mult * v_mult * risk_mult
@@ -176,16 +194,15 @@ def get_trade_budget_usdt(
 
     budget = max(floor_usdt, min(raw, ceil_usdt))
 
-    # הבטח מינימום נומינלי לפי סימבול (אם הועבר)
+    # הבטחת notional מינימלי לפי סימבול (אם הועבר)
     try:
         mn = _min_notional_for(symbol) if symbol else DEFAULT_MIN_NOTIONAL
-        # אם הכוונה שהתקציב הוא Margin, לא חייב להבטיח notional כאן.
-        # בכל זאת נוודא לפחות רצפת $5/ENV כדי שלא ניפול על notional בהמשך.
+        # אם התקציב הוא Margin — אין חובה להבטיח כאן נומינלי, אבל נשמור על רצפה מינימלית
         budget = max(budget, float(mn))
     except Exception:
         pass
 
-    # לוג דיאגנוסטי קל (sampled)
+    # לוג דיאגנוסטי (אופציונלי)
     if _b("LOG_BUDGET_DEBUG", False):
         logger.info({
             "event": "budget.calc",
@@ -202,3 +219,33 @@ def get_trade_budget_usdt(
         })
 
     return float(budget)
+
+# Alias נוח לשימוש בקוד קיים/חדש
+def get_dynamic_budget_for(
+    symbol: Optional[str] = None,
+    *,
+    score: Optional[float] = None,   # שם חלופי ל-quality
+    quality: Optional[float] = None, # אם נשלח גם score וגם quality — נעדיף quality
+    atr: Optional[float] = None,
+    price: Optional[float] = None,
+) -> float:
+    """
+    אותו הדבר כמו get_trade_budget_usdt — נשמר לשם קריא/אחיד.
+    """
+    q = quality if quality is not None else score
+    return get_trade_budget_usdt(symbol=symbol, quality=q, atr=atr, price=price)
+
+def get_budget_usdt(
+    symbol: Optional[str] = None,
+    *,
+    quality: Optional[float] = None,
+    atr: Optional[float] = None,
+    price: Optional[float] = None,
+) -> float:
+    """
+    מעטפת: אם דינמי דלוק → דינמי; אחרת → סטטי (MAX_TRADE_BUDGET).
+    """
+    if _b("DYNAMIC_BUDGET_ENABLE", False):
+        return get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price)
+    return _f("MAX_TRADE_BUDGET", 100.0)
+
