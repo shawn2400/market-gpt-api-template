@@ -142,14 +142,16 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o]
-CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
+CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
+# דפדפנים לא מאפשרים credentials עם wildcard:
+CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE,
 )
 app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
@@ -158,6 +160,8 @@ app.mount("/metrics", make_asgi_app())
 # ────────────────────────────────────────────────────────────────────────────────
 # Auth gate (public paths vs. token)
 # ────────────────────────────────────────────────────────────────────────────────
+METRICS_PUBLIC = os.getenv("METRICS_PUBLIC", "1").lower() in ("1", "true", "yes", "on")
+
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
@@ -168,9 +172,12 @@ async def validate_token(request: Request, call_next):
         "/provider/cryptopanic/webhook",
     }
     PUBLIC_PREFIXES = [
-        "/price", "/static/", "/risk", "/metrics",
+        "/price", "/static/", "/risk",
         "/status/ping", "/status/ws", "/status/executor", "/status/all",
     ]
+    if METRICS_PUBLIC:
+        PUBLIC_PREFIXES.append("/metrics")
+
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
@@ -479,6 +486,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
