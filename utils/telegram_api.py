@@ -1,4 +1,4 @@
-# utils/telegram_api.py
+# FILE: utils/telegram_api.py
 from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
@@ -11,6 +11,7 @@ logger = logging.getLogger("algogpt.telegram")
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 BASE = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
 
+
 def _chat_default(chat_id: Optional[int | str]) -> int | str:
     """
     קובע chat_id ברירת מחדל:
@@ -20,13 +21,14 @@ def _chat_default(chat_id: Optional[int | str]) -> int | str:
         os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or ""
     )
 
+
 # === API Wrappers ===
 async def send_message(
     text: str,
     reply_markup: Optional[Dict[str, Any]] = None,
     chat_id: Optional[int | str] = None,
     silent: bool = False,
-    parse_mode: str = "Markdown",
+    parse_mode: str = "HTML",
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
     if not TOKEN:
@@ -51,12 +53,13 @@ async def send_message(
         logger.error(f"send_message failed: {e}")
         return {"ok": False, "error": str(e)}
 
+
 async def edit_message(
     chat_id: int | str,
     message_id: int,
     text: str,
     reply_markup: Optional[Dict[str, Any]] = None,
-    parse_mode: str = "Markdown",
+    parse_mode: str = "HTML",
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
     if not TOKEN:
@@ -80,6 +83,7 @@ async def edit_message(
         logger.error(f"edit_message failed: {e}")
         return {"ok": False, "error": str(e)}
 
+
 async def get_me() -> Dict[str, Any]:
     if not TOKEN:
         return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
@@ -90,6 +94,7 @@ async def get_me() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"get_me failed: {e}")
         return {"ok": False, "error": str(e)}
+
 
 async def send_chat_action(
     action: str = "typing",
@@ -106,6 +111,7 @@ async def send_chat_action(
     except Exception as e:
         logger.error(f"send_chat_action failed: {e}")
         return {"ok": False, "error": str(e)}
+
 
 
 
