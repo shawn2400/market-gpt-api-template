@@ -11,107 +11,39 @@
       "type": "stat",
       "title": "CPU Usage %",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "avg(rate(process_cpu_seconds_total[1m])) * 100"}
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 70},
-              {"color": "red", "value": 85}
-            ]
-          }
-        }
-      },
-      "options": {"colorMode": "value", "justifyMode": "center"}
+      "targets": [{"expr": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "thresholds": {"mode": "absolute","steps":[{"color":"green"},{"color":"orange","value":70},{"color":"red","value":85}]}}}
     },
     {
       "type": "stat",
-      "title": "Memory RSS (MB)",
+      "title": "Memory Usage %",
       "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "process_resident_memory_bytes / 1024 / 1024"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "megabytes"}}
-    },
-    {
-      "type": "stat",
-      "title": "Open Trades",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "algogpt_trades_open_total"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
-    },
-    {
-      "type": "stat",
-      "title": "PnL Total (USDT)",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "algogpt_pnl_total_usdt"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "currencyUSD"}}
+      "targets": [{"expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"orange","value":70},{"color":"red","value":80}]}}}
     },
     {
       "type": "timeseries",
-      "title": "API Latency (ms)",
+      "title": "API Latency p95/p99",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "targets": [
-        {"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le, path))", "legendFormat": "{{path}} p95"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "ms"}}
+        {"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p99"}
+      ]
     },
     {
       "type": "timeseries",
-      "title": "AI Latency (s)",
+      "title": "API RPS",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "histogram_quantile(0.95, sum(rate(algogpt_ai_latency_seconds_bucket[5m])) by (le))", "legendFormat": "AI p95"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "s"}}
+      "targets": [{"expr": "sum(rate(algogpt_api_requests_total[1m]))", "legendFormat": "RPS"}]
     },
     {
       "type": "timeseries",
-      "title": "TP/SL Hits",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "rate(algogpt_tp_hits_total[5m])", "legendFormat": "TP"},
-        {"expr": "rate(algogpt_sl_hits_total[5m])", "legendFormat": "SL"}
-      ],
-      "fieldConfig": {"defaults": {"unit": "ops"}}
-    },
-    {
-      "type": "table",
-      "title": "Active Alerts (Alertmanager)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
-      "datasource": {"type": "alertmanager", "uid": "alertmanager"},
-      "targets": [{}],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto"},
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 1},
-              {"color": "red", "value": 2}
-            ]
-          }
-        }
-      },
-      "options": {"showHeader": true}
+      "title": "5xx Error Rate",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+      "targets": [{"expr": "sum(rate(algogpt_api_requests_total{status=~\"5..\"}[5m]))"}],
+      "fieldConfig": {"defaults":{"unit":"ops","color":{"mode":"continuous-GrYlRd"}}}
     }
   ]
 }
+
 
