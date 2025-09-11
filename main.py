@@ -99,13 +99,14 @@ app.mount("/metrics", make_asgi_app())
 async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
-        "/docs", "/redoc", "/telegram/webhook", "/telegram/ping"
+        "/docs", "/redoc",
+        "/telegram/webhook", "/telegram/ping",
+        # פותח לציבור רק את webhook של CryptoPanic (חתום HMAC בצד הראוטר)
+        "/provider/cryptopanic/webhook",
     }
-    # שים לב: /alerts מוסר – מוגן ע"י טוקן; Webhooks לגורמי חוץ מקבלים חריג מפורש
     PUBLIC_PREFIXES = [
         "/price", "/static/", "/risk", "/metrics",
         "/status/ping", "/status/ws", "/status/executor", "/status/all",
-        "/provider/cryptopanic"  # ← Webhook חתום בלבד
     ]
     path = request.url.path
     if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
@@ -394,6 +395,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
