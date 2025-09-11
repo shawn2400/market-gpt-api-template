@@ -10,7 +10,7 @@
       "title": "Active Alerts",
       "gridPos": {"h": 15, "w": 24, "x": 0, "y": 0},
       "datasource": {"type": "alertmanager", "uid": "alertmanager"},
-      "targets": [{"expr": ""}],
+      "targets": [{}],
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -26,15 +26,7 @@
           }
         }
       },
-      "options": {
-        "showHeader": true,
-        "columns": [
-          {"text": "alertname"},
-          {"text": "severity"},
-          {"text": "startsAt"},
-          {"text": "description"}
-        ]
-      }
+      "options": {"showHeader": true}
     }
   ]
 }
