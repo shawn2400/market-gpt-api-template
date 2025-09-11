@@ -2,19 +2,17 @@ apiVersion: 1
 
 datasources:
   - name: Prometheus
+    uid: prometheus
     type: prometheus
-    uid: Prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
 
   - name: Alertmanager
-    type: alertmanager
     uid: alertmanager
+    type: alertmanager
     access: proxy
     url: http://alertmanager:9093
-    jsonData:
-      implementation: prometheus
 
 
 
