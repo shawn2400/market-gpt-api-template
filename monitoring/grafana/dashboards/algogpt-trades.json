@@ -1,6 +1,8 @@
 {
   "id": null,
   "title": "AlgoGPT – Trades",
+  "tags": ["algogpt", "trades"],
+  "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "10s",
@@ -21,19 +23,18 @@
     },
     {
       "type": "stat",
-      "title": "Total PnL (USDT)",
+      "title": "PnL Total (USDT)",
       "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "algogpt_pnl_total_usdt"}],
-      "fieldConfig": {"defaults": {"unit": "currencyUSD"}}
+      "targets": [{"expr": "algogpt_pnl_total_usdt"}]
     },
     {
       "type": "timeseries",
-      "title": "TP / SL Hits",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 4},
+      "title": "TP / SL Events",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
       "targets": [
-        {"expr": "increase(algogpt_tp_hits_total[1h])", "legendFormat": "TP ({{level}})"},
+        {"expr": "increase(algogpt_tp_hits_total[1h])", "legendFormat": "TP {{level}}"},
         {"expr": "increase(algogpt_sl_hits_total[1h])", "legendFormat": "SL"}
       ]
     }
