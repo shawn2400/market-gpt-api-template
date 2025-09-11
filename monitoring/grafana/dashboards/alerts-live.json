@@ -1,7 +1,7 @@
 {
   "id": null,
-  "title": "AlgoGPT – Alerts Live",
-  "tags": ["algogpt", "alerts", "alertmanager"],
+  "title": "AlgoGPT – Live Alerts",
+  "tags": ["algogpt", "alerts", "live"],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -9,29 +9,62 @@
   "panels": [
     {
       "type": "table",
-      "title": "Active Alerts",
-      "gridPos": {"h": 15, "w": 24, "x": 0, "y": 0},
-      "datasource": {"type": "alertmanager", "uid": "alertmanager"},
-      "targets": [{"expr": ""}],
-      "options": {
-        "showHeader": true
+      "title": "Active Alerts (Alertmanager)",
+      "gridPos": { "h": 20, "w": 24, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "alertmanager",
+        "uid": "alertmanager"
       },
+      "targets": [
+        {
+          "expr": "alerts",
+          "refId": "A"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "critical": { "color": "red", "text": "Critical" },
+                "warning": { "color": "orange", "text": "Warning" },
+                "info": { "color": "blue", "text": "Info" }
+              }
+            }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color":"green"},
-              {"color":"yellow","value":1},
-              {"color":"red","value":2}
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 2 }
             ]
           }
         }
-      }
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Severity",
+            "desc": true
+          }
+        ]
+      },
+      "columns": [
+        { "text": "Alertname", "value": "labels.alertname" },
+        { "text": "Service", "value": "labels.service" },
+        { "text": "Severity", "value": "labels.severity" },
+        { "text": "Summary", "value": "annotations.summary" },
+        { "text": "Description", "value": "annotations.description" },
+        { "text": "Starts At", "value": "startsAt" },
+        { "text": "Ends At", "value": "endsAt" }
+      ]
     }
   ]
 }
+
 
 
 
