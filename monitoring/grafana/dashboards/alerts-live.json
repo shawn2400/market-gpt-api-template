@@ -1,7 +1,7 @@
 {
   "id": null,
   "title": "AlgoGPT – Alerts Live",
-  "tags": ["algogpt", "alerts"],
+  "tags": ["algogpt", "alerts", "alertmanager"],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -12,25 +12,27 @@
       "title": "Active Alerts",
       "gridPos": {"h": 15, "w": 24, "x": 0, "y": 0},
       "datasource": {"type": "alertmanager", "uid": "alertmanager"},
-      "targets": [{}],
+      "targets": [{"expr": ""}],
       "options": {
-        "showHeader": true,
-        "columns": [
-          {"text": "Severity", "value": "labels.severity"},
-          {"text": "Alert", "value": "labels.alertname"},
-          {"text": "Description", "value": "annotations.description"},
-          {"text": "Active Since", "value": "startsAt"}
-        ]
+        "showHeader": true
       },
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
-          "thresholds": {"mode": "absolute","steps":[{"color":"green"},{"color":"yellow","value":1},{"color":"red","value":2}]}
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color":"green"},
+              {"color":"yellow","value":1},
+              {"color":"red","value":2}
+            ]
+          }
         }
       }
     }
   ]
 }
+
 
 
 
