@@ -26,7 +26,9 @@
       "title": "API Latency (p95)",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))"}],
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))"}
+      ],
       "fieldConfig": {"defaults": {"unit": "s"}}
     },
     {
