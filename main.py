@@ -74,6 +74,67 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
 
 # ────────────────────────────────────────────────────────────────────────────────
+# OpenAPI dynamic filter (hide x-internal, patterns, cap operations)
+# ────────────────────────────────────────────────────────────────────────────────
+from fastapi.openapi.utils import get_openapi
+from fnmatch import fnmatch
+
+def custom_openapi():
+    if getattr(app, "openapi_schema", None):
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title, version=APP_VERSION,
+        description=app.description, routes=app.routes
+    )
+
+    max_ops = int(os.getenv("OPENAPI_PUBLIC_MAX_OPS", "30"))  # 0 = unlimited
+    hide_patterns = [p.strip() for p in os.getenv("OPENAPI_HIDE_PATTERNS", "").split(",") if p.strip()]
+    include_tags = {t.strip() for t in os.getenv("OPENAPI_INCLUDE_TAGS", "").split(",") if t.strip()}
+
+    new_paths: Dict[str, Any] = {}
+    count = 0
+
+    for path in sorted(schema.get("paths", {}).keys()):
+        methods = schema["paths"][path]
+        new_methods = {}
+
+        path_hidden = any(fnmatch(path, pat) for pat in hide_patterns)
+
+        for method in list(methods.keys()):
+            if method.startswith("x-"):
+                continue
+            op = methods[method]
+
+            # hide if explicitly internal
+            if op.get("x-internal") is True:
+                continue
+
+            # include only specific tags if configured
+            if include_tags and not include_tags.intersection(set(op.get("tags") or [])):
+                continue
+
+            # hide by path glob
+            if path_hidden:
+                continue
+
+            # enforce public ops cap
+            if max_ops > 0 and count >= max_ops:
+                continue
+
+            new_methods[method] = op
+            count += 1
+
+        if new_methods:
+            new_paths[path] = new_methods
+
+    schema["paths"] = new_paths
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+# ────────────────────────────────────────────────────────────────────────────────
 # Middlewares
 # ────────────────────────────────────────────────────────────────────────────────
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
@@ -227,7 +288,7 @@ if not _route_exists("/status/all"):
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"
-    ts_ms = int(time.time() * 1000)
+    ts = int(time.time() * 1000)  # OpenAPI field name: ts
     err = ""
     try:
         p = get_price(symbol)
@@ -243,7 +304,7 @@ async def price(symbol: str):
         "symbol": symbol.upper(),
         "price": float(p) if p is not None else None,
         "source": src,
-        "ts_ms": ts_ms,
+        "ts": ts,
         "error": err,
     }
 
@@ -304,16 +365,14 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(401, "Invalid telegram secret")
 
-    # parse JSON safely
     try:
         update = await request.json()
     except Exception:
         raise HTTPException(400, "invalid JSON")
 
-    # Handle inline callback buttons: "CONFIRM:APPROVE:<cid>" / "CONFIRM:REJECT:<cid>"
     cb = update.get("callback_query")
     if cb:
-        data = str(cb.get("data", ""))  # e.g., "CONFIRM:APPROVE:<cid>"
+        data = str(cb.get("data", ""))
         chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
         chat_id = int(chat.get("id", 0))
         parts = data.split(":", 2)
@@ -326,7 +385,6 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
             else:
                 ConfirmStore.reject(cid, approver=approver)
                 await _tg_send(chat_id, "❌ בוטל. הטרייד לא יצא לפועל.")
-        # answerCallbackQuery
         try:
             cb_id = cb.get("id")
             if BOT_TOKEN and cb_id:
@@ -336,7 +394,6 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
             pass
         return {"ok": True}
 
-    # Simple "/ping"
     msg = update.get("message")
     if msg and str(msg.get("text", "")).strip() == "/ping":
         chat_id = int(msg.get("chat", {}).get("id", 0))
@@ -421,6 +478,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
