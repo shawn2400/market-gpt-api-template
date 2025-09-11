@@ -30,7 +30,7 @@ except Exception:
 
 from utils.trade_executor import ConfirmStore
 
-# Optional runtime counters (לסטטוסי WS/Executor)
+# Optional runtime counters (WS/Executor status)
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters
 except Exception:
@@ -62,7 +62,7 @@ logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 # ────────────────────────────────────────────────────────────────────────────────
 # FS bootstrap
 # ────────────────────────────────────────────────────────────────────────────────
-for d in ("static", "logs"):
+for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -101,7 +101,7 @@ async def validate_token(request: Request, call_next):
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
         "/docs", "/redoc",
         "/telegram/webhook", "/telegram/ping",
-        # פותח לציבור רק את webhook של CryptoPanic (חתום HMAC בצד הראוטר)
+        # Only CryptoPanic webhook is public (HMAC-verified in its router)
         "/provider/cryptopanic/webhook",
     }
     PUBLIC_PREFIXES = [
@@ -395,6 +395,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
