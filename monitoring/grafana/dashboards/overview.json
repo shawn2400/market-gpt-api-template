@@ -4,7 +4,7 @@
   "tags": ["algogpt", "overview", "main"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "panels": [
     {
@@ -78,7 +78,7 @@
     },
     {
       "type": "heatmap",
-      "title": "API Requests Heatmap (by Hour of Day)",
+      "title": "API Requests Heatmap (by Path)",
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 12 },
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
@@ -91,6 +91,33 @@
         "defaults": {
           "unit": "ops",
           "color": { "mode": "continuous-BlPu" }
+        }
+      },
+      "options": {
+        "showLegend": true,
+        "calculation": "lastNotNull",
+        "color": { "mode": "continuous" }
+      }
+    },
+    {
+      "type": "heatmap",
+      "title": "Trades Heatmap (TP/SL Hits by Level)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(algogpt_tp_hits_total[5m])) by (level)",
+          "legendFormat": "TP Level {{level}}"
+        },
+        {
+          "expr": "sum(rate(algogpt_sl_hits_total[5m]))",
+          "legendFormat": "SL Hits"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "continuous-YlOrRd" }
         }
       },
       "options": {
