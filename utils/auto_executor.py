@@ -162,6 +162,14 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
+# ─────────── ClientOrderId helper ───────────
+def _new_coid(kind: str) -> Optional[str]:
+    pref = (ORDER_ID_PREFIX or "").strip()
+    if not pref:
+        return None
+    # מגבלה של בינאנס ~36 תווים; נשמור קצר
+    return f"{pref}_{kind}_{int(time.time()*1000)%10_000_000}"
+
 # ─────────── Klines / ATR helpers ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
     k = 2 / (period + 1); ema=[]; s=None
@@ -298,6 +306,7 @@ def _pos_side_for_open(side: str) -> str:
 
 def _pos_side_for_close(entry_side: str) -> str:
     return "LONG" if entry_side == "BUY" else "SHORT"
+
 # ─────────── Idempotency (Redis/memory) ───────────
 class _Idem:
     _mem: Dict[str, float] = {}
@@ -384,7 +393,7 @@ class ConfirmStore:
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
 
-    # ✅ תוספת לתאימות עם /flush ב-main.py
+    # ✅ תאימות עם /flush
     @classmethod
     def flush_all(cls) -> None:
         cls._mem.clear()
@@ -643,17 +652,25 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    order_common_open = {}
+    order_common_open: Dict[str, Any] = {}
     if is_hedge:
         order_common_open["positionSide"] = _pos_side_for_open(side)
 
-    lim = futures_create_order(symbol=sym, side=side, type="LIMIT",
-                               timeInForce="GTC", price=limit_str, quantity=qty_str,
-                               **order_common_open)
+    # קבענו clientOrderId לפי prefix (אם קיים)
+    coid_lim = _new_coid("OPEN_LIM") or None
+    coid_stp = _new_coid("OPEN_STP") or None
+
+    lim_args = dict(symbol=sym, side=side, type="LIMIT",
+                    timeInForce="GTC", price=limit_str, quantity=qty_str, **order_common_open)
+    if coid_lim: lim_args["newClientOrderId"] = coid_lim
+
+    stp_args = dict(symbol=sym, side=side, type="STOP",
+                    timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str, **order_common_open)
+    if coid_stp: stp_args["newClientOrderId"] = coid_stp
+
+    lim = futures_create_order(**lim_args)
     lim_id = str(lim.get("orderId") or "")
-    stp = futures_create_order(symbol=sym, side=side, type="STOP",
-                               timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str,
-                               **order_common_open)
+    stp = futures_create_order(**stp_args)
     stp_id = str(stp.get("orderId") or "")
 
     def _is_filled(oid: str) -> Tuple[bool, Optional[float]]:
@@ -706,10 +723,13 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                     try:
                         if oid: futures_cancel_order(sym, oid)
                     except Exception: pass
-                order_common_mkt = {}
+                order_common_mkt: Dict[str, Any] = {}
                 if is_hedge:
                     order_common_mkt["positionSide"] = _pos_side_for_open(side)
-                mkt = futures_create_order(symbol=sym, side=side, type="MARKET", quantity=qty_str, **order_common_mkt)
+                mkt_args = dict(symbol=sym, side=side, type="MARKET", quantity=qty_str, **order_common_mkt)
+                coid_mkt = _new_coid("OPEN_MKT") or None
+                if coid_mkt: mkt_args["newClientOrderId"] = coid_mkt
+                mkt = futures_create_order(**mkt_args)
                 mk = get_price(sym) or futures_mark_price(sym) or cur
                 bps = abs((cur or 0) - (mk or 0)) / max(mk or 1e-9, 1e-9) * 10000.0 if mk and cur else None
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
@@ -866,11 +886,14 @@ async def execute_trade_live(
         for o in arr:
             typ = str(o.get("type")).upper()
             args: Dict[str, Any] = dict(
-                symbol=sym, side=close_side, type=typ,
-                reduceOnly=True, timeInForce="GTC",
+                symbol=sym, side=close_side, type=typ, reduceOnly=True,
             )
             if is_hedge:
                 args["positionSide"] = _pos_side_for_close(side)
+
+            # timeInForce רק בסוגי LIMIT
+            if "MARKET" not in typ:
+                args["timeInForce"] = "GTC"
 
             if "MARKET" in typ:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
@@ -879,6 +902,11 @@ async def execute_trade_live(
                 args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
 
             args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
+
+            coid_kind = "TP" if "TAKE_PROFIT" in typ else "SL"
+            coid = _new_coid(coid_kind) or None
+            if coid: args["newClientOrderId"] = coid
+
             try:
                 resp = futures_create_order(**args)
                 o["response"] = resp
@@ -886,6 +914,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
