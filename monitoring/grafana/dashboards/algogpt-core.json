@@ -1,7 +1,7 @@
 {
   "id": null,
-  "title": "AlgoGPT – Core",
-  "tags": ["algogpt", "core", "system"],
+  "title": "AlgoGPT – Core Metrics",
+  "tags": ["algogpt", "core"],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -9,91 +9,37 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Blackbox /health",
+      "title": "Open Trades",
       "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "avg(probe_success{job=\"algogpt-health\"})"}],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bool",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{"color": "red"}, {"color": "green", "value": 1}]
-          }
-        }
-      }
+      "targets": [{"expr": "algogpt_trades_open_total"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
     },
     {
       "type": "stat",
-      "title": "RPS (Total)",
+      "title": "PnL Total (USDT)",
       "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [{"expr": "sum(rate(algogpt_api_requests_total[1m]))"}],
-      "fieldConfig": {"defaults": {"unit": "ops"}}
-    },
-    {
-      "type": "stat",
-      "title": "5xx Error Rate",
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {
-          "expr": "sum(rate(algogpt_api_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(algogpt_api_requests_total[5m])), 1)"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 0.01},
-              {"color": "red", "value": 0.05}
-            ]
-          }
-        }
-      }
+      "targets": [{"expr": "algogpt_pnl_total_usdt"}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "color": {"mode": "continuous-GrYlRd"}}}
     },
     {
       "type": "timeseries",
-      "title": "Latency p95/p99",
+      "title": "CPU Usage",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(algogpt_api_latency_seconds_bucket[5m])))",
-          "legendFormat": "p95"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(algogpt_api_latency_seconds_bucket[5m])))",
-          "legendFormat": "p99"
-        }
-      ],
-      "fieldConfig": {"defaults": {"unit": "s"}}
+      "targets": [{"expr": "rate(process_cpu_seconds_total[1m])"}],
+      "fieldConfig": {"defaults": {"unit": "percent"}}
     },
     {
       "type": "timeseries",
-      "title": "API RPS by Path",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "title": "Memory Usage",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
       "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {
-          "expr": "sum by (path,method,status) (rate(algogpt_api_requests_total[1m]))",
-          "legendFormat": "{{method}} {{path}} ({{status}})"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Container CPU/Memory",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
-      "datasource": {"type": "prometheus", "uid": "Prometheus"},
-      "targets": [
-        {"expr": "rate(container_cpu_usage_seconds_total{container=\"algogpt\"}[2m])", "legendFormat": "CPU"},
-        {"expr": "container_memory_working_set_bytes{container=\"algogpt\"}", "legendFormat": "Memory"}
-      ]
+      "targets": [{"expr": "process_resident_memory_bytes"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}}
     }
   ]
 }
+
 
