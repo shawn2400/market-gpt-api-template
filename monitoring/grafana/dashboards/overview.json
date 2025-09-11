@@ -4,7 +4,7 @@
   "tags": ["algogpt", "overview", "main"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "panels": [
     {
@@ -75,9 +75,33 @@
         }
       },
       "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "type": "heatmap",
+      "title": "API Requests Heatmap (by Hour of Day)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(algogpt_api_requests_total[5m])) by (path)",
+          "legendFormat": "{{path}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "continuous-BlPu" }
+        }
+      },
+      "options": {
+        "showLegend": true,
+        "calculation": "lastNotNull",
+        "color": { "mode": "continuous" }
+      }
     }
   ]
 }
+
 
 
 
