@@ -1,49 +1,83 @@
 {
   "id": null,
   "title": "AlgoGPT – Overview",
-  "tags": ["algogpt", "overview"],
+  "tags": ["algogpt", "overview", "main"],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
-  "refresh": "10s",
+  "refresh": "30s",
   "panels": [
     {
-      "type": "stat",
-      "title": "CPU Usage %",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-      "targets": [{"expr": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)"}],
-      "fieldConfig": {"defaults": {"unit": "percent", "thresholds": {"mode": "absolute","steps":[{"color":"green"},{"color":"orange","value":70},{"color":"red","value":85}]}}}
+      "type": "text",
+      "title": "AlgoGPT Dashboard Navigation",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "content": "## 🚀 AlgoGPT Main Overview\n\n- 📊 [Core Metrics](d/algogpt-core/algogpt-core)\n- 💹 [Trades Dashboard](d/algogpt-trades/algogpt-trades)\n- 🚨 [Alerts Summary](d/algogpt-alerts/alerts)\n- 🔔 [Live Alerts (Alertmanager)](d/alerts-live/alerts-live)\n\n⏱ Refresh: 30s | Version: *2.18.0*"
+      },
+      "mode": "markdown"
     },
     {
       "type": "stat",
-      "title": "Memory Usage %",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-      "targets": [{"expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))"}],
-      "fieldConfig": {"defaults": {"unit": "percent", "thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"orange","value":70},{"color":"red","value":80}]}}}
+      "title": "Open Trades",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "algogpt_trades_open_total" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
     },
     {
-      "type": "timeseries",
-      "title": "API Latency p95/p99",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "type": "stat",
+      "title": "Total PnL (USDT)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "algogpt_pnl_total_usdt" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0 },
+              { "color": "green", "value": 100 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "type": "stat",
+      "title": "API 5xx Rate (5m)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
-        {"expr": "histogram_quantile(0.95, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.99, sum(rate(algogpt_api_latency_seconds_bucket[5m])) by (le))", "legendFormat": "p99"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "API RPS",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
-      "targets": [{"expr": "sum(rate(algogpt_api_requests_total[1m]))", "legendFormat": "RPS"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "5xx Error Rate",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
-      "targets": [{"expr": "sum(rate(algogpt_api_requests_total{status=~\"5..\"}[5m]))"}],
-      "fieldConfig": {"defaults":{"unit":"ops","color":{"mode":"continuous-GrYlRd"}}}
+        { "expr": "sum(rate(algogpt_api_requests_total{status=~\"5..\"}[5m]))" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "continuous-GrYlRd" }
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
     }
   ]
 }
+
 
 
