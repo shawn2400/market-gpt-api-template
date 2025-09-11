@@ -63,7 +63,8 @@ logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 # ────────────────────────────────────────────────────────────────────────────────
 # FS bootstrap
 # ────────────────────────────────────────────────────────────────────────────────
-for d in ("static", "logs"):
+# מוסיף גם data כדי להבטיח שה-SQLite יעבוד עם DATABASE_URL=sqlite:////app/data/algogpt.db
+for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -226,7 +227,7 @@ if not _route_exists("/status/all"):
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"
-    ts = time.time()
+    ts_ms = int(time.time() * 1000)
     err = ""
     try:
         p = get_price(symbol)
@@ -242,7 +243,7 @@ async def price(symbol: str):
         "symbol": symbol.upper(),
         "price": float(p) if p is not None else None,
         "source": src,
-        "ts": ts,
+        "ts_ms": ts_ms,
         "error": err,
     }
 
@@ -273,7 +274,7 @@ async def readyz():
         except Exception:
             details[f"price_{s}"] = None
 
-    return {"ok": True if not err else False, "error": err, "details": details}
+    return {"ok": (err is None), "error": err, "details": details}
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Telegram webhook & ping (public)
@@ -303,15 +304,16 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(401, "Invalid telegram secret")
 
+    # parse JSON safely
     try:
         update = await request.json()
     except Exception:
         raise HTTPException(400, "invalid JSON")
 
-    # Inline callback buttons: "CONFIRM:APPROVE:<cid>" / "CONFIRM:REJECT:<cid>"
+    # Handle inline callback buttons: "CONFIRM:APPROVE:<cid>" / "CONFIRM:REJECT:<cid>"
     cb = update.get("callback_query")
     if cb:
-        data = str(cb.get("data", ""))
+        data = str(cb.get("data", ""))  # e.g., "CONFIRM:APPROVE:<cid>"
         chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
         chat_id = int(chat.get("id", 0))
         parts = data.split(":", 2)
@@ -419,6 +421,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
