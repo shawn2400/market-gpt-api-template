@@ -1,6 +1,7 @@
 # main.py
 from __future__ import annotations
 import os
+import time
 import asyncio
 import logging
 from pathlib import Path
@@ -30,7 +31,7 @@ except Exception:
 
 from utils.trade_executor import ConfirmStore
 
-# Optional runtime counters (לסטטוסי WS/Executor)
+# Optional runtime counters (WS/Executor status)
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters
 except Exception:
@@ -101,7 +102,7 @@ async def validate_token(request: Request, call_next):
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
         "/docs", "/redoc",
         "/telegram/webhook", "/telegram/ping",
-        # פותחים לציבור רק את webhook של CryptoPanic (חתום HMAC בצד הראוטר)
+        # public provider webhook (HMAC-validated in its router)
         "/provider/cryptopanic/webhook",
     }
     PUBLIC_PREFIXES = [
@@ -143,14 +144,14 @@ for module_path in (
     "routes.backtest",
     "routes.executor",
     "routes.binance_status",
-    "routes.telegram_webhook",     # אם קיים
+    "routes.telegram_webhook",     # optional
     "routes.grid",
     "routes.executor_control",
-    "routes.ws_user_stream",       # אם קיים
-    "routes.ai_analyze",           # ✅ /ai/analyze עם Rate-Limit
-    "routes.ws_user_status",       # ✅ אופציונלי: /status/ws
-    "routes.executor_status",      # ✅ אופציונלי: /status/executor
-    "routes.provider_cryptopanic", # ✅ webhook חתום
+    "routes.ws_user_stream",       # optional
+    "routes.ai_analyze",           # /ai/analyze with rate limit
+    "routes.ws_user_status",       # fallback /status/ws
+    "routes.executor_status",      # fallback /status/executor
+    "routes.provider_cryptopanic", # HMAC-signed webhook
 ):
     if _try_include(module_path):
         try:
@@ -180,13 +181,12 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "status": "ok"}
+    return {"ok": True, "status": "ok", "version": APP_VERSION}
 
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health():
     return {"ok": True, "status": "ok", "env": os.getenv("ENV", "prod"), "version": APP_VERSION}
 
-# Simple ping
 @app.get("/status/ping")
 async def status_ping():
     return {"ok": True, "ts_ms": int(asyncio.get_event_loop().time() * 1000)}
@@ -221,34 +221,59 @@ if not _route_exists("/status/all"):
         }
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Price (בדיקות)
+# Price (aligned with OpenAPI schema)
 # ────────────────────────────────────────────────────────────────────────────────
 @app.get("/price/{symbol}")
 async def price(symbol: str):
+    src = "binance_fapi"
+    ts = time.time()
+    err = ""
     try:
         p = get_price(symbol)
-    except Exception:
+        ok = bool(p and p > 0)
+        if not ok:
+            err = "no price"
+    except Exception as e:
         p = None
-    return {"symbol": symbol.upper(), "price": p, "fresh": bool(p and p > 0)}
+        ok = False
+        err = str(e)
+    return {
+        "ok": ok,
+        "symbol": symbol.upper(),
+        "price": float(p) if p is not None else None,
+        "source": src,
+        "ts": ts,
+        "error": err,
+    }
 
 @app.get("/readyz")
 async def readyz():
+    details: Dict[str, Any] = {}
+    err: str | None = None
     try:
-        ping_ok = bool(fapi_ping())
-    except Exception:
-        ping_ok = False
+        details["binance_ping_ok"] = bool(fapi_ping())
+        if not details["binance_ping_ok"]:
+            err = "binance ping failed"
+    except Exception as e:
+        details["binance_ping_ok"] = False
+        err = f"binance ping error: {e}"
+
     try:
         bal = futures_balance()
-        balance_ok = bool(bal and isinstance(bal, list))
-    except Exception:
-        balance_ok = False
-    prices: Dict[str, Any] = {}
+        details["balance_ok"] = bool(bal and isinstance(bal, list))
+        if not details["balance_ok"]:
+            err = (err or "") + "; balance not ok"
+    except Exception as e:
+        details["balance_ok"] = False
+        err = (err or "") + f"; balance error: {e}"
+
     for s in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
         try:
-            prices[f"price_{s}"] = get_price(s)
+            details[f"price_{s}"] = get_price(s)
         except Exception:
-            prices[f"price_{s}"] = None
-    return {"ping_ok": ping_ok, "balance_ok": balance_ok, **prices}
+            details[f"price_{s}"] = None
+
+    return {"ok": True if not err else False, "error": err, "details": details}
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Telegram webhook & ping (public)
@@ -278,16 +303,15 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(401, "Invalid telegram secret")
 
-    # parse JSON safely
     try:
         update = await request.json()
     except Exception:
         raise HTTPException(400, "invalid JSON")
 
-    # Handle inline callback buttons: "CONFIRM:APPROVE:<cid>" / "CONFIRM:REJECT:<cid>"
+    # Inline callback buttons: "CONFIRM:APPROVE:<cid>" / "CONFIRM:REJECT:<cid>"
     cb = update.get("callback_query")
     if cb:
-        data = str(cb.get("data", ""))  # e.g., "CONFIRM:APPROVE:<cid>"
+        data = str(cb.get("data", ""))
         chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
         chat_id = int(chat.get("id", 0))
         parts = data.split(":", 2)
@@ -395,6 +419,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
