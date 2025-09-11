@@ -5,19 +5,16 @@ datasources:
     type: prometheus
     uid: Prometheus
     access: proxy
-    orgId: 1
     url: http://prometheus:9090
     isDefault: true
-    editable: true
 
   - name: Alertmanager
     type: alertmanager
     uid: alertmanager
     access: proxy
-    orgId: 1
     url: http://alertmanager:9093
-    editable: true
-
+    jsonData:
+      implementation: prometheus
 
 
 
