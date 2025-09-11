@@ -298,7 +298,6 @@ def _pos_side_for_open(side: str) -> str:
 
 def _pos_side_for_close(entry_side: str) -> str:
     return "LONG" if entry_side == "BUY" else "SHORT"
-
 # ─────────── Idempotency (Redis/memory) ───────────
 class _Idem:
     _mem: Dict[str, float] = {}
@@ -384,6 +383,25 @@ class ConfirmStore:
         rec = cls.get(cid)
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
+
+    # ✅ תוספת לתאימות עם /flush ב-main.py
+    @classmethod
+    def flush_all(cls) -> None:
+        cls._mem.clear()
+        if cls._r:
+            try:
+                for k in cls._r.scan_iter(match="confirm:*"):
+                    cls._r.delete(k)
+            except Exception:
+                pass
+
+    @classmethod
+    def flush(cls) -> None:
+        cls.flush_all()
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.flush_all()
 
 async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid: str) -> Dict[str, Any]:
     if not BOT_TOKEN:
@@ -600,6 +618,7 @@ def _build_ladders(sym: str, side: str, qty: float,
     if tp_targets: _prep("TP", tp_targets, tp_splits, +1 if side=="BUY" else -1)
     if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
     return plan
+
 # ─────────── Hybrid entry + escalation (עם מדיניות דינמית + positionSide ב-HEDGE) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
                               ref_entry: Optional[float], is_hedge: bool,
@@ -867,6 +886,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
