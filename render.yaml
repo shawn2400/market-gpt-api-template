@@ -1,17 +1,14 @@
 # FILE: render.yaml
 services:
-  # ── Web (קיים) ─ ניהול בלי שינוי ─────────────────────────
+  # ── Web (קיים) — רק מציגים, לא משנים ─────────────────────
   - type: web
     name: algogpt-docker
     env: docker
     region: frankfurt
     plan: pro
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    healthCheckPath: /health
-    # אין כאן envVars ואין disk כדי לא לייצר "Update" ל־web
+    # בכוונה אין dockerfilePath / envVars / disk כדי למנוע "Update" לשירות הקיים
 
-  # ── Worker (Python, Free, Oregon) ─────────────────────────
+  # ── Worker חדש (Python, Free, Oregon) ─────────────────────
   - type: worker
     name: ops-supervisor
     env: python
@@ -19,7 +16,8 @@ services:
     plan: free
     buildCommand: pip install -r requirements-worker.txt
     startCommand: python -u utils/ops_supervisor.py
-    # גם כאן לא שמים סודות בקובץ. נוסיף אותם בדשבורד אחרי היצירה.
+    # סודות/משתני סביבה מוסיפים בדשבורד אחרי היצירה (לא בקובץ)
+
 
 
 
