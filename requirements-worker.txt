@@ -1,5 +1,5 @@
 # Worker-only (ללא pandas/numpy/scipy/ta)
-httpx==0.25.2
+httpx==0.25.2             # תואם גם ל-openai 1.37 וגם ל-PTB 20.6
 aiohttp==3.9.5
 redis==5.0.4
 orjson==3.10.6
@@ -8,8 +8,9 @@ python-dotenv==1.0.1
 structlog==24.1.0
 prometheus-client==0.20.0
 openai==1.37.0
-python-telegram-bot==20.6
+python-telegram-bot==20.6  # דורש httpx ~= 0.25.*
 websockets==12.0
+
 
 
 
