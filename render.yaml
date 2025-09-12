@@ -13,7 +13,6 @@ services:
     dockerContext: .
     healthCheckPath: /health
 
-    # רק ערכים לא-רגישים כאן. הסודות נכנסים ב-Render UI.
     envVars:
       - key: PORT
         value: "10000"
@@ -23,13 +22,16 @@ services:
         value: "1"
       - key: GUNICORN_TIMEOUT
         value: "120"
-      - key: PUBLIC_HOST
-        value: https://algogpt-docker.onrender.com
-      - key: WEBHOOK_HOST
-        value: https://algogpt-docker.onrender.com
-      # DB מקומי על דיסק מתמשך (לא סוד)
+      # Scheduler (כדי שלא תלוי ב-worker)
+      - key: AI_SCHED_ENABLE
+        value: "1"
+      - key: AI_SCHED_INTERVAL_SEC
+        value: "300"
+      # DB (SQLite על דיסק מתמשך)
+      - key: USE_DB
+        value: "1"
       - key: DATABASE_URL
-        value: sqlite:////app/data/algogpt.db
+        value: "sqlite:////app/data/algogpt.db"
 
     disk:
       name: data
@@ -45,17 +47,21 @@ services:
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python -u utils/ops_supervisor.py"
 
-    # גם כאן רק לא-רגיש. סודות ב-UI.
+    # שים לב: אין מפתחות כאן, רק קונפיג כללי
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
       - key: OPS_POLICY_PATH
-        value: policies/ops_policy.yaml
-      - key: PUBLIC_HOST
-        value: https://algogpt-docker.onrender.com
-      # אם אתה רוצה שה-worker יעשה דיווח/בדיקות תקופתיות:
-      - key: AI_SCHED_ENABLE
+        value: "policies/ops_policy.yaml"
+      # לא צריך DB ב-worker, אלא אם אתה רוצה. כדי למנוע כשלים:
+      - key: USE_DB
+        value: "0"
+      # אם תרצה גם heartbeat אוטומטי מה-worker:
+      - key: TELEGRAM_ADMIN_ONLY
         value: "1"
-      - key: AI_SCHED_INTERVAL_SEC
-        value: "300"
+      - key: AI_SCHED_ENABLE
+        value: "0"  # הסשדולר רץ ב-Web; תשאיר 0 ב-worker כדי לא לכפל
+
 
 
 
