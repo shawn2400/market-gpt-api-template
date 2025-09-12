@@ -1,4 +1,3 @@
-# Worker-only (ללא pandas/numpy/scipy/ta)
 httpx==0.27.0
 aiohttp==3.9.5
 redis==5.0.4
