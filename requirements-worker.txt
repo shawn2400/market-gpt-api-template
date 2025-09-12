@@ -1,13 +1,15 @@
+# נטול Pandas/NumPy/Scipy כדי לבנות מהר
 httpx==0.27.0
 requests==2.32.3
-dateparser==1.2.0
 aiohttp==3.9.5
-websockets==12.0
-python-binance==1.0.19
-openai==1.37.0
 redis==5.0.4
+openai==1.37.0
+python-dotenv==1.0.1
 orjson==3.10.6
 PyYAML==6.0.2
-psutil==5.9.8
 structlog==24.1.0
+psutil==5.9.8
 prometheus-client==0.20.0
+python-telegram-bot==20.6
+dateparser==1.2.0
+
