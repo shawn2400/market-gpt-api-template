@@ -1,6 +1,6 @@
 # FILE: render.yaml
 services:
-  # ── Web (Docker) ─────────────────────────
+  # ── Web (Docker) ── לא משנים אותו כאן בפועל ─────────────
   - type: web
     name: algogpt-docker
     env: docker
@@ -12,55 +12,38 @@ services:
     dockerContext: .
     healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: "10000"
-      - key: APP_MODULE
-        value: main:app
-      - key: WEB_CONCURRENCY
-        value: "1"
-      - key: GUNICORN_TIMEOUT
-        value: "120"
-      - key: UVICORN_LOG_LEVEL
-        value: "info"
-      - key: UVICORN_ACCESS_LOG
-        value: "false"
-      - key: PUBLIC_HOST
-        value: "https://algogpt-docker.onrender.com"
-
-      # DB על דיסק מתמיד
-      - key: USE_DB
-        value: "1"
-      - key: DATABASE_URL
-        value: "sqlite:////app/data/algogpt.db"
-
-      # הסקד'ולר ירוץ ב־web
-      - key: AI_SCHED_ENABLE
-        value: "1"
-      - key: AI_SCHED_INTERVAL_SEC
-        value: "300"
-
+      - key: PORT                 ; value: "10000"
+      - key: APP_MODULE           ; value: main:app
+      - key: WEB_CONCURRENCY      ; value: "1"
+      - key: GUNICORN_TIMEOUT     ; value: "120"
+      - key: UVICORN_LOG_LEVEL    ; value: "info"
+      - key: UVICORN_ACCESS_LOG   ; value: "false"
+      - key: PUBLIC_HOST          ; value: "https://algogpt-docker.onrender.com"
+      # DB מתמיד (בדוקקק שהדיסק קיים בשירות ה-Web)
+      - key: USE_DB               ; value: "1"
+      - key: DATABASE_URL         ; value: "sqlite:////app/data/algogpt.db"
+      # מי מריץ Scheduler? (אם אתה רוצה שכל האוטומציה תרוץ ב-Web)
+      - key: AI_SCHED_ENABLE      ; value: "1"
+      - key: AI_SCHED_INTERVAL_SEC; value: "300"
     disk:
       name: data
       mountPath: /app/data
       sizeGB: 1
 
-  # ── Worker (Python) חדש ────────────────
+  # ── Worker (Python, Free, Oregon) ─────────────────────────
   - type: worker
-    name: ops-supervisor-eu
+    name: ops-supervisor
     env: python
-    region: frankfurt
-    plan: starter
+    region: oregon
+    plan: free
     buildCommand: "pip install -r requirements-worker.txt"
     startCommand: "python -u utils/ops_supervisor.py"
     envVars:
-      - key: OPS_POLICY_PATH
-        value: "policies/ops_policy.yaml"
-      # לא שומרים DB מקומי ב-worker
-      - key: USE_DB
-        value: "0"
-      # הסקד׳ולר רץ ב-Web
-      - key: AI_SCHED_ENABLE
-        value: "0"
+      - key: OPS_POLICY_PATH ; value: "policies/ops_policy.yaml"
+      - key: USE_DB          ; value: "0"   # ל-worker אין דיסק
+      # אם ה-Web מריץ Scheduler, השאר 0 כאן:
+      - key: AI_SCHED_ENABLE ; value: "0"
+
 
 
 
