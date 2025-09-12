@@ -1,21 +1,25 @@
 # FILE: render.yaml
 services:
+  # ── Web (קיים) ─ ניהול בלי שינוי ─────────────────────────
+  - type: web
+    name: algogpt-docker
+    env: docker
+    region: frankfurt
+    plan: pro
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # אין כאן envVars ואין disk כדי לא לייצר "Update" ל־web
+
+  # ── Worker (Python, Free, Oregon) ─────────────────────────
   - type: worker
     name: ops-supervisor
     env: python
-    region: oregon         # אם תרצה להעביר לפרנקפורט: frankfurt (יצירת שירות חדש)
-    plan: free             # אם Render לא מאפשר Free ל-worker -> שנה ל-starter
+    region: oregon
+    plan: free
     buildCommand: pip install -r requirements-worker.txt
     startCommand: python -u utils/ops_supervisor.py
-    envVars:
-      - key: OPS_POLICY_PATH
-        value: policies/ops_policy.yaml
-      - key: USE_DB
-        value: "0"         # ל-worker אין דיסק DB
-      - key: AI_SCHED_ENABLE
-        value: "0"         # הסקד׳ולר רץ אצלך ב-Web
-      # שים לב: לא שמים סודות כאן. הוסף אותם ידנית ב-Dashboard אחרי יצירה:
-      # PUBLIC_HOST, API_BEARER_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, (REDIS_URL אם צריך)
+    # גם כאן לא שמים סודות בקובץ. נוסיף אותם בדשבורד אחרי היצירה.
 
 
 
