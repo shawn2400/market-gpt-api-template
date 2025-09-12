@@ -36,7 +36,7 @@ services:
       - key: DATABASE_URL
         value: "sqlite:////app/data/algogpt.db"
 
-      # Scheduler on Web (כדי שלא תלוי ב-worker)
+      # Scheduler on Web
       - key: AI_SCHED_ENABLE
         value: "1"
       - key: AI_SCHED_INTERVAL_SEC
@@ -53,20 +53,19 @@ services:
     env: python
     region: frankfurt
     plan: starter
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: "pip install -r requirements-worker.txt"
     startCommand: "python -u utils/ops_supervisor.py"
 
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.11"
       - key: OPS_POLICY_PATH
         value: "policies/ops_policy.yaml"
-      # לא לשמור DB לוקאלי ב-Worker
+      # לא שומרים DB מקומי ב-worker
       - key: USE_DB
         value: "0"
-      # Scheduler רץ ב-Web
+      # הסקד׳ולר רץ ב-Web
       - key: AI_SCHED_ENABLE
         value: "0"
+
 
 
 
