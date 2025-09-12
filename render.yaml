@@ -53,6 +53,7 @@ services:
     env: python
     region: frankfurt
     plan: starter
+    autoDeploy: false
     buildCommand: "pip install -r requirements-worker.txt"
     startCommand: "python -u utils/ops_supervisor.py"
 
@@ -65,6 +66,7 @@ services:
       # הסקד׳ולר רץ ב-Web
       - key: AI_SCHED_ENABLE
         value: "0"
+
 
 
 
