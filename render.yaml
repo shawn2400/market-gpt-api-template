@@ -2,7 +2,7 @@
 services:
   # ── Web (Docker) ─────────────────────────
   - type: web
-    name: algogpt-docker                # קיים – לא נוגעים
+    name: algogpt-docker
     env: docker
     region: frankfurt
     plan: pro
@@ -12,19 +12,33 @@ services:
     dockerContext: .
     healthCheckPath: /health
     envVars:
-      - key: PORT;                value: "10000"
-      - key: APP_MODULE;          value: main:app
-      - key: WEB_CONCURRENCY;     value: "1"
-      - key: GUNICORN_TIMEOUT;    value: "120"
-      - key: UVICORN_LOG_LEVEL;   value: "info"
-      - key: UVICORN_ACCESS_LOG;  value: "false"
-      - key: PUBLIC_HOST;         value: "https://algogpt-docker.onrender.com"
+      - key: PORT
+        value: "10000"
+      - key: APP_MODULE
+        value: main:app
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: GUNICORN_TIMEOUT
+        value: "120"
+      - key: UVICORN_LOG_LEVEL
+        value: "info"
+      - key: UVICORN_ACCESS_LOG
+        value: "false"
+      - key: PUBLIC_HOST
+        value: "https://algogpt-docker.onrender.com"
+
       # DB על דיסק מתמיד
-      - key: USE_DB;              value: "1"
-      - key: DATABASE_URL;        value: "sqlite:////app/data/algogpt.db"
+      - key: USE_DB
+        value: "1"
+      - key: DATABASE_URL
+        value: "sqlite:////app/data/algogpt.db"
+
       # הסקד'ולר ירוץ ב־web
-      - key: AI_SCHED_ENABLE;     value: "1"
-      - key: AI_SCHED_INTERVAL_SEC; value: "300"
+      - key: AI_SCHED_ENABLE
+        value: "1"
+      - key: AI_SCHED_INTERVAL_SEC
+        value: "300"
+
     disk:
       name: data
       mountPath: /app/data
@@ -32,16 +46,21 @@ services:
 
   # ── Worker (Python) חדש ────────────────
   - type: worker
-    name: ops-supervisor-eu              # שם חדש וייחודי
+    name: ops-supervisor-eu
     env: python
     region: frankfurt
     plan: starter
     buildCommand: "pip install -r requirements-worker.txt"
     startCommand: "python -u utils/ops_supervisor.py"
     envVars:
-      - key: OPS_POLICY_PATH; value: "policies/ops_policy.yaml"
-      - key: USE_DB;          value: "0"   # ל־worker אין דיסק DB
-      - key: AI_SCHED_ENABLE; value: "0"   # הסקד'ולר כבר רץ ב־web
+      - key: OPS_POLICY_PATH
+        value: "policies/ops_policy.yaml"
+      # לא שומרים DB מקומי ב-worker
+      - key: USE_DB
+        value: "0"
+      # הסקד׳ולר רץ ב-Web
+      - key: AI_SCHED_ENABLE
+        value: "0"
 
 
 
