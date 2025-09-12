@@ -13,6 +13,7 @@ services:
     dockerContext: .
     healthCheckPath: /health
 
+    # רק ערכים לא-רגישים כאן. הסודות נכנסים ב-Render UI.
     envVars:
       - key: PORT
         value: "10000"
@@ -22,6 +23,13 @@ services:
         value: "1"
       - key: GUNICORN_TIMEOUT
         value: "120"
+      - key: PUBLIC_HOST
+        value: https://algogpt-docker.onrender.com
+      - key: WEBHOOK_HOST
+        value: https://algogpt-docker.onrender.com
+      # DB מקומי על דיסק מתמשך (לא סוד)
+      - key: DATABASE_URL
+        value: sqlite:////app/data/algogpt.db
 
     disk:
       name: data
@@ -30,16 +38,25 @@ services:
 
   # ── Worker (Python) ────────────────────────────────────────
   - type: worker
-    name: ops-supervisor-eu     # שם זמני כדי לא להתנגש בקיים ב-Oregon
+    name: ops-supervisor-eu
     env: python
     region: frankfurt
     plan: starter
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python -u utils/ops_supervisor.py"
 
+    # גם כאן רק לא-רגיש. סודות ב-UI.
     envVars:
       - key: OPS_POLICY_PATH
         value: policies/ops_policy.yaml
+      - key: PUBLIC_HOST
+        value: https://algogpt-docker.onrender.com
+      # אם אתה רוצה שה-worker יעשה דיווח/בדיקות תקופתיות:
+      - key: AI_SCHED_ENABLE
+        value: "1"
+      - key: AI_SCHED_INTERVAL_SEC
+        value: "300"
+
 
 
 
