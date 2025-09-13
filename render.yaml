@@ -1,22 +1,83 @@
 # FILE: render.yaml
 services:
-  # ── Web (קיים) — רק מציגים, לא משנים ─────────────────────
+  # ─────────────────────────────────────────────
+  # Web ראשי — אל נוגעים (לא לדרוס קיים)
+  # ─────────────────────────────────────────────
   - type: web
     name: algogpt-docker
     env: docker
     region: frankfurt
     plan: pro
-    # בכוונה אין dockerfilePath / envVars / disk כדי למנוע "Update" לשירות הקיים
+    autoDeploy: false
+    # בכוונה אין dockerfilePath/envVars כאן כדי לא לשנות את השירות הקיים
 
-  # ── Worker חדש (Python, Free, Oregon) ─────────────────────
-  - type: worker
+  # ─────────────────────────────────────────────
+  # Web משני — ops-supervisor (Docker, אותו Dockerfile)
+  # ─────────────────────────────────────────────
+  - type: web
     name: ops-supervisor
-    env: python
-    region: oregon
-    plan: free
-    buildCommand: pip install -r requirements-worker.txt
-    startCommand: python -u utils/ops_supervisor.py
-    # סודות/משתני סביבה מוסיפים בדשבורד אחרי היצירה (לא בקובץ)
+    env: docker
+    region: frankfurt
+    plan: starter                 # שדרג ל-pro אם צריך
+    dockerfilePath: Dockerfile    # Python 3.11 שלך → wheels, בלי קומפילציה
+    autoDeploy: false
+    envVars:
+      # Core / Runtime
+      - key: PORT
+        value: 10001
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PUBLIC_HOST
+        value: https://ops-supervisor.onrender.com
+      - key: OPS_POLICY_PATH
+        value: policies/ops_policy.yaml
+      - key: INSTANCE_ID
+        value: ops-supervisor
+
+      # Safety (בדיקות – כבוי)
+      - key: AUTO_RUN
+        value: "0"
+      - key: EXECUTE_TRADES
+        value: "0"
+      - key: AI_SCHED_ENABLE
+        value: "0"
+      - key: AI_SCHED_INTERVAL_SEC
+        value: "300"
+
+      # Redis (URL לשים בדשבורד), Namespace מבודד מהראשי
+      - key: REDIS_URL
+        value: SET_IN_DASHBOARD
+      - key: REDIS_NAMESPACE
+        value: ops-supervisor-web
+
+      # Auth/Tokens — שונים מהראשי! (לשים בדשבורד)
+      - key: ALGOGPT_TOKENS
+        value: SET_IN_DASHBOARD_SECONDARY
+      - key: API_BEARER_TOKEN
+        value: SET_IN_DASHBOARD_SECONDARY
+      - key: WEBHOOK_HMAC_SECRET
+        value: SET_IN_DASHBOARD_SECONDARY
+
+      # OpenAI — לשים בדשבורד בלבד
+      - key: OPENAI_API_KEY
+        value: SET_IN_DASHBOARD
+
+      # Telegram — כבוי כדי לא להתנגש בראשי
+      - key: TELEGRAM_AUTO_WEBHOOK
+        value: "0"
+      - key: TELEGRAM_ADMIN_ONLY
+        value: "1"
+      - key: TELEGRAM_ADMIN_IDS
+        value: "449087907"
+      - key: TELEGRAM_CHAT_ID
+        value: "449087907"
+      - key: TELEGRAM_BOT_TOKEN
+        value: ""     # ריק לבדיקות
+      - key: TELEGRAM_WEBHOOK_SECRET
+        value: ""     # הוסף בדשבורד אם צריך
+
 
 
 
