@@ -1,7 +1,7 @@
 # FILE: render.yaml
 services:
   # ─────────────────────────────────────────────
-  # Web ראשי — אל נוגעים (לא לדרוס קיים)
+  # Web ראשי — לא נוגעים בו כדי לא לשנות דיפלוי קיים
   # ─────────────────────────────────────────────
   - type: web
     name: algogpt-docker
@@ -9,7 +9,7 @@ services:
     region: frankfurt
     plan: pro
     autoDeploy: false
-    # בכוונה אין dockerfilePath/envVars כאן כדי לא לשנות את השירות הקיים
+    # בכוונה אין dockerfilePath/envVars כאן כדי למנוע דריסה של ההגדרות הקיימות
 
   # ─────────────────────────────────────────────
   # Web משני — ops-supervisor (Docker, אותו Dockerfile)
@@ -18,25 +18,25 @@ services:
     name: ops-supervisor
     env: docker
     region: frankfurt
-    plan: starter                 # שדרג ל-pro אם צריך
-    dockerfilePath: Dockerfile    # Python 3.11 שלך → wheels, בלי קומפילציה
+    plan: starter
+    dockerfilePath: Dockerfile
     autoDeploy: false
     envVars:
       # Core / Runtime
       - key: PORT
-        value: 10001
+        value: "10001"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: LOG_LEVEL
-        value: INFO
+        value: "INFO"
       - key: PUBLIC_HOST
-        value: https://ops-supervisor.onrender.com
+        value: "https://ops-supervisor.onrender.com"
       - key: OPS_POLICY_PATH
-        value: policies/ops_policy.yaml
+        value: "policies/ops_policy.yaml"
       - key: INSTANCE_ID
-        value: ops-supervisor
+        value: "ops-supervisor"
 
-      # Safety (בדיקות – כבוי)
+      # Safety (בדיקות – כבוי כברירת מחדל)
       - key: AUTO_RUN
         value: "0"
       - key: EXECUTE_TRADES
@@ -46,25 +46,25 @@ services:
       - key: AI_SCHED_INTERVAL_SEC
         value: "300"
 
-      # Redis (URL לשים בדשבורד), Namespace מבודד מהראשי
+      # Redis (את ה-URL מגדירים בדשבורד), Namespace מבודד מהראשי
       - key: REDIS_URL
-        value: SET_IN_DASHBOARD
+        value: "SET_IN_DASHBOARD"
       - key: REDIS_NAMESPACE
-        value: ops-supervisor-web
+        value: "ops-supervisor-web"
 
-      # Auth/Tokens — שונים מהראשי! (לשים בדשבורד)
+      # Auth/Tokens — שונים מהראשי! (להגדיר בדשבורד בלבד)
       - key: ALGOGPT_TOKENS
-        value: SET_IN_DASHBOARD_SECONDARY
+        value: "SET_IN_DASHBOARD_SECONDARY"
       - key: API_BEARER_TOKEN
-        value: SET_IN_DASHBOARD_SECONDARY
+        value: "SET_IN_DASHBOARD_SECONDARY"
       - key: WEBHOOK_HMAC_SECRET
-        value: SET_IN_DASHBOARD_SECONDARY
+        value: "SET_IN_DASHBOARD_SECONDARY"
 
-      # OpenAI — לשים בדשבורד בלבד
+      # OpenAI — להגדיר בדשבורד בלבד
       - key: OPENAI_API_KEY
-        value: SET_IN_DASHBOARD
+        value: "SET_IN_DASHBOARD"
 
-      # Telegram — כבוי כדי לא להתנגש בראשי
+      # Telegram — כבוי כדי לא להתנגש בראשי; מלא רק אם צריך שליחה
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "0"
       - key: TELEGRAM_ADMIN_ONLY
@@ -74,9 +74,10 @@ services:
       - key: TELEGRAM_CHAT_ID
         value: "449087907"
       - key: TELEGRAM_BOT_TOKEN
-        value: ""     # ריק לבדיקות
+        value: ""
       - key: TELEGRAM_WEBHOOK_SECRET
-        value: ""     # הוסף בדשבורד אם צריך
+        value: ""
+
 
 
 
