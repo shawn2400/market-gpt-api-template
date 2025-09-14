@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import time
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ import yaml
 # -------------------- Config & Globals --------------------
 POLICY_PATH = os.getenv("OPS_POLICY_PATH", "policies/ops_policy.yaml")
 TZ_IL = ZoneInfo("Asia/Jerusalem")
+VERSION = "3.5"
 
 # Telegram
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -31,7 +33,7 @@ AIX_API_BASE = os.getenv("AIX_API_BASE", "https://api.x.ai").strip()
 AIX_MODEL_DEFAULT = os.getenv("AIX_MODEL_DEFAULT", "grok-3-mini").strip()
 
 # Infra checks
-REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_URL_ENV = os.getenv("REDIS_URL", "")
 PRIMARY_PUBLIC_HOST = os.getenv("PRIMARY_PUBLIC_HOST", "").strip()
 DEPLOY_HOOK = os.getenv("RENDER_DEPLOY_HOOK_MAIN", "").strip()
 
@@ -132,15 +134,76 @@ class AIXProvider(LLMProvider):
         async with self.session.post(url, headers=headers, json=body, timeout=HTTP_TIMEOUT) as r:
             return await r.json()
 
+# -------------------- ENV Sanitize (built-in; no external file needed) --------------------
+def _clean_redis_url(u: str) -> str:
+    if not u:
+        return u
+    # strip quotes/whitespace and literal/real newlines
+    u = u.strip().strip('"').strip("'").strip()
+    u = u.replace("\\n", "").rstrip("\n").strip()
+
+    # common paste error: starts with '//' instead of 'rediss://'
+    if u.startswith("//") and "keyvalue.render.com" in u:
+        u = "rediss:" + u
+
+    # enforce TLS on external endpoint
+    if "keyvalue.render.com" in u and not u.startswith("rediss://"):
+        u = "rediss://" + u.split("://", 1)[-1]
+
+    # convert internal free-tier host to external TLS if needed
+    if re.search(r"@red-[a-z0-9]+:6379$", u) and not "keyvalue.render.com" in u:
+        m = re.match(r"^redis[s]?://([^@]+)@[^:]+:\d+$", u)
+        if m:
+            auth = m.group(1)
+            u = f"rediss://{auth}@frankfurt-keyvalue.render.com:6379"
+    return u
+
+async def _redis_self_test(session: aiohttp.ClientSession, url: str) -> Tuple[bool, str]:
+    try:
+        import redis  # type: ignore
+    except Exception as e:
+        return False, f"redis-lib-missing: {e}"
+    try:
+        r = redis.Redis.from_url(url, decode_responses=True)  # do NOT pass ssl=
+        ok = bool(r.ping())
+        return ok, "ok" if ok else "ping-false"
+    except Exception as e:
+        return False, str(e)
+
 # -------------------- Core Supervisor --------------------
 class Supervisor:
     def __init__(self, policy: Policy):
         self.policy = policy
         self.session: Optional[aiohttp.ClientSession] = None
         self.running = True
+        # will be set in __aenter__ after sanitize
+        self.redis_url: str = _clean_redis_url(REDIS_URL_ENV)
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(timeout=HTTP_TIMEOUT)
+
+        # ENV sanitize + runtime auto-fix (updates process env if changed)
+        raw = REDIS_URL_ENV
+        cleaned = _clean_redis_url(raw)
+        if cleaned and cleaned != raw:
+            os.environ["REDIS_URL"] = cleaned
+            self.redis_url = cleaned
+            ts_il_fmt, ts_utc_fmt = self.policy.time_formats
+            ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
+            await send_telegram(self.session,
+                f"🛠️ Auto-sanitized <b>REDIS_URL</b> at runtime\n"
+                f"<b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
+                f"<code>old={repr(raw)}</code>\n<code>new={repr(cleaned)}</code>"
+            )
+
+        # quick self-test and notify
+        if self.redis_url:
+            ok, reason = await _redis_self_test(self.session, self.redis_url)
+            if ok:
+                await send_telegram(self.session, "✅ Redis connectivity OK after sanitize.")
+            else:
+                await send_telegram(self.session, f"⚠️ Redis self-test failed: <code>{reason}</code>")
+
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -150,7 +213,7 @@ class Supervisor:
     async def run(self):
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-        await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🔵 Info | Ops Supervisor starting (v3.4)")
+        await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🔵 Info | Ops Supervisor starting (v{VERSION})")
 
         sched = self.policy.gate("SCHEDULE", {})
         tick_seconds = int(sched.get("tick_seconds", 60))
@@ -159,7 +222,7 @@ class Supervisor:
         tasks = [
             asyncio.create_task(self.loop_health(tick_seconds)),
             asyncio.create_task(self.loop_maintenance(maintenance_minutes)),
-            asyncio.create_task(self.loop_nightly()),
+            asyncio.create_task(self.loop_nightly())),
             asyncio.create_task(self.loop_eod()),
         ]
 
@@ -233,14 +296,10 @@ class Supervisor:
     # ---------------- Health / Auto-Heal ----------------
     async def health_check(self) -> Tuple[bool, str]:
         # 1) Redis
-        if REDIS_URL:
-            try:
-                import redis  # type: ignore
-                r = redis.Redis.from_url(REDIS_URL, decode_responses=True, ssl=REDIS_URL.startswith("rediss://"))
-                if not r.ping():
-                    return False, "redis_unreachable"
-            except Exception:
-                return False, "redis_error"
+        if self.redis_url:
+            ok, reason = await _redis_self_test(self.session, self.redis_url)
+            if not ok:
+                return False, f"redis_error:{reason}"
 
         # 2) Primary /health
         if PRIMARY_PUBLIC_HOST:
@@ -269,6 +328,17 @@ class Supervisor:
             except Exception as e:
                 await send_telegram(self.session, f"🧯 Auto-Heal failed ({diag}): {e}")
         elif diag.startswith("redis"):
+            # try one more sanitize-attempt (in case env changed at runtime)
+            new_clean = _clean_redis_url(os.getenv("REDIS_URL", ""))
+            if new_clean and new_clean != self.redis_url:
+                os.environ["REDIS_URL"] = new_clean
+                self.redis_url = new_clean
+                ok, reason = await _redis_self_test(self.session, self.redis_url)
+                if ok:
+                    await send_telegram(self.session, f"✅ Redis recovered after re-sanitize.\n<code>{repr(self.redis_url)}</code>")
+                    return
+                else:
+                    await send_telegram(self.session, f"⚠️ Redis re-sanitize failed: <code>{reason}</code>")
             await send_telegram(self.session, f"⚠️ Redis issue detected: {diag}. Using external TLS endpoint recommended.")
 
     # ---------------- Maintenance Cycle ----------------
@@ -314,7 +384,6 @@ class Supervisor:
             v = float(v)
         except Exception:
             v = 5.0
-        # תמיכה בערכים 0-1 כיחס → אחוזים
         return int(round(v * 100)) if 0.0 < v <= 1.0 else int(round(v))
 
     async def notify_cancel(self, stage: str, reason: str, rollback: bool = False):
@@ -423,4 +492,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
