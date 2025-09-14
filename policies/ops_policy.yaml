@@ -23,6 +23,7 @@ SCHEDULE:
   maintenance_minutes: 45
   nightly_sweep_local_time: "02:30"
   eod_report_local_time: "23:57"
+  fixers_interval_seconds: 120        # 🔁 כל כמה זמן לרוץ על ה-Fixers
 
 GATES:
   cpu_pct_max: 60
@@ -170,5 +171,32 @@ STATUS_WATCH: { binance: { enabled: true, maintenance_hold: true } }
 AUDIT: { hash_chain: true, sign_release: true }
 
 DATA_GUARD: { mask_secrets_pii: true }
+
+# -------------------- הוספה: Auto-Fixers --------------------
+AUTO_FIXERS:
+  enabled: true
+  # כל מקטע אפשר לכבות/להדליק בנפרד:
+  redis:
+    enabled: true
+    persist_to_render: true          # שומר ENV מתוקן ב-Render + redeploy אוטומטי
+  primary:
+    enabled: true
+    redeploy_via: ["hook","api"]     # קודם hook אם מוגדר, אח"כ Render API
+    cooldown_sec: 1800
+  telegram_webhook:
+    enabled: true
+    route: "/telegram/webhook"       # הנתיב אצלך בשרת המשני
+    query_secret_key: "secret"       # שם הפרמטר לשמירת ה-secret
+  executor_ping:
+    enabled: true
+    require_token: true              # שולח Authorization: Bearer PRIMARY_API_TOKEN
+  render_env_sync:
+    enabled: true
+    keys: ["REDIS_URL"]              # אילו ENV לשמור ב-Render כשמתוקנים בזמן ריצה
+
+SENSITIVE:
+  require_approval: ["rotate_secrets","plan_change","region_migration"]
+  auto_fix_allow: ["redis_env_fix","telegram_set_webhook","primary_redeploy"]
+
 
 
