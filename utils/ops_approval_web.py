@@ -82,10 +82,17 @@ def _save_ticket(ticket: Dict[str, Any], ttl_s: int):
         return
     _redis.setex(_ticket_key(ticket["id"]), max(60, ttl_s), json.dumps(ticket))
 
-def _publish_event(ticket_id: str, status: str):
+def _publish_event(ticket_id: str, status: str, approvals: int, require: int, version: str = ""):
     try:
         if _redis:
-            _redis.publish(APPROVAL_PUBSUB_CHANNEL, json.dumps({"id": ticket_id, "status": status, "ts": int(time.time())}))
+            _redis.publish(APPROVAL_PUBSUB_CHANNEL, json.dumps({
+                "id": ticket_id,
+                "status": status,
+                "approvals": int(approvals),
+                "require": int(require),
+                "version": version,
+                "ts": int(time.time())
+            }))
     except Exception:
         pass
 
@@ -118,18 +125,20 @@ async def health():
         ok = bool(_redis and _redis.ping())
     except Exception:
         ok = False
-    return JSONResponse({"ok": ok})
+    return JSONResponse({"ok": ok, "pubsub_channel": APPROVAL_PUBSUB_CHANNEL})
 
 @app.get("/ops/approve", response_class=HTMLResponse)
 async def approve(req: Request):
     """
     GET /ops/approve?action=approve|reject&ticket_id=...&expires=...&require=2&version=...&sig=...
-    - HMAC אימות
+    - אימות HMAC אם מוגדר סוד
     - עדכון Ticket ב-Redis
     - פרסום אירוע Pub/Sub + הודעת טלגרם
     """
     q = dict(req.query_params)
-    required = ["action", "ticket_id", "expires", "require", "version", "sig"]
+    required = ["action", "ticket_id", "expires", "require", "version"]
+    if WEBHOOK_HMAC_SECRET:
+        required.append("sig")
     for k in required:
         if k not in q:
             raise HTTPException(status_code=400, detail=f"missing param: {k}")
@@ -146,10 +155,11 @@ async def approve(req: Request):
     if exp < now:
         return HTMLResponse(f"<h2>⏱️ Link expired</h2><p>ticket <code>{_html(ticket_id)}</code></p>", status_code=410)
 
-    to_sign = {k: q[k] for k in q if k != "sig"}
-    expected = _sign_params(to_sign)
-    if WEBHOOK_HMAC_SECRET and not hmac.compare_digest(expected, q["sig"]):
-        raise HTTPException(status_code=401, detail="bad signature")
+    if WEBHOOK_HMAC_SECRET:
+        to_sign = {k: q[k] for k in q if k != "sig"}
+        expected = _sign_params(to_sign)
+        if not hmac.compare_digest(expected, q.get("sig","")):
+            raise HTTPException(status_code=401, detail="bad signature")
 
     ticket = await _load_ticket(ticket_id)
     if not ticket:
@@ -180,7 +190,7 @@ async def approve(req: Request):
         raise HTTPException(status_code=400, detail="unknown action")
 
     _save_ticket(ticket, remaining)
-    _publish_event(ticket["id"], ticket["status"])
+    _publish_event(ticket["id"], ticket["status"], ticket.get("approvals", 0), ticket.get("require", 1), q.get("version",""))
 
     who = q.get("by", "unknown")
     version = q.get("version", "")
@@ -216,5 +226,6 @@ async def get_ticket(ticket_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT","10000")))
+
 
 
