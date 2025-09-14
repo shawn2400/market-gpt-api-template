@@ -1,106 +1,52 @@
 # FILE: utils/render_api.py
 from __future__ import annotations
 import aiohttp
-from typing import Any, Dict, List, Optional
-
-RENDER_API_BASE = "https://api.render.com"
+from typing import Any, Dict, Optional
 
 class RenderAPI:
-    """
-    דק-קליינט ל-Render API עם כמה נתיבים נפוצים:
-    - list_services
-    - get_service
-    - create_deploy
-    - set_env_var_compat (ניסיון תאימות בכמה שיטות)
-    """
-    def __init__(self, api_key: str, api_base: str = RENDER_API_BASE):
-        self.api_key = api_key
-        self.api_base = api_base.rstrip("/")
-
-    def _headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_key}",
+    def __init__(self, api_key: str, base: str = "https://api.render.com"):
+        self.base = base.rstrip("/")
+        self.headers = {
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "Accept": "application/json",
         }
 
-    async def _get(self, session: aiohttp.ClientSession, path: str) -> Any:
-        url = f"{self.api_base}{path}"
-        async with session.get(url, headers=self._headers()) as resp:
-            resp.raise_for_status()
-            return await resp.json()
-
-    async def _post(self, session: aiohttp.ClientSession, path: str, json_body: Any = None) -> Any:
-        url = f"{self.api_base}{path}"
-        async with session.post(url, headers=self._headers(), json=json_body) as resp:
-            if resp.status // 100 != 2:
-                text = await resp.text()
-                raise RuntimeError(f"POST {path} failed: {resp.status} {text}")
-            if resp.content_type and "application/json" in resp.content_type:
-                return await resp.json()
-            return await resp.text()
-
-    async def _patch(self, session: aiohttp.ClientSession, path: str, json_body: Any = None) -> Any:
-        url = f"{self.api_base}{path}"
-        async with session.patch(url, headers=self._headers(), json=json_body) as resp:
-            if resp.status // 100 != 2:
-                text = await resp.text()
-                raise RuntimeError(f"PATCH {path} failed: {resp.status} {text}")
-            if resp.content_type and "application/json" in resp.content_type:
-                return await resp.json()
-            return await resp.text()
-
-    async def _put(self, session: aiohttp.ClientSession, path: str, json_body: Any = None) -> Any:
-        url = f"{self.api_base}{path}"
-        async with session.put(url, headers=self._headers(), json=json_body) as resp:
-            if resp.status // 100 != 2:
-                text = await resp.text()
-                raise RuntimeError(f"PUT {path} failed: {resp.status} {text}")
-            if resp.content_type and "application/json" in resp.content_type:
-                return await resp.json()
-            return await resp.text()
-
-    # ---------- Services ----------
-    async def list_services(self) -> List[Dict[str, Any]]:
-        async with aiohttp.ClientSession() as s:
-            # Render מחזיר לעיתים רשימה של אובייקטים עם {cursor, service:{...}}
-            data = await self._get(s, "/v1/services")
-            return data
+    async def _req(self, method: str, path: str, json_body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        url = f"{self.base}{path}"
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout, headers=self.headers) as s:
+            async with s.request(method.upper(), url, json=json_body) as r:
+                try:
+                    data = await r.json()
+                except Exception:
+                    data = {"status": r.status, "text": await r.text()}
+                data["_http_status"] = r.status
+                return data
 
     async def get_service(self, service_id: str) -> Dict[str, Any]:
-        async with aiohttp.ClientSession() as s:
-            return await self._get(s, f"/v1/services/{service_id}")
+        return await self._req("GET", f"/v1/services/{service_id}")
 
-    async def create_deploy(self, service_id: str) -> Any:
-        """
-        טריגר דיפלוי לשירות נתון.
-        """
-        async with aiohttp.ClientSession() as s:
-            return await self._post(s, f"/v1/services/{service_id}/deploys", json_body={})
+    async def create_deploy(self, service_id: str) -> bool:
+        # Render: POST /v1/services/{serviceId}/deploys
+        data = await self._req("POST", f"/v1/services/{service_id}/deploys", json_body={})
+        return 200 <= data.get("_http_status", 0) < 300
 
-    # ---------- Env Vars (compat) ----------
     async def set_env_var_compat(self, service_id: str, key: str, value: str, visibility: str = "private") -> bool:
         """
-        מנסה לעדכן/ליצור משתנה סביבה בכמה וריאציות אפשריות, כדי להיות סובלני לשינויים ב-API.
-        מחזיר True אם אחד מהם הצליח (2xx).
-        פורמט סטנדרטי: רשימה של אובייקטים {key, value, visibility}
+        מנסה כמה פורמטים נפוצים של Render API לעדכון ENV.
+        אם ה־API בארגון שלך שונה—נחזור False (וה־Supervisor רק יתריע, לא ייפול).
         """
-        payload_list = [{"key": key, "value": value, "visibility": visibility}]
-        paths = [
-            ("POST", f"/v1/services/{service_id}/env-vars"),
-            ("PATCH", f"/v1/services/{service_id}/env-vars"),
-            ("PUT", f"/v1/services/{service_id}/env-vars"),
-        ]
-        async with aiohttp.ClientSession() as s:
-            for method, path in paths:
-                try:
-                    if method == "POST":
-                        await self._post(s, path, json_body=payload_list)
-                    elif method == "PATCH":
-                        await self._patch(s, path, json_body=payload_list)
-                    elif method == "PUT":
-                        await self._put(s, path, json_body=payload_list)
-                    return True
-                except Exception:
-                    continue
-        return False
+        # ניסיון 1: PUT envVars (פורמט A)
+        body_a = {"envVars": [{"key": key, "value": value, "visibility": visibility}]}
+        a = await self._req("PUT", f"/v1/services/{service_id}/env-vars", json_body=body_a)
+        if 200 <= a.get("_http_status", 0) < 300:
+            return True
+        # ניסיון 2: POST envVars (פורמט B)
+        body_b = {"key": key, "value": value, "visibility": visibility}
+        b = await self._req("POST", f"/v1/services/{service_id}/env-vars", json_body=body_b)
+        if 200 <= b.get("_http_status", 0) < 300:
+            return True
+        # ניסיון 3: חלק מהממשקים משתמשים ב-type=SECRET/GENERAL
+        body_c = {"envVars": [{"key": key, "value": value, "type": "SECRET" if visibility=="private" else "GENERAL"}]}
+        c = await self._req("PUT", f"/v1/services/{service_id}/env-vars", json_body=body_c)
+        return 200 <= c.get("_http_status", 0) < 300
