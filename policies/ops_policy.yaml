@@ -5,21 +5,15 @@ MASTER:
   emergency_actions_in_frozen: ["reconnect","restart","rollback_config"]
 
 PROFILES:
-  eco:
-    experiments_per_day: 6
-    advisor_mode: "off"
-  balanced:
-    experiments_per_day: 12
-    advisor_mode: "risk-gated"
-  performance:
-    experiments_per_day: 16
-    advisor_mode: "risk-gated"
+  eco:         { experiments_per_day: 6,  advisor_mode: "off" }
+  balanced:    { experiments_per_day: 12, advisor_mode: "risk-gated" }
+  performance: { experiments_per_day: 16, advisor_mode: "risk-gated" }
 
 TIME:
   tz: "Asia/Jerusalem"
   formats:
-    ts_il: "%d/%m/%Y %H:%M:%S %Z"     # לדוגמה: 11/09/2025 14:23:05 IDT
-    ts_utc: "%Y-%m-%d %H:%M:%S UTC"   # לדוגמה: 2025-09-11 11:23:05 UTC
+    ts_il: "%d/%m/%Y %H:%M:%S %Z"
+    ts_utc: "%Y-%m-%d %H:%M:%S UTC"
   include_utc: true
   include_local: true
   prepend_in_messages: true
@@ -74,6 +68,7 @@ EMERGENCY:
   telegram_commands: ["/safe", "/freeze_on", "/freeze_off"]
 
 CANARY:
+  # אפשר או אחוזים (0-1) או מספרים (5,15,30). הסופרווייזר יתרגם.
   size_by_crs: { "0-3": 0.05, "4-6": 0.15, "7-10": 0.30 }
   promote_if_green_minutes: 15
 
@@ -85,10 +80,7 @@ PREDICTOR:
   features: ["delta_loc","files_touched","area","time_of_day","crs","past_win_rate"]
   threshold_block: 0.75
 
-PROMPT_OPT:
-  dedup_hash: true
-  max_context_chars: 8000
-  cache_ttl_min: 60
+PROMPT_OPT: { dedup_hash: true, max_context_chars: 8000, cache_ttl_min: 60 }
 
 MARKET_AWARE:
   vol_kpi: "1h_realized_vol"
@@ -96,30 +88,17 @@ MARKET_AWARE:
   boost_when_trending: true
   binance_maintenance_hold: true
 
-OPTIMIZER:
-  require_pareto_front: true
-  max_cost_delta_usd: 0.05
+OPTIMIZER: { require_pareto_front: true, max_cost_delta_usd: 0.05 }
 
-EVAL:
-  causal: "cuped"
-  min_effect_size: 0.02
+EVAL: { causal: "cuped", min_effect_size: 0.02 }
 
-DISTILLATION:
-  repeat_threshold: 3
-  auto_promote_to_rule: true
-  add_golden_test: true
+DISTILLATION: { repeat_threshold: 3, auto_promote_to_rule: true, add_golden_test: true }
 
-SAFETY_RUNS:
-  shadow: true
-  drysim_on_sensitive: true
-  drysim_duration_s: 30
+SAFETY_RUNS: { shadow: true, drysim_on_sensitive: true, drysim_duration_s: 30 }
 
 BUDGETS:
-  xai:
-    monthly_usd_cap: 30
-  openai:
-    monthly_usd_cap: 20
-    daily_usd_cap: 5
+  xai:    { monthly_usd_cap: 30 }
+  openai: { monthly_usd_cap: 20, daily_usd_cap: 5 }
   action_on_cap: degrade
 
 BUDGET_GOVERNOR:
@@ -127,29 +106,14 @@ BUDGET_GOVERNOR:
   shift_heavy_tasks_to: "nightly"
   hard_cap_action: "heuristics_only"
 
-RELEASE_NOTES:
-  include_forecast: true
-  revert_if_forecast_miss_min: 30
+RELEASE_NOTES: { include_forecast: true, revert_if_forecast_miss_min: 30 }
 
-EXCHANGES_DEFAULTS:
-  enabled: false
-  require_credentials: true
-  activate_only_if: ["handshake_ok","quotas_set","allowlisted"]
+EXCHANGES_DEFAULTS: { enabled: false, require_credentials: true, activate_only_if: ["handshake_ok","quotas_set","allowlisted"] }
 
 EXCHANGES:
-  binance:
-    enabled: true
-    ws_max: 8
-    rest_rps: 40
-    token_bucket: { capacity: 120, refill_per_s: 20 }
-  bybit:
-    enabled: false
-    ws_max: 0
-    rest_rps: 0
-  okx:
-    enabled: false
-    ws_max: 0
-    rest_rps: 0
+  binance: { enabled: true, ws_max: 8, rest_rps: 40, token_bucket: { capacity: 120, refill_per_s: 20 } }
+  bybit:   { enabled: false, ws_max: 0, rest_rps: 0 }
+  okx:     { enabled: false, ws_max: 0, rest_rps: 0 }
 
 AUTO_ONBOARD:
   enabled: true
@@ -157,10 +121,7 @@ AUTO_ONBOARD:
   preapproved_exchanges: ["binance","bybit"]
   preapproved_features: ["advisor_voice","vision_rca","embeddings_kb","web_search"]
   require: ["credentials","allowlist","handshake_ok","quotas_set","budget_ok","gates_green"]
-  rollout:
-    shadow_ratio: 0.01
-    canary_pct: 15
-    promote_if_green_minutes: 15
+  rollout: { shadow_ratio: 0.01, canary_pct: 15, promote_if_green_minutes: 15 }
   concurrency: 1
   spacing_seconds: 120
   backoff_ms: [1000, 4000, 12000]
@@ -173,76 +134,41 @@ INNOVATION_WATCH:
     pypi: ["ta", "scipy", "pandas", "numpy"]
     github_topics: ["technical-indicators", "quant", "crypto-trading"]
     docs_watch: ["binance_api_changes", "exchange_status"]
-    x_feed: { enabled: false }   # הדלק רק אם יש API חוקי ל-X
+    x_feed: { enabled: false }
   cadence_hours: 6
   curation:
     must_have: ["license_ok", "maintained", "stars_gt:50"]
     denylist: ["abandoned", "unsafe", "heavy_gpu"]
-  scoring:
-    formula: "(impact*compatibility*maintainability) - cost"
-    promote_threshold: 0.7
-  rollout:
-    mode: "propose_then_auto"   # מציע בטלגרם; Non-sensitive → Auto Canary
-    canary_pct: 10
-    auto_revert_on_slo: true
+  scoring: { formula: "(impact*compatibility*maintainability) - cost", promote_threshold: 0.7 }
+  rollout: { mode: "propose_then_auto", canary_pct: 10, auto_revert_on_slo: true }
 
 EXCHANGE_GUARD:
   on_429: ["backoff_jitter","reduce_ws_pool","pause_experiments"]
   min_backoff_ms: 500
   max_backoff_ms: 8000
 
-HEALTH_ENDPOINTS:
-  healthz: true
-  readyz: true
-  livez: true
+HEALTH_ENDPOINTS: { healthz: true, readyz: true, livez: true }
 
-DISK_GUARD:
-  min_free_gb: 3
-  min_free_inodes_pct: 10
-  auto_clean_logs: true
+DISK_GUARD: { min_free_gb: 3, min_free_inodes_pct: 10, auto_clean_logs: true }
 
-POLICY_PIN:
-  require_hash: false
-  current_sha256: ""
+POLICY_PIN: { require_hash: false, current_sha256: "" }
 
-OBSERVABILITY:
-  correlation_id: "ulid"
-  inject_into_logs_and_msgs: true
+OBSERVABILITY: { correlation_id: "ulid", inject_into_logs_and_msgs: true }
 
-ADVISOR_CB:
-  p95_ms_trip: 8000
-  error_rate_trip_pct: 2
-  cooloff_seconds: 600
-  fallback: "heuristics_only"
+ADVISOR_CB: { p95_ms_trip: 8000, error_rate_trip_pct: 2, cooloff_seconds: 600, fallback: "heuristics_only" }
 
-ROADMAP:
-  score_formula: "(impact*prob)/effort"
-  pick_top_k_per_day: 3
-  auto_refresh_hours: 6
+ROADMAP: { score_formula: "(impact*prob)/effort", pick_top_k_per_day: 3, auto_refresh_hours: 6 }
 
-CHAOS_LITE:
-  enabled: true
-  schedule: "Sun 03:40"
-  scope: ["ws_reconnect","api_slowdown"]
-  max_duration_seconds: 60
-  abort_on_error: true
+CHAOS_LITE: { enabled: true, schedule: "Sun 03:40", scope: ["ws_reconnect","api_slowdown"], max_duration_seconds: 60, abort_on_error: true }
 
-POSTMORTEM:
-  auto_generate: true
-  attach_rca_to_kb: true
+POSTMORTEM: { auto_generate: true, attach_rca_to_kb: true }
 
-DR:
-  weekly_restore_check: "Sun 03:10"
-  immutable_backup_days: 90
-  retention_days: 14
+DR: { weekly_restore_check: "Sun 03:10", immutable_backup_days: 90, retention_days: 14 }
 
-STATUS_WATCH:
-  binance: { enabled: true, maintenance_hold: true }
+STATUS_WATCH: { binance: { enabled: true, maintenance_hold: true } }
 
-AUDIT:
-  hash_chain: true
-  sign_release: true
+AUDIT: { hash_chain: true, sign_release: true }
 
-DATA_GUARD:
-  mask_secrets_pii: true
+DATA_GUARD: { mask_secrets_pii: true }
+
 
