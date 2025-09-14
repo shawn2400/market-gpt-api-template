@@ -62,7 +62,7 @@ async def send_telegram(text: str):
 def _sign_params(params: Dict[str, str]) -> str:
     if not WEBHOOK_HMAC_SECRET:
         return ""
-    s = "&".join(f"{k}={params[k]}" for k in sorted(params))  # must match supervisor's canonicalization
+    s = "&".join(f"{k}={params[k]}" for k in sorted(params))
     return hmac.new(WEBHOOK_HMAC_SECRET, s.encode(), hashlib.sha256).hexdigest()
 
 def _html(s: str) -> str:
@@ -83,11 +83,9 @@ def _save_ticket(ticket: Dict[str, Any], ttl_s: int):
     _redis.setex(_ticket_key(ticket["id"]), max(60, ttl_s), json.dumps(ticket))
 
 def _publish_event(ticket_id: str, status: str):
-    """Notify supervisor via Redis Pub/Sub for immediate progress."""
-    if not _redis:
-        return
     try:
-        _redis.publish(APPROVAL_PUBSUB_CHANNEL, json.dumps({"id": ticket_id, "status": status, "ts": int(time.time())}))
+        if _redis:
+            _redis.publish(APPROVAL_PUBSUB_CHANNEL, json.dumps({"id": ticket_id, "status": status, "ts": int(time.time())}))
     except Exception:
         pass
 
@@ -113,14 +111,22 @@ async def _shutdown():
         _http = None
 
 # --------- routes ---------
+@app.get("/health", response_class=JSONResponse)
+async def health():
+    ok = False
+    try:
+        ok = bool(_redis and _redis.ping())
+    except Exception:
+        ok = False
+    return JSONResponse({"ok": ok})
+
 @app.get("/ops/approve", response_class=HTMLResponse)
 async def approve(req: Request):
     """
     GET /ops/approve?action=approve|reject&ticket_id=...&expires=...&require=2&version=...&sig=...
-    - Verify HMAC signature (same canonical form as supervisor)
-    - Update ticket in Redis
-    - Publish Pub/Sub event for immediate progress
-    - Notify Telegram
+    - HMAC אימות
+    - עדכון Ticket ב-Redis
+    - פרסום אירוע Pub/Sub + הודעת טלגרם
     """
     q = dict(req.query_params)
     required = ["action", "ticket_id", "expires", "require", "version", "sig"]
@@ -134,5 +140,81 @@ async def approve(req: Request):
         exp = int(q["expires"])
         req_needed = int(q["require"])
     except Exception:
-        raise HTTPException(status_code=400
+        raise HTTPException(status_code=400, detail="invalid expires/require")
+
+    now = int(time.time())
+    if exp < now:
+        return HTMLResponse(f"<h2>⏱️ Link expired</h2><p>ticket <code>{_html(ticket_id)}</code></p>", status_code=410)
+
+    to_sign = {k: q[k] for k in q if k != "sig"}
+    expected = _sign_params(to_sign)
+    if WEBHOOK_HMAC_SECRET and not hmac.compare_digest(expected, q["sig"]):
+        raise HTTPException(status_code=401, detail="bad signature")
+
+    ticket = await _load_ticket(ticket_id)
+    if not ticket:
+        ticket = {
+            "id": ticket_id,
+            "status": "pending",
+            "require": req_needed,
+            "approvals": 0,
+            "created_at": now,
+            "expires_at": exp,
+            "proposal": {"version": q.get("version","")},
+        }
+
+    remaining = max(30, exp - now)
+
+    if action == "approve":
+        ticket["approvals"] = int(ticket.get("approvals", 0)) + 1
+        ticket["require"] = int(ticket.get("require", req_needed))
+        if ticket["approvals"] >= ticket["require"]:
+            ticket["status"] = "approved"
+        else:
+            ticket["status"] = "pending"
+        verb = f"✅ APPROVED ({ticket['approvals']}/{ticket['require']})"
+    elif action == "reject":
+        ticket["status"] = "rejected"
+        verb = "❌ REJECTED"
+    else:
+        raise HTTPException(status_code=400, detail="unknown action")
+
+    _save_ticket(ticket, remaining)
+    _publish_event(ticket["id"], ticket["status"])
+
+    who = q.get("by", "unknown")
+    version = q.get("version", "")
+    await send_telegram(
+        f"🔐 <b>Change approval</b> | <code>{_html(ticket_id)}</code>\n"
+        f"{verb} | by: <code>{_html(who)}</code>\n"
+        f"Version: <code>{_html(version)}</code>\n"
+        f"Status: <b>{_html(ticket['status'])}</b>"
+    )
+
+    extra = ""
+    if ticket["status"] == "approved":
+        extra = "<p>System may proceed (supervisor will continue immediately).</p>"
+    elif ticket["status"] == "pending":
+        extra = f"<p>Waiting for more approvals: {ticket['approvals']}/{ticket['require']}.</p>"
+
+    return HTMLResponse(
+        f"<h2>{verb}</h2>"
+        f"<p>Ticket: <code>{_html(ticket_id)}</code></p>"
+        f"<p>Status: <b>{_html(ticket['status'])}</b></p>"
+        f"{extra}",
+        status_code=200
+    )
+
+@app.get("/ops/ticket/{ticket_id}", response_class=JSONResponse)
+async def get_ticket(ticket_id: str):
+    t = await _load_ticket(ticket_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="ticket not found")
+    return JSONResponse(t)
+
+# Local dev
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT","10000")))
+
 
