@@ -63,7 +63,6 @@ logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 # ────────────────────────────────────────────────────────────────────────────────
 # FS bootstrap
 # ────────────────────────────────────────────────────────────────────────────────
-# מוסיף גם data כדי להבטיח שה-SQLite יעבוד עם DATABASE_URL=sqlite:////app/data/algogpt.db
 for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -74,7 +73,7 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# OpenAPI dynamic filter (hide x-internal, patterns, cap operations)
+# OpenAPI dynamic filter
 # ────────────────────────────────────────────────────────────────────────────────
 from fastapi.openapi.utils import get_openapi
 from fnmatch import fnmatch
@@ -106,19 +105,15 @@ def custom_openapi():
                 continue
             op = methods[method]
 
-            # hide if explicitly internal
             if op.get("x-internal") is True:
                 continue
 
-            # include only specific tags if configured
             if include_tags and not include_tags.intersection(set(op.get("tags") or [])):
                 continue
 
-            # hide by path glob
             if path_hidden:
                 continue
 
-            # enforce public ops cap
             if max_ops > 0 and count >= max_ops:
                 continue
 
@@ -143,7 +138,6 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
-# דפדפנים לא מאפשרים credentials עם wildcard:
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
 
 app.add_middleware(
@@ -158,7 +152,7 @@ app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Auth gate (public paths vs. token)
+# Auth gate
 # ────────────────────────────────────────────────────────────────────────────────
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC", "1").lower() in ("1", "true", "yes", "on")
 
@@ -167,8 +161,7 @@ async def validate_token(request: Request, call_next):
     PUBLIC_PATHS = {
         "/", "/openapi.json", "/health", "/healthz", "/readyz",
         "/docs", "/redoc",
-        "/telegram/webhook", "/telegram/ping",
-        # public provider webhook (HMAC-validated in its router)
+        "/telegram/webhook", "/telegram/callback", "/telegram/ping",  # ← הוספנו /callback לציבורי
         "/provider/cryptopanic/webhook",
     }
     PUBLIC_PREFIXES = [
@@ -190,7 +183,7 @@ async def validate_token(request: Request, call_next):
     return await call_next(request)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Include routers (dynamic safe import)
+# Include routers
 # ────────────────────────────────────────────────────────────────────────────────
 def _try_include(module_path: str) -> bool:
     try:
@@ -213,14 +206,15 @@ for module_path in (
     "routes.backtest",
     "routes.executor",
     "routes.binance_status",
-    "routes.telegram_webhook",     # optional
+    "routes.telegram_webhook",     # /telegram/commands (אופציונלי)
+    "routes.telegram_callbacks",   # /telegram/callback — עבור callbacks נפרד
     "routes.grid",
     "routes.executor_control",
     "routes.ws_user_stream",       # optional
-    "routes.ai_analyze",           # /ai/analyze with rate limit
-    "routes.ws_user_status",       # fallback /status/ws
-    "routes.executor_status",      # fallback /status/executor
-    "routes.provider_cryptopanic", # HMAC-signed webhook
+    "routes.ai_analyze",
+    "routes.ws_user_status",
+    "routes.executor_status",
+    "routes.provider_cryptopanic",
 ):
     if _try_include(module_path):
         try:
@@ -258,7 +252,6 @@ async def debug_health():
 
 @app.get("/status/ping")
 async def status_ping():
-    # שימוש ב-epoch ms לשמירה על עקביות עם שאר ה־API
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -291,12 +284,12 @@ if not _route_exists("/status/all"):
         }
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Price (aligned with OpenAPI schema)
+# Price
 # ────────────────────────────────────────────────────────────────────────────────
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"
-    ts = int(time.time() * 1000)  # OpenAPI field name: ts
+    ts = int(time.time() * 1000)
     err = ""
     try:
         p = get_price(symbol)
@@ -353,6 +346,14 @@ BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
 
+# Admin policy (גם ל-webhook הישיר)
+ADMIN_ONLY = os.getenv("TELEGRAM_ADMIN_ONLY", "1").lower() in ("1","true","yes","on")
+ADMIN_IDS  = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
+def _is_admin(uid: int) -> bool:
+    if not ADMIN_ONLY:
+        return True
+    return str(uid) in ADMIN_IDS
+
 async def _tg_send(chat_id: int, text: str):
     if not BOT_TOKEN:
         return
@@ -364,12 +365,33 @@ async def _tg_send(chat_id: int, text: str):
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("telegram send failed: %s", e)
 
+async def _tg_answer_callback(cbq_id: str, text: str = ""):
+    if not (BOT_TOKEN and cbq_id):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/answerCallbackQuery", data={"callback_query_id": cbq_id, "text": text, "show_alert": False})
+    except Exception as e:
+        logging.getLogger("algogpt.telegram").warning("answerCallbackQuery failed: %s", e)
+
+async def _tg_disable_kb(chat_id: int, message_id: int):
+    if not BOT_TOKEN:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/editMessageReplyMarkup", data={
+                "chat_id": chat_id, "message_id": message_id, "reply_markup": '{"inline_keyboard":[]}'
+            })
+    except Exception as e:
+        logging.getLogger("algogpt.telegram").warning("disable_kb failed: %s", e)
+
 @app.get("/telegram/ping", include_in_schema=False)
 async def tg_ping():
     return {"ok": True, "src": "telegram", "ts_ms": int(time.time() * 1000)}
 
 @app.post("/telegram/webhook", include_in_schema=False)
 async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
+    # Secret header (הגנת webhook)
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(401, "Invalid telegram secret")
 
@@ -378,34 +400,53 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     except Exception:
         raise HTTPException(400, "invalid JSON")
 
+    # callback_query — אישור/ביטול
     cb = update.get("callback_query")
     if cb:
-        data = str(cb.get("data", ""))
-        chat = (cb.get("message", {}).get("chat", {}) or cb.get("from", {}))
-        chat_id = int(chat.get("id", 0))
+        cb_id = cb.get("id")
+        from_user = cb.get("from") or {}
+        uid = int(from_user.get("id") or 0)
+        msg = cb.get("message") or {}
+        chat_id = int((msg.get("chat") or {}).get("id") or 0)
+        message_id = int(msg.get("message_id") or 0)
+        data = str(cb.get("data") or "")
+        if not _is_admin(uid):
+            await _tg_answer_callback(cb_id, "⛔️ אין הרשאה")
+            return {"ok": True}
+
         parts = data.split(":", 2)
         if len(parts) == 3 and parts[0] == "CONFIRM":
             action, cid = parts[1], parts[2]
-            approver = str(cb.get("from", {}).get("username") or chat_id)
+            rec = ConfirmStore.get(cid)
+            if not rec or rec.get("status") != "pending":
+                if chat_id and message_id:
+                    await _tg_disable_kb(chat_id, message_id)
+                await _tg_answer_callback(cb_id, "פג תוקף/כבר טופל")
+                return {"ok": True}
             if action == "APPROVE":
-                ConfirmStore.approve(cid, approver=approver)
-                await _tg_send(chat_id, "✅ אושר. מפעיל את הטרייד.")
-            else:
-                ConfirmStore.reject(cid, approver=approver)
-                await _tg_send(chat_id, "❌ בוטל. הטרייד לא יצא לפועל.")
-        try:
-            cb_id = cb.get("id")
-            if BOT_TOKEN and cb_id:
-                async with httpx.AsyncClient(timeout=10.0) as cli:
-                    await cli.post(f"{API_BASE}/answerCallbackQuery", data={"callback_query_id": cb_id})
-        except Exception:
-            pass
+                ConfirmStore.approve(cid, approver=str(uid))
+                await _tg_answer_callback(cb_id, "אושר ✅")
+                if chat_id and message_id:
+                    await _tg_disable_kb(chat_id, message_id)
+                return {"ok": True}
+            if action == "REJECT":
+                ConfirmStore.reject(cid, approver=str(uid))
+                await _tg_answer_callback(cb_id, "בוטל ❌")
+                if chat_id and message_id:
+                    await _tg_disable_kb(chat_id, message_id)
+                return {"ok": True}
+            await _tg_answer_callback(cb_id, "פעולה לא מזוהה")
+            return {"ok": True}
+
+        await _tg_answer_callback(cb_id, "לא נתמך")
         return {"ok": True}
 
+    # הודעות טקסט פשוטות (לשימוש מהיר: /ping)
     msg = update.get("message")
     if msg and str(msg.get("text", "")).strip() == "/ping":
-        chat_id = int(msg.get("chat", {}).get("id", 0))
-        await _tg_send(chat_id, "pong ✅")
+        chat_id = int((msg.get("chat") or {}).get("id") or 0)
+        if chat_id:
+            await _tg_send(chat_id, "pong ✅")
         return {"ok": True}
 
     return {"ok": True}
@@ -486,6 +527,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
