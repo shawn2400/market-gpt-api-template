@@ -41,6 +41,9 @@ AIX_API_KEY = os.getenv("AIX_API_KEY", "").strip()
 AIX_API_BASE = os.getenv("AIX_API_BASE", "https://api.x.ai").strip()
 AIX_MODEL_DEFAULT = os.getenv("AIX_MODEL_DEFAULT", "grok-3-mini").strip()
 
+# Provider order (env-configurable)
+LLM_PROVIDER_ORDER = os.getenv("LLM_PROVIDER_ORDER", "openai,aix,conservative").strip()
+
 # Infra / Render
 REDIS_URL_ENV = os.getenv("REDIS_URL", "")
 PRIMARY_PUBLIC_HOST = os.getenv("PRIMARY_PUBLIC_HOST", "").strip().rstrip("/")
@@ -219,6 +222,12 @@ def _expand_env_templates(s: str) -> str:
     if not isinstance(s, str):
         return s
     return re.sub(r"\$\{([A-Z0-9_]+)\}", lambda m: os.getenv(m.group(1), ""), s)
+
+def _iter_llm_order() -> list[str]:
+    order_raw = (LLM_PROVIDER_ORDER or "").lower().replace(" ", "")
+    valid = {"aix", "openai", "conservative"}
+    order = [p for p in order_raw.split(",") if p in valid]
+    return order or ["openai", "aix", "conservative"]
 
 # -------------------- Core Supervisor --------------------
 class Supervisor:
@@ -494,13 +503,12 @@ class Supervisor:
             if not ticket_id:
                 await self.notify_cancel("approval", "failed_to_create_ticket")
                 return
-            # המתנה מאובטחת לאישור/דחייה, עם Pub/Sub (מתקדם מיידית)
             timeout_s = int(self.policy.gate("APPROVAL_ENDPOINTS", {}).get("timeout_seconds", 600))
             ok, status = await self.wait_for_ticket(ticket_id, timeout_s)
             if not ok:
                 await self.notify_cancel("approval", status or "not_approved")
                 return
-            # אושר → ממשיכים כרגיל
+            # approved → continue
 
         # Canary → Promote → Post-verify
         canary_pct = self.canary_by_crs(crs)
@@ -572,32 +580,40 @@ class Supervisor:
 
     # ---------------- LLM Orchestration ----------------
     async def propose_change(self) -> Optional[Dict[str, Any]]:
-        conservative: Optional[Dict[str, Any]] = {
+        """Provider order via LLM_PROVIDER_ORDER with robust fallback."""
+        conservative: Dict[str, Any] = {
             "crs": 2, "sensitive": False,
-            "plan": "Tweak non-critical scheduler interval by +10% during low traffic window; monitor p95 & error rate; auto-revert on SLO drift.",
+            "plan": ("Tweak non-critical scheduler interval by +10% during low traffic window; "
+                     "monitor p95 & error rate; auto-revert on SLO drift."),
             "version": f"{VERSION}-sched-tweak"
         }
 
         system = ("You are the Ops-Advisor. Return a STRICT JSON with keys: "
-                  "{ \"crs\": int, \"sensitive\": bool, \"plan\": str, \"version\": str } only.")
+                  '{ "crs": int, "sensitive": bool, "plan": str, "version": str } only.')
         user = "Produce one safe improvement for the next 45min window."
 
-        data: Dict[str, Any] = {}
-        if AIX_API_KEY:
-            aix = AIXProvider(self.session, "xai")
+        for prov in _iter_llm_order():
             try:
-                data = await aix.chat_json(AIX_MODEL_DEFAULT, system, user)
+                if prov == "aix":
+                    if not AIX_API_KEY:  # skip if no key
+                        continue
+                    data = await AIXProvider(self.session, "xai").chat_json(AIX_MODEL_DEFAULT, system, user)
+                    prop = self._extract_json(data)
+                    if prop:
+                        return prop
+                elif prov == "openai":
+                    if not OPENAI_API_KEY:
+                        continue
+                    data = await OpenAIProvider(self.session, "openai").chat_json(OPENAI_MODEL_MINI, system, user)
+                    prop = self._extract_json(data)
+                    if prop:
+                        return prop
+                elif prov == "conservative":
+                    return conservative
             except Exception:
-                data = {}
-        if (not data or "choices" not in data) and OPENAI_API_KEY:
-            oa = OpenAIProvider(self.session, "openai")
-            try:
-                data = await oa.chat_json(OPENAI_MODEL_MINI, system, user)
-            except Exception:
-                data = {}
+                continue
 
-        proposal = self._extract_json(data) if data else None
-        return proposal or conservative
+        return conservative
 
     def _extract_json(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
@@ -666,8 +682,8 @@ class Supervisor:
         def signed_link(action: str) -> str:
             base_params = dict(params, action=action)
             sig = _hmac_sign(base_params)
-            if sig:
-                base_params["sig"] = sig
+            # אם אין סוד – עדיין נצרף sig="" כדי שהוובהוק לא ידרוש אותו
+            base_params["sig"] = sig or ""
             return base + "?" + urlencode(base_params, quote_via=quote_plus)
 
         approve_url = signed_link("approve")
@@ -803,7 +819,6 @@ class Supervisor:
                     ok, status = await self.wait_for_ticket(ticket_id, timeout_s)
                     if not ok:
                         await self.notify_cancel("auto_onboard_approval", status or "not_approved")
-                        # continue next step or stop? Here we stop:
                         return
             else:
                 await send_telegram(self.session, f"🟣 Auto-Onboard preview (no-approval): <b>{_html(name)}</b>\n<code>{_html(plan)}</code>")
@@ -822,6 +837,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
 
