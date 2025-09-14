@@ -56,8 +56,8 @@ CHANGE_APPROVAL:
   channels: ["telegram"]        # כרגע טלגרם
 
 APPROVAL_ENDPOINTS:
-  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"  # יוחלף מריצה לפי env
-  hmac_env: "WEBHOOK_HMAC_SECRET"  # שם משתנה env למפתח חתימה
+  approve_url_base: "${PUBLIC_HOST}/ops/approve"  # בסיס קישורי אישור (נלקח מה־env)
+  hmac_env: "WEBHOOK_HMAC_SECRET"                 # שם משתנה env למפתח חתימה
   two_man_rule: true
   timeout_seconds: 600
   on_mismatch: "hold_and_alert"
@@ -131,7 +131,10 @@ BUDGET_GOVERNOR:
 
 RELEASE_NOTES: { include_forecast: true, revert_if_forecast_miss_min: 30 }
 
-EXCHANGES_DEFAULTS: { enabled: false, require_credentials: true, activate_only_if: ["handshake_ok","quotas_set","allowlisted"] }
+EXCHANGES_DEFAULTS:
+  enabled: false
+  require_credentials: true
+  activate_only_if: ["handshake_ok","quotas_set","allowlisted"]
 
 EXCHANGES:
   binance: { enabled: true, ws_max: 8, rest_rps: 40, token_bucket: { capacity: 120, refill_per_s: 20 } }
@@ -182,21 +185,36 @@ EXCHANGE_GUARD:
 
 HEALTH_ENDPOINTS: { healthz: true, readyz: true, livez: true }
 
-DISK_GUARD: { min_free_gb: 3, min_free_inodes_pct: 10, auto_clean_logs: true }
+DISK_GUARD:
+  min_free_gb: 3
+  min_free_inodes_pct: 10
+  auto_clean_logs: true
 
 POLICY_PIN: { require_hash: false, current_sha256: "" }
 
 OBSERVABILITY: { correlation_id: "ulid", inject_into_logs_and_msgs: true }
 
-ADVISOR_CB: { p95_ms_trip: 8000, error_rate_trip_pct: 2, cooloff_seconds: 600, fallback: "heuristics_only" }
+ADVISOR_CB:
+  p95_ms_trip: 8000
+  error_rate_trip_pct: 2
+  cooloff_seconds: 600
+  fallback: "heuristics_only"
 
 ROADMAP: { score_formula: "(impact*prob)/effort", pick_top_k_per_day: 3, auto_refresh_hours: 6 }
 
-CHAOS_LITE: { enabled: true, schedule: "Sun 03:40", scope: ["ws_reconnect","api_slowdown"], max_duration_seconds: 60, abort_on_error: true }
+CHAOS_LITE:
+  enabled: true
+  schedule: "Sun 03:40"
+  scope: ["ws_reconnect","api_slowdown"]
+  max_duration_seconds: 60
+  abort_on_error: true
 
 POSTMORTEM: { auto_generate: true, attach_rca_to_kb: true }
 
-DR: { weekly_restore_check: "Sun 03:10", immutable_backup_days: 90, retention_days: 14 }
+DR:
+  weekly_restore_check: "Sun 03:10"
+  immutable_backup_days: 90
+  retention_days: 14
 
 STATUS_WATCH: { binance: { enabled: true, maintenance_hold: true } }
 
