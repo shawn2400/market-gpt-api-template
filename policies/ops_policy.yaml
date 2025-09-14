@@ -40,14 +40,14 @@ QUALITY_GATES:
 
 # ===== Change Approval (אישור ידני עם הסבר) =====
 CHANGE_APPROVAL:
-  required: true                # דורש אישור לכל שינוי משמעותי
+  required: true                # דורש אישור לשינויים משמעותיים
   ttl_minutes: 20               # זמן תפוגה לטיקט
   min_crs_for_manual: 2         # כל שינוי עם CRS>=2 מצריך אישור
   explain: true                 # לצרף הסבר/תוכנית פעולה בהודעות
-  channels: ["telegram"]        # היכן לבקש אישור (טלגרם כיום)
+  channels: ["telegram"]        # כרגע טלגרם
 
 APPROVAL_ENDPOINTS:
-  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"
+  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"  # יוחלף מריצת ה-Supervisor לפי env
   hmac_env: "WEBHOOK_HMAC_SECRET"  # שם משתנה env למפתח חתימה
   two_man_rule: true
   timeout_seconds: 600
@@ -59,6 +59,10 @@ APPROVAL_ENDPOINTS:
     otp_required: true
     require_reason: true
     strict_audit: true
+
+# Pub/Sub – ערוץ התראות אישור מיידי
+APPROVAL_PUBSUB:
+  channel: "ops:ticket:events"
 
 APPROVAL_FLOW:
   stages: [preflight, canary, promote, postverify]
@@ -80,8 +84,7 @@ EMERGENCY:
   telegram_commands: ["/safe", "/freeze_on", "/freeze_off"]
 
 CANARY:
-  size_by_crs: { "0-3": 0.05, "4-6": 0.15, "7-10": 0.30 }
-  promote_if_green_minutes: 15
+  size_by_crs: { "0-3": 0.05, "4-6": 0.15, "7-10": 0.30 }  # הערכים הם יחס (0..1) – הקוד כבר ממיר לאחוזים
 
 SLO_GUARD:
   burn_alert_pct_per_hour: 10
@@ -136,7 +139,7 @@ AUTO_ONBOARD:
   steps:
     - name: "validate_creds"   # בדיקות יבשות למפתחות/סודות/חיבורים
       crs: 1
-    - name: "enable_scheduler" # הדלקת משימות בטוחות (ללא מסחר)
+    - name: "enable_scheduler" # משימות בטוחות (ללא מסחר)
       crs: 3
     - name: "telegram_webhook" # הגדרת וובהוק/התראות
       crs: 4
