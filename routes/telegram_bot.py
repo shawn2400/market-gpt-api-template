@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
 
 from utils.auth import require_api_key
+from utils.telegram_notifier import register_webhook  # ✅ חובה לייבא!
 
 logger = logging.getLogger("algogpt.routes.telegram_bot")
 
@@ -85,6 +86,13 @@ async def send(req: SendRequest) -> Dict[str, Any]:
     except Exception as e:
         logger.error("telegram/send failed: %s", e)
         raise HTTPException(502, str(e))
+
+# ✅ NEW: הגדרת Webhook ידנית
+@router.get("/set-webhook")
+async def set_webhook() -> Dict[str, Any]:
+    ok = await register_webhook()
+    return {"ok": ok, "status": "Webhook registered" if ok else "Webhook failed"}
+
 
 
 
