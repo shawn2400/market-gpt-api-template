@@ -10,9 +10,9 @@ from utils.binance_client import (
     get_symbol_filters, get_all_orders, futures_cancel_order, get_futures_client
 )
 
-# ✅ Dynamic budget (גלובלי לכל הסימבולים) — נופל חזרה ל-MAX_TRADE_BUDGET אם כבוי
+# ✅ Dynamic budget (גלובלי) — נופל ל-MAX_TRADE_BUDGET אם כבוי/חסר
 try:
-    from utils.budget import get_budget_usdt  # מעטפת: דינמי אם DYNAMIC_BUDGET_ENABLE=1, אחרת סטטי
+    from utils.budget import get_budget_usdt  # דינמי אם DYNAMIC_BUDGET_ENABLE=1
 except Exception:
     def get_budget_usdt(symbol: Optional[str] = None, *, quality: Optional[float] = None,
                         atr: Optional[float] = None, price: Optional[float] = None) -> float:  # type: ignore
@@ -44,7 +44,7 @@ PERCENT_PRICE_GUARD_BPS = float(os.getenv("PERCENT_PRICE_GUARD_BPS", "45"))
 SLIPPAGE_GUARD_BPS      = float(os.getenv("SLIPPAGE_GUARD_BPS", "35"))
 POST_FILL_SANITY_BPS    = float(os.getenv("POST_FILL_SANITY_BPS", "40"))
 
-# Limit offsets (when using LIMIT TP/SL)
+# Limit offsets (כשמשתמשים ב-LIMIT ל-TP/SL)
 SL_LIMIT_OFFSET_BPS   = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS   = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
@@ -56,7 +56,7 @@ DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
-# Ladder config (מופיע גם ב-binance_client; נטען כאן לנוחות)
+# Ladder config
 LADDER_TP_ENABLE      = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
 LADDER_TP_KIND        = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()  # TAKE_PROFIT or TAKE_PROFIT_MARKET
 LADDER_TP_DEFAULT_PCTS= os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
@@ -77,8 +77,9 @@ CANCEL_PREFIX_OVERRIDE      = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE            = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 CONFIRM_TTL_SEC     = int(os.getenv("CONFIRM_TTL_SEC", "180"))
+TELEGRAM_CHAT_ID    = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
 
-# Redis (אופציונלי) — לאידמפוטנציה ועוד
+# Redis (אופציונלי) — Idempotency/ConfirmStore
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 try:
     import redis  # type: ignore
@@ -93,7 +94,11 @@ def _decimals(step_str: str) -> int:
     return len(frac)
 
 def _filters(symbol: str) -> Dict[str, Any]:
-    return get_symbol_filters(symbol) or {}
+    try:
+        f = get_symbol_filters(symbol) or {}
+    except Exception:
+        f = {}
+    return f
 
 def _q_price(symbol: str, price: float) -> Tuple[str, float]:
     f = _filters(symbol); tick = float(f.get("tickSize") or DEFAULT_TICK) or DEFAULT_TICK
@@ -104,7 +109,7 @@ def _q_price(symbol: str, price: float) -> Tuple[str, float]:
 def _q_qty(symbol: str, qty: float) -> Tuple[str, float]:
     f = _filters(symbol); step = float(f.get("stepSize") or DEFAULT_QTY_STEP) or DEFAULT_QTY_STEP
     decs = _decimals(str(f.get("stepSize") or DEFAULT_QTY_STEP))
-    steps = math.floor(qty / step); q = max(step, steps * step)
+    steps = math.floor(max(0.0, qty) / step); q = max(step, steps * step)
     s = f"{q:.{decs}f}"; return s, float(s)
 
 def _min_notional(symbol: str) -> float:
@@ -157,12 +162,10 @@ class _Idem:
                 return bool(ok)
             except Exception as e:
                 log.warning("Idempotency redis error: %s", e)
-        # memory fallback
         ts = cls._mem.get(k, 0.0)
         if now - ts < ttl:
             return False
         cls._mem[k] = now
-        # cleanup (best-effort)
         for kk, vv in list(cls._mem.items()):
             if now - vv > ttl * 2:
                 cls._mem.pop(kk, None)
@@ -228,13 +231,16 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
         {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
     ]]}
     text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
-    async with httpx.AsyncClient(timeout=10.0) as cli:
-        r = await cli.post(f"{API_BASE}/sendMessage", data={
-            "chat_id": chat_id, "text": text, "parse_mode": "HTML",
-            "disable_web_page_preview": True, "reply_markup": json.dumps(kb)
-        })
-        try: return r.json()
-        except Exception: return {"ok": False, "error": f"http {r.status_code}"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            r = await cli.post(f"{API_BASE}/sendMessage", data={
+                "chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                "disable_web_page_preview": True, "reply_markup": json.dumps(kb)
+            })
+            return r.json()
+    except Exception as e:
+        log.exception("telegram send failed", extra={"err": str(e)})
+        return {"ok": False, "error": str(e)}
 
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
@@ -267,7 +273,6 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
         tr = (h-l) if prev is None else max(h-l, abs(h-prev), abs(l-prev))
         trs.append(tr); prev=c
     if len(trs) < period: return trs[-1] if trs else 0.0
-    # Wilder RMA via EMA(alpha=1/period)
     alpha = 1.0/period
     s=None
     for v in trs:
@@ -328,7 +333,7 @@ def _cancel_old_closing_orders(symbol: str) -> int:
         count = 0
         for o in orders:
             st = (o.get("status") or "").upper()
-            if st not in ("NEW","PARTIALLY_FILLED"):  # cancel only active
+            if st not in ("NEW","PARTIALLY_FILLED"):
                 continue
             typ = (o.get("type") or "").upper()
             if typ not in tps + sls:
@@ -396,7 +401,6 @@ def _build_ladders(sym: str, side: str, qty: float,
                         "qty": qalloc,
                     })
             else:  # SL
-                # SL: תמיד LIMIT כברירת מחדל כדי לשלוט במחיר (אפשר להפוך ל-STOP_MARKET בהמשך אם תרצה)
                 limit_p = _offset_bps(float(t), SL_LIMIT_OFFSET_BPS, limit_sign)
                 _, lim_p = _q_price(sym, limit_p)
                 plan["sl_orders"].append({
@@ -444,7 +448,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 if str(o.get("orderId")) == str(oid):
                     st = (o.get("status") or "").upper()
                     if st in ("FILLED", "PARTIALLY_FILLED"):
-                        # avgPrice קיים לעיתים בהיסטוריית הזמנות
                         ap = o.get("avgPrice") or o.get("price")
                         try:
                             return True, float(ap) if ap is not None else None
@@ -462,7 +465,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         if lim_filled and not stp_filled:
             try: futures_cancel_order(sym, stp_id)
             except Exception: pass
-            # Post-fill sanity
             mk = get_price(sym) or futures_mark_price(sym) or lim_fill_px or limit_p
             if mk and lim_fill_px:
                 bps = abs(lim_fill_px - mk) / max(mk, 1e-9) * 10000.0
@@ -491,7 +493,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                     if stp_id: futures_cancel_order(sym, stp_id)
                 except Exception: pass
                 mkt = futures_create_order(symbol=sym, side=side, type="MARKET", quantity=qty_str)
-                # sanity מול mark אחרי מרקט
                 mk = get_price(sym) or futures_mark_price(sym) or cur
                 bps = abs((cur or 0) - (mk or 0)) / max(mk or 1e-9, 1e-9) * 10000.0 if mk and cur else None
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
@@ -507,7 +508,6 @@ async def execute_trade_live(
     tp_targets: Optional[List[float]] = None, tp_splits: Optional[List[float]] = None,
     sl_targets: Optional[List[float]] = None, sl_splits: Optional[List[float]] = None,
     confirm_first: bool = True, telegram_chat_id: Optional[int] = None,
-    # תאימות ל-auto_executor שלך:
     position_side: str = "BOTH", reduce_only: bool = False,
 ) -> Dict[str, Any]:
 
@@ -520,29 +520,27 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # Percent-Price Guard מול entry המבוקש (אם הוזן), אחרת מול base
+    # Percent-Price Guard
     ref_for_guard = float(entry or base_price)
     mk = float(get_price(sym) or futures_mark_price(sym) or base_price)
     pp_bps = abs(mk - ref_for_guard) / max(ref_for_guard, 1e-9) * 10000.0
     if pp_bps >= PERCENT_PRICE_GUARD_BPS:
         return {"ok": False, "reason": "percent_price_guard", "bps": pp_bps, "mk": mk, "ref": ref_for_guard}
 
-    # איכות/תנודתיות — עבור תקציב דינמי
+    # איכות/ATR — לצורך תקציב דינמי
     gate = _quality_gate(sym, side)
-    score_for_budget: Optional[float] = None
     try:
-        score_for_budget = float(gate.get("score")) if isinstance(gate, dict) and gate.get("score") is not None else None
+        score_for_budget: Optional[float] = float(gate.get("score")) if gate.get("score") is not None else None
     except Exception:
         score_for_budget = None
 
-    atr_for_budget: Optional[float] = None
     try:
         kl = _fetch_klines_raw(sym, "1m", 60)
-        atr_for_budget = _atr_from_klines(kl, 14) if kl else None
+        atr_for_budget: Optional[float] = _atr_from_klines(kl, 14) if kl else None
     except Exception:
         atr_for_budget = None
 
-    # אם לא הועבר budget → קבע דינמי/סטטי לפי ENV דרך get_budget_usdt
+    # תקציב
     if budget is None or float(budget) <= 0:
         budget = get_budget_usdt(symbol=sym, quality=score_for_budget, atr=atr_for_budget, price=float(base_price))
 
@@ -564,13 +562,11 @@ async def execute_trade_live(
     if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
         return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
 
-    # הרחבת TP/SL מסטרינגים ב-ENV אם לא הגיעו מבחוץ
+    # הרחבת TP/SL מה-ENV אם לא הגיעו
     if tp is None and not tp_targets and LADDER_TP_ENABLE:
         try:
             tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
-            # המרות מאחוז ליעד מחיר סביב entry/base
-            anchor = float(entry or base_price)
-            sign = +1 if side=="BUY" else -1
+            anchor = float(entry or base_price); sign = +1 if side=="BUY" else -1
             tp_targets = [anchor * (1.0 + sign * p/100.0) for p in tps]
             tp_splits = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_SPLITS)] or None
         except Exception:
@@ -578,8 +574,7 @@ async def execute_trade_live(
     if sl is None and not sl_targets and LADDER_SL_ENABLE and LADDER_SL_DEFAULT_PCTS:
         try:
             slps = [float(x) for x in _parse_csv_floats(LADDER_SL_DEFAULT_PCTS)]
-            anchor = float(entry or base_price)
-            sign = -1 if side=="BUY" else +1
+            anchor = float(entry or base_price); sign = -1 if side=="BUY" else +1
             sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
         except Exception:
             pass
@@ -615,15 +610,16 @@ async def execute_trade_live(
         return {"ok": False, "reason": "risk_check_failed", "risk": risk}
 
     if confirm_first:
-        if not telegram_chat_id:
+        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
+        if not chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
-        approval = await require_approval(telegram_chat_id, {
+        approval = await require_approval(chat_id, {
             "symbol": sym, "side": side, "qty": qty, "leverage": leverage
         })
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # Hygiene: בטל TP/SL קודמים (למנוע התנגשויות) לפי פריפיקס/מדיניות
+    # Hygiene: בטל TP/SL קודמים
     _cancel_old_closing_orders(sym)
 
     try:
@@ -635,7 +631,6 @@ async def execute_trade_live(
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
-    # Post-fill sanity (חיזוק) — אם חריג מעבר לסף, נחזיר אזהרה בתוכנית
     sanity_ok = bool(entry_res.get("sanity_ok", True))
     sanity_bps = entry_res.get("sanity_bps")
 
@@ -664,10 +659,8 @@ async def execute_trade_live(
                 symbol=sym, side=close_side, type=typ,
                 reduceOnly=True, timeInForce="GTC",
             )
-            # STOP/TAKE_PROFIT (לימיט) צריכים גם price וגם stopPrice
             if "MARKET" in typ:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
-                # MARKET סוג לא מקבל price
             else:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
                 args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
@@ -678,8 +671,8 @@ async def execute_trade_live(
             except Exception as e:
                 o["response"] = {"ok": False, "error": str(e)}
 
-    # החזרה
     return plan
+
 
 
 
