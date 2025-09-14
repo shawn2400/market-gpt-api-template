@@ -17,7 +17,7 @@ import yaml
 # -------------------- Config & Globals --------------------
 POLICY_PATH = os.getenv("OPS_POLICY_PATH", "policies/ops_policy.yaml")
 TZ_IL = ZoneInfo("Asia/Jerusalem")
-VERSION = "3.5"
+VERSION = "3.6"
 
 # Telegram
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -32,10 +32,13 @@ AIX_API_KEY = os.getenv("AIX_API_KEY", "").strip()
 AIX_API_BASE = os.getenv("AIX_API_BASE", "https://api.x.ai").strip()
 AIX_MODEL_DEFAULT = os.getenv("AIX_MODEL_DEFAULT", "grok-3-mini").strip()
 
-# Infra checks
+# Infra / Render
 REDIS_URL_ENV = os.getenv("REDIS_URL", "")
 PRIMARY_PUBLIC_HOST = os.getenv("PRIMARY_PUBLIC_HOST", "").strip()
 DEPLOY_HOOK = os.getenv("RENDER_DEPLOY_HOOK_MAIN", "").strip()
+RENDER_API_KEY = os.getenv("RENDER_API_KEY", "").strip()
+SECONDARY_SERVICE_ID = os.getenv("SECONDARY_SERVICE_ID", "").strip()  # ops-supervisor
+PRIMARY_SERVICE_ID = os.getenv("PRIMARY_SERVICE_ID", "").strip()      # algogpt-docker
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
 
@@ -134,7 +137,7 @@ class AIXProvider(LLMProvider):
         async with self.session.post(url, headers=headers, json=body, timeout=HTTP_TIMEOUT) as r:
             return await r.json()
 
-# -------------------- ENV Sanitize (built-in; no external file needed) --------------------
+# -------------------- ENV Sanitize (built-in) --------------------
 def _clean_redis_url(u: str) -> str:
     if not u:
         return u
@@ -151,7 +154,7 @@ def _clean_redis_url(u: str) -> str:
         u = "rediss://" + u.split("://", 1)[-1]
 
     # convert internal free-tier host to external TLS if needed
-    if re.search(r"@red-[a-z0-9]+:6379$", u) and not "keyvalue.render.com" in u:
+    if re.search(r"@red-[a-z0-9]+:6379$", u) and "keyvalue.render.com" not in u:
         m = re.match(r"^redis[s]?://([^@]+)@[^:]+:\d+$", u)
         if m:
             auth = m.group(1)
@@ -176,7 +179,6 @@ class Supervisor:
         self.policy = policy
         self.session: Optional[aiohttp.ClientSession] = None
         self.running = True
-        # will be set in __aenter__ after sanitize
         self.redis_url: str = _clean_redis_url(REDIS_URL_ENV)
 
     async def __aenter__(self):
@@ -222,7 +224,7 @@ class Supervisor:
         tasks = [
             asyncio.create_task(self.loop_health(tick_seconds)),
             asyncio.create_task(self.loop_maintenance(maintenance_minutes)),
-            asyncio.create_task(self.loop_nightly())),
+            asyncio.create_task(self.loop_nightly()),
             asyncio.create_task(self.loop_eod()),
         ]
 
@@ -318,27 +320,74 @@ class Supervisor:
 
         return True, "ok"
 
-    async def auto_heal(self, diag: str):
-        # deploy-hook for primary only, with cooldown
-        if diag.startswith("primary") and DEPLOY_HOOK and _cooldown_ok("deploy_hook", 1800):
+    async def _persist_redis_fix_to_render(self, new_url: str) -> bool:
+        """
+        נסיון לשמור את ה-REDIS_URL המתוקן כמשתנה סביבה בשירות המשני + טריגר דיפלוי.
+        מחזיר True אם הצליח.
+        """
+        if not (RENDER_API_KEY and SECONDARY_SERVICE_ID and new_url):
+            return False
+        try:
+            from utils.render_api import RenderAPI  # lazy import
+        except Exception:
+            return False
+        try:
+            api = RenderAPI(RENDER_API_KEY)
+            ok = await api.set_env_var_compat(SECONDARY_SERVICE_ID, "REDIS_URL", new_url, visibility="private")
+            if not ok:
+                return False
+            # טריגר דיפלוי למשני
+            await api.create_deploy(SECONDARY_SERVICE_ID)
+            return True
+        except Exception:
+            return False
+
+    async def _redeploy_primary(self, reason: str):
+        # עדיפות 1: Deploy hook אם הוגדר תקין
+        if DEPLOY_HOOK and "<SERVICE_ID>" not in DEPLOY_HOOK and "<KEY>" not in DEPLOY_HOOK:
             try:
                 async with self.session.post(DEPLOY_HOOK, timeout=aiohttp.ClientTimeout(total=10)) as r:
                     _ = await r.text()
-                await send_telegram(self.session, f"🧯 Auto-Heal: Triggered primary redeploy ({diag}).")
+                await send_telegram(self.session, f"🧯 Auto-Heal: Triggered primary redeploy via hook ({reason}).")
+                return
             except Exception as e:
-                await send_telegram(self.session, f"🧯 Auto-Heal failed ({diag}): {e}")
-        elif diag.startswith("redis"):
-            # try one more sanitize-attempt (in case env changed at runtime)
-            new_clean = _clean_redis_url(os.getenv("REDIS_URL", ""))
+                await send_telegram(self.session, f"🧯 Auto-Heal deploy hook failed: {e}")
+
+        # עדיפות 2: Render API אם יש SERVICE_ID + KEY
+        if RENDER_API_KEY and PRIMARY_SERVICE_ID:
+            try:
+                from utils.render_api import RenderAPI
+                api = RenderAPI(RENDER_API_KEY)
+                await api.create_deploy(PRIMARY_SERVICE_ID)
+                await send_telegram(self.session, f"🧯 Auto-Heal: Triggered primary redeploy via Render API ({reason}).")
+            except Exception as e:
+                await send_telegram(self.session, f"🧯 Auto-Heal Render API failed: {e}")
+
+    async def auto_heal(self, diag: str):
+        # Primary issues → redeploy (עם cooldown)
+        if diag.startswith("primary") and _cooldown_ok("deploy_hook", 1800):
+            await self._redeploy_primary(diag)
+            return
+
+        # Redis issues → sanitize + persist to Render if possible
+        if diag.startswith("redis"):
+            # נסיון סניטציה נוסף (אם ה-ENV השתנה)
+            new_clean = _clean_redis_url(os.getenv("REDIS_URL", self.redis_url))
             if new_clean and new_clean != self.redis_url:
                 os.environ["REDIS_URL"] = new_clean
                 self.redis_url = new_clean
                 ok, reason = await _redis_self_test(self.session, self.redis_url)
                 if ok:
                     await send_telegram(self.session, f"✅ Redis recovered after re-sanitize.\n<code>{repr(self.redis_url)}</code>")
+                    # לשמור קבוע ב-Render אם אפשר
+                    if await self._persist_redis_fix_to_render(new_clean):
+                        await send_telegram(self.session, "📌 Persisted REDIS_URL fix to Render env and triggered redeploy.")
+                    else:
+                        await send_telegram(self.session, "ℹ️ Could not persist REDIS_URL via Render API (missing perms or API mismatch).")
                     return
                 else:
                     await send_telegram(self.session, f"⚠️ Redis re-sanitize failed: <code>{reason}</code>")
+
             await send_telegram(self.session, f"⚠️ Redis issue detected: {diag}. Using external TLS endpoint recommended.")
 
     # ---------------- Maintenance Cycle ----------------
