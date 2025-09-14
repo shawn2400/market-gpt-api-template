@@ -1,15 +1,16 @@
 # routes/telegram_webhook.py
 from __future__ import annotations
 import os, logging, time
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List
 from fastapi import APIRouter, Request, HTTPException
 import httpx
 
 logger = logging.getLogger("algogpt.telegram.webhook")
 
-# שים לב: קובץ זה מוסיף /telegram/commands בלבד (לא מתנגש עם /telegram/webhook הקיים)
+# קידומת ייעודית; לא מתנגש עם /telegram/webhook הקיים אם יש
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
+# ─────────── Env / Auth ───────────
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_ONLY = str(os.getenv("TELEGRAM_ADMIN_ONLY", "1")).lower() in ("1","true","yes","on")
 ADMIN_IDS = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
@@ -20,7 +21,7 @@ def _allowed_user(uid: int) -> bool:
     return str(uid) in ADMIN_IDS
 
 async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
-    """שליחת תשובה למשתמש בטלגרם (parse_mode=HTML, ללא preview)"""
+    """שליחת תשובה כטקסט רגיל (HTML), ללא קישוריות ווב־פריוויו."""
     if not TG_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -36,7 +37,7 @@ async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
     except Exception as e:
         logger.warning(f"[tg] sendMessage failed: {e}")
 
-# ===== Fallback-safe status sources =====
+# ─────────── Status Providers (fallback-safe) ───────────
 try:
     from utils.runtime_counters import ws_get_counters as _ws_get_counters
 except Exception:
@@ -56,16 +57,65 @@ except Exception:
 try:
     from utils.telegram_notifier import set_explain_enabled, get_explain_enabled
 except Exception:
-    def set_explain_enabled(v: bool) -> None: pass
-    def get_explain_enabled() -> bool: return False
+    def set_explain_enabled(v: bool) -> None:  # type: ignore
+        pass
+    def get_explain_enabled() -> bool:  # type: ignore
+        return False
 
-# אופציונלי — רשימת פוזיציות פתוחות
 try:
     from utils.binance_client import get_open_positions as _get_open_positions
 except Exception:
     def _get_open_positions() -> List[Dict[str, Any]]:
         return []
 
+# ─────────── ConfirmStore & Callback Idempotency ───────────
+from utils.trade_executor import ConfirmStore  # משתמש ב־Redis אם REDIS_URL קיים, אחרת זיכרון
+
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+try:
+    import redis  # type: ignore
+    _r_cbq = redis.Redis.from_url(REDIS_URL, decode_responses=True) if REDIS_URL else None
+except Exception:
+    _r_cbq = None
+_seen_cbq_mem: set[str] = set()
+
+def _cbq_seen(cbq_id: str, ttl: int = 30) -> bool:
+    """הגנה מכפילויות callback מטלגרם. True = כבר טופל, False = חדש."""
+    if _r_cbq:
+        try:
+            ok = _r_cbq.set(f"cbq:{cbq_id}", "1", nx=True, ex=ttl)
+            return not bool(ok)
+        except Exception:
+            pass
+    if cbq_id in _seen_cbq_mem:
+        return True
+    _seen_cbq_mem.add(cbq_id)
+    if len(_seen_cbq_mem) > 5000:
+        _seen_cbq_mem.clear()
+    return False
+
+async def _tg_answer_callback(token: str, cbq_id: str, text: str) -> None:
+    url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as cli:
+            await cli.post(url, data={"callback_query_id": cbq_id, "text": text, "show_alert": False})
+    except Exception as e:
+        logger.warning(f"[tg] answerCallbackQuery failed: {e}")
+
+async def _tg_disable_kb(token: str, chat_id: int, message_id: int) -> None:
+    """ניטרול מקלדת אינליין בהודעה כדי למנוע לחיצות חוזרות."""
+    url = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as cli:
+            await cli.post(url, data={
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": '{"inline_keyboard":[]}'
+            })
+    except Exception as e:
+        logger.warning(f"[tg] editMessageReplyMarkup failed: {e}")
+
+# ─────────── UI Strings ───────────
 HELP_TEXT = (
     "🤖 <b>AlgoGPT Bot</b> — Help / עזרה\n\n"
     "• /help — עזרה\n"
@@ -89,7 +139,7 @@ def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
             lines.append(f"• <b>{sym}</b> {side} qty={abs(amt):.4f} @ {entry:.4f}")
         except Exception:
             continue
-    extra = len(rows)-len(lines)
+    extra = len(rows) - len(lines)
     if extra > 0:
         lines.append(f"… ועוד {extra} פריטים")
     return "\n".join(lines)
@@ -97,7 +147,7 @@ def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
 def _fmt_status() -> str:
     ws = _ws_get_counters()
     ex = _exec_get_counters()
-    def _n(v): 
+    def _n(v):
         try:
             return f"{float(v):.2f}"
         except Exception:
@@ -105,11 +155,11 @@ def _fmt_status() -> str:
     ws_state = "OK" if int(ws.get("ws_up") or 0) == 1 and (ws.get("last_event_age_sec") or 0) <= int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10")) else "WARN"
     ex_state = "OK"
     age = ex.get("last_tick_age_sec")
-    if isinstance(age, (int,float)) and age is not None and age > int(os.getenv("EXEC_TICK_STALE_WARN_SEC","30")):
+    if isinstance(age, (int, float)) and age is not None and age > int(os.getenv("EXEC_TICK_STALE_WARN_SEC","30")):
         ex_state = "WARN"
     if int(ex.get("timeouts_burst") or 0) >= int(os.getenv("EXEC_TIMEOUT_BURST_ALERT","3")):
         ex_state = "WARN"
-    combined = "PAUSE" if ws_state=="WARN" and (ws.get("last_event_age_sec") or 0) > int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10"))*3 else ("WARN" if ("WARN" in (ws_state, ex_state)) else "OK")
+    combined = "PAUSE" if ws_state == "WARN" and (ws.get("last_event_age_sec") or 0) > int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10")) * 3 else ("WARN" if ("WARN" in (ws_state, ex_state)) else "OK")
     lines = [
         f"📊 <b>Status</b> [{combined}]",
         f"WS: up={ws.get('ws_up')} ttl={ws.get('last_event_age_sec')}s ewma={_n(ws.get('ewma_latency_ms'))}ms rc={ws.get('reconnects')}",
@@ -117,11 +167,10 @@ def _fmt_status() -> str:
     ]
     return "\n".join(lines)
 
+# ─────────── Webhook Endpoint (messages + callbacks) ───────────
 @router.post("/commands")
 async def commands(req: Request):
-    """נתיב וובהוק לפקודות טלגרם (ללא התנגשות עם /telegram/webhook הישן).
-       הגבלות: ADMIN_ONLY + TELEGRAM_ADMIN_IDS.
-    """
+    """Webhook אחוד להודעות טקסט ול־callback_query של כפתורי אישור/ביטול."""
     if not TG_TOKEN:
         raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
     try:
@@ -129,7 +178,58 @@ async def commands(req: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Bad payload")
 
-    # תמיכה ב-callback_query קיימת דרך קבצים אחרים במערכת.
+    # --- callback_query: אישור/ביטול טרייד ---
+    cbq = update.get("callback_query")
+    if cbq:
+        cbq_id = cbq.get("id") or ""
+        if _cbq_seen(cbq_id):
+            return {"ok": True}  # דופליקייט/רטרי
+
+        from_user = cbq.get("from") or {}
+        uid = int(from_user.get("id") or 0)
+        msg = cbq.get("message") or {}
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
+        message_id = msg.get("message_id")
+        data = (cbq.get("data") or "").strip()
+
+        if not chat_id or not message_id:
+            return {"ok": True}
+        if not _allowed_user(uid):
+            await _tg_answer_callback(TG_TOKEN, cbq_id, "⛔️ אין הרשאה")
+            return {"ok": True}
+
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            await _tg_answer_callback(TG_TOKEN, cbq_id, "פורמט לא תקין")
+            return {"ok": True}
+        kind, action, cid = parts
+        if kind != "CONFIRM":
+            await _tg_answer_callback(TG_TOKEN, cbq_id, "לא נתמך")
+            return {"ok": True}
+
+        rec = ConfirmStore.get(cid)
+        if not rec or rec.get("status") != "pending":
+            await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
+            await _tg_answer_callback(TG_TOKEN, cbq_id, "פג תוקף/כבר טופל")
+            return {"ok": True}
+
+        if action == "APPROVE":
+            ConfirmStore.approve(cid, approver=str(uid))
+            await _tg_answer_callback(TG_TOKEN, cbq_id, "אושר ✅")
+            await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
+            return {"ok": True}
+
+        if action == "REJECT":
+            ConfirmStore.reject(cid, approver=str(uid))
+            await _tg_answer_callback(TG_TOKEN, cbq_id, "בוטל ❌")
+            await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
+            return {"ok": True}
+
+        await _tg_answer_callback(TG_TOKEN, cbq_id, "פעולה לא מזוהה")
+        return {"ok": True}
+
+    # --- text messages (/help, /status, ...) ---
     msg = update.get("message") or {}
     chat = msg.get("chat") or {}
     chat_id = chat.get("id")
@@ -175,6 +275,7 @@ async def commands(req: Request):
 
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.")
     return {"ok": True}
+
 
 
 
