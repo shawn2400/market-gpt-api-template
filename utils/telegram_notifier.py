@@ -9,22 +9,21 @@ BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID        = int(os.getenv("TELEGRAM_CHAT_ID", "0") or 0)
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 
-# ===================== Explain flags (טוגל בזמן אמת) =====================
+# ===================== Explain flags =====================
 _EXPLAIN_ON              = os.getenv("OPS_EXPLAIN_TRADE_TELEGRAM", "1").lower() in ("1","true","yes","on")
 EXPLAIN_COOLDOWN_SEC     = int(os.getenv("OPS_EXPLAIN_COOLDOWN_SEC", "45"))
 EXPLAIN_MAX_PER_MIN      = int(os.getenv("OPS_EXPLAIN_MAX_PER_MIN", "6"))
 EXPLAIN_MIN_SCORE        = float(os.getenv("OPS_EXPLAIN_MIN_SCORE", "0"))
 
-# ===================== Bundling / Rate-limit / Dedup =====================
+# ===================== Bundling / Rate-limit =====================
 BUNDLE_ENABLE            = os.getenv("OPS_ALERT_BUNDLING", "1").lower() in ("1","true","yes","on")
 BUNDLE_WINDOW_SEC        = int(os.getenv("OPS_ALERT_BUNDLE_WINDOW_SEC", "30"))
 BUNDLE_MAX_ITEMS         = int(os.getenv("OPS_ALERT_BUNDLE_MAX_ITEMS", "12"))
 BUNDLE_TITLE             = os.getenv("OPS_ALERT_BUNDLE_TITLE", "🔔 Ops Alerts")
 
-SEND_MAX_PER_MIN         = int(os.getenv("TG_SEND_MAX_PER_MIN", "25"))  # cap כללי
+SEND_MAX_PER_MIN         = int(os.getenv("TG_SEND_MAX_PER_MIN", "25"))
 DEDUP_TTL_SEC            = int(os.getenv("TG_DEDUP_TTL_SEC", "20"))
 
-# ===================== פנימיים =====================
 _last_explain_ts: float = 0.0
 _win_start: float = 0.0
 _sent_in_win: int = 0
@@ -44,7 +43,6 @@ def set_explain_enabled(v: bool) -> None:
 def get_explain_enabled() -> bool:
     return bool(_EXPLAIN_ON)
 
-# ===================== helpers =====================
 def _now() -> float:
     return time.time()
 
@@ -74,7 +72,6 @@ def _dedup_allow(text: str) -> bool:
     if now - ts <= DEDUP_TTL_SEC:
         return False
     _dedup_map[key] = now
-    # ניקוי קל אקראי
     if len(_dedup_map) > 1024:
         for k, v in list(_dedup_map.items())[:128]:
             if now - v > DEDUP_TTL_SEC * 3:
@@ -108,7 +105,6 @@ async def _tg_send(text: str, chat_id: Optional[int] = None) -> None:
     try:
         await _http_send(text, chat_id=chat_id)
     except RuntimeError:
-        # אם אין event-loop (למשל מתוך thread), נריץ סנכרוני
         try:
             asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id))
         except Exception:
@@ -123,7 +119,6 @@ def _win_tick():
         _win_start = now
         _sent_in_win = 0
 
-# ===================== Bundling =====================
 async def _bundle_flush():
     global _bundle_items
     async with _bundle_lock:
@@ -158,39 +153,27 @@ async def _bundle_add(msg: str):
         _bundle_items.append(msg)
     await _bundle_schedule_flush()
 
-# ===================== Public Notifications API =====================
-async def notify_no_trades():
-    # בכוונה שקט (מניעת ספאם). אם תרצה: אפשר להפעיל בדגל ENV.
-    return None
+# ===================== Public Notifications =====================
+async def notify_no_trades(): return None
 
 async def notify_scan_error(reason: str):
     txt = f"⚠️ <b>Scan error</b>\n<code>{reason}</code>"
-    if BUNDLE_ENABLE:
-        await _bundle_add(txt.replace("\n", " | "))
-    else:
-        await _tg_send(txt)
+    if BUNDLE_ENABLE: await _bundle_add(txt.replace("\n", " | "))
+    else: await _tg_send(txt)
 
 async def notify_ops_alert(msg: str):
     txt = f"🛠 {msg}"
-    if BUNDLE_ENABLE:
-        await _bundle_add(txt)
-    else:
-        await _tg_send(txt)
+    if BUNDLE_ENABLE: await _bundle_add(txt)
+    else: await _tg_send(txt)
 
 async def notify_explain_trade(plan: Dict[str, Any]):
-    if not _EXPLAIN_ON:
-        return
-    if float(plan.get("score", 0.0)) < EXPLAIN_MIN_SCORE:
-        return
-
+    if not _EXPLAIN_ON: return
+    if float(plan.get("score", 0.0)) < EXPLAIN_MIN_SCORE: return
     global _last_explain_ts, _sent_in_win
     _win_tick()
-
     now = _now()
-    if _last_explain_ts and (now - _last_explain_ts) < EXPLAIN_COOLDOWN_SEC:
-        return
-    if _sent_in_win >= max(1, EXPLAIN_MAX_PER_MIN):
-        return
+    if _last_explain_ts and (now - _last_explain_ts) < EXPLAIN_COOLDOWN_SEC: return
+    if _sent_in_win >= max(1, EXPLAIN_MAX_PER_MIN): return
 
     sym   = str(plan.get("symbol","")).upper()
     side  = str(plan.get("side","")).upper()
@@ -201,30 +184,20 @@ async def notify_explain_trade(plan: Dict[str, Any]):
     adx   = float(plan.get("adx", 0.0) or 0.0)
     atr   = float(plan.get("atr", 0.0) or 0.0)
     score = float(plan.get("score", 0.0) or 0.0)
+    ema21 = plan.get("ema_21")
+    ema50 = plan.get("ema_50")
+    macdh = plan.get("macd_hist")
+    rsi   = plan.get("rsi")
+    trend_ok = "✓" if (ema21 and ema50 and ((float(ema21) > float(ema50) and side=="LONG") or (float(ema21) < float(ema50) and side=="SHORT"))) else "✗"
+    macd_ok  = "✓" if (macdh is not None and ((side=="LONG" and float(macdh)>0) or (side=="SHORT" and float(macdh)<0))) else "✗"
 
-    ema21 = plan.get("ema_21", None)
-    ema50 = plan.get("ema_50", None)
-    macdh = plan.get("macd_hist", None)
-    rsi   = plan.get("rsi", None)
-
-    trend_ok = "✓" if (ema21 is not None and ema50 is not None and float(ema21) > float(ema50) and side=="LONG") \
-        or (ema21 is not None and ema50 is not None and float(ema21) < float(ema50) and side=="SHORT") else "✗"
-    macd_ok = "✓" if (macdh is not None and ((side=="LONG" and float(macdh) > 0) or (side=="SHORT" and float(macdh) < 0))) else "✗"
-
-    lines = []
-    lines.append("⚙️ <b>Explain Trade</b>")
-    lines.append(f"<b>{sym}</b> · <b>{side}</b> · lev=<b>{lev}</b>")
-    if ema21 is not None and ema50 is not None:
-        lines.append(f"EMA21{'>' if float(ema21)>float(ema50) else '<'}EMA50 {trend_ok}")
-    if macdh is not None:
-        lines.append(f"MACD hist {float(macdh):+.4f} {macd_ok}")
+    lines = [f"⚙️ <b>Explain Trade</b>", f"<b>{sym}</b> · <b>{side}</b> · lev=<b>{lev}</b>"]
+    if ema21 and ema50: lines.append(f"EMA21{'>' if float(ema21)>float(ema50) else '<'}EMA50 {trend_ok}")
+    if macdh: lines.append(f"MACD hist {float(macdh):+.4f} {macd_ok}")
     lines.append(f"ADX {adx:.0f} | ATR {atr:.4f}")
-    if rsi is not None:
-        lines.append(f"RSI {float(rsi):.1f}")
+    if rsi: lines.append(f"RSI {float(rsi):.1f}")
     lines.append(f"Quality Score: <b>{score:.2f}/10</b>")
-    if entry and (sl or tp):
-        lines.append(f"Entry {entry:.4f} | SL {sl:.4f} | TP {tp:.4f}")
-
+    if entry and (sl or tp): lines.append(f"Entry {entry:.4f} | SL {sl:.4f} | TP {tp:.4f}")
     await _tg_send("\n".join(lines))
     _last_explain_ts = now
     _sent_in_win += 1
@@ -236,27 +209,42 @@ async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any):
         val = str(value)
     await _tg_send(f"🔧 <b>{symbol}</b> {side} · {kind.upper()} → <code>{val}</code>")
 
-async def notify_info(text: str):
-    await _tg_send(f"ℹ️ {text}")
-
-async def notify_error(text: str):
-    await _tg_send(f"🚨 {text}")
-
-async def notify_heartbeat():
-    await _tg_send("🫀 Heartbeat OK")
+async def notify_info(text: str): await _tg_send(f"ℹ️ {text}")
+async def notify_error(text: str): await _tg_send(f"🚨 {text}")
+async def notify_heartbeat(): await _tg_send("🫀 Heartbeat OK")
 
 async def notify_daily_summary(summary: Dict[str, Any]):
-    # summary: {"pnl": float, "trades": list, "time": "dd/mm/YYYY HH:MM"}
     pnl = summary.get("pnl", 0.0)
     t   = summary.get("time", "")
     n   = len(summary.get("trades") or [])
     await _tg_send(f"📘 Daily Summary {t}\nPnL: <b>{pnl:.2f}</b> USDT · trades={n}")
+
+# ===================== Webhook Registration =====================
+async def register_webhook() -> bool:
+    public_host = os.getenv("PUBLIC_HOST", "").strip()
+    secret_token = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+    if not BOT_TOKEN or not public_host or not secret_token:
+        return False
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            r = await cli.post(f"{API_BASE}/setWebhook", data={
+                "url": f"{public_host}/telegram/webhook",
+                "secret_token": secret_token,
+                "drop_pending_updates": "true",
+                "max_connections": "40",
+            })
+            return r.status_code == 200 and r.json().get("ok", False)
+    except Exception as e:
+        logger.warning({"event": "register_webhook_failed", "error": str(e)})
+        return False
 
 __all__ = [
     "set_explain_enabled", "get_explain_enabled",
     "notify_no_trades", "notify_scan_error", "notify_explain_trade",
     "notify_sl_tp_update", "notify_info", "notify_error",
     "notify_heartbeat", "notify_daily_summary", "notify_ops_alert",
+    "register_webhook"
 ]
 
 
