@@ -9,32 +9,25 @@ from pydantic import BaseModel, Field, constr
 from utils.auth import require_api_key
 from utils.telegram_api import send_message as telegram_send
 from utils.approvals import preflight_proposal
-
-# HMAC + Idempotency
-from utils.security import verify_hmac, idem_seen  # NEW
-
-# Rate-limit (אופציונלי)
+from utils.security import verify_hmac, idem_seen
 from utils.rate_limit import require_rate_limit
 
-# Auto-exec כלים (לייב)
-from utils.risk import suggest_risk
-from utils.binance_client import (
-    futures_create_order,
-    set_leverage,
-    futures_mark_price,
-    get_symbol_filters,
-    modify_stop_loss,
-    place_tp_ladder,
-)
+# ביצוע לייב עם אישור בטלגרם
+from utils.trade_executor import execute_trade_live
 
 # ===== ENV =====
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
 SINK_ENFORCE_APPROVALS = os.getenv("SINK_ENFORCE_APPROVALS", "1").lower() in ("1","true","yes","on")
 AUTO_RUN  = os.getenv("AUTO_RUN", "1").lower() in ("1","true","yes","on")
 EXECUTE_TRADES = os.getenv("EXECUTE_TRADES", "1").lower() in ("1","true","yes","on")
+
 ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "ALG").strip()
+
 ALERTS_RPM = int(os.getenv("ALERTS_RPM", "60"))
 ALERTS_BURST = int(os.getenv("ALERTS_BURST", str(ALERTS_RPM)))
+
+# צ'אט ברירת מחדל לאישור בטלגרם
+ADMIN_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID") or "0")
 
 router = APIRouter(
     prefix="/alerts",
@@ -70,61 +63,16 @@ class AlertResponse(BaseModel):
     order: Optional[Dict[str, Any]] = None
 
 # ================= Helpers =================
-def _side_to_binance(side: str) -> Tuple[str, str]:
+def _side_to_ex(side: str) -> str:
     s = (side or "").strip().lower()
-    if s in ("buy","long","up"):  return "BUY", "LONG"
-    if s in ("sell","short","down"): return "SELL", "SHORT"
-    return "BUY", "LONG"
-
-def _close_side_for_pos(pos_side: str) -> str:
-    ps = (pos_side or "").upper()
-    return "SELL" if ps == "LONG" else "BUY"
-
-def _decimals_from_step(step_str: str) -> int:
-    if "." not in step_str:
-        return 0
-    frac = step_str.split(".", 1)[1]
-    while frac and frac.endswith("0"):
-        frac = frac[:-1]
-    return len(frac)
-
-def _quantize_qty_with_filters(symbol: str, price: float, qty_guess: float) -> float:
-    f = get_symbol_filters(symbol) or {}
-    step = float(f.get("stepSize") or 0.001)
-    min_notional = float(f.get("minNotional") or 5.0)
-    qty = max(qty_guess, min_notional / max(price, 1e-12))
-    if step <= 0:
-        step = 0.001
-    steps = int(qty / step)
-    qty_adj = max(step, steps * step)
-    return qty_adj
+    if s in ("buy","long","up"):  return "BUY"
+    if s in ("sell","short","down"): return "SELL"
+    return "BUY"
 
 def _targets_from_alert(a: TradeAlert) -> List[float]:
     out = [a.tp1]
     if a.tp2: out.append(a.tp2)
     if a.tp3: out.append(a.tp3)
-    return out
-
-def _tp_percents_from_targets(entry_price: float, entry_side: str, tps: List[float]) -> List[float]:
-    """
-    ממיר יעדי TP ב־Price לאחוזים בהתאם לצד הכניסה.
-    BUY: pct = (tp/entry - 1) * 100
-    SELL: pct = (1 - tp/entry) * 100
-    מסנן יעדים שליליים/שגויים.
-    """
-    out: List[float] = []
-    if entry_price <= 0 or not tps:
-        return out
-    es = (entry_side or "").upper()
-    for tp in tps:
-        if tp <= 0:
-            continue
-        if es == "BUY":
-            pct = (tp / entry_price - 1.0) * 100.0
-        else:
-            pct = (1.0 - tp / entry_price) * 100.0
-        if pct > 0:
-            out.append(round(pct, 6))
     return out
 
 async def _notify_new_alert(alert: TradeAlert, approved: bool, reason: Optional[str]) -> None:
@@ -139,56 +87,6 @@ async def _notify_new_alert(alert: TradeAlert, approved: bool, reason: Optional[
         await telegram_send(text)
     except Exception:
         pass
-
-# === Auto Execute ===
-def _risk_and_open_market(alert: TradeAlert) -> Dict[str, Any]:
-    symbol = alert.symbol.upper()
-    ex_side, pos_side = _side_to_binance(alert.side)
-    price = futures_mark_price(symbol) or float(alert.entry)
-
-    try:
-        r = suggest_risk(symbol=symbol, entry=float(alert.entry), sl=float(alert.sl),
-                         budget_usd=alert.budget_usd, leverage=alert.leverage)
-        leverage = int(r.get("leverage") or alert.leverage or 10)
-        budget_usd = float(r.get("budget_usd") or alert.budget_usd or 50.0)
-        qty_risk = float(r.get("quantity") or 0.0)
-    except Exception:
-        leverage = int(alert.leverage or 10)
-        budget_usd = float(alert.budget_usd or 50.0)
-        qty_risk = (budget_usd * leverage) / max(price, 1e-12)
-
-    qty = _quantize_qty_with_filters(symbol, price, qty_risk)
-    lev_resp = set_leverage(symbol, leverage)
-    order = futures_create_order(symbol=symbol, side=ex_side, type="MARKET", quantity=str(qty))
-
-    # SL חדש (close_position=True → ייקח כמות מהפוזיציה)
-    sl_resp = modify_stop_loss(
-        symbol,
-        float(alert.sl),
-        side=_close_side_for_pos(pos_side),
-        close_position=True
-    )
-
-    # TP ladder: המרה לאחוזים ושיגור
-    tps = _targets_from_alert(alert)
-    tp_percents = _tp_percents_from_targets(price, ex_side, tps)
-    tp_resp = place_tp_ladder(
-        symbol,
-        entry_side=ex_side,
-        entry_price=float(price),
-        quantity=float(qty),
-        tp_percents=tp_percents if tp_percents else None
-    )
-
-    return {
-        "leverage_set": lev_resp,
-        "market_order": order,
-        "stop_loss": sl_resp,
-        "tp_ladder": tp_resp,
-        "qty": qty,
-        "price_ref": price,
-        "pos_side": pos_side,
-    }
 
 # ================= Routes =================
 @router.post("/trades/active", response_model=AlertResponse)
@@ -220,10 +118,28 @@ async def receive_alert(
 
     executed = False
     order_payload: Optional[Dict[str, Any]] = None
-    if approved and AUTO_RUN and EXECUTE_TRADES and (not SINK_ENFORCE_APPROVALS):
+
+    if approved and AUTO_RUN and EXECUTE_TRADES:
+        # מבצעים דרך המנוע המאוחד — תמיד עם אישור בטלגרם
         try:
-            order_payload = _risk_and_open_market(alert)
-            executed = True
+            tp_targets = _targets_from_alert(alert)  # TP כמחירי יעד (לא אחוזים)
+            res = await execute_trade_live(
+                symbol=alert.symbol.upper(),
+                side=_side_to_ex(alert.side),
+                leverage=int(alert.leverage or 10),
+                budget=float(alert.budget_usd or 50.0),
+                dry_run=False,
+                entry=float(alert.entry),
+                sl=float(alert.sl),
+                tp=None,
+                tp_targets=tp_targets if tp_targets else None,
+                confirm_first=True,
+                telegram_chat_id=ADMIN_CHAT_ID or None,
+            )
+            order_payload = res
+            executed = bool(res and res.get("ok", False))
+            if not executed:
+                reason = res.get("reason") or "execute_trade_live_failed"
         except Exception as e:
             reason = f"auto_exec_failed: {e}"
 
@@ -276,6 +192,7 @@ async def ingest_trade(
     if x_idempotency_key and idem_seen(x_idempotency_key):
         return {"ok": True, "duplicate": True}
     return {"ok": True, "payload": payload}
+
 
 
 
