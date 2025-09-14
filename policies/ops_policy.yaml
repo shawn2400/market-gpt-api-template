@@ -38,24 +38,34 @@ QUALITY_GATES:
     needs_advisor_or_approval: [4,6]
     approval_only: [7,10]
 
-APPROVAL_FLOW:
-  stages: [preflight, canary, promote, postverify]
-  cancel_on: [gates_violation, tests_failed, budget_exceeded, slo_drift, security_flag]
-  on_cancel: rollback_and_notify
-  retries: 1
-  notify_telegram: true
+# ===== Change Approval (אישור ידני עם הסבר) =====
+CHANGE_APPROVAL:
+  required: true                # דורש אישור לכל שינוי משמעותי
+  ttl_minutes: 20               # זמן תפוגה לטיקט
+  min_crs_for_manual: 2         # כל שינוי עם CRS>=2 מצריך אישור
+  explain: true                 # לצרף הסבר/תוכנית פעולה בהודעות
+  channels: ["telegram"]        # היכן לבקש אישור (טלגרם כיום)
 
-APPROVAL_LOGIC:
+APPROVAL_ENDPOINTS:
+  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"
+  hmac_env: "WEBHOOK_HMAC_SECRET"  # שם משתנה env למפתח חתימה
   two_man_rule: true
   timeout_seconds: 600
-  on_mismatch: hold_and_alert
-  on_timeout: cancel_change
+  on_mismatch: "hold_and_alert"
+  on_timeout: "cancel_change"
   break_glass:
     enabled: true
     command: "/override"
     otp_required: true
     require_reason: true
     strict_audit: true
+
+APPROVAL_FLOW:
+  stages: [preflight, canary, promote, postverify]
+  cancel_on: [gates_violation, tests_failed, budget_exceeded, slo_drift, security_flag]
+  on_cancel: rollback_and_notify
+  retries: 1
+  notify_telegram: true
 
 FLAGS: { ops_scan: on, refactor: on, security_hardening: on, advisor_voice: auto }
 
@@ -116,12 +126,22 @@ EXCHANGES:
   bybit:   { enabled: false, ws_max: 0, rest_rps: 0 }
   okx:     { enabled: false, ws_max: 0, rest_rps: 0 }
 
+# ===== Auto-Onboard מדורג עם אישור =====
 AUTO_ONBOARD:
   enabled: true
+  staged: true
   triggers: ["on_power_on","on_mode_change_full","nightly_02_30"]
   preapproved_exchanges: ["binance","bybit"]
   preapproved_features: ["advisor_voice","vision_rca","embeddings_kb","web_search"]
+  steps:
+    - name: "validate_creds"   # בדיקות יבשות למפתחות/סודות/חיבורים
+      crs: 1
+    - name: "enable_scheduler" # הדלקת משימות בטוחות (ללא מסחר)
+      crs: 3
+    - name: "telegram_webhook" # הגדרת וובהוק/התראות
+      crs: 4
   require: ["credentials","allowlist","handshake_ok","quotas_set","budget_ok","gates_green"]
+  require_approval: true
   rollout: { shadow_ratio: 0.01, canary_pct: 15, promote_if_green_minutes: 15 }
   concurrency: 1
   spacing_seconds: 120
@@ -171,6 +191,7 @@ STATUS_WATCH: { binance: { enabled: true, maintenance_hold: true } }
 AUDIT: { hash_chain: true, sign_release: true }
 
 DATA_GUARD: { mask_secrets_pii: true }
+
 
 
 
