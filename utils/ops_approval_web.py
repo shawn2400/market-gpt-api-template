@@ -20,6 +20,7 @@ REDIS_URL_ENV = os.getenv("REDIS_URL", "")
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").encode() if os.getenv("WEBHOOK_HMAC_SECRET") else None
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+APPROVAL_PUBSUB_CHANNEL = os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events")
 
 # --------- runtime holders ---------
 _redis: Optional[redis.Redis] = None
@@ -61,7 +62,7 @@ async def send_telegram(text: str):
 def _sign_params(params: Dict[str, str]) -> str:
     if not WEBHOOK_HMAC_SECRET:
         return ""
-    s = "&".join(f"{k}={params[k]}" for k in sorted(params))  # same canonical form as supervisor
+    s = "&".join(f"{k}={params[k]}" for k in sorted(params))  # must match supervisor's canonicalization
     return hmac.new(WEBHOOK_HMAC_SECRET, s.encode(), hashlib.sha256).hexdigest()
 
 def _html(s: str) -> str:
@@ -80,6 +81,15 @@ def _save_ticket(ticket: Dict[str, Any], ttl_s: int):
     if not _redis:
         return
     _redis.setex(_ticket_key(ticket["id"]), max(60, ttl_s), json.dumps(ticket))
+
+def _publish_event(ticket_id: str, status: str):
+    """Notify supervisor via Redis Pub/Sub for immediate progress."""
+    if not _redis:
+        return
+    try:
+        _redis.publish(APPROVAL_PUBSUB_CHANNEL, json.dumps({"id": ticket_id, "status": status, "ts": int(time.time())}))
+    except Exception:
+        pass
 
 # --------- lifecycle ---------
 @app.on_event("startup")
@@ -107,9 +117,10 @@ async def _shutdown():
 async def approve(req: Request):
     """
     GET /ops/approve?action=approve|reject&ticket_id=...&expires=...&require=2&version=...&sig=...
-    - מאמת HMAC (על כל הפרמטרים חוץ מ-sig) בדיוק כמו בסופרווייזר
-    - מעדכן את ה-Ticket ב-Redis (approvals / rejected)
-    - שולח עדכון לטלגרם
+    - Verify HMAC signature (same canonical form as supervisor)
+    - Update ticket in Redis
+    - Publish Pub/Sub event for immediate progress
+    - Notify Telegram
     """
     q = dict(req.query_params)
     required = ["action", "ticket_id", "expires", "require", "version", "sig"]
@@ -123,84 +134,5 @@ async def approve(req: Request):
         exp = int(q["expires"])
         req_needed = int(q["require"])
     except Exception:
-        raise HTTPException(status_code=400, detail="invalid expires/require")
+        raise HTTPException(status_code=400
 
-    # Verify expiry
-    now = int(time.time())
-    if exp < now:
-        return HTMLResponse(f"<h2>⏱️ Link expired</h2><p>ticket {_html(ticket_id)}</p>", status_code=410)
-
-    # Verify signature
-    to_sign = {k: q[k] for k in q if k != "sig"}
-    expected = _sign_params(to_sign)
-    if WEBHOOK_HMAC_SECRET and not hmac.compare_digest(expected, q["sig"]):
-        raise HTTPException(status_code=401, detail="bad signature")
-
-    # Load/update ticket
-    ticket = await _load_ticket(ticket_id)
-    if not ticket:
-        # still allow recording (e.g., ticket stored elsewhere) – create a minimal shell
-        ticket = {
-            "id": ticket_id,
-            "status": "pending",
-            "require": req_needed,
-            "approvals": 0,
-            "created_at": now,
-            "expires_at": exp,
-            "proposal": {"version": q.get("version","")},
-        }
-
-    remaining = max(30, exp - now)
-
-    if action == "approve":
-        ticket["approvals"] = int(ticket.get("approvals", 0)) + 1
-        ticket["require"] = int(ticket.get("require", req_needed))
-        if ticket["approvals"] >= ticket["require"]:
-            ticket["status"] = "approved"
-        else:
-            ticket["status"] = "pending"
-        verb = f"✅ APPROVED ({ticket['approvals']}/{ticket['require']})"
-    elif action == "reject":
-        ticket["status"] = "rejected"
-        verb = "❌ REJECTED"
-    else:
-        raise HTTPException(status_code=400, detail="unknown action")
-
-    _save_ticket(ticket, remaining)
-
-    # Notify Telegram
-    who = q.get("by", "unknown")
-    version = q.get("version", "")
-    await send_telegram(
-        f"🔐 <b>Change approval</b> | <code>{_html(ticket_id)}</code>\n"
-        f"{verb} | by: <code>{_html(who)}</code>\n"
-        f"Version: <code>{_html(version)}</code>\n"
-        f"Status: <b>{_html(ticket['status'])}</b>"
-    )
-
-    # HTML response
-    extra = ""
-    if ticket["status"] == "approved":
-        extra = "<p>System may proceed (supervisor will pick this up on next cycle).</p>"
-    elif ticket["status"] == "pending":
-        extra = f"<p>Waiting for more approvals: {ticket['approvals']}/{ticket['require']}.</p>"
-
-    return HTMLResponse(
-        f"<h2>{verb}</h2>"
-        f"<p>Ticket: <code>{_html(ticket_id)}</code></p>"
-        f"<p>Status: <b>{_html(ticket['status'])}</b></p>"
-        f"{extra}",
-        status_code=200
-    )
-
-@app.get("/ops/ticket/{ticket_id}", response_class=JSONResponse)
-async def get_ticket(ticket_id: str):
-    t = await _load_ticket(ticket_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="ticket not found")
-    return JSONResponse(t)
-
-# For local run (Render will use your Start Command instead)
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT","10000")))
