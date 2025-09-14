@@ -1,14 +1,13 @@
 # routes/telegram_webhook.py
 from __future__ import annotations
-import os, logging, time, json
+import os, logging, time
 from typing import Any, Dict, Optional, List
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
 import httpx
 
 logger = logging.getLogger("algogpt.telegram.webhook")
 
-# לא מתנגש עם /telegram/webhook שב-main.py
+# שים לב: קובץ זה מוסיף /telegram/commands בלבד (לא מתנגש עם /telegram/webhook הקיים)
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -20,8 +19,8 @@ def _allowed_user(uid: int) -> bool:
         return True
     return str(uid) in ADMIN_IDS
 
-async def _reply(chat_id: int, text: str, *, html: bool = True):
-    """שליחת תשובה למשתמש בטלגרם"""
+async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
+    """שליחת תשובה למשתמש בטלגרם (parse_mode=HTML, ללא preview)"""
     if not TG_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -120,6 +119,9 @@ def _fmt_status() -> str:
 
 @router.post("/commands")
 async def commands(req: Request):
+    """נתיב וובהוק לפקודות טלגרם (ללא התנגשות עם /telegram/webhook הישן).
+       הגבלות: ADMIN_ONLY + TELEGRAM_ADMIN_IDS.
+    """
     if not TG_TOKEN:
         raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
     try:
@@ -127,6 +129,7 @@ async def commands(req: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Bad payload")
 
+    # תמיכה ב-callback_query קיימת דרך קבצים אחרים במערכת.
     msg = update.get("message") or {}
     chat = msg.get("chat") or {}
     chat_id = chat.get("id")
@@ -170,9 +173,9 @@ async def commands(req: Request):
         await _reply(chat_id, "⚪️ Explain-Trade: OFF")
         return {"ok": True}
 
-    # שמירה על תאימות: אפשר להרחיב בעתיד (scan/exec_dry) דרך API ייעודי.
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.")
     return {"ok": True}
+
 
 
 
