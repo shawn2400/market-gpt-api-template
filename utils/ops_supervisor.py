@@ -17,7 +17,7 @@ import yaml
 # -------------------- Config & Globals --------------------
 POLICY_PATH = os.getenv("OPS_POLICY_PATH", "policies/ops_policy.yaml")
 TZ_IL = ZoneInfo("Asia/Jerusalem")
-VERSION = "3.6"
+VERSION = "3.7"
 
 # Telegram
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -52,6 +52,18 @@ def _cooldown_ok(key: str, sec: int) -> bool:
         _last_action_ts[key] = now
         return True
     return False
+
+# -------------------- Safe import for RenderAPI (works in both -m and script modes) ---
+RenderAPI = None
+try:
+    from utils.render_api import RenderAPI  # when run with: python -m utils.ops_supervisor
+except Exception:
+    try:
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from utils.render_api import RenderAPI  # fallback when run as a script
+    except Exception:
+        RenderAPI = None
 
 # -------------------- Utilities --------------------
 def now_ts(fmt_il: str, fmt_utc: str) -> Tuple[str, str]:
@@ -320,25 +332,59 @@ class Supervisor:
 
         return True, "ok"
 
+    async def _set_env_var_http(self, service_id: str, key: str, value: str, visibility: str = "private") -> bool:
+        if not (RENDER_API_KEY and service_id):
+            return False
+        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}
+        base = "https://api.render.com"
+
+        # Try PUT env-vars bulk
+        body_a = {"envVars": [{"key": key, "value": value, "visibility": visibility}]}
+        async with self.session.put(f"{base}/v1/services/{service_id}/env-vars", headers=headers, json=body_a, timeout=HTTP_TIMEOUT) as r1:
+            if 200 <= r1.status < 300:
+                return True
+
+        # Try POST single
+        body_b = {"key": key, "value": value, "visibility": visibility}
+        async with self.session.post(f"{base}/v1/services/{service_id}/env-vars", headers=headers, json=body_b, timeout=HTTP_TIMEOUT) as r2:
+            if 200 <= r2.status < 300:
+                return True
+
+        # Try PUT with type SECRET/GENERAL
+        body_c = {"envVars": [{"key": key, "value": value, "type": "SECRET" if visibility == "private" else "GENERAL"}]}
+        async with self.session.put(f"{base}/v1/services/{service_id}/env-vars", headers=headers, json=body_c, timeout=HTTP_TIMEOUT) as r3:
+            if 200 <= r3.status < 300:
+                return True
+
+        return False
+
+    async def _create_deploy_http(self, service_id: str) -> bool:
+        if not (RENDER_API_KEY and service_id):
+            return False
+        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}
+        base = "https://api.render.com"
+        async with self.session.post(f"{base}/v1/services/{service_id}/deploys", headers=headers, json={}, timeout=HTTP_TIMEOUT) as r:
+            return 200 <= r.status < 300
+
     async def _persist_redis_fix_to_render(self, new_url: str) -> bool:
         """
-        נסיון לשמור את ה-REDIS_URL המתוקן כמשתנה סביבה בשירות המשני + טריגר דיפלוי.
-        מחזיר True אם הצליח.
+        שומר את ה-REDIS_URL המתוקן בשירות המשני + טריגר דיפלוי. מחזיר True אם הצליח.
         """
         if not (RENDER_API_KEY and SECONDARY_SERVICE_ID and new_url):
             return False
         try:
-            from utils.render_api import RenderAPI  # lazy import
-        except Exception:
-            return False
-        try:
-            api = RenderAPI(RENDER_API_KEY)
-            ok = await api.set_env_var_compat(SECONDARY_SERVICE_ID, "REDIS_URL", new_url, visibility="private")
-            if not ok:
-                return False
-            # טריגר דיפלוי למשני
-            await api.create_deploy(SECONDARY_SERVICE_ID)
-            return True
+            if RenderAPI is not None:
+                api = RenderAPI(RENDER_API_KEY)
+                ok = await api.set_env_var_compat(SECONDARY_SERVICE_ID, "REDIS_URL", new_url, visibility="private")
+                if not ok:
+                    return False
+                await api.create_deploy(SECONDARY_SERVICE_ID)
+                return True
+            else:
+                ok = await self._set_env_var_http(SECONDARY_SERVICE_ID, "REDIS_URL", new_url, visibility="private")
+                if not ok:
+                    return False
+                return await self._create_deploy_http(SECONDARY_SERVICE_ID)
         except Exception:
             return False
 
@@ -353,25 +399,30 @@ class Supervisor:
             except Exception as e:
                 await send_telegram(self.session, f"🧯 Auto-Heal deploy hook failed: {e}")
 
-        # עדיפות 2: Render API אם יש SERVICE_ID + KEY
-        if RENDER_API_KEY and PRIMARY_SERVICE_ID:
+        # עדיפות 2: Render API אם יש SERVICE_ID + KEY (עם fallback גם בלי המודול)
+        if RENDER_API_KEY and PRIMARY_SERVICE_ID and _cooldown_ok("render_api_redeploy", 1800):
             try:
-                from utils.render_api import RenderAPI
-                api = RenderAPI(RENDER_API_KEY)
-                await api.create_deploy(PRIMARY_SERVICE_ID)
-                await send_telegram(self.session, f"🧯 Auto-Heal: Triggered primary redeploy via Render API ({reason}).")
+                ok = False
+                if RenderAPI is not None:
+                    api = RenderAPI(RENDER_API_KEY)
+                    ok = await api.create_deploy(PRIMARY_SERVICE_ID)
+                else:
+                    ok = await self._create_deploy_http(PRIMARY_SERVICE_ID)
+                if ok:
+                    await send_telegram(self.session, f"🧯 Auto-Heal: Triggered primary redeploy via Render API ({reason}).")
+                else:
+                    await send_telegram(self.session, "🧯 Auto-Heal Render API failed (non-2xx).")
             except Exception as e:
-                await send_telegram(self.session, f"🧯 Auto-Heal Render API failed: {e}")
+                await send_telegram(self.session, f"🧯 Auto-Heal Render API exception: {e}")
 
     async def auto_heal(self, diag: str):
-        # Primary issues → redeploy (עם cooldown)
-        if diag.startswith("primary") and _cooldown_ok("deploy_hook", 1800):
+        # Primary issues → redeploy
+        if diag.startswith("primary"):
             await self._redeploy_primary(diag)
             return
 
         # Redis issues → sanitize + persist to Render if possible
         if diag.startswith("redis"):
-            # נסיון סניטציה נוסף (אם ה-ENV השתנה)
             new_clean = _clean_redis_url(os.getenv("REDIS_URL", self.redis_url))
             if new_clean and new_clean != self.redis_url:
                 os.environ["REDIS_URL"] = new_clean
@@ -379,7 +430,6 @@ class Supervisor:
                 ok, reason = await _redis_self_test(self.session, self.redis_url)
                 if ok:
                     await send_telegram(self.session, f"✅ Redis recovered after re-sanitize.\n<code>{repr(self.redis_url)}</code>")
-                    # לשמור קבוע ב-Render אם אפשר
                     if await self._persist_redis_fix_to_render(new_clean):
                         await send_telegram(self.session, "📌 Persisted REDIS_URL fix to Render env and triggered redeploy.")
                     else:
@@ -458,7 +508,6 @@ class Supervisor:
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
         await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🧹 Nightly sweep started…")
-        # TODO: imports/AST/SBOM/log rotation/security checks
 
     async def eod_report(self):
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
@@ -541,5 +590,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
