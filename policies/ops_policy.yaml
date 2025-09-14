@@ -6,6 +6,15 @@ MASTER:
   profile: "balanced"         # eco|balanced|performance
   emergency_actions_in_frozen: ["reconnect","restart","rollback_config"]
 
+# ===== Notifications cadence / throttling =====
+NOTIFY:
+  cadence_hours: 3            # דיג'סט כל 3 שעות
+  daily_cap: 5                # עד 5 הודעות לא דחופות ביום
+  immediate_kinds: ["approval","emergency"]  # תמיד מיידי
+  always_send_kinds: ["eod"]  # תמיד נשלח (דוח סוף יום)
+  coalesce: true              # איסוף אירועים לדיג'סט
+  coalesce_max_items: 50
+
 PROFILES:
   eco:         { experiments_per_day: 6,  advisor_mode: "off" }
   balanced:    { experiments_per_day: 12, advisor_mode: "risk-gated" }
@@ -47,7 +56,7 @@ CHANGE_APPROVAL:
   channels: ["telegram"]        # כרגע טלגרם
 
 APPROVAL_ENDPOINTS:
-  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"  # יוחלף מריצת ה-Supervisor לפי env
+  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"  # יוחלף מריצה לפי env
   hmac_env: "WEBHOOK_HMAC_SECRET"  # שם משתנה env למפתח חתימה
   two_man_rule: true
   timeout_seconds: 600
@@ -84,7 +93,7 @@ EMERGENCY:
   telegram_commands: ["/safe", "/freeze_on", "/freeze_off"]
 
 CANARY:
-  size_by_crs: { "0-3": 0.05, "4-6": 0.15, "7-10": 0.30 }  # הערכים הם יחס (0..1) – הקוד כבר ממיר לאחוזים
+  size_by_crs: { "0-3": 0.05, "4-6": 0.15, "7-10": 0.30 }  # יחסים (0..1)
 
 SLO_GUARD:
   burn_alert_pct_per_hour: 10
@@ -137,11 +146,11 @@ AUTO_ONBOARD:
   preapproved_exchanges: ["binance","bybit"]
   preapproved_features: ["advisor_voice","vision_rca","embeddings_kb","web_search"]
   steps:
-    - name: "validate_creds"   # בדיקות יבשות למפתחות/סודות/חיבורים
+    - name: "validate_creds"
       crs: 1
-    - name: "enable_scheduler" # משימות בטוחות (ללא מסחר)
+    - name: "enable_scheduler"
       crs: 3
-    - name: "telegram_webhook" # הגדרת וובהוק/התראות
+    - name: "telegram_webhook"
       crs: 4
   require: ["credentials","allowlist","handshake_ok","quotas_set","budget_ok","gates_green"]
   require_approval: true
@@ -194,6 +203,7 @@ STATUS_WATCH: { binance: { enabled: true, maintenance_hold: true } }
 AUDIT: { hash_chain: true, sign_release: true }
 
 DATA_GUARD: { mask_secrets_pii: true }
+
 
 
 
