@@ -1,8 +1,10 @@
 # FILE: utils/ops_supervisor.py
+from __future__ import annotations
 import asyncio
 import json
 import os
 import signal
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -15,20 +17,36 @@ import yaml
 POLICY_PATH = os.getenv("OPS_POLICY_PATH", "policies/ops_policy.yaml")
 TZ_IL = ZoneInfo("Asia/Jerusalem")
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Telegram
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE = os.getenv("OPENAI_BASE", "https://api.openai.com")  # optional override
-OPENAI_MODEL_MINI = os.getenv("OPENAI_MODEL_MINI", "gpt-4o-mini")
+# Providers
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_BASE = os.getenv("OPENAI_BASE", "https://api.openai.com").strip()
+OPENAI_MODEL_MINI = os.getenv("OPENAI_MODEL_MINI", "gpt-4o-mini").strip()
 
-AIX_API_KEY = os.getenv("AIX_API_KEY", "")
-AIX_API_BASE = os.getenv("AIX_API_BASE", "https://api.x.ai")   # OpenAI-compatible style
-AIX_MODEL_DEFAULT = os.getenv("AIX_MODEL_DEFAULT", "grok-3-mini")
-AIX_MODEL_UP1 = os.getenv("AIX_MODEL_UP1", "grok-3")
-AIX_MODEL_UP2 = os.getenv("AIX_MODEL_UP2", "grok-4")
+AIX_API_KEY = os.getenv("AIX_API_KEY", "").strip()
+AIX_API_BASE = os.getenv("AIX_API_BASE", "https://api.x.ai").strip()
+AIX_MODEL_DEFAULT = os.getenv("AIX_MODEL_DEFAULT", "grok-3-mini").strip()
 
-HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
+# Infra checks
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+PRIMARY_PUBLIC_HOST = os.getenv("PRIMARY_PUBLIC_HOST", "").strip()
+DEPLOY_HOOK = os.getenv("RENDER_DEPLOY_HOOK_MAIN", "").strip()
+
+HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
+
+# cooldowns for auto-heal actions
+_last_action_ts: Dict[str, float] = {}
+
+def _cooldown_ok(key: str, sec: int) -> bool:
+    now = time.time()
+    ts = _last_action_ts.get(key, 0.0)
+    if now - ts >= sec:
+        _last_action_ts[key] = now
+        return True
+    return False
 
 # -------------------- Utilities --------------------
 def now_ts(fmt_il: str, fmt_utc: str) -> Tuple[str, str]:
@@ -59,7 +77,6 @@ async def send_telegram(session: aiohttp.ClientSession, text: str, keyboard: Opt
 @dataclass
 class Policy:
     raw: Dict[str, Any]
-
     @property
     def time_formats(self):
         t = self.raw.get("TIME", {})
@@ -67,14 +84,12 @@ class Policy:
             t.get("formats", {}).get("ts_il", "%d/%m/%Y %H:%M:%S %Z"),
             t.get("formats", {}).get("ts_utc", "%Y-%m-%d %H:%M:%S UTC"),
         )
-
     def gate(self, key: str, default: Any = None) -> Any:
         return self.raw.get(key, default)
 
-
 def load_policy() -> Policy:
     with open(POLICY_PATH, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = yaml.safe_load(f) or {}
     return Policy(data)
 
 # -------------------- Providers (AIX/OpenAI) --------------------
@@ -82,7 +97,6 @@ class LLMProvider:
     def __init__(self, session: aiohttp.ClientSession, name: str):
         self.session = session
         self.name = name
-
     async def chat_json(self, model: str, system: str, user: str, max_tokens: int = 800) -> Dict[str, Any]:
         raise NotImplementedError
 
@@ -94,59 +108,50 @@ class OpenAIProvider(LLMProvider):
         headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
         body = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": [{"role":"system","content":system},{"role":"user","content":user}],
             "temperature": 0.2,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"}
+            "response_format": {"type": "json_object"},
         }
         async with self.session.post(url, headers=headers, json=body, timeout=HTTP_TIMEOUT) as r:
-            data = await r.json()
-            return data
+            return await r.json()
 
 class AIXProvider(LLMProvider):
     async def chat_json(self, model: str, system: str, user: str, max_tokens: int = 800) -> Dict[str, Any]:
         if not AIX_API_KEY:
             return {"error": "AIX_API_KEY missing"}
-        # xAI (AIX) – OpenAI-like interface
         url = f"{AIX_API_BASE}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {AIX_API_KEY}", "Content-Type": "application/json"}
         body = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": [{"role":"system","content":system},{"role":"user","content":user}],
             "temperature": 0.2,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"}
+            "response_format": {"type": "json_object"},
         }
         async with self.session.post(url, headers=headers, json=body, timeout=HTTP_TIMEOUT) as r:
-            data = await r.json()
-            return data
+            return await r.json()
 
 # -------------------- Core Supervisor --------------------
 class Supervisor:
     def __init__(self, policy: Policy):
         self.policy = policy
-        self.session = None
+        self.session: Optional[aiohttp.ClientSession] = None
         self.running = True
 
     async def __aenter__(self):
-        self.session = aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession(timeout=HTTP_TIMEOUT)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        await self.session.close()
+        if self.session:
+            await self.session.close()
 
     async def run(self):
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-        await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🔵 Info | Ops Supervisor starting (v3.3)")
+        await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🔵 Info | Ops Supervisor starting (v3.4)")
 
-        # schedule tasks
         sched = self.policy.gate("SCHEDULE", {})
         tick_seconds = int(sched.get("tick_seconds", 60))
         maintenance_minutes = int(sched.get("maintenance_minutes", 45))
@@ -158,16 +163,14 @@ class Supervisor:
             asyncio.create_task(self.loop_eod()),
         ]
 
-        # Auto-onboard on start
         await self.auto_onboard()
 
-        # handle signals (Linux)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self.shutdown(s)))
             except NotImplementedError:
-                pass  # environments without signal handler support
+                pass
 
         await asyncio.gather(*tasks)
 
@@ -179,7 +182,8 @@ class Supervisor:
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
         await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🔴 Stopping gracefully ({sig.name})")
         await asyncio.sleep(0.2)
-        await self.session.close()
+        if self.session:
+            await self.session.close()
         os._exit(0)
 
     # ---------------- Loops ----------------
@@ -228,71 +232,97 @@ class Supervisor:
 
     # ---------------- Health / Auto-Heal ----------------
     async def health_check(self) -> Tuple[bool, str]:
-        # TODO: integrate real CPU/MEM/WS/API-error metrics
-        # Return (ok, diag)
+        # 1) Redis
+        if REDIS_URL:
+            try:
+                import redis  # type: ignore
+                r = redis.Redis.from_url(REDIS_URL, decode_responses=True, ssl=REDIS_URL.startswith("rediss://"))
+                if not r.ping():
+                    return False, "redis_unreachable"
+            except Exception:
+                return False, "redis_error"
+
+        # 2) Primary /health
+        if PRIMARY_PUBLIC_HOST:
+            try:
+                url = PRIMARY_PUBLIC_HOST.rstrip("/") + "/health"
+                async with self.session.get(url, timeout=HTTP_TIMEOUT) as resp:
+                    ok = resp.status == 200
+                    if ok:
+                        data = await resp.json()
+                        if not bool(data.get("ok", False)):
+                            return False, "primary_not_ok"
+                    else:
+                        return False, "primary_http_" + str(resp.status)
+            except Exception:
+                return False, "primary_down"
+
         return True, "ok"
 
     async def auto_heal(self, diag: str):
-        ts_il_fmt, ts_utc_fmt = self.policy.time_formats
-        ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-        await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🧯🛠️ אירוע טופל אוטומטית | Incident Auto-Heal\n<b>Root-Cause:</b> {diag}")
-        # Implement reconnect/restart/rollback-config here
+        # deploy-hook for primary only, with cooldown
+        if diag.startswith("primary") and DEPLOY_HOOK and _cooldown_ok("deploy_hook", 1800):
+            try:
+                async with self.session.post(DEPLOY_HOOK, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                    _ = await r.text()
+                await send_telegram(self.session, f"🧯 Auto-Heal: Triggered primary redeploy ({diag}).")
+            except Exception as e:
+                await send_telegram(self.session, f"🧯 Auto-Heal failed ({diag}): {e}")
+        elif diag.startswith("redis"):
+            await send_telegram(self.session, f"⚠️ Redis issue detected: {diag}. Using external TLS endpoint recommended.")
 
     # ---------------- Maintenance Cycle ----------------
     async def maintenance_cycle(self):
-        # 1) Propose change via AIX (primary). If CRS high/sensitive, also consult OpenAI.
         proposal = await self.propose_change()
         if not proposal:
             return
         crs = max(0, min(10, int(proposal.get("crs", 3))))
         sensitive = bool(proposal.get("sensitive", False))
 
-        # 2) Preflight gates/tests/budget/security
         ok, reason = await self.preflight_checks()
         if not ok:
             await self.notify_cancel("preflight", reason)
             return
 
-        # 3) Canary by CRS
         canary_pct = self.canary_by_crs(crs)
         ok, reason = await self.run_canary(proposal, canary_pct)
         if not ok:
             await self.notify_cancel("canary", reason, rollback=True)
             return
 
-        # 4) Promote
         ok, reason = await self.promote(proposal)
         if not ok:
             await self.notify_cancel("promote", reason, rollback=True)
             return
 
-        # 5) Post-verify
         ok, reason = await self.post_verify(proposal)
         if not ok:
             await self.notify_cancel("postverify", reason, rollback=True)
             return
 
-        # 6) Success notify
         await self.notify_success(proposal)
 
     def canary_by_crs(self, crs: int) -> int:
         sizes = self.policy.gate("CANARY", {}).get("size_by_crs", {"0-3": 5, "4-6": 15, "7-10": 30})
         if crs <= 3:
-            return int(sizes.get("0-3", 5))
+            v = sizes.get("0-3", 5)
         elif crs <= 6:
-            return int(sizes.get("4-6", 15))
+            v = sizes.get("4-6", 15)
         else:
-            return int(sizes.get("7-10", 30))
+            v = sizes.get("7-10", 30)
+        try:
+            v = float(v)
+        except Exception:
+            v = 5.0
+        # תמיכה בערכים 0-1 כיחס → אחוזים
+        return int(round(v * 100)) if 0.0 < v <= 1.0 else int(round(v))
 
     async def notify_cancel(self, stage: str, reason: str, rollback: bool = False):
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-        text = (
-            f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
-            f"🔴❌ בוטל בזמן ביצוע | Execution Cancelled\n"
-            f"<b>שלב:</b> {stage}\n"
-            f"<b>סיבה:</b> {reason}\n"
-        )
+        text = (f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
+                f"🔴❌ בוטל בזמן ביצוע | Execution Cancelled\n"
+                f"<b>שלב:</b> {stage}\n<b>סיבה:</b> {reason}\n")
         if rollback:
             text += "⏪ <b>Rollback:</b> הושלם לגרסה יציבה\n"
         await send_telegram(self.session, text)
@@ -300,11 +330,9 @@ class Supervisor:
     async def notify_success(self, proposal: Dict[str, Any]):
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-        text = (
-            f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
-            f"🟢🚀 שדרוג הושלם | Upgrade Promoted\n"
-            f"<b>גרסה:</b> v{proposal.get('version','X.Y.Z')}\n"
-        )
+        text = (f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
+                f"🟢🚀 שדרוג הושלם | Upgrade Promoted\n"
+                f"<b>גרסה:</b> v{proposal.get('version','X.Y.Z')}\n")
         await send_telegram(self.session, text)
 
     # ---------------- Nightly / EOD ----------------
@@ -317,32 +345,25 @@ class Supervisor:
     async def eod_report(self):
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-        # Example KPIs (placeholder)
-        text = (
-            f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
-            f"📊 סיכום יומי | Daily EOD\n"
-            f"<pre>p95: 1080ms   errors: 1.5%   ws_disc: 2\n"
-            f"MTTR: 48s   advisor_calls: 3   budget: OAI $0.12 | AIX $0.28</pre>\n"
-            f"<b>שינויים:</b> 1 (Promoted: 1 / Rolled: 0)\n"
-            f"Highlights: latency↓18%, errors↓0.6%"
-        )
+        text = (f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
+                f"📊 סיכום יומי | Daily EOD\n"
+                f"<pre>p95: 1080ms   errors: 1.5%   ws_disc: 2\n"
+                f"MTTR: 48s   advisor_calls: 3   budget: OAI $0.12 | AIX $0.28</pre>\n"
+                f"<b>שינויים:</b> 1 (Promoted: 1 / Rolled: 0)\n"
+                f"Highlights: latency↓18%, errors↓0.6%")
         await send_telegram(self.session, text)
 
     # ---------------- LLM Orchestration ----------------
     async def propose_change(self) -> Optional[Dict[str, Any]]:
-        system = (
-            "You are the Ops-Advisor. Return a STRICT JSON with keys: "
-            "{ 'crs': int(0-10), 'sensitive': bool, 'plan': str, 'version': str } only."
-        )
+        system = ("You are the Ops-Advisor. Return a STRICT JSON with keys: "
+                  "{ 'crs': int(0-10), 'sensitive': bool, 'plan': str, 'version': str } only.")
         user = "Produce one safe improvement for the next 45min window."
-        # AIX primary
         aix = AIXProvider(self.session, "xai")
         data = await aix.chat_json(AIX_MODEL_DEFAULT, system, user)
         proposal = self._extract_json(data)
         if not proposal:
             return None
 
-        # Risk gate: if CRS>=5 or sensitive -> ask OpenAI advisor for cross-check
         crs = int(proposal.get("crs", 3))
         sensitive = bool(proposal.get("sensitive", False))
         if (crs >= 5 or sensitive) and OPENAI_API_KEY:
@@ -350,7 +371,6 @@ class Supervisor:
             data2 = await oa.chat_json(OPENAI_MODEL_MINI, system, user)
             prop2 = self._extract_json(data2)
             if prop2 and abs(int(prop2.get("crs", 3)) - crs) >= 3:
-                # disagreement → require approval (skip auto)
                 await self.notify_cancel("advisor_disagree", "advisor and primary disagree", rollback=False)
                 return None
         return proposal
@@ -365,7 +385,7 @@ class Supervisor:
         return None
 
     async def preflight_checks(self) -> Tuple[bool, str]:
-        # TODO: real gates/tests/budget/security checks
+        # TODO: gates/tests/budget/security checks
         return True, "ok"
 
     async def run_canary(self, proposal: Dict[str, Any], pct: int) -> Tuple[bool, str]:
@@ -392,7 +412,6 @@ class Supervisor:
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
         await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🟣 Auto-Onboard starting…")
         # TODO: check credentials/allowlist/handshake and bring exchanges/features online gradually
-
 
 async def main():
     policy = load_policy()
