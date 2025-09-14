@@ -7,7 +7,6 @@ import httpx
 
 logger = logging.getLogger("algogpt.telegram.webhook")
 
-# קידומת ייעודית; לא מתנגש עם /telegram/webhook הקיים אם יש
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 # ─────────── Env / Auth ───────────
@@ -21,7 +20,6 @@ def _allowed_user(uid: int) -> bool:
     return str(uid) in ADMIN_IDS
 
 async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
-    """שליחת תשובה כטקסט רגיל (HTML), ללא קישוריות ווב־פריוויו."""
     if not TG_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -69,7 +67,7 @@ except Exception:
         return []
 
 # ─────────── ConfirmStore & Callback Idempotency ───────────
-from utils.trade_executor import ConfirmStore  # משתמש ב־Redis אם REDIS_URL קיים, אחרת זיכרון
+from utils.trade_executor import ConfirmStore
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 try:
@@ -80,7 +78,6 @@ except Exception:
 _seen_cbq_mem: set[str] = set()
 
 def _cbq_seen(cbq_id: str, ttl: int = 30) -> bool:
-    """הגנה מכפילויות callback מטלגרם. True = כבר טופל, False = חדש."""
     if _r_cbq:
         try:
             ok = _r_cbq.set(f"cbq:{cbq_id}", "1", nx=True, ex=ttl)
@@ -103,7 +100,6 @@ async def _tg_answer_callback(token: str, cbq_id: str, text: str) -> None:
         logger.warning(f"[tg] answerCallbackQuery failed: {e}")
 
 async def _tg_disable_kb(token: str, chat_id: int, message_id: int) -> None:
-    """ניטרול מקלדת אינליין בהודעה כדי למנוע לחיצות חוזרות."""
     url = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
@@ -170,7 +166,6 @@ def _fmt_status() -> str:
 # ─────────── Webhook Endpoint (messages + callbacks) ───────────
 @router.post("/commands")
 async def commands(req: Request):
-    """Webhook אחוד להודעות טקסט ול־callback_query של כפתורי אישור/ביטול."""
     if not TG_TOKEN:
         raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
     try:
@@ -183,7 +178,7 @@ async def commands(req: Request):
     if cbq:
         cbq_id = cbq.get("id") or ""
         if _cbq_seen(cbq_id):
-            return {"ok": True}  # דופליקייט/רטרי
+            return {"ok": True}
 
         from_user = cbq.get("from") or {}
         uid = int(from_user.get("id") or 0)
