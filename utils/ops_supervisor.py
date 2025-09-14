@@ -9,20 +9,24 @@ import time
 import hmac
 import hashlib
 import secrets
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, quote_plus
 
 import aiohttp
 import yaml
 
+try:
+    import redis  # type: ignore
+except Exception:
+    redis = None  # optional: supervisor still runs without pubsub/persistence
+
 # -------------------- Config & Globals --------------------
 POLICY_PATH = os.getenv("OPS_POLICY_PATH", "policies/ops_policy.yaml")
 TZ_IL = ZoneInfo("Asia/Jerusalem")
-VERSION = "3.8"  # bumped
+VERSION = "3.9"  # bumped
 
 # Telegram
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -45,7 +49,7 @@ RENDER_API_KEY = os.getenv("RENDER_API_KEY", "").strip()
 SECONDARY_SERVICE_ID = os.getenv("SECONDARY_SERVICE_ID", "").strip()  # ops-supervisor
 PRIMARY_SERVICE_ID = os.getenv("PRIMARY_SERVICE_ID", "").strip()      # algogpt-docker
 
-# Approval signing
+# Approval signing (webhook and supervisor MUST share the same secret)
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").encode() if os.getenv("WEBHOOK_HMAC_SECRET") else None
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
@@ -61,7 +65,7 @@ def _cooldown_ok(key: str, sec: int) -> bool:
         return True
     return False
 
-# -------------------- Safe import for RenderAPI (works in both -m and script modes) ---
+# -------------------- Safe import for RenderAPI --------------------
 RenderAPI = None
 try:
     from utils.render_api import RenderAPI  # when run with: python -m utils.ops_supervisor
@@ -81,11 +85,7 @@ def now_ts(fmt_il: str, fmt_utc: str) -> Tuple[str, str]:
     return ts_il, ts_utc
 
 def _html(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-         .replace("<", "&lt;")
-         .replace(">", "&gt;")
-    )
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 async def send_telegram(session: aiohttp.ClientSession, text: str, keyboard: Optional[Dict[str, Any]] = None):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -168,19 +168,12 @@ class AIXProvider(LLMProvider):
 def _clean_redis_url(u: str) -> str:
     if not u:
         return u
-    # strip quotes/whitespace and literal/real newlines
     u = u.strip().strip('"').strip("'").strip()
     u = u.replace("\\n", "").rstrip("\n").strip()
-
-    # common paste error: starts with '//' instead of 'rediss://'
     if u.startswith("//") and "keyvalue.render.com" in u:
         u = "rediss:" + u
-
-    # enforce TLS on external endpoint
     if "keyvalue.render.com" in u and not u.startswith("rediss://"):
         u = "rediss://" + u.split("://", 1)[-1]
-
-    # convert internal free-tier host to external TLS if needed
     if re.search(r"@red-[a-z0-9]+:6379$", u) and "keyvalue.render.com" not in u:
         m = re.match(r"^redis[s]?://([^@]+)@[^:]+:\d+$", u)
         if m:
@@ -194,34 +187,25 @@ async def _redis_self_test(session: aiohttp.ClientSession, url: str) -> Tuple[bo
     except Exception as e:
         return False, f"redis-lib-missing: {e}"
     try:
-        r = redis.Redis.from_url(url, decode_responses=True)  # do NOT pass ssl=
+        r = redis.Redis.from_url(url, decode_responses=True)
         ok = bool(r.ping())
         return ok, "ok" if ok else "ping-false"
     except Exception as e:
         return False, str(e)
 
-# -------------------- Approval utils --------------------
+# -------------------- Approval helpers --------------------
 def _gen_ticket_id() -> str:
-    # ULID-style friendly id (not strict ULID): time prefix + random tail
     ts = int(time.time() * 1000)
     rand = secrets.token_hex(8)
     return f"{ts:x}-{rand}"
 
+def _canonical_qs(params: Dict[str, str]) -> str:
+    return "&".join(f"{k}={params[k]}" for k in sorted(params))
+
 def _hmac_sign(params: Dict[str, str]) -> str:
     if not WEBHOOK_HMAC_SECRET:
         return ""
-    # canonical query string
-    s = "&".join(f"{k}={params[k]}" for k in sorted(params))
-    return hmac.new(WEBHOOK_HMAC_SECRET, s.encode(), hashlib.sha256).hexdigest()
-
-def _signed_url(base: str, path: str, params: Dict[str, str]) -> str:
-    base = base.rstrip("/") + "/"
-    url_base = urljoin(base, path.lstrip("/"))
-    params = dict(params)  # copy
-    sig = _hmac_sign(params)
-    if sig:
-        params["sig"] = sig
-    return url_base + "?" + urlencode(params)
+    return hmac.new(WEBHOOK_HMAC_SECRET, _canonical_qs(params).encode(), hashlib.sha256).hexdigest()
 
 def _approval_keyboard(approve_url: str, reject_url: str) -> Dict[str, Any]:
     return {
@@ -231,6 +215,11 @@ def _approval_keyboard(approve_url: str, reject_url: str) -> Dict[str, Any]:
         ]
     }
 
+def _expand_env_templates(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    return re.sub(r"\$\{([A-Z0-9_]+)\}", lambda m: os.getenv(m.group(1), ""), s)
+
 # -------------------- Core Supervisor --------------------
 class Supervisor:
     def __init__(self, policy: Policy):
@@ -239,10 +228,18 @@ class Supervisor:
         self.running = True
         self.redis_url: str = _clean_redis_url(REDIS_URL_ENV)
 
+    def _redis_client(self):
+        if not (redis and self.redis_url):
+            return None
+        try:
+            return redis.Redis.from_url(self.redis_url, decode_responses=True)
+        except Exception:
+            return None
+
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(timeout=HTTP_TIMEOUT)
 
-        # ENV sanitize + runtime auto-fix (updates process env if changed)
+        # ENV sanitize + runtime auto-fix
         raw = REDIS_URL_ENV
         cleaned = _clean_redis_url(raw)
         if cleaned and cleaned != raw:
@@ -383,25 +380,18 @@ class Supervisor:
             return False
         headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}
         base = "https://api.render.com"
-
-        # Try PUT env-vars bulk
         body_a = {"envVars": [{"key": key, "value": value, "visibility": visibility}]}
         async with self.session.put(f"{base}/v1/services/{service_id}/env-vars", headers=headers, json=body_a, timeout=HTTP_TIMEOUT) as r1:
             if 200 <= r1.status < 300:
                 return True
-
-        # Try POST single
         body_b = {"key": key, "value": value, "visibility": visibility}
         async with self.session.post(f"{base}/v1/services/{service_id}/env-vars", headers=headers, json=body_b, timeout=HTTP_TIMEOUT) as r2:
             if 200 <= r2.status < 300:
                 return True
-
-        # Try PUT with type SECRET/GENERAL
         body_c = {"envVars": [{"key": key, "value": value, "type": "SECRET" if visibility == "private" else "GENERAL"}]}
         async with self.session.put(f"{base}/v1/services/{service_id}/env-vars", headers=headers, json=body_c, timeout=HTTP_TIMEOUT) as r3:
             if 200 <= r3.status < 300:
                 return True
-
         return False
 
     async def _create_deploy_http(self, service_id: str) -> bool:
@@ -413,9 +403,6 @@ class Supervisor:
             return 200 <= r.status < 300
 
     async def _persist_redis_fix_to_render(self, new_url: str) -> bool:
-        """
-        שומר את ה-REDIS_URL המתוקן בשירות המשני + טריגר דיפלוי. מחזיר True אם הצליח.
-        """
         if not (RENDER_API_KEY and SECONDARY_SERVICE_ID and new_url):
             return False
         try:
@@ -435,7 +422,7 @@ class Supervisor:
             return False
 
     async def _redeploy_primary(self, reason: str):
-        # עדיפות 1: Deploy hook אם הוגדר תקין
+        # Only redeploy (no code mutation)
         if DEPLOY_HOOK and "<SERVICE_ID>" not in DEPLOY_HOOK and "<KEY>" not in DEPLOY_HOOK:
             try:
                 async with self.session.post(DEPLOY_HOOK, timeout=aiohttp.ClientTimeout(total=10)) as r:
@@ -445,7 +432,6 @@ class Supervisor:
             except Exception as e:
                 await send_telegram(self.session, f"🧯 Auto-Heal deploy hook failed: {e}")
 
-        # עדיפות 2: Render API אם יש SERVICE_ID + KEY (עם fallback גם בלי המודול)
         if RENDER_API_KEY and PRIMARY_SERVICE_ID and _cooldown_ok("render_api_redeploy", 1800):
             try:
                 ok = False
@@ -462,12 +448,10 @@ class Supervisor:
                 await send_telegram(self.session, f"🧯 Auto-Heal Render API exception: {e}")
 
     async def auto_heal(self, diag: str):
-        # Primary issues → redeploy (אין "קוסם" שמשנה קוד)
         if diag.startswith("primary"):
             await self._redeploy_primary(diag)
             return
 
-        # Redis issues → sanitize + persist to Render if possible
         if diag.startswith("redis"):
             new_clean = _clean_redis_url(os.getenv("REDIS_URL", self.redis_url))
             if new_clean and new_clean != self.redis_url:
@@ -483,7 +467,6 @@ class Supervisor:
                     return
                 else:
                     await send_telegram(self.session, f"⚠️ Redis re-sanitize failed: <code>{_html(reason)}</code>")
-
             await send_telegram(self.session, f"⚠️ Redis issue detected: {diag}. Using external TLS endpoint recommended.")
 
     # ---------------- Maintenance Cycle ----------------
@@ -500,19 +483,26 @@ class Supervisor:
             await self.notify_cancel("preflight", reason)
             return
 
-        # ===== Approval gate (manual) =====
-        require_approval = bool(self.policy.gate("CHANGE_APPROVAL", {}).get("required", True))
-        min_crs_for_manual = int(self.policy.gate("CHANGE_APPROVAL", {}).get("min_crs_for_manual", 2))
+        # ===== Approval gate =====
+        change_appr = self.policy.gate("CHANGE_APPROVAL", {})
+        require_approval = bool(change_appr.get("required", True))
+        min_crs_for_manual = int(change_appr.get("min_crs_for_manual", 2))
         needs_manual = require_approval and (sensitive or crs >= min_crs_for_manual)
 
         if needs_manual:
-            sent = await self.request_change_approval(proposal)
-            # לא ממשיכים עד אישור – משאירים HOLD (לא חוסם לולאה; פשוט מדלגים על המחזור הזה)
-            if sent:
-                await self.notify_hold(proposal)
-            return  # hold
+            ticket_id = await self.request_change_approval(proposal)
+            if not ticket_id:
+                await self.notify_cancel("approval", "failed_to_create_ticket")
+                return
+            # המתנה מאובטחת לאישור/דחייה, עם Pub/Sub (מתקדם מיידית)
+            timeout_s = int(self.policy.gate("APPROVAL_ENDPOINTS", {}).get("timeout_seconds", 600))
+            ok, status = await self.wait_for_ticket(ticket_id, timeout_s)
+            if not ok:
+                await self.notify_cancel("approval", status or "not_approved")
+                return
+            # אושר → ממשיכים כרגיל
 
-        # Canary → Promote → Post-verify (הדגמה; לא נוגעים בקוד הפקה)
+        # Canary → Promote → Post-verify
         canary_pct = self.canary_by_crs(crs)
         ok, reason = await self.run_canary(proposal, canary_pct)
         if not ok:
@@ -544,15 +534,6 @@ class Supervisor:
         except Exception:
             v = 5.0
         return int(round(v * 100)) if 0.0 < v <= 1.0 else int(round(v))
-
-    async def notify_hold(self, proposal: Dict[str, Any]):
-        ts_il_fmt, ts_utc_fmt = self.policy.time_formats
-        ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-        text = (f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
-                f"⏸️ שינוי מושהה עד אישור | Change on HOLD\n"
-                f"<b>CRS:</b> {proposal.get('crs')}  <b>רגיש:</b> {proposal.get('sensitive')}\n"
-                f"<b>תוכנית:</b>\n<code>{_html(proposal.get('plan',''))}</code>")
-        await send_telegram(self.session, text)
 
     async def notify_cancel(self, stage: str, reason: str, rollback: bool = False):
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
@@ -591,10 +572,6 @@ class Supervisor:
 
     # ---------------- LLM Orchestration ----------------
     async def propose_change(self) -> Optional[Dict[str, Any]]:
-        """
-        מחזיר הצעת שינוי בטוחה; אם אין ספקיות/מפתחות – חוזר הצעה שמרנית או None.
-        """
-        # ברירת מחדל שמרנית אם אין מודלים
         conservative: Optional[Dict[str, Any]] = {
             "crs": 2, "sensitive": False,
             "plan": "Tweak non-critical scheduler interval by +10% during low traffic window; monitor p95 & error rate; auto-revert on SLO drift.",
@@ -605,7 +582,6 @@ class Supervisor:
                   "{ \"crs\": int, \"sensitive\": bool, \"plan\": str, \"version\": str } only.")
         user = "Produce one safe improvement for the next 45min window."
 
-        # העדפה: AIX → OpenAI → fallback
         data: Dict[str, Any] = {}
         if AIX_API_KEY:
             aix = AIXProvider(self.session, "xai")
@@ -642,7 +618,7 @@ class Supervisor:
         return True, "ok"
 
     async def promote(self, proposal: Dict[str, Any]) -> Tuple[bool, str]:
-        # חשוב: לא מבצעים קוד-דפלוימנט כאן. מדובר בשינויי קונפיג/פרמטרים קלים בלבד (דמה).
+        # No code deployment here — only safe config toggles (demo)
         await asyncio.sleep(1)
         return True, "ok"
 
@@ -652,38 +628,50 @@ class Supervisor:
         return True, "ok"
 
     # ---------------- Approval flow ----------------
-    async def request_change_approval(self, proposal: Dict[str, Any]) -> bool:
+    async def request_change_approval(self, proposal: Dict[str, Any]) -> Optional[str]:
         """
-        יוצר בקשת אישור עם two-man rule אם הוגדר. לא מחכה לאישור – רק שולח ויוצא HOLD.
+        יוצר בקשת אישור ושולח קישורים חתומים. מחזיר ticket_id.
         """
         change_appr = self.policy.gate("CHANGE_APPROVAL", {})
         appr_endpoints = self.policy.gate("APPROVAL_ENDPOINTS", {})
-        two_man = bool(appr_endpoints.get("two_man_rule", True))
+        explain = bool(change_appr.get("explain", True))
         timeout_s = int(appr_endpoints.get("timeout_seconds", 600))
+        two_man = bool(appr_endpoints.get("two_man_rule", True))
 
         ticket_id = _gen_ticket_id()
-        title = f"Change Request (CRS {proposal.get('crs')})"
-        explain = bool(change_appr.get("explain", True))
-        plan = proposal.get("plan", "")
-        version = proposal.get("version", "X.Y.Z")
+        version = str(proposal.get("version", "X.Y.Z"))
+        plan = str(proposal.get("plan", ""))
+        crs = int(proposal.get("crs", 0))
+        sensitive = bool(proposal.get("sensitive", False))
 
-        if not PRIMARY_PUBLIC_HOST:
+        # approve_url_base in policy (env templates allowed), else PRIMARY_PUBLIC_HOST + /ops/approve
+        approve_base_cfg = appr_endpoints.get("approve_url_base", "")
+        approve_base_cfg = _expand_env_templates(approve_base_cfg) if approve_base_cfg else ""
+        base = approve_base_cfg or (PRIMARY_PUBLIC_HOST + "/ops/approve" if PRIMARY_PUBLIC_HOST else "")
+
+        if not base:
             await send_telegram(
                 self.session,
-                f"🟠 Approval requested but <code>PRIMARY_PUBLIC_HOST</code> is not set. "
-                f"Skipping links.\n<b>{_html(title)}</b>\n<code>{_html(plan)}</code>"
+                "🟠 Approval requested but no public base URL configured (<code>PRIMARY_PUBLIC_HOST</code> / <code>APPROVAL_ENDPOINTS.approve_url_base</code>)."
             )
-            return True
+            return None
 
-        params_base = {
+        params = {
             "ticket_id": ticket_id,
             "expires": str(int(time.time()) + timeout_s),
             "require": "2" if two_man else "1",
             "version": version,
         }
-        approve_url = _signed_url(PRIMARY_PUBLIC_HOST, "/ops/approve", {**params_base, "action": "approve"})
-        reject_url  = _signed_url(PRIMARY_PUBLIC_HOST, "/ops/approve", {**params_base, "action": "reject"})
 
+        def signed_link(action: str) -> str:
+            base_params = dict(params, action=action)
+            sig = _hmac_sign(base_params)
+            if sig:
+                base_params["sig"] = sig
+            return base + "?" + urlencode(base_params, quote_via=quote_plus)
+
+        approve_url = signed_link("approve")
+        reject_url  = signed_link("reject")
         kb = _approval_keyboard(approve_url, reject_url)
 
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
@@ -691,8 +679,8 @@ class Supervisor:
         lines = [
             f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}",
             "📝 <b>Change Approval Required</b>",
-            f"ID: <code>{ticket_id}</code> | Two-man: <b>{'ON' if two_man else 'OFF'}</b> | TTL: {timeout_s}s",
-            f"CRS: <b>{proposal.get('crs')}</b> | Sensitive: <b>{proposal.get('sensitive')}</b>",
+            f"ID: <code>{_html(ticket_id)}</code> | Two-man: <b>{'ON' if two_man else 'OFF'}</b> | TTL: {timeout_s}s",
+            f"CRS: <b>{crs}</b> | Sensitive: <b>{'Yes' if sensitive else 'No'}</b>",
             f"Version: <code>{_html(version)}</code>",
         ]
         if explain and plan:
@@ -700,26 +688,72 @@ class Supervisor:
 
         await send_telegram(self.session, "\n".join(lines), keyboard=kb)
 
-        # רשומת Ticket ב-Redis (אם קיים) – כדי שמערכות חיצוניות יוכלו לעדכן סטטוס
-        try:
-            import redis  # type: ignore
-            if self.redis_url:
-                r = redis.Redis.from_url(self.redis_url, decode_responses=True)
-                key = f"ops:ticket:{ticket_id}"
-                payload = {
-                    "id": ticket_id,
-                    "status": "pending",
-                    "require": 2 if two_man else 1,
-                    "approvals": 0,
-                    "created_at": int(time.time()),
-                    "expires_at": int(time.time()) + timeout_s,
-                    "proposal": proposal,
-                }
+        # Persist ticket for webhook / external systems
+        r = self._redis_client()
+        if r:
+            key = f"ops:ticket:{ticket_id}"
+            payload = {
+                "id": ticket_id,
+                "status": "pending",
+                "require": 2 if two_man else 1,
+                "approvals": 0,
+                "created_at": int(time.time()),
+                "expires_at": int(time.time()) + timeout_s,
+                "proposal": proposal,
+            }
+            try:
                 r.setex(key, timeout_s, json.dumps(payload))
-        except Exception:
-            pass
+            except Exception:
+                pass
 
-        return True
+        return ticket_id
+
+    async def wait_for_ticket(self, ticket_id: str, timeout_s: int) -> Tuple[bool, str]:
+        """
+        ממתין לאישור/דחייה. מאזין ל-Pub/Sub (ops:ticket:events, ניתן לשינוי ב-YAML תחת APPROVAL_PUBSUB.channel).
+        מחזיר (True,'approved') / (False,'rejected'|'timeout').
+        """
+        r = self._redis_client()
+        channel = self.policy.gate("APPROVAL_PUBSUB", {}).get("channel", "ops:ticket:events")
+        deadline = time.time() + max(5, timeout_s)
+
+        def _load():
+            if not r:
+                return None
+            v = r.get(f"ops:ticket:{ticket_id}")
+            return json.loads(v) if v else None
+
+        # quick immediate check
+        t = _load()
+        if t and t.get("status") in ("approved", "rejected"):
+            return (t["status"] == "approved", t["status"])
+
+        # Subscribe + light polling fallback
+        if r:
+            ps = r.pubsub(ignore_subscribe_messages=True)
+            try:
+                ps.subscribe(channel)
+                while time.time() < deadline:
+                    msg = await asyncio.to_thread(ps.get_message, timeout=1.0)
+                    if msg and msg.get("type") == "message":
+                        try:
+                            data = json.loads(msg["data"])
+                            if data.get("id") == ticket_id and data.get("status") in ("approved", "rejected"):
+                                return (data["status"] == "approved", data["status"])
+                        except Exception:
+                            pass
+                    # fallback poll
+                    t = _load()
+                    if t and t.get("status") in ("approved", "rejected"):
+                        return (t["status"] == "approved", t["status"])
+            finally:
+                try:
+                    ps.unsubscribe(channel)
+                    ps.close()
+                except Exception:
+                    pass
+
+        return False, "timeout"
 
     # ---------------- Auto-Onboard ----------------
     async def auto_onboard(self):
@@ -731,10 +765,8 @@ class Supervisor:
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
         await send_telegram(self.session, f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n🟣 Auto-Onboard starting…")
 
-        # טריגרים/דרישות
         require = set(ao.get("require", []))
         missing: list[str] = []
-        # בדיקות "קלות" (דוגמאות; לא מפעיל כלום)
         if "credentials" in require and not (os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET")):
             missing.append("credentials(binance)")
         if "allowlist" in require and not os.getenv("ALLOWLIST_OK", ""):
@@ -743,11 +775,6 @@ class Supervisor:
             missing.append("handshake_ok")
         if "quotas_set" in require and not os.getenv("QUOTAS_SET", ""):
             missing.append("quotas_set")
-        if "budget_ok" in require:
-            # דוגמה פשוטה: אם אין מפתחות, מחשיבים כ-OK אבל לא מפעילים פיצ'רים יקרים
-            pass
-        if "gates_green" in require:
-            pass
 
         if missing:
             await send_telegram(self.session, "ℹ️ Auto-Onboard prerequisites missing: <code>" + _html(", ".join(missing)) + "</code>")
@@ -761,25 +788,28 @@ class Supervisor:
         ])
 
         require_approval = bool(ao.get("require_approval", True))
+        spacing_seconds = int(ao.get("spacing_seconds", 120))
+
         for step in steps:
             name = step.get("name", "step")
             crs = int(step.get("crs", 2))
-            plan = f"AUTO-ONBOARD step '{name}' (crs={crs}) – safe no-op preview; will activate only after approval."
+            plan = f"AUTO-ONBOARD step '{name}' (crs={crs}) – safe preview; activates only after approval."
             proposal = {"crs": crs, "sensitive": (crs >= 4), "plan": plan, "version": f"{VERSION}-ao-{name}"}
 
             if require_approval:
-                await self.request_change_approval(proposal)
-                await self.notify_hold(proposal)
+                ticket_id = await self.request_change_approval(proposal)
+                if ticket_id:
+                    timeout_s = int(self.policy.gate("APPROVAL_ENDPOINTS", {}).get("timeout_seconds", 600))
+                    ok, status = await self.wait_for_ticket(ticket_id, timeout_s)
+                    if not ok:
+                        await self.notify_cancel("auto_onboard_approval", status or "not_approved")
+                        # continue next step or stop? Here we stop:
+                        return
             else:
-                # גם כאן – לא מפעילים כלום ללא אישורך. שולחים אינפורמציה בלבד.
-                ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
-                await send_telegram(self.session,
-                    f"📅🕒 <b>זמן:</b> {ts_il} | <b>Time:</b> {ts_utc}\n"
-                    f"🟣 Auto-Onboard preview: <b>{_html(name)}</b>\n<code>{_html(plan)}</code>"
-                )
+                await send_telegram(self.session, f"🟣 Auto-Onboard preview (no-approval): <b>{_html(name)}</b>\n<code>{_html(plan)}</code>")
 
             if staged:
-                await asyncio.sleep(int(ao.get("spacing_seconds", 120)))
+                await asyncio.sleep(spacing_seconds)
 
 # -------------------- Main --------------------
 async def main():
