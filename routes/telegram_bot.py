@@ -1,6 +1,6 @@
 # routes/telegram_bot.py
 from __future__ import annotations
-import os, logging
+import os, logging, time
 from typing import Optional, Dict, Any
 
 import httpx
@@ -12,10 +12,11 @@ from utils.telegram_notifier import register_webhook  # ✅ חובה לייבא!
 
 logger = logging.getLogger("algogpt.routes.telegram_bot")
 
+# שים לב: אין כאן תלות גלובלית של require_api_key על כל ה־router.
+# במקום זה מגנים רק על מה שחייבים.
 router = APIRouter(
     prefix="/telegram",
     tags=["Telegram"],
-    dependencies=[Depends(require_api_key)],
 )
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -29,6 +30,10 @@ class SendRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=4096)
     parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2 (אם לא נשלח — יילקח מה-ENV אם קיים)")
     disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה")
+
+@router.get("/ping")
+async def ping() -> Dict[str, Any]:
+    return {"ok": True, "ts": int(time.time())}
 
 @router.get("/health")
 async def health() -> Dict[str, Any]:
@@ -68,7 +73,7 @@ async def test_ping(chat_id: Optional[int] = Query(None)) -> Dict[str, Any]:
         logger.error("telegram/test-ping failed: %s", e)
         raise HTTPException(502, str(e))
 
-@router.post("/send")
+@router.post("/send", dependencies=[Depends(require_api_key)])
 async def send(req: SendRequest) -> Dict[str, Any]:
     if not BOT_TOKEN:
         raise HTTPException(500, "BOT_TOKEN missing")
@@ -95,11 +100,12 @@ async def send(req: SendRequest) -> Dict[str, Any]:
         logger.error("telegram/send failed: %s", e)
         raise HTTPException(502, str(e))
 
-# ✅ NEW: הגדרת Webhook ידנית
-@router.get("/set-webhook")
+# ✅ הגדרת Webhook ידנית — מוגן API Key
+@router.get("/set-webhook", dependencies=[Depends(require_api_key)])
 async def set_webhook() -> Dict[str, Any]:
     ok = await register_webhook()
     return {"ok": ok, "status": "Webhook registered" if ok else "Webhook failed"}
+
 
 
 
