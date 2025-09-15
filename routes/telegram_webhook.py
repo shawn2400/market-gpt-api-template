@@ -1,8 +1,8 @@
 # routes/telegram_webhook.py
 from __future__ import annotations
-import os, logging, time
-from typing import Any, Dict, List
-from fastapi import APIRouter, Request, HTTPException
+import os, logging, time, re
+from typing import Any, Dict, List, Optional
+from fastapi import APIRouter, Request, HTTPException, Header
 import httpx
 
 logger = logging.getLogger("algogpt.telegram.webhook")
@@ -11,27 +11,37 @@ router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 # ─────────── Env / Auth ───────────
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 ADMIN_ONLY = str(os.getenv("TELEGRAM_ADMIN_ONLY", "1")).lower() in ("1","true","yes","on")
 ADMIN_IDS = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
+PM_ENV: Optional[str] = (os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None)  # None => לא שולחים parse_mode
 
 def _allowed_user(uid: int) -> bool:
     if not ADMIN_ONLY:
         return True
     return str(uid) in ADMIN_IDS
 
+# ─────────── Small helpers ───────────
+_TAG_RE = re.compile(r"<[^>]+>")
+
+def _to_plain(text: str) -> str:
+    # המרה עדינה לטקסט “נקי” אם אין parse_mode
+    return _TAG_RE.sub("", text).replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
 async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
     if not TG_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    payload = {
+    payload: Dict[str, Any] = {
         "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML" if html else "Markdown",
+        "text": text if (html and PM_ENV) else (_to_plain(text) if html else text),
         "disable_web_page_preview": True,
     }
+    if PM_ENV:
+        payload["parse_mode"] = PM_ENV
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
-            await cli.post(url, data=payload)
+            await cli.post(url, json=payload)
     except Exception as e:
         logger.warning(f"[tg] sendMessage failed: {e}")
 
@@ -95,7 +105,7 @@ async def _tg_answer_callback(token: str, cbq_id: str, text: str) -> None:
     url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
-            await cli.post(url, data={"callback_query_id": cbq_id, "text": text, "show_alert": False})
+            await cli.post(url, json={"callback_query_id": cbq_id, "text": text, "show_alert": False})
     except Exception as e:
         logger.warning(f"[tg] answerCallbackQuery failed: {e}")
 
@@ -103,16 +113,16 @@ async def _tg_disable_kb(token: str, chat_id: int, message_id: int) -> None:
     url = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
-            await cli.post(url, data={
+            await cli.post(url, json={
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "reply_markup": '{"inline_keyboard":[]}'
+                "reply_markup": {"inline_keyboard": []}
             })
     except Exception as e:
         logger.warning(f"[tg] editMessageReplyMarkup failed: {e}")
 
 # ─────────── UI Strings ───────────
-HELP_TEXT = (
+HELP_TEXT_HTML = (
     "🤖 <b>AlgoGPT Bot</b> — Help / עזרה\n\n"
     "• /help — עזרה\n"
     "• /ping — פינג\n"
@@ -121,6 +131,7 @@ HELP_TEXT = (
     "• /explain_on — הפעלת הסברי טריידים\n"
     "• /explain_off — כיבוי הסברי טריידים\n"
 )
+HELP_TEXT_PLAIN = _to_plain(HELP_TEXT_HTML)
 
 def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
     if not rows:
@@ -138,7 +149,8 @@ def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
     extra = len(rows) - len(lines)
     if extra > 0:
         lines.append(f"… ועוד {extra} פריטים")
-    return "\n".join(lines)
+    txt = "\n".join(lines)
+    return txt if PM_ENV else _to_plain(txt)
 
 def _fmt_status() -> str:
     ws = _ws_get_counters()
@@ -161,13 +173,22 @@ def _fmt_status() -> str:
         f"WS: up={ws.get('ws_up')} ttl={ws.get('last_event_age_sec')}s ewma={_n(ws.get('ewma_latency_ms'))}ms rc={ws.get('reconnects')}",
         f"EXE: age={ex.get('last_tick_age_sec')}s ewma={_n(ex.get('tick_ewma_ms'))} p95={_n(ex.get('tick_p95_ms'))} tb={ex.get('timeouts_burst')} itv={ex.get('current_interval')}",
     ]
-    return "\n".join(lines)
+    txt = "\n".join(lines)
+    return txt if PM_ENV else _to_plain(txt)
 
 # ─────────── Webhook Endpoint (messages + callbacks) ───────────
 @router.post("/commands")
-async def commands(req: Request):
+async def commands(
+    req: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
     if not TG_TOKEN:
         raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
+
+    # הגנת Secret (אופציונלי, תואם /webhook הראשי)
+    if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid telegram secret")
+
     try:
         update = await req.json()
     except Exception:
@@ -235,41 +256,42 @@ async def commands(req: Request):
     if not chat_id or not uid:
         return {"ok": True}
     if not _allowed_user(uid):
-        await _reply(chat_id, "⛔️ אין לך הרשאה להשתמש בבוט זה.")
+        await _reply(chat_id, "⛔️ אין לך הרשאה להשתמש בבוט זה.", html=False)
         return {"ok": True}
 
     if not text or text.lower() in ("/start", "/help"):
-        await _reply(chat_id, HELP_TEXT)
+        await _reply(chat_id, HELP_TEXT_HTML if PM_ENV else HELP_TEXT_PLAIN, html=bool(PM_ENV))
         return {"ok": True}
 
     parts = text.split()
     cmd = parts[0].lower()
 
     if cmd == "/ping":
-        await _reply(chat_id, f"pong ✅ {int(time.time())}")
+        await _reply(chat_id, f"pong ✅ {int(time.time())}", html=False)
         return {"ok": True}
 
     if cmd == "/status":
-        await _reply(chat_id, _fmt_status())
+        await _reply(chat_id, _fmt_status(), html=bool(PM_ENV))
         return {"ok": True}
 
     if cmd == "/positions":
         rows = _get_open_positions() or []
-        await _reply(chat_id, _fmt_positions(rows))
+        await _reply(chat_id, _fmt_positions(rows), html=bool(PM_ENV))
         return {"ok": True}
 
     if cmd == "/explain_on":
         set_explain_enabled(True)
-        await _reply(chat_id, "🟢 Explain-Trade: ON")
+        await _reply(chat_id, "🟢 Explain-Trade: ON", html=False)
         return {"ok": True}
 
     if cmd == "/explain_off":
         set_explain_enabled(False)
-        await _reply(chat_id, "⚪️ Explain-Trade: OFF")
+        await _reply(chat_id, "⚪️ Explain-Trade: OFF", html=False)
         return {"ok": True}
 
-    await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.")
+    await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.", html=False)
     return {"ok": True}
+
 
 
 
