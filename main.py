@@ -219,9 +219,9 @@ for module_path in (
     "routes.backtest",
     "routes.executor",
     "routes.binance_status",
-    "routes.telegram_webhook",     # אופציונלי (אם קיים)
+    "routes.telegram_webhook",     # יש עכשיו גם /telegram/webhook ישירות כאן
     "routes.telegram_callbacks",   # אופציונלי (אם קיים)
-    "routes.telegram_bot",         # ⬅️ נוסף: נתיבי bot (/telegram/test-ping, /telegram/health, /telegram/send, /telegram/set-webhook)
+    "routes.telegram_bot",         # נתיבי bot מאחורי Bearer (/test-ping, /health, /send, /set-webhook)
     "routes.grid",
     "routes.executor_control",
     "routes.ws_user_stream",       # optional
@@ -253,9 +253,7 @@ def _route_exists(path: str) -> bool:
         pass
     return False
 
-# אם אין רואטר טלגרם קיים – נטען fallback מינימלי (בקובץ נפרד)
-if not _route_exists("/telegram/webhook") or not _route_exists("/telegram/ping"):
-    _try_include("routes.telegram_fallback")
+# ⚠️ ביטול fallback: לא טוענים routes.telegram_fallback יותר
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Meta & Health
@@ -440,6 +438,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
