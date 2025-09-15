@@ -21,6 +21,13 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
+# NEW: schedulers & manual triggers for Digest/EOD
+from utils.telegram_notifier import (
+    ensure_ops_schedulers_started,  # מפעיל את הלופים של Digest/EOD ב-startup
+    send_ops_digest_now,            # טריגר ידני לדיג'סט
+    send_eod_report_now,            # טריגר ידני לדוח יומי
+)
+
 # InternalAuthMiddleware (safe import with fallback)
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
@@ -187,6 +194,7 @@ async def validate_token(request: Request, call_next):
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Include routers
 # ────────────────────────────────────────────────────────────────────────────────
@@ -411,12 +419,29 @@ async def _startup_user_stream():
     except Exception as e:
         logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
 
+# NEW: start Digest/EOD schedulers on startup
+@app.on_event("startup")
+async def _ops_schedulers():
+    await ensure_ops_schedulers_started()
+
+# (Optional) Manual triggers for testing
+@app.get("/ops/digest/now", include_in_schema=False)
+async def ops_digest_now(hours: Optional[int] = None):
+    await send_ops_digest_now(hours)  # hours=None => ישתמש ב-OPS_DIGEST_INTERVAL_HOURS
+    return {"ok": True, "sent": True, "hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS", "3"))}
+
+@app.get("/ops/eod/now", include_in_schema=False)
+async def ops_eod_now():
+    await send_eod_report_now()
+    return {"ok": True, "sent": True}
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
