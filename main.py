@@ -29,7 +29,17 @@ except Exception:
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
 
-from utils.trade_executor import ConfirmStore
+# ConfirmStore (נמצא לעתים ב-trade_executor ולעתים ב-auto_executor)
+try:
+    from utils.trade_executor import ConfirmStore
+except Exception:
+    try:
+        from utils.auto_executor import ConfirmStore  # type: ignore
+    except Exception:
+        class ConfirmStore:  # very-weak fallback
+            @classmethod
+            def flush_all(cls): ...
+            flush = reset = flush_all
 
 # Optional runtime counters (WS/Executor status)
 try:
@@ -49,12 +59,8 @@ def _coerce_log_level(val):
     import logging as _l
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
         return int(val)
-    m = {
-        "debug": _l.DEBUG,
-        "info": _l.INFO,
-        "warning": _l.WARNING, "warn": _l.WARNING,
-        "error": _l.ERROR, "critical": _l.CRITICAL
-    }
+    m = {"debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING, "warn": _l.WARNING,
+         "error": _l.ERROR, "critical": _l.CRITICAL}
     return m.get(str(val).strip().lower(), _l.INFO)
 
 logger = setup_json_logging()
@@ -181,7 +187,6 @@ async def validate_token(request: Request, call_next):
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
-
 # ────────────────────────────────────────────────────────────────────────────────
 # Include routers
 # ────────────────────────────────────────────────────────────────────────────────
@@ -215,6 +220,11 @@ for module_path in (
     "routes.ws_user_status",
     "routes.executor_status",
     "routes.provider_cryptopanic",
+
+    # ⬅️ חשוב! חיבור סורק/אוטופיילוט:
+    "routes.scan",
+    "routes.multi_scan",
+    "routes.system_autopilot",
 ):
     if _try_include(module_path):
         try:
@@ -280,10 +290,7 @@ if not _route_exists("/status/all"):
             ping_ok = False
         ws = ws_user_status()
         ex = exec_get_counters()
-        return {
-            "ok": True, "version": APP_VERSION,
-            "ws": ws, "executor": ex, "binance_ping_ok": ping_ok,
-        }
+        return {"ok": True, "version": APP_VERSION, "ws": ws, "executor": ex, "binance_ping_ok": ping_ok}
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Price
@@ -302,14 +309,8 @@ async def price(symbol: str):
         p = None
         ok = False
         err = str(e)
-    return {
-        "ok": ok,
-        "symbol": symbol.upper(),
-        "price": float(p) if p is not None else None,
-        "source": src,
-        "ts": ts,
-        "error": err,
-    }
+    return {"ok": ok, "symbol": symbol.upper(), "price": float(p) if p is not None else None,
+            "source": src, "ts": ts, "error": err}
 
 @app.get("/readyz")
 async def readyz():
@@ -358,7 +359,7 @@ async def flush_kill_switch():
     return {"ok": True, "flushed": done}
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Auto setWebhook (optional) + WS autostart
+# Auto setWebhook + WS autostart
 # ────────────────────────────────────────────────────────────────────────────────
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -416,6 +417,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
