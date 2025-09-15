@@ -56,8 +56,8 @@ CHANGE_APPROVAL:
   channels: ["telegram"]        # כרגע טלגרם
 
 APPROVAL_ENDPOINTS:
-  approve_url_base: "${PUBLIC_HOST}/ops/approve"  # בסיס קישורי אישור (נלקח מה־env)
-  hmac_env: "WEBHOOK_HMAC_SECRET"                 # שם משתנה env למפתח חתימה
+  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"  # *** חשוב: זה ה-ops-approval-web ***
+  hmac_env: "WEBHOOK_HMAC_SECRET"                         # שם משתנה env למפתח חתימה
   two_man_rule: true
   timeout_seconds: 600
   on_mismatch: "hold_and_alert"
@@ -170,7 +170,7 @@ INNOVATION_WATCH:
     pypi: ["ta", "scipy", "pandas", "numpy"]
     github_topics: ["technical-indicators", "quant", "crypto-trading"]
     docs_watch: ["binance_api_changes", "exchange_status"]
-    x_feed: { enabled: false }
+  x_feed: { enabled: false }
   cadence_hours: 6
   curation:
     must_have: ["license_ok", "maintained", "stars_gt:50"]
