@@ -181,23 +181,32 @@ async def notify_explain_trade(plan: Dict[str, Any]):
     entry = float(plan.get("entry", 0.0) or 0.0)
     sl    = float(plan.get("sl", 0.0) or 0.0)
     tp    = float(plan.get("tp", 0.0) or 0.0)
-    adx   = float(plan.get("adx", 0.0) or 0.0)
-    atr   = float(plan.get("atr", 0.0) or 0.0)
+    adx   = float(plan.get("adx", plan.get("dyn", {}).get("adx", 0.0)) or 0.0)
+    atr   = float(plan.get("atr", plan.get("dyn", {}).get("atr_pct", 0.0)) or 0.0)
     score = float(plan.get("score", 0.0) or 0.0)
     ema21 = plan.get("ema_21")
     ema50 = plan.get("ema_50")
     macdh = plan.get("macd_hist")
     rsi   = plan.get("rsi")
+
+    # Profit-Lock (דינמי, אם קיים ב-plan)
+    pl = plan.get("profit_lock_policy") or {}
+    pl_enabled = bool(pl.get("enabled", False))
+    pl_lock_pct = pl.get("lock_pct")
+
     trend_ok = "✓" if (ema21 and ema50 and ((float(ema21) > float(ema50) and side=="LONG") or (float(ema21) < float(ema50) and side=="SHORT"))) else "✗"
     macd_ok  = "✓" if (macdh is not None and ((side=="LONG" and float(macdh)>0) or (side=="SHORT" and float(macdh)<0))) else "✗"
 
     lines = [f"⚙️ <b>Explain Trade</b>", f"<b>{sym}</b> · <b>{side}</b> · lev=<b>{lev}</b>"]
     if ema21 and ema50: lines.append(f"EMA21{'>' if float(ema21)>float(ema50) else '<'}EMA50 {trend_ok}")
-    if macdh: lines.append(f"MACD hist {float(macdh):+.4f} {macd_ok}")
-    lines.append(f"ADX {adx:.0f} | ATR {atr:.4f}")
-    if rsi: lines.append(f"RSI {float(rsi):.1f}")
+    if macdh is not None: lines.append(f"MACD hist {float(macdh):+.4f} {macd_ok}")
+    if adx or atr: lines.append(f"ADX {adx:.0f} | ATR% {float(atr):.2f}" if atr < 10 else f"ADX {adx:.0f} | ATR {float(atr):.4f}")
+    if rsi is not None: lines.append(f"RSI {float(rsi):.1f}")
     lines.append(f"Quality Score: <b>{score:.2f}/10</b>")
+    if pl_enabled and pl_lock_pct is not None:
+        lines.append(f"🔒 Profit-Lock (dyn): <b>{float(pl_lock_pct):.1f}%</b>")
     if entry and (sl or tp): lines.append(f"Entry {entry:.4f} | SL {sl:.4f} | TP {tp:.4f}")
+
     await _tg_send("\n".join(lines))
     _last_explain_ts = now
     _sent_in_win += 1
