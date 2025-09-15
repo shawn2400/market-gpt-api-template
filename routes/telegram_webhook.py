@@ -181,7 +181,16 @@ def _fmt_status() -> str:
 async def ping() -> Dict[str, Any]:
     return {"ok": True, "ts": int(time.time())}
 
-# ─────────── Webhook Endpoint (messages + callbacks) ───────────
+# ─────────── Webhook Endpoint (Telegram) ───────────
+@router.post("/webhook")
+async def webhook(
+    req: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    # פשוט מפנה לאותו מעבד של /commands
+    return await commands(req, x_telegram_bot_api_secret_token)
+
+# ─────────── Commands Endpoint (messages + callbacks) ───────────
 @router.post("/commands")
 async def commands(
     req: Request,
@@ -190,7 +199,7 @@ async def commands(
     if not TG_TOKEN:
         raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
 
-    # הגנת Secret (אופציונלי, תואם /webhook הראשי)
+    # הגנת Secret (תואם /webhook)
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Invalid telegram secret")
 
@@ -297,13 +306,6 @@ async def commands(
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.", html=False)
     return {"ok": True}
 
-# ⬅️ alias לנתיב שה-startup רושם אליו webhook:
-@router.post("/webhook")
-async def webhook(
-    req: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
-):
-    return await commands(req, x_telegram_bot_api_secret_token=x_telegram_bot_api_secret_token)
 
 
            
