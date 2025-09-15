@@ -221,6 +221,7 @@ for module_path in (
     "routes.binance_status",
     "routes.telegram_webhook",     # אופציונלי (אם קיים)
     "routes.telegram_callbacks",   # אופציונלי (אם קיים)
+    "routes.telegram_bot",         # ⬅️ נוסף: נתיבי bot (/telegram/test-ping, /telegram/health, /telegram/send, /telegram/set-webhook)
     "routes.grid",
     "routes.executor_control",
     "routes.ws_user_stream",       # optional
@@ -439,6 +440,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
