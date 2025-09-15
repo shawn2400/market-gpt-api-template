@@ -81,7 +81,6 @@ try:
     LEV_ADX_MAP_JSON      = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
 except Exception:
     LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
-cat >> utils/trade_executor.py <<'PY_B'
 # ─────────────────────────────────────────────────────────────────────────────
 # סט ב׳ — המשך מלא: Budget/Leverage helpers, Idempotency, ConfirmStore,
 # Hybrid Entry (עם HEDGE), Public API execute_trade_live, ו־rollback.
