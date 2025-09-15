@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -21,11 +21,11 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
-# NEW: schedulers & manual triggers for Digest/EOD
+# Digest/EOD schedulers + manual triggers
 from utils.telegram_notifier import (
-    ensure_ops_schedulers_started,  # מפעיל את הלופים של Digest/EOD ב-startup
-    send_ops_digest_now,            # טריגר ידני לדיג'סט
-    send_eod_report_now,            # טריגר ידני לדוח יומי
+    ensure_ops_schedulers_started,
+    send_ops_digest_now,
+    send_eod_report_now,
 )
 
 # InternalAuthMiddleware (safe import with fallback)
@@ -228,7 +228,6 @@ for module_path in (
     "routes.ws_user_status",
     "routes.executor_status",
     "routes.provider_cryptopanic",
-
     # ⬅️ חשוב! חיבור סורק/אוטופיילוט:
     "routes.scan",
     "routes.multi_scan",
@@ -367,11 +366,12 @@ async def flush_kill_switch():
     return {"ok": True, "flushed": done}
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Auto setWebhook + WS autostart
+# Auto setWebhook + WS + Schedulers
 # ────────────────────────────────────────────────────────────────────────────────
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
 
 @app.on_event("startup")
 async def _startup_preflight_warmup():
@@ -388,8 +388,6 @@ async def _startup_preflight_warmup():
             pass
     except Exception as e:
         logger.warning({"event": "warmup.price_failed", "error": str(e)})
-
-TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
 
 @app.on_event("startup")
 async def _startup_webhook():
@@ -419,15 +417,15 @@ async def _startup_user_stream():
     except Exception as e:
         logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
 
-# NEW: start Digest/EOD schedulers on startup
+# Start Digest/EOD schedulers on startup
 @app.on_event("startup")
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
-# (Optional) Manual triggers for testing
+# (Optional) Manual triggers for testing (protected by auth)
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
-    await send_ops_digest_now(hours)  # hours=None => ישתמש ב-OPS_DIGEST_INTERVAL_HOURS
+    await send_ops_digest_now(hours)
     return {"ok": True, "sent": True, "hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS", "3"))}
 
 @app.get("/ops/eod/now", include_in_schema=False)
@@ -440,7 +438,8 @@ async def ops_eod_now():
 # ────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
