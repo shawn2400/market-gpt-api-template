@@ -28,7 +28,7 @@ from utils.notifier import Notifier  # NEW
 # -------------------- Config & Globals --------------------
 POLICY_PATH = os.getenv("OPS_POLICY_PATH", "policies/ops_policy.yaml")
 TZ_IL = ZoneInfo("Asia/Jerusalem")
-VERSION = "4.0"  # bumped
+VERSION = "4.1"  # bumped
 
 # Telegram
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -110,7 +110,6 @@ async def send_telegram(session: aiohttp.ClientSession, text: str, keyboard: Opt
     except Exception:
         pass
 
-# -------------------- Policy --------------------
 @dataclass
 class Policy:
     raw: Dict[str, Any]
@@ -226,6 +225,14 @@ def _iter_llm_order() -> list[str]:
     valid = {"aix", "openai", "conservative"}
     order = [p for p in order_raw.split(",") if p in valid]
     return order or ["openai", "aix", "conservative"]
+
+def _parse_admin_ids() -> list[str]:
+    """Read TELEGRAM_ADMIN_IDS (comma/space separated) → list of IDs as strings."""
+    s = os.getenv("TELEGRAM_ADMIN_IDS", "").strip()
+    if not s:
+        return []
+    import re as _re
+    return [x for x in _re.split(r"[,\s]+", s) if x]
 
 # -------------------- Core Supervisor --------------------
 class Supervisor:
@@ -663,6 +670,7 @@ class Supervisor:
     async def request_change_approval(self, proposal: Dict[str, Any]) -> Optional[str]:
         """
         יוצר בקשת אישור ושולח קישורים חתומים. מחזיר ticket_id.
+        תומך בשדה by=<approver_id> לכל מאשר מתוך TELEGRAM_ADMIN_IDS.
         """
         change_appr = self.policy.gate("CHANGE_APPROVAL", {})
         appr_endpoints = self.policy.gate("APPROVAL_ENDPOINTS", {})
@@ -676,16 +684,18 @@ class Supervisor:
         crs = int(proposal.get("crs", 0))
         sensitive = bool(proposal.get("sensitive", False))
 
-        # approve_url_base in policy (env templates allowed), else PRIMARY_PUBLIC_HOST + /ops/approve
+        # בסיס לינקים מאת ה-policy (עם הרחבת ${ENV}) או נפילה ל-PRIMARY_PUBLIC_HOST
         approve_base_cfg = appr_endpoints.get("approve_url_base", "")
         approve_base_cfg = _expand_env_templates(approve_base_cfg) if approve_base_cfg else ""
         base = approve_base_cfg or (PRIMARY_PUBLIC_HOST + "/ops/approve" if PRIMARY_PUBLIC_HOST else "")
 
         if not base:
-            await self._notify("approval",
+            await self._notify(
+                "approval",
                 "🟠 Approval requested but no public base URL configured "
-                "(<code>PRIMARY_PUBLIC_HOST</code> / <code>APPROVAL_ENDPOINTS.approve_url_base</code>).",
-                urgent=True)
+                "(<code>PUBLIC_HOST</code> via policy APPROVAL_ENDPOINTS.approve_url_base, או <code>PRIMARY_PUBLIC_HOST</code>).",
+                urgent=True,
+            )
             return None
 
         params = {
@@ -695,15 +705,27 @@ class Supervisor:
             "version": version,
         }
 
-        def signed_link(action: str) -> str:
+        def signed_link(action: str, extra: Optional[Dict[str, str]] = None) -> str:
             base_params = dict(params, action=action)
+            if extra:
+                base_params.update(extra)
             sig = _hmac_sign(base_params)
-            base_params["sig"] = sig or ""
+            base_params["sig"] = sig or ""  # even if no secret, include blank
             return base + "?" + urlencode(base_params, quote_via=quote_plus)
 
-        approve_url = signed_link("approve")
-        reject_url  = signed_link("reject")
-        kb = _approval_keyboard(approve_url, reject_url)
+        approvers = _parse_admin_ids()
+
+        # בניית מקלדת: כפתור לכל מאשר (Approve/Reject) כולל by=<id>
+        if approvers:
+            approve_row = []
+            reject_row = []
+            for aid in approvers:
+                approve_row.append({"text": f"✅ Approve ({aid})", "url": signed_link("approve", {"by": aid})})
+                reject_row.append({"text": f"❌ Reject ({aid})",  "url": signed_link("reject",  {"by": aid})})
+            kb = {"inline_keyboard": [approve_row, reject_row]}
+        else:
+            # נסיגה: כפתורים כלליים ללא by=
+            kb = _approval_keyboard(signed_link("approve"), signed_link("reject"))
 
         ts_il_fmt, ts_utc_fmt = self.policy.time_formats
         ts_il, ts_utc = now_ts(ts_il_fmt, ts_utc_fmt)
@@ -716,6 +738,8 @@ class Supervisor:
         ]
         if explain and plan:
             lines.append(f"Plan:\n<code>{_html(plan)}</code>")
+        if approvers:
+            lines.append("Approvers: <code>" + _html(", ".join(approvers)) + "</code>")
 
         await self._notify("approval", "\n".join(lines), urgent=True, keyboard=kb)
 
@@ -731,6 +755,7 @@ class Supervisor:
                 "created_at": int(time.time()),
                 "expires_at": int(time.time()) + timeout_s,
                 "proposal": proposal,
+                "approved_by": [],  # optional for webhook enforcement
             }
             try:
                 r.setex(key, timeout_s, json.dumps(payload))
@@ -849,6 +874,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
 
