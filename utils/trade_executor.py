@@ -53,7 +53,7 @@ MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "8.5"))
 MAX_ATR_PCT           = float(os.getenv("MAX_ATR_PCT", "2.5"))
 MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 
-# Env flags חדשים/חשובים
+# Env flags
 FEAT_QUALITY_ENFORCE  = os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on")
 APPROVE_BEFORE_GATE   = os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")
 
@@ -236,8 +236,19 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
         {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
         {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
     ]]}
-    # ברירת מחדל: בלי parse_mode (נמנע 400). אם מגדירים ב-ENV – משתמשים בזה.
-    text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
+
+    # בונים טקסט שמתאים גם בלי parse_mode
+    summary_plain = (
+        summary_html
+        .replace("<br/>", "\n")
+        .replace("<b>", "").replace("</b>", "")
+        .replace("<code>", "").replace("</code>", "")
+    )
+    if TELEGRAM_PARSE_MODE:
+        text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
+    else:
+        text = f"{title}\n{summary_plain}\n\nCID: {cid}"
+
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -246,10 +257,10 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
     }
     if TELEGRAM_PARSE_MODE:
         payload["parse_mode"] = TELEGRAM_PARSE_MODE
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             r = await cli.post(f"{API_BASE}/sendMessage", json=payload)
-            # אם טלגרם החזיר non-JSON (נדיר), ננסה להגן מפני חריגה
             try:
                 return r.json()
             except Exception:
@@ -261,7 +272,7 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
     title = "אישור טרייד"
-    # שומרים HTML פשוט ותקין גם בלי parse_mode (או עם, אם הופעל)
+    # HTML פשוט; בלי parse_mode יומר לטקסט רגיל בפונקציה למעלה
     summary = (
         f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
         f"qty={payload.get('qty')} lev={payload.get('leverage')}<br/>"
@@ -639,7 +650,7 @@ async def execute_trade_live(
     if FEAT_QUALITY_ENFORCE and not gate.get("enter_ok"):
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
 
-    # ✔️ אם מאשרים רק אחרי Gate (ברירת מחדל ישנה)
+    # ✔️ או אישור רק אחרי Gate (אם APPROVE_BEFORE_GATE=0)
     if confirm_first and not APPROVE_BEFORE_GATE:
         chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
         if not chat_id:
