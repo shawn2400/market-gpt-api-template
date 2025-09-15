@@ -437,6 +437,25 @@ class ConfirmStore:
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
 
+    # ✅ הוספה: תמיכה ב-/flush דרך main.py
+    @classmethod
+    def flush_all(cls) -> None:
+        cls._mem.clear()
+        if cls._r:
+            try:
+                for k in cls._r.scan_iter(match="confirm:*"):
+                    cls._r.delete(k)
+            except Exception:
+                pass
+
+    @classmethod
+    def flush(cls) -> None:
+        cls.flush_all()
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.flush_all()
+
 async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid: str) -> Dict[str, Any]:
     if not BOT_TOKEN:
         return {"ok": False, "error": "BOT_TOKEN missing"}
@@ -494,7 +513,6 @@ async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, A
             return {"cid": cid, "status": rec["status"]}
         await asyncio.sleep(0.5)
     return {"cid": cid, "status": "expired"}
-
 # ─────────── Cancel old closing orders (TP/SL) ───────────
 def _cancel_old_closing_orders(symbol: str) -> int:
     try:
@@ -937,6 +955,7 @@ def _safe_close_position(sym: str, side: str, qty: float) -> Dict[str, Any]:
         return {"ok": True, "response": resp}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 
 
