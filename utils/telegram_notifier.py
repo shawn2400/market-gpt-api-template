@@ -53,9 +53,9 @@ def _parse_list_env(name: str, default_csv: str) -> List[str]:
     return [x.strip().lower() for x in os.getenv(name, default_csv).split(",") if x.strip()]
 
 OPS_APPROVAL_STRICT           = os.getenv("OPS_APPROVAL_STRICT", "1").lower() in ("1","true","yes","on")
-OPS_MANUAL_MIN_CRS           = float(os.getenv("OPS_MANUAL_MIN_CRS", "8"))
-OPS_MANUAL_SENSITIVE_LEVELS  = set(_parse_list_env("OPS_MANUAL_SENSITIVE_LEVELS", "high,critical"))
-OPS_MANUAL_TOUCHES           = set(_parse_list_env("OPS_MANUAL_TOUCHES", "trading,env"))
+OPS_MANUAL_MIN_CRS            = float(os.getenv("OPS_MANUAL_MIN_CRS", "8"))
+OPS_MANUAL_SENSITIVE_LEVELS   = set(_parse_list_env("OPS_MANUAL_SENSITIVE_LEVELS", "high,critical"))
+OPS_MANUAL_TOUCHES            = set(_parse_list_env("OPS_MANUAL_TOUCHES", "trading,env"))
 
 OPS_AUTO_APPROVE_NON_SENSITIVE = os.getenv("OPS_AUTO_APPROVE_NON_SENSITIVE", "1").lower() in ("1","true","yes","on")
 OPS_AUTO_CRS_MAX               = int(os.getenv("OPS_AUTO_CRS_MAX", "6"))
@@ -397,8 +397,9 @@ def _ensure_urls(change: Dict[str, Any]) -> Dict[str, str]:
     if OPS_APPROVAL_BASE and WEBHOOK_HMAC_SECRET and tid and not (approve_url and reject_url and ticket_url):
         sig = _sign(tid, int(expires))
         q = urlencode({"ticket_id": tid, "expires": int(expires), "sig": sig})
-        approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}"
-        reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}"
+        # NOTE: צד ה־web דורש action=... בפרמטרים
+        approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}&action=approve"
+        reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}&action=reject"
         ticket_url  = ticket_url  or f"{OPS_APPROVAL_BASE}/ops/ticket/{quote(str(tid))}"
 
     return {"approve": approve_url or "", "reject": reject_url or "", "ticket": ticket_url or ""}
@@ -567,7 +568,7 @@ async def route_change_ticket(change: Dict[str, Any]) -> Dict[str, Any]:
     Strict policy:
       - אם OPS_APPROVAL_STRICT=1 → אישור ידני רק אם _is_very_sensitive(change) == True
       - אחרת (STRICT=0) → legacy: sensitive או CRS גבוה יבקשו ידני.
-    כל מקרה נרשם לדיג'סט/EOD.
+    תמיד נרשם לדיג'סט/סוף-יום.
     """
     tid       = str(change.get("ticket_id",""))
     plan      = change.get("plan","")
@@ -740,6 +741,7 @@ __all__ = [
     # digests
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
 ]
+
 
 
 
