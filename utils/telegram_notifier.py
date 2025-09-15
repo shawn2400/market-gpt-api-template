@@ -11,9 +11,7 @@ try:
     from zoneinfo import ZoneInfo
     _TZ_IL = ZoneInfo("Asia/Jerusalem")
 except Exception:
-    class _FixedTZ(timezone.__class__):  # fallback UTC+3
-        def __new__(cls): return timezone(timedelta(hours=3))
-    _TZ_IL = _FixedTZ()
+    _TZ_IL = timezone(timedelta(hours=3))  # Fallback UTC+3
 
 logger = logging.getLogger("algogpt.tg")
 
@@ -50,19 +48,27 @@ _bundle_task: Optional[asyncio.Task] = None
 _bundle_lock = asyncio.Lock()
 
 # ===================== Auto-Approval & Digest Policy =====================
-# ✅ בקשתך: לא רגיש → אישור אוטומטי; רגיש → אישור ידני; דיג'סט כל 3–5 שעות + דוח יומי.
+# Strict policy: רק "רגיש מאוד" יבקש אישור; כל היתר אוטומטי ושקט
+def _parse_list_env(name: str, default_csv: str) -> List[str]:
+    return [x.strip().lower() for x in os.getenv(name, default_csv).split(",") if x.strip()]
+
+OPS_APPROVAL_STRICT           = os.getenv("OPS_APPROVAL_STRICT", "1").lower() in ("1","true","yes","on")
+OPS_MANUAL_MIN_CRS           = float(os.getenv("OPS_MANUAL_MIN_CRS", "8"))
+OPS_MANUAL_SENSITIVE_LEVELS  = set(_parse_list_env("OPS_MANUAL_SENSITIVE_LEVELS", "high,critical"))
+OPS_MANUAL_TOUCHES           = set(_parse_list_env("OPS_MANUAL_TOUCHES", "trading,env"))
+
 OPS_AUTO_APPROVE_NON_SENSITIVE = os.getenv("OPS_AUTO_APPROVE_NON_SENSITIVE", "1").lower() in ("1","true","yes","on")
-OPS_AUTO_CRS_MAX              = int(os.getenv("OPS_AUTO_CRS_MAX", "6"))  # auto רק עד סיכון 6 כברירת מחדל
-OPS_APPROVAL_BASE             = os.getenv("OPS_APPROVAL_BASE", os.getenv("PUBLIC_HOST","")).rstrip("/")
-WEBHOOK_HMAC_SECRET           = os.getenv("WEBHOOK_HMAC_SECRET","").strip()
+OPS_AUTO_CRS_MAX               = int(os.getenv("OPS_AUTO_CRS_MAX", "6"))
+OPS_APPROVAL_BASE              = os.getenv("OPS_APPROVAL_BASE", os.getenv("PUBLIC_HOST","")).rstrip("/")
+WEBHOOK_HMAC_SECRET            = os.getenv("WEBHOOK_HMAC_SECRET","").strip()
 
-OPS_DIGEST_ENABLE             = os.getenv("OPS_DIGEST_ENABLE","1").lower() in ("1","true","yes","on")
-OPS_DIGEST_INTERVAL_HOURS     = max(3, min(5, int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))))  # clamp 3..5
-OPS_EOD_ENABLE                = os.getenv("OPS_EOD_ENABLE","1").lower() in ("1","true","yes","on")
-OPS_EOD_HOUR_IL               = int(os.getenv("OPS_EOD_HOUR_IL","23"))
-OPS_EOD_MINUTE_IL             = int(os.getenv("OPS_EOD_MINUTE_IL","55"))
+OPS_DIGEST_ENABLE              = os.getenv("OPS_DIGEST_ENABLE","1").lower() in ("1","true","yes","on")
+OPS_DIGEST_INTERVAL_HOURS      = max(3, min(5, int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))))  # clamp 3..5
+OPS_EOD_ENABLE                 = os.getenv("OPS_EOD_ENABLE","1").lower() in ("1","true","yes","on")
+OPS_EOD_HOUR_IL                = int(os.getenv("OPS_EOD_HOUR_IL","23"))
+OPS_EOD_MINUTE_IL              = int(os.getenv("OPS_EOD_MINUTE_IL","55"))
 
-OPS_APPROVAL_EMOJI            = os.getenv("OPS_APPROVAL_EMOJI","1").lower() in ("1","true","yes","on")
+OPS_APPROVAL_EMOJI             = os.getenv("OPS_APPROVAL_EMOJI","1").lower() in ("1","true","yes","on")
 
 # Optional Redis (לרישום אירועים לדיג'סט). נופל לקובץ אם אין Redis.
 _redis = None
@@ -110,8 +116,7 @@ def _rl_allow() -> bool:
     return True
 
 def _dedup_key(text: str) -> str:
-    h = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
-    return h
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
 
 def _dedup_allow(text: str) -> bool:
     now = _now()
@@ -375,7 +380,7 @@ def _ts_pair(iso_utc: Optional[str]) -> Tuple[str, str]:
         dt = _now_dt_utc()
     utc_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     il_dt   = dt.astimezone(_TZ_IL)
-    il_str  = il_dt.strftime("%Y-%m-%d %H:%М:%S IL")
+    il_str  = il_dt.strftime("%Y-%m-%d %H:%M:%S IL")
     return il_str, utc_str
 
 def _sign(ticket_id: str, expires_epoch: int) -> str:
@@ -525,6 +530,20 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
     return out
 
 # ===================== Auto-Approve Router =====================
+def _is_very_sensitive(change: Dict[str, Any]) -> tuple[bool, str]:
+    crs = float(change.get("crs", 0) or 0)
+    if crs >= OPS_MANUAL_MIN_CRS:
+        return True, f"crs>={OPS_MANUAL_MIN_CRS}"
+    level = str(change.get("sensitive_level", "")).strip().lower()
+    if level and level in OPS_MANUAL_SENSITIVE_LEVELS:
+        return True, f"level={level}"
+    if bool(change.get("sensitive", False)):
+        touches = (change.get("touches") or {})
+        for t in OPS_MANUAL_TOUCHES:
+            if bool(touches.get(t, False)):
+                return True, f"sensitive+touches.{t}"
+    return False, ""
+
 async def _auto_approve_change(change: Dict[str, Any]) -> bool:
     """Clicks the signed Approve URL (HTTP GET)."""
     urls = _ensure_urls(change)
@@ -545,96 +564,111 @@ async def _auto_approve_change(change: Dict[str, Any]) -> bool:
 
 async def route_change_ticket(change: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Main policy:
-      - if not sensitive and crs <= OPS_AUTO_CRS_MAX and OPS_AUTO_APPROVE_NON_SENSITIVE=1 -> auto-approve (silent)
-      - else -> send approval message to Telegram
-    Always records event for digest/EOD.
+    Strict policy:
+      - אם OPS_APPROVAL_STRICT=1 → אישור ידני רק אם _is_very_sensitive(change) == True
+      - אחרת (STRICT=0) → legacy: sensitive או CRS גבוה יבקשו ידני.
+    כל מקרה נרשם לדיג'סט/EOD.
     """
+    tid       = str(change.get("ticket_id",""))
+    plan      = change.get("plan","")
+    version   = change.get("version","")
+    crs       = float(change.get("crs", 0) or 0)
     sensitive = bool(change.get("sensitive", False))
-    crs = float(change.get("crs", 0) or 0)
-    tid = str(change.get("ticket_id",""))
-    plan = change.get("plan","")
-    version = change.get("version","")
 
-    if OPS_AUTO_APPROVE_NON_SENSITIVE and (not sensitive) and crs <= OPS_AUTO_CRS_MAX:
-        ok = await _auto_approve_change(change)
+    if OPS_APPROVAL_STRICT:
+        manual, reason = _is_very_sensitive(change)
+    else:
+        manual = (sensitive or crs >= OPS_AUTO_CRS_MAX)
+        reason = "legacy_sensitive_or_high_crs" if manual else ""
+
+    if manual:
         await _store_change_event({
-            "kind":"change",
-            "ticket_id": tid,
-            "status": "auto_approved" if ok else "auto_approve_failed",
-            "sensitive": sensitive,
-            "crs": crs,
-            "plan": plan,
-            "version": version,
+            "kind":"change","ticket_id":tid,"status":"awaiting_manual",
+            "sensitive": sensitive,"crs": crs,"plan": plan,"version": version,
+            "reason": reason,
         })
-        if not ok:
-            # fallback: send manual approval
-            await send_change_approval_he(change)
-        return {"ok": True, "auto": True}
+        await send_change_approval_he(change)
+        return {"ok": True, "auto": False, "reason": reason}
 
-    # sensitive or high CRS -> manual approval
+    # Auto-approve (שקט)
+    ok = await _auto_approve_change(change)
     await _store_change_event({
-        "kind":"change",
-        "ticket_id": tid,
-        "status": "awaiting_manual",
-        "sensitive": sensitive,
-        "crs": crs,
-        "plan": plan,
-        "version": version,
+        "kind":"change","ticket_id":tid,
+        "status": "auto_approved" if ok else "auto_approve_failed",
+        "sensitive": sensitive,"crs": crs,"plan": plan,"version": version,
+        "reason": "strict_auto" if OPS_APPROVAL_STRICT else "legacy_auto",
     })
-    await send_change_approval_he(change)
-    return {"ok": True, "auto": False}
+    if not ok:
+        # fallback נדיר – אם חתימה/URL לא תקפים: שולחים אישור ידני כדי לא להיתקע
+        await send_change_approval_he(change)
+    return {"ok": True, "auto": True}
 
 # ===================== Digest & EOD =====================
 async def send_ops_digest_now(hours: Optional[int] = None) -> None:
-    """Sends a digest for the last N hours (default = OPS_DIGEST_INTERVAL_HOURS)."""
+    """Sends a bilingual (HE/EN) ops digest for the last N hours."""
     interval_h = int(hours or OPS_DIGEST_INTERVAL_HOURS)
     ts_min = _now() - interval_h * 3600
     items = await _load_changes_since(ts_min)
+
     if not items:
-        await _tg_send(f"🧭 דיג'סט תפעולי ({interval_h}ש) — אין עדכונים.")
+        await _tg_send(f"🧭 דיג'סט ({interval_h}ש) — אין עדכונים.\n🧭 Digest ({interval_h}h) — No updates.")
         return
 
-    total = len(items)
-    auto_ok = sum(1 for x in items if x.get("status")=="auto_approved")
-    auto_fail = sum(1 for x in items if x.get("status")=="auto_approve_failed")
-    manual = sum(1 for x in items if x.get("status")=="awaiting_manual")
-    # short list of last 6
-    last_lines = []
-    for x in items[-6:]:
-        line = f"{_fmt_il(x.get('ts'))} · v{(x.get('version') or '—')} · CRS {x.get('crs','?')} · {'Sensitive' if x.get('sensitive') else 'Non-sens'} · {x.get('status')}"
-        if x.get("plan"): line += f" · {x['plan']}"
-        last_lines.append("• " + line)
+    total    = len(items)
+    auto_ok  = sum(1 for x in items if x.get("status")=="auto_approved")
+    auto_fail= sum(1 for x in items if x.get("status")=="auto_approve_failed")
+    manual   = sum(1 for x in items if x.get("status")=="awaiting_manual")
+
+    def _line(x: Dict[str,Any]) -> str:
+        ts = _fmt_il(x.get("ts"))
+        ver = x.get("version") or "—"
+        crs = x.get("crs","?")
+        sens = "Sensitive" if x.get("sensitive") else "Non-sens"
+        plan = (x.get("plan") or "—")
+        if len(plan) > 80: plan = plan[:77] + "…"
+        return f"• {ts} · v{ver} · CRS {crs} · {sens} · {x.get('status')}\n  ↳ {plan}"
+
+    last_lines = [_line(x) for x in items[-8:]]
 
     msg = [
-        f"🧭 דיג'סט תפעולי ({interval_h}ש) — {total} עדכונים",
-        f"Auto OK: {auto_ok} | Auto Fail: {auto_fail} | Manual: {manual}",
+        f"🧭 דיג'סט ({interval_h}ש) — סה\"כ {total} | Auto OK {auto_ok} | Auto Fail {auto_fail} | Manual {manual}",
+        f"🧭 Digest ({interval_h}h) — total {total} | Auto OK {auto_ok} | Auto Fail {auto_fail} | Manual {manual}",
         "— — —",
         *last_lines
     ]
     await _tg_send("\n".join(msg))
 
 async def send_eod_report_now() -> None:
-    """End-of-day (IL) operational report."""
-    # from today 00:00 IL
-    now_il = datetime.now(_TZ_IL)
+    """End-of-day bilingual report (HE/EN) for current IL day."""
+    now_il   = datetime.now(_TZ_IL)
     start_il = now_il.replace(hour=0, minute=0, second=0, microsecond=0)
-    ts_min = start_il.astimezone(timezone.utc).timestamp()
-    items = await _load_changes_since(ts_min)
-    total = len(items)
-    auto_ok = sum(1 for x in items if x.get("status")=="auto_approved")
-    auto_fail = sum(1 for x in items if x.get("status")=="auto_approve_failed")
-    manual = sum(1 for x in items if x.get("status")=="awaiting_manual")
+    ts_min   = start_il.astimezone(timezone.utc).timestamp()
+    items    = await _load_changes_since(ts_min)
+
+    total    = len(items)
+    auto_ok  = sum(1 for x in items if x.get("status")=="auto_approved")
+    auto_fail= sum(1 for x in items if x.get("status")=="auto_approve_failed")
+    manual   = sum(1 for x in items if x.get("status")=="awaiting_manual")
+
+    def _short(x: Dict[str,Any]) -> str:
+        ts = _fmt_il(x.get("ts"))
+        ver = x.get("version") or "—"
+        crs = x.get("crs","?")
+        sens = "Sensitive" if x.get("sensitive") else "Non-sens"
+        plan = (x.get("plan") or "—")
+        if len(plan) > 100: plan = plan[:97] + "…"
+        return f"• {ts} · v{ver} · CRS {crs} · {sens} · {x.get('status')} · {plan}"
+
+    last = [_short(x) for x in items[-12:]]
 
     msg = [
         f"📘 דוח יומי — {now_il.strftime('%Y-%m-%d')} (IL)",
         f"סה\"כ שינויים: {total} | Auto OK: {auto_ok} | Auto Fail: {auto_fail} | Manual: {manual}",
+        f"📘 End-of-Day — {now_il.strftime('%Y-%m-%d')} (IL)",
+        f"Total changes: {total} | Auto OK: {auto_ok} | Auto Fail: {auto_fail} | Manual: {manual}",
+        "— — —",
+        *last
     ]
-    # top 8 by recency
-    for x in items[-8:]:
-        short = (x.get("plan") or "—")
-        if len(short) > 70: short = short[:67] + "…"
-        msg.append(f"• {_fmt_il(x.get('ts'))} · v{(x.get('version') or '—')} · CRS {x.get('crs','?')} · {'Sensitive' if x.get('sensitive') else 'Non-sens'} · {short}")
     await _tg_send("\n".join(msg))
 
 # Background loops
@@ -643,14 +677,13 @@ _eod_task: Optional[asyncio.Task] = None
 _schedulers_started: bool = False
 
 def _seconds_until_next_digest(now_il: Optional[datetime] = None) -> int:
+    """Align to next multiple of interval since midnight IL."""
     now_il = now_il or datetime.now(_TZ_IL)
-    base = now_il.replace(minute=0, second=0, microsecond=0)
-    # align to next multiple of interval
-    delta_h = OPS_DIGEST_INTERVAL_HOURS - ((now_il.hour - base.hour) % OPS_DIGEST_INTERVAL_HOURS)
-    if delta_h == 0 and now_il.minute == 0:
-        delta_h = OPS_DIGEST_INTERVAL_HOURS
-    target = base + timedelta(hours=delta_h)
-    return max(5, int((target - now_il).total_seconds()))
+    period = OPS_DIGEST_INTERVAL_HOURS * 3600
+    since_midnight = now_il.hour*3600 + now_il.minute*60 + now_il.second
+    rem = since_midnight % period
+    wait = (period - rem) if rem != 0 else period
+    return max(5, int(wait))
 
 def _seconds_until_eod(now_il: Optional[datetime] = None) -> int:
     now_il = now_il or datetime.now(_TZ_IL)
