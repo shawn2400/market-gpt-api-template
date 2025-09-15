@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -206,8 +206,8 @@ for module_path in (
     "routes.backtest",
     "routes.executor",
     "routes.binance_status",
-    "routes.telegram_webhook",     # אופציונלי
-    "routes.telegram_callbacks",   # אופציונלי
+    "routes.telegram_webhook",     # אופציונלי (אם קיים)
+    "routes.telegram_callbacks",   # אופציונלי (אם קיים)
     "routes.grid",
     "routes.executor_control",
     "routes.ws_user_stream",       # optional
@@ -235,6 +235,10 @@ def _route_exists(path: str) -> bool:
         pass
     return False
 
+# אם אין רואטר טלגרם קיים – נטען fallback מינימלי (בקובץ נפרד)
+if not _route_exists("/telegram/webhook") or not _route_exists("/telegram/ping"):
+    _try_include("routes.telegram_fallback")
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Meta & Health
 # ────────────────────────────────────────────────────────────────────────────────
@@ -254,9 +258,7 @@ async def debug_health():
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
 
-# ────────────────────────────────────────────────────────────────────────────────
 # Built-in status endpoints (fallback)
-# ────────────────────────────────────────────────────────────────────────────────
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
     async def status_ws():
@@ -339,125 +341,6 @@ async def readyz():
     return {"ok": (err is None), "error": err, "details": details}
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Telegram webhook & ping (public)
-# ────────────────────────────────────────────────────────────────────────────────
-WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
-TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
-PM_ENV = (os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None)  # None => לא שולחים parse_mode
-
-# Admin policy (גם ל-webhook הישיר)
-ADMIN_ONLY = os.getenv("TELEGRAM_ADMIN_ONLY", "1").lower() in ("1","true","yes","on")
-ADMIN_IDS  = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
-def _is_admin(uid: int) -> bool:
-    if not ADMIN_ONLY:
-        return True
-    return str(uid) in ADMIN_IDS
-
-async def _tg_send(chat_id: int, text: str):
-    if not BOT_TOKEN:
-        return
-    payload: Dict[str, Any] = {
-        "chat_id": chat_id,
-        "text": text,
-        "disable_web_page_preview": True,
-    }
-    if PM_ENV:
-        payload["parse_mode"] = PM_ENV
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(f"{API_BASE}/sendMessage", json=payload)
-    except Exception as e:
-        logging.getLogger("algogpt.telegram").warning("telegram send failed: %s", e)
-
-async def _tg_answer_callback(cbq_id: str, text: str = ""):
-    if not (BOT_TOKEN and cbq_id):
-        return
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(f"{API_BASE}/answerCallbackQuery", json={"callback_query_id": cbq_id, "text": text, "show_alert": False})
-    except Exception as e:
-        logging.getLogger("algogpt.telegram").warning("answerCallbackQuery failed: %s", e)
-
-async def _tg_disable_kb(chat_id: int, message_id: int):
-    if not BOT_TOKEN:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(f"{API_BASE}/editMessageReplyMarkup", json={
-                "chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}
-            })
-    except Exception as e:
-        logging.getLogger("algogpt.telegram").warning("disable_kb failed: %s", e)
-
-# מגדירים רק אם לא הוגדר ע"י ראוטר חיצוני
-if not _route_exists("/telegram/ping"):
-    @app.get("/telegram/ping", include_in_schema=False)
-    async def tg_ping():
-        return {"ok": True, "src": "telegram", "ts_ms": int(time.time() * 1000)}
-
-if not _route_exists("/telegram/webhook"):
-    @app.post("/telegram/webhook", include_in_schema=False)
-    async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
-        # Secret header (הגנת webhook)
-        if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
-            raise HTTPException(401, "Invalid telegram secret")
-
-        try:
-            update = await request.json()
-        except Exception:
-            raise HTTPException(400, "invalid JSON")
-
-        # callback_query — אישור/ביטול
-        cb = update.get("callback_query")
-        if cb:
-            cb_id = cb.get("id")
-            from_user = cb.get("from") or {}
-            uid = int(from_user.get("id") or 0)
-            msg = cb.get("message") or {}
-            chat_id = int((msg.get("chat") or {}).get("id") or 0)
-            message_id = int(msg.get("message_id") or 0)
-            data = str(cb.get("data") or "")
-            if not _is_admin(uid):
-                await _tg_answer_callback(cb_id, "⛔️ אין הרשאה")
-                return {"ok": True}
-
-            parts = data.split(":", 2)
-            if len(parts) == 3 and parts[0] == "CONFIRM":
-                action, cid = parts[1], parts[2]
-                rec = ConfirmStore.get(cid)
-                if not rec or rec.get("status") != "pending":
-                    if chat_id and message_id:
-                        await _tg_disable_kb(chat_id, message_id)
-                    await _tg_answer_callback(cb_id, "פג תוקף/כבר טופל")
-                    return {"ok": True}
-                if action == "APPROVE":
-                    ConfirmStore.approve(cid, approver=str(uid))
-                    await _tg_answer_callback(cb_id, "אושר ✅")
-                    if chat_id and message_id:
-                        await _tg_disable_kb(chat_id, message_id)
-                    return {"ok": True}
-                if action == "REJECT":
-                    ConfirmStore.reject(cid, approver=str(uid))
-                    await _tg_answer_callback(cb_id, "בוטל ❌")
-                    if chat_id and message_id:
-                        await _tg_disable_kb(chat_id, message_id)
-                    return {"ok": True}
-                await _tg_answer_callback(cb_id, "פעולה לא מזוהה")
-                return {"ok": True}
-
-        # הודעות טקסט פשוטות (לשימוש מהיר: /ping)
-        msg = update.get("message")
-        if msg and str(msg.get("text", "")).strip() == "/ping":
-            chat_id = int((msg.get("chat") or {}).get("id") or 0)
-            if chat_id:
-                await _tg_send(chat_id, "pong ✅")
-            return {"ok": True}
-
-        return {"ok": True}
-
-# ────────────────────────────────────────────────────────────────────────────────
 # Kill-Switch /flush
 # ────────────────────────────────────────────────────────────────────────────────
 @app.post("/flush")
@@ -475,8 +358,12 @@ async def flush_kill_switch():
     return {"ok": True, "flushed": done}
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Preflight Warmup on startup
+# Auto setWebhook (optional) + WS autostart
 # ────────────────────────────────────────────────────────────────────────────────
+WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+
 @app.on_event("startup")
 async def _startup_preflight_warmup():
     try:
@@ -493,9 +380,8 @@ async def _startup_preflight_warmup():
     except Exception as e:
         logger.warning({"event": "warmup.price_failed", "error": str(e)})
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Auto setWebhook (optional)
-# ────────────────────────────────────────────────────────────────────────────────
+TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
+
 @app.on_event("startup")
 async def _startup_webhook():
     if not BOT_TOKEN or not TELEGRAM_AUTO_WEBHOOK:
@@ -514,9 +400,6 @@ async def _startup_webhook():
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
 
-# ────────────────────────────────────────────────────────────────────────────────
-# WS User-Data Stream autostart
-# ────────────────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def _startup_user_stream():
     try:
@@ -533,6 +416,7 @@ async def _startup_user_stream():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10000")))
+
 
 
 
