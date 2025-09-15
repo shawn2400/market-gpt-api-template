@@ -297,6 +297,15 @@ async def commands(
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.", html=False)
     return {"ok": True}
 
+# ⬅️ alias לנתיב שה-startup רושם אליו webhook:
+@router.post("/webhook")
+async def webhook(
+    req: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    return await commands(req, x_telegram_bot_api_secret_token=x_telegram_bot_api_secret_token)
+
+
            
 
 
