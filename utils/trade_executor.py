@@ -48,9 +48,14 @@ POST_FILL_SANITY_BPS    = float(os.getenv("POST_FILL_SANITY_BPS", "40"))
 SL_LIMIT_OFFSET_BPS   = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS   = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
+# Gate/Quality
 MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "8.5"))
 MAX_ATR_PCT           = float(os.getenv("MAX_ATR_PCT", "2.5"))
 MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
+
+# Env flags חדשים/חשובים
+FEAT_QUALITY_ENFORCE  = os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on")
+APPROVE_BEFORE_GATE   = os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")
 
 DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
@@ -78,6 +83,7 @@ BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE            = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 CONFIRM_TTL_SEC     = int(os.getenv("CONFIRM_TTL_SEC", "180"))
 TELEGRAM_CHAT_ID    = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
+TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "").strip()  # "" (ברירת מחדל), או "HTML"/"MarkdownV2"
 
 # Redis (אופציונלי) — Idempotency/ConfirmStore
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -230,14 +236,24 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
         {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
         {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
     ]]}
+    # ברירת מחדל: בלי parse_mode (נמנע 400). אם מגדירים ב-ENV – משתמשים בזה.
     text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+        "reply_markup": kb,
+    }
+    if TELEGRAM_PARSE_MODE:
+        payload["parse_mode"] = TELEGRAM_PARSE_MODE
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.post(f"{API_BASE}/sendMessage", data={
-                "chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                "disable_web_page_preview": True, "reply_markup": json.dumps(kb)
-            })
-            return r.json()
+            r = await cli.post(f"{API_BASE}/sendMessage", json=payload)
+            # אם טלגרם החזיר non-JSON (נדיר), ננסה להגן מפני חריגה
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": r.status_code == 200, "status_code": r.status_code, "text": r.text[:200]}
     except Exception as e:
         log.exception("telegram send failed", extra={"err": str(e)})
         return {"ok": False, "error": str(e)}
@@ -245,6 +261,7 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
     title = "אישור טרייד"
+    # שומרים HTML פשוט ותקין גם בלי parse_mode (או עם, אם הופעל)
     summary = (
         f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
         f"qty={payload.get('qty')} lev={payload.get('leverage')}<br/>"
@@ -579,6 +596,7 @@ async def execute_trade_live(
         except Exception:
             pass
 
+    # DRY-RUN: מחזיר תוכנית בלבד
     if dry_run:
         plan: Dict[str, Any] = {
             "ok": True, "symbol": sym, "side": side, "leverage": leverage,
@@ -602,14 +620,27 @@ async def execute_trade_live(
             }
         return plan
 
+    # שגיאת כמות?
     if qty is None:
         return {"ok": False, "reason": qty_calc_error or "allocation_invalid"}
-    if not gate.get("enter_ok"):
-        return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
-    if RISK_CHECK_ENABLE and not risk.get("ok", True):
-        return {"ok": False, "reason": "risk_check_failed", "risk": risk}
 
-    if confirm_first:
+    # ✔️ שליחת אישור לפני Gate כשמוגדר APPROVE_BEFORE_GATE=1
+    if confirm_first and APPROVE_BEFORE_GATE:
+        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
+        if not chat_id:
+            return {"ok": False, "reason": "telegram_chat_id_required"}
+        approval = await require_approval(chat_id, {
+            "symbol": sym, "side": side, "qty": qty, "leverage": leverage
+        })
+        if approval.get("status") != "approved":
+            return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
+
+    # Gate – אכיפה תלויה דגל
+    if FEAT_QUALITY_ENFORCE and not gate.get("enter_ok"):
+        return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
+
+    # ✔️ אם מאשרים רק אחרי Gate (ברירת מחדל ישנה)
+    if confirm_first and not APPROVE_BEFORE_GATE:
         chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
         if not chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
@@ -672,6 +703,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
