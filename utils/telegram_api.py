@@ -11,6 +11,9 @@ logger = logging.getLogger("algogpt.telegram")
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 BASE = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
 
+# Optional global parse mode from ENV: "", "HTML", "MarkdownV2"
+PARSE_MODE_ENV = (os.getenv("TELEGRAM_PARSE_MODE", "") or "").strip() or None
+
 
 def _chat_default(chat_id: Optional[int | str]) -> int | str:
     """
@@ -28,20 +31,28 @@ async def send_message(
     reply_markup: Optional[Dict[str, Any]] = None,
     chat_id: Optional[int | str] = None,
     silent: bool = False,
-    parse_mode: str = "HTML",
+    parse_mode: Optional[str] = None,
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
+    """
+    שולח הודעה. אם parse_mode לא נשלח, נשתמש ב-TELEGRAM_PARSE_MODE מה-ENV (אם הוגדר),
+    אחרת לא נשלח parse_mode כלל (מונע 400 במקרה של תווים 'רגישים').
+    """
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN missing")
         return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
 
+    if parse_mode is None:
+        parse_mode = PARSE_MODE_ENV
+
     payload: Dict[str, Any] = {
         "chat_id": _chat_default(chat_id),
         "text": text,
-        "parse_mode": parse_mode,
         "disable_web_page_preview": bool(disable_preview),
         "disable_notification": bool(silent),
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     if reply_markup:
         payload["reply_markup"] = reply_markup
 
@@ -59,19 +70,23 @@ async def edit_message(
     message_id: int,
     text: str,
     reply_markup: Optional[Dict[str, Any]] = None,
-    parse_mode: str = "HTML",
+    parse_mode: Optional[str] = None,
     disable_preview: bool = True,
 ) -> Dict[str, Any]:
     if not TOKEN:
         return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
 
+    if parse_mode is None:
+        parse_mode = PARSE_MODE_ENV
+
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "message_id": message_id,
         "text": text,
-        "parse_mode": parse_mode,
         "disable_web_page_preview": bool(disable_preview),
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     if reply_markup:
         payload["reply_markup"] = reply_markup
 
@@ -111,6 +126,7 @@ async def send_chat_action(
     except Exception as e:
         logger.error(f"send_chat_action failed: {e}")
         return {"ok": False, "error": str(e)}
+
 
 
 
