@@ -1,4 +1,3 @@
-cat > utils/trade_executor.py <<'PY_A'
 # utils/trade_executor.py
 from __future__ import annotations
 import os, math, time, logging, asyncio, json, hashlib
@@ -9,12 +8,12 @@ import httpx
 from utils.binance_client import (
     get_price, futures_mark_price, set_leverage, futures_create_order,
     get_symbol_filters, get_all_orders, futures_cancel_order, get_futures_client,
-    futures_balance,  # ← נשתמש ליתרה עבור Budget דינמי
+    futures_balance,
 )
 
-# ✅ Dynamic budget hook (fallback פנימי אם budget.py לא קיים)
+# ✅ Dynamic budget hook
 try:
-    from utils.budget import get_budget_usdt  # דינמי אם DYNAMIC_BUDGET_ENABLE=1
+    from utils.budget import get_budget_usdt
 except Exception:
     def get_budget_usdt(symbol: Optional[str] = None, *, quality: Optional[float] = None,
                         atr: Optional[float] = None, price: Optional[float] = None) -> float:  # type: ignore
@@ -23,7 +22,7 @@ except Exception:
         except Exception:
             return 100.0
 
-# ✅ Risk (אופציונלי)
+# ✅ Risk (optional)
 try:
     from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
 except Exception:
@@ -46,10 +45,6 @@ PERCENT_PRICE_GUARD_BPS = float(os.getenv("PERCENT_PRICE_GUARD_BPS", "45"))
 SLIPPAGE_GUARD_BPS      = float(os.getenv("SLIPPAGE_GUARD_BPS", "35"))
 POST_FILL_SANITY_BPS    = float(os.getenv("POST_FILL_SANITY_BPS", "40"))
 
-# Limit offsets (כשמשתמשים ב-LIMIT ל-TP)
-SL_LIMIT_OFFSET_BPS   = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
-TP_LIMIT_OFFSET_BPS   = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
-
 # Gate/Quality
 QUALITY_DEFAULT       = float(os.getenv("QUALITY_DEFAULT", "6"))
 MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "7"))
@@ -57,76 +52,91 @@ MIN_QUALITY_FALLBACK  = float(os.getenv("MIN_QUALITY_FALLBACK", "6"))
 MAX_ATR_PCT           = float(os.getenv("MAX_ATR_PCT", "2.5"))
 MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 
-# Env flags
-FEAT_QUALITY_ENFORCE  = os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on")
-APPROVE_BEFORE_GATE   = os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")
-
-# 🔒 Always require Telegram approval + require TP&SL
+# Enforce
 ENFORCE_APPROVAL_ALWAYS  = os.getenv("ENFORCE_APPROVAL_ALWAYS", "1").lower() in ("1","true","yes","on")
 REQUIRE_TP_AND_SL        = os.getenv("REQUIRE_TP_AND_SL", "1").lower() in ("1","true","yes","on")
 
-DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
-DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
-DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
-
 # Ladder config
 LADDER_TP_ENABLE          = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
-LADDER_TP_KIND            = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()  # TAKE_PROFIT or TAKE_PROFIT_MARKET
+LADDER_TP_KIND            = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
 LADDER_TP_DEFAULT_PCTS    = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 LADDER_TP_DEFAULT_SPLITS  = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
-LADDER_SL_ENABLE          = os.getenv("LADDER_SL_ENABLE", "1") in ("1","true","yes","on")  # ← ON by default
-LADDER_SL_DEFAULT_PCTS    = os.getenv("LADDER_SL_DEFAULT_PCTS", "0.8").strip()             # ← default 0.8%
-TP_LADDER_COOLDOWN_SEC    = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
+LADDER_SL_ENABLE          = os.getenv("LADDER_SL_ENABLE", "1") in ("1","true","yes","on")
+LADDER_SL_DEFAULT_PCTS    = os.getenv("LADDER_SL_DEFAULT_PCTS", "0.8").strip()
 
-# Dynamic SL (initial arming) + trail/breath (ניהול בזמן אמת ב-trade_manager)
+# Dynamic SL / Trail
 SL_DYNAMIC_ENABLE     = os.getenv("SL_DYNAMIC_ENABLE", "1").lower() in ("1","true","yes","on")
 SL_ATR_MULT           = float(os.getenv("SL_ATR_MULT", "0.6"))
 SL_TRAIL_ENABLE       = os.getenv("SL_TRAIL_ENABLE", "1").lower() in ("1","true","yes","on")
-SL_BREATH_ALLOW       = os.getenv("SL_BREATH_ALLOW", "1").lower() in ("1","true","yes","on")
 
 # Dynamic Budget & Leverage
 BUDGET_DYNAMIC_ENABLE     = os.getenv("BUDGET_DYNAMIC_ENABLE", "1").lower() in ("1","true","yes","on")
 BUDGET_USE_BALANCE        = os.getenv("BUDGET_USE_BALANCE", "1").lower() in ("1","true","yes","on")
-BUDGET_DYNAMIC_RISK_PCTS  = os.getenv("BUDGET_DYNAMIC_RISK_PCTS", "1.5,3.0,5.0")  # quality 7 / 8.5 / 9.5
-BUDGET_DYNAMIC_FORCE      = os.getenv("BUDGET_DYNAMIC_FORCE", "0").lower() in ("1","true","yes","on")  # אם True יתעלם מ-budget שהגיע בפונקציה
+BUDGET_DYNAMIC_RISK_PCTS  = os.getenv("BUDGET_DYNAMIC_RISK_PCTS", "1.5,3.0,5.0")
 
 DYN_LEVERAGE_ENABLE       = os.getenv("DYN_LEVERAGE_ENABLE", "1").lower() in ("1","true","yes","on")
-DYN_LEVERAGE_FORCE        = os.getenv("DYN_LEVERAGE_FORCE", "0").lower() in ("1","true","yes","on")
 MIN_LEVERAGE              = int(float(os.getenv("MIN_LEVERAGE", "5")))
 LEV_HARD_CAP              = int(float(os.getenv("LEV_HARD_CAP", "50")))
 try:
     LEV_ADX_MAP_JSON      = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
 except Exception:
     LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
-try:
-    LEVERAGE_SYMBOL_CAPS  = json.loads(os.getenv("LEVERAGE_SYMBOL_CAPS", '{"BTCUSDT":15,"1000PEPEUSDT":8}'))
-except Exception:
-    LEVERAGE_SYMBOL_CAPS  = {"BTCUSDT":15,"1000PEPEUSDT":8}
+cat >> utils/trade_executor.py <<'PY_B'
+# ─────────────────────────────────────────────────────────────────────────────
+# סט ב׳ — המשך מלא: Budget/Leverage helpers, Idempotency, ConfirmStore,
+# Hybrid Entry (עם HEDGE), Public API execute_trade_live, ו־rollback.
+# כולל backfills לסביבת־משתנים אם לא הוגדרו בחלק א׳.
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Idempotency
-IDEMPOTENCY_TTL_SEC   = int(os.getenv("IDEMPOTENCY_TTL_SEC", "15"))
+# ─────────── Backfill ENV (אם לא הוגדרו בחלק א׳) ───────────
+if 'FEAT_QUALITY_ENFORCE' not in globals():
+    FEAT_QUALITY_ENFORCE  = os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on")
+if 'APPROVE_BEFORE_GATE' not in globals():
+    APPROVE_BEFORE_GATE   = os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")
 
-# Prefix controls for cancels
-ORDER_ID_PREFIX             = os.getenv("ORDER_ID_PREFIX", "").strip()
-CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
-CANCEL_PREFIX_OVERRIDE      = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
+if 'DEFAULT_QTY_STEP' not in globals():
+    DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
+if 'DEFAULT_PRICE_TICK' not in globals():
+    DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
+if 'DEFAULT_MIN_NOT' not in globals():
+    DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
-# Telegram
-BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-API_BASE            = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
-CONFIRM_TTL_SEC     = int(os.getenv("CONFIRM_TTL_SEC", "180"))
-TELEGRAM_CHAT_ID    = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
-TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "").strip()  # "" (ברירת מחדל), או "HTML"/"MarkdownV2"
+if 'ORDER_ID_PREFIX' not in globals():
+    ORDER_ID_PREFIX             = os.getenv("ORDER_ID_PREFIX", "").strip()
+if 'CANCEL_ONLY_PREFIXED_ORDERS' not in globals():
+    CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
+if 'CANCEL_PREFIX_OVERRIDE' not in globals():
+    CANCEL_PREFIX_OVERRIDE      = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
-# Redis (אופציונלי) — Idempotency/ConfirmStore
-REDIS_URL = os.getenv("REDIS_URL", "").strip()
-try:
-    import redis  # type: ignore
-    _redis_available = bool(REDIS_URL)
-except Exception:
-    _redis_available = False
+if 'IDEMPOTENCY_TTL_SEC' not in globals():
+    IDEMPOTENCY_TTL_SEC   = int(os.getenv("IDEMPOTENCY_TTL_SEC", "15"))
 
-# ─────────── Quantize helpers ───────────
+if 'BOT_TOKEN' not in globals():
+    BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+if 'API_BASE' not in globals():
+    API_BASE            = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+if 'CONFIRM_TTL_SEC' not in globals():
+    CONFIRM_TTL_SEC     = int(os.getenv("CONFIRM_TTL_SEC", "180"))
+if 'TELEGRAM_CHAT_ID' not in globals():
+    TELEGRAM_CHAT_ID    = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
+if 'TELEGRAM_PARSE_MODE' not in globals():
+    TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "").strip()
+
+if 'REDIS_URL' not in globals():
+    REDIS_URL = os.getenv("REDIS_URL", "").strip()
+    try:
+        import redis  # type: ignore
+        _redis_available = bool(REDIS_URL)
+    except Exception:
+        _redis_available = False
+
+if 'LEVERAGE_SYMBOL_CAPS' not in globals():
+    try:
+        LEVERAGE_SYMBOL_CAPS  = json.loads(os.getenv("LEVERAGE_SYMBOL_CAPS", '{"BTCUSDT":15,"1000PEPEUSDT":8}'))
+    except Exception:
+        LEVERAGE_SYMBOL_CAPS  = {"BTCUSDT":15,"1000PEPEUSDT":8}
+
+# ─────────── Quantize & math helpers (אם חסר) ───────────
 def _decimals(step_str: str) -> int:
     if "." not in step_str: return 0
     frac = step_str.split(".")[1].rstrip("0")
@@ -176,7 +186,7 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
-# ─────────── Light indicators (no pandas) ───────────
+# ─────────── Indicators & quality gate (קל, בלי pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
     k = 2 / (period + 1); ema=[]; s=None
     for v in vals:
@@ -197,9 +207,7 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
     return float(s or 0.0)
 
 def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
-    """חישוב ADX קליל ללא pandas."""
-    if len(kl) < period + 2:
-        return 0.0
+    if len(kl) < period + 2: return 0.0
     plus_dm, minus_dm, tr_list = [], [], []
     prev_h, prev_l, prev_c = None, None, None
     for r in kl:
@@ -214,7 +222,6 @@ def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
         tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
         plus_dm.append(pdm); minus_dm.append(mdm); tr_list.append(tr)
         prev_h, prev_l, prev_c = h, l, c
-    if len(tr_list) < period: return 0.0
 
     def rma(xs: List[float], p: int) -> List[float]:
         alpha = 1/p
@@ -224,16 +231,16 @@ def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
             out.append(s)
         return out
 
+    if len(tr_list) < period: return 0.0
     tr_rma = rma(tr_list, period)
     pdm_rma = rma(plus_dm, period)
     mdm_rma = rma(minus_dm, period)
-    di_plus, di_minus, dx = [], [], []
+    dx=[]
     for t, p, m in zip(tr_rma, pdm_rma, mdm_rma):
         if t <= 0: di_p, di_m = 0.0, 0.0
         else:
             di_p = (p / t) * 100.0
             di_m = (m / t) * 100.0
-        di_plus.append(di_p); di_minus.append(di_m)
         denom = (di_p + di_m)
         dx.append(0.0 if denom == 0 else abs(di_p - di_m) / denom * 100.0)
     if not dx: return 0.0
@@ -283,7 +290,7 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
     except Exception as e:
         log.warning("quality gate failed: %s", e)
         return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["gate_error"], "metrics": {}}
-cat >> utils/trade_executor.py <<'PY_B'
+
 # ─────────── Budget & Leverage helpers ───────────
 def _parse_pct_csv(s: str) -> List[float]:
     out=[]
@@ -327,7 +334,7 @@ def _choose_budget_dynamic(quality: Optional[float], price: float) -> float:
 
 def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
     lev = int(requested)
-    if not DYN_LEVERAGE_ENABLE and not DYN_LEVERAGE_FORCE:
+    if not DYN_LEVERAGE_ENABLE:
         return max(MIN_LEVERAGE, min(LEV_HARD_CAP, lev))
     try:
         pairs = sorted([(float(k), int(v)) for k, v in LEV_ADX_MAP_JSON.items()], key=lambda x: x[0])
@@ -338,8 +345,6 @@ def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
         if adx >= thr: dyn = max(dyn, l)
     cap_by_symbol = int(LEVERAGE_SYMBOL_CAPS.get(symbol.upper(), LEV_HARD_CAP))
     dyn = max(MIN_LEVERAGE, min(dyn, cap_by_symbol, LEV_HARD_CAP))
-    if DYN_LEVERAGE_FORCE:
-        return dyn
     return max(MIN_LEVERAGE, min(max(lev, dyn), cap_by_symbol, LEV_HARD_CAP))
 
 # ─────────── Idempotency (Redis/memory) ───────────
@@ -428,7 +433,6 @@ class ConfirmStore:
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
 
-    # אופציונלי: /flush
     @classmethod
     def flush_all(cls) -> None:
         cls._mem.clear()
@@ -527,7 +531,7 @@ def _cancel_old_closing_orders(symbol: str) -> int:
         log.warning("cancel_old_closing_orders error: %s", e)
         return 0
 
-# ─────────── Ladders build (SL כ-STOP_MARKET, workingType ב-שליחה) ───────────
+# ─────────── Ladder builders ───────────
 def _parse_csv_floats(s: str) -> List[float]:
     out=[]
     for x in (s or "").split(","):
@@ -565,12 +569,12 @@ def _build_ladders(sym: str, side: str, qty: float,
                     plan["tp_orders"].append({"type": "TAKE_PROFIT","stopPrice": stop_p,"price": lim_p,"qty": qalloc})
             else:
                 plan["sl_orders"].append({"type": "STOP_MARKET","stopPrice": stop_p,"qty": qalloc})
+
     if tp_targets: _prep("TP", tp_targets, tp_splits, +1 if side=="BUY" else -1)
     if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
     return plan
-# ===== חלק C — utils/trade_executor.py (C/3) — HEDGE positionSide fix =====
 
-# ─────────── HEDGE helpers ───────────
+# ===== HEDGE helpers =====
 def _normalize_position_side(ps: Optional[str]) -> str:
     ps = (ps or "BOTH").upper().strip()
     if ps not in {"BOTH", "LONG", "SHORT"}:
@@ -581,18 +585,11 @@ def _close_side_for(entry_side: str) -> str:
     return "SELL" if entry_side.upper() == "BUY" else "BUY"
 
 def _pos_side_for_entry(side: str) -> str:
-    """Default positionSide when user passed BOTH/empty but is in hedge mode at the exchange."""
     return "LONG" if side.upper() == "BUY" else "SHORT"
 
-# ─────────── Hybrid entry (patched to pass positionSide) ───────────
-async def _place_hybrid_entry(
-    sym: str,
-    side: str,
-    qty: float,
-    base_price: float,
-    ref_entry: Optional[float],
-    position_side: str,  # ← NEW
-) -> Dict[str, Any]:
+# ─────────── Hybrid entry (עם positionSide) ───────────
+async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
+                              ref_entry: Optional[float], position_side: str) -> Dict[str, Any]:
     ref = ref_entry if ref_entry is not None else base_price
     if side == "BUY":
         limit_price = _offset_bps(ref, -ENTRY_BAND_BPS, +1)
@@ -610,7 +607,6 @@ async def _place_hybrid_entry(
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    # pass positionSide to BOTH orders so hedge mode won't net positions
     lim = futures_create_order(
         symbol=sym, side=side, type="LIMIT",
         timeInForce="GTC", price=limit_str, quantity=qty_str,
@@ -647,7 +643,7 @@ async def _place_hybrid_entry(
         stp_filled, stp_fill_px = await asyncio.to_thread(_is_filled, stp_id)
 
         if lim_filled and not stp_filled:
-            try: futures_cancel_order(sym, lim_id=stp_id)  # safe if still NEW
+            try: futures_cancel_order(sym, stp_id)
             except Exception: pass
             mk = get_price(sym) or futures_mark_price(sym) or lim_fill_px or limit_p
             if mk and lim_fill_px:
@@ -656,7 +652,7 @@ async def _place_hybrid_entry(
             return {"ok": True, "entry_kind": "LIMIT", "price": lim_fill_px or limit_p, "sanity_bps": None, "sanity_ok": True, "order": lim}
 
         if stp_filled and not lim_filled:
-            try: futures_cancel_order(sym, lim_id=lim_id)
+            try: futures_cancel_order(sym, lim_id)
             except Exception: pass
             mk = get_price(sym) or futures_mark_price(sym) or stp_fill_px or stop_p
             if mk and stp_fill_px:
@@ -671,10 +667,10 @@ async def _place_hybrid_entry(
             justified = (gate.get("enter_ok") is True) and (slip_bps >= ESCALATE_SLIP_BPS)
             if ALLOW_MARKET_ENTRY and justified:
                 try:
-                    if lim_id: futures_cancel_order(sym, lim_id=lim_id)
+                    if lim_id: futures_cancel_order(sym, lim_id)
                 except Exception: pass
                 try:
-                    if stp_id: futures_cancel_order(sym, lim_id=stp_id)
+                    if stp_id: futures_cancel_order(sym, stp_id)
                 except Exception: pass
                 mkt = futures_create_order(
                     symbol=sym, side=side, type="MARKET", quantity=qty_str,
@@ -686,7 +682,41 @@ async def _place_hybrid_entry(
             t0 = time.time()
         await asyncio.sleep(1.0)
 
-# ─────────── Public API (patched fragments) ───────────
+# ─────────── Public API ───────────
+def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[float]]]) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
+    tp_targets: Optional[List[float]] = None
+    tp_splits : Optional[List[float]] = None
+    sl_targets: Optional[List[float]] = None
+
+    if LADDER_TP_ENABLE:
+        try:
+            tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
+            sign = +1 if side=="BUY" else -1
+            tp_targets = [anchor * (1.0 + sign * p/100.0) for p in tps]
+            tp_splits = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_SPLITS)] or None
+        except Exception:
+            pass
+
+    if SL_DYNAMIC_ENABLE and kl:
+        try:
+            atr = _atr_from_klines(kl, 14)
+            sign = -1 if side=="BUY" else +1
+            sl_p = anchor * (1.0 + sign * ((atr / max(anchor, 1e-9)) * SL_ATR_MULT * 100.0) / 100.0)
+            sl_targets = [sl_p]
+        except Exception:
+            sl_targets = None
+
+    if (not sl_targets) and LADDER_SL_ENABLE:
+        try:
+            src = LADDER_SL_DEFAULT_PCTS if LADDER_SL_DEFAULT_PCTS else "0.8"
+            slps = [float(x) for x in _parse_csv_floats(src)]
+            sign = -1 if side=="BUY" else +1
+            sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
+        except Exception:
+            sl_targets = None
+
+    return tp_targets, tp_splits, sl_targets
+
 async def execute_trade_live(
     symbol: str, side: str, *,
     budget: Optional[float] = None, leverage: int = 5, dry_run: bool = True,
@@ -697,22 +727,145 @@ async def execute_trade_live(
     confirm_first: bool = True, telegram_chat_id: Optional[int] = None,
     position_side: str = "BOTH", reduce_only: bool = False,
 ) -> Dict[str, Any]:
+
     side = side.upper().strip()
     if side not in {"BUY","SELL"}:
         raise ValueError("side must be BUY/SELL")
     sym = symbol.upper().strip()
     position_side = _normalize_position_side(position_side)
 
-    # ... (everything unchanged up to placing entry)
+    base_price = get_price(sym) or futures_mark_price(sym)
+    if not base_price or base_price <= 0:
+        raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # place entry (now with positionSide)
-    entry_res = await _place_hybrid_entry(
-        sym, side, qty, float(base_price), entry, position_side
-    )
+    ref_for_guard = float(entry or base_price)
+    mk = float(get_price(sym) or futures_mark_price(sym) or base_price)
+    pp_bps = abs(mk - ref_for_guard) / max(ref_for_guard, 1e-9) * 10000.0
+    if pp_bps >= PERCENT_PRICE_GUARD_BPS:
+        return {"ok": False, "reason": "percent_price_guard", "bps": pp_bps, "mk": mk, "ref": ref_for_guard}
+
+    gate = _quality_gate(sym, side)
+    try:
+        score_for_budget: Optional[float] = float(gate.get("score")) if gate.get("score") is not None else QUALITY_DEFAULT
+    except Exception:
+        score_for_budget = QUALITY_DEFAULT
+
+    try:
+        kl = _fetch_klines_raw(sym, "1m", 60)
+        atr_for_budget: Optional[float] = _atr_from_klines(kl, 14) if kl else None
+        adx_for_lev: float = _adx_from_klines(kl, 14) if kl else 0.0
+    except Exception:
+        atr_for_budget = None
+        adx_for_lev = 0.0
+        kl = None
+
+    dyn_leverage = _choose_leverage(sym, adx_for_lev, leverage)
+
+    if BUDGET_DYNAMIC_ENABLE and (budget is None or float(budget) <= 0):
+        budget = _choose_budget_dynamic(score_for_budget, float(base_price))
+
+    qty_calc_error = None
+    qty: Optional[float] = None
+    try:
+        qty = _calc_qty(sym, float(base_price), budget, dyn_leverage, quantity)
+    except Exception as e:
+        qty_calc_error = str(e)
+
+    risk = pre_trade_risk_check(sym, side, dyn_leverage, entry)
+
+    idem_payload = {"sym": sym, "side": side, "lev": int(dyn_leverage),
+                    "qty": round(float(qty or 0), 10), "dry": bool(dry_run),
+                    "entry_bucket": round(ref_for_guard, 5)}
+    if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
+        return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
+
+    if (tp is None and not tp_targets) or (sl is None and not sl_targets):
+        tps, tps_splits, sls = _compute_tp_sl_targets(side, float(entry or base_price), kl)
+        if tp is None and not tp_targets: tp_targets, tp_splits = tps, tps_splits
+        if sl is None and not sl_targets: sl_targets = sls
+
+    if REQUIRE_TP_AND_SL:
+        if not (tp_targets or tp is not None):
+            return {"ok": False, "reason": "tp_required"}
+        if not (sl_targets or sl is not None):
+            return {"ok": False, "reason": "sl_required"}
+
+    if dry_run:
+        plan: Dict[str, Any] = {
+            "ok": True, "symbol": sym, "side": side, "leverage": dyn_leverage,
+            "base_price": float(base_price), "dry_run": True,
+            "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
+            "gate": gate, "risk": risk, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
+            "guards": {"percent_price_bps": pp_bps, "slippage_guard_bps": SLIPPAGE_GUARD_BPS},
+            "position_side": position_side, "reduce_only": reduce_only,
+            "budget_used": float(budget or 0.0), "quality": score_for_budget,
+            "adx": adx_for_lev,
+        }
+        if qty is not None:
+            ladders = _build_ladders(sym, side, qty,
+                                     ([tp] if tp is not None else tp_targets), tp_splits,
+                                     ([sl] if sl is not None else sl_targets), sl_splits)
+            plan.update({"qty": qty, **ladders})
+            plan["entry_simulation"] = {
+                "limit_around": _offset_bps(entry or base_price, (-ENTRY_BAND_BPS if side=="BUY" else +ENTRY_BAND_BPS), +1),
+                "stop_around":  _offset_bps(entry or base_price, (+STOP_BAND_BPS  if side=="BUY" else -STOP_BAND_BPS ), +1),
+                "escalate_after_sec": ESCALATE_AFTER_S, "escalate_slip_bps": ESCALATE_SLIP_BPS,
+                "allow_market_entry": ALLOW_MARKET_ENTRY,
+            }
+        return plan
+
+    if qty is None:
+        return {"ok": False, "reason": qty_calc_error or "allocation_invalid"}
+
+    must_approve = True if ENFORCE_APPROVAL_ALWAYS else bool(confirm_first)
+    if must_approve:
+        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
+        if not chat_id:
+            return {"ok": False, "reason": "telegram_chat_id_required"}
+        payload = {"symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage, "quality": score_for_budget, "budget": float(budget or 0.0)}
+        if APPROVE_BEFORE_GATE:
+            approval = await require_approval(chat_id, payload)
+            if approval.get("status") != "approved":
+                return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
+
+    if FEAT_QUALITY_ENFORCE and not gate.get("enter_ok"):
+        return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
+
+    if must_approve and not APPROVE_BEFORE_GATE:
+        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
+        if not chat_id:
+            return {"ok": False, "reason": "telegram_chat_id_required"}
+        payload = {"symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage, "quality": score_for_budget, "budget": float(budget or 0.0)}
+        approval = await require_approval(chat_id, payload)
+        if approval.get("status") != "approved":
+            return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
+
+    _cancel_old_closing_orders(sym)
+
+    try:
+        set_leverage(sym, int(dyn_leverage))
+    except Exception as e:
+        log.warning("set_leverage failed: %s", e)
+
+    entry_res = await _place_hybrid_entry(sym, side, qty, float(base_price), entry, position_side)
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
-    # build ladders and arm TP/SL with correct positionSide for hedge mode
+    sanity_ok = bool(entry_res.get("sanity_ok", True))
+    sanity_bps = entry_res.get("sanity_bps")
+
+    plan: Dict[str, Any] = {
+        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage,
+        "base_price": float(base_price), "dry_run": False,
+        "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
+        "gate": gate, "risk": risk, "entry_result": entry_res,
+        "tp_orders": [], "sl_orders": [],
+        "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
+        "position_side": position_side, "reduce_only": reduce_only,
+        "budget_used": float(budget or 0.0), "quality": score_for_budget,
+        "adx": adx_for_lev,
+    }
+
     close_side = _close_side_for(side)
     ladders = _build_ladders(sym, side, qty,
                              ([tp] if tp is not None else tp_targets), tp_splits,
@@ -750,13 +903,20 @@ async def execute_trade_live(
             except Exception as e:
                 o["response"] = {"ok": False, "error": str(e)}
 
-    # ... (rollback block unchanged)
+    if REQUIRE_TP_AND_SL and not (tp_success and sl_success):
+        rb = _safe_close_position(sym, side, qty, position_side=position_side)
+        plan.update({
+            "ok": False,
+            "reason": "tp_sl_arming_failed",
+            "rolled_back": True,
+            "rollback": rb,
+        })
+        return plan
 
     return plan
 
-# ─────────── Helpers (close-on-failure) — patched to honor hedge ───────────
+# ─────────── Helpers (rollback) ───────────
 def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "BOTH") -> Dict[str, Any]:
-    """Flat the just-opened position if arming TP/SL failed."""
     position_side = _normalize_position_side(position_side)
     close_side = _close_side_for(side)
     try:
@@ -772,6 +932,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
         return {"ok": True, "response": resp}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 
 
