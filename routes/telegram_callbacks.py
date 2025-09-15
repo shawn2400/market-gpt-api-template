@@ -27,7 +27,7 @@ async def _tg_answer_callback(cbq_id: str, text: str = "") -> None:
     url = f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery"
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
-            await cli.post(url, data={"callback_query_id": cbq_id, "text": text, "show_alert": False})
+            await cli.post(url, json={"callback_query_id": cbq_id, "text": text, "show_alert": False})
     except Exception as e:
         logger.warning(f"[tg] answerCallbackQuery failed: {e}")
 
@@ -37,12 +37,15 @@ async def _disable_kb(chat_id: int, message_id: int) -> None:
     url = f"https://api.telegram.org/bot{TG_TOKEN}/editMessageReplyMarkup"
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
-            await cli.post(url, data={"chat_id": chat_id, "message_id": message_id, "reply_markup": '{"inline_keyboard":[]}'})
+            await cli.post(url, json={"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}})
     except Exception as e:
         logger.warning(f"[tg] editMessageReplyMarkup failed: {e}")
 
 @router.post("/callback")
-async def callback_handler(req: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
+async def callback_handler(
+    req: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None)
+):
     # הגנת Secret כמו ב-/webhook
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Invalid telegram secret")
@@ -101,4 +104,5 @@ async def callback_handler(req: Request, x_telegram_bot_api_secret_token: str | 
 
     await _tg_answer_callback(cb_id, "פעולה לא מזוהה")
     return {"ok": True}
+
 
