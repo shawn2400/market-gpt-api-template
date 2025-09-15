@@ -12,11 +12,9 @@ from utils.binance_client import (
 
 # ✅ Dynamic budget (תאימות לשמות שונים במודול התקציב)
 try:
-    # אם יש עטיפה בשם הזה
     from utils.budget import get_budget_usdt as _get_budget
 except Exception:
     try:
-        # השם שקיים בקובץ budget ששלחת: get_trade_budget_usdt
         from utils.budget import get_trade_budget_usdt as _get_budget  # type: ignore
     except Exception:
         def _get_budget(symbol: Optional[str] = None, *, quality: Optional[float] = None,
@@ -39,7 +37,7 @@ log = logging.getLogger("algogpt.auto_executor")
 # ─────────── Policy & Defaults (ENV) ───────────
 ALLOW_MARKET_ENTRY    = os.getenv("ALLOW_MARKET_ENTRY", "1").lower() in ("1","true","yes","on")
 
-# Fallback (סטטי) — ידרס דינמית אם DYNAMIC_POLICY_ENABLE=1
+# Fallback (סטטי) — יידרס דינמית אם DYNAMIC_POLICY_ENABLE=1
 ENTRY_BAND_BPS_FALLBK = float(os.getenv("ENTRY_BAND_BPS", "8.5"))
 STOP_BAND_BPS_FALLBK  = float(os.getenv("STOP_BAND_BPS",  "10"))
 ESCALATE_AFTER_S_FBK  = float(os.getenv("ESCALATE_AFTER_SEC", "10"))
@@ -128,6 +126,30 @@ DYN_CANCEL_MAX_SEC      = float(os.getenv("DYN_CANCEL_MAX_SEC","60"))
 DYN_ATR_LOW_PCT         = float(os.getenv("DYN_ATR_LOW_PCT","0.5"))
 DYN_ATR_HIGH_PCT        = float(os.getenv("DYN_ATR_HIGH_PCT","3.0"))
 
+# ─────────── Dynamic Leverage (ADX-driven) ───────────
+LEVERAGE_DYNAMIC_ENABLE = os.getenv("LEVERAGE_DYNAMIC_ENABLE", "1").lower() in ("1","true","yes","on")
+LEV_HARD_CAP            = int(os.getenv("LEV_HARD_CAP", "50"))
+LEV_ADX_MAP_JSON        = os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}')
+LEVERAGE_SYMBOL_CAPS    = os.getenv("LEVERAGE_SYMBOL_CAPS", "")  # JSON, אופציונלי
+
+# ─────────── Dynamic SL (ATR) ───────────
+SL_DYNAMIC_ENABLE       = os.getenv("SL_DYNAMIC_ENABLE","1").lower() in ("1","true","yes","on")
+SL_ATR_MULT             = float(os.getenv("SL_ATR_MULT","0.6"))
+SL_TRAIL_ENABLE         = os.getenv("SL_TRAIL_ENABLE","1").lower() in ("1","true","yes","on")
+SL_BREATH_ALLOW         = os.getenv("SL_BREATH_ALLOW","1").lower() in ("1","true","yes","on")
+
+# ─────────── Profit Lock (דינמי, לא 80% קשיח) ───────────
+PROFIT_LOCK_ENABLE      = os.getenv("PROFIT_LOCK_ENABLE","1").lower() in ("1","true","yes","on")
+PROFIT_LOCK_BASE_PCT    = float(os.getenv("PROFIT_LOCK_BASE_PCT","80"))   # ברירת מחדל 80% אבל…
+PROFIT_LOCK_MIN_PCT     = float(os.getenv("PROFIT_LOCK_MIN_PCT","50"))   # מגבלות תחתונות/עלינות
+PROFIT_LOCK_MAX_PCT     = float(os.getenv("PROFIT_LOCK_MAX_PCT","95"))
+PROFIT_LOCK_ADX_WEIGHT  = float(os.getenv("PROFIT_LOCK_ADX_WEIGHT","0.50"))  # כמה ADX משפיע
+PROFIT_LOCK_ATR_WEIGHT  = float(os.getenv("PROFIT_LOCK_ATR_WEIGHT","0.35"))  # כמה ATR% משפיע
+PROFIT_LOCK_MOM_WEIGHT  = float(os.getenv("PROFIT_LOCK_MOM_WEIGHT","0.15"))  # כמה מומנטום משפיע
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
 def _lerp(a: float, b: float, t: float) -> float:
     t = max(0.0, min(1.0, t))
     return a + (b - a) * t
@@ -186,7 +208,7 @@ def _new_coid(kind: str) -> Optional[str]:
     # מגבלה של בינאנס ~36 תווים; נשמור קצר
     return f"{pref}_{kind}_{int(time.time()*1000)%10_000_000}"
 
-# ─────────── Klines / ATR helpers ───────────
+# ─────────── Klines helpers + EMA/ATR/ADX (ללא pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
     k = 2 / (period + 1); ema=[]; s=None
     for v in vals:
@@ -206,10 +228,65 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
         s = v if s is None else (alpha*v+(1-alpha)*s)
     return float(s or 0.0)
 
+def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
+    if len(kl) < period + 2:
+        return 0.0
+    highs = [float(r[2]) for r in kl]
+    lows  = [float(r[3]) for r in kl]
+    closes= [float(r[4]) for r in kl]
+    trs, plusDM, minusDM = [], [], []
+    for i in range(1, len(kl)):
+        upMove = highs[i] - highs[i-1]
+        downMove = lows[i-1] - lows[i]
+        trs.append(max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])))
+        plusDM.append(upMove if (upMove > downMove and upMove > 0) else 0.0)
+        minusDM.append(downMove if (downMove > upMove and downMove > 0) else 0.0)
+    def _wilder_smooth(arr: List[float], p: int) -> List[float]:
+        out=[]; s=sum(arr[:p]); out.append(s)
+        for i in range(p, len(arr)):
+            s = s - (s/p) + arr[i]
+            out.append(s)
+        return out
+    trN    = _wilder_smooth(trs, period)
+    plusDMN= _wilder_smooth(plusDM, period)
+    minusDMN=_wilder_smooth(minusDM, period)
+    di_plus = [ (plusDMN[i] / trN[i]) * 100 if trN[i] > 0 else 0 for i in range(len(trN)) ]
+    di_minus= [ (minusDMN[i] / trN[i]) * 100 if trN[i] > 0 else 0 for i in range(len(trN)) ]
+    dx = [ (abs(di_plus[i]-di_minus[i]) / max(di_plus[i]+di_minus[i], 1e-12)) * 100 for i in range(len(di_plus)) ]
+    # ADX חצי-פשוט: ממוצע נע של DX
+    adx_vals = _ema(dx, period)
+    return float(adx_vals[-1]) if adx_vals else 0.0
+
 def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
     cli = get_futures_client()
-    data = cli.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(10, limit)))
+    data = cli.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(20, limit)))
     return data or []
+
+# ─────────── Profit-Lock estimator (דינמי) ───────────
+def _estimate_profit_lock_pct(adx_now: float, atr_pct: float, mom_pct: float) -> float:
+    """
+    מחזיר אחוז 'נעילה' דינמי של רווח בזמן תיקון.
+    הערך לא נאכף כאן (הניהול השוטף בתיקיית manager), אלא מפורסם ב-plan לאבחון.
+    """
+    if not PROFIT_LOCK_ENABLE:
+        return 0.0
+    # נרמל טווחים: ADX ∈[0..50+], ATR% ∈[DYN_ATR_LOW_PCT..DYN_ATR_HIGH_PCT], מומנטום ∈[-0.5..0.5]%
+    adx_t = _clamp(adx_now / 50.0, 0.0, 1.0)
+    if DYN_ATR_HIGH_PCT <= DYN_ATR_LOW_PCT:
+        atr_t = 0.5
+    else:
+        atr_t = _clamp((atr_pct - DYN_ATR_LOW_PCT) / (DYN_ATR_HIGH_PCT - DYN_ATR_LOW_PCT), 0.0, 1.0)
+    mom_t = _clamp((mom_pct + 0.5) / 1.0, 0.0, 1.0)  # -0.5..+0.5 → 0..1
+    w_adx = PROFIT_LOCK_ADX_WEIGHT
+    w_atr = PROFIT_LOCK_ATR_WEIGHT
+    w_mom = PROFIT_LOCK_MOM_WEIGHT
+    w_sum = max(1e-9, w_adx + w_atr + w_mom)
+    mix = (w_adx*adx_t + w_atr*(1.0-atr_t) + w_mom*mom_t) / w_sum
+    base = PROFIT_LOCK_BASE_PCT / 100.0
+    lo   = PROFIT_LOCK_MIN_PCT  / 100.0
+    hi   = PROFIT_LOCK_MAX_PCT  / 100.0
+    out  = _clamp(_lerp(base*0.8, base*1.2, mix), lo, hi)
+    return round(out * 100.0, 2)
 
 # ─────────── Dynamic policy builder ───────────
 def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
@@ -217,7 +294,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
     מחשב פרמטרים דינמיים לפי ATR% של 1m/14:
       t = נורמליזציה של ATR% בין DYN_ATR_LOW_PCT .. DYN_ATR_HIGH_PCT (תחום [0..1])
       ואז LERP בין המינימום למקסימום לכל פרמטר.
-      מחזיר גם atr, atr_pct, last_price לשימוש בתקציב.
+      מחזיר גם atr, atr_pct, last_price לשימוש בתקציב ול-profit lock/lev.
     """
     if not DYNAMIC_POLICY_ENABLE:
         return {
@@ -230,6 +307,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
             "cancel_max_age": float(CANCEL_MAX_AGE_SEC_FBK or 0),
             "cancel_ttl": float(CANCEL_TTL_SEC_FBK or 0),
             "atr": None, "atr_pct": None, "last_price": None,
+            "adx": None, "mom_pct": None,
         }
 
     try:
@@ -237,8 +315,11 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
         last = float(kl[-1][4]) if kl else float(get_price(symbol) or futures_mark_price(symbol) or 0)
         atr = _atr_from_klines(kl, 14)
         atr_pct = (atr / last) * 100.0 if last > 0 else DYN_ATR_HIGH_PCT
+        # מומנטום קצר 3-4 נרות
+        closes = [float(r[4]) for r in kl][-5:]
+        mom_pct = ((closes[-1] / closes[-4]) - 1.0) * 100.0 if len(closes) >= 4 and closes[-4] > 0 else 0.0
+        adx_now = _adx_from_klines(kl, 14)
     except Exception:
-        # במקרה כשל — חזור לפולבק סטטי
         return {
             "entry_bps": ENTRY_BAND_BPS_FALLBK,
             "stop_bps": STOP_BAND_BPS_FALLBK,
@@ -249,6 +330,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
             "cancel_max_age": float(CANCEL_MAX_AGE_SEC_FBK or 0),
             "cancel_ttl": float(CANCEL_TTL_SEC_FBK or 0),
             "atr": None, "atr_pct": None, "last_price": None,
+            "adx": None, "mom_pct": None,
         }
 
     # נורמליזציה ל-[0..1]
@@ -280,6 +362,7 @@ def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
         "cancel_max_age": float(cmax),
         "cancel_ttl": float(cttl),
         "atr": float(atr), "atr_pct": float(atr_pct), "last_price": float(last),
+        "adx": float(adx_now), "mom_pct": float(mom_pct),
     }
 
 # ─────────── Position mode (auto/hedge/oneway) ───────────
@@ -335,7 +418,7 @@ class _Idem:
         if _redis_available:
             _r = redis.Redis.from_url(REDIS_URL, decode_responses=True)  # type: ignore
     except Exception as e:
-        log.warning("Redis unavailable for idempotency: %s", e); _r = None
+        log.warning("Idempotency redis error: %s", e); _r = None
 
     @classmethod
     def _key(cls, payload: Dict[str, Any]) -> str:
@@ -503,7 +586,6 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
     except Exception as e:
         log.warning("quality gate failed: %s", e)
         return {"enter_ok": False, "score": 0.0, "reasons": ["gate_error"]}
-
 # ─────────── Cancel old closing orders (TP/SL) — חכם + דינמי ───────────
 def _order_age_sec(o: Dict[str, Any]) -> Optional[float]:
     now_ms = int(time.time() * 1000)
@@ -530,7 +612,6 @@ def _cancel_old_closing_orders(symbol: str, policy: Optional[Dict[str, float]] =
         cancel_min = float(p.get("cancel_min_age", CANCEL_MIN_AGE_SEC_FBK or 0))
         cancel_max = float(p.get("cancel_max_age", CANCEL_MAX_AGE_SEC_FBK or 0))
         ttl = float(p.get("cancel_ttl", CANCEL_TTL_SEC_FBK or 0))
-        # TTL דינמי אם 0
         if ttl <= 0:
             base = (p.get("escalate_after_s") or ESCALATE_AFTER_S_FBK)
             ttl = max(AUTO_CANCEL_TTL_MIN, min(AUTO_CANCEL_TTL_MAX, float(base) * 6.0))
@@ -558,12 +639,10 @@ def _cancel_old_closing_orders(symbol: str, policy: Optional[Dict[str, float]] =
             if typ not in tps + sls:
                 continue
 
-            # ReduceOnly filter
             if CANCEL_ONLY_REDUCE_ONLY:
                 if not bool(o.get("reduceOnly", False)):
                     continue
 
-            # Age window filter
             age = _order_age_sec(o)
             if age is not None:
                 if cancel_min > 0 and age < cancel_min:
@@ -571,7 +650,6 @@ def _cancel_old_closing_orders(symbol: str, policy: Optional[Dict[str, float]] =
                 if cancel_max > 0 and age > cancel_max:
                     continue
 
-            # Prefix filter (בשביל ONEWAY/מדיניות ידנית)
             if only_pref:
                 coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
                 if not (pref and coid.startswith(pref)):
@@ -635,14 +713,25 @@ def _build_ladders(sym: str, side: str, qty: float,
                         "qty": qalloc,
                     })
             else:  # SL
-                limit_p = _offset_bps(float(t), SL_LIMIT_OFFSET_BPS, limit_sign)
-                _, lim_p = _q_price(sym, limit_p)
-                plan["sl_orders"].append({
+                if SL_DYNAMIC_ENABLE and SL_ATR_MULT > 0:
+                    # במקרה ויש יעד SL מחושב על בסיס ATR — כבר הומר במחוץ; כאן נשמור על LIMIT ליציבות
+                    limit_p = _offset_bps(float(t), SL_LIMIT_OFFSET_BPS, limit_sign)
+                    _, lim_p = _q_price(sym, limit_p)
+                    plan["sl_orders"].append({
                         "type": "STOP",
                         "stopPrice": stop_p,
                         "price": lim_p,
                         "qty": qalloc,
-                })
+                    })
+                else:
+                    limit_p = _offset_bps(float(t), SL_LIMIT_OFFSET_BPS, limit_sign)
+                    _, lim_p = _q_price(sym, limit_p)
+                    plan["sl_orders"].append({
+                        "type": "STOP",
+                        "stopPrice": stop_p,
+                        "price": lim_p,
+                        "qty": qalloc,
+                    })
 
     if tp_targets: _prep("TP", tp_targets, tp_splits, +1 if side=="BUY" else -1)
     if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
@@ -755,10 +844,11 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
+
 # ─────────── Public API ───────────
 async def execute_trade_live(
-    symbol: str, side: str, *,
-    budget: Optional[float] = None, leverage: int = 5, dry_run: bool = True,
+    symbol: str, side: str, *|,
+    budget: Optional[float] = None, leverage: int = 0, dry_run: bool = True,
     quantity: Optional[float] = None, entry: Optional[float] = None,
     sl: Optional[float] = None, tp: Optional[float] = None,
     tp_targets: Optional[List[float]] = None, tp_splits: Optional[List[float]] = None,
@@ -781,7 +871,7 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # בנה פוליסה דינמית (ATR)
+    # בנה פוליסה דינמית (ATR + ADX + MOM)
     pol = _build_dynamic_policy(sym)
 
     # Percent-Price Guard (סטטי – שומר ברמת אחוזים מול ref)
@@ -799,6 +889,35 @@ async def execute_trade_live(
     except Exception:
         score_for_budget = None
 
+    # 🔢 מינוף דינמי לפי ADX (אם leverage<=0 או הופעל דגל)
+    lev_eff = int(leverage or 0)
+    try:
+        if LEVERAGE_DYNAMIC_ENABLE and lev_eff <= 0:
+            adx_now = float(pol.get("adx") or 0.0)
+            mapping = json.loads(LEV_ADX_MAP_JSON) if isinstance(LEV_ADX_MAP_JSON, str) else dict(LEV_ADX_MAP_JSON)
+            # mapping דוגמה: {"30":15,"25":12,"20":9,"0":7} → בחר סף מקסימלי קטן מ-שווה ל-ADX
+            best = 0
+            for k, v in mapping.items():
+                try:
+                    th = float(k); lv = int(v)
+                    if adx_now >= th and lv > best:
+                        best = lv
+                except Exception:
+                    continue
+            lev_eff = best or 5
+        if lev_eff <= 0: lev_eff = 5
+        # הגבלת LEV לפי caps כלליים ו-per-symbol
+        lev_eff = min(lev_eff, LEV_HARD_CAP)
+        try:
+            caps = json.loads(LEVERAGE_SYMBOL_CAPS) if LEVERAGE_SYMBOL_CAPS else {}
+            if sym in caps:
+                lev_eff = min(lev_eff, int(caps[sym]))
+        except Exception:
+            pass
+    except Exception as e:
+        log.warning("dynamic leverage calc failed: %s", e)
+        lev_eff = int(leverage or 5)
+
     # אם התקציב לא הגיע מבחוץ — נקבע דינמית/סטטית דרך מודול התקציב
     if budget is None or float(budget) <= 0:
         budget = _get_budget(symbol=sym, quality=score_for_budget, atr=pol.get("atr"), price=pol.get("last_price"))
@@ -807,21 +926,21 @@ async def execute_trade_live(
     qty_calc_error = None
     qty: Optional[float] = None
     try:
-        qty = _calc_qty(sym, float(base_price), budget, leverage, quantity)
+        qty = _calc_qty(sym, float(base_price), budget, lev_eff, quantity)
     except Exception as e:
         qty_calc_error = str(e)
 
     # ✅ Risk preview
-    risk = pre_trade_risk_check(sym, side, leverage, entry)
+    risk = pre_trade_risk_check(sym, side, lev_eff, entry)
 
     # Idempotency Shield
-    idem_payload = {"sym": sym, "side": side, "lev": int(leverage),
+    idem_payload = {"sym": sym, "side": side, "lev": int(lev_eff),
                     "qty": round(float(qty or 0), 10), "dry": bool(dry_run),
                     "entry_bucket": round(ref_for_guard, 5)}
     if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
         return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
 
-    # הרחבת TP/SL מה-ENV אם לא הגיעו
+    # הרחבת TP/SL מה-ENV אם לא הגיעו + SL דינמי לפי ATR כ-ברירת מחדל
     if tp is None and not tp_targets and LADDER_TP_ENABLE:
         try:
             tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
@@ -831,18 +950,30 @@ async def execute_trade_live(
             tp_splits = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_SPLITS)] or None
         except Exception:
             pass
-    if sl is None and not sl_targets and LADDER_SL_ENABLE and LADDER_SL_DEFAULT_PCTS:
+
+    if sl is None and not sl_targets:
         try:
-            slps = [float(x) for x in _parse_csv_floats(LADDER_SL_DEFAULT_PCTS)]
             anchor = float(entry or base_price)
-            sign = -1 if side=="BUY" else +1
-            sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
+            if SL_DYNAMIC_ENABLE and pol.get("atr"):
+                atr = float(pol["atr"])
+                sl_px = (anchor - SL_ATR_MULT*atr) if side == "BUY" else (anchor + SL_ATR_MULT*atr)
+                sl_targets = [sl_px]
+            elif LADDER_SL_ENABLE and LADDER_SL_DEFAULT_PCTS:
+                slps = [float(x) for x in _parse_csv_floats(LADDER_SL_DEFAULT_PCTS)]
+                sign = -1 if side=="BUY" else +1
+                sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
         except Exception:
             pass
 
+    # DRY-RUN: מחזיר תוכנית בלבד
     if dry_run:
+        profit_lock_pct = _estimate_profit_lock_pct(
+            float(pol.get("adx") or 0.0),
+            float(pol.get("atr_pct") or 0.0),
+            float(pol.get("mom_pct") or 0.0),
+        )
         plan: Dict[str, Any] = {
-            "ok": True, "symbol": sym, "side": side, "leverage": leverage,
+            "ok": True, "symbol": sym, "side": side, "leverage": lev_eff,
             "base_price": float(base_price), "dry_run": True,
             "entry_policy": f"HYBRID_LIMIT_STOP(dyn {pol['entry_bps']:.2f}/{pol['stop_bps']:.2f}bps)+MARKET_ESCALATE(after~{pol['escalate_after_s']:.0f}s, slip≥{pol['escalate_slip_bps']:.0f}bps)",
             "gate": gate, "risk": risk, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
@@ -851,6 +982,14 @@ async def execute_trade_live(
             "reduce_only": reduce_only,
             "cancel_policy": {"min_age": pol["cancel_min_age"], "max_age": pol["cancel_max_age"]},
             "budget_used": float(budget or 0.0),
+            "dyn": {"atr_pct": pol.get("atr_pct"), "adx": pol.get("adx"), "mom_pct": pol.get("mom_pct")},
+            "profit_lock_policy": {
+                "enabled": PROFIT_LOCK_ENABLE,
+                "lock_pct": profit_lock_pct,
+                "base_pct": PROFIT_LOCK_BASE_PCT,
+                "min_pct": PROFIT_LOCK_MIN_PCT,
+                "max_pct": PROFIT_LOCK_MAX_PCT,
+            }
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
@@ -876,7 +1015,7 @@ async def execute_trade_live(
         if not telegram_chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
         approval = await require_approval(telegram_chat_id, {
-            "symbol": sym, "side": side, "qty": qty, "leverage": leverage
+            "symbol": sym, "side": side, "qty": qty, "leverage": lev_eff
         })
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
@@ -885,7 +1024,7 @@ async def execute_trade_live(
     _cancel_old_closing_orders(sym, policy=pol)
 
     try:
-        set_leverage(sym, int(leverage))
+        set_leverage(sym, int(lev_eff))
     except Exception as e:
         log.warning("set_leverage failed: %s", e)
 
@@ -896,14 +1035,28 @@ async def execute_trade_live(
     sanity_ok = bool(entry_res.get("sanity_ok", True))
     sanity_bps = entry_res.get("sanity_bps")
 
+    profit_lock_pct = _estimate_profit_lock_pct(
+        float(pol.get("adx") or 0.0),
+        float(pol.get("atr_pct") or 0.0),
+        float(pol.get("mom_pct") or 0.0),
+    )
+
     plan: Dict[str, Any] = {
-        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
+        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": lev_eff,
         "base_price": float(base_price), "dry_run": False,
         "entry_policy": f"HYBRID_LIMIT_STOP(dyn {pol['entry_bps']:.2f}/{pol['stop_bps']:.2f}bps)+MARKET_ESCALATE(after~{pol['escalate_after_s']:.0f}s, slip≥{pol['escalate_slip_bps']:.0f}bps)",
         "gate": gate, "risk": risk, "entry_result": entry_res,
         "tp_orders": [], "sl_orders": [], "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
         "position_mode": pos_mode, "cancel_policy": {"min_age": pol["cancel_min_age"], "max_age": pol["cancel_max_age"]},
         "budget_used": float(budget or 0.0),
+        "dyn": {"atr_pct": pol.get("atr_pct"), "adx": pol.get("adx"), "mom_pct": pol.get("mom_pct")},
+        "profit_lock_policy": {
+            "enabled": PROFIT_LOCK_ENABLE,
+            "lock_pct": profit_lock_pct,
+            "base_pct": PROFIT_LOCK_BASE_PCT,
+            "min_pct": PROFIT_LOCK_MIN_PCT,
+            "max_pct": PROFIT_LOCK_MAX_PCT,
+        }
     }
 
     close_side = "SELL" if side=="BUY" else "BUY"
@@ -945,6 +1098,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
