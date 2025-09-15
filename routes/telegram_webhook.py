@@ -77,7 +77,11 @@ except Exception:
         return []
 
 # ─────────── ConfirmStore & Callback Idempotency ───────────
-from utils.trade_executor import ConfirmStore
+# תואם גם לפריסה שבה ConfirmStore יושב ב-auto_executor ולא ב-trade_executor
+try:
+    from utils.auto_executor import ConfirmStore  # חדש
+except Exception:
+    from utils.trade_executor import ConfirmStore  # תאימות ישנה
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 try:
@@ -113,184 +117,8 @@ async def _tg_disable_kb(token: str, chat_id: int, message_id: int) -> None:
     url = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
-            await cli.post(url, json={
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "reply_markup": {"inline_keyboard": []}
-            })
-    except Exception as e:
-        logger.warning(f"[tg] editMessageReplyMarkup failed: {e}")
+           
 
-# ─────────── UI Strings ───────────
-HELP_TEXT_HTML = (
-    "🤖 <b>AlgoGPT Bot</b> — Help / עזרה\n\n"
-    "• /help — עזרה\n"
-    "• /ping — פינג\n"
-    "• /status — סטטוס מערכת (WS+Executor)\n"
-    "• /positions — פוזיציות פתוחות (תמצית)\n"
-    "• /explain_on — הפעלת הסברי טריידים\n"
-    "• /explain_off — כיבוי הסברי טריידים\n"
-)
-HELP_TEXT_PLAIN = _to_plain(HELP_TEXT_HTML)
-
-def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
-    if not rows:
-        return "אין פוזיציות פתוחות."
-    lines = []
-    for p in rows[:15]:
-        try:
-            sym = (p.get("symbol") or "").upper()
-            amt = float(p.get("positionAmt") or 0.0)
-            entry = float(p.get("entryPrice") or 0.0)
-            side = "LONG" if amt > 0 else "SHORT"
-            lines.append(f"• <b>{sym}</b> {side} qty={abs(amt):.4f} @ {entry:.4f}")
-        except Exception:
-            continue
-    extra = len(rows) - len(lines)
-    if extra > 0:
-        lines.append(f"… ועוד {extra} פריטים")
-    txt = "\n".join(lines)
-    return txt if PM_ENV else _to_plain(txt)
-
-def _fmt_status() -> str:
-    ws = _ws_get_counters()
-    ex = _exec_get_counters()
-    def _n(v):
-        try:
-            return f"{float(v):.2f}"
-        except Exception:
-            return str(v)
-    ws_state = "OK" if int(ws.get("ws_up") or 0) == 1 and (ws.get("last_event_age_sec") or 0) <= int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10")) else "WARN"
-    ex_state = "OK"
-    age = ex.get("last_tick_age_sec")
-    if isinstance(age, (int, float)) and age is not None and age > int(os.getenv("EXEC_TICK_STALE_WARN_SEC","30")):
-        ex_state = "WARN"
-    if int(ex.get("timeouts_burst") or 0) >= int(os.getenv("EXEC_TIMEOUT_BURST_ALERT","3")):
-        ex_state = "WARN"
-    combined = "PAUSE" if ws_state == "WARN" and (ws.get("last_event_age_sec") or 0) > int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10")) * 3 else ("WARN" if ("WARN" in (ws_state, ex_state)) else "OK")
-    lines = [
-        f"📊 <b>Status</b> [{combined}]",
-        f"WS: up={ws.get('ws_up')} ttl={ws.get('last_event_age_sec')}s ewma={_n(ws.get('ewma_latency_ms'))}ms rc={ws.get('reconnects')}",
-        f"EXE: age={ex.get('last_tick_age_sec')}s ewma={_n(ex.get('tick_ewma_ms'))} p95={_n(ex.get('tick_p95_ms'))} tb={ex.get('timeouts_burst')} itv={ex.get('current_interval')}",
-    ]
-    txt = "\n".join(lines)
-    return txt if PM_ENV else _to_plain(txt)
-
-# ─────────── Webhook Endpoint (messages + callbacks) ───────────
-@router.post("/commands")
-async def commands(
-    req: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
-):
-    if not TG_TOKEN:
-        raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
-
-    # הגנת Secret (אופציונלי, תואם /webhook הראשי)
-    if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid telegram secret")
-
-    try:
-        update = await req.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Bad payload")
-
-    # --- callback_query: אישור/ביטול טרייד ---
-    cbq = update.get("callback_query")
-    if cbq:
-        cbq_id = cbq.get("id") or ""
-        if _cbq_seen(cbq_id):
-            return {"ok": True}
-
-        from_user = cbq.get("from") or {}
-        uid = int(from_user.get("id") or 0)
-        msg = cbq.get("message") or {}
-        chat = msg.get("chat") or {}
-        chat_id = chat.get("id")
-        message_id = msg.get("message_id")
-        data = (cbq.get("data") or "").strip()
-
-        if not chat_id or not message_id:
-            return {"ok": True}
-        if not _allowed_user(uid):
-            await _tg_answer_callback(TG_TOKEN, cbq_id, "⛔️ אין הרשאה")
-            return {"ok": True}
-
-        parts = data.split(":", 2)
-        if len(parts) != 3:
-            await _tg_answer_callback(TG_TOKEN, cbq_id, "פורמט לא תקין")
-            return {"ok": True}
-        kind, action, cid = parts
-        if kind != "CONFIRM":
-            await _tg_answer_callback(TG_TOKEN, cbq_id, "לא נתמך")
-            return {"ok": True}
-
-        rec = ConfirmStore.get(cid)
-        if not rec or rec.get("status") != "pending":
-            await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
-            await _tg_answer_callback(TG_TOKEN, cbq_id, "פג תוקף/כבר טופל")
-            return {"ok": True}
-
-        if action == "APPROVE":
-            ConfirmStore.approve(cid, approver=str(uid))
-            await _tg_answer_callback(TG_TOKEN, cbq_id, "אושר ✅")
-            await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
-            return {"ok": True}
-
-        if action == "REJECT":
-            ConfirmStore.reject(cid, approver=str(uid))
-            await _tg_answer_callback(TG_TOKEN, cbq_id, "בוטל ❌")
-            await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
-            return {"ok": True}
-
-        await _tg_answer_callback(TG_TOKEN, cbq_id, "פעולה לא מזוהה")
-        return {"ok": True}
-
-    # --- text messages (/help, /status, ...) ---
-    msg = update.get("message") or {}
-    chat = msg.get("chat") or {}
-    chat_id = chat.get("id")
-    user = msg.get("from") or {}
-    uid = int(user.get("id") or 0)
-    text = (msg.get("text") or "").strip()
-
-    if not chat_id or not uid:
-        return {"ok": True}
-    if not _allowed_user(uid):
-        await _reply(chat_id, "⛔️ אין לך הרשאה להשתמש בבוט זה.", html=False)
-        return {"ok": True}
-
-    if not text or text.lower() in ("/start", "/help"):
-        await _reply(chat_id, HELP_TEXT_HTML if PM_ENV else HELP_TEXT_PLAIN, html=bool(PM_ENV))
-        return {"ok": True}
-
-    parts = text.split()
-    cmd = parts[0].lower()
-
-    if cmd == "/ping":
-        await _reply(chat_id, f"pong ✅ {int(time.time())}", html=False)
-        return {"ok": True}
-
-    if cmd == "/status":
-        await _reply(chat_id, _fmt_status(), html=bool(PM_ENV))
-        return {"ok": True}
-
-    if cmd == "/positions":
-        rows = _get_open_positions() or []
-        await _reply(chat_id, _fmt_positions(rows), html=bool(PM_ENV))
-        return {"ok": True}
-
-    if cmd == "/explain_on":
-        set_explain_enabled(True)
-        await _reply(chat_id, "🟢 Explain-Trade: ON", html=False)
-        return {"ok": True}
-
-    if cmd == "/explain_off":
-        set_explain_enabled(False)
-        await _reply(chat_id, "⚪️ Explain-Trade: OFF", html=False)
-        return {"ok": True}
-
-    await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.", html=False)
-    return {"ok": True}
 
 
 
