@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import httpx
 from fastapi import APIRouter, Request, Header, HTTPException
@@ -12,25 +12,23 @@ from utils.trade_executor import ConfirmStore
 
 router = APIRouter()
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Env
-# ────────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Env ─────────────────────────
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
-PM_ENV         = (os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None)  # None => לא שולחים parse_mode
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+PM_ENV = os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None  # None => לא שולחים parse_mode
 
-# Admin policy
-ADMIN_ONLY = os.getenv("TELEGRAM_ADMIN_ONLY", "1").lower() in ("1","true","yes","on")
-ADMIN_IDS  = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
+ADMIN_ONLY = os.getenv("TELEGRAM_ADMIN_ONLY", "1").lower() in ("1", "true", "yes", "on")
+ADMIN_IDS = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS", "") or "").split(",") if s.strip()}
 
 def _is_admin(uid: int) -> bool:
     if not ADMIN_ONLY:
         return True
     return str(uid) in ADMIN_IDS
 
-async def _tg_send(chat_id: int, text: str):
-    if not BOT_TOKEN:
+# ─────────────────────── Telegram I/O ───────────────────────
+async def _tg_send(chat_id: int, text: str) -> None:
+    if not BOT_TOKEN or not chat_id:
         return
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
@@ -45,7 +43,7 @@ async def _tg_send(chat_id: int, text: str):
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("telegram send failed: %s", e)
 
-async def _tg_answer_callback(cbq_id: str, text: str = ""):
+async def _tg_answer_callback(cbq_id: str, text: str = "") -> None:
     if not (BOT_TOKEN and cbq_id):
         return
     try:
@@ -56,8 +54,8 @@ async def _tg_answer_callback(cbq_id: str, text: str = ""):
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("answerCallbackQuery failed: %s", e)
 
-async def _tg_disable_kb(chat_id: int, message_id: int):
-    if not BOT_TOKEN:
+async def _tg_disable_kb(chat_id: int, message_id: int) -> None:
+    if not BOT_TOKEN or not (chat_id and message_id):
         return
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
@@ -67,15 +65,16 @@ async def _tg_disable_kb(chat_id: int, message_id: int):
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("disable_kb failed: %s", e)
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Routes
-# ────────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Routes ─────────────────────────
 @router.get("/telegram/ping", include_in_schema=False)
 async def tg_ping():
     return {"ok": True, "src": "telegram", "ts_ms": int(time.time() * 1000)}
 
 @router.post("/telegram/webhook", include_in_schema=False)
-async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
     # Secret header (הגנת webhook)
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(401, "Invalid telegram secret")
@@ -85,7 +84,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     except Exception:
         raise HTTPException(400, "invalid JSON")
 
-    # callback_query — אישור/ביטול
+    # 1) callback_query – אישור/ביטול עסקאות
     cb = update.get("callback_query")
     if cb:
         cb_id = cb.get("id")
@@ -95,6 +94,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
         chat_id = int((msg.get("chat") or {}).get("id") or 0)
         message_id = int(msg.get("message_id") or 0)
         data = str(cb.get("data") or "")
+
         if not _is_admin(uid):
             await _tg_answer_callback(cb_id, "⛔️ אין הרשאה")
             return {"ok": True}
@@ -108,27 +108,37 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                     await _tg_disable_kb(chat_id, message_id)
                 await _tg_answer_callback(cb_id, "פג תוקף/כבר טופל")
                 return {"ok": True}
+
             if action == "APPROVE":
                 ConfirmStore.approve(cid, approver=str(uid))
                 await _tg_answer_callback(cb_id, "אושר ✅")
                 if chat_id and message_id:
                     await _tg_disable_kb(chat_id, message_id)
                 return {"ok": True}
+
             if action == "REJECT":
                 ConfirmStore.reject(cid, approver=str(uid))
                 await _tg_answer_callback(cb_id, "בוטל ❌")
                 if chat_id and message_id:
                     await _tg_disable_kb(chat_id, message_id)
                 return {"ok": True}
+
             await _tg_answer_callback(cb_id, "פעולה לא מזוהה")
             return {"ok": True}
 
-    # הודעות טקסט פשוטות (לשימוש מהיר: /ping)
+    # 2) הודעות טקסט פשוטות
     msg = update.get("message")
-    if msg and str(msg.get("text", "")).strip() == "/ping":
+    if msg:
+        text = str(msg.get("text", "")).strip()
         chat_id = int((msg.get("chat") or {}).get("id") or 0)
-        if chat_id:
-            await _tg_send(chat_id, "pong ✅")
-        return {"ok": True}
+        if text == "/ping":
+            if chat_id:
+                await _tg_send(chat_id, "pong ✅")
+            return {"ok": True}
+        if text == "/start":
+            if chat_id:
+                await _tg_send(chat_id, "ברוך הבא 👋 הבוט מחובר. שלח /ping לבדיקה.")
+            return {"ok": True}
 
+    # ACK שקט ברירת מחדל
     return {"ok": True}
