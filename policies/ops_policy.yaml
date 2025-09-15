@@ -56,7 +56,7 @@ CHANGE_APPROVAL:
   channels: ["telegram"]        # כרגע טלגרם
 
 APPROVAL_ENDPOINTS:
-  approve_url_base: "${PUBLIC_HOST}/ops/approve"  # חשוב: זה ה־ops-approval-web
+  approve_url_base: "${PUBLIC_HOST}/ops/approve"  # חייב להצביע ל־ops-approval-web
   hmac_env: "WEBHOOK_HMAC_SECRET"                 # שם משתנה env למפתח חתימה
   two_man_rule: false
   timeout_seconds: 600
