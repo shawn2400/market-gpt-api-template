@@ -21,14 +21,12 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
-# Digest/EOD schedulers + manual triggers
 from utils.telegram_notifier import (
     ensure_ops_schedulers_started,
     send_ops_digest_now,
     send_eod_report_now,
 )
 
-# InternalAuthMiddleware (safe import with fallback)
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
 except Exception:
@@ -36,19 +34,17 @@ except Exception:
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
 
-# ConfirmStore (נמצא לעתים ב-trade_executor ולעתים ב-auto_executor)
 try:
     from utils.trade_executor import ConfirmStore
 except Exception:
     try:
         from utils.auto_executor import ConfirmStore  # type: ignore
     except Exception:
-        class ConfirmStore:  # very-weak fallback
+        class ConfirmStore:
             @classmethod
             def flush_all(cls): ...
             flush = reset = flush_all
 
-# Optional runtime counters (WS/Executor status)
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters
 except Exception:
@@ -59,9 +55,6 @@ except Exception:
                 "last_tick_age_sec": None, "timeouts_burst": 0, "no_trade_streak": 0,
                 "current_interval": int(os.getenv("SCAN_INTERVAL","60"))}
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Logging
-# ────────────────────────────────────────────────────────────────────────────────
 def _coerce_log_level(val):
     import logging as _l
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
@@ -73,9 +66,6 @@ def _coerce_log_level(val):
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FS bootstrap
-# ────────────────────────────────────────────────────────────────────────────────
 for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -85,9 +75,6 @@ for d in ("static", "logs", "data"):
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
 
-# ────────────────────────────────────────────────────────────────────────────────
-# OpenAPI dynamic filter
-# ────────────────────────────────────────────────────────────────────────────────
 from fastapi.openapi.utils import get_openapi
 from fnmatch import fnmatch
 
@@ -100,7 +87,7 @@ def custom_openapi():
         description=app.description, routes=app.routes
     )
 
-    max_ops = int(os.getenv("OPENAPI_PUBLIC_MAX_OPS", "30"))  # 0 = unlimited
+    max_ops = int(os.getenv("OPENAPI_PUBLIC_MAX_OPS", "30"))
     hide_patterns = [p.strip() for p in os.getenv("OPENAPI_HIDE_PATTERNS", "").split(",") if p.strip()]
     include_tags = {t.strip() for t in os.getenv("OPENAPI_INCLUDE_TAGS", "").split(",") if t.strip()}
 
@@ -142,9 +129,6 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Middlewares
-# ────────────────────────────────────────────────────────────────────────────────
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -164,9 +148,6 @@ app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Auth gate
-# ────────────────────────────────────────────────────────────────────────────────
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC", "1").lower() in ("1", "true", "yes", "on")
 
 @app.middleware("http")
@@ -195,9 +176,6 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Include routers
-# ────────────────────────────────────────────────────────────────────────────────
 def _try_include(module_path: str) -> bool:
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -219,17 +197,16 @@ for module_path in (
     "routes.backtest",
     "routes.executor",
     "routes.binance_status",
-    "routes.telegram_webhook",     # יש עכשיו גם /telegram/webhook ישירות כאן
-    "routes.telegram_callbacks",   # אופציונלי (אם קיים)
-    "routes.telegram_bot",         # נתיבי bot מאחורי Bearer (/test-ping, /health, /send, /set-webhook)
+    "routes.telegram_webhook",   # כולל /telegram/webhook + /telegram/ping
+    "routes.telegram_callbacks", # אופציונלי (אם קיים)
+    "routes.telegram_bot",       # נתיבי הבוט מאחורי Bearer
     "routes.grid",
     "routes.executor_control",
-    "routes.ws_user_stream",       # optional
+    "routes.ws_user_stream",     # optional
     "routes.ai_analyze",
     "routes.ws_user_status",
     "routes.executor_status",
     "routes.provider_cryptopanic",
-    # ⬅️ חשוב! חיבור סורק/אוטופיילוט:
     "routes.scan",
     "routes.multi_scan",
     "routes.system_autopilot",
@@ -253,11 +230,8 @@ def _route_exists(path: str) -> bool:
         pass
     return False
 
-# ⚠️ ביטול fallback: לא טוענים routes.telegram_fallback יותר
+# ❌ ללא fallback — לא טוענים routes.telegram_fallback כלל
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Meta & Health
-# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {"ok": True, "status": "ok", "service": "app_full", "title": "AlgoGPT API", "version": APP_VERSION}
@@ -274,7 +248,6 @@ async def debug_health():
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
 
-# Built-in status endpoints (fallback)
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
     async def status_ws():
@@ -298,9 +271,6 @@ if not _route_exists("/status/all"):
         ex = exec_get_counters()
         return {"ok": True, "version": APP_VERSION, "ws": ws, "executor": ex, "binance_ping_ok": ping_ok}
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Price
-# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"
@@ -347,9 +317,6 @@ async def readyz():
 
     return {"ok": (err is None), "error": err, "details": details}
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Kill-Switch /flush
-# ────────────────────────────────────────────────────────────────────────────────
 @app.post("/flush")
 async def flush_kill_switch():
     done = False
@@ -364,9 +331,6 @@ async def flush_kill_switch():
             logger.warning({"event": "flush_failed", "err": str(e)})
     return {"ok": True, "flushed": done}
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Auto setWebhook + WS + Schedulers
-# ────────────────────────────────────────────────────────────────────────────────
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -416,12 +380,10 @@ async def _startup_user_stream():
     except Exception as e:
         logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
 
-# Start Digest/EOD schedulers on startup
 @app.on_event("startup")
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
-# (Optional) Manual triggers for testing (protected by auth)
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
     await send_ops_digest_now(hours)
@@ -432,9 +394,6 @@ async def ops_eod_now():
     await send_eod_report_now()
     return {"ok": True, "sent": True}
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Main
-# ────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
