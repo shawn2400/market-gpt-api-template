@@ -56,9 +56,9 @@ CHANGE_APPROVAL:
   channels: ["telegram"]        # כרגע טלגרם
 
 APPROVAL_ENDPOINTS:
-  approve_url_base: "${PRIMARY_PUBLIC_HOST}/ops/approve"  # *** חשוב: זה ה-ops-approval-web ***
-  hmac_env: "WEBHOOK_HMAC_SECRET"                         # שם משתנה env למפתח חתימה
-  two_man_rule: true
+  approve_url_base: "${PUBLIC_HOST}/ops/approve"  # חשוב: זה ה־ops-approval-web
+  hmac_env: "WEBHOOK_HMAC_SECRET"                 # שם משתנה env למפתח חתימה
+  two_man_rule: false
   timeout_seconds: 600
   on_mismatch: "hold_and_alert"
   on_timeout: "cancel_change"
@@ -221,6 +221,8 @@ STATUS_WATCH: { binance: { enabled: true, maintenance_hold: true } }
 AUDIT: { hash_chain: true, sign_release: true }
 
 DATA_GUARD: { mask_secrets_pii: true }
+
+
 
 
 
