@@ -176,6 +176,11 @@ def _fmt_status() -> str:
     txt = "\n".join(lines)
     return txt if PM_ENV else _to_plain(txt)
 
+# ─────────── Simple ping (לא מאובטח, לא דורש TOKEN) ───────────
+@router.get("/ping")
+async def ping() -> Dict[str, Any]:
+    return {"ok": True, "ts": int(time.time())}
+
 # ─────────── Webhook Endpoint (messages + callbacks) ───────────
 @router.post("/commands")
 async def commands(
