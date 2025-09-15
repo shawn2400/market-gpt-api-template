@@ -7,10 +7,11 @@ import httpx
 
 from utils.binance_client import (
     get_price, futures_mark_price, set_leverage, futures_create_order,
-    get_symbol_filters, get_all_orders, futures_cancel_order, get_futures_client
+    get_symbol_filters, get_all_orders, futures_cancel_order, get_futures_client,
+    futures_balance,  # ← נשתמש ליתרה עבור Budget דינמי
 )
 
-# ✅ Dynamic budget (גלובלי) — נופל ל-MAX_TRADE_BUDGET אם כבוי/חסר
+# ✅ Dynamic budget hook (fallback פנימי אם budget.py לא קיים)
 try:
     from utils.budget import get_budget_usdt  # דינמי אם DYNAMIC_BUDGET_ENABLE=1
 except Exception:
@@ -49,7 +50,9 @@ SL_LIMIT_OFFSET_BPS   = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS   = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
 # Gate/Quality
-MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "8.5"))
+QUALITY_DEFAULT       = float(os.getenv("QUALITY_DEFAULT", "6"))
+MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "7"))
+MIN_QUALITY_FALLBACK  = float(os.getenv("MIN_QUALITY_FALLBACK", "6"))
 MAX_ATR_PCT           = float(os.getenv("MAX_ATR_PCT", "2.5"))
 MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 
@@ -71,8 +74,33 @@ LADDER_TP_KIND            = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").up
 LADDER_TP_DEFAULT_PCTS    = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 LADDER_TP_DEFAULT_SPLITS  = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
 LADDER_SL_ENABLE          = os.getenv("LADDER_SL_ENABLE", "1") in ("1","true","yes","on")  # ← ON by default
-LADDER_SL_DEFAULT_PCTS    = os.getenv("LADDER_SL_DEFAULT_PCTS", "0.8").strip()             # ← default 0.8% כדי שתמיד יהיה SL
+LADDER_SL_DEFAULT_PCTS    = os.getenv("LADDER_SL_DEFAULT_PCTS", "0.8").strip()             # ← default 0.8%
 TP_LADDER_COOLDOWN_SEC    = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
+
+# Dynamic SL (initial arming) + trail/breath (ניהול בזמן אמת ב-trade_manager)
+SL_DYNAMIC_ENABLE     = os.getenv("SL_DYNAMIC_ENABLE", "1").lower() in ("1","true","yes","on")
+SL_ATR_MULT           = float(os.getenv("SL_ATR_MULT", "0.6"))
+SL_TRAIL_ENABLE       = os.getenv("SL_TRAIL_ENABLE", "1").lower() in ("1","true","yes","on")
+SL_BREATH_ALLOW       = os.getenv("SL_BREATH_ALLOW", "1").lower() in ("1","true","yes","on")
+
+# Dynamic Budget & Leverage
+BUDGET_DYNAMIC_ENABLE     = os.getenv("BUDGET_DYNAMIC_ENABLE", "1").lower() in ("1","true","yes","on")
+BUDGET_USE_BALANCE        = os.getenv("BUDGET_USE_BALANCE", "1").lower() in ("1","true","yes","on")
+BUDGET_DYNAMIC_RISK_PCTS  = os.getenv("BUDGET_DYNAMIC_RISK_PCTS", "1.5,3.0,5.0")  # quality 7 / 8.5 / 9.5
+BUDGET_DYNAMIC_FORCE      = os.getenv("BUDGET_DYNAMIC_FORCE", "0").lower() in ("1","true","yes","on")  # אם True יתעלם מ-budget שהגיע בפונקציה
+
+DYN_LEVERAGE_ENABLE       = os.getenv("DYN_LEVERAGE_ENABLE", "1").lower() in ("1","true","yes","on")
+DYN_LEVERAGE_FORCE        = os.getenv("DYN_LEVERAGE_FORCE", "0").lower() in ("1","true","yes","on")
+MIN_LEVERAGE              = int(float(os.getenv("MIN_LEVERAGE", "5")))
+LEV_HARD_CAP              = int(float(os.getenv("LEV_HARD_CAP", "50")))
+try:
+    LEV_ADX_MAP_JSON      = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
+except Exception:
+    LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
+try:
+    LEVERAGE_SYMBOL_CAPS  = json.loads(os.getenv("LEVERAGE_SYMBOL_CAPS", '{"BTCUSDT":15,"1000PEPEUSDT":8}'))
+except Exception:
+    LEVERAGE_SYMBOL_CAPS  = {"BTCUSDT":15,"1000PEPEUSDT":8}
 
 # Idempotency
 IDEMPOTENCY_TTL_SEC   = int(os.getenv("IDEMPOTENCY_TTL_SEC", "15"))
@@ -146,6 +174,182 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
 
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
+
+# ─────────── Light indicators (no pandas) ───────────
+def _ema(vals: List[float], period: int) -> List[float]:
+    k = 2 / (period + 1); ema=[]; s=None
+    for v in vals:
+        s = v if s is None else (v*k + s*(1-k)); ema.append(s)
+    return ema
+
+def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
+    trs=[]; prev=None
+    for r in kl:
+        h=float(r[2]); l=float(r[3]); c=float(r[4])
+        tr = (h-l) if prev is None else max(h-l, abs(h-prev), abs(l-prev))
+        trs.append(tr); prev=c
+    if len(trs) < period: return trs[-1] if trs else 0.0
+    alpha = 1.0/period
+    s=None
+    for v in trs:
+        s = v if s is None else (alpha*v+(1-alpha)*s)
+    return float(s or 0.0)
+
+def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
+    """חישוב ADX קליל ללא pandas."""
+    if len(kl) < period + 2:
+        return 0.0
+    plus_dm, minus_dm, tr_list = [], [], []
+    prev_h, prev_l, prev_c = None, None, None
+    for r in kl:
+        h, l, c = float(r[2]), float(r[3]), float(r[4])
+        if prev_h is None:
+            prev_h, prev_l, prev_c = h, l, c
+            continue
+        up_move   = h - prev_h
+        down_move = prev_l - l
+        pdm = up_move if (up_move > down_move and up_move > 0) else 0.0
+        mdm = down_move if (down_move > up_move and down_move > 0) else 0.0
+        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        plus_dm.append(pdm); minus_dm.append(mdm); tr_list.append(tr)
+        prev_h, prev_l, prev_c = h, l, c
+    if len(tr_list) < period: return 0.0
+
+    def rma(xs: List[float], p: int) -> List[float]:
+        alpha = 1/p
+        out=[]; s=None
+        for x in xs:
+            s = x if s is None else (alpha*x + (1-alpha)*s)
+            out.append(s)
+        return out
+
+    tr_rma = rma(tr_list, period)
+    pdm_rma = rma(plus_dm, period)
+    mdm_rma = rma(minus_dm, period)
+    di_plus, di_minus, dx = [], [], []
+    for t, p, m in zip(tr_rma, pdm_rma, mdm_rma):
+        if t <= 0: di_p, di_m = 0.0, 0.0
+        else:
+            di_p = (p / t) * 100.0
+            di_m = (m / t) * 100.0
+        di_plus.append(di_p); di_minus.append(di_m)
+        denom = (di_p + di_m)
+        dx.append(0.0 if denom == 0 else abs(di_p - di_m) / denom * 100.0)
+    if not dx: return 0.0
+    adx = rma(dx, period)[-1]
+    return float(adx or 0.0)
+
+def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
+    cli = get_futures_client()
+    data = cli.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(50, limit)))
+    return data or []
+
+def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
+    try:
+        kl = _fetch_klines_raw(symbol, "1m", 60)
+        closes = [float(r[4]) for r in kl]
+        vols   = [float(r[5]) for r in kl]
+        if len(closes) < 30:
+            return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["insufficient_data"], "metrics": {}}
+
+        ema21 = _ema(closes, 21)[-1]
+        ema50 = _ema(closes, 50)[-1]
+        last  = closes[-1]
+        atr   = _atr_from_klines(kl, 14)
+        atr_pct = (atr / last) * 100.0 if last > 0 else 999.0
+        mom = (last / closes[-4] - 1.0) * 100.0
+
+        trend_ok = (ema21 > ema50 and last > ema21) if side == "BUY" else (ema21 < ema50 and last < ema21)
+        mom_ok   = (mom > 0.05) if side == "BUY" else (mom < -0.05)
+        vol_ok   = True if MIN_VOLUME <= 0 else (vols[-1] >= MIN_VOLUME)
+        atr_ok   = (atr_pct <= MAX_ATR_PCT)
+
+        score = 0.0
+        score += 4.0 if trend_ok else 0.0
+        score += 3.0 if mom_ok else 0.0
+        score += 2.0 if atr_ok else 0.0
+        score += 1.0 if vol_ok else 0.0
+        score = max(score, MIN_QUALITY_FALLBACK, QUALITY_DEFAULT)
+
+        reasons=[]
+        if not trend_ok: reasons.append("trend_mismatch")
+        if not mom_ok:   reasons.append("weak_momentum")
+        if not atr_ok:   reasons.append("atr_too_high")
+        if not vol_ok:   reasons.append("low_volume")
+
+        return {"enter_ok": score >= MIN_QUALITY_SCORE, "score": round(score, 2), "reasons": reasons,
+                "metrics": {"ema21": ema21, "ema50": ema50, "atr_pct": atr_pct, "mom_pct": mom, "vol1m": vols[-1]}}
+    except Exception as e:
+        log.warning("quality gate failed: %s", e)
+        return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["gate_error"], "metrics": {}}
+
+# ─────────── Budget & Leverage helpers ───────────
+def _parse_pct_csv(s: str) -> List[float]:
+    out=[]
+    for x in (s or "").split(","):
+        x=x.strip()
+        if not x: continue
+        try: out.append(float(x))
+        except Exception: continue
+    return out
+
+def _balance_usdt() -> float:
+    try:
+        bal = futures_balance()
+        # חפש USDT
+        for r in bal or []:
+            if str(r.get("asset")).upper() == "USDT":
+                # availableBalance עדיפה; fallback ל-balance
+                av = r.get("availableBalance") or r.get("withdrawAvailable") or r.get("balance")
+                return float(av)
+    except Exception as e:
+        log.warning("balance fetch failed: %s", e)
+    return 0.0
+
+def _choose_budget_dynamic(quality: Optional[float], price: float) -> float:
+    if not BUDGET_DYNAMIC_ENABLE:
+        # חזרה ל-hook החיצוני/ENV MAX_TRADE_BUDGET
+        return get_budget_usdt(quality=quality, price=price)
+    # מפות אחוזים לפי Quality (7 / 8.5 / 9.5)
+    pcts = _parse_pct_csv(BUDGET_DYNAMIC_RISK_PCTS) or [1.5, 3.0, 5.0]
+    pcts = (pcts + [pcts[-1]]*3)[:3]
+    q = float(quality or QUALITY_DEFAULT)
+    if q >= 9.5: pct = pcts[2]
+    elif q >= 8.5: pct = pcts[1]
+    elif q >= 7.0: pct = pcts[0]
+    else:          pct = min(pcts[0], 1.0)
+
+    if BUDGET_USE_BALANCE:
+        bal = _balance_usdt()
+        if bal <= 0:
+            # אם אין גישה ליתרה, ניפול ל-hook
+            return get_budget_usdt(quality=quality, price=price)
+        alloc = bal * (pct / 100.0)
+        # אל תיפול מתחת למינימום notional
+        mn = _min_notional("BTCUSDT")  # קירוב מינימום נפוץ; בכל מקרה _ensure_min_notional יתקן בכמות
+        return max(alloc, mn)
+    # ללא יתרה – חזור ל-hook
+    return get_budget_usdt(quality=quality, price=price)
+
+def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
+    lev = int(requested)
+    if not DYN_LEVERAGE_ENABLE and not DYN_LEVERAGE_FORCE:
+        return max(MIN_LEVERAGE, min(LEV_HARD_CAP, lev))
+    # ממפה לפי LEV_ADX_MAP_JSON
+    try:
+        pairs = sorted([(float(k), int(v)) for k, v in LEV_ADX_MAP_JSON.items()], key=lambda x: x[0])
+    except Exception:
+        pairs = [(0.0, 7), (20.0, 9), (25.0, 12), (30.0, 15)]
+    dyn = MIN_LEVERAGE
+    for thr, l in pairs:
+        if adx >= thr: dyn = max(dyn, l)
+    # capping לפי סימבול
+    cap_by_symbol = int(LEVERAGE_SYMBOL_CAPS.get(symbol.upper(), LEV_HARD_CAP))
+    dyn = max(MIN_LEVERAGE, min(dyn, cap_by_symbol, LEV_HARD_CAP))
+    if DYN_LEVERAGE_FORCE:
+        return dyn
+    # אם לא force — קח המקסימום בין המבוקש לדינמי (אבל תכבד caps)
+    return max(MIN_LEVERAGE, min(max(lev, dyn), cap_by_symbol, LEV_HARD_CAP))
 
 # ─────────── Idempotency (Redis/memory) ───────────
 class _Idem:
@@ -273,10 +477,14 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
     title = "אישור טרייד"
+    # הוסף תקציב/ציון ל-summary
+    q = payload.get("quality")
+    bud = payload.get("budget")
+    lev = payload.get("leverage")
     summary = (
         f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
-        f"qty={payload.get('qty')} lev={payload.get('leverage')}<br/>"
-        f"כניסה: HYBRID (Limit±{ENTRY_BAND_BPS}bps / Stop±{STOP_BAND_BPS}bps)"
+        f"qty={payload.get('qty')} lev={lev} budget≈{bud} USDT<br/>"
+        f"Quality≈{q} | כניסה: HYBRID (Limit±{ENTRY_BAND_BPS}bps / Stop±{STOP_BAND_BPS}bps)"
     )
     await send_confirm_request(chat_id, title, summary, cid)
     t0 = time.time()
@@ -286,69 +494,6 @@ async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, A
             return {"cid": cid, "status": rec["status"]}
         await asyncio.sleep(0.5)
     return {"cid": cid, "status": "expired"}
-
-# ─────────── Light indicators (no pandas) ───────────
-def _ema(vals: List[float], period: int) -> List[float]:
-    k = 2 / (period + 1); ema=[]; s=None
-    for v in vals:
-        s = v if s is None else (v*k + s*(1-k)); ema.append(s)
-    return ema
-
-def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
-    trs=[]; prev=None
-    for r in kl:
-        h=float(r[2]); l=float(r[3]); c=float(r[4])
-        tr = (h-l) if prev is None else max(h-l, abs(h-prev), abs(l-prev))
-        trs.append(tr); prev=c
-    if len(trs) < period: return trs[-1] if trs else 0.0
-    alpha = 1.0/period
-    s=None
-    for v in trs:
-        s = v if s is None else (alpha*v+(1-alpha)*s)
-    return float(s or 0.0)
-
-def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
-    cli = get_futures_client()
-    data = cli.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(10, limit)))
-    return data or []
-
-def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
-    try:
-        kl = _fetch_klines_raw(symbol, "1m", 60)
-        closes = [float(r[4]) for r in kl]
-        vols   = [float(r[5]) for r in kl]
-        if len(closes) < 30:
-            return {"enter_ok": False, "score": 0.0, "reasons": ["insufficient_data"]}
-
-        ema21 = _ema(closes, 21)[-1]
-        ema50 = _ema(closes, 50)[-1]
-        last  = closes[-1]
-        atr   = _atr_from_klines(kl, 14)
-        atr_pct = (atr / last) * 100.0 if last > 0 else 999.0
-        mom = (last / closes[-4] - 1.0) * 100.0
-
-        trend_ok = (ema21 > ema50 and last > ema21) if side == "BUY" else (ema21 < ema50 and last < ema21)
-        mom_ok   = (mom > 0.05) if side == "BUY" else (mom < -0.05)
-        vol_ok   = True if MIN_VOLUME <= 0 else (vols[-1] >= MIN_VOLUME)
-        atr_ok   = (atr_pct <= MAX_ATR_PCT)
-
-        score = 0.0
-        score += 4.0 if trend_ok else 0.0
-        score += 3.0 if mom_ok else 0.0
-        score += 2.0 if atr_ok else 0.0
-        score += 1.0 if vol_ok else 0.0
-
-        reasons=[]
-        if not trend_ok: reasons.append("trend_mismatch")
-        if not mom_ok:   reasons.append("weak_momentum")
-        if not atr_ok:   reasons.append("atr_too_high")
-        if not vol_ok:   reasons.append("low_volume")
-
-        return {"enter_ok": score >= MIN_QUALITY_SCORE, "score": round(score, 2), "reasons": reasons,
-                "metrics": {"ema21": ema21, "ema50": ema50, "atr_pct": atr_pct, "mom_pct": mom, "vol1m": vols[-1]}}
-    except Exception as e:
-        log.warning("quality gate failed: %s", e)
-        return {"enter_ok": False, "score": 0.0, "reasons": ["gate_error"]}
 
 # ─────────── Cancel old closing orders (TP/SL) ───────────
 def _cancel_old_closing_orders(symbol: str) -> int:
@@ -525,41 +670,47 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             t0 = time.time()
         await asyncio.sleep(1.0)
 
-# ─────────── Helpers ───────────
-def _has_order_id(resp: Dict[str, Any]) -> bool:
-    try:
-        return bool(resp and resp.get("orderId"))
-    except Exception:
-        return False
-
-def _q_or_none(sym: str, v: Optional[float]) -> Optional[str]:
-    if v is None: return None
-    return _q_price(sym, float(v))[0]
-
-def _qty_or_none(sym: str, v: Optional[float]) -> Optional[str]:
-    if v is None: return None
-    return _q_qty(sym, float(v))[0]
-
-def _opposite_side(side: str) -> str:
-    return "SELL" if side.upper() == "BUY" else "BUY"
-
-def _now_ms() -> int:
-    return int(time.time()*1000)
-
-def _safe_close_position(sym: str, side: str, qty: float) -> Dict[str, Any]:
-    """Try to immediately flat the just-opened position if we failed to arm TP/SL."""
-    close_side = _opposite_side(side)
-    try:
-        resp = futures_create_order(
-            symbol=sym, side=close_side, type="MARKET",
-            reduceOnly=True, timeInForce="GTC",
-            quantity=_q_qty(sym, qty)[0]
-        )
-        return {"ok": True, "response": resp}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
 # ─────────── Public API ───────────
+def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[float]]]) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
+    """
+    מחזיר (tp_targets, tp_splits, sl_targets) בהתבסס על ENV ו/או SL דינמי (ATR).
+    """
+    tp_targets: Optional[List[float]] = None
+    tp_splits : Optional[List[float]] = None
+    sl_targets: Optional[List[float]] = None
+
+    if LADDER_TP_ENABLE:
+        try:
+            tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
+            sign = +1 if side=="BUY" else -1
+            tp_targets = [anchor * (1.0 + sign * p/100.0) for p in tps]
+            tp_splits = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_SPLITS)] or None
+        except Exception:
+            pass
+
+    # SL דינמי ראשוני: ATR × SL_ATR_MULT
+    if SL_DYNAMIC_ENABLE and kl:
+        try:
+            atr = _atr_from_klines(kl, 14)
+            sign = -1 if side=="BUY" else +1
+            # יעד SL יחיד מבוסס ATR; ניהול "נשימה" וטריילינג בזמן אמת יעשה ב-trade_manager
+            sl_p = anchor * (1.0 + sign * ((atr / max(anchor, 1e-9)) * SL_ATR_MULT * 100.0) / 100.0)
+            sl_targets = [sl_p]
+        except Exception:
+            sl_targets = None
+
+    # אם אין SL דינמי/נכשל – נשתמש בברירת מחדל LADDER_SL_DEFAULT_PCTS
+    if (not sl_targets) and LADDER_SL_ENABLE:
+        try:
+            src = LADDER_SL_DEFAULT_PCTS if LADDER_SL_DEFAULT_PCTS else "0.8"
+            slps = [float(x) for x in _parse_csv_floats(src)]
+            sign = -1 if side=="BUY" else +1
+            sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
+        except Exception:
+            sl_targets = None
+
+    return tp_targets, tp_splits, sl_targets
+
 async def execute_trade_live(
     symbol: str, side: str, *,
     budget: Optional[float] = None, leverage: int = 5, dry_run: bool = True,
@@ -587,58 +738,51 @@ async def execute_trade_live(
     if pp_bps >= PERCENT_PRICE_GUARD_BPS:
         return {"ok": False, "reason": "percent_price_guard", "bps": pp_bps, "mk": mk, "ref": ref_for_guard}
 
-    # איכות/ATR — לצורך תקציב דינמי
+    # איכות/ATR/ADX — לצורך תקציב/מינוף דינמיים
     gate = _quality_gate(sym, side)
     try:
-        score_for_budget: Optional[float] = float(gate.get("score")) if gate.get("score") is not None else None
+        score_for_budget: Optional[float] = float(gate.get("score")) if gate.get("score") is not None else QUALITY_DEFAULT
     except Exception:
-        score_for_budget = None
+        score_for_budget = QUALITY_DEFAULT
 
     try:
         kl = _fetch_klines_raw(sym, "1m", 60)
         atr_for_budget: Optional[float] = _atr_from_klines(kl, 14) if kl else None
+        adx_for_lev: float = _adx_from_klines(kl, 14) if kl else 0.0
     except Exception:
         atr_for_budget = None
+        adx_for_lev = 0.0
+        kl = None
+
+    # מינוף דינמי
+    dyn_leverage = _choose_leverage(sym, adx_for_lev, leverage)
 
     # תקציב
-    if budget is None or float(budget) <= 0:
-        budget = get_budget_usdt(symbol=sym, quality=score_for_budget, atr=atr_for_budget, price=float(base_price))
-
+    if BUDGET_DYNAMIC_FORCE or (budget is None or float(budget) <= 0):
+        budget = _choose_budget_dynamic(score_for_budget, float(base_price))
     # חישוב כמות
     qty_calc_error = None
     qty: Optional[float] = None
     try:
-        qty = _calc_qty(sym, float(base_price), budget, leverage, quantity)
+        qty = _calc_qty(sym, float(base_price), budget, dyn_leverage, quantity)
     except Exception as e:
         qty_calc_error = str(e)
 
     # ✅ Risk preview
-    risk = pre_trade_risk_check(sym, side, leverage, entry)
+    risk = pre_trade_risk_check(sym, side, dyn_leverage, entry)
 
     # Idempotency Shield
-    idem_payload = {"sym": sym, "side": side, "lev": int(leverage),
+    idem_payload = {"sym": sym, "side": side, "lev": int(dyn_leverage),
                     "qty": round(float(qty or 0), 10), "dry": bool(dry_run),
                     "entry_bucket": round(ref_for_guard, 5)}
     if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
         return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
 
-    # הרחבת TP/SL מה-ENV אם לא הגיעו
-    if tp is None and not tp_targets and LADDER_TP_ENABLE:
-        try:
-            tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
-            anchor = float(entry or base_price); sign = +1 if side=="BUY" else -1
-            tp_targets = [anchor * (1.0 + sign * p/100.0) for p in tps]
-            tp_splits = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_SPLITS)] or None
-        except Exception:
-            pass
-    if sl is None and not sl_targets and LADDER_SL_ENABLE:
-        try:
-            slps_src = LADDER_SL_DEFAULT_PCTS if LADDER_SL_DEFAULT_PCTS else "0.8"
-            slps = [float(x) for x in _parse_csv_floats(slps_src)]
-            anchor = float(entry or base_price); sign = -1 if side=="BUY" else +1
-            sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
-        except Exception:
-            pass
+    # הרחבת TP/SL (או דינמי ATR) אם לא סופקו
+    if (tp is None and not tp_targets) or (sl is None and not sl_targets):
+        tps, tps_splits, sls = _compute_tp_sl_targets(side, float(entry or base_price), kl)
+        if tp is None and not tp_targets: tp_targets, tp_splits = tps, tps_splits
+        if sl is None and not sl_targets: sl_targets = sls
 
     # 🔒 חובה TP + SL לפני המשך (אלא אם REQUIRE_TP_AND_SL=0)
     if REQUIRE_TP_AND_SL:
@@ -650,13 +794,14 @@ async def execute_trade_live(
     # DRY-RUN: מחזיר תוכנית בלבד
     if dry_run:
         plan: Dict[str, Any] = {
-            "ok": True, "symbol": sym, "side": side, "leverage": leverage,
+            "ok": True, "symbol": sym, "side": side, "leverage": dyn_leverage,
             "base_price": float(base_price), "dry_run": True,
             "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
             "gate": gate, "risk": risk, "alloc_ok": qty is not None, "alloc_error": qty_calc_error,
             "guards": {"percent_price_bps": pp_bps, "slippage_guard_bps": SLIPPAGE_GUARD_BPS},
             "position_side": position_side, "reduce_only": reduce_only,
-            "budget_used": float(budget or 0.0),
+            "budget_used": float(budget or 0.0), "quality": score_for_budget,
+            "adx": adx_for_lev,
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
@@ -681,9 +826,9 @@ async def execute_trade_live(
         chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
         if not chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
-        # שלב אישור בהתאם לדגל הישן (ברירת מחדל: אחרי Gate)
+        payload = {"symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage, "quality": score_for_budget, "budget": float(budget or 0.0)}
         if APPROVE_BEFORE_GATE:
-            approval = await require_approval(chat_id, {"symbol": sym, "side": side, "qty": qty, "leverage": leverage})
+            approval = await require_approval(chat_id, payload)
             if approval.get("status") != "approved":
                 return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
@@ -691,12 +836,13 @@ async def execute_trade_live(
     if FEAT_QUALITY_ENFORCE and not gate.get("enter_ok"):
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
 
-    # אישור אחרי Gate (ברירת מחדל)
+    # אישור אחרי Gate (אם לא ביצענו קודם)
     if must_approve and not APPROVE_BEFORE_GATE:
         chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
         if not chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
-        approval = await require_approval(chat_id, {"symbol": sym, "side": side, "qty": qty, "leverage": leverage})
+        payload = {"symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage, "quality": score_for_budget, "budget": float(budget or 0.0)}
+        approval = await require_approval(chat_id, payload)
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
@@ -704,7 +850,7 @@ async def execute_trade_live(
     _cancel_old_closing_orders(sym)
 
     try:
-        set_leverage(sym, int(leverage))
+        set_leverage(sym, int(dyn_leverage))
     except Exception as e:
         log.warning("set_leverage failed: %s", e)
 
@@ -716,17 +862,18 @@ async def execute_trade_live(
     sanity_bps = entry_res.get("sanity_bps")
 
     plan: Dict[str, Any] = {
-        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": leverage,
+        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage,
         "base_price": float(base_price), "dry_run": False,
         "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
         "gate": gate, "risk": risk, "entry_result": entry_res,
         "tp_orders": [], "sl_orders": [],
         "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
         "position_side": position_side, "reduce_only": reduce_only,
-        "budget_used": float(budget or 0.0),
+        "budget_used": float(budget or 0.0), "quality": score_for_budget,
+        "adx": adx_for_lev,
     }
 
-    close_side = _opposite_side(side)
+    close_side = "SELL" if side == "BUY" else "BUY"
     ladders = _build_ladders(sym, side, qty,
                              ([tp] if tp is not None else tp_targets), tp_splits,
                              ([sl] if sl is not None else sl_targets), sl_splits)
@@ -758,9 +905,9 @@ async def execute_trade_live(
                 resp = futures_create_order(**args)
                 o["response"] = resp
                 if typ.startswith("TAKE_PROFIT"):
-                    tp_success = tp_success or _has_order_id(resp)
+                    tp_success = tp_success or bool(resp.get("orderId"))
                 if typ.startswith("STOP"):
-                    sl_success = sl_success or _has_order_id(resp)
+                    sl_success = sl_success or bool(resp.get("orderId"))
             except Exception as e:
                 o["response"] = {"ok": False, "error": str(e)}
 
@@ -773,10 +920,24 @@ async def execute_trade_live(
             "rolled_back": True,
             "rollback": rb,
         })
-        # נסמן שניסינו, ונחזיר את התוכנית כולל שגיאות ההצבה
         return plan
 
     return plan
+
+# ─────────── Helpers (close-on-failure) ───────────
+def _safe_close_position(sym: str, side: str, qty: float) -> Dict[str, Any]:
+    """Try to immediately flat the just-opened position if we failed to arm TP/SL."""
+    close_side = "SELL" if side.upper() == "BUY" else "BUY"
+    try:
+        resp = futures_create_order(
+            symbol=sym, side=close_side, type="MARKET",
+            reduceOnly=True, timeInForce="GTC",
+            quantity=_q_qty(sym, qty)[0]
+        )
+        return {"ok": True, "response": resp}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 
 
