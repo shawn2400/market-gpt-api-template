@@ -34,14 +34,14 @@ log = logging.getLogger("algogpt.trade_executor")
 # ─────────── Policy & Defaults (ENV) ───────────
 ALLOW_MARKET_ENTRY    = os.getenv("ALLOW_MARKET_ENTRY", "1").lower() in ("1","true","yes","on")
 
-ENTRY_BAND_BPS        = float(os.getenv("ENTRY_BAND_BPS", "8.5"))
-STOP_BAND_BPS         = float(os.getenv("STOP_BAND_BPS",  "10"))
+ENTRY_BAND_BPS        = float(os.getenv("ENTRY_BAND_BPS", "120"))   # שודרג לברירת מחדל 120bps כדי להתאים ללוגים שלך
+STOP_BAND_BPS         = float(os.getenv("STOP_BAND_BPS",  "20"))
 ESCALATE_AFTER_S      = float(os.getenv("ESCALATE_AFTER_SEC", "10"))
 ESCALATE_SLIP_BPS     = float(os.getenv("ESCALATE_SLIPPAGE_BPS", "15"))
 
 # Guards
 PERCENT_PRICE_GUARD_BPS = float(os.getenv("PERCENT_PRICE_GUARD_BPS", "45"))
-SLIPPAGE_GUARD_BPS      = float(os.getenv("SLIPPAGE_GUARD_BPS", "35"))
+SLIPPAGE_GUARD_BPS      = float(os.getenv("SLIPPAGE_GUARD_BPS", "80"))  # תואם ללוגים שהצגת
 POST_FILL_SANITY_BPS    = float(os.getenv("POST_FILL_SANITY_BPS", "40"))
 
 # Limit offsets (כשמשתמשים ב-LIMIT ל-TP/SL)
@@ -55,11 +55,19 @@ MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 
 # Env flags
 FEAT_QUALITY_ENFORCE  = os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on")
-APPROVE_BEFORE_GATE   = os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")
+APPROVE_BEFORE_GATE   = os.getenv("APPROVE_BEFORE_GATE", "1").lower() in ("1","true","yes","on")  # ← ברירת מחדל חדשה
+REQUIRE_APPROVAL      = os.getenv("REQUIRE_APPROVAL", "1").lower() in ("1","true","yes","on")     # ← תמיד לבקש אישור
+REQUIRE_SL_TP         = os.getenv("REQUIRE_SL_TP", "1").lower() in ("1","true","yes","on")       # ← כניסה רק אם יש גם SL וגם TP
 
 DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
+
+# SL/TP fallbacks
+DEFAULT_SL_ATR_MULT   = float(os.getenv("DEFAULT_SL_ATR_MULT", "0.8"))  # SL ≈ ATR*0.8
+DEFAULT_SL_PCT        = float(os.getenv("DEFAULT_SL_PCT", "0.8"))       # SL ≈ 0.8% אם אין ATR
+TP_FALLBACK_PCT       = float(os.getenv("TP_FALLBACK_PCT", "1.2"))      # TP ≈ +1.2% אם אין אחר
+NOTIFY_ON_TRADE       = os.getenv("NOTIFY_ON_TRADE", "1").lower() in ("1","true","yes","on")
 
 # Ladder config
 LADDER_TP_ENABLE      = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
@@ -83,7 +91,7 @@ BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE            = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 CONFIRM_TTL_SEC     = int(os.getenv("CONFIRM_TTL_SEC", "180"))
 TELEGRAM_CHAT_ID    = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
-TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "").strip()  # "" (ברירת מחדל), או "HTML"/"MarkdownV2"
+TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "").strip()  # "" = ללא parse_mode
 
 # Redis (אופציונלי) — Idempotency/ConfirmStore
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -229,6 +237,19 @@ class ConfirmStore:
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
 
+# ─────────── Telegram helpers ───────────
+async def _tg_send(chat_id: int, text: str) -> None:
+    if not (BOT_TOKEN and chat_id):
+        return
+    payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if TELEGRAM_PARSE_MODE:
+        payload["parse_mode"] = TELEGRAM_PARSE_MODE
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/sendMessage", json=payload)
+    except Exception as e:
+        log.warning("telegram send failed: %s", e)
+
 async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid: str) -> Dict[str, Any]:
     if not BOT_TOKEN:
         return {"ok": False, "error": "BOT_TOKEN missing"}
@@ -237,13 +258,10 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
         {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
     ]]}
 
-    # בונים טקסט שמתאים גם בלי parse_mode
-    summary_plain = (
-        summary_html
-        .replace("<br/>", "\n")
-        .replace("<b>", "").replace("</b>", "")
-        .replace("<code>", "").replace("</code>", "")
-    )
+    # טקסט שמתאים גם בלי parse_mode
+    summary_plain = (summary_html.replace("<br/>", "\n")
+                                .replace("<b>", "").replace("</b>", "")
+                                .replace("<code>", "").replace("</code>", ""))
     if TELEGRAM_PARSE_MODE:
         text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
     else:
@@ -272,7 +290,6 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
     title = "אישור טרייד"
-    # HTML פשוט; בלי parse_mode יומר לטקסט רגיל בפונקציה למעלה
     summary = (
         f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
         f"qty={payload.get('qty')} lev={payload.get('leverage')}<br/>"
@@ -458,8 +475,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     if slip_bps_now >= SLIPPAGE_GUARD_BPS:
         return {"ok": False, "reason": "slippage_guard", "slip_bps": slip_bps_now}
 
-    limit_str, limit_p = _q_price(sym, limit_price)
-    stop_str , stop_p  = _q_price(sym, stop_price)
+    limit_str, limit_p = _q_price(sym, float(limit_price))
+    stop_str , stop_p  = _q_price(sym, float(stop_price))
     qty_str  , _       = _q_qty(sym, qty)
 
     lim = futures_create_order(symbol=sym, side=side, type="LIMIT",
@@ -539,6 +556,10 @@ async def execute_trade_live(
     position_side: str = "BOTH", reduce_only: bool = False,
 ) -> Dict[str, Any]:
 
+    # דרישה גלובלית לאישור
+    if REQUIRE_APPROVAL:
+        confirm_first = True
+
     side = side.upper().strip()
     if side not in {"BUY","SELL"}:
         raise ValueError("side must be BUY/SELL")
@@ -555,7 +576,7 @@ async def execute_trade_live(
     if pp_bps >= PERCENT_PRICE_GUARD_BPS:
         return {"ok": False, "reason": "percent_price_guard", "bps": pp_bps, "mk": mk, "ref": ref_for_guard}
 
-    # איכות/ATR — לצורך תקציב דינמי
+    # איכות/ATR — לצורך תקציב דינמי ול־SL fallback
     gate = _quality_gate(sym, side)
     try:
         score_for_budget: Optional[float] = float(gate.get("score")) if gate.get("score") is not None else None
@@ -564,8 +585,10 @@ async def execute_trade_live(
 
     try:
         kl = _fetch_klines_raw(sym, "1m", 60)
-        atr_for_budget: Optional[float] = _atr_from_klines(kl, 14) if kl else None
+        atr_abs = _atr_from_klines(kl, 14) if kl else None
+        atr_for_budget: Optional[float] = atr_abs
     except Exception:
+        atr_abs = None
         atr_for_budget = None
 
     # תקציב
@@ -607,7 +630,23 @@ async def execute_trade_live(
         except Exception:
             pass
 
-    # DRY-RUN: מחזיר תוכנית בלבד
+    # 🔒 Fallback חובה: ודא שתמיד יש גם TP וגם SL אם REQUIRE_SL_TP=1
+    anchor = float(entry or base_price)
+    if REQUIRE_SL_TP:
+        # TP גיבוי אם אין
+        if tp is None and not tp_targets:
+            sign_tp = +1 if side == "BUY" else -1
+            tp_targets = [anchor * (1.0 + sign_tp * TP_FALLBACK_PCT / 100.0)]
+        # SL גיבוי אם אין
+        if sl is None and not sl_targets:
+            if atr_abs and anchor > 0:
+                sl_pct = max(DEFAULT_SL_PCT, (atr_abs / anchor) * 100.0 * DEFAULT_SL_ATR_MULT)
+            else:
+                sl_pct = DEFAULT_SL_PCT
+            sign_sl = -1 if side == "BUY" else +1
+            sl_targets = [anchor * (1.0 + sign_sl * sl_pct / 100.0)]
+
+    # DRY-RUN: מחזיר תוכנית בלבד (כולל ה־fallback שחושב)
     if dry_run:
         plan: Dict[str, Any] = {
             "ok": True, "symbol": sym, "side": side, "leverage": leverage,
@@ -617,6 +656,7 @@ async def execute_trade_live(
             "guards": {"percent_price_bps": pp_bps, "slippage_guard_bps": SLIPPAGE_GUARD_BPS},
             "position_side": position_side, "reduce_only": reduce_only,
             "budget_used": float(budget or 0.0),
+            "enforced": {"require_approval": REQUIRE_APPROVAL, "require_sl_tp": REQUIRE_SL_TP}
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
@@ -629,13 +669,16 @@ async def execute_trade_live(
                 "escalate_after_sec": ESCALATE_AFTER_S, "escalate_slip_bps": ESCALATE_SLIP_BPS,
                 "allow_market_entry": ALLOW_MARKET_ENTRY,
             }
+            if REQUIRE_SL_TP and (not plan["tp_orders"] or not plan["sl_orders"]):
+                plan["ok"] = False
+                plan["reason"] = "missing_tp_or_sl_after_fallback"
         return plan
 
     # שגיאת כמות?
     if qty is None:
         return {"ok": False, "reason": qty_calc_error or "allocation_invalid"}
 
-    # ✔️ שליחת אישור לפני Gate כשמוגדר APPROVE_BEFORE_GATE=1
+    # ✔️ שליחת אישור לפני Gate כשמוגדר APPROVE_BEFORE_GATE=1 (ברירת מחדל) או כשהכרחנו REQUIRE_APPROVAL
     if confirm_first and APPROVE_BEFORE_GATE:
         chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
         if not chat_id:
@@ -661,6 +704,13 @@ async def execute_trade_live(
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
+    # וידוא מקדים: לא נכנסים אם אין לנו גם TP וגם SL אחרי fallback
+    pre_ladders = _build_ladders(sym, side, qty,
+                                 ([tp] if tp is not None else tp_targets), tp_splits,
+                                 ([sl] if sl is not None else sl_targets), sl_splits)
+    if REQUIRE_SL_TP and (not pre_ladders["tp_orders"] or not pre_ladders["sl_orders"]):
+        return {"ok": False, "reason": "missing_tp_or_sl_after_fallback"}
+
     # Hygiene: בטל TP/SL קודמים
     _cancel_old_closing_orders(sym)
 
@@ -685,6 +735,7 @@ async def execute_trade_live(
         "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
         "position_side": position_side, "reduce_only": reduce_only,
         "budget_used": float(budget or 0.0),
+        "enforced": {"require_approval": REQUIRE_APPROVAL, "require_sl_tp": REQUIRE_SL_TP}
     }
 
     close_side = "SELL" if side=="BUY" else "BUY"
@@ -713,7 +764,32 @@ async def execute_trade_live(
             except Exception as e:
                 o["response"] = {"ok": False, "error": str(e)}
 
+    # אם נכפה REQUIRE_SL_TP — ודא שבפועל יש לנו גם TP וגם SL אחרי נסיונות ההצבה
+    if REQUIRE_SL_TP and (not plan["tp_orders"] or not plan["sl_orders"]):
+        return {"ok": False, "reason": "tp_or_sl_orders_missing_after_submit", "partial_plan": plan}
+
+    # התראת סיכום לטלגרם
+    if NOTIFY_ON_TRADE:
+        try:
+            chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
+            if chat_id:
+                ek = str(entry_res.get("entry_kind") or "N/A")
+                ep = entry_res.get("price")
+                tpn = len(plan["tp_orders"]); sln = len(plan["sl_orders"])
+                msg = (f"✅ נכנסה פוזיציה: <b>{sym}</b> {side}\n"
+                       f"qty={qty} lev={leverage}\n"
+                       f"כניסה: {ek} @ {ep}\n"
+                       f"TP={tpn} | SL={sln}\n"
+                       f"ניהול: HYBRID+Ladders+ReduceOnly (דינמי)")
+                if not TELEGRAM_PARSE_MODE:
+                    # הסר תגים כשאין parse_mode
+                    msg = msg.replace("<b>","").replace("</b>","")
+                await _tg_send(chat_id, msg)
+        except Exception as e:
+            log.warning("post-trade notify failed: %s", e)
+
     return plan
+
 
 
 
