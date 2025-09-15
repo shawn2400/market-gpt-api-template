@@ -1,7 +1,7 @@
 # FILE: utils/ops_approval_web.py
 from __future__ import annotations
 import os, time, json, hmac, hashlib, re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Set
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -21,6 +21,19 @@ WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").encode() if os.getenv
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 APPROVAL_PUBSUB_CHANNEL = os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events")
+
+def _as_bool(v: str | None, default: bool = False) -> bool:
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1","true","yes","on","y")
+
+# Enforcements for two-man rule
+REQUIRE_UNIQUE_APPROVERS = _as_bool(os.getenv("REQUIRE_UNIQUE_APPROVERS", "1"), True)  # דרוש מאשרים שונים
+REQUIRE_APPROVER_ID      = _as_bool(os.getenv("REQUIRE_APPROVER_ID", "1"), True)       # חייב להעביר 'by'
+ALLOW_MISSING_HMAC       = _as_bool(os.getenv("ALLOW_MISSING_HMAC", "0"), False)       # לא מומלץ
+# רשימת מאשרים מותרת (אופציונלי). ניתן לשים מזהי טלגרם/אימייל/שם משתמש.
+ALLOWLIST_RAW = os.getenv("APPROVER_ALLOWLIST", "")  # e.g. "449087907,dev1@example.com,alice"
+ALLOWLIST: Set[str] = set(x.strip() for x in ALLOWLIST_RAW.split(",") if x.strip())
 
 # --------- runtime holders ---------
 _redis: Optional[redis.Redis] = None
@@ -82,7 +95,7 @@ def _save_ticket(ticket: Dict[str, Any], ttl_s: int):
         return
     _redis.setex(_ticket_key(ticket["id"]), max(60, ttl_s), json.dumps(ticket))
 
-def _publish_event(ticket_id: str, status: str, approvals: int, require: int, version: str = ""):
+def _publish_event(ticket_id: str, status: str, approvals: int, require: int, version: str = "", approvers: List[str] | None = None):
     try:
         if _redis:
             _redis.publish(APPROVAL_PUBSUB_CHANNEL, json.dumps({
@@ -90,11 +103,19 @@ def _publish_event(ticket_id: str, status: str, approvals: int, require: int, ve
                 "status": status,
                 "approvals": int(approvals),
                 "require": int(require),
+                "approvers": approvers or [],
                 "version": version,
                 "ts": int(time.time())
             }))
     except Exception:
         pass
+
+def _sanitize_approver(s: str) -> str:
+    s = s.strip()
+    # קצר ונקי לתצוגה/אחסון
+    if len(s) > 128:
+        s = s[:128]
+    return s
 
 # --------- lifecycle ---------
 @app.on_event("startup")
@@ -125,19 +146,31 @@ async def health():
         ok = bool(_redis and _redis.ping())
     except Exception:
         ok = False
-    return JSONResponse({"ok": ok, "pubsub_channel": APPROVAL_PUBSUB_CHANNEL})
+    return JSONResponse({
+        "ok": ok,
+        "pubsub_channel": APPROVAL_PUBSUB_CHANNEL,
+        "require_unique_approvers": REQUIRE_UNIQUE_APPROVERS,
+        "require_approver_id": REQUIRE_APPROVER_ID,
+        "allowlist_enabled": bool(ALLOWLIST),
+    })
+
+# Render "Advanced > Health Check Path" לעיתים מוגדר /healthz
+@app.get("/healthz", response_class=JSONResponse)
+async def healthz():
+    return await health()
 
 @app.get("/ops/approve", response_class=HTMLResponse)
 async def approve(req: Request):
     """
-    GET /ops/approve?action=approve|reject&ticket_id=...&expires=...&require=2&version=...&sig=...
-    - אימות HMAC אם מוגדר סוד
-    - עדכון Ticket ב-Redis
-    - פרסום אירוע Pub/Sub + הודעת טלגרם
+    GET /ops/approve?action=approve|reject&ticket_id=...&expires=...&require=2&version=...&sig=&by=
+    - אימות HMAC (אם הוגדר סוד)
+    - two-man rule אמיתי: מונים מאשרים ייחודיים (approvers)
+    - allowlist אופציונלי (APPROVER_ALLOWLIST)
+    - עדכון Ticket ב-Redis + פרסום Pub/Sub + הודעת טלגרם
     """
     q = dict(req.query_params)
     required = ["action", "ticket_id", "expires", "require", "version"]
-    if WEBHOOK_HMAC_SECRET:
+    if WEBHOOK_HMAC_SECRET and not ALLOW_MISSING_HMAC:
         required.append("sig")
     for k in required:
         if k not in q:
@@ -145,9 +178,11 @@ async def approve(req: Request):
 
     action = q["action"]
     ticket_id = q["ticket_id"]
+    by = _sanitize_approver(q.get("by", ""))
+
     try:
         exp = int(q["expires"])
-        req_needed = int(q["require"])
+        req_needed = max(1, int(q["require"]))
     except Exception:
         raise HTTPException(status_code=400, detail="invalid expires/require")
 
@@ -155,12 +190,27 @@ async def approve(req: Request):
     if exp < now:
         return HTMLResponse(f"<h2>⏱️ Link expired</h2><p>ticket <code>{_html(ticket_id)}</code></p>", status_code=410)
 
-    if WEBHOOK_HMAC_SECRET:
+    # HMAC check (optional)
+    if WEBHOOK_HMAC_SECRET and not ALLOW_MISSING_HMAC:
         to_sign = {k: q[k] for k in q if k != "sig"}
         expected = _sign_params(to_sign)
         if not hmac.compare_digest(expected, q.get("sig","")):
             raise HTTPException(status_code=401, detail="bad signature")
 
+    # Enforce presence of 'by' when needed
+    if REQUIRE_APPROVER_ID and req_needed > 1 and not by:
+        raise HTTPException(status_code=400, detail="missing 'by' (approver id)")
+
+    # Allowlist (optional)
+    if ALLOWLIST and by:
+        if by not in ALLOWLIST:
+            return HTMLResponse(
+                f"<h2>🚫 Unauthorized approver</h2>"
+                f"<p><b>{_html(by)}</b> is not in allowlist.</p>",
+                status_code=403
+            )
+
+    # Load/Create ticket
     ticket = await _load_ticket(ticket_id)
     if not ticket:
         ticket = {
@@ -168,32 +218,54 @@ async def approve(req: Request):
             "status": "pending",
             "require": req_needed,
             "approvals": 0,
+            "approvers": [],            # list[str]
+            "rejected_by": [],          # list[str]
             "created_at": now,
             "expires_at": exp,
             "proposal": {"version": q.get("version","")},
         }
 
+    # normalize
+    try:
+        approvers: List[str] = list(dict.fromkeys(ticket.get("approvers", [])))  # unique keep order
+    except Exception:
+        approvers = []
+    rejected_by: List[str] = list(dict.fromkeys(ticket.get("rejected_by", [])))
+
     remaining = max(30, exp - now)
 
     if action == "approve":
-        ticket["approvals"] = int(ticket.get("approvals", 0)) + 1
-        ticket["require"] = int(ticket.get("require", req_needed))
-        if ticket["approvals"] >= ticket["require"]:
-            ticket["status"] = "approved"
-        else:
-            ticket["status"] = "pending"
-        verb = f"✅ APPROVED ({ticket['approvals']}/{ticket['require']})"
+        # two-man rule: count unique approvers
+        if by:
+            if (not REQUIRE_UNIQUE_APPROVERS) or (by not in approvers):
+                approvers.append(by)
+        # compute approvals as unique count (even if 'by' ריק, נשאר כמו שהיה)
+        approvals = len(approvers)
+        require = int(ticket.get("require", req_needed))
+        status = "approved" if approvals >= require else "pending"
+        ticket.update({
+            "approvers": approvers,
+            "approvals": approvals,
+            "require": require,
+            "status": status,
+        })
+        verb = f"✅ APPROVED ({approvals}/{require})"
     elif action == "reject":
-        ticket["status"] = "rejected"
+        if by and by not in rejected_by:
+            rejected_by.append(by)
+        ticket.update({
+            "status": "rejected",
+            "rejected_by": rejected_by
+        })
         verb = "❌ REJECTED"
     else:
         raise HTTPException(status_code=400, detail="unknown action")
 
     _save_ticket(ticket, remaining)
-    _publish_event(ticket["id"], ticket["status"], ticket.get("approvals", 0), ticket.get("require", 1), q.get("version",""))
-
-    who = q.get("by", "unknown")
     version = q.get("version", "")
+    _publish_event(ticket["id"], ticket["status"], ticket.get("approvals", 0), ticket.get("require", 1), version, approvers=ticket.get("approvers", []))
+
+    who = by or q.get("by","unknown")
     await send_telegram(
         f"🔐 <b>Change approval</b> | <code>{_html(ticket_id)}</code>\n"
         f"{verb} | by: <code>{_html(who)}</code>\n"
@@ -205,7 +277,7 @@ async def approve(req: Request):
     if ticket["status"] == "approved":
         extra = "<p>System may proceed (supervisor will continue immediately).</p>"
     elif ticket["status"] == "pending":
-        extra = f"<p>Waiting for more approvals: {ticket['approvals']}/{ticket['require']}.</p>"
+        extra = f"<p>Waiting for more approvals: {ticket.get('approvals',0)}/{ticket.get('require',1)}.</p>"
 
     return HTMLResponse(
         f"<h2>{verb}</h2>"
@@ -226,6 +298,7 @@ async def get_ticket(ticket_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT","10000")))
+
 
 
 
