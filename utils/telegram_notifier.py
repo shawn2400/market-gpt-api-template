@@ -3,9 +3,17 @@ from __future__ import annotations
 
 import os, time, asyncio, logging, hashlib, hmac, json
 from typing import Any, Dict, Optional, List, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode, quote
-from zoneinfo import ZoneInfo
+
+# ---- TZ (Asia/Jerusalem) ----
+try:
+    from zoneinfo import ZoneInfo
+    _TZ_IL = ZoneInfo("Asia/Jerusalem")
+except Exception:
+    class _FixedTZ(timezone.__class__):  # fallback UTC+3
+        def __new__(cls): return timezone(timedelta(hours=3))
+    _TZ_IL = _FixedTZ()
 
 logger = logging.getLogger("algogpt.tg")
 
@@ -41,6 +49,33 @@ _bundle_items: List[str] = []
 _bundle_task: Optional[asyncio.Task] = None
 _bundle_lock = asyncio.Lock()
 
+# ===================== Auto-Approval & Digest Policy =====================
+# ✅ בקשתך: לא רגיש → אישור אוטומטי; רגיש → אישור ידני; דיג'סט כל 3–5 שעות + דוח יומי.
+OPS_AUTO_APPROVE_NON_SENSITIVE = os.getenv("OPS_AUTO_APPROVE_NON_SENSITIVE", "1").lower() in ("1","true","yes","on")
+OPS_AUTO_CRS_MAX              = int(os.getenv("OPS_AUTO_CRS_MAX", "6"))  # auto רק עד סיכון 6 כברירת מחדל
+OPS_APPROVAL_BASE             = os.getenv("OPS_APPROVAL_BASE", os.getenv("PUBLIC_HOST","")).rstrip("/")
+WEBHOOK_HMAC_SECRET           = os.getenv("WEBHOOK_HMAC_SECRET","").strip()
+
+OPS_DIGEST_ENABLE             = os.getenv("OPS_DIGEST_ENABLE","1").lower() in ("1","true","yes","on")
+OPS_DIGEST_INTERVAL_HOURS     = max(3, min(5, int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))))  # clamp 3..5
+OPS_EOD_ENABLE                = os.getenv("OPS_EOD_ENABLE","1").lower() in ("1","true","yes","on")
+OPS_EOD_HOUR_IL               = int(os.getenv("OPS_EOD_HOUR_IL","23"))
+OPS_EOD_MINUTE_IL             = int(os.getenv("OPS_EOD_MINUTE_IL","55"))
+
+OPS_APPROVAL_EMOJI            = os.getenv("OPS_APPROVAL_EMOJI","1").lower() in ("1","true","yes","on")
+
+# Optional Redis (לרישום אירועים לדיג'סט). נופל לקובץ אם אין Redis.
+_redis = None
+try:
+    _redis_url = os.getenv("REDIS_URL","").strip()
+    if _redis_url:
+        import redis.asyncio as aioredis
+        _redis = aioredis.from_url(_redis_url, decode_responses=True)
+except Exception as _e:
+    logger.debug({"event":"redis.disabled","reason":str(_e)})
+
+_changes_file = os.getenv("OPS_CHANGES_FILE", "/tmp/ops_changes.jsonl")
+
 # ===================== Helpers (Rate-limit / Dedup) =====================
 def set_explain_enabled(v: bool) -> None:
     global _EXPLAIN_ON
@@ -51,6 +86,13 @@ def get_explain_enabled() -> bool:
 
 def _now() -> float:
     return time.time()
+
+def _now_dt_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _fmt_il(ts: float | int | None = None) -> str:
+    dt = datetime.fromtimestamp(ts or _now(), tz=timezone.utc).astimezone(_TZ_IL)
+    return dt.strftime("%Y-%m-%d %H:%M:%S IL")
 
 def _rl_tick() -> None:
     global _rl_win_start, _rl_sent_in_win
@@ -115,7 +157,8 @@ async def _http_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_i
     if not _rl_allow():
         logger.debug({"event":"tg.rate_limited","drop":True})
         return
-    if not _dedup_allow(text + json.dumps(reply_markup, sort_keys=True, ensure_ascii=False)):
+    keytext = text + json.dumps(reply_markup, sort_keys=True, ensure_ascii=False)
+    if not _dedup_allow(keytext):
         logger.debug({"event":"tg.dup_suppressed"})
         return
     cid = chat_id if chat_id is not None else CHAT_ID
@@ -241,10 +284,6 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
     macdh = plan.get("macd_hist")
     rsi   = plan.get("rsi")
 
-    pl = plan.get("profit_lock_policy") or {}
-    pl_enabled = bool(pl.get("enabled", False))
-    pl_lock_pct = pl.get("lock_pct")
-
     trend_ok = "✓" if (ema21 and ema50 and ((float(ema21) > float(ema50) and side=="LONG") or (float(ema21) < float(ema50) and side=="SHORT"))) else "✗"
     macd_ok  = "✓" if (macdh is not None and ((side=="LONG" and float(macdh)>0) or (side=="SHORT" and float(macdh)<0))) else "✗"
 
@@ -262,11 +301,6 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
         except Exception:
             pass
     lines.append(f"Quality Score: <b>{score:.2f}/10</b>")
-    if pl_enabled and pl_lock_pct is not None:
-        try:
-            lines.append(f"🔒 Profit-Lock (dyn): <b>{float(pl_lock_pct):.1f}%</b>")
-        except Exception:
-            lines.append(f"🔒 Profit-Lock (dyn): <b>{pl_lock_pct}</b>")
     if entry and (sl or tp):
         try:
             lines.append(f"Entry {entry:.4f} | SL {sl:.4f} | TP {tp:.4f}")
@@ -284,14 +318,9 @@ async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any) -> 
         val = str(value)
     await _tg_send(f"🔧 <b>{symbol}</b> {side} · {kind.upper()} → <code>{val}</code>")
 
-async def notify_info(text: str) -> None:
-    await _tg_send(f"ℹ️ {text}")
-
-async def notify_error(text: str) -> None:
-    await _tg_send(f"🚨 {text}")
-
-async def notify_heartbeat() -> None:
-    await _tg_send("🫀 Heartbeat OK")
+async def notify_info(text: str) -> None:  await _tg_send(f"ℹ️ {text}")
+async def notify_error(text: str) -> None: await _tg_send(f"🚨 {text}")
+async def notify_heartbeat() -> None:      await _tg_send("🫀 Heartbeat OK")
 
 async def notify_daily_summary(summary: Dict[str, Any]) -> None:
     pnl = summary.get("pnl", 0.0)
@@ -324,14 +353,8 @@ async def register_webhook() -> bool:
         return False
 
 # ===================== Change-Approval (Hebrew) =====================
-APPROVAL_LANG        = os.getenv("OPS_APPROVAL_LANG", "he").lower()
-APPROVAL_EMOJI       = os.getenv("OPS_APPROVAL_EMOJI", "1").lower() in ("1","true","yes","on")
-OPS_APPROVAL_BASE    = os.getenv("OPS_APPROVAL_BASE", os.getenv("PUBLIC_HOST","")).rstrip("/")
-WEBHOOK_HMAC_SECRET  = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
-_TZ_IL               = ZoneInfo("Asia/Jerusalem")
-
 def _em(emoji: str, text: str) -> str:
-    return f"{emoji} {text}" if APPROVAL_EMOJI else text
+    return f"{emoji} {text}" if OPS_APPROVAL_EMOJI else text
 
 def _fmt_pct(v: float | int | None) -> str:
     try:
@@ -347,12 +370,12 @@ def _fmt_int(v: int | float | None) -> str:
 
 def _ts_pair(iso_utc: Optional[str]) -> Tuple[str, str]:
     try:
-        dt = datetime.fromisoformat(str(iso_utc).replace("Z","+00:00")) if iso_utc else datetime.now(timezone.utc)
+        dt = datetime.fromisoformat(str(iso_utc).replace("Z","+00:00")) if iso_utc else _now_dt_utc()
     except Exception:
-        dt = datetime.now(timezone.utc)
+        dt = _now_dt_utc()
     utc_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     il_dt   = dt.astimezone(_TZ_IL)
-    il_str  = il_dt.strftime("%Y-%m-%d %H:%M:%S IL")
+    il_str  = il_dt.strftime("%Y-%m-%d %H:%М:%S IL")
     return il_str, utc_str
 
 def _sign(ticket_id: str, expires_epoch: int) -> str:
@@ -360,37 +383,22 @@ def _sign(ticket_id: str, expires_epoch: int) -> str:
     return hmac.new(WEBHOOK_HMAC_SECRET.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 def _ensure_urls(change: Dict[str, Any]) -> Dict[str, str]:
-    """
-    Builds approve/reject/ticket URLs if not provided in `change`.
-    Expects OPS_APPROVAL_BASE like: https://ops-approval-web.onrender.com
-    Produces:
-      /ops/approve?ticket_id=...&expires=...&sig=...
-      /ops/reject? ...
-      /ops/ticket/<id>
-    """
     tid = change.get("ticket_id", "")
-    expires = int(change.get("ops_expires") or (time.time() + int(change.get("ttl_sec", 600))))
+    expires = int(change.get("ops_expires") or (_now() + int(change.get("ttl_sec", 600))))
     approve_url = change.get("approve_url")
     reject_url  = change.get("reject_url")
     ticket_url  = change.get("ticket_url")
 
     if OPS_APPROVAL_BASE and WEBHOOK_HMAC_SECRET and tid and not (approve_url and reject_url and ticket_url):
-        sig = _sign(tid, expires)
-        q = urlencode({"ticket_id": tid, "expires": expires, "sig": sig})
+        sig = _sign(tid, int(expires))
+        q = urlencode({"ticket_id": tid, "expires": int(expires), "sig": sig})
         approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}"
         reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}"
         ticket_url  = ticket_url  or f"{OPS_APPROVAL_BASE}/ops/ticket/{quote(str(tid))}"
 
-    return {
-        "approve": approve_url or "",
-        "reject":  reject_url  or "",
-        "ticket":  ticket_url  or "",
-    }
+    return {"approve": approve_url or "", "reject": reject_url or "", "ticket": ticket_url or ""}
 
 def format_change_approval_he(change: Dict[str, Any]) -> str:
-    """
-    Returns an HTML-formatted Hebrew message that explains exactly what is being approved.
-    """
     tid = str(change.get("ticket_id","—"))
     ttl = int(change.get("ttl_sec", 600))
     crs = change.get("crs", "—")
@@ -426,11 +434,11 @@ def format_change_approval_he(change: Dict[str, Any]) -> str:
     lines.append(f"<b>Version</b>: <code>{version}</code>")
     lines.append(f"{_em('📝','תכנית')} — {plan}")
     lines.append("— — —")
-    lines.append(f"{_em('🖥️','השפעת עומס (משוער)')}: CPU {_fmt_pct(cpu_pct)}, Mem {_fmt_pct(mem_pct)}, API/דקה {_fmt_int(api_rate)}")
     try:
         dollars_fmt = f"{float(dollars):.2f}"
     except Exception:
         dollars_fmt = str(dollars)
+    lines.append(f"{_em('🖥️','השפעת עומס (משוער)')}: CPU {_fmt_pct(cpu_pct)}, Mem {_fmt_pct(mem_pct)}, API/דקה {_fmt_int(api_rate)}")
     lines.append(f"{_em('💰','עלות (תקרה)')}: ${dollars_fmt} | טוקני AI: {_fmt_int(tokens)} | קריאות API: {_fmt_int(api_max)}")
     t_trd = bool(touches.get("trading", False))
     t_alr = bool(touches.get("alerts", False))
@@ -442,31 +450,23 @@ def format_change_approval_he(change: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 async def send_change_approval_he(change: Dict[str, Any], chat_id: Optional[int] = None) -> Dict[str, Any] | None:
-    """
-    Sends the Hebrew change-approval message with inline buttons (Approve/Reject/Ticket).
-    `change` may include approve_url/reject_url/ticket_url; if absent we build them.
-    """
     if not BOT_TOKEN or not API_BASE:
         logger.debug({"event":"tg.skip_send","reason":"missing_token_or_api"})
         return None
-
     urls = _ensure_urls(change)
     text = format_change_approval_he(change)
 
-    # Inline keyboard
     kb_rows: list[list[dict[str,str]]] = []
     row1 = []
     if urls.get("approve"):
         row1.append({"text": "✅ אשר", "url": urls["approve"]})
     if urls.get("reject"):
         row1.append({"text": "❌ דחה", "url": urls["reject"]})
-    if row1:
-        kb_rows.append(row1)
+    if row1: kb_rows.append(row1)
     if urls.get("ticket"):
         kb_rows.append([{"text": "🧾 פרטי הטיקט", "url": urls["ticket"]}])
 
     reply_markup = {"inline_keyboard": kb_rows}
-
     try:
         await _tg_send_with_markup(text, reply_markup, chat_id=chat_id)
         return {"ok": True}
@@ -474,15 +474,240 @@ async def send_change_approval_he(change: Dict[str, Any], chat_id: Optional[int]
         logger.warning({"event":"tg.approval_send_failed","error":str(e)})
         return {"ok": False, "error": str(e)}
 
+# ===================== Change Events Store (for Digest/EOD) =====================
+async def _store_change_event(ev: Dict[str, Any]) -> None:
+    ev = dict(ev)
+    ev.setdefault("ts", _now())
+    ev.setdefault("date", datetime.fromtimestamp(ev["ts"], tz=timezone.utc).astimezone(_TZ_IL).strftime("%Y-%m-%d"))
+    data = json.dumps(ev, ensure_ascii=False)
+    if _redis:
+        try:
+            await _redis.rpush("ops:changes", data)
+            return
+        except Exception as e:
+            logger.debug({"event":"redis.store.failed","err":str(e)})
+    # file fallback
+    try:
+        with open(_changes_file, "a", encoding="utf-8") as f:
+            f.write(data + "\n")
+    except Exception as e:
+        logger.debug({"event":"file.store.failed","err":str(e)})
+
+async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
+    out: List[Dict[str,Any]] = []
+    # Prefer Redis
+    if _redis:
+        try:
+            items = await _redis.lrange("ops:changes", 0, -1)
+            for line in items:
+                try:
+                    obj = json.loads(line)
+                    if float(obj.get("ts", 0)) >= ts_min:
+                        out.append(obj)
+                except Exception:
+                    pass
+            return out
+        except Exception as e:
+            logger.debug({"event":"redis.load.failed","err":str(e)})
+    # file fallback
+    try:
+        if os.path.exists(_changes_file):
+            with open(_changes_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                        if float(obj.get("ts", 0)) >= ts_min:
+                            out.append(obj)
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.debug({"event":"file.load.failed","err":str(e)})
+    return out
+
+# ===================== Auto-Approve Router =====================
+async def _auto_approve_change(change: Dict[str, Any]) -> bool:
+    """Clicks the signed Approve URL (HTTP GET)."""
+    urls = _ensure_urls(change)
+    approve_url = urls.get("approve","")
+    if not approve_url:
+        return False
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            r = await cli.get(approve_url)
+            ok = (200 <= r.status_code < 300)
+            if not ok:
+                logger.warning({"event":"auto_approve.http_error","status":r.status_code,"body":r.text[:256]})
+            return ok
+    except Exception as e:
+        logger.warning({"event":"auto_approve.failed","error":str(e)})
+        return False
+
+async def route_change_ticket(change: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Main policy:
+      - if not sensitive and crs <= OPS_AUTO_CRS_MAX and OPS_AUTO_APPROVE_NON_SENSITIVE=1 -> auto-approve (silent)
+      - else -> send approval message to Telegram
+    Always records event for digest/EOD.
+    """
+    sensitive = bool(change.get("sensitive", False))
+    crs = float(change.get("crs", 0) or 0)
+    tid = str(change.get("ticket_id",""))
+    plan = change.get("plan","")
+    version = change.get("version","")
+
+    if OPS_AUTO_APPROVE_NON_SENSITIVE and (not sensitive) and crs <= OPS_AUTO_CRS_MAX:
+        ok = await _auto_approve_change(change)
+        await _store_change_event({
+            "kind":"change",
+            "ticket_id": tid,
+            "status": "auto_approved" if ok else "auto_approve_failed",
+            "sensitive": sensitive,
+            "crs": crs,
+            "plan": plan,
+            "version": version,
+        })
+        if not ok:
+            # fallback: send manual approval
+            await send_change_approval_he(change)
+        return {"ok": True, "auto": True}
+
+    # sensitive or high CRS -> manual approval
+    await _store_change_event({
+        "kind":"change",
+        "ticket_id": tid,
+        "status": "awaiting_manual",
+        "sensitive": sensitive,
+        "crs": crs,
+        "plan": plan,
+        "version": version,
+    })
+    await send_change_approval_he(change)
+    return {"ok": True, "auto": False}
+
+# ===================== Digest & EOD =====================
+async def send_ops_digest_now(hours: Optional[int] = None) -> None:
+    """Sends a digest for the last N hours (default = OPS_DIGEST_INTERVAL_HOURS)."""
+    interval_h = int(hours or OPS_DIGEST_INTERVAL_HOURS)
+    ts_min = _now() - interval_h * 3600
+    items = await _load_changes_since(ts_min)
+    if not items:
+        await _tg_send(f"🧭 דיג'סט תפעולי ({interval_h}ש) — אין עדכונים.")
+        return
+
+    total = len(items)
+    auto_ok = sum(1 for x in items if x.get("status")=="auto_approved")
+    auto_fail = sum(1 for x in items if x.get("status")=="auto_approve_failed")
+    manual = sum(1 for x in items if x.get("status")=="awaiting_manual")
+    # short list of last 6
+    last_lines = []
+    for x in items[-6:]:
+        line = f"{_fmt_il(x.get('ts'))} · v{(x.get('version') or '—')} · CRS {x.get('crs','?')} · {'Sensitive' if x.get('sensitive') else 'Non-sens'} · {x.get('status')}"
+        if x.get("plan"): line += f" · {x['plan']}"
+        last_lines.append("• " + line)
+
+    msg = [
+        f"🧭 דיג'סט תפעולי ({interval_h}ש) — {total} עדכונים",
+        f"Auto OK: {auto_ok} | Auto Fail: {auto_fail} | Manual: {manual}",
+        "— — —",
+        *last_lines
+    ]
+    await _tg_send("\n".join(msg))
+
+async def send_eod_report_now() -> None:
+    """End-of-day (IL) operational report."""
+    # from today 00:00 IL
+    now_il = datetime.now(_TZ_IL)
+    start_il = now_il.replace(hour=0, minute=0, second=0, microsecond=0)
+    ts_min = start_il.astimezone(timezone.utc).timestamp()
+    items = await _load_changes_since(ts_min)
+    total = len(items)
+    auto_ok = sum(1 for x in items if x.get("status")=="auto_approved")
+    auto_fail = sum(1 for x in items if x.get("status")=="auto_approve_failed")
+    manual = sum(1 for x in items if x.get("status")=="awaiting_manual")
+
+    msg = [
+        f"📘 דוח יומי — {now_il.strftime('%Y-%m-%d')} (IL)",
+        f"סה\"כ שינויים: {total} | Auto OK: {auto_ok} | Auto Fail: {auto_fail} | Manual: {manual}",
+    ]
+    # top 8 by recency
+    for x in items[-8:]:
+        short = (x.get("plan") or "—")
+        if len(short) > 70: short = short[:67] + "…"
+        msg.append(f"• {_fmt_il(x.get('ts'))} · v{(x.get('version') or '—')} · CRS {x.get('crs','?')} · {'Sensitive' if x.get('sensitive') else 'Non-sens'} · {short}")
+    await _tg_send("\n".join(msg))
+
+# Background loops
+_digest_task: Optional[asyncio.Task] = None
+_eod_task: Optional[asyncio.Task] = None
+_schedulers_started: bool = False
+
+def _seconds_until_next_digest(now_il: Optional[datetime] = None) -> int:
+    now_il = now_il or datetime.now(_TZ_IL)
+    base = now_il.replace(minute=0, second=0, microsecond=0)
+    # align to next multiple of interval
+    delta_h = OPS_DIGEST_INTERVAL_HOURS - ((now_il.hour - base.hour) % OPS_DIGEST_INTERVAL_HOURS)
+    if delta_h == 0 and now_il.minute == 0:
+        delta_h = OPS_DIGEST_INTERVAL_HOURS
+    target = base + timedelta(hours=delta_h)
+    return max(5, int((target - now_il).total_seconds()))
+
+def _seconds_until_eod(now_il: Optional[datetime] = None) -> int:
+    now_il = now_il or datetime.now(_TZ_IL)
+    target = now_il.replace(hour=OPS_EOD_HOUR_IL, minute=OPS_EOD_MINUTE_IL, second=0, microsecond=0)
+    if target <= now_il:
+        target = target + timedelta(days=1)
+    return max(5, int((target - now_il).total_seconds()))
+
+async def _digest_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(_seconds_until_next_digest())
+            await send_ops_digest_now()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug({"event":"digest.loop.err","err":str(e)})
+            await asyncio.sleep(5)
+
+async def _eod_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(_seconds_until_eod())
+            await send_eod_report_now()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug({"event":"eod.loop.err","err":str(e)})
+            await asyncio.sleep(5)
+
+async def ensure_ops_schedulers_started() -> None:
+    """Call this once on app startup."""
+    global _schedulers_started, _digest_task, _eod_task
+    if _schedulers_started:
+        return
+    loop = asyncio.get_event_loop()
+    if OPS_DIGEST_ENABLE:
+        _digest_task = loop.create_task(_digest_loop())
+    if OPS_EOD_ENABLE:
+        _eod_task = loop.create_task(_eod_loop())
+    _schedulers_started = True
+
 # ===================== Public API =====================
 __all__ = [
+    # flags & simple notifiers
     "set_explain_enabled", "get_explain_enabled",
     "notify_no_trades", "notify_scan_error", "notify_explain_trade",
     "notify_sl_tp_update", "notify_info", "notify_error",
     "notify_heartbeat", "notify_daily_summary", "notify_ops_alert",
     "register_webhook",
+    # approvals
     "format_change_approval_he", "send_change_approval_he",
+    "route_change_ticket",
+    # digests
+    "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
 ]
+
 
 
 
