@@ -21,10 +21,11 @@ logger = logging.getLogger("algogpt.trade_manager")
 # ──────────────────────────────────────────────────────────────────────────────
 _COOLDOWN = int(os.getenv("TM_UPDATE_COOLDOWN_SEC", "30"))
 
+# Breakeven guard
 _BE_GUARD_ENABLE = os.getenv("BE_GUARD_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 _BE_GUARD_EVERY_SEC = int(os.getenv("BE_GUARD_EVERY_SEC", "30"))
 _TP1_TAGS: List[str] = [t.strip() for t in os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1").split(",") if t.strip()]
-TP_BE_ONLY_AFTER_TP1 = os.getenv("TP_BE_ONLY_AFTER_TP1", "1").lower() in ("1","true","yes")
+TP_BE_ONLY_AFTER_TP1 = os.getenv("TP_BE_ONLY_AFTER_TP1", "1").lower() in ("1","true","yes","on")
 TP_BE_OFFSET_BPS = float(os.getenv("TP_BE_OFFSET_BPS", "5"))
 
 # Prefix policy for cancels
@@ -43,6 +44,12 @@ _TRAIL_FREEZE_MAX_SEC = int(os.getenv("TRAIL_FREEZE_MAX_SEC","180"))
 _TRAIL_FREEZE_SPIKE_ATR_MULT = float(os.getenv("TRAIL_FREEZE_SPIKE_ATR_MULT", "1.8"))
 _TRAIL_FREEZE_ADX_WEAK = float(os.getenv("TRAIL_FREEZE_ADX_WEAK", "20"))
 _last_trail_freeze_until: Dict[str,float] = {}
+
+# “Breathing” SL – שמירת רווח בזמן תיקון
+SL_BREATH_ALLOW = os.getenv("SL_BREATH_ALLOW","1").lower() in ("1","true","yes","on")
+SL_BREATH_ATR_MULT = float(os.getenv("SL_BREATH_ATR_MULT","1.0"))   # כמה ATR לשחרר בזמן תיקון
+LOCK_PROFIT_KEEP_RATIO = float(os.getenv("LOCK_PROFIT_KEEP_RATIO","0.8"))  # שמירת 80% מהרווח
+BREATH_COND_MIN_PROFIT_PCT = float(os.getenv("BREATH_COND_MIN_PROFIT_PCT","0.8"))  # נשימה רק מעל רווח מינימלי
 
 # Daily Cap / KillSwitch
 DAILY_LOSS_CAP = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
@@ -103,14 +110,14 @@ def _q_price(symbol: str, price: float) -> Tuple[str, float]:
 def _q_qty(symbol: str, qty: float) -> Tuple[str, float]:
     f = _filters(symbol); step = float(f.get("stepSize") or DEFAULT_QTY_STEP) or DEFAULT_QTY_STEP
     decs = _decimals(str(f.get("stepSize") or DEFAULT_QTY_STEP))
-    steps = math.floor(qty / step); q = max(step, steps * step)
+    steps = math.floor(max(0.0, qty) / step); q = max(step, steps * step)
     s = f"{q:.{decs}f}"; return s, float(s)
 
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Safe wrappers for SL/TP modify (fallback אם אין בביננס-קליינט)
+# SL/TP helpers (MARK_PRICE triggers)
 # ──────────────────────────────────────────────────────────────────────────────
 def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
     """בטל הזמנות TP/SL פעילות לפי סוגים, בהתאם למדיניות פריפיקס."""
@@ -143,18 +150,35 @@ def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
             logger.warning("[tm.cancel] cancel failed %s/%s: %s", symbol, oid, e)
     return count
 
+def _current_stop(symbol: str, side: str) -> Optional[float]:
+    """מאחזר את מחיר ה-STOP הפעיל הקרוב ביותר (MARKET/STOP) לפי צד הפוזיציה."""
+    try:
+        orders = get_open_orders(symbol) or []
+    except Exception:
+        return None
+    stops = []
+    for o in orders:
+        typ = (o.get("type") or "").upper()
+        if "STOP" not in typ: 
+            continue
+        sp = float(o.get("stopPrice") or o.get("price") or 0.0)
+        if sp > 0:
+            stops.append(sp)
+    if not stops:
+        return None
+    # LONG → ה-STOP הגבוה ביותר; SHORT → ה-STOP הנמוך ביותר
+    return max(stops) if side.upper()=="LONG" else min(stops)
+
 def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
     """
-    Fallback modify: cancel active STOP/STOP_MARKET → place new STOP (limit)
+    Modify SL ע"י ביטול ישן → יצירת STOP_MARKET חדש על בסיס MARK_PRICE.
     """
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     # ביטול ישנים
     _cancel_closing_orders(sym, ("STOP","STOP_MARKET"))
     # כימות
-    stop_str, stop_px = _q_price(sym, float(new_price))
-    limit_px = _offset_bps(stop_px, SL_LIMIT_OFFSET_BPS, -1 if close_side=="SELL" else +1)
-    price_str, limit_px = _q_price(sym, float(limit_px))
+    stop_str, _ = _q_price(sym, float(new_price))
     # כמות (אם לא נמסר רמז, ניקח מהפוזיציה)
     qty = qty_hint
     if not qty or qty <= 0:
@@ -171,8 +195,9 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
     # שליחה
     try:
         resp = futures_create_order(
-            symbol=sym, side=close_side, type="STOP", timeInForce="GTC",
-            reduceOnly=True, stopPrice=stop_str, price=price_str, quantity=qty_str
+            symbol=sym, side=close_side, type="STOP_MARKET",
+            reduceOnly=True, stopPrice=stop_str, quantity=qty_str,
+            workingType="MARK_PRICE", timeInForce="GTC"
         )
         return {"ok": True, "response": resp}
     except Exception as e:
@@ -180,7 +205,7 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
 
 def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
     """
-    Fallback modify: cancel active TAKE_PROFIT/TAKE_PROFIT_MARKET → place new TAKE_PROFIT (limit)
+    Modify TP: Cancel → place TAKE_PROFIT (limit) עם OFFSET קטן, או MARKET לפי צורך.
     """
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
@@ -205,8 +230,9 @@ def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "L
     # שליחה
     try:
         resp = futures_create_order(
-            symbol=sym, side=close_side, type="TAKE_PROFIT", timeInForce="GTC",
-            reduceOnly=True, stopPrice=stop_str, price=price_str, quantity=qty_str
+            symbol=sym, side=close_side, type="TAKE_PROFIT",
+            reduceOnly=True, stopPrice=stop_str, price=price_str, quantity=qty_str,
+            timeInForce="GTC", workingType="MARK_PRICE"
         )
         return {"ok": True, "response": resp}
     except Exception as e:
@@ -391,17 +417,64 @@ async def manage_open_trades():
                     _last_update[sym] = now
                     continue
 
-                # Compute trailing SL
+                # Compute desired trailing SL (בסיס)
                 try:
                     if side == "LONG":
                         recent_low = float(df["low"].iloc[-3:].min())
-                        trail_sl = recent_low - 0.6 * current_atr
+                        baseline_sl = recent_low - 0.6 * current_atr
                     else:
                         recent_high = float(df["high"].iloc[-3:].max())
-                        trail_sl = recent_high + 0.6 * current_atr
-                    if _is_finite_number(trail_sl):
-                        modify_stop_loss(sym, trail_sl, position_side=side)
-                        await notify_sl_tp_update(sym, side, "trailing", trail_sl)
+                        baseline_sl = recent_high + 0.6 * current_atr
+                except Exception as e:
+                    logger.error("[manage] baseline build failed for %s: %s", sym, e)
+                    _last_update[sym] = now
+                    continue
+
+                # נשימה דינמית: אם יש רווח וכנראה תיקון, אפשר להרחיק SL מעט — אבל לשמור 80% מהרווח
+                target_sl = baseline_sl
+                try:
+                    if SL_BREATH_ALLOW and profit_pct >= BREATH_COND_MIN_PROFIT_PCT:
+                        # floor: שמירת X% מהרווח
+                        if side == "LONG":
+                            keep_floor = entry + LOCK_PROFIT_KEEP_RATIO * max(0.0, price - entry)
+                            relax = price - SL_BREATH_ATR_MULT * current_atr
+                            target_sl = min(baseline_sl, relax)
+                            target_sl = max(target_sl, keep_floor)  # אל תרד מתחת לשמירת רווח
+                        else:
+                            keep_ceiling = entry - LOCK_PROFIT_KEEP_RATIO * max(0.0, entry - price)
+                            relax = price + SL_BREATH_ATR_MULT * current_atr
+                            target_sl = max(baseline_sl, relax)
+                            target_sl = min(target_sl, keep_ceiling)
+                        # אם המומנטום נגדנו אך ADX חזק → אפשר לשחרר קצת יותר
+                        if (macd_now < 0 and current_adx >= 22):
+                            if side == "LONG":
+                                target_sl = min(target_sl, price - 1.2 * SL_BREATH_ATR_MULT * current_atr)
+                                target_sl = max(target_sl, keep_floor)
+                            else:
+                                target_sl = max(target_sl, price + 1.2 * SL_BREATH_ATR_MULT * current_atr)
+                                target_sl = min(target_sl, keep_ceiling)
+                except Exception as e:
+                    logger.debug("[manage] breathing compute failed %s: %s", sym, e)
+
+                # אל תזיז SL “רע” (כיוון שמקטין שמירת רווח) מתחת/מעל ל־BE אם כבר הוזז ל-BE
+                cur_stop = _current_stop(sym, side) or entry
+                if side == "LONG":
+                    # אם כבר מעל כניסה, אל תוריד מתחת לכניסה
+                    if (cur_stop >= entry) and (target_sl < entry):
+                        target_sl = max(entry, target_sl)
+                else:
+                    if (cur_stop <= entry) and (target_sl > entry):
+                        target_sl = min(entry, target_sl)
+
+                # עדכון SL בפועל רק אם יש שינוי מהותי
+                try:
+                    if _is_finite_number(target_sl) and _is_finite_number(cur_stop):
+                        # הבדל ספי כדי לא להציף הזמנות
+                        thresh = 0.25 * current_atr
+                        need_update = (abs(target_sl - float(cur_stop)) >= thresh)
+                        if need_update:
+                            modify_stop_loss(sym, target_sl, position_side=side)
+                            await notify_sl_tp_update(sym, side, "trailing", target_sl)
                 except Exception as e:
                     logger.error("[manage] trailing update failed for %s: %s", sym, e)
 
@@ -578,6 +651,7 @@ async def _be_guard_tick():
             logger.info("[tm.be_guard] %s BE set", symbol)
         except Exception as e:
             logger.error("[tm.be_guard] error: %s", e)
+
 
 
 
