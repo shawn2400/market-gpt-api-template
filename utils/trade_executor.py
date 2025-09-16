@@ -703,6 +703,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
+
 # ─────────── Public API ───────────
 def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[float]]]) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
     tp_targets: Optional[List[float]] = None
@@ -737,7 +738,6 @@ def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[floa
             sl_targets = None
 
     return tp_targets, tp_splits, sl_targets
-
 
 async def execute_trade_live(
     symbol: str, side: str, *,
@@ -984,6 +984,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
             except Exception as e2:
                 return {"ok": False, "error": str(e2)}
         return {"ok": False, "error": str(e)}
+
 
 
 
