@@ -115,13 +115,14 @@ if 'TELEGRAM_CHAT_ID' not in globals():
 if 'TELEGRAM_PARSE_MODE' not in globals():
     TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "").strip()
 
+# Redis availability flag
 if 'REDIS_URL' not in globals():
     REDIS_URL = os.getenv("REDIS_URL", "").strip()
-    try:
-        import redis  # type: ignore
-        _redis_available = bool(REDIS_URL)
-    except Exception:
-        _redis_available = False
+try:
+    import redis  # type: ignore
+    _redis_available = bool(REDIS_URL)
+except Exception:
+    _redis_available = False
 
 if 'LEVERAGE_SYMBOL_CAPS' not in globals():
     try:
@@ -703,7 +704,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
-
 # ─────────── Public API ───────────
 def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[float]]]) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
     tp_targets: Optional[List[float]] = None
@@ -984,139 +984,13 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
             except Exception as e2:
                 return {"ok": False, "error": str(e2)}
         return {"ok": False, "error": str(e)}
-# utils/trade_executor.py
-from __future__ import annotations
-import os, time, json, uuid, logging, threading
-from typing import Any, Dict, Optional
 
-logger = logging.getLogger("algogpt.trade_executor")
-
-# Optional Redis
-REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
-try:
-    import redis  # type: ignore
-    _r = redis.Redis.from_url(REDIS_URL, decode_responses=True) if REDIS_URL else None
-except Exception:
-    _r = None
-
-# ===== ConfirmStore =====
-class ConfirmStore:
-    """
-    מאגר אישורים פשוט: Redis אם יש, אחרת בזיכרון.
-    רשומה:
-    {
-      "cid": str, "chat_id": int, "payload": {...},
-      "status": "pending"|"approved"|"rejected"|"expired",
-      "ttl_sec": int, "created_ts": float, "expires_ts": float,
-      "approver": Optional[str]
-    }
-    """
-    _mem: Dict[str, Dict[str, Any]] = {}
-    _lock = threading.RLock()
-
-    @classmethod
-    def _mem_prune(cls) -> None:
-        now = time.time()
-        dead = [k for k, v in cls._mem.items() if now >= float(v.get("expires_ts", 0))]
-        for k in dead:
-            rec = cls._mem.get(k)
-            if rec and rec.get("status") == "pending":
-                rec["status"] = "expired"
-            cls._mem.pop(k, None)
-
-    @classmethod
-    def _key(cls, cid: str) -> str:
-        return f"confirm:{cid}"
-
-    @classmethod
-    def create(cls, chat_id: int, payload: Dict[str, Any], ttl: int = 180) -> str:
-        cid = uuid.uuid4().hex[:16]
-        now = time.time()
-        rec = {
-            "cid": cid, "chat_id": int(chat_id), "payload": dict(payload or {}),
-            "status": "pending", "ttl_sec": int(ttl),
-            "created_ts": now, "expires_ts": now + int(ttl),
-            "approver": None,
-        }
-        if _r:
-            try:
-                _r.set(cls._key(cid), json.dumps(rec), ex=max(1, int(ttl)))
-                return cid
-            except Exception as e:
-                logger.warning("ConfirmStore redis create failed: %s", e)
-        with cls._lock:
-            cls._mem_prune()
-            cls._mem[cid] = rec
-        return cid
-
-    @classmethod
-    def get(cls, cid: str) -> Optional[Dict[str, Any]]:
-        if not cid:
-            return None
-        if _r:
-            try:
-                s = _r.get(cls._key(cid))
-                if not s:
-                    return None
-                rec = json.loads(s)
-                # סימון expiry לוגי אם פג
-                if time.time() >= float(rec.get("expires_ts", 0)) and rec.get("status") == "pending":
-                    rec["status"] = "expired"
-                return rec
-            except Exception as e:
-                logger.warning("ConfirmStore redis get failed: %s", e)
-        with cls._lock:
-            cls._mem_prune()
-            rec = cls._mem.get(cid)
-            if not rec:
-                return None
-            if time.time() >= float(rec.get("expires_ts", 0)) and rec.get("status") == "pending":
-                rec["status"] = "expired"
-            return rec
-
-    @classmethod
-    def _update(cls, cid: str, status: str, approver: str = "") -> Optional[Dict[str, Any]]:
-        if not cid:
-            return None
-        if _r:
-            try:
-                s = _r.get(cls._key(cid))
-                if not s:
-                    return None
-                rec = json.loads(s)
-                rec["status"] = status
-                if approver:
-                    rec["approver"] = str(approver)
-                # שמור זמן שנותר כדי לא לאבד TTL
-                ttl = _r.ttl(cls._key(cid))
-                _r.set(cls._key(cid), json.dumps(rec), ex=max(1, int(ttl) if ttl and ttl > 0 else 30))
-                return rec
-            except Exception as e:
-                logger.warning("ConfirmStore redis update failed: %s", e)
-        with cls._lock:
-            cls._mem_prune()
-            rec = cls._mem.get(cid)
-            if not rec:
-                return None
-            rec["status"] = status
-            if approver:
-                rec["approver"] = str(approver)
-            return rec
-
-    @classmethod
-    def approve(cls, cid: str, approver: str = "") -> Optional[Dict[str, Any]]:
-        return cls._update(cid, "approved", approver)
-
-    @classmethod
-    def reject(cls, cid: str, approver: str = "") -> Optional[Dict[str, Any]]:
-        return cls._update(cid, "rejected", approver)
-
-# ===== Execute wrapper (delegates to auto_executor) =====
-async def execute_trade_live(*args, **kwargs):
-    from utils.auto_executor import execute_trade_live as _exec
-    return await _exec(*args, **kwargs)
-
-__all__ = ["ConfirmStore", "execute_trade_live"]
+__all__ = [
+    "execute_trade_live",
+    "ConfirmStore",
+    "send_confirm_request",
+    "require_approval",
+]
 
 
 
