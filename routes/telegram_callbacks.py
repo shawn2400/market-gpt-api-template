@@ -1,4 +1,4 @@
-# routes/telegram_callbacks.py
+# routes/telegram_callbacks.py 
 from __future__ import annotations
 import os, logging
 from typing import Any, Dict
@@ -20,6 +20,31 @@ def _is_admin(uid: int) -> bool:
     if not ADMIN_ONLY:
         return True
     return str(uid) in ADMIN_IDS
+
+# --- Optional Redis-backed dedup for callback_query ids (防 double-click/dup delivery)
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+try:
+    import redis  # type: ignore
+    _r_cbq = redis.Redis.from_url(REDIS_URL, decode_responses=True) if REDIS_URL else None
+except Exception:
+    _r_cbq = None
+_seen_cbq_mem: set[str] = set()
+
+def _cbq_seen(cbq_id: str, ttl: int = 30) -> bool:
+    if not cbq_id:
+        return False
+    if _r_cbq:
+        try:
+            ok = _r_cbq.set(f"cbq:{cbq_id}", "1", nx=True, ex=ttl)
+            return not bool(ok)
+        except Exception:
+            pass
+    if cbq_id in _seen_cbq_mem:
+        return True
+    _seen_cbq_mem.add(cbq_id)
+    if len(_seen_cbq_mem) > 5000:
+        _seen_cbq_mem.clear()
+    return False
 
 async def _tg_answer_callback(cbq_id: str, text: str = "") -> None:
     if not (TG_TOKEN and cbq_id):
@@ -46,7 +71,7 @@ async def callback_handler(
     req: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None)
 ):
-    # הגנת Secret כמו ב-/webhook
+    # Secret guard (mirrors /webhook)
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Invalid telegram secret")
 
@@ -60,6 +85,10 @@ async def callback_handler(
         return {"ok": True}
 
     cb_id = cb.get("id") or ""
+    # idempotency: ignore dup deliveries
+    if _cbq_seen(cb_id):
+        return {"ok": True}
+
     from_user = cb.get("from") or {}
     uid = int(from_user.get("id") or 0)
     msg = cb.get("message") or {}
@@ -104,5 +133,6 @@ async def callback_handler(
 
     await _tg_answer_callback(cb_id, "פעולה לא מזוהה")
     return {"ok": True}
+
 
 
