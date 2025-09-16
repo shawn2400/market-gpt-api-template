@@ -180,6 +180,39 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
+# ─────────── Hedge / One-Way detection ───────────
+_HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
+_HEDGE_MODE_CACHE: Optional[bool] = None
+
+def _is_hedge_mode_runtime() -> bool:
+    global _HEDGE_MODE_CACHE
+    if _HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"):
+        return True
+    if _HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):
+        return False
+    if _HEDGE_MODE_CACHE is not None:
+        return _HEDGE_MODE_CACHE
+    try:
+        data = get_futures_client().futures_account()
+        _HEDGE_MODE_CACHE = bool(data.get("dualSidePosition"))
+        return _HEDGE_MODE_CACHE
+    except Exception:
+        # ברירת מחדל שמרנית: One-Way
+        _HEDGE_MODE_CACHE = False
+        return False
+
+def _effective_position_side(desired: str) -> str:
+    """
+    אם החשבון One-Way — תמיד נחזיר 'BOTH' כדי לא לשלוח positionSide בכלל.
+    אם Hedge — נחזיר LONG/SHORT לפי הבקשה.
+    """
+    desired = (desired or "BOTH").upper()
+    if not _is_hedge_mode_runtime():
+        return "BOTH"
+    if desired in {"LONG","SHORT"}:
+        return desired
+    return "BOTH"
+
 # ─────────── Indicators & quality gate (ללא pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
     k = 2 / (period + 1); ema=[]; s=None
@@ -340,6 +373,7 @@ def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
     cap_by_symbol = int(LEVERAGE_SYMBOL_CAPS.get(symbol.upper(), LEV_HARD_CAP))
     dyn = max(MIN_LEVERAGE, min(dyn, cap_by_symbol, LEV_HARD_CAP))
     return max(MIN_LEVERAGE, min(max(lev, dyn), cap_by_symbol, LEV_HARD_CAP))
+
 # ─────────── Idempotency (Redis/memory) ───────────
 class _Idem:
     _mem: Dict[str, float] = {}
@@ -557,7 +591,7 @@ def _build_ladders(sym: str, side: str, qty: float,
                 if tp_kind_market:
                     plan["tp_orders"].append({"type": "TAKE_PROFIT_MARKET","stopPrice": stop_p,"qty": qalloc})
                 else:
-                    # TAKE_PROFIT (Limit) — אם תרצה, אפשר להוסיף price נפרד
+                    # TAKE_PROFIT (Limit)
                     plan["tp_orders"].append({"type": "TAKE_PROFIT","stopPrice": stop_p,"price": stop_p,"qty": qalloc})
             else:
                 plan["sl_orders"].append({"type": "STOP_MARKET","stopPrice": stop_p,"qty": qalloc})
@@ -599,13 +633,15 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
+    eff_ps = _effective_position_side(position_side)
+
     entry_kwargs = dict(
         symbol=sym, side=side, type="LIMIT",
         timeInForce="GTC", price=limit_str, quantity=qty_str,
         reduceOnly=False
     )
-    if position_side != "BOTH":
-        entry_kwargs["positionSide"] = position_side
+    if eff_ps != "BOTH":
+        entry_kwargs["positionSide"] = eff_ps
 
     lim = futures_create_order(**entry_kwargs)
     lim_id = str(lim.get("orderId") or "")
@@ -615,8 +651,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str,
         reduceOnly=False, workingType="MARK_PRICE"
     )
-    if position_side != "BOTH":
-        stop_kwargs["positionSide"] = position_side
+    if eff_ps != "BOTH":
+        stop_kwargs["positionSide"] = eff_ps
 
     stp = futures_create_order(**stop_kwargs)
     stp_id = str(stp.get("orderId") or "")
@@ -673,8 +709,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                     if stp_id: futures_cancel_order(sym, stp_id)
                 except Exception: pass
                 mkt_kwargs = dict(symbol=sym, side=side, type="MARKET", quantity=qty_str, reduceOnly=False)
-                if position_side != "BOTH":
-                    mkt_kwargs["positionSide"] = position_side
+                if eff_ps != "BOTH":
+                    mkt_kwargs["positionSide"] = eff_ps
                 mkt = futures_create_order(**mkt_kwargs)
                 mk = get_price(sym) or futures_mark_price(sym) or cur
                 bps = abs((cur or 0) - (mk or 0)) / max(mk or 1e-9, 1e-9) * 10000.0 if mk and cur else None
@@ -716,7 +752,6 @@ def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[floa
             sl_targets = None
 
     return tp_targets, tp_splits, sl_targets
-
 async def execute_trade_live(
     symbol: str, side: str, *,
     budget: Optional[float] = None, leverage: int = 5, dry_run: bool = True,
@@ -733,6 +768,7 @@ async def execute_trade_live(
         raise ValueError("side must be BUY/SELL")
     sym = symbol.upper().strip()
     position_side = _normalize_position_side(position_side)
+    position_side = _effective_position_side(position_side)  # ← התאמה אוטו׳ ל-Hedge/One-Way
 
     base_price = get_price(sym) or futures_mark_price(sym)
     if not base_price or base_price <= 0:
@@ -884,15 +920,17 @@ async def execute_trade_live(
                 reduceOnly=True,
                 workingType="MARK_PRICE",
             )
-            # positionSide — רק אם לא BOTH
-            if position_side != "BOTH":
-                args["positionSide"] = position_side
+
+            eff_ps = _effective_position_side(position_side)
+            if eff_ps != "BOTH":
+                args["positionSide"] = eff_ps
 
             if "MARKET" in typ:
                 # STOP_MARKET / TAKE_PROFIT_MARKET: רק stopPrice + quantity
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+                # אין timeInForce להזמנות *MARKET
             else:
-                # STOP / TAKE_PROFIT (לימיט): stopPrice + price + TIF
+                # STOP / TAKE_PROFIT (Limit): stopPrice + price + TIF=GTC
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
                 args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
                 args["timeInForce"] = "GTC"
@@ -923,7 +961,7 @@ async def execute_trade_live(
 
 # ─────────── Helpers (rollback) ───────────
 def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "BOTH") -> Dict[str, Any]:
-    position_side = _normalize_position_side(position_side)
+    position_side = _effective_position_side(_normalize_position_side(position_side))
     close_side = _close_side_for(side)
     try:
         args = dict(
@@ -939,6 +977,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
         return {"ok": True, "response": resp}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 
 
