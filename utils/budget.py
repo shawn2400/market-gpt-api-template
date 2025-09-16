@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # utils/budget.py
 from __future__ import annotations
 import os, json, logging
@@ -248,4 +249,5 @@ def get_budget_usdt(
     if _b("DYNAMIC_BUDGET_ENABLE", False):
         return get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price)
     return _f("MAX_TRADE_BUDGET", 100.0)
+
 
