@@ -1,197 +1,304 @@
+# utils/config.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, re, logging
-from typing import List
+import os
+import json
+import logging
+from dataclasses import dataclass, field
+from typing import List, Set, Dict, Optional
 
-# ---------------------------
+log = logging.getLogger("algogpt.config")
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ---------------------------
-def _as_bool(val: str | None, default: bool = False) -> bool:
-    if val is None:
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    v = str(os.getenv(name, "")).strip().lower()
+    if v in ("1", "true", "yes", "y", "on", "enable", "enabled"):
+        return True
+    if v in ("0", "false", "no", "n", "off", "disable", "disabled"):
+        return False
+    return bool(default)
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
         return default
-    return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
-def _as_int(val: str | None, default: int, min_v: int|None=None, max_v: int|None=None) -> int:
+def _env_int(name: str, default: int) -> int:
     try:
-        x = int(str(val).strip()) if val else default
-    except:
-        x = default
-    if min_v is not None and x < min_v: x = min_v
-    if max_v is not None and x > max_v: x = max_v
-    return x
+        return int(float(os.getenv(name, str(default))))
+    except Exception:
+        return default
 
-def _as_float(val: str | None, default: float, min_v: float|None=None, max_v: float|None=None) -> float:
+def _split_csv(s: str | None) -> List[str]:
+    if not s:
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+def _load_json_env(name: str, fallback: Dict | str = "{}") -> Dict:
+    raw = os.getenv(name)
+    src = raw if (raw and raw.strip()) else (fallback if isinstance(fallback, str) else json.dumps(fallback))
     try:
-        x = float(str(val).strip()) if val else default
-    except:
-        x = default
-    if min_v is not None and x < min_v: x = min_v
-    if max_v is not None and x > max_v: x = max_v
-    return x
+        return json.loads(src)
+    except Exception:
+        return {}
 
-def _csv(val: str|None, default: str="")->List[str]:
-    s = val.strip() if (val and isinstance(val,str)) else default.strip()
-    if not s: return []
-    return [p.strip() for p in s.split(",") if p.strip()]
+# ──────────────────────────────────────────────────────────────────────────────
+# Settings
+# ──────────────────────────────────────────────────────────────────────────────
 
-def _clean_env(name: str) -> str:
-    """ניקוי משתני ENV מרווחים ותווי newline מיותרים"""
-    return (os.getenv(name) or "").strip().replace("\n", "").replace("\r", "")
+@dataclass
+class Settings:
+    # App
+    APP_NAME: str = os.getenv("APP_NAME", "AlgoGPT")
+    ENV: str = os.getenv("ENV", "dev")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9]{3,20}$")
-_INTERVAL_RE = re.compile(r"^(\d+)(m|h|d|w|M|y)$", re.IGNORECASE)
+    # Service base URLs
+    BINANCE_FUTURES_HTTP_BASE: str = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
-def _norm_symbols(items: List[str]) -> List[str]:
-    out, seen = [], set()
-    for raw in items:
-        s = str(raw).upper().replace(" ","")
-        if not s or s in seen: continue
-        if not _SYMBOL_RE.match(s):
-            logging.warning(f"[CONFIG] Ignoring invalid symbol '{raw}'"); continue
-        seen.add(s); out.append(s)
-    return out
+    # Auth
+    AUTH_ALLOW_ALL: bool = _env_bool("AUTH_ALLOW_ALL", False)
+    # Comma-separated tokens: ALGOGPT_API_TOKENS, API_TOKENS, ALGOGPT_TOKEN, API_TOKEN (first non-empty used)
+    API_TOKENS: Set[str] = field(default_factory=set)
 
-def _norm_intervals(items: List[str], fallback: List[str]) -> List[str]:
-    out=[]
-    for it in items:
-        if _INTERVAL_RE.match(str(it).strip()):
-            out.append(it.strip())
-        else:
-            logging.warning(f"[CONFIG] Ignoring invalid interval '{it}'")
+    # Headers & query param names we accept for auth extraction
+    AUTH_HEADER_CANDIDATES: List[str] = field(default_factory=lambda: [
+        "Authorization",          # Bearer <token>
+        "X-API-Key",
+        "X-Auth-Token",
+        "X-Token",
+        "X-Algogpt-Token",
+        "X-Authorization",
+    ])
+    AUTH_QUERY_KEYS: List[str] = field(default_factory=lambda: [
+        "api_key", "apikey", "token", "key", "auth"
+    ])
+    AUTH_BEARER_PREFIXES: List[str] = field(default_factory=lambda: [
+        "Bearer", "Token", "JWT"
+    ])
+    # Public paths that should be accessible without auth
+    AUTH_PUBLIC_PATHS: Set[str] = field(default_factory=lambda: {
+        "/", "/ping", "/status", "/healthz",
+        "/docs", "/redoc", "/openapi.json",
+    })
+
+    # Trade / policy knobs (kept here for visibility; modules may still read via os.getenv)
+    ALLOW_MARKET_ENTRY: bool = _env_bool("ALLOW_MARKET_ENTRY", True)
+    ENTRY_BAND_BPS: float = _env_float("ENTRY_BAND_BPS", 8.5)
+    STOP_BAND_BPS: float = _env_float("STOP_BAND_BPS", 10.0)
+    ESCALATE_AFTER_SEC: float = _env_float("ESCALATE_AFTER_SEC", 10.0)
+    ESCALATE_SLIPPAGE_BPS: float = _env_float("ESCALATE_SLIPPAGE_BPS", 15.0)
+
+    PERCENT_PRICE_GUARD_BPS: float = _env_float("PERCENT_PRICE_GUARD_BPS", 45.0)
+    SLIPPAGE_GUARD_BPS: float = _env_float("SLIPPAGE_GUARD_BPS", 35.0)
+    POST_FILL_SANITY_BPS: float = _env_float("POST_FILL_SANITY_BPS", 40.0)
+
+    # Quality / risk
+    MIN_QUALITY_SCORE: float = _env_float("MIN_QUALITY_SCORE", 7.0)
+    MAX_ATR_PCT: float = _env_float("MAX_ATR_PCT", 2.5)
+    MIN_VOLUME: float = _env_float("MIN_VOLUME", 0.0)
+
+    # Ladders
+    LADDER_TP_ENABLE: bool = _env_bool("LADDER_TP_ENABLE", True)
+    LADDER_TP_KIND: str = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
+    LADDER_TP_DEFAULT_PCTS: List[float] = field(default_factory=lambda: [1.8, 3.2, 5.5])
+    LADDER_TP_DEFAULT_SPLITS: List[float] = field(default_factory=lambda: [0.4, 0.35, 0.25])
+    LADDER_SL_ENABLE: bool = _env_bool("LADDER_SL_ENABLE", True)
+    LADDER_SL_DEFAULT_PCTS: List[float] = field(default_factory=lambda: _split_csv(os.getenv("LADDER_SL_DEFAULT_PCTS", "0.8")) or [0.8])
+
+    # Dynamic SL / Trail
+    SL_DYNAMIC_ENABLE: bool = _env_bool("SL_DYNAMIC_ENABLE", True)
+    SL_ATR_MULT: float = _env_float("SL_ATR_MULT", 0.6)
+    SL_TRAIL_ENABLE: bool = _env_bool("SL_TRAIL_ENABLE", True)
+
+    # Leverage caps per symbol (JSON)
+    LEVERAGE_SYMBOL_CAPS: Dict[str, int] = field(default_factory=lambda: _load_json_env("LEVERAGE_SYMBOL_CAPS", '{"BTCUSDT":15,"1000PEPEUSDT":8}'))
+
+    # Telegram
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    TELEGRAM_CHAT_ID_DEFAULT: int = _env_int("TELEGRAM_CHAT_ID", 0)
+    TELEGRAM_PARSE_MODE: str = os.getenv("TELEGRAM_PARSE_MODE", "").strip()
+    CONFIRM_TTL_SEC: int = _env_int("CONFIRM_TTL_SEC", 180)
+
+    # Redis (optional)
+    REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+
+    # Precision defaults
+    DEFAULT_QTY_STEP: float = _env_float("DEFAULT_QTY_STEP", 0.001)
+    DEFAULT_PRICE_TICK: float = _env_float("DEFAULT_PRICE_TICK", 0.01)
+    MIN_NOTIONAL_USDT: float = _env_float("MIN_NOTIONAL_USDT", 5.0)
+
+    # Idempotency
+    IDEMPOTENCY_TTL_SEC: int = _env_int("IDEMPOTENCY_TTL_SEC", 15)
+
+    # Misc
+    ORDER_ID_PREFIX: str = os.getenv("ORDER_ID_PREFIX", "").strip()
+    CANCEL_ONLY_PREFIXED_ORDERS: bool = _env_bool("CANCEL_ONLY_PREFIXED_ORDERS", False)
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "APP_NAME": self.APP_NAME,
+            "ENV": self.ENV,
+            "BINANCE_FUTURES_HTTP_BASE": self.BINANCE_FUTURES_HTTP_BASE,
+            "AUTH_ALLOW_ALL": self.AUTH_ALLOW_ALL,
+            "TOKENS_COUNT": len(self.API_TOKENS),
+            "AUTH_HEADER_CANDIDATES": self.AUTH_HEADER_CANDIDATES,
+            "AUTH_QUERY_KEYS": self.AUTH_QUERY_KEYS,
+            "AUTH_PUBLIC_PATHS": sorted(self.AUTH_PUBLIC_PATHS),
+            "ALLOW_MARKET_ENTRY": self.ALLOW_MARKET_ENTRY,
+            "ENTRY_BAND_BPS": self.ENTRY_BAND_BPS,
+            "STOP_BAND_BPS": self.STOP_BAND_BPS,
+            "ESCALATE_AFTER_SEC": self.ESCALATE_AFTER_SEC,
+            "ESCALATE_SLIPPAGE_BPS": self.ESCALATE_SLIPPAGE_BPS,
+            "PERCENT_PRICE_GUARD_BPS": self.PERCENT_PRICE_GUARD_BPS,
+            "SLIPPAGE_GUARD_BPS": self.SLIPPAGE_GUARD_BPS,
+            "POST_FILL_SANITY_BPS": self.POST_FILL_SANITY_BPS,
+            "MIN_QUALITY_SCORE": self.MIN_QUALITY_SCORE,
+            "MAX_ATR_PCT": self.MAX_ATR_PCT,
+            "MIN_VOLUME": self.MIN_VOLUME,
+            "LADDER_TP_ENABLE": self.LADDER_TP_ENABLE,
+            "LADDER_TP_KIND": self.LADDER_TP_KIND,
+            "LADDER_TP_DEFAULT_PCTS": self.LADDER_TP_DEFAULT_PCTS,
+            "LADDER_TP_DEFAULT_SPLITS": self.LADDER_TP_DEFAULT_SPLITS,
+            "LADDER_SL_ENABLE": self.LADDER_SL_ENABLE,
+            "LADDER_SL_DEFAULT_PCTS": self.LADDER_SL_DEFAULT_PCTS,
+            "SL_DYNAMIC_ENABLE": self.SL_DYNAMIC_ENABLE,
+            "SL_ATR_MULT": self.SL_ATR_MULT,
+            "SL_TRAIL_ENABLE": self.SL_TRAIL_ENABLE,
+            "LEVERAGE_SYMBOL_CAPS": self.LEVERAGE_SYMBOL_CAPS,
+            "TELEGRAM_BOT_TOKEN_SET": bool(self.TELEGRAM_BOT_TOKEN),
+            "TELEGRAM_CHAT_ID_DEFAULT": self.TELEGRAM_CHAT_ID_DEFAULT,
+            "TELEGRAM_PARSE_MODE": self.TELEGRAM_PARSE_MODE,
+            "CONFIRM_TTL_SEC": self.CONFIRM_TTL_SEC,
+            "REDIS_URL_SET": bool(self.REDIS_URL),
+            "DEFAULT_QTY_STEP": self.DEFAULT_QTY_STEP,
+            "DEFAULT_PRICE_TICK": self.DEFAULT_PRICE_TICK,
+            "MIN_NOTIONAL_USDT": self.MIN_NOTIONAL_USDT,
+            "IDEMPOTENCY_TTL_SEC": self.IDEMPOTENCY_TTL_SEC,
+            "ORDER_ID_PREFIX": self.ORDER_ID_PREFIX,
+            "CANCEL_ONLY_PREFIXED_ORDERS": self.CANCEL_ONLY_PREFIXED_ORDERS,
+        }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Token loading
+# ──────────────────────────────────────────────────────────────────────────────
+
+_SENTINELS = {"PUT_REAL_API_TOKEN", "CHANGE_ME", "REPLACE_ME", "YOUR_TOKEN_HERE", "TOKEN"}
+
+def _load_tokens_from_env() -> Set[str]:
+    candidates: List[str] = []
+    # Multi-value first
+    for k in ("ALGOGPT_API_TOKENS", "API_TOKENS", "ALGOGPT_TOKENS"):
+        v = os.getenv(k, "")
+        if v.strip():
+            candidates.extend(_split_csv(v))
+    # Single-value fallbacks
+    for k in ("ALGOGPT_API_TOKEN", "ALGOGPT_TOKEN", "API_TOKEN", "TOKEN"):
+        v = os.getenv(k, "")
+        if v.strip():
+            candidates.append(v.strip())
+
+    # From file (one token per line)
+    path = os.getenv("API_TOKENS_FILE", "").strip()
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        candidates.append(line)
+        except Exception as e:
+            log.warning("Could not read API_TOKENS_FILE %s: %s", path, e)
+
+    # Filter sentinels / empties / duplicates
+    cleaned: Set[str] = set()
+    for t in candidates:
+        tt = t.strip()
+        if not tt:
+            continue
+        if tt in _SENTINELS:
+            continue
+        cleaned.add(tt)
+    return cleaned
+
+def _load_tp_defaults(env_name: str, fallback: List[float]) -> List[float]:
+    raw = os.getenv(env_name, "")
+    if not raw.strip():
+        return fallback
+    out: List[float] = []
+    for x in _split_csv(raw):
+        try:
+            out.append(float(x))
+        except Exception:
+            pass
     return out or fallback
 
-def _require_url(name,val,must_start:tuple[str,...])->str:
-    if not val or not any(val.startswith(p) for p in must_start):
-        raise RuntimeError(f"❌ {name} must start with {must_start}, got {val!r}")
-    return val.rstrip("/")
+# ──────────────────────────────────────────────────────────────────────────────
+# Singleton + public API
+# ──────────────────────────────────────────────────────────────────────────────
 
-# ---------------------------
-# Env
-# ---------------------------
-APP_ENV=os.getenv("APP_ENV","production").strip().lower()
-IS_PROD=APP_ENV=="production"
+_settings: Optional[Settings] = None
 
-# Binance
-BINANCE_API_KEY=_clean_env("BINANCE_API_KEY")
-BINANCE_API_SECRET=_clean_env("BINANCE_API_SECRET")
-BINANCE_HTTP_BASE=_clean_env("BINANCE_HTTP_BASE") or "https://api.binance.com"
-BINANCE_FUTURES_HTTP_BASE=_clean_env("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com"
-BINANCE_WS_BASE=_clean_env("BINANCE_WS_BASE") or "wss://stream.binance.com:9443"
-BINANCE_FUTURES_WS_BASE=_clean_env("BINANCE_FUTURES_WS_BASE") or "wss://fstream.binance.com"
-BINANCE_FAPI_ALTS=[b.strip() for b in _csv(os.getenv("BINANCE_FAPI_ALTS"),
-    "https://fapi1.binance.com,https://fapi2.binance.com,https://fapi3.binance.com")]
+def load_settings() -> Settings:
+    global _settings
+    s = Settings()
+    s.API_TOKENS = _load_tokens_from_env()
+    s.LADDER_TP_DEFAULT_PCTS = _load_tp_defaults("LADDER_TP_DEFAULT_PCTS", s.LADDER_TP_DEFAULT_PCTS)
+    s.LADDER_TP_DEFAULT_SPLITS = _load_tp_defaults("LADDER_TP_DEFAULT_SPLITS", s.LADDER_TP_DEFAULT_SPLITS)
+    # Log once
+    log.info("[Config] %s env=%s | tokens=%d | allow_all=%s",
+             s.APP_NAME, s.ENV, len(s.API_TOKENS), s.AUTH_ALLOW_ALL)
+    _settings = s
+    return s
 
-DEFAULT_MARKET=os.getenv("DEFAULT_MARKET","futures").strip().lower()
-if DEFAULT_MARKET not in {"spot","futures"}:
-    logging.warning(f"[CONFIG] DEFAULT_MARKET invalid {DEFAULT_MARKET}, forcing futures")
-    DEFAULT_MARKET="futures"
+def get_settings() -> Settings:
+    return _settings or load_settings()
 
-# Trading
-AUTO_RUN=_as_bool(os.getenv("AUTO_RUN"),False)
-MIN_LEVERAGE=_as_int(os.getenv("MIN_LEVERAGE"),5,1,125)
-MAX_LEVERAGE=_as_int(os.getenv("MAX_LEVERAGE"),35,MIN_LEVERAGE,125)
-MAX_TRADE_BUDGET=_as_float(os.getenv("MAX_TRADE_BUDGET"),100,1,1_000_000)
-# ברירת מחדל הועלתה ל-8.5 כדי להקשיח סינון אם אין .env
-MIN_QUALITY_SCORE=_as_float(os.getenv("MIN_QUALITY_SCORE"),8.5,0,10)
-SCAN_INTERVAL=_as_int(os.getenv("SCAN_INTERVAL"),60,10,3600)
-MIN_VOLUME=_as_float(os.getenv("MIN_VOLUME"),1_000_000,0,1e12)
-TRENDING_ONLY=_as_bool(os.getenv("TRENDING_ONLY"),False)
+def reload_settings() -> Settings:
+    return load_settings()
 
-# Watchlist
-WATCHLIST=_norm_symbols(_csv(os.getenv("WATCHLIST"),"BTCUSDT,ETHUSDT"))
-if not WATCHLIST: WATCHLIST=["BTCUSDT","ETHUSDT"]
-DEFAULT_ANCHOR="BTCUSDT"
-if DEFAULT_ANCHOR not in WATCHLIST: WATCHLIST.insert(0,DEFAULT_ANCHOR)
+# Convenience for auth module (if it wishes to delegate to config)
+def is_public_path(path: str) -> bool:
+    s = get_settings()
+    # match exact, and also allow prefix for docs assets
+    if path in s.AUTH_PUBLIC_PATHS:
+        return True
+    if path.startswith("/docs") or path.startswith("/redoc"):
+        return True
+    return False
 
-# Indicators
-_raw_intervals=_csv(os.getenv("INDICATOR_INTERVALS"),"15m,1h")
-INDICATOR_INTERVALS=_norm_intervals(_raw_intervals,["15m","1h"])
-DEFAULT_INTERVAL=INDICATOR_INTERVALS[0] if INDICATOR_INTERVALS else "15m"
+def valid_token(token: Optional[str]) -> bool:
+    s = get_settings()
+    if s.AUTH_ALLOW_ALL:
+        return True
+    if not token or not token.strip():
+        return False
+    return token.strip() in s.API_TOKENS
 
-# Risk
-STOP_LOSS_ATR_MULTIPLIER=_as_float(os.getenv("STOP_LOSS_ATR_MULTIPLIER"),1.5,0.1,10)
-USE_TRAILING_SL=_as_bool(os.getenv("USE_TRAILING_SL"),True)
+# Bearer parsing helper (shared by utils.auth if imported)
+def strip_bearer_prefix(value: str) -> str:
+    v = (value or "").strip()
+    if not v:
+        return v
+    s = get_settings()
+    for p in s.AUTH_BEARER_PREFIXES:
+        pref = f"{p} "
+        if v.lower().startswith(pref.lower()):
+            return v[len(pref):].strip()
+    return v
 
-# Options
-EXECUTE_TRADES=_as_bool(os.getenv("EXECUTE_TRADES"),False)
-BINANCE_SKIP_ACCOUNT_MUTATIONS=_as_bool(os.getenv("BINANCE_SKIP_ACCOUNT_MUTATIONS"),True)
-BINANCE_FORCE_HEDGE_MODE=_as_bool(os.getenv("BINANCE_FORCE_HEDGE_MODE"),False)
-BINANCE_MARGIN_TYPE_DEFAULT=(os.getenv("BINANCE_MARGIN_TYPE_DEFAULT") or "ISOLATED").strip().upper()
-if BINANCE_MARGIN_TYPE_DEFAULT not in {"ISOLATED","CROSSED"}:
-    logging.warning(f"[CONFIG] invalid margin {BINANCE_MARGIN_TYPE_DEFAULT}, forcing ISOLATED")
-    BINANCE_MARGIN_TYPE_DEFAULT="ISOLATED"
+# Quick dump for debugging
+def debug_dump() -> Dict[str, object]:
+    return get_settings().as_dict()
 
-# Live management (חדש)
-ALLOW_MANAGE_OPEN_TRADES=_as_bool(os.getenv("ALLOW_MANAGE_OPEN_TRADES"), True)
 
-# OpenAI
-OPENAI_API_KEY=_clean_env("OPENAI_API_KEY")
-OPENAI_MODEL=_clean_env("OPENAI_MODEL") or "gpt-4o"
-ENABLE_AI_ROUTES=_as_bool(os.getenv("ENABLE_AI_ROUTES"),True)
+# Initialize immediately on import
+load_settings()
 
-# Limits
-RESPONSE_MAX_BYTES=_as_int(os.getenv("RESPONSE_MAX_BYTES"),2*1024*1024,256*1024,16*1024*1024)
-
-# WS
-WS_UPDATE_INTERVAL=_as_int(os.getenv("WS_UPDATE_INTERVAL"),15,5,120)
-PRICE_MONITOR_INTERVAL=_as_int(os.getenv("PRICE_MONITOR_INTERVAL"),30,5,300)
-PRICE_WS_FRESH_TTL=_as_int(os.getenv("PRICE_WS_FRESH_TTL"),20,5,300)
-PRICE_MONITOR_DISABLE=_as_bool(os.getenv("PRICE_MONITOR_DISABLE"),False)
-
-# Logging
-LOG_LEVEL=(os.getenv("LOG_LEVEL") or "INFO").strip().upper()
-if LOG_LEVEL not in {"CRITICAL","ERROR","WARNING","INFO","DEBUG"}:
-    LOG_LEVEL="INFO"
-
-# ---------------------------
-# Validation
-# ---------------------------
-def _validate_urls():
-    _require_url("BINANCE_HTTP_BASE",BINANCE_HTTP_BASE,("https://",))
-    _require_url("BINANCE_FUTURES_HTTP_BASE",BINANCE_FUTURES_HTTP_BASE,("https://",))
-    _require_url("BINANCE_WS_BASE",BINANCE_WS_BASE,("wss://",))
-    _require_url("BINANCE_FUTURES_WS_BASE",BINANCE_FUTURES_WS_BASE,("wss://",))
-    for alt in BINANCE_FAPI_ALTS:
-        if not alt.startswith("https://"):
-            raise RuntimeError(f"❌ bad alt {alt}")
-
-def _validate_keys():
-    if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-        logging.warning("⚠️ Binance API key/secret missing")
-    if EXECUTE_TRADES and (not BINANCE_API_KEY or not BINANCE_API_SECRET):
-        raise RuntimeError("❌ EXECUTE_TRADES=true requires keys")
-    if ENABLE_AI_ROUTES and not OPENAI_API_KEY:
-        logging.warning("⚠️ ENABLE_AI_ROUTES=true but no OPENAI_API_KEY → AI disabled")
-
-def _validate_semantics():
-    if MIN_LEVERAGE>MAX_LEVERAGE:
-        raise RuntimeError("❌ MIN>MAX leverage")
-    if not INDICATOR_INTERVALS:
-        raise RuntimeError("❌ No valid intervals")
-    if not WATCHLIST:
-        raise RuntimeError("❌ Empty watchlist")
-
-def check_config():
-    _validate_urls(); _validate_keys(); _validate_semantics()
-    if EXECUTE_TRADES and BINANCE_SKIP_ACCOUNT_MUTATIONS:
-        raise RuntimeError("❌ EXECUTE_TRADES=true but skip mutations=true")
-    logging.info(f"[CONFIG] Started | EXECUTE_TRADES={EXECUTE_TRADES} | WATCHLIST={WATCHLIST}")
-
-def dump_config_sanitized()->dict:
-    return {
-        "env":APP_ENV,
-        "watchlist":WATCHLIST,
-        "intervals":INDICATOR_INTERVALS,
-        "auto_run":AUTO_RUN,
-        "min_quality":MIN_QUALITY_SCORE,
-        "max_leverage":MAX_LEVERAGE,
-        "budget":MAX_TRADE_BUDGET,
-        "exec_trades":EXECUTE_TRADES,
-        "allow_live_manage": ALLOW_MANAGE_OPEN_TRADES,
-        "enable_ai":ENABLE_AI_ROUTES,
-        "model":OPENAI_MODEL,
-        "binance_key_len": len(BINANCE_API_KEY),
-        "openai_key_len": len(OPENAI_API_KEY),
-    }
 
 
 
