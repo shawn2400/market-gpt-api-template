@@ -48,22 +48,51 @@ ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))
 HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
 _HEDGE_MODE_CACHE: Optional[bool] = None
 
+def _now() -> float:
+    return time.time()
+
+def _ms() -> int:
+    return int(time.time() * 1000)
+
+def _get_account_cached() -> Optional[Dict[str, Any]]:
+    """פנימי: לוקח account עם קאש קצר, עם backoff על BAN/429."""
+    now = _now()
+    if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
+        return _account_cache["data"]
+    if _account_cache["data"] and (now - _account_cache["ts"] <= ACCOUNT_TTL_SEC):
+        return _account_cache["data"]
+    try:
+        data = client.futures_account()
+        _account_cache.update({"data": data, "ts": now, "ban_until": 0.0})
+        return data
+    except BinanceAPIException as e:
+        s = str(e)
+        code = getattr(e, "code", None)
+        status = getattr(e, "status_code", None)
+        if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
+            _account_cache["ban_until"] = now + ACCOUNT_ON_BAN_BACKOFF
+            logger.error("futures_account banned/rate limited; backing off %ss", ACCOUNT_ON_BAN_BACKOFF)
+            return _account_cache["data"]
+        logger.error("futures_account error: %s", e)
+        return _account_cache["data"]
+    except Exception as e:
+        logger.error("futures_account failed: %s", e)
+        return _account_cache["data"]
+
 def _is_hedge_mode_runtime() -> bool:
     """True אם החשבון במצב Hedge; אחרת False (One-Way). כיבוד override דרך HEDGE_MODE."""
     global _HEDGE_MODE_CACHE
-    if HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"):  # כפייה ל-Hedge
+    if HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"):
         return True
-    if HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):  # כפייה ל-One-Way
+    if HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):
         return False
     try:
         acc = _get_account_cached() or {}
-        # לפי מבנה Binance: dualSidePosition=True → Hedge
         dual = bool(acc.get("dualSidePosition"))
         _HEDGE_MODE_CACHE = dual
         return dual
     except Exception:
-        # בהיעדר מידע – ברירת מחדל שמרנית: One-Way
-        return False
+        return False  # שמרני
 
 def _effective_position_side_from_kwargs(kwargs: Dict[str, Any]) -> str:
     """
@@ -72,8 +101,7 @@ def _effective_position_side_from_kwargs(kwargs: Dict[str, Any]) -> str:
     """
     ps = str(kwargs.get("positionSide") or "").upper().strip()
     if not _is_hedge_mode_runtime():
-        # One-Way → לא שולחים positionSide בכלל
-        kwargs.pop("positionSide", None)
+        kwargs.pop("positionSide", None)  # One-Way → לא לשלוח בכלל
         return "BOTH"
     if ps in ("LONG","SHORT"):
         return ps
@@ -116,7 +144,8 @@ def _coid(kind: str, symbol: str, level: int | None = None) -> str:
     parts = []
     if ORDER_ID_PREFIX:
         parts.append(ORDER_ID_PREFIX)
-    parts.append(k); parts.append(symbol.upper())
+    parts.append(k)
+    parts.append(symbol.upper())
     if level is not None and kind.upper() not in ("TP", "SL"):
         parts.append(str(level))
     if ORDER_ID_INCLUDE_TS:
@@ -176,13 +205,7 @@ _idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _idem_lock = threading.RLock()
 
 # ===== Helpers =====
-def _now() -> float:
-    return time.time()
-
-def _ms() -> int:
-    return int(time.time() * 1000)
-
-def _get_exchange_info_cached(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
+def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     ts = _now()
     if not force_refresh and _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
         return _exinfo_cache["data"]
@@ -202,34 +225,7 @@ def fapi_ping() -> bool:
         logger.warning("Futures ping failed: %s", e)
         return False
 
-def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
-    return _get_exchange_info_cached(force_refresh=force_refresh)
-
 # ===== Account & Positions =====
-def _get_account_cached() -> Optional[Dict[str, Any]]:
-    now = _now()
-    if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
-        return _account_cache["data"]
-    if _account_cache["data"] and (now - _account_cache["ts"] <= ACCOUNT_TTL_SEC):
-        return _account_cache["data"]
-    try:
-        data = client.futures_account()
-        _account_cache.update({"data": data, "ts": now, "ban_until": 0.0})
-        return data
-    except BinanceAPIException as e:
-        s = str(e)
-        code = getattr(e, "code", None)
-        status = getattr(e, "status_code", None)
-        if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
-            _account_cache["ban_until"] = now + ACCOUNT_ON_BAN_BACKOFF
-            logger.error("futures_account banned/rate limited; backing off %ss", ACCOUNT_ON_BAN_BACKOFF)
-            return _account_cache["data"]
-        logger.error("futures_account error: %s", e)
-        return _account_cache["data"]
-    except Exception as e:
-        logger.error("futures_account failed: %s", e)
-        return _account_cache["data"]
-
 def futures_balance() -> List[Dict[str, Any]]:
     try:
         data = _get_account_cached() or {}
@@ -461,7 +457,6 @@ def futures_index_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
-
 # ===== Open orders / history =====
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
@@ -483,7 +478,7 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
 
 # ===== Price guard =====
 def _percent_guard_ok(symbol: str, price: float) -> bool:
-    if not PERCENT_GUARD_ENABLE: 
+    if not PERCENT_GUARD_ENABLE:
         return True
     mark = futures_mark_price(symbol)
     if not mark or mark <= 0:
@@ -502,6 +497,7 @@ def _percent_guard_ok(symbol: str, price: float) -> bool:
     bps = max(1, int(PERCENT_GUARD_BPS))
     dev_bps = abs(price - mark) / mark * 10000.0
     return dev_bps <= bps
+
 # ===== Orders / Positions / Helpers =====
 def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
     if not prefix:
@@ -714,9 +710,16 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
 
     return _safe_create_order(**kwargs)
 
-def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *|,
-                      reduce_only: bool=True, close_position: bool=False,
-                      client_order_id: Optional[str]=None) -> Dict[str, Any]:
+def place_stop_market(
+    symbol: str,
+    side: str,
+    stop_price: float,
+    quantity: float,
+    *,
+    reduce_only: bool = True,
+    close_position: bool = False,
+    client_order_id: Optional[str] = None
+) -> Dict[str, Any]:
     sym = symbol.upper()
     qprice = _quantize_price(sym, float(stop_price))
     qqty   = _quantize_qty(sym, float(quantity))
@@ -737,11 +740,15 @@ def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float
         kwargs["newClientOrderId"] = _coid("SL", sym)
     return _safe_create_order(**kwargs)
 
-def modify_stop_loss(symbol: str, new_stop_price: float, *|,
-                     side: Optional[str]=None,
-                     client_order_id_prefix: Optional[str]=None,
-                     close_position: bool=True,
-                     quantity: Optional[float]=None) -> Dict[str, Any]:
+def modify_stop_loss(
+    symbol: str,
+    new_stop_price: float,
+    *,
+    side: Optional[str] = None,
+    client_order_id_prefix: Optional[str] = None,
+    close_position: bool = True,
+    quantity: Optional[float] = None
+) -> Dict[str, Any]:
     sym = symbol.upper()
     _cancel_closing_orders(sym, types=("STOP", "STOP_MARKET"))
     if not side:
@@ -759,15 +766,22 @@ def modify_stop_loss(symbol: str, new_stop_price: float, *|,
         qty = abs(float(pos.get("positionAmt","0")))
     if qty is None or qty <= 0:
         return {"ok": False, "error": "invalid_qty"}
-    return place_stop_market(sym, side, float(new_stop_price), float(qty),
-                             reduce_only=True, close_position=bool(close_position),
-                             client_order_id=coid)
+    return place_stop_market(
+        sym, side, float(new_stop_price), float(qty),
+        reduce_only=True, close_position=bool(close_position),
+        client_order_id=coid
+    )
 
-def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: float,
-                    tp_percents: Optional[List[float]]=None,
-                    splits: Optional[List[float]]=None,
-                    reduce_only: bool=True,
-                    client_order_id_prefix: Optional[str]=None) -> Dict[str, Any]:
+def place_tp_ladder(
+    symbol: str,
+    entry_side: str,
+    entry_price: float,
+    quantity: float,
+    tp_percents: Optional[List[float]] = None,
+    splits: Optional[List[float]] = None,
+    reduce_only: bool = True,
+    client_order_id_prefix: Optional[str] = None
+) -> Dict[str, Any]:
     if not LADDER_TP_ENABLE:
         return {"ok": False, "error": "ladder_disabled"}
     now = _now()
@@ -790,7 +804,7 @@ def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: 
     placed = []; errors = []
     for i, (pct, frac) in enumerate(zip(tp_percents, splits), start=1):
         qty_i = max(0.0, float(quantity) * float(frac))
-        if qty_i <= 0: 
+        if qty_i <= 0:
             continue
         if entry_side.upper() == "BUY":
             tprice = entry_price * (1.0 + pct/100.0)
@@ -816,7 +830,7 @@ def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: 
             kwargs["price"] = stop_q
             kwargs["timeInForce"] = "GTC"
 
-        # ב-Hedge נעדיף reduceOnly; ב-One-Way ל-*MARKET טריגר לא נוסיף reduceOnly (ול-TAKE_PROFIT Limit זה לא קריטי)
+        # ב-Hedge נעדיף reduceOnly; ב-One-Way ל-*MARKET טריגר לא נוסיף reduceOnly
         if reduce_only and _is_hedge_mode_runtime():
             kwargs["reduceOnly"] = True
         res = _safe_create_order(**kwargs)
@@ -916,8 +930,16 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
 
-def futures_cancel_and_replace_limit(symbol: str, side: str, price: float, quantity: float, *, reduce_only: bool=False,
-                                     client_order_id: Optional[str]=None, time_in_force: str="GTC") -> Dict[str, Any]:
+def futures_cancel_and_replace_limit(
+    symbol: str,
+    side: str,
+    price: float,
+    quantity: float,
+    *,
+    reduce_only: bool = False,
+    client_order_id: Optional[str] = None,
+    time_in_force: str = "GTC"
+) -> Dict[str, Any]:
     _cancel_closing_orders(symbol, types=("LIMIT",))
     sym = symbol.upper()
     return futures_create_order(
@@ -991,6 +1013,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
