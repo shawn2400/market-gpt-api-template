@@ -46,7 +46,7 @@ def refresh_tokens_from_env() -> None:
         len(_TOKENS), sorted(_PUBLIC_PATHS), _PUBLIC_PREFIXES
     )
 
-# נטען בעת import (startup)
+# load on import
 refresh_tokens_from_env()
 
 def allow_all() -> bool:
