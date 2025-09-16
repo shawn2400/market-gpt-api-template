@@ -21,7 +21,7 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
-# ✅ notifier: לא קריטי
+# ✅ notifier (לא קריטי)
 try:
     from utils.telegram_notifier import (
         ensure_ops_schedulers_started,
@@ -41,7 +41,7 @@ except Exception:
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
 
-# ✅ ConfirmStore: מביאים מכל מקום שיש
+# ✅ ConfirmStore
 try:
     from utils.trade_executor import ConfirmStore
 except Exception:
@@ -164,26 +164,24 @@ def _split_multi(s: str) -> Iterable[str]:
     import re
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
-# ברירות מחדל — מומלץ להשאיר public:
+# ברירות מחדל ציבורי (כולל תאימות ישנה):
 DEFAULT_PUBLIC_PATHS = {
     "/", "/openapi.json", "/health", "/healthz", "/readyz",
     "/docs", "/redoc",
     "/telegram/webhook", "/telegram/callback", "/telegram/ping",
     "/provider/cryptopanic/webhook",
-    "/status/ping", "/status/ws", "/status/executor", "/status/all",
-    "/status/auth",  # ← הוספנו כדי שתוכל לבדוק tokens_count בלי טוקן
+    "/status/ping", "/status/ws", "/status/executor", "/status/all", "/status/auth",
+    # תאימות ישנה לפתוח בלי טוקן:
+    "/executor/status", "/ws-user/status",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
-# מה־ENV
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS", "")))
 CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
 
-# אם METRICS_PUBLIC=1 – נפתח גם /metrics
 if METRICS_PUBLIC:
     CFG_PUBLIC.add("/metrics")
 
-# סט אפקטיבי
 EFFECTIVE_PUBLIC_PATHS = set(DEFAULT_PUBLIC_PATHS) if PUBLIC_STATUS else set()
 EFFECTIVE_PUBLIC_PATHS |= CFG_PUBLIC
 
@@ -203,20 +201,16 @@ async def validate_token(request: Request, call_next):
     if request.method.upper() == "OPTIONS":
         return await call_next(request)
 
-    # public exact
     if path in EFFECTIVE_PUBLIC_PATHS:
         return await call_next(request)
 
-    # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
         if path.startswith(pfx):
             return await call_next(request)
 
-    # allow all?
     if allow_all():
         return await call_next(request)
 
-    # token-based
     token = extract_token(request, request.headers.get("Authorization", ""), request.headers.get("X-API-Key"))
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
@@ -229,27 +223,25 @@ def _try_include(module_path: str) -> bool:
         added_any = False
         if hasattr(mod, "router"):
             app.include_router(mod.router)
-            logger.info({"event": "router_registered", "router": f"{module_path}.router"})
+            logging.getLogger("algogpt").info({"event": "router_registered", "router": f"{module_path}.router"})
             added_any = True
         if hasattr(mod, "legacy"):
             app.include_router(mod.legacy)
-            logger.info({"event": "router_registered", "router": f"{module_path}.legacy"})
+            logging.getLogger("algogpt").info({"event": "router_registered", "router": f"{module_path}.legacy"})
             added_any = True
         if not added_any:
-            logger.warning({"event": "router_missing_router_attr", "router": module_path})
+            logging.getLogger("algogpt").warning({"event": "router_missing_router_attr", "router": module_path})
         return added_any
     except Exception as e:
-        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
+        logging.getLogger("algogpt").warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
     return False
-
-_registered_paths = set()
 
 for module_path in (
     "routes.trade",
     "routes.analytics",
     "routes.decision",
     "routes.backtest",
-    "routes.executor",          # מוגן ע"י dependency בפנים
+    "routes.executor",
     "routes.binance_status",
     "routes.telegram_webhook",
     "routes.telegram_callbacks",
@@ -257,32 +249,13 @@ for module_path in (
     "routes.executor_control",
     "routes.ws_user_stream",
     "routes.ai_analyze",
-    # במקום שניים נפרדים — נטען ראוטר סטטוס מאוחד שמכיל גם legacy:
-    "routes.status",
+    "routes.status",  # כולל legacy
     "routes.provider_cryptopanic",
     "routes.scan",
     "routes.multi_scan",
     "routes.system_autopilot",
-    # לא טוענים routes.telegram_fallback כברירת מחדל
 ):
-    if _try_include(module_path):
-        try:
-            for r in app.router.routes:
-                try:
-                    _registered_paths.add(getattr(r, "path", None))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-def _route_exists(path: str) -> bool:
-    try:
-        for r in app.router.routes:
-            if getattr(r, "path", None) == path:
-                return True
-    except Exception:
-        pass
-    return False
+    _try_include(module_path)
 
 # ---------- base routes ----------
 @app.get("/")
@@ -301,28 +274,23 @@ async def debug_health():
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
 
-if not _route_exists("/status/ws"):
-    @app.get("/status/ws")
-    async def status_ws():
-        st = ws_user_status()
-        return {"ok": True, **st}
+# (גיבוי אם מישהו לא טען את הראוטר)
+from utils.runtime_counters import ws_user_status as _ws, exec_get_counters as _ex
+@app.get("/status/ws")
+async def status_ws():
+    return {"ok": True, **_ws()}
 
-if not _route_exists("/status/executor"):
-    @app.get("/status/executor")
-    async def status_executor():
-        st = exec_get_counters()
-        return {"ok": True, **st}
+@app.get("/status/executor")
+async def status_executor():
+    return {"ok": True, **_ex()}
 
-if not _route_exists("/status/all"):
-    @app.get("/status/all")
-    async def status_all():
-        try:
-            ping_ok = bool(fapi_ping())
-        except Exception:
-            ping_ok = False
-        ws = ws_user_status()
-        ex = exec_get_counters()
-        return {"ok": True, "version": APP_VERSION, "ws": ws, "executor": ex, "binance_ping_ok": ping_ok}
+@app.get("/status/all")
+async def status_all():
+    try:
+        ping_ok = bool(fapi_ping())
+    except Exception:
+        ping_ok = False
+    return {"ok": True, "version": APP_VERSION, "ws": _ws(), "executor": _ex(), "binance_ping_ok": ping_ok}
 
 @app.get("/price/{symbol}")
 async def price(symbol: str):
@@ -352,7 +320,6 @@ async def readyz():
     except Exception as e:
         details["binance_ping_ok"] = False
         err = f"binance ping error: {e}"
-
     try:
         bal = futures_balance()
         details["balance_ok"] = bool(bal and isinstance(bal, list))
@@ -361,13 +328,11 @@ async def readyz():
     except Exception as e:
         details["balance_ok"] = False
         err = (err or "") + f"; balance error: {e}"
-
     for s in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
         try:
             details[f"price_{s}"] = get_price(s)
         except Exception:
             details[f"price_{s}"] = None
-
     return {"ok": (err is None), "error": err, "details": details}
 
 @app.post("/flush")
@@ -451,6 +416,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
