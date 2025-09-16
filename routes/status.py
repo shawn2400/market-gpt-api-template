@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from utils.runtime_counters import ws_user_status, exec_get_counters
 from utils.auth import get_public_paths, get_loaded_tokens, refresh_tokens_from_env
 
-# ראוטר מודרני תחת /status/...
+# מודרני /status/...
 router = APIRouter(prefix="/status", tags=["status"])
 
 @router.get("/ping")
@@ -46,7 +46,7 @@ def status_auth_refresh():
     refresh_tokens_from_env()
     return status_auth()
 
-# תאימות לנתיבים הישנים (לוג ישן/סקריפטים קיימים)
+# תאימות לנתיבים הישנים
 legacy = APIRouter(tags=["status"])
 
 @legacy.get("/executor/status")
