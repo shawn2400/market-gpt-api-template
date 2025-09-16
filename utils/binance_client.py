@@ -628,6 +628,19 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
             qty_q = _ensure_min_notional_qty(sym, float(ref_price), qty_q)
         kwargs["quantity"] = qty_q
 
+    # --- sanitize params by order type ---
+    typ = str(kwargs.get("type") or "").upper()
+    # MARKET-like: אין timeInForce
+    if "MARKET" in typ and "timeInForce" in kwargs:
+        kwargs.pop("timeInForce", None)
+    # ל-* _MARKET אין price
+    if typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
+        kwargs.pop("price", None)
+    # אם סוגרים פוזיציה שלמה – אין quantity ואין reduceOnly
+    if kwargs.get("closePosition"):
+        kwargs.pop("quantity", None)
+        kwargs.pop("reduceOnly", None)
+
     return _safe_create_order(**kwargs)
 
 def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *,
@@ -638,13 +651,15 @@ def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float
     qqty   = _quantize_qty(sym, float(quantity))
     kwargs = dict(
         symbol=sym, side=side.upper(), type="STOP_MARKET",
-        stopPrice=qprice, reduceOnly=bool(reduce_only), recvWindow=RECV_WINDOW,
-        workingType=WORKING_TYPE
+        stopPrice=qprice, recvWindow=RECV_WINDOW, workingType=WORKING_TYPE
     )
     if close_position:
+        # סגירה מלאה: לא שולחים quantity/ reduceOnly
         kwargs["closePosition"] = True
     else:
         kwargs["quantity"] = qqty
+        if reduce_only:
+            kwargs["reduceOnly"] = True
     kwargs["newClientOrderId"] = _sanitize_coid(client_order_id) if client_order_id else _coid("SL", sym)
     return _safe_create_order(**kwargs)
 
@@ -913,6 +928,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
