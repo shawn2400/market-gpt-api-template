@@ -372,7 +372,7 @@ def _rate_allow() -> bool:
         _bucket_used += 1; return True
     return False
 
-def _note_rate_limit_hit() -> None:
+def _note_rate_limit_hit():
     global _dyn_qps, _dyn_backoff_base, _last_rl_hit, _rl_hits
     _rl_hits += 1; _last_rl_hit = _now()
     _dyn_qps = max(1, _dyn_qps - 1)
@@ -461,6 +461,7 @@ def futures_index_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
+
 # ===== Open orders / history =====
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
@@ -479,6 +480,7 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
         logger.error("get_all_orders failed: %s", e); return []
     except Exception as e:
         logger.error("get_all_orders error: %s", e); return []
+
 # ===== Price guard =====
 def _percent_guard_ok(symbol: str, price: float) -> bool:
     if not PERCENT_GUARD_ENABLE: 
@@ -500,7 +502,6 @@ def _percent_guard_ok(symbol: str, price: float) -> bool:
     bps = max(1, int(PERCENT_GUARD_BPS))
     dev_bps = abs(price - mark) / mark * 10000.0
     return dev_bps <= bps
-
 # ===== Orders / Positions / Helpers =====
 def _order_has_prefix(o: Dict[str, Any], prefix: str) -> bool:
     if not prefix:
@@ -555,7 +556,6 @@ def _order_side_for_close(pos_side: str) -> str:
     return "SELL"
 
 # ===== Idempotency =====
-_idem_cache: Dict[str, Tuple[float, Dict[str, Any]]]  # (הכרזה כבר בחלק 1)
 def _idem_get(coid: str) -> Optional[Dict[str, Any]]:
     with _idem_lock:
         ts_res = _idem_cache.get(coid)
@@ -699,10 +699,10 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     eff_ps = _effective_position_side_from_kwargs(kwargs)  # עשוי להסיר positionSide
     is_trigger_market = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
     if not _is_hedge_mode_runtime():
-        # בחשבון One-Way: לצורך תאימות, ב-*MARKET טריגר עדיף לא לשלוח reduceOnly מלכתחילה
+        # בחשבון One-Way: ב-*MARKET טריגר עדיף לא לשלוח reduceOnly מלכתחילה
         if is_trigger_market and "reduceOnly" in kwargs:
             kwargs.pop("reduceOnly", None)
-        # גם ל-MARKET רגיל היו דיווחי -1106 → ננסה להשאיר ל-retry, אך אם יש closePosition True – אין reduceOnly
+        # אם closePosition True – אין quantity/reduceOnly
         if kwargs.get("closePosition"):
             kwargs.pop("quantity", None)
             kwargs.pop("reduceOnly", None)
@@ -714,7 +714,7 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
 
     return _safe_create_order(**kwargs)
 
-def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *,
+def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float, *|,
                       reduce_only: bool=True, close_position: bool=False,
                       client_order_id: Optional[str]=None) -> Dict[str, Any]:
     sym = symbol.upper()
@@ -737,7 +737,7 @@ def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float
         kwargs["newClientOrderId"] = _coid("SL", sym)
     return _safe_create_order(**kwargs)
 
-def modify_stop_loss(symbol: str, new_stop_price: float, *,
+def modify_stop_loss(symbol: str, new_stop_price: float, *|,
                      side: Optional[str]=None,
                      client_order_id_prefix: Optional[str]=None,
                      close_position: bool=True,
@@ -797,17 +797,25 @@ def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: 
         else:
             tprice = entry_price * (1.0 - pct/100.0)
 
+        # כימות פעם אחת לשימוש גם ב-stopPrice וגם ב-price (אם LIMIT TP)
+        stop_q = _quantize_price(sym, float(tprice))
+
         kwargs = dict(
             symbol=sym,
             side=side,
             type=LADDER_TP_KIND,  # TAKE_PROFIT_MARKET או TAKE_PROFIT
-            stopPrice=_quantize_price(sym, float(tprice)),
+            stopPrice=stop_q,
             closePosition=False,
             quantity=_ensure_min_notional_qty(sym, float(tprice), _quantize_qty(sym, qty_i)),
             workingType=WORKING_TYPE,
             recvWindow=RECV_WINDOW,
             newClientOrderId=_sanitize_coid((client_order_id_prefix or ORDER_ID_PREFIX or "TP") + f"_TP{i}_{sym}")
         )
+        # אם זה TAKE_PROFIT (Limit) – חייבים גם price וגם TIF (לפי Binance)
+        if LADDER_TP_KIND == "TAKE_PROFIT":
+            kwargs["price"] = stop_q
+            kwargs["timeInForce"] = "GTC"
+
         # ב-Hedge נעדיף reduceOnly; ב-One-Way ל-*MARKET טריגר לא נוסיף reduceOnly (ול-TAKE_PROFIT Limit זה לא קריטי)
         if reduce_only and _is_hedge_mode_runtime():
             kwargs["reduceOnly"] = True
@@ -983,6 +991,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
