@@ -17,10 +17,7 @@ import httpx
 
 from utils.json_logger import setup_json_logging
 from utils.response_limits import ResponseSizeLimiter
-from utils.auth import (
-    extract_token, allow_all, token_matches,
-    get_loaded_tokens, get_public_paths
-)
+from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
@@ -114,7 +111,7 @@ def custom_openapi():
         path_hidden = any(fnmatch(path, pat) for pat in hide_patterns)
 
         for method in list(methods.keys()):
-            if method.startswith("x-"):  # internal
+            if method.startswith("x-"):
                 continue
             op = methods[method]
             if op.get("x-internal") is True:
@@ -167,22 +164,26 @@ def _split_multi(s: str) -> Iterable[str]:
     import re
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
-# ברירות מחדל — מומלץ להשאיר public:
+# ברירות מחדל — **כולל /status/auth** כדי שתמיד נוכל לאבחן טוקנים
 DEFAULT_PUBLIC_PATHS = {
     "/", "/openapi.json", "/health", "/healthz", "/readyz",
     "/docs", "/redoc",
     "/telegram/webhook", "/telegram/callback", "/telegram/ping",
     "/provider/cryptopanic/webhook",
-    "/status/ping", "/status/ws", "/status/executor", "/status/all", "/status/auth",
+    "/status/ping", "/status/ws", "/status/executor", "/status/all",
+    "/status/auth",  # 👈 חדש: ציבורי כברירת מחדל
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
+# מה־ENV
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS", "")))
 CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
 
+# אם METRICS_PUBLIC=1 – נפתח גם /metrics
 if METRICS_PUBLIC:
     CFG_PUBLIC.add("/metrics")
 
+# סט אפקטיבי
 EFFECTIVE_PUBLIC_PATHS = set(DEFAULT_PUBLIC_PATHS) if PUBLIC_STATUS else set()
 EFFECTIVE_PUBLIC_PATHS |= CFG_PUBLIC
 
@@ -234,6 +235,8 @@ def _try_include(module_path: str) -> bool:
         logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
     return False
 
+_registered_paths = set()
+
 for module_path in (
     "routes.trade",
     "routes.analytics",
@@ -253,8 +256,17 @@ for module_path in (
     "routes.scan",
     "routes.multi_scan",
     "routes.system_autopilot",
+    # לא טוענים routes.telegram_fallback כברירת מחדל
 ):
-    _try_include(module_path)
+    if _try_include(module_path):
+        try:
+            for r in app.router.routes:
+                try:
+                    _registered_paths.add(getattr(r, "path", None))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 def _route_exists(path: str) -> bool:
     try:
@@ -282,17 +294,6 @@ async def debug_health():
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
 
-# חדש: /status/auth (ציבורי)
-@app.get("/status/auth")
-async def status_auth():
-    tokens_plain = get_loaded_tokens(mask=False)
-    return {
-        "ok": True,
-        "tokens_count": len(tokens_plain),
-        "tokens_preview": get_loaded_tokens(mask=True),
-        "public": get_public_paths(),
-    }
-
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
     async def status_ws():
@@ -315,6 +316,25 @@ if not _route_exists("/status/all"):
         ws = ws_user_status()
         ex = exec_get_counters()
         return {"ok": True, "version": APP_VERSION, "ws": ws, "executor": ex, "binance_ping_ok": ping_ok}
+
+# 👇 חדש: סטטוס אימות ותצורה — ציבורי by default
+try:
+    from utils.auth import get_loaded_tokens, get_public_paths
+except Exception:
+    def get_loaded_tokens(mask: bool = True): return []
+    def get_public_paths(): return {"paths": [], "prefixes": []}
+
+if not _route_exists("/status/auth"):
+    @app.get("/status/auth")
+    async def status_auth():
+        toks = get_loaded_tokens(mask=True)
+        public = get_public_paths()
+        return {
+            "ok": True,
+            "tokens_count": len(toks),
+            "tokens": toks,           # ממוסכים
+            "public": public,
+        }
 
 @app.get("/price/{symbol}")
 async def price(symbol: str):
@@ -384,6 +404,11 @@ TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1",
 
 @app.on_event("startup")
 async def _startup_preflight_warmup():
+    # לוג עזר: אילו טוקנים טעונים (מוסך)
+    try:
+        logger.info({"event": "auth.tokens_loaded", "tokens": get_loaded_tokens(mask=True)})
+    except Exception:
+        pass
     try:
         _ = futures_exchange_info_safe(force_refresh=True)
     except Exception as e:
@@ -443,6 +468,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
