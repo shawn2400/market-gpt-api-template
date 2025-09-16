@@ -8,7 +8,7 @@ from utils.auth import require_api_key, get_loaded_tokens, get_public_paths
 router = APIRouter(
     prefix="/status",
     tags=["Status"],
-    dependencies=[Depends(require_api_key)],  # נפתח לציבור אם הוגדר ב-ENV
+    dependencies=[Depends(require_api_key)],  # ייפתח לציבור אם הוגדרו ENV מתאימים
 )
 
 @router.get("/ping")
