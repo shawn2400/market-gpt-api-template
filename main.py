@@ -164,7 +164,7 @@ def _split_multi(s: str) -> Iterable[str]:
     import re
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
-# ברירות מחדל — **כולל /status/auth** כדי שתמיד נוכל לאבחן טוקנים
+# ברירות מחדל — כולל /status/auth כדי שתמיד אפשר לאבחן טוקנים
 DEFAULT_PUBLIC_PATHS = {
     "/", "/openapi.json", "/health", "/healthz", "/readyz",
     "/docs", "/redoc",
@@ -256,7 +256,6 @@ for module_path in (
     "routes.scan",
     "routes.multi_scan",
     "routes.system_autopilot",
-    # לא טוענים routes.telegram_fallback כברירת מחדל
 ):
     if _try_include(module_path):
         try:
@@ -317,7 +316,7 @@ if not _route_exists("/status/all"):
         ex = exec_get_counters()
         return {"ok": True, "version": APP_VERSION, "ws": ws, "executor": ex, "binance_ping_ok": ping_ok}
 
-# 👇 חדש: סטטוס אימות ותצורה — ציבורי by default
+# 👇 סטטוס אימות/טוקנים — ציבורי כברירת מחדל
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -329,12 +328,7 @@ if not _route_exists("/status/auth"):
     async def status_auth():
         toks = get_loaded_tokens(mask=True)
         public = get_public_paths()
-        return {
-            "ok": True,
-            "tokens_count": len(toks),
-            "tokens": toks,           # ממוסכים
-            "public": public,
-        }
+        return {"ok": True, "tokens_count": len(toks), "tokens": toks, "public": public}
 
 @app.get("/price/{symbol}")
 async def price(symbol: str):
@@ -468,9 +462,6 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
-
-
-
 
 
 
