@@ -38,6 +38,7 @@ def _read_public_from_env() -> None:
         _PUBLIC_PREFIXES = []
 
 def refresh_tokens_from_env() -> None:
+    """Load tokens + public paths from ENV (called on import)."""
     global _TOKENS
     _TOKENS = _read_tokens_from_env()
     _read_public_from_env()
@@ -78,6 +79,7 @@ def get_loaded_tokens(mask: bool = True):
 
 def get_public_paths():
     return {"paths": sorted(_PUBLIC_PATHS), "prefixes": list(_PUBLIC_PREFIXES)}
+
 
 
 
