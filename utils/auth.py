@@ -1,159 +1,88 @@
 # utils/auth.py
 from __future__ import annotations
-import os, hmac, logging, re
-from typing import Set, Optional, List
-from threading import RLock
-from fastapi import Header, HTTPException, status, Request
+import os, re, logging
+from typing import Optional, Set, List
+from fastapi import HTTPException, Header, Request
 
 logger = logging.getLogger("algogpt.auth")
 
-def _truthy(v: str | None) -> bool:
-    return str(v or "").strip().lower() in {"1", "true", "yes", "on"}
-
-def _split_tokens(val: str) -> Set[str]:
-    parts = re.split(r"[,\n;\s]+", (val or "").strip())
-    return {p for p in (s.strip() for s in parts) if p}
-
-def _mask_token(t: str) -> str:
-    if not t:
-        return ""
-    return "***" if len(t) <= 6 else f"{t[:3]}…{t[-3:]}"
-
-def _const_eq(a: str, b: str) -> bool:
-    try:
-        return hmac.compare_digest(a, b)
-    except Exception:
-        return a == b
-
-def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
-    if not authorization:
-        return None
-    parts = authorization.strip().split()
-    if len(parts) == 2 and parts[0].lower() == "bearer":
-        return parts[1].strip()
-    return None
-
-# store
-_TOKENS_LOCK = RLock()
 _TOKENS: Set[str] = set()
-_ALLOW_ALL: bool = False
-_PUBLIC_STATUS: bool = _truthy(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
+_PUBLIC_PATHS: Set[str] = set()
+_PUBLIC_PREFIXES: List[str] = []
 
-def _load_tokens_from_env() -> Set[str]:
-    keys = (
-        "API_BEARER_TOKEN", "API_BEARER_TOKEN_ALT", "API_BEARER_TOKENS",
-        "ALGOGPT_TOKEN", "ALGOGPT_TOKENS", "API_BEARER", "API_TOKENS",
-    )
-    tokens: Set[str] = set()
-    for k in keys:
-        v = (os.getenv(k) or "").strip()
-        if v:
-            tokens |= _split_tokens(v)
-
-    # תוספת: קובץ טוקנים (שורה לכל טוקן)
-    file_path = (os.getenv("API_TOKENS_FILE") or "").strip()
-    if file_path and os.path.exists(file_path):
+def _read_tokens_from_env() -> Set[str]:
+    toks: list[str] = []
+    env = os.getenv("API_TOKENS", "")
+    if env:
+        toks += re.split(r"[,\s]+", env.strip())
+    fp = os.getenv("API_TOKENS_FILE")
+    if fp and os.path.isfile(fp):
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                tokens |= _split_tokens(f.read())
+            with open(fp, "r", encoding="utf-8") as fh:
+                toks += [ln.strip() for ln in fh if ln.strip()]
         except Exception as e:
-            logger.warning("[Auth] failed reading API_TOKENS_FILE=%s: %s", file_path, e)
+            logger.warning("auth: failed reading API_TOKENS_FILE %s: %s", fp, e)
+    return {t for t in (x.strip() for x in toks) if t}
 
-    return {t for t in tokens if t}
+def _read_public_from_env() -> None:
+    global _PUBLIC_PATHS, _PUBLIC_PREFIXES
+    if os.getenv("SECURITY_PUBLIC_STATUS", "0") == "1":
+        paths = os.getenv("SECURITY_PUBLIC_PATHS", "")
+        _PUBLIC_PATHS = {p.strip() for p in paths.split(",") if p.strip()}
+        prefs = os.getenv("SECURITY_PUBLIC_PREFIXES", "")
+        _PUBLIC_PREFIXES = [p.strip() for p in prefs.split(",") if p.strip()]
+    else:
+        _PUBLIC_PATHS = set()
+        _PUBLIC_PREFIXES = []
 
-def _init_store() -> None:
-    global _TOKENS, _ALLOW_ALL, _PUBLIC_STATUS
-    with _TOKENS_LOCK:
-        _TOKENS = _load_tokens_from_env()
-        _ALLOW_ALL = _truthy(os.getenv("SECURITY_ALLOW_ALL"))
-        _PUBLIC_STATUS = _truthy(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
-    logger.info("[Auth] loaded %d tokens (allow_all=%s, public_status=%s)",
-                len(_TOKENS), _ALLOW_ALL, _PUBLIC_STATUS)
+def refresh_tokens_from_env() -> None:
+    """Load tokens + public allowlist from ENV/files. Call on startup."""
+    global _TOKENS
+    _TOKENS = _read_tokens_from_env()
+    _read_public_from_env()
+    logger.info(
+        "auth: loaded %d token(s). public_paths=%s prefixes=%s",
+        len(_TOKENS), sorted(_PUBLIC_PATHS), _PUBLIC_PREFIXES
+    )
 
-_init_store()
+# load on import (app startup)
+refresh_tokens_from_env()
 
-def refresh_tokens_from_env() -> int:
-    global _TOKENS, _ALLOW_ALL, _PUBLIC_STATUS
-    with _TOKENS_LOCK:
-        _TOKENS = _load_tokens_from_env()
-        _ALLOW_ALL  = _truthy(os.getenv("SECURITY_ALLOW_ALL"))
-        _PUBLIC_STATUS = _truthy(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
-        count = len(_TOKENS)
-    logger.info("[Auth] tokens refreshed (%d loaded, allow_all=%s, public_status=%s)",
-                count, _ALLOW_ALL, _PUBLIC_STATUS)
-    return count
+def get_loaded_tokens(mask: bool = True):
+    if mask:
+        return [f"{t[:3]}***{t[-2:]}" if len(t) > 5 else "***" for t in sorted(_TOKENS)]
+    return sorted(_TOKENS)
 
-def get_loaded_tokens(mask: bool = True) -> List[str]:
-    with _TOKENS_LOCK:
-        toks = list(_TOKENS)
-    return [(_mask_token(t) if mask else t) for t in toks]
+def get_public_paths():
+    return {"paths": sorted(_PUBLIC_PATHS), "prefixes": list(_PUBLIC_PREFIXES)}
 
-def allow_all() -> bool:
-    with _TOKENS_LOCK:
-        return _ALLOW_ALL
+def _is_public(path: str) -> bool:
+    if path in _PUBLIC_PATHS:
+        return True
+    return any(path.startswith(pref) for pref in _PUBLIC_PREFIXES)
 
-def token_matches(candidate: Optional[str]) -> bool:
-    if not candidate:
-        return False
-    with _TOKENS_LOCK:
-        for t in _TOKENS:
-            if _const_eq(candidate, t):
-                return True
-    return False
-
-def _header_any(request: Request, names: tuple[str, ...]) -> Optional[str]:
-    for n in names:
-        v = request.headers.get(n)
-        if v and v.strip():
-            return v.strip()
-    return None
-
-def extract_token(
-    request: Request,
-    authorization: Optional[str] = None,
-    x_api_key: Optional[str] = None,
-) -> Optional[str]:
-    token = _extract_bearer(authorization or request.headers.get("authorization"))
-    if not token:
-        hdr = _header_any(
-            request,
-            ("x-api-key", "x-auth-token", "x-token", "x-algogpt-token", "x-authorization"),
-        )
-        token = (hdr or "").strip() or None
-    if not token:
-        qp = request.query_params.get("api_key") or request.query_params.get("token")
-        token = qp.strip() if qp else None
-    return token or None
-
-# FastAPI dependency
 async def require_api_key(
     request: Request,
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None),
-) -> None:
-    # /ping ו-/status ציבוריים אם רוצים
-    if request.url.path in ("/ping", "/status") and _PUBLIC_STATUS:
+):
+    # allow public paths (opt-in by env)
+    path = request.url.path
+    if _is_public(path):
         return
-    if allow_all():
+
+    token: Optional[str] = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(None, 1)[1].strip()
+    if not token and x_api_key:
+        token = x_api_key.strip()
+    if not token:
+        token = request.query_params.get("api_key")
+
+    if token and token in _TOKENS:
         return
-    token = extract_token(request, authorization, x_api_key)
-    if not token_matches(token):
-        masked = (token[:6] + "...") if token else None
-        logger.warning("[Auth] invalid token=%s path=%s", masked, request.url.path)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-            headers={"WWW-Authenticate": "Bearer, X-API-Key"},
-        )
 
-require_bearer_token = require_api_key
-
-__all__ = [
-    "require_api_key", "require_bearer_token",
-    "refresh_tokens_from_env", "get_loaded_tokens",
-    "extract_token", "allow_all", "token_matches",
-]
-
+    raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 
