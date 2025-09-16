@@ -171,6 +171,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/telegram/webhook", "/telegram/callback", "/telegram/ping",
     "/provider/cryptopanic/webhook",
     "/status/ping", "/status/ws", "/status/executor", "/status/all",
+    "/status/auth",  # ← הוספנו כדי שתוכל לבדוק tokens_count בלי טוקן
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
@@ -224,12 +225,19 @@ async def validate_token(request: Request, call_next):
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
     try:
-        mod = __import__(module_path, fromlist=["router"])
+        mod = __import__(module_path, fromlist=["router", "legacy"])
+        added_any = False
         if hasattr(mod, "router"):
             app.include_router(mod.router)
-            logger.info({"event": "router_registered", "router": module_path})
-            return True
-        logger.warning({"event": "router_missing_router_attr", "router": module_path})
+            logger.info({"event": "router_registered", "router": f"{module_path}.router"})
+            added_any = True
+        if hasattr(mod, "legacy"):
+            app.include_router(mod.legacy)
+            logger.info({"event": "router_registered", "router": f"{module_path}.legacy"})
+            added_any = True
+        if not added_any:
+            logger.warning({"event": "router_missing_router_attr", "router": module_path})
+        return added_any
     except Exception as e:
         logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
     return False
@@ -249,8 +257,8 @@ for module_path in (
     "routes.executor_control",
     "routes.ws_user_stream",
     "routes.ai_analyze",
-    "routes.ws_user_status",
-    "routes.executor_status",   # מספק /status/executor ציבורי
+    # במקום שניים נפרדים — נטען ראוטר סטטוס מאוחד שמכיל גם legacy:
+    "routes.status",
     "routes.provider_cryptopanic",
     "routes.scan",
     "routes.multi_scan",
@@ -443,6 +451,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
