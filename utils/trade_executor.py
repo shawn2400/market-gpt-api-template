@@ -197,7 +197,6 @@ def _is_hedge_mode_runtime() -> bool:
         _HEDGE_MODE_CACHE = bool(data.get("dualSidePosition"))
         return _HEDGE_MODE_CACHE
     except Exception:
-        # ברירת מחדל שמרנית: One-Way
         _HEDGE_MODE_CACHE = False
         return False
 
@@ -908,6 +907,18 @@ async def execute_trade_live(
                              ([sl] if sl is not None else sl_targets), sl_splits)
     plan["tp_orders"] = ladders["tp_orders"]; plan["sl_orders"] = ladders["sl_orders"]
 
+    def _place_with_retry(args: Dict[str, Any]) -> Dict[str, Any]:
+        """שולח הזמנה, ואם קיבלנו -1106 על reduceOnly – מנסה שוב בלי reduceOnly."""
+        try:
+            return futures_create_order(**args)
+        except Exception as e:
+            msg = str(e).lower()
+            if "reduceonly" in msg or "reduce only" in msg:
+                a2 = dict(args)
+                a2.pop("reduceOnly", None)
+                return futures_create_order(**a2)
+            raise
+
     tp_success = False
     sl_success = False
     for arr in (plan["tp_orders"], plan["sl_orders"]):
@@ -917,7 +928,6 @@ async def execute_trade_live(
                 symbol=sym,
                 side=close_side,
                 type=typ,
-                reduceOnly=True,
                 workingType="MARK_PRICE",
             )
 
@@ -925,20 +935,24 @@ async def execute_trade_live(
             if eff_ps != "BOTH":
                 args["positionSide"] = eff_ps
 
+            # STOP_MARKET / TAKE_PROFIT_MARKET: רק stopPrice + quantity (בלי TIF)
+            # STOP / TAKE_PROFIT (Limit): stopPrice + price + TIF
             if "MARKET" in typ:
-                # STOP_MARKET / TAKE_PROFIT_MARKET: רק stopPrice + quantity
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
-                # אין timeInForce להזמנות *MARKET
             else:
-                # STOP / TAKE_PROFIT (Limit): stopPrice + price + TIF=GTC
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
                 args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
                 args["timeInForce"] = "GTC"
 
             args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
 
+            # ⚠️ reduceOnly לטריגרים MARKET ב-One-Way גורם ל- -1106 → לא לשלוח
+            is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
+            if not (is_market_trigger and eff_ps == "BOTH"):
+                args["reduceOnly"] = True
+
             try:
-                resp = futures_create_order(**args)
+                resp = _place_with_retry(args)
                 o["response"] = resp
                 if typ.startswith("TAKE_PROFIT"):
                     tp_success = tp_success or bool(resp.get("orderId"))
@@ -961,22 +975,30 @@ async def execute_trade_live(
 
 # ─────────── Helpers (rollback) ───────────
 def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "BOTH") -> Dict[str, Any]:
-    position_side = _effective_position_side(_normalize_position_side(position_side))
+    eff_ps = _effective_position_side(_normalize_position_side(position_side))
     close_side = _close_side_for(side)
+    args = dict(
+        symbol=sym,
+        side=close_side,
+        type="MARKET",
+        quantity=_q_qty(sym, qty)[0],
+    )
+    if eff_ps != "BOTH":
+        args["positionSide"] = eff_ps
+        args["reduceOnly"] = True  # ב-Hedge זה תקין
+    # ב-One-Way נתחיל בלי reduceOnly כדי להימנע מ- -1106, ואם צריך – ננסה שוב
     try:
-        args = dict(
-            symbol=sym,
-            side=close_side,
-            type="MARKET",
-            reduceOnly=True,
-            quantity=_q_qty(sym, qty)[0],
-        )
-        if position_side != "BOTH":
-            args["positionSide"] = position_side
-        resp = futures_create_order(**args)
-        return {"ok": True, "response": resp}
+        return {"ok": True, "response": futures_create_order(**args)}
     except Exception as e:
+        msg = str(e).lower()
+        if "reduceonly" in msg or "reduce only" in msg:
+            args2 = dict(args); args2.pop("reduceOnly", None)
+            try:
+                return {"ok": True, "response": futures_create_order(**args2)}
+            except Exception as e2:
+                return {"ok": False, "error": str(e2)}
         return {"ok": False, "error": str(e)}
+
 
 
 
