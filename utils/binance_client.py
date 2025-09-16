@@ -44,6 +44,42 @@ PRICE_CACHE_TTL_MS = int(os.getenv("PRICE_CACHE_TTL_MS", "250"))
 ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))
 ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))
 
+# ===== Hedge/One-Way detection (runtime + override) =====
+HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
+_HEDGE_MODE_CACHE: Optional[bool] = None
+
+def _is_hedge_mode_runtime() -> bool:
+    """True אם החשבון במצב Hedge; אחרת False (One-Way). כיבוד override דרך HEDGE_MODE."""
+    global _HEDGE_MODE_CACHE
+    if HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"):  # כפייה ל-Hedge
+        return True
+    if HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):  # כפייה ל-One-Way
+        return False
+    try:
+        acc = _get_account_cached() or {}
+        # לפי מבנה Binance: dualSidePosition=True → Hedge
+        dual = bool(acc.get("dualSidePosition"))
+        _HEDGE_MODE_CACHE = dual
+        return dual
+    except Exception:
+        # בהיעדר מידע – ברירת מחדל שמרנית: One-Way
+        return False
+
+def _effective_position_side_from_kwargs(kwargs: Dict[str, Any]) -> str:
+    """
+    מחזיר LONG/SHORT אם הועבר positionSide בחשבון Hedge. ב-One-Way או אם לא חוקי – מחזיר 'BOTH'.
+    בנוסף, אם One-Way ונשלח positionSide – נסיר אותו מה-kwargs (סניטציה).
+    """
+    ps = str(kwargs.get("positionSide") or "").upper().strip()
+    if not _is_hedge_mode_runtime():
+        # One-Way → לא שולחים positionSide בכלל
+        kwargs.pop("positionSide", None)
+        return "BOTH"
+    if ps in ("LONG","SHORT"):
+        return ps
+    kwargs.pop("positionSide", None)
+    return "BOTH"
+
 # ===== Ladder ENV =====
 LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
 LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
@@ -443,7 +479,6 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
         logger.error("get_all_orders failed: %s", e); return []
     except Exception as e:
         logger.error("get_all_orders error: %s", e); return []
-
 # ===== Price guard =====
 def _percent_guard_ok(symbol: str, price: float) -> bool:
     if not PERCENT_GUARD_ENABLE: 
@@ -451,7 +486,6 @@ def _percent_guard_ok(symbol: str, price: float) -> bool:
     mark = futures_mark_price(symbol)
     if not mark or mark <= 0:
         return True
-    # שימוש ב־percentPrice filters אם קיימים; אחרת ב־PERCENT_GUARD_BPS
     f = get_symbol_filters(symbol) or {}
     pp = (f.get("percentPrice") or {}) if f else {}
     try:
@@ -463,7 +497,6 @@ def _percent_guard_ok(symbol: str, price: float) -> bool:
         lo = mark * float(down)
         hi = mark * float(up)
         return (price >= lo) and (price <= hi)
-    # fallback — ביפסים סביב mark
     bps = max(1, int(PERCENT_GUARD_BPS))
     dev_bps = abs(price - mark) / mark * 10000.0
     return dev_bps <= bps
@@ -522,6 +555,7 @@ def _order_side_for_close(pos_side: str) -> str:
     return "SELL"
 
 # ===== Idempotency =====
+_idem_cache: Dict[str, Tuple[float, Dict[str, Any]]]  # (הכרזה כבר בחלק 1)
 def _idem_get(coid: str) -> Optional[Dict[str, Any]]:
     with _idem_lock:
         ts_res = _idem_cache.get(coid)
@@ -539,7 +573,6 @@ def _idem_get(coid: str) -> Optional[Dict[str, Any]]:
 def _idem_put(coid: str, res: Dict[str, Any]) -> None:
     with _idem_lock:
         _idem_cache[coid] = (_now(), res)
-        # prune light
         if len(_idem_cache) > 2048:
             dead = [k for k,(t,_) in _idem_cache.items() if (_now() - t) > IDEMP_TTL_SEC]
             for k in dead[:512]:
@@ -550,12 +583,15 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
     kwargs.setdefault("workingType", WORKING_TYPE)
     kwargs.setdefault("recvWindow", RECV_WINDOW)
 
+    # כבדוק Hedge/One-Way וסניטציית positionSide
+    eff_ps = _effective_position_side_from_kwargs(kwargs)  # עשוי להסיר positionSide ב-One-Way
+
     if not str(kwargs.get("newClientOrderId", "")).strip():
         sym = str(kwargs.get("symbol", "UNK")).upper()
         kind = _kind_from_kwargs(kwargs)
         kwargs["newClientOrderId"] = _coid(kind, sym)
 
-    # Percent-guard for price/stopPrice
+    # Percent-guard
     try:
         sym = str(kwargs.get("symbol", "UNK")).upper()
         if "price" in kwargs and kwargs["price"] is not None:
@@ -575,6 +611,20 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
         if idem_hit is not None:
             return idem_hit
 
+    # ===== Retry loop + טיפול מיוחד ב- -1106 (reduceOnly) =====
+    def _maybe_retry_without_reduceonly(err: Exception) -> Optional[Dict[str, Any]]:
+        msg = str(err).lower()
+        if "reduceonly" in msg and "not required" in msg and "reduceonly" in (k.lower() for k in kwargs.keys()):
+            k2 = dict(kwargs)
+            k2.pop("reduceOnly", None)
+            try:
+                r2 = client.futures_create_order(**k2)
+                if coid: _idem_put(coid, r2 if isinstance(r2, dict) else {"ok": True, "res": r2})
+                return r2
+            except Exception as e2:
+                return {"ok": False, "error": str(e2)}
+        return None
+
     for attempt in range(1, BINANCE_MAX_RETRIES + 1):
         if not _rate_allow():
             _backoff_sleep(attempt); continue
@@ -585,14 +635,23 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
             return res
         except BinanceAPIException as e:
             s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
+            # טיפול רייטלימיט
             if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
                 logger.warning("Rate-limited, attempt=%s; qps=%s base=%sms", attempt, _dyn_qps, _dyn_backoff_base)
                 _note_rate_limit_hit(); _backoff_sleep(attempt); continue
+            # נסה ללא reduceOnly אם רלוונטי
+            retry = _maybe_retry_without_reduceonly(e)
+            if retry is not None:
+                return retry
             logger.error("BinanceAPIException: %s", e)
             err = {"ok": False, "error": str(e)}
             if coid: _idem_put(coid, err)
             return err
         except Exception as e:
+            # נסה ללא reduceOnly אם זה המקרה
+            retry = _maybe_retry_without_reduceonly(e)
+            if retry is not None:
+                return retry
             logger.error("futures_create_order failed: %s", e)
             _backoff_sleep(attempt)
             if attempt == BINANCE_MAX_RETRIES:
@@ -606,16 +665,17 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
 def futures_create_order(**kwargs) -> Dict[str, Any]:
     """
     עטיפה בטוחה ליצירת הזמנה — עם Idempotency, Percent-Guard, Backoff, WorkingType/recvWindow.
+    כולל סניטציה לפי סוג הזמנה, וניקוי reduceOnly אם אינו נדרש ב-One-Way.
     """
-    # Quantize מחיר/כמות אם ניתנו כ-float
     sym = str(kwargs.get("symbol", "UNK")).upper()
+
+    # Quantize
     if "price" in kwargs and kwargs["price"] is not None:
         kwargs["price"] = _quantize_price(sym, float(kwargs["price"]))
     if "stopPrice" in kwargs and kwargs["stopPrice"] is not None:
         kwargs["stopPrice"] = _quantize_price(sym, float(kwargs["stopPrice"]))
     if "quantity" in kwargs and kwargs["quantity"] is not None:
         qty_q = _quantize_qty(sym, float(kwargs["quantity"]))
-        # אם יש price ידוע — בדוק מינימום notional
         ref_price = None
         if kwargs.get("price") is not None:
             ref_price = float(kwargs["price"])
@@ -628,18 +688,29 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
             qty_q = _ensure_min_notional_qty(sym, float(ref_price), qty_q)
         kwargs["quantity"] = qty_q
 
-    # --- sanitize params by order type ---
+    # סוג הזמנה → סניטציה
     typ = str(kwargs.get("type") or "").upper()
-    # MARKET-like: אין timeInForce
     if "MARKET" in typ and "timeInForce" in kwargs:
         kwargs.pop("timeInForce", None)
-    # ל-* _MARKET אין price
     if typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
         kwargs.pop("price", None)
-    # אם סוגרים פוזיציה שלמה – אין quantity ואין reduceOnly
-    if kwargs.get("closePosition"):
-        kwargs.pop("quantity", None)
-        kwargs.pop("reduceOnly", None)
+
+    # Hedge/One-Way: סניטציה של positionSide ו־reduceOnly
+    eff_ps = _effective_position_side_from_kwargs(kwargs)  # עשוי להסיר positionSide
+    is_trigger_market = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
+    if not _is_hedge_mode_runtime():
+        # בחשבון One-Way: לצורך תאימות, ב-*MARKET טריגר עדיף לא לשלוח reduceOnly מלכתחילה
+        if is_trigger_market and "reduceOnly" in kwargs:
+            kwargs.pop("reduceOnly", None)
+        # גם ל-MARKET רגיל היו דיווחי -1106 → ננסה להשאיר ל-retry, אך אם יש closePosition True – אין reduceOnly
+        if kwargs.get("closePosition"):
+            kwargs.pop("quantity", None)
+            kwargs.pop("reduceOnly", None)
+    else:
+        # Hedge: אם closePosition → אין quantity/reduceOnly
+        if kwargs.get("closePosition"):
+            kwargs.pop("quantity", None)
+            kwargs.pop("reduceOnly", None)
 
     return _safe_create_order(**kwargs)
 
@@ -654,13 +725,16 @@ def place_stop_market(symbol: str, side: str, stop_price: float, quantity: float
         stopPrice=qprice, recvWindow=RECV_WINDOW, workingType=WORKING_TYPE
     )
     if close_position:
-        # סגירה מלאה: לא שולחים quantity/ reduceOnly
         kwargs["closePosition"] = True
     else:
         kwargs["quantity"] = qqty
-        if reduce_only:
+        # ב-One-Way והזמנת טריגר MARKET לא נשלח reduceOnly מראש; ב-Hedge זה בסדר
+        if reduce_only and _is_hedge_mode_runtime():
             kwargs["reduceOnly"] = True
-    kwargs["newClientOrderId"] = _sanitize_coid(client_order_id) if client_order_id else _coid("SL", sym)
+    if client_order_id:
+        kwargs["newClientOrderId"] = _sanitize_coid(client_order_id)
+    else:
+        kwargs["newClientOrderId"] = _coid("SL", sym)
     return _safe_create_order(**kwargs)
 
 def modify_stop_loss(symbol: str, new_stop_price: float, *,
@@ -668,21 +742,14 @@ def modify_stop_loss(symbol: str, new_stop_price: float, *,
                      client_order_id_prefix: Optional[str]=None,
                      close_position: bool=True,
                      quantity: Optional[float]=None) -> Dict[str, Any]:
-    """
-    Modify SL ע"י cancel&replace בטוח.
-    אם side לא ניתן — נגזר מהפוזיציה.
-    """
     sym = symbol.upper()
-    # בטל SL קיימים
     _cancel_closing_orders(sym, types=("STOP", "STOP_MARKET"))
-    # קבע צד
     if not side:
         pos = get_single_position(sym)
         if not pos:
             return {"ok": False, "error": "no_position"}
         amt = float(pos.get("positionAmt","0"))
         side = "SELL" if amt > 0 else "BUY"
-    # צור חדש
     coid = (client_order_id_prefix + "_SL") if client_order_id_prefix else None
     qty = quantity
     if close_position and qty is None:
@@ -701,9 +768,6 @@ def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: 
                     splits: Optional[List[float]]=None,
                     reduce_only: bool=True,
                     client_order_id_prefix: Optional[str]=None) -> Dict[str, Any]:
-    """
-    בונה סולם TP כ-TAKE_PROFIT_MARKET/ReduceOnly.
-    """
     if not LADDER_TP_ENABLE:
         return {"ok": False, "error": "ladder_disabled"}
     now = _now()
@@ -721,7 +785,6 @@ def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: 
     tp_percents = tp_percents[:LADDER_TP_MAX_LEVELS]
     splits = splits[:len(tp_percents)]
     if abs(sum(splits) - 1.0) > 1e-6:
-        # נרמל
         s = sum(splits); splits = [x/s for x in splits]
 
     placed = []; errors = []
@@ -729,34 +792,33 @@ def place_tp_ladder(symbol: str, entry_side: str, entry_price: float, quantity: 
         qty_i = max(0.0, float(quantity) * float(frac))
         if qty_i <= 0: 
             continue
-        # stopPrice כיעד TP (MARK_PRICE trigger)
         if entry_side.upper() == "BUY":
             tprice = entry_price * (1.0 + pct/100.0)
         else:
             tprice = entry_price * (1.0 - pct/100.0)
+
         kwargs = dict(
             symbol=sym,
             side=side,
-            type=LADDER_TP_KIND,  # TAKE_PROFIT_MARKET
+            type=LADDER_TP_KIND,  # TAKE_PROFIT_MARKET או TAKE_PROFIT
             stopPrice=_quantize_price(sym, float(tprice)),
-            reduceOnly=bool(reduce_only),
             closePosition=False,
             quantity=_ensure_min_notional_qty(sym, float(tprice), _quantize_qty(sym, qty_i)),
             workingType=WORKING_TYPE,
             recvWindow=RECV_WINDOW,
             newClientOrderId=_sanitize_coid((client_order_id_prefix or ORDER_ID_PREFIX or "TP") + f"_TP{i}_{sym}")
         )
+        # ב-Hedge נעדיף reduceOnly; ב-One-Way ל-*MARKET טריגר לא נוסיף reduceOnly (ול-TAKE_PROFIT Limit זה לא קריטי)
+        if reduce_only and _is_hedge_mode_runtime():
+            kwargs["reduceOnly"] = True
         res = _safe_create_order(**kwargs)
-        if isinstance(res, dict) and res.get("ok") is False:
+        if isinstance(res, dict) and res.get("ok") is False and res.get("error"):
             errors.append({"level": i, "error": res.get("error")})
         else:
             placed.append(res)
     return {"ok": len(errors) == 0, "placed": placed, "errors": errors}
 
 def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str, Any]:
-    """
-    מציב SL ב-BE (entryPrice) עם התאמת טיק קטנה לצד הבטוח.
-    """
     sym = symbol.upper()
     pos = get_single_position(sym)
     if not pos:
@@ -768,13 +830,12 @@ def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str, Any]:
     if entry <= 0:
         return {"ok": False, "error": "no_entry_price"}
 
-    # adjust entry by small tick to avoid immediate trigger
     f = get_symbol_filters(sym) or {}
     tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
-    if amt > 0:  # LONG → SL slightly below entry
+    if amt > 0:  # LONG
         sprice = entry - tick * max(1, tick_adjust)
         side = "SELL"
-    else:       # SHORT → SL slightly above entry
+    else:       # SHORT
         sprice = entry + tick * max(1, tick_adjust)
         side = "BUY"
 
@@ -812,6 +873,7 @@ def close_all_positions() -> Dict[str,Any]:
             if abs(amt) <= 1e-12: continue
             side = "SELL" if amt>0 else "BUY"
             try:
+                # One-Way עלול לזרוק -1106 על reduceOnly → נשתמש ב-_safe_create_order עם retry פנימי
                 res = _safe_create_order(symbol=sym, side=side, type="MARKET",
                                          reduceOnly=True, quantity=_quantize_qty(sym, abs(amt)),
                                          newClientOrderId=_coid("MKT", sym))
@@ -848,9 +910,6 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
 
 def futures_cancel_and_replace_limit(symbol: str, side: str, price: float, quantity: float, *, reduce_only: bool=False,
                                      client_order_id: Optional[str]=None, time_in_force: str="GTC") -> Dict[str, Any]:
-    """
-    כלי עזר: ביטול כל LIMIT קודמים (אופציונלי לפי prefix) והצבת LIMIT חדש.
-    """
     _cancel_closing_orders(symbol, types=("LIMIT",))
     sym = symbol.upper()
     return futures_create_order(
@@ -859,12 +918,12 @@ def futures_cancel_and_replace_limit(symbol: str, side: str, price: float, quant
         type="LIMIT",
         price=_quantize_price(sym, float(price)),
         quantity=_ensure_min_notional_qty(sym, float(price), _quantize_qty(sym, float(quantity))),
-        reduceOnly=bool(reduce_only),
+        reduceOnly=bool(reduce_only) if _is_hedge_mode_runtime() else False,
         timeInForce=time_in_force,
         newClientOrderId=_sanitize_coid(client_order_id) if client_order_id else _coid("LMT", sym)
     )
 
-# --- Compatibility wrapper for legacy callers (used by routes.grid) ---
+# --- Compatibility wrapper ---
 def place_limit_order(
     symbol: str,
     side: str,
@@ -878,10 +937,6 @@ def place_limit_order(
     client=None,
     **kwargs,
 ):
-    """
-    Backward-compatible LIMIT order helper.
-    Accepts either (quantity + price) or (size_usdt + price). Uses futures_create_order.
-    """
     sym = symbol.upper()
     if price is None:
         raise ValueError("place_limit_order requires price")
@@ -909,7 +964,7 @@ def place_limit_order(
         type="LIMIT",
         price=_quantize_price(sym, p_float),
         quantity=qty_str,
-        reduceOnly=bool(reduce_only),
+        reduceOnly=bool(reduce_only) if _is_hedge_mode_runtime() else False,
         timeInForce=tif_final,
         **{k: v for k, v in kwargs.items() if k not in {"tif"}}
     )
@@ -928,6 +983,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
