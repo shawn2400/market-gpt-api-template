@@ -21,11 +21,20 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
-from utils.telegram_notifier import (
-    ensure_ops_schedulers_started,
-    send_ops_digest_now,
-    send_eod_report_now,
-)
+# ✅ הפוך ליבוא "notifier" ללא-קריטי (נופל-ל-noop אם המודול לא קיים)
+try:
+    from utils.telegram_notifier import (
+        ensure_ops_schedulers_started,
+        send_ops_digest_now,
+        send_eod_report_now,
+    )
+except Exception:
+    async def ensure_ops_schedulers_started() -> None:
+        return None
+    async def send_ops_digest_now(hours: Optional[int] = None) -> None:
+        return None
+    async def send_eod_report_now() -> None:
+        return None
 
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
@@ -247,7 +256,6 @@ async def debug_health():
 @app.get("/status/ping")
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
-
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
     async def status_ws():
@@ -362,7 +370,7 @@ async def _startup_webhook():
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/setWebhook", json={
-                "url": f"{public_host}/telegram/webhook",
+                "url": f"{public_host.rstrip('/')}/telegram/webhook",
                 "secret_token": WEBHOOK_SECRET,
                 "drop_pending_updates": True,
                 "max_connections": 40,
@@ -397,6 +405,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
