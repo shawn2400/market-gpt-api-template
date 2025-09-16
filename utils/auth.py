@@ -1,6 +1,6 @@
 # utils/auth.py
 from __future__ import annotations
-import os, hmac, logging
+import os, hmac, logging, re
 from typing import Set, Optional, List
 from threading import RLock
 from fastapi import Header, HTTPException, status, Request
@@ -8,11 +8,12 @@ from fastapi import Header, HTTPException, status, Request
 logger = logging.getLogger("algogpt.auth")
 
 def _truthy(v: str | None) -> bool:
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+    return str(v or "").strip().lower() in {"1", "true", "yes", "on"}
 
 def _split_tokens(val: str) -> Set[str]:
-    raw = val.replace("\n", ",").replace(";", ",").split(",")
-    return {p.strip() for p in raw if p and p.strip()}
+    # ⬅️ כעת תומך גם ברווחים
+    parts = re.split(r"[,\n;\s]+", val.strip())
+    return {p for p in (s.strip() for s in parts) if p}
 
 def _mask_token(t: str) -> str:
     if not t:
@@ -37,6 +38,7 @@ def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
 _TOKENS_LOCK = RLock()
 _TOKENS: Set[str] = set()
 _ALLOW_ALL: bool = False
+_PUBLIC_STATUS: bool = _truthy(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
 
 def _load_tokens_from_env() -> Set[str]:
     keys = (
@@ -46,34 +48,37 @@ def _load_tokens_from_env() -> Set[str]:
         "ALGOGPT_TOKEN",
         "ALGOGPT_TOKENS",
         "API_BEARER",
+        # אם יש אצלך גם API_TOKENS – אפשר להוסיף:
+        "API_TOKENS",
     )
     tokens: Set[str] = set()
     for k in keys:
         v = (os.getenv(k) or "").strip()
         if not v:
             continue
-        if ("," in v) or (";" in v) or ("\n" in v):
-            tokens |= _split_tokens(v)
-        else:
-            tokens.add(v)
+        tokens |= _split_tokens(v)
     return {t for t in tokens if t}
 
 def _init_store() -> None:
-    global _TOKENS, _ALLOW_ALL
+    global _TOKENS, _ALLOW_ALL, _PUBLIC_STATUS
     with _TOKENS_LOCK:
         _TOKENS = _load_tokens_from_env()
         _ALLOW_ALL = _truthy(os.getenv("SECURITY_ALLOW_ALL"))
-    logger.info("[Auth] loaded %d tokens (allow_all=%s)", len(_TOKENS), _ALLOW_ALL)
+        _PUBLIC_STATUS = _truthy(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
+    logger.info("[Auth] loaded %d tokens (allow_all=%s, public_status=%s)",
+                len(_TOKENS), _ALLOW_ALL, _PUBLIC_STATUS)
 
 _init_store()
 
 def refresh_tokens_from_env() -> int:
-    global _TOKENS, _ALLOW_ALL
+    global _TOKENS, _ALLOW_ALL, _PUBLIC_STATUS
     with _TOKENS_LOCK:
         _TOKENS = _load_tokens_from_env()
-        _ALLOW_ALL = _truthy(os.getenv("SECURITY_ALLOW_ALL"))
+        _ALLOW_ALL  = _truthy(os.getenv("SECURITY_ALLOW_ALL"))
+        _PUBLIC_STATUS = _truthy(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
         count = len(_TOKENS)
-    logger.info("[Auth] tokens refreshed (%d loaded, allow_all=%s)", count, _ALLOW_ALL)
+    logger.info("[Auth] tokens refreshed (%d loaded, allow_all=%s, public_status=%s)",
+                count, _ALLOW_ALL, _PUBLIC_STATUS)
     return count
 
 def get_loaded_tokens(mask: bool = True) -> List[str]:
@@ -94,14 +99,36 @@ def token_matches(candidate: Optional[str]) -> bool:
                 return True
     return False
 
+def _header_any(request: Request, names: tuple[str, ...]) -> Optional[str]:
+    for n in names:
+        v = request.headers.get(n)
+        if v and v.strip():
+            return v.strip()
+    return None
+
 def extract_token(
     request: Request,
     authorization: Optional[str] = None,
     x_api_key: Optional[str] = None,
 ) -> Optional[str]:
-    token = _extract_bearer(authorization) or (x_api_key or "").strip() or None
+    # 1) Authorization: Bearer ...
+    token = _extract_bearer(authorization or request.headers.get("authorization"))
+    # 2) מפתחים אוהבים וריאציות נוספות:
     if not token:
-        qp = request.query_params.get("api_key")
+        hdr = _header_any(
+            request,
+            (
+                "x-api-key",
+                "x-auth-token",
+                "x-token",
+                "x-algogpt-token",
+                "x-authorization",
+            ),
+        )
+        token = (hdr or "").strip() or None
+    # 3) query params
+    if not token:
+        qp = request.query_params.get("api_key") or request.query_params.get("token")
         token = qp.strip() if qp else None
     return token or None
 
@@ -111,15 +138,19 @@ async def require_api_key(
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None),
 ) -> None:
+    # ⬅️ אופציונלי: לאפשר /ping ו-/status ללא Auth (לבריאות/בדיקות), נשלט ב-ENV
+    if request.url.path in ("/ping", "/status") and _PUBLIC_STATUS:
+        return
     if allow_all():
         return
     token = extract_token(request, authorization, x_api_key)
     if not token_matches(token):
-        logger.warning("[Auth] invalid token=%s", (token[:6] + "...") if token else None)
+        masked = (token[:6] + "...") if token else None
+        logger.warning("[Auth] invalid token=%s path=%s", masked, request.url.path)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": "Bearer, X-API-Key"},
         )
 
 # Alias for backward compatibility
@@ -134,6 +165,7 @@ __all__ = [
     "allow_all",
     "token_matches",
 ]
+
 
 
 
