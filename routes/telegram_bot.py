@@ -9,26 +9,22 @@ from pydantic import BaseModel, Field, ConfigDict
 
 logger = logging.getLogger("algogpt.routes.telegram_bot")
 
-# שים לב: אין כאן Depends(require_api_key). ההגנה מתבצעת ע"י ה-middleware הגלובלי ב-main.py.
-router = APIRouter(
-    prefix="/telegram",
-    tags=["Telegram"],
-)
+# שים לב: אין כאן תלות ב-require_api_key. ההגנה תתבצע במידלוואר של main.py.
+router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-API_BASE  = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+API_BASE    = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 DEFAULT_CHAT = os.getenv("TELEGRAM_TEST_CHAT_ID", "").strip()
-PM_ENV = (os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None)  # None => לא שולחים parse_mode
-
-PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").strip()
+PM_ENV: Optional[str] = (os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+PUBLIC_HOST    = os.getenv("PUBLIC_HOST", "").strip()
 
 class SendRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     chat_id: Optional[int] = Field(None, description="אם לא — יילקח מ־TELEGRAM_TEST_CHAT_ID")
     text: str = Field(..., min_length=1, max_length=4096)
     parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2 (אם לא נשלח — יילקח מה-ENV אם קיים)")
-    disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה")
+    disable_preview: bool = Field(True, alias="disable_preview", description="השבתת תצוגה מקדימה")
 
 @router.get("/health")
 async def health() -> Dict[str, Any]:
@@ -101,22 +97,21 @@ async def set_webhook() -> Dict[str, Any]:
     if not PUBLIC_HOST:
         raise HTTPException(500, "PUBLIC_HOST missing")
     url = f"{PUBLIC_HOST}/telegram/webhook"
-    payload: Dict[str, Any] = {
+    body = {
         "url": url,
+        "secret_token": WEBHOOK_SECRET,
         "drop_pending_updates": True,
         "max_connections": 40,
     }
-    if WEBHOOK_SECRET:
-        payload["secret_token"] = WEBHOOK_SECRET
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.post(f"{API_BASE}/setWebhook", json=payload)
+            r = await cli.post(f"{API_BASE}/setWebhook", json=body)
         j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
-        ok = bool(j.get("ok"))
-        return {"ok": ok, "telegram_response": j, "webhook_url": url}
+        return {"ok": bool(j.get("ok")), "telegram_response": j, "requested_url": url}
     except Exception as e:
         logger.error("telegram/set-webhook failed: %s", e)
         raise HTTPException(502, str(e))
+
 
 
 
