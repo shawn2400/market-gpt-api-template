@@ -14,11 +14,28 @@ router = APIRouter(prefix="/scan", tags=["Scan"])
 # Models
 # =====================
 class IndicatorSet(BaseModel):
+    # תאימות Pydantic v1/v2: מתירים extra כדי לא לרוץ על שדות לא מוכרים
+    class Config:
+        extra = "ignore"
+    try:
+        # Pydantic v2
+        from pydantic import ConfigDict
+        model_config = ConfigDict(extra="ignore")  # type: ignore
+    except Exception:
+        pass
+
     rsi: Optional[float] = None
     ema_21: Optional[float] = None
     adx: Optional[float] = None
     atr: Optional[float] = None
     vwap_trend: Optional[bool] = None
+    ema_50: Optional[float] = None
+    macd: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_hist: Optional[float] = None
+    bb_mid: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_lower: Optional[float] = None
 
 class ScanSignal(BaseModel):
     symbol: str
@@ -38,8 +55,11 @@ class ScanResponse(BaseModel):
 # Binance helpers
 # =====================
 def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
+    sym = symbol.strip().upper()
+    if not sym.endswith("USDT"):
+        sym += "USDT"
     url = f"{FUTURES_BASE}/fapi/v1/klines"
-    r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": int(limit)}, timeout=10)
+    r = requests.get(url, params={"symbol": sym, "interval": interval, "limit": int(limit)}, timeout=10)
     r.raise_for_status()
     arr = r.json()
     if not arr:
@@ -68,14 +88,16 @@ async def scan_info(
             return ScanResponse(ok=False, count_total=1, returned=0, error="no data")
         ind = prepare_indicators_for_backtest(df)
         row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
-        sig = ScanSignal(symbol=symbol, interval=interval, indicators=IndicatorSet(**row))
+        sig = ScanSignal(symbol=(symbol if symbol.endswith("USDT") else symbol + "USDT").upper(),
+                         interval=interval,
+                         indicators=IndicatorSet(**row))
         return ScanResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
         return ScanResponse(ok=False, count_total=1, returned=0, error=str(e))
 
-@router.get("/", response_model=ScanResponse, summary="Multi-symbol scan")
+@router.get("/", response_model=ScanResponse, summary="Multi-symbol scan (array query)")
 async def scan_symbols(
-    symbols: List[str] = Query(..., description="List of symbols e.g. BTCUSDT,ETHUSDT"),
+    symbols: List[str] = Query(..., description="List of symbols e.g. BTCUSDT,ETHUSDT (repeat ?symbols=...)"),
     interval: str = Query("15m"),
     limit: int = Query(200, ge=50, le=200)
 ) -> ScanResponse:
@@ -84,14 +106,18 @@ async def scan_symbols(
         try:
             df = _fetch_klines(s, interval, limit)
             if df.empty:
-                out.append(ScanSignal(symbol=s, interval=interval, ok=False, error="no data"))
+                out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
+                                      interval=interval, ok=False, error="no data"))
                 continue
             ind = prepare_indicators_for_backtest(df)
             row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
-            out.append(ScanSignal(symbol=s, interval=interval, indicators=IndicatorSet(**row)))
+            out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
+                                  interval=interval, indicators=IndicatorSet(**row)))
         except Exception as e:
-            out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
+            out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
+                                  interval=interval, ok=False, error=str(e)))
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
+
 
 
 
