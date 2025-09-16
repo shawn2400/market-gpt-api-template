@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 logger = logging.getLogger("algogpt.routes.telegram_bot")
 
-# שים לב: אין כאן תלות ב-require_api_key. ההגנה תתבצע במידלוואר של main.py.
+# אין כאן תלות ב-require_api_key. ההגנה מתבצעת במידלוואר של main.py.
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -20,11 +20,12 @@ WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 PUBLIC_HOST    = os.getenv("PUBLIC_HOST", "").strip()
 
 class SendRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    # תאימות ל-Pydantic v2 + התעלמות משדות נוספים שמגיעים מבחוץ
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
     chat_id: Optional[int] = Field(None, description="אם לא — יילקח מ־TELEGRAM_TEST_CHAT_ID")
     text: str = Field(..., min_length=1, max_length=4096)
     parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2 (אם לא נשלח — יילקח מה-ENV אם קיים)")
-    disable_preview: bool = Field(True, alias="disable_preview", description="השבתת תצוגה מקדימה")
+    disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה")
 
 @router.get("/health")
 async def health() -> Dict[str, Any]:
@@ -96,7 +97,7 @@ async def set_webhook() -> Dict[str, Any]:
         raise HTTPException(500, "BOT_TOKEN missing")
     if not PUBLIC_HOST:
         raise HTTPException(500, "PUBLIC_HOST missing")
-    url = f"{PUBLIC_HOST}/telegram/webhook"
+    url = f"{PUBLIC_HOST.rstrip('/')}/telegram/webhook"
     body = {
         "url": url,
         "secret_token": WEBHOOK_SECRET,
