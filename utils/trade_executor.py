@@ -1,4 +1,4 @@
-# utils/trade_executor.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, math, time, logging, asyncio, json, hashlib
 from typing import Optional, Dict, Any, List, Tuple
@@ -11,7 +11,7 @@ from utils.binance_client import (
     futures_balance,
 )
 
-# ✅ Dynamic budget hook
+# ====== Optional dynamic budget hook ======
 try:
     from utils.budget import get_budget_usdt
 except Exception:
@@ -22,7 +22,7 @@ except Exception:
         except Exception:
             return 100.0
 
-# ✅ Risk (optional)
+# ====== Optional risk hook ======
 try:
     from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
 except Exception:
@@ -34,7 +34,6 @@ log = logging.getLogger("algogpt.trade_executor")
 
 # ─────────── Policy & Defaults (ENV) ───────────
 ALLOW_MARKET_ENTRY    = os.getenv("ALLOW_MARKET_ENTRY", "1").lower() in ("1","true","yes","on")
-
 ENTRY_BAND_BPS        = float(os.getenv("ENTRY_BAND_BPS", "8.5"))
 STOP_BAND_BPS         = float(os.getenv("STOP_BAND_BPS",  "10"))
 ESCALATE_AFTER_S      = float(os.getenv("ESCALATE_AFTER_SEC", "10"))
@@ -82,7 +81,7 @@ try:
 except Exception:
     LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
 
-# ─────────── Backfill ENV (אם לא הוגדרו) ───────────
+# Backfill ENV defaults
 if 'FEAT_QUALITY_ENFORCE' not in globals():
     FEAT_QUALITY_ENFORCE  = os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on")
 if 'APPROVE_BEFORE_GATE' not in globals():
@@ -90,7 +89,7 @@ if 'APPROVE_BEFORE_GATE' not in globals():
 
 if 'DEFAULT_QTY_STEP' not in globals():
     DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
-if 'DEFAULT_PRICE_TICK' not in globals():
+if 'DEFAULT_TICK' not in globals():
     DEFAULT_TICK          = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 if 'DEFAULT_MIN_NOT' not in globals():
     DEFAULT_MIN_NOT       = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
@@ -138,10 +137,9 @@ def _decimals(step_str: str) -> int:
 
 def _filters(symbol: str) -> Dict[str, Any]:
     try:
-        f = get_symbol_filters(symbol) or {}
+        return get_symbol_filters(symbol) or {}
     except Exception:
-        f = {}
-    return f
+        return {}
 
 def _q_price(symbol: str, price: float) -> Tuple[str, float]:
     f = _filters(symbol); tick = float(f.get("tickSize") or DEFAULT_TICK) or DEFAULT_TICK
@@ -202,17 +200,15 @@ def _is_hedge_mode_runtime() -> bool:
 
 def _effective_position_side(desired: str) -> str:
     """
-    אם החשבון One-Way — תמיד נחזיר 'BOTH' כדי לא לשלוח positionSide בכלל.
-    אם Hedge — נחזיר LONG/SHORT לפי הבקשה.
+    One-Way → נחזיר 'BOTH' (כלומר לא נשלח positionSide בכלל).
+    Hedge → נחזיר LONG/SHORT בלבד.
     """
     desired = (desired or "BOTH").upper()
     if not _is_hedge_mode_runtime():
         return "BOTH"
-    if desired in {"LONG","SHORT"}:
-        return desired
-    return "BOTH"
+    return desired if desired in {"LONG","SHORT"} else "BOTH"
 
-# ─────────── Indicators & quality gate (ללא pandas) ───────────
+# ─────────── Indicators (ללא pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
     k = 2 / (period + 1); ema=[]; s=None
     for v in vals:
@@ -247,7 +243,6 @@ def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
         mdm = down_move if (down_move > up_move and down_move > 0) else 0.0
         tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
         plus_dm.append(pdm); minus_dm.append(mdm); tr_list.append(tr)
-        prev_h, prev_l, prev_c = h, l, c
 
     def rma(xs: List[float], p: int) -> List[float]:
         alpha = 1/p
@@ -407,7 +402,7 @@ class _Idem:
                 cls._mem.pop(kk, None)
         return True
 
-# ─────────── Telegram Confirm Store (memory/redis) ───────────
+# ─────────── Telegram confirm (memory/redis) ───────────
 class ConfirmStore:
     _mem: Dict[str, Dict[str, Any]] = {}
     _r = None
@@ -451,13 +446,15 @@ class ConfirmStore:
     def approve(cls, cid: str, approver: str = "") -> None:
         rec = cls.get(cid)
         if not rec: return
-        rec["status"] = "approved"; rec["approver"] = approver; cls._save(cid, rec)
+        rec["status"] = "approved"; rec["approver"] = int(approver) if str(approver).isdigit() else str(approver)
+        cls._save(cid, rec)
 
     @classmethod
     def reject(cls, cid: str, approver: str = "") -> None:
         rec = cls.get(cid)
         if not rec: return
-        rec["status"] = "rejected"; rec["approver"] = approver; cls._save(cid, rec)
+        rec["status"] = "rejected"; rec["approver"] = int(approver) if str(approver).isdigit() else str(approver)
+        cls._save(cid, rec)
 
     @classmethod
     def flush_all(cls) -> None:
@@ -477,11 +474,7 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
         {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
         {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
     ]]}
-    summary_plain = (
-        summary_html.replace("<br/>", "\n")
-                    .replace("<b>", "").replace("</b>", "")
-                    .replace("<code>", "").replace("</code>", "")
-    )
+    summary_plain = summary_html.replace("<br/>", "\n").replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "")
     if TELEGRAM_PARSE_MODE:
         text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
     else:
@@ -503,7 +496,7 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
             except Exception:
                 return {"ok": r.status_code == 200, "status_code": r.status_code, "text": r.text[:200]}
     except Exception as e:
-        log.exception("telegram send failed", extra={"err": str(e)})  # noqa
+        log.exception("telegram send failed", extra={"err": str(e)})
         return {"ok": False, "error": str(e)}
 
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -590,7 +583,6 @@ def _build_ladders(sym: str, side: str, qty: float,
                 if tp_kind_market:
                     plan["tp_orders"].append({"type": "TAKE_PROFIT_MARKET","stopPrice": stop_p,"qty": qalloc})
                 else:
-                    # TAKE_PROFIT (Limit)
                     plan["tp_orders"].append({"type": "TAKE_PROFIT","stopPrice": stop_p,"price": stop_p,"qty": qalloc})
             else:
                 plan["sl_orders"].append({"type": "STOP_MARKET","stopPrice": stop_p,"qty": qalloc})
@@ -599,12 +591,9 @@ def _build_ladders(sym: str, side: str, qty: float,
     if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
     return plan
 
-# ===== HEDGE helpers =====
 def _normalize_position_side(ps: Optional[str]) -> str:
     ps = (ps or "BOTH").upper().strip()
-    if ps not in {"BOTH", "LONG", "SHORT"}:
-        ps = "BOTH"
-    return ps
+    return ps if ps in {"BOTH", "LONG", "SHORT"} else "BOTH"
 
 def _close_side_for(entry_side: str) -> str:
     return "SELL" if entry_side.upper() == "BUY" else "BUY"
@@ -612,7 +601,7 @@ def _close_side_for(entry_side: str) -> str:
 def _pos_side_for_entry(side: str) -> str:
     return "LONG" if side.upper() == "BUY" else "SHORT"
 
-# ─────────── Hybrid entry (עם positionSide מותנה) ───────────
+# ─────────── Hybrid entry (LIMIT+STOP עם positionSide מותנה) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
                               ref_entry: Optional[float], position_side: str) -> Dict[str, Any]:
     ref = ref_entry if ref_entry is not None else base_price
@@ -641,7 +630,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     )
     if eff_ps != "BOTH":
         entry_kwargs["positionSide"] = eff_ps
-
     lim = futures_create_order(**entry_kwargs)
     lim_id = str(lim.get("orderId") or "")
 
@@ -652,7 +640,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     )
     if eff_ps != "BOTH":
         stop_kwargs["positionSide"] = eff_ps
-
     stp = futures_create_order(**stop_kwargs)
     stp_id = str(stp.get("orderId") or "")
 
@@ -716,7 +703,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
-
 # ─────────── Public API ───────────
 def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[float]]]) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
     tp_targets: Optional[List[float]] = None
@@ -751,6 +737,8 @@ def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[floa
             sl_targets = None
 
     return tp_targets, tp_splits, sl_targets
+
+
 async def execute_trade_live(
     symbol: str, side: str, *,
     budget: Optional[float] = None, leverage: int = 5, dry_run: bool = True,
@@ -767,7 +755,7 @@ async def execute_trade_live(
         raise ValueError("side must be BUY/SELL")
     sym = symbol.upper().strip()
     position_side = _normalize_position_side(position_side)
-    position_side = _effective_position_side(position_side)  # ← התאמה אוטו׳ ל-Hedge/One-Way
+    position_side = _effective_position_side(position_side)  # התאמה אוטו׳ ל-Hedge/One-Way
 
     base_price = get_price(sym) or futures_mark_price(sym)
     if not base_price or base_price <= 0:
@@ -933,10 +921,9 @@ async def execute_trade_live(
 
             eff_ps = _effective_position_side(position_side)
             if eff_ps != "BOTH":
-                args["positionSide"] = eff_ps
+                args["positionSide"] = eff_ps  # Hedge: LONG/SHORT
 
-            # STOP_MARKET / TAKE_PROFIT_MARKET: רק stopPrice + quantity (בלי TIF)
-            # STOP / TAKE_PROFIT (Limit): stopPrice + price + TIF
+            # MARKET-trigger (STOP_MARKET/TAKE_PROFIT_MARKET) – לא שולחים TIF/price
             if "MARKET" in typ:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
             else:
@@ -946,7 +933,7 @@ async def execute_trade_live(
 
             args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
 
-            # ⚠️ reduceOnly לטריגרים MARKET ב-One-Way גורם ל- -1106 → לא לשלוח
+            # ⚠️ One-Way + MARKET trigger → אל תשלח reduceOnly (ימנע -1106)
             is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
             if not (is_market_trigger and eff_ps == "BOTH"):
                 args["reduceOnly"] = True
@@ -985,8 +972,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
     )
     if eff_ps != "BOTH":
         args["positionSide"] = eff_ps
-        args["reduceOnly"] = True  # ב-Hedge זה תקין
-    # ב-One-Way נתחיל בלי reduceOnly כדי להימנע מ- -1106, ואם צריך – ננסה שוב
+        args["reduceOnly"] = True  # Hedge תקין
     try:
         return {"ok": True, "response": futures_create_order(**args)}
     except Exception as e:
@@ -998,6 +984,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
             except Exception as e2:
                 return {"ok": False, "error": str(e2)}
         return {"ok": False, "error": str(e)}
+
 
 
 
