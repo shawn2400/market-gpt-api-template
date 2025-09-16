@@ -48,7 +48,6 @@ _bundle_task: Optional[asyncio.Task] = None
 _bundle_lock = asyncio.Lock()
 
 # ===================== Auto-Approval & Digest Policy =====================
-# Strict policy: רק "רגיש מאוד" יבקש אישור; כל היתר אוטומטי ושקט
 def _parse_list_env(name: str, default_csv: str) -> List[str]:
     return [x.strip().lower() for x in os.getenv(name, default_csv).split(",") if x.strip()]
 
@@ -69,6 +68,14 @@ OPS_EOD_HOUR_IL                = int(os.getenv("OPS_EOD_HOUR_IL","23"))
 OPS_EOD_MINUTE_IL              = int(os.getenv("OPS_EOD_MINUTE_IL","55"))
 
 OPS_APPROVAL_EMOJI             = os.getenv("OPS_APPROVAL_EMOJI","1").lower() in ("1","true","yes","on")
+
+# 🆕 שפת הודעות: mix | he | en
+OPS_APPROVAL_LANG              = os.getenv("OPS_APPROVAL_LANG", "mix").strip().lower()
+if OPS_APPROVAL_LANG not in ("mix","he","en"):
+    OPS_APPROVAL_LANG = "mix"
+
+# 🆕 האם להוסיף action=approve/reject ל-URLs (דיפולט 0 למקסימום תאימות)
+OPS_REQUIRE_ACTION_PARAM       = os.getenv("OPS_REQUIRE_ACTION_PARAM","0").lower() in ("1","true","yes","on")
 
 # Optional Redis (לרישום אירועים לדיג'סט). נופל לקובץ אם אין Redis.
 _redis = None
@@ -357,7 +364,7 @@ async def register_webhook() -> bool:
         logger.warning({"event": "register_webhook_failed", "error": str(e)})
         return False
 
-# ===================== Change-Approval (Hebrew) =====================
+# ===================== Formatting Helpers =====================
 def _em(emoji: str, text: str) -> str:
     return f"{emoji} {text}" if OPS_APPROVAL_EMOJI else text
 
@@ -397,14 +404,18 @@ def _ensure_urls(change: Dict[str, Any]) -> Dict[str, str]:
     if OPS_APPROVAL_BASE and WEBHOOK_HMAC_SECRET and tid and not (approve_url and reject_url and ticket_url):
         sig = _sign(tid, int(expires))
         q = urlencode({"ticket_id": tid, "expires": int(expires), "sig": sig})
-        # NOTE: צד ה־web דורש action=... בפרמטרים
-        approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}&action=approve"
-        reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}&action=reject"
+        if OPS_REQUIRE_ACTION_PARAM:
+            approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}&action=approve"
+            reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}&action=reject"
+        else:
+            approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}"
+            reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}"
         ticket_url  = ticket_url  or f"{OPS_APPROVAL_BASE}/ops/ticket/{quote(str(tid))}"
 
     return {"approve": approve_url or "", "reject": reject_url or "", "ticket": ticket_url or ""}
 
-def format_change_approval_he(change: Dict[str, Any]) -> str:
+# ===================== HE / EN / MIX Formatting =====================
+def _format_change_he(change: Dict[str, Any]) -> str:
     tid = str(change.get("ticket_id","—"))
     ttl = int(change.get("ttl_sec", 600))
     crs = change.get("crs", "—")
@@ -431,6 +442,15 @@ def format_change_approval_he(change: Dict[str, Any]) -> str:
 
     il_ts, utc_ts = _ts_pair(created_at)
 
+    try:
+        dollars_fmt = f"{float(dollars):.2f}"
+    except Exception:
+        dollars_fmt = str(dollars)
+
+    t_trd = bool(touches.get("trading", False))
+    t_alr = bool(touches.get("alerts", False))
+    t_env = bool(touches.get("env", False))
+
     lines: List[str] = []
     lines.append(f"<b>{_em('🕒','זמן')}</b>: {il_ts} | {utc_ts}")
     lines.append(f"<b>{_em('✅','דרוש אישור שינוי')}</b> (Change Approval)")
@@ -440,22 +460,82 @@ def format_change_approval_he(change: Dict[str, Any]) -> str:
     lines.append(f"<b>Version</b>: <code>{version}</code>")
     lines.append(f"{_em('📝','תכנית')} — {plan}")
     lines.append("— — —")
-    try:
-        dollars_fmt = f"{float(dollars):.2f}"
-    except Exception:
-        dollars_fmt = str(dollars)
     lines.append(f"{_em('🖥️','השפעת עומס (משוער)')}: CPU {_fmt_pct(cpu_pct)}, Mem {_fmt_pct(mem_pct)}, API/דקה {_fmt_int(api_rate)}")
     lines.append(f"{_em('💰','עלות (תקרה)')}: ${dollars_fmt} | טוקני AI: {_fmt_int(tokens)} | קריאות API: {_fmt_int(api_max)}")
-    t_trd = bool(touches.get("trading", False))
-    t_alr = bool(touches.get("alerts", False))
-    t_env = bool(touches.get("env", False))
     lines.append(f"{_em('⚙️','שינויים')}: " + (", ".join(changes) if changes else "—"))
     lines.append(f"{_em('🔌','נגיעה ברכיבים')}: Trading={'כן' if t_trd else 'לא'}, Alerts={'כן' if t_alr else 'לא'}, ENV={'כן' if t_env else 'לא'}")
     lines.append(f"{_em('🛡️','בטיחות')}: Canary={'ON' if canary else 'OFF'} | Rollback={'ON' if rollback else 'OFF'}")
     lines.append(_em("ℹ️", "לחיצה על \"אשר\" תפעיל Preflight → Canary → Promote → Post-verify עם ביטול/Rollback אוטומטי אם יש סטייה."))
     return "\n".join(lines)
 
+def _format_change_en(change: Dict[str, Any]) -> str:
+    tid = str(change.get("ticket_id","—"))
+    ttl = int(change.get("ttl_sec", 600))
+    crs = change.get("crs", "—")
+    sensitive = bool(change.get("sensitive", False))
+    two_man   = bool(change.get("two_man", False))
+    version   = change.get("version", "—")
+    plan      = change.get("plan", "—")
+
+    budget   = change.get("budget") or {}
+    dollars  = budget.get("dollars_max", 0.0)
+    api_max  = budget.get("api_calls_max", 0)
+    tokens   = budget.get("ai_tokens_max", 0)
+
+    impact   = change.get("impact") or {}
+    cpu_pct  = impact.get("cpu_pct", None)
+    mem_pct  = impact.get("mem_pct", None)
+    api_rate = impact.get("api_per_min", None)
+
+    changes  = change.get("changes") or []
+    touches  = change.get("touches") or {}
+    canary   = bool(change.get("canary", True))
+    rollback = bool(change.get("rollback", True))
+    created_at = change.get("created_at")
+
+    il_ts, utc_ts = _ts_pair(created_at)
+    try:
+        dollars_fmt = f"{float(dollars):.2f}"
+    except Exception:
+        dollars_fmt = str(dollars)
+
+    t_trd = bool(touches.get("trading", False))
+    t_alr = bool(touches.get("alerts", False))
+    t_env = bool(touches.get("env", False))
+
+    lines: List[str] = []
+    lines.append(f"<b>{_em('🕒','Time')}</b>: {il_ts} | {utc_ts}")
+    lines.append(f"<b>{_em('✅','Change Approval Required')}</b>")
+    lines.append(f"<b>ID</b>: <code>{tid}</code>")
+    lines.append(f"<b>Two-man</b>: {'ON' if two_man else 'OFF'} | <b>TTL</b>: {ttl}s")
+    lines.append(f"<b>CRS</b>: {crs}/10 | <b>Sensitive</b>: {'True' if sensitive else 'False'}")
+    lines.append(f"<b>Version</b>: <code>{version}</code>")
+    lines.append(f"{_em('📝','Plan')} — {plan}")
+    lines.append("— — —")
+    lines.append(f"{_em('🖥️','Estimated Load Impact')}: CPU {_fmt_pct(cpu_pct)}, Mem {_fmt_pct(mem_pct)}, API/min {_fmt_int(api_rate)}")
+    lines.append(f"{_em('💰','Cost Cap')}: ${dollars_fmt} | AI tokens: {_fmt_int(tokens)} | API calls: {_fmt_int(api_max)}")
+    lines.append(f"{_em('⚙️','Changes')}: " + (", ".join(changes) if changes else "—"))
+    lines.append(f"{_em('🔌','Touches')}: Trading={'Yes' if t_trd else 'No'}, Alerts={'Yes' if t_alr else 'No'}, ENV={'Yes' if t_env else 'No'}")
+    lines.append(f"{_em('🛡️','Safety')}: Canary={'ON' if canary else 'OFF'} | Rollback={'ON' if rollback else 'OFF'}")
+    lines.append(_em("ℹ️", 'Press "Approve" to run Preflight → Canary → Promote → Post-verify with auto rollback on deviation.'))
+    return "\n".join(lines)
+
+def _format_change_mixed(change: Dict[str, Any]) -> str:
+    he = _format_change_he(change)
+    en = _format_change_en(change)
+    return he + "\n\n" + en
+
+def format_change_approval_he(change: Dict[str, Any]) -> str:
+    """Back-compat name; respects OPS_APPROVAL_LANG."""
+    if OPS_APPROVAL_LANG == "he":
+        return _format_change_he(change)
+    if OPS_APPROVAL_LANG == "en":
+        return _format_change_en(change)
+    return _format_change_mixed(change)
+
+# ===================== Send Change Approval =====================
 async def send_change_approval_he(change: Dict[str, Any], chat_id: Optional[int] = None) -> Dict[str, Any] | None:
+    """Back-compat name; sends Mix/HE/EN per OPS_APPROVAL_LANG."""
     if not BOT_TOKEN or not API_BASE:
         logger.debug({"event":"tg.skip_send","reason":"missing_token_or_api"})
         return None
@@ -465,12 +545,12 @@ async def send_change_approval_he(change: Dict[str, Any], chat_id: Optional[int]
     kb_rows: list[list[dict[str,str]]] = []
     row1 = []
     if urls.get("approve"):
-        row1.append({"text": "✅ אשר", "url": urls["approve"]})
+        row1.append({"text": "✅ אשר / Approve", "url": urls["approve"]})
     if urls.get("reject"):
-        row1.append({"text": "❌ דחה", "url": urls["reject"]})
+        row1.append({"text": "❌ דחה / Reject", "url": urls["reject"]})
     if row1: kb_rows.append(row1)
     if urls.get("ticket"):
-        kb_rows.append([{"text": "🧾 פרטי הטיקט", "url": urls["ticket"]}])
+        kb_rows.append([{"text": "🧾 פרטי הטיקט / Ticket", "url": urls["ticket"]}])
 
     reply_markup = {"inline_keyboard": kb_rows}
     try:
