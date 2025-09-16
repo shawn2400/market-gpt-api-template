@@ -463,7 +463,7 @@ def _format_change_he(change: Dict[str, Any]) -> str:
     lines.append(f"{_em('🖥️','השפעת עומס (משוער)')}: CPU {_fmt_pct(cpu_pct)}, Mem {_fmt_pct(mem_pct)}, API/דקה {_fmt_int(api_rate)}")
     lines.append(f"{_em('💰','עלות (תקרה)')}: ${dollars_fmt} | טוקני AI: {_fmt_int(tokens)} | קריאות API: {_fmt_int(api_max)}")
     lines.append(f"{_em('⚙️','שינויים')}: " + (", ".join(changes) if changes else "—"))
-    lines.append(f"{_em('🔌','נגיעה ברכיבים')}: Trading={'כן' if t_trd else 'לא'}, Alerts={'כן' if t_alr else 'לא'}, ENV={'כן' if t_env else 'לא'}")
+    lines.append(f"{_em('🔌','נגיעה ברכיבים')}: Trading={'כן' if t_trd else 'לא'}, Alerts={'כן' אם t_alr else 'לא'}, ENV={'כן' אם t_env else 'לא'}")
     lines.append(f"{_em('🛡️','בטיחות')}: Canary={'ON' if canary else 'OFF'} | Rollback={'ON' if rollback else 'OFF'}")
     lines.append(_em("ℹ️", "לחיצה על \"אשר\" תפעיל Preflight → Canary → Promote → Post-verify עם ביטול/Rollback אוטומטי אם יש סטייה."))
     return "\n".join(lines)
@@ -821,6 +821,8 @@ __all__ = [
     # digests
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
 ]
+
+
 
 
 
