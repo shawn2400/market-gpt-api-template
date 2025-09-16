@@ -5,7 +5,7 @@ import time
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Iterable
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +21,7 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
-# ✅ הפוך ליבוא "notifier" ללא-קריטי (נופל-ל-noop אם המודול לא קיים)
+# ✅ notifier: לא קריטי
 try:
     from utils.telegram_notifier import (
         ensure_ops_schedulers_started,
@@ -29,20 +29,19 @@ try:
         send_eod_report_now,
     )
 except Exception:
-    async def ensure_ops_schedulers_started() -> None:
-        return None
-    async def send_ops_digest_now(hours: Optional[int] = None) -> None:
-        return None
-    async def send_eod_report_now() -> None:
-        return None
+    async def ensure_ops_schedulers_started() -> None: return None
+    async def send_ops_digest_now(hours: Optional[int] = None) -> None: return None
+    async def send_eod_report_now() -> None: return None
 
+# ✅ InternalAuthMiddleware: fallback no-op
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
 except Exception:
-    class InternalAuthMiddleware(BaseHTTPMiddleware):  # no-op fallback
+    class InternalAuthMiddleware(BaseHTTPMiddleware):  # no-op
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
 
+# ✅ ConfirmStore: מביאים מכל מקום שיש
 try:
     from utils.trade_executor import ConfirmStore
 except Exception:
@@ -54,6 +53,7 @@ except Exception:
             def flush_all(cls): ...
             flush = reset = flush_all
 
+# ✅ runtime counters (fallback)
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters
 except Exception:
@@ -75,6 +75,7 @@ def _coerce_log_level(val):
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
+# יצירת תיקיות בסיס
 for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -84,6 +85,7 @@ for d in ("static", "logs", "data"):
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
 
+# ---------- OpenAPI סינון ----------
 from fastapi.openapi.utils import get_openapi
 from fnmatch import fnmatch
 
@@ -106,23 +108,18 @@ def custom_openapi():
     for path in sorted(schema.get("paths", {}).keys()):
         methods = schema["paths"][path]
         new_methods = {}
-
         path_hidden = any(fnmatch(path, pat) for pat in hide_patterns)
 
         for method in list(methods.keys()):
-            if method.startswith("x-"):
+            if method.startswith("x-"):  # internal
                 continue
             op = methods[method]
-
             if op.get("x-internal") is True:
                 continue
-
             if include_tags and not include_tags.intersection(set(op.get("tags") or [])):
                 continue
-
             if path_hidden:
                 continue
-
             if max_ops > 0 and count >= max_ops:
                 continue
 
@@ -138,6 +135,7 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+# ---------- Middlewares ----------
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES", "5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -153,38 +151,77 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE,
 )
+
 app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
+# ---------- נתיבים ציבוריים (ENV) ----------
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC", "1").lower() in ("1", "true", "yes", "on")
+PUBLIC_STATUS = os.getenv("SECURITY_PUBLIC_STATUS", "1").lower() in ("1", "true", "yes", "on")
+
+def _split_multi(s: str) -> Iterable[str]:
+    import re
+    return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
+
+# ברירות מחדל — מומלץ להשאיר public:
+DEFAULT_PUBLIC_PATHS = {
+    "/", "/openapi.json", "/health", "/healthz", "/readyz",
+    "/docs", "/redoc",
+    "/telegram/webhook", "/telegram/callback", "/telegram/ping",
+    "/provider/cryptopanic/webhook",
+    "/status/ping", "/status/ws", "/status/executor", "/status/all",
+}
+DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
+
+# מה־ENV
+CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS", "")))
+CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
+
+# אם METRICS_PUBLIC=1 – נפתח גם /metrics
+if METRICS_PUBLIC:
+    CFG_PUBLIC.add("/metrics")
+
+# סט אפקטיבי
+EFFECTIVE_PUBLIC_PATHS = set(DEFAULT_PUBLIC_PATHS) if PUBLIC_STATUS else set()
+EFFECTIVE_PUBLIC_PATHS |= CFG_PUBLIC
+
+EFFECTIVE_PUBLIC_PREFIXES = list(DEFAULT_PUBLIC_PREFIXES) if PUBLIC_STATUS else []
+EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
+
+logger.info({
+    "event": "public_paths_config",
+    "public_status": PUBLIC_STATUS,
+    "paths": sorted(EFFECTIVE_PUBLIC_PATHS),
+    "prefixes": sorted(EFFECTIVE_PUBLIC_PREFIXES),
+})
 
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    PUBLIC_PATHS = {
-        "/", "/openapi.json", "/health", "/healthz", "/readyz",
-        "/docs", "/redoc",
-        "/telegram/webhook", "/telegram/callback", "/telegram/ping",
-        "/provider/cryptopanic/webhook",
-    }
-    PUBLIC_PREFIXES = [
-        "/price", "/static/", "/risk",
-        "/status/ping", "/status/ws", "/status/executor", "/status/all",
-    ]
-    if METRICS_PUBLIC:
-        PUBLIC_PREFIXES.append("/metrics")
-
     path = request.url.path
-    if request.method.upper() == "OPTIONS" or path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+    if request.method.upper() == "OPTIONS":
         return await call_next(request)
+
+    # public exact
+    if path in EFFECTIVE_PUBLIC_PATHS:
+        return await call_next(request)
+
+    # public prefixes
+    for pfx in EFFECTIVE_PUBLIC_PREFIXES:
+        if path.startswith(pfx):
+            return await call_next(request)
+
+    # allow all?
     if allow_all():
         return await call_next(request)
 
+    # token-based
     token = extract_token(request, request.headers.get("Authorization", ""), request.headers.get("X-API-Key"))
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
+# ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -204,21 +241,21 @@ for module_path in (
     "routes.analytics",
     "routes.decision",
     "routes.backtest",
-    "routes.executor",
+    "routes.executor",          # מוגן ע"י dependency בפנים
     "routes.binance_status",
-    "routes.telegram_webhook",   # כולל /telegram/webhook + /telegram/ping
-    "routes.telegram_callbacks", # אופציונלי (אם קיים)
-    "routes.telegram_bot",       # נתיבי הבוט מאחורי Bearer
+    "routes.telegram_webhook",
+    "routes.telegram_callbacks",
     "routes.grid",
     "routes.executor_control",
-    "routes.ws_user_stream",     # optional
+    "routes.ws_user_stream",
     "routes.ai_analyze",
     "routes.ws_user_status",
-    "routes.executor_status",
+    "routes.executor_status",   # מספק /status/executor ציבורי
     "routes.provider_cryptopanic",
     "routes.scan",
     "routes.multi_scan",
     "routes.system_autopilot",
+    # לא טוענים routes.telegram_fallback כברירת מחדל
 ):
     if _try_include(module_path):
         try:
@@ -239,8 +276,7 @@ def _route_exists(path: str) -> bool:
         pass
     return False
 
-# ❌ ללא fallback — לא טוענים routes.telegram_fallback כלל
-
+# ---------- base routes ----------
 @app.get("/")
 async def root():
     return {"ok": True, "status": "ok", "service": "app_full", "title": "AlgoGPT API", "version": APP_VERSION}
@@ -256,6 +292,7 @@ async def debug_health():
 @app.get("/status/ping")
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
+
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
     async def status_ws():
@@ -339,6 +376,7 @@ async def flush_kill_switch():
             logger.warning({"event": "flush_failed", "err": str(e)})
     return {"ok": True, "flushed": done}
 
+# ---------- Telegram webhook auto-setup ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -405,6 +443,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
