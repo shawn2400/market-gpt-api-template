@@ -1,4 +1,4 @@
-# utils/auto_executor.py  (PART 1/2)
+# utils/auto_executor.py
 from __future__ import annotations
 import os, math, time, logging, asyncio, json, hashlib
 from typing import Optional, Dict, Any, List, Tuple
@@ -32,7 +32,7 @@ except Exception:
     def pre_trade_risk_check(*args, **kwargs):  # type: ignore
         return {"ok": True, "score": 100.0, "reasons": ["risk_module_missing"], "metrics": {}}
 
-# ✅ אישורים — נשתמש ב־ConfirmStore מה־trade_executor (אותו מקור של ה־webhook)
+# ✅ אישורים — ConfirmStore מגיע מ־trade_executor כדי להיות אחיד מול ה-webhook
 from utils.trade_executor import ConfirmStore
 
 log = logging.getLogger("algogpt.auto_executor")
@@ -386,7 +386,6 @@ def _detect_position_mode() -> str:
 
     _pos_mode_cache, _pos_mode_cache_ts = "ONEWAY", now
     return "ONEWAY"
-# utils/auto_executor.py  (PART 2/2)
 
 def _pos_side_for_open(side: str) -> str:
     return "LONG" if side == "BUY" else "SHORT"
@@ -651,8 +650,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     if slip_bps_now >= pol["slip_guard_bps"]:
         return {"ok": False, "reason": "slippage_guard", "slip_bps": slip_bps_now, "guard_bps": pol["slip_guard_bps"]}
 
-    limit_str, limit_p = _q_price(sym, limit_price)
-    stop_str , stop_p  = _q_price(sym, stop_price)
+    limit_str, limit_p = _q_price(sym, float(limit_price))
+    stop_str , stop_p  = _q_price(sym, float(stop_price))
     qty_str  , _       = _q_qty(sym, qty)
 
     order_common_open: Dict[str, Any] = {}
@@ -746,7 +745,7 @@ async def execute_trade_live(
     tp_targets: Optional[List[float]] = None, tp_splits: Optional[List[float]] = None,
     sl_targets: Optional[List[float]] = None, sl_splits: Optional[List[float]] = None,
     confirm_first: bool = True, telegram_chat_id: Optional[int] = None,
-    position_side: str = "BOTH", reduce_only: bool = False,  # תאימות אחורה; position_side מתעלם אם Hedge
+    position_side: str = "BOTH", reduce_only: bool = False,
 ) -> Dict[str, Any]:
 
     side = side.upper().strip()
@@ -977,6 +976,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     return plan
+
 
 
 
