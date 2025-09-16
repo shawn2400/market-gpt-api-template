@@ -43,16 +43,17 @@ def status_auth_refresh():
     refresh_tokens_from_env()
     return status_auth()
 
-# תאימות לנתיבים הישנים
+# תאימות לנתיבים ישנים (למי שממשיך לקרוא /executor/status, /ws-user/status)
 legacy = APIRouter(tags=["status"])
+
+@legacy.get("/executor/status")
+def legacy_executor():
+    return {"ok": True, "status": exec_get_counters()}
 
 @legacy.get("/ws-user/status")
 def legacy_ws_user():
     return {"ok": True, "status": ws_user_status()}
 
-@legacy.get("/executor/status")
-def legacy_executor():
-    return {"ok": True, "status": exec_get_counters()}
 
 
 
