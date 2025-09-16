@@ -1,7 +1,7 @@
 # routes/executor_status.py
 from __future__ import annotations
 import os, time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from fastapi import APIRouter, Response
 
 router = APIRouter(prefix="/status", tags=["status"])
@@ -21,7 +21,7 @@ except Exception:
             "current_interval": 0,
         }
 
-# Thresholds (ENV overrideable, עם ברירות מחדל שמרניות)
+# Thresholds (ENV overrideable)
 EXEC_TICK_STALE_WARN_SEC = int(os.getenv("EXEC_TICK_STALE_WARN_SEC", "30"))
 TIMEOUT_BURST_ALERT      = int(os.getenv("EXEC_TIMEOUT_BURST_ALERT", "3"))
 
