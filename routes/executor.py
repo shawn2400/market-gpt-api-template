@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
 from utils.binance_client import (
@@ -26,7 +26,15 @@ router = APIRouter(
 )
 
 class ExecTradeRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    # תאימות pydantic v1/v2
+    class Config:
+        extra = "ignore"
+    try:
+        from pydantic import ConfigDict
+        model_config = ConfigDict(extra="ignore")  # type: ignore
+    except Exception:
+        pass
+
     symbol: str = Field(..., examples=["BTCUSDT"])
     side: str = Field(..., examples=["BUY", "SELL"])
     leverage: int = Field(10, ge=1, le=125)
@@ -54,6 +62,7 @@ async def ping() -> Dict[str, Any]:
 
 @router.get("/status")
 async def status() -> Dict[str, Any]:
+    # אפשר להרחיב בהמשך (קוצבים, last_tick וכו')
     return {"ok": True, "status": "running"}
 
 @router.get("/positions")
@@ -131,6 +140,7 @@ async def trade(req: ExecTradeRequest):
     except Exception as e:
         logger.error("trade failed: %s", e)
         raise HTTPException(500, str(e))
+
 
 
 
