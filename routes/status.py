@@ -1,42 +1,62 @@
 # routes/status.py
 from __future__ import annotations
 import time
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter
 from utils.runtime_counters import get_ws_status, get_exec_status
-from utils.auth import require_api_key, get_loaded_tokens, get_public_paths
+from utils.auth import get_public_paths, get_loaded_tokens, refresh_tokens_from_env
 
-router = APIRouter(
-    prefix="/status",
-    tags=["Status"],
-    dependencies=[Depends(require_api_key)],
-)
+# חדש: כל מסלולי ה"סטטוס" תחת prefix קבוע /status
+router = APIRouter(prefix="/status", tags=["status"])
 
 @router.get("/ping")
-async def ping():
+def ping():
     return {"ok": True, "ts": int(time.time())}
 
 @router.get("/executor")
-async def executor_status():
+def status_executor():
     return {"ok": True, "status": get_exec_status()}
 
-@router.get("/ws")
-async def ws_user_status():
+@router.get("/ws-user")
+def status_ws_user():
     return {"ok": True, "status": get_ws_status()}
 
 @router.get("/all")
-async def all_status():
-    return {"ok": True, "executor": get_exec_status(), "ws": get_ws_status()}
-
-@router.get("/auth")
-async def auth_status():
-    masked = get_loaded_tokens(mask=True)
-    public = get_public_paths()
+def status_all():
     return {
         "ok": True,
-        "tokens_count": len(masked),
-        "tokens": masked,
-        "public": public,
+        "ping": {"ok": True, "ts": int(time.time())},
+        "executor": get_exec_status(),
+        "ws_user": get_ws_status(),
     }
+
+@router.get("/auth")
+def status_auth():
+    # לא חושפים טוקנים גולמיים – רק count ותצוגה ממוסכת
+    masked = get_loaded_tokens(mask=True)
+    return {
+        "ok": True,
+        "tokens_count": len(get_loaded_tokens(mask=False)),
+        "tokens_preview": masked,
+        "public": get_public_paths(),
+    }
+
+@router.post("/auth/refresh")
+def status_auth_refresh():
+    # מאפשר רענון ENV בזמן ריצה (מוגן כברירת מחדל אלא אם הוגדר כ-public)
+    refresh_tokens_from_env()
+    return status_auth()
+
+
+# תאימות לאחור: משמרים את הנתיבים הישנים שהשתמשת בהם
+legacy = APIRouter(tags=["status"])
+
+@legacy.get("/ws-user/status")
+def legacy_ws_user():
+    return {"ok": True, "status": get_ws_status()}
+
+@legacy.get("/executor/status")
+def legacy_executor():
+    return {"ok": True, "status": get_exec_status()}
 
 
 
