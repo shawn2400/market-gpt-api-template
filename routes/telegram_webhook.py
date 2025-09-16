@@ -14,7 +14,10 @@ TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 ADMIN_ONLY = str(os.getenv("TELEGRAM_ADMIN_ONLY", "1")).lower() in ("1","true","yes","on")
 ADMIN_IDS = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
-PM_ENV: Optional[str] = (os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None)  # None => לא שולחים parse_mode
+
+# קיבוע parse mode: רק HTML נתמך (הטקסטים משתמשים ב-<b> וכו')
+_raw_pm = os.getenv("TELEGRAM_PARSE_MODE", "").strip().upper()
+PM_ENV: Optional[str] = "HTML" if _raw_pm == "HTML" else None  # None => לא שולחים parse_mode
 
 def _allowed_user(uid: int) -> bool:
     if not ADMIN_ONLY:
@@ -32,13 +35,14 @@ async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
     if not TG_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    use_html = html and PM_ENV == "HTML"
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
-        "text": text if (html and PM_ENV) else (_to_plain(text) if html else text),
+        "text": text if use_html else (_to_plain(text) if html else text),
         "disable_web_page_preview": True,
     }
-    if PM_ENV:
-        payload["parse_mode"] = PM_ENV
+    if use_html:
+        payload["parse_mode"] = "HTML"
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
             await cli.post(url, json=payload)
@@ -88,6 +92,8 @@ except Exception:
 _seen_cbq_mem: set[str] = set()
 
 def _cbq_seen(cbq_id: str, ttl: int = 30) -> bool:
+    if not cbq_id:
+        return False
     if _r_cbq:
         try:
             ok = _r_cbq.set(f"cbq:{cbq_id}", "1", nx=True, ex=ttl)
@@ -102,6 +108,8 @@ def _cbq_seen(cbq_id: str, ttl: int = 30) -> bool:
     return False
 
 async def _tg_answer_callback(token: str, cbq_id: str, text: str) -> None:
+    if not (token and cbq_id):
+        return
     url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
@@ -110,6 +118,8 @@ async def _tg_answer_callback(token: str, cbq_id: str, text: str) -> None:
         logger.warning(f"[tg] answerCallbackQuery failed: {e}")
 
 async def _tg_disable_kb(token: str, chat_id: int, message_id: int) -> None:
+    if not (token and chat_id and message_id):
+        return
     url = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
@@ -150,7 +160,7 @@ def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
     if extra > 0:
         lines.append(f"… ועוד {extra} פריטים")
     txt = "\n".join(lines)
-    return txt if PM_ENV else _to_plain(txt)
+    return txt if PM_ENV == "HTML" else _to_plain(txt)
 
 def _fmt_status() -> str:
     ws = _ws_get_counters()
@@ -174,7 +184,7 @@ def _fmt_status() -> str:
         f"EXE: age={ex.get('last_tick_age_sec')}s ewma={_n(ex.get('tick_ewma_ms'))} p95={_n(ex.get('tick_p95_ms'))} tb={ex.get('timeouts_burst')} itv={ex.get('current_interval')}",
     ]
     txt = "\n".join(lines)
-    return txt if PM_ENV else _to_plain(txt)
+    return txt if PM_ENV == "HTML" else _to_plain(txt)
 
 # ─────────── Simple ping (לא מאובטח, לא דורש TOKEN) ───────────
 @router.get("/ping")
@@ -223,10 +233,13 @@ async def commands(
         message_id = msg.get("message_id")
         data = (cbq.get("data") or "").strip()
 
-        if not chat_id or not message_id:
-            return {"ok": True}
         if not _allowed_user(uid):
             await _tg_answer_callback(TG_TOKEN, cbq_id, "⛔️ אין הרשאה")
+            return {"ok": True}
+
+        if not chat_id or not message_id:
+            # עונים כדי להעלים את הספינר גם אם אין לנו הודעה לעריכה
+            await _tg_answer_callback(TG_TOKEN, cbq_id, "עודכן")
             return {"ok": True}
 
         parts = data.split(":", 2)
@@ -274,7 +287,7 @@ async def commands(
         return {"ok": True}
 
     if not text or text.lower() in ("/start", "/help"):
-        await _reply(chat_id, HELP_TEXT_HTML if PM_ENV else HELP_TEXT_PLAIN, html=bool(PM_ENV))
+        await _reply(chat_id, HELP_TEXT_HTML if PM_ENV == "HTML" else HELP_TEXT_PLAIN, html=bool(PM_ENV == "HTML"))
         return {"ok": True}
 
     parts = text.split()
@@ -285,12 +298,12 @@ async def commands(
         return {"ok": True}
 
     if cmd == "/status":
-        await _reply(chat_id, _fmt_status(), html=bool(PM_ENV))
+        await _reply(chat_id, _fmt_status(), html=bool(PM_ENV == "HTML"))
         return {"ok": True}
 
     if cmd == "/positions":
         rows = _get_open_positions() or []
-        await _reply(chat_id, _fmt_positions(rows), html=bool(PM_ENV))
+        await _reply(chat_id, _fmt_positions(rows), html=bool(PM_ENV == "HTML"))
         return {"ok": True}
 
     if cmd == "/explain_on":
