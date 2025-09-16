@@ -1,14 +1,14 @@
 # routes/status.py
 from __future__ import annotations
 import time
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from utils.runtime_counters import get_ws_status, get_exec_status
 from utils.auth import require_api_key, get_loaded_tokens, get_public_paths
 
 router = APIRouter(
     prefix="/status",
     tags=["Status"],
-    dependencies=[Depends(require_api_key)],  # ייפתח לציבור אם הוגדרו ENV מתאימים
+    dependencies=[Depends(require_api_key)],
 )
 
 @router.get("/ping")
@@ -31,7 +31,13 @@ async def all_status():
 async def auth_status():
     masked = get_loaded_tokens(mask=True)
     public = get_public_paths()
-    return {"ok": True, "tokens_count": len(masked), "tokens": masked, "public": public}
+    return {
+        "ok": True,
+        "tokens_count": len(masked),
+        "tokens": masked,
+        "public": public,
+    }
+
 
 
 
