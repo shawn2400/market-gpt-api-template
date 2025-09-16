@@ -81,13 +81,8 @@ try:
     LEV_ADX_MAP_JSON      = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
 except Exception:
     LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
-# ─────────────────────────────────────────────────────────────────────────────
-# סט ב׳ — המשך מלא: Budget/Leverage helpers, Idempotency, ConfirmStore,
-# Hybrid Entry (עם HEDGE), Public API execute_trade_live, ו־rollback.
-# כולל backfills לסביבת־משתנים אם לא הוגדרו בחלק א׳.
-# ─────────────────────────────────────────────────────────────────────────────
 
-# ─────────── Backfill ENV (אם לא הוגדרו בחלק א׳) ───────────
+# ─────────── Backfill ENV (אם לא הוגדרו) ───────────
 if 'FEAT_QUALITY_ENFORCE' not in globals():
     FEAT_QUALITY_ENFORCE  = os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on")
 if 'APPROVE_BEFORE_GATE' not in globals():
@@ -135,7 +130,7 @@ if 'LEVERAGE_SYMBOL_CAPS' not in globals():
     except Exception:
         LEVERAGE_SYMBOL_CAPS  = {"BTCUSDT":15,"1000PEPEUSDT":8}
 
-# ─────────── Quantize & math helpers (אם חסר) ───────────
+# ─────────── Quantize & math helpers ───────────
 def _decimals(step_str: str) -> int:
     if "." not in step_str: return 0
     frac = step_str.split(".")[1].rstrip("0")
@@ -185,7 +180,7 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
-# ─────────── Indicators & quality gate (קל, בלי pandas) ───────────
+# ─────────── Indicators & quality gate (ללא pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
     k = 2 / (period + 1); ema=[]; s=None
     for v in vals:
@@ -345,7 +340,6 @@ def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
     cap_by_symbol = int(LEVERAGE_SYMBOL_CAPS.get(symbol.upper(), LEV_HARD_CAP))
     dyn = max(MIN_LEVERAGE, min(dyn, cap_by_symbol, LEV_HARD_CAP))
     return max(MIN_LEVERAGE, min(max(lev, dyn), cap_by_symbol, LEV_HARD_CAP))
-
 # ─────────── Idempotency (Redis/memory) ───────────
 class _Idem:
     _mem: Dict[str, float] = {}
@@ -476,7 +470,7 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
             except Exception:
                 return {"ok": r.status_code == 200, "status_code": r.status_code, "text": r.text[:200]}
     except Exception as e:
-        log.exception("telegram send failed", extra={"err": str(e)})
+        log.exception("telegram send failed", extra={"err": str(e)})  # noqa
         return {"ok": False, "error": str(e)}
 
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -563,9 +557,8 @@ def _build_ladders(sym: str, side: str, qty: float,
                 if tp_kind_market:
                     plan["tp_orders"].append({"type": "TAKE_PROFIT_MARKET","stopPrice": stop_p,"qty": qalloc})
                 else:
-                    limit_p = _offset_bps(float(t), TP_LIMIT_OFFSET_BPS, limit_sign)
-                    _, lim_p = _q_price(sym, limit_p)
-                    plan["tp_orders"].append({"type": "TAKE_PROFIT","stopPrice": stop_p,"price": lim_p,"qty": qalloc})
+                    # TAKE_PROFIT (Limit) — אם תרצה, אפשר להוסיף price נפרד
+                    plan["tp_orders"].append({"type": "TAKE_PROFIT","stopPrice": stop_p,"price": stop_p,"qty": qalloc})
             else:
                 plan["sl_orders"].append({"type": "STOP_MARKET","stopPrice": stop_p,"qty": qalloc})
 
@@ -586,7 +579,7 @@ def _close_side_for(entry_side: str) -> str:
 def _pos_side_for_entry(side: str) -> str:
     return "LONG" if side.upper() == "BUY" else "SHORT"
 
-# ─────────── Hybrid entry (עם positionSide) ───────────
+# ─────────── Hybrid entry (עם positionSide מותנה) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
                               ref_entry: Optional[float], position_side: str) -> Dict[str, Any]:
     ref = ref_entry if ref_entry is not None else base_price
@@ -606,18 +599,26 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_str , stop_p  = _q_price(sym, stop_price)
     qty_str  , _       = _q_qty(sym, qty)
 
-    lim = futures_create_order(
+    entry_kwargs = dict(
         symbol=sym, side=side, type="LIMIT",
         timeInForce="GTC", price=limit_str, quantity=qty_str,
-        positionSide=position_side, reduceOnly=False
+        reduceOnly=False
     )
+    if position_side != "BOTH":
+        entry_kwargs["positionSide"] = position_side
+
+    lim = futures_create_order(**entry_kwargs)
     lim_id = str(lim.get("orderId") or "")
 
-    stp = futures_create_order(
+    stop_kwargs = dict(
         symbol=sym, side=side, type="STOP",
         timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str,
-        positionSide=position_side, reduceOnly=False, workingType="MARK_PRICE"
+        reduceOnly=False, workingType="MARK_PRICE"
     )
+    if position_side != "BOTH":
+        stop_kwargs["positionSide"] = position_side
+
+    stp = futures_create_order(**stop_kwargs)
     stp_id = str(stp.get("orderId") or "")
 
     def _is_filled(oid: str) -> Tuple[bool, Optional[float]]:
@@ -671,10 +672,10 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 try:
                     if stp_id: futures_cancel_order(sym, stp_id)
                 except Exception: pass
-                mkt = futures_create_order(
-                    symbol=sym, side=side, type="MARKET", quantity=qty_str,
-                    positionSide=position_side, reduceOnly=False
-                )
+                mkt_kwargs = dict(symbol=sym, side=side, type="MARKET", quantity=qty_str, reduceOnly=False)
+                if position_side != "BOTH":
+                    mkt_kwargs["positionSide"] = position_side
+                mkt = futures_create_order(**mkt_kwargs)
                 mk = get_price(sym) or futures_mark_price(sym) or cur
                 bps = abs((cur or 0) - (mk or 0)) / max(mk or 1e-9, 1e-9) * 10000.0 if mk and cur else None
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
@@ -881,15 +882,21 @@ async def execute_trade_live(
                 side=close_side,
                 type=typ,
                 reduceOnly=True,
-                timeInForce="GTC",
                 workingType="MARK_PRICE",
-                positionSide=position_side if position_side != "BOTH" else _pos_side_for_entry(side),
             )
+            # positionSide — רק אם לא BOTH
+            if position_side != "BOTH":
+                args["positionSide"] = position_side
+
             if "MARKET" in typ:
+                # STOP_MARKET / TAKE_PROFIT_MARKET: רק stopPrice + quantity
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
             else:
+                # STOP / TAKE_PROFIT (לימיט): stopPrice + price + TIF
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
                 args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+                args["timeInForce"] = "GTC"
+
             args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
 
             try:
@@ -919,15 +926,16 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
     position_side = _normalize_position_side(position_side)
     close_side = _close_side_for(side)
     try:
-        resp = futures_create_order(
+        args = dict(
             symbol=sym,
             side=close_side,
             type="MARKET",
             reduceOnly=True,
-            timeInForce="GTC",
             quantity=_q_qty(sym, qty)[0],
-            positionSide=position_side if position_side != "BOTH" else _pos_side_for_entry(side),
         )
+        if position_side != "BOTH":
+            args["positionSide"] = position_side
+        resp = futures_create_order(**args)
         return {"ok": True, "response": resp}
     except Exception as e:
         return {"ok": False, "error": str(e)}
