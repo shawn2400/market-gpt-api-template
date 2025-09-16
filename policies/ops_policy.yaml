@@ -1,5 +1,21 @@
 # FILE: policies/ops_policy.yaml
+# Version: 1-1
 ---
+# ===== Explicit rules that override global thresholds when matched =====
+rules:
+  - match: { step: enable_scheduler }
+    allow_auto_approve: true
+    max_crs: 3
+    require_two_man: false
+    sensitive: false
+
+  - match: { step: validate_creds }
+    allow_auto_approve: true
+    max_crs: 3
+    require_two_man: false
+    sensitive: false
+
+# ===== Master switches & operating profile =====
 MASTER:
   power: "on"                 # on | off
   mode: "full"                # off|frozen|safe|lite|full
@@ -51,7 +67,7 @@ QUALITY_GATES:
 CHANGE_APPROVAL:
   required: true                # דורש אישור לשינויים משמעותיים
   ttl_minutes: 20               # זמן תפוגה לטיקט
-  min_crs_for_manual: 2         # כל שינוי עם CRS>=2 מצריך אישור
+  min_crs_for_manual: 2         # כל שינוי עם CRS>=2 מצריך אישור (אלא אם כלל ב־rules מתיר auto-approve)
   explain: true                 # לצרף הסבר/תוכנית פעולה בהודעות
   channels: ["telegram"]        # כרגע טלגרם
 
