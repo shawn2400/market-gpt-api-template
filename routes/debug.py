@@ -2,14 +2,10 @@
 from __future__ import annotations
 from fastapi import APIRouter, Request
 import os, platform, time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+from utils.auth import extract_token, token_matches, get_loaded_tokens, refresh_tokens_from_env
 
-from utils.auth import (
-    extract_token, token_matches,
-    get_loaded_tokens, refresh_tokens_from_env,
-)
-
-router = APIRouter(prefix="", tags=["Debug"])  # בלי Depends — ציבורי
+router = APIRouter(prefix="", tags=["Debug"])  # ציבורי
 
 @router.get("/_debug/auth", include_in_schema=False)
 async def debug_auth(request: Request):
@@ -49,7 +45,6 @@ async def debug_refresh_auth():
         "count": len(toks),
         "tokens_masked": get_loaded_tokens(mask=True),
     }
-
 
 
 
