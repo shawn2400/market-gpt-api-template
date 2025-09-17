@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional, Iterable
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from prometheus_client import make_asgi_app
@@ -21,7 +23,7 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
-# ✅ notifier (לא קריטי — עם fallback)
+# ✅ notifier (fallback בטוח)
 try:
     from utils.telegram_notifier import (
         ensure_ops_schedulers_started,
@@ -84,6 +86,14 @@ for d in ("static", "logs", "data"):
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - מסחר אלגוריתמי")
+
+# ---------- RequestValidationError => 422 ----------
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
+    )
 
 # ---------- OpenAPI סינון ----------
 from fastapi.openapi.utils import get_openapi
@@ -171,10 +181,10 @@ DEFAULT_PUBLIC_PATHS = {
     "/telegram/webhook", "/telegram/callback", "/telegram/ping",
     "/provider/cryptopanic/webhook",
     "/status/ping", "/status/ws", "/status/executor", "/status/all",
-    "/status/auth",             # 👈 סטטוס אימות ציבורי
+    "/status/auth",
     "/debug/health",
-    "/_debug/auth", "/debug/env", "/debug/refresh-auth",  # 👈 דיבוג אימות ציבורי
-    "/executor/status",         # 👈 סטטוס אקזקיוטר ציבורי
+    "/_debug/auth", "/debug/env", "/debug/refresh-auth",
+    "/executor/status",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
@@ -182,11 +192,9 @@ DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS", "")))
 CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
 
-# אם METRICS_PUBLIC=1 – נפתח גם /metrics
 if METRICS_PUBLIC:
     CFG_PUBLIC.add("/metrics")
 
-# סט אפקטיבי
 EFFECTIVE_PUBLIC_PATHS = set(DEFAULT_PUBLIC_PATHS) if PUBLIC_STATUS else set()
 EFFECTIVE_PUBLIC_PATHS |= CFG_PUBLIC
 
@@ -207,20 +215,16 @@ async def validate_token(request: Request, call_next):
     if request.method.upper() == "OPTIONS":
         return await call_next(request)
 
-    # public exact
     if path in EFFECTIVE_PUBLIC_PATHS:
         return await call_next(request)
 
-    # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
         if path.startswith(pfx):
             return await call_next(request)
 
-    # allow all?
     if allow_all():
         return await call_next(request)
 
-    # token-based
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     token = extract_token(request, a_hdr, x_hdr)
@@ -248,7 +252,7 @@ for module_path in (
     "routes.analytics",
     "routes.decision",
     "routes.backtest",
-    "routes.executor",          # מוגן ע"י המידלוור הגלובלי
+    "routes.executor",
     "routes.binance_status",
     "routes.telegram_webhook",
     "routes.telegram_callbacks",
@@ -257,12 +261,12 @@ for module_path in (
     "routes.ws_user_stream",
     "routes.ai_analyze",
     "routes.ws_user_status",
-    "routes.executor_status",   # מספק /status/executor ציבורי (אם קיים)
+    "routes.executor_status",
     "routes.provider_cryptopanic",
     "routes.scan",
     "routes.multi_scan",
     "routes.system_autopilot",
-    "routes.debug",             # 👈 דיבוג ציבורי: _debug/auth, /debug/env, /debug/refresh-auth
+    "routes.debug",
 ):
     if _try_include(module_path):
         try:
@@ -406,7 +410,6 @@ TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1",
 
 @app.on_event("startup")
 async def _startup_preflight_warmup():
-    # לוג עזר: אילו טוקנים טעונים (מוסך)
     try:
         logger.info({"event": "auth.tokens_loaded", "tokens": get_loaded_tokens(mask=True)})
     except Exception:
@@ -457,7 +460,7 @@ async def _startup_user_stream():
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
-# --- public debug auth endpoint (תמיד ציבורי ב-DEFAULT_PUBLIC_PATHS) ---
+# --- public debug auth endpoint ---
 try:
     from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
 except Exception:
@@ -487,6 +490,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
