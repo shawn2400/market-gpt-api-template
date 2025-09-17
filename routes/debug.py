@@ -14,7 +14,7 @@ from utils.auth import require_api_key, get_loaded_tokens, refresh_tokens_from_e
 router = APIRouter(
     prefix="/debug",
     tags=["Debug"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_api_key)],  # דורש טוקן, ניתן להסיר אם רוצים public
 )
 
 @router.get("")
@@ -59,20 +59,22 @@ def debug_router(
             }
 
         if op == "tokens":
+            masked = get_loaded_tokens(mask=True)
             return {
                 "ok": True,
                 "event": "tokens",
-                "count": len(get_loaded_tokens(mask=True)),
-                "tokens_masked": get_loaded_tokens(mask=True),
+                "count": len(masked),
+                "tokens_masked": masked,
             }
 
         if op == "refresh":
-            count = refresh_tokens_from_env()
+            tokens = refresh_tokens_from_env()
             return {
                 "ok": True,
                 "event": "refresh",
                 "detail": "Tokens reloaded from environment.",
-                "count": count,
+                "count": len(tokens),
+                "tokens_masked": get_loaded_tokens(mask=True),
             }
 
         return {"ok": False, "event": "invalid", "detail": f"Unknown op={op}"}
@@ -82,10 +84,8 @@ def debug_router(
             "ok": False,
             "event": "error",
             "error": str(e),
-            "traceback": traceback.format_exc().splitlines()[-5:],  # רק 5 שורות אחרונות
+            "traceback": traceback.format_exc().splitlines()[-5:],  # 5 שורות אחרונות בלבד
         }
-
-
 
 
 
