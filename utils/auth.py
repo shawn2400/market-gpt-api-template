@@ -106,7 +106,6 @@ def get_public_paths() -> Dict[str, Any]:
     _ensure_tokens_fresh()
     return {"paths": sorted(_PUBLIC_PATHS), "prefixes": list(_PUBLIC_PREFIXES)}
 
-# Back-compat for older code/tests
 def get_public_config() -> Dict[str, Any]:
     _ensure_tokens_fresh()
     return {
@@ -187,6 +186,7 @@ __all__ = [
     "get_loaded_tokens", "get_public_paths", "get_public_config",
     "allow_all", "refresh_tokens_from_env",
 ]
+
 
 
 
