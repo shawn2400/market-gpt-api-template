@@ -21,7 +21,7 @@ from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 from utils.metrics_middleware import MetricsMiddleware
 
-# ✅ notifier: לא קריטי
+# ✅ notifier (לא קריטי — עם fallback)
 try:
     from utils.telegram_notifier import (
         ensure_ops_schedulers_started,
@@ -33,7 +33,7 @@ except Exception:
     async def send_ops_digest_now(hours: Optional[int] = None) -> None: return None
     async def send_eod_report_now() -> None: return None
 
-# ✅ InternalAuthMiddleware: fallback no-op
+# ✅ InternalAuthMiddleware (fallback no-op אם לא קיים)
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
 except Exception:
@@ -41,7 +41,7 @@ except Exception:
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
 
-# ✅ ConfirmStore: מביאים מכל מקום שיש
+# ✅ ConfirmStore (fallback בטוח)
 try:
     from utils.trade_executor import ConfirmStore
 except Exception:
@@ -53,7 +53,7 @@ except Exception:
             def flush_all(cls): ...
             flush = reset = flush_all
 
-# ✅ runtime counters (fallback)
+# ✅ runtime counters (עם fallback)
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters
 except Exception:
@@ -173,7 +173,8 @@ DEFAULT_PUBLIC_PATHS = {
     "/status/ping", "/status/ws", "/status/executor", "/status/all",
     "/status/auth",             # 👈 סטטוס אימות ציבורי
     "/debug/health",
-    "/debug/auth", "/_debug/auth",  # 👈 דיבוג אימות ציבורי
+    "/_debug/auth", "/debug/env", "/debug/refresh-auth",  # 👈 דיבוג אימות ציבורי
+    "/executor/status",         # 👈 סטטוס אקזקיוטר ציבורי
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
@@ -220,8 +221,6 @@ async def validate_token(request: Request, call_next):
         return await call_next(request)
 
     # token-based
-    # (נעזרים ב-extract_token כך שהוא יאסוף מ-Authorization / X-API-Key / query param
-    #  לפי המימוש אצלך ב-utils.auth)
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     token = extract_token(request, a_hdr, x_hdr)
@@ -249,7 +248,7 @@ for module_path in (
     "routes.analytics",
     "routes.decision",
     "routes.backtest",
-    "routes.executor",          # מוגן ע"י dependency בפנים
+    "routes.executor",          # מוגן ע"י המידלוור הגלובלי
     "routes.binance_status",
     "routes.telegram_webhook",
     "routes.telegram_callbacks",
@@ -258,11 +257,12 @@ for module_path in (
     "routes.ws_user_stream",
     "routes.ai_analyze",
     "routes.ws_user_status",
-    "routes.executor_status",   # מספק /status/executor ציבורי
+    "routes.executor_status",   # מספק /status/executor ציבורי (אם קיים)
     "routes.provider_cryptopanic",
     "routes.scan",
     "routes.multi_scan",
     "routes.system_autopilot",
+    "routes.debug",             # 👈 דיבוג ציבורי: _debug/auth, /debug/env, /debug/refresh-auth
 ):
     if _try_include(module_path):
         try:
@@ -457,22 +457,22 @@ async def _startup_user_stream():
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
-# --- public debug auth endpoint (no deps, תמיד ציבורי ב-DEFAULT_PUBLIC_PATHS) ---
+# --- public debug auth endpoint (תמיד ציבורי ב-DEFAULT_PUBLIC_PATHS) ---
 try:
-    from utils.auth import extract_token, token_matches, get_loaded_tokens as _get_loaded_tokens
+    from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
 except Exception:
     def _get_loaded_tokens(mask: bool = True): return []
-    def extract_token(req, a, b): return None
-    def token_matches(tok): return False
+    def _extract_token(req, a, b): return None
+    def _token_matches(tok): return False
 
 @app.get("/_debug/auth", include_in_schema=False)
 async def _debug_auth(request: Request):
     a = request.headers.get("authorization") or request.headers.get("Authorization")
     x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    t = extract_token(request, a, x)
+    t = _extract_token(request, a, x)
     return {"ok": True, "auth_header": a, "x_api_key": x,
             "query": dict(request.query_params), "extracted_token": t,
-            "matches": bool(token_matches(t)), "tokens_loaded": _get_loaded_tokens(mask=True)}
+            "matches": bool(_token_matches(t)), "tokens_loaded": _get_loaded_tokens(mask=True)}
 
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
@@ -487,9 +487,6 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
-
-
-
 
 
 
