@@ -1,10 +1,9 @@
 from __future__ import annotations
 import logging
 from typing import Dict, Any, Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from utils.auth import require_api_key
 from utils.binance_client import (
     fapi_ping,
     futures_open_positions_safe,
@@ -87,7 +86,7 @@ async def exchange_info() -> Dict[str, Any]:
         raise HTTPException(500, str(e))
 
 @router.post("/trade")
-async def trade(req: ExecTradeRequest):
+async def trade(req: ExecTradeRequest) -> Dict[str, Any]:
     try:
         budget_effective: Optional[float] = None
         if req.budget_usd and req.budget_usd > 0:
@@ -124,7 +123,6 @@ async def trade(req: ExecTradeRequest):
     except Exception as e:
         logger.error("trade failed: %s", e)
         raise HTTPException(500, str(e))
-
 
 
 
