@@ -1,9 +1,7 @@
 # utils/auth.py
 from __future__ import annotations
-import os
-import time
-import logging
-from typing import Optional, Set, List
+import os, time, logging
+from typing import Optional, Set, List, Dict, Any
 from fastapi import Request, Header, HTTPException
 
 logger = logging.getLogger("algogpt.auth")
@@ -15,7 +13,8 @@ def _b(v: str | None) -> bool:
     return str(v or "").lower() in ("1", "true", "yes", "on")
 
 def _split(s: str) -> List[str]:
-    return [p.strip() for p in (s or "").split(",") if p.strip()]
+    raw = (s or "").replace("\n", ",").replace("\t", ",").strip()
+    return [p.strip() for p in raw.split(",") if p.strip()]
 
 # ─────────────────────────
 # Security config (public)
@@ -34,7 +33,7 @@ def _is_public(path: str) -> bool:
     if path in _PUBLIC_PATHS:
         return True
     for pref in _PUBLIC_PREFIXES:
-        if path.startswith(pref):
+        if pref and path.startswith(pref):
             return True
     return False
 
@@ -43,13 +42,18 @@ def _is_public(path: str) -> bool:
 # ─────────────────────────
 _TOKENS: Set[str] = set()
 _TOKENS_LOADED_AT = 0.0
-_TOKENS_TTL_SEC = float(os.getenv("AUTH_TOKENS_TTL", "10"))
+def _tokens_ttl_sec() -> float:
+    try:
+        return float(os.getenv("AUTH_TOKENS_TTL", "60"))
+    except Exception:
+        return 60.0
 
 def _load_tokens(force: bool = False) -> Set[str]:
     """Load tokens from API_TOKENS and API_TOKENS_FILE with small TTL."""
     global _TOKENS, _TOKENS_LOADED_AT
     now = time.time()
-    if not force and _TOKENS and (now - _TOKENS_LOADED_AT) < _TOKENS_TTL_SEC:
+    ttl = _tokens_ttl_sec()
+    if not force and _TOKENS and (now - _TOKENS_LOADED_AT) < ttl:
         return _TOKENS
 
     toks: Set[str] = set()
@@ -57,7 +61,7 @@ def _load_tokens(force: bool = False) -> Set[str]:
     for t in _split(os.getenv("API_TOKENS", "")):
         toks.add(t)
     # from file lines
-    fp = os.getenv("API_TOKENS_FILE", "").strip()
+    fp = (os.getenv("API_TOKENS_FILE", "") or "").strip()
     if fp:
         try:
             if os.path.isfile(fp):
@@ -77,7 +81,7 @@ def _load_tokens(force: bool = False) -> Set[str]:
 # ─────────────────────────
 # Token extraction
 # ─────────────────────────
-def _extract_token(
+def extract_token(
     request: Request,
     authorization: Optional[str],
     x_api_key: Optional[str],
@@ -86,13 +90,13 @@ def _extract_token(
     if x_api_key and x_api_key.strip():
         return x_api_key.strip()
 
-    # Header: Authorization (Bearer <token> or raw token)
+    # Header: Authorization (Bearer <token> או טוקן גולמי)
     if authorization and authorization.strip():
         a = authorization.strip()
         parts = a.split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             return parts[1].strip()
-        return a  # allow raw token (some clients send just the token)
+        return a  # חלק מהקליינטים שולחים רק טוקן
 
     # Optional query param fallback
     try:
@@ -106,6 +110,9 @@ def _extract_token(
 
     return None
 
+def token_matches(token: Optional[str]) -> bool:
+    return bool(token and token in _load_tokens())
+
 # ─────────────────────────
 # FastAPI dependency
 # ─────────────────────────
@@ -115,18 +122,19 @@ async def require_api_key(
     x_api_key: Optional[str] = Header(None),
 ) -> bool:
     """
-    Use as a FastAPI dependency to protect routes.
-    Allows public paths/prefixes per env. Raises 401 if token missing/invalid.
+    תלויות אבטחה לראוטים מוגנים:
+    - מתיר נתיבים ציבוריים לפי ENV.
+    - אם לא ציבורי: דורש טוקן תקף (Bearer / X-API-Key / ?api_key=...).
     """
-    # Public or preflight
+    # Public או Preflight
     if request.method == "OPTIONS" or _is_public(request.url.path):
         return True
 
-    token = _extract_token(request, authorization, x_api_key)
+    token = extract_token(request, authorization, x_api_key)
     if not token:
         raise HTTPException(status_code=401, detail="Missing API token")
 
-    if token not in _load_tokens():
+    if not token_matches(token):
         raise HTTPException(status_code=401, detail="Invalid API token")
 
     return True
@@ -140,21 +148,20 @@ def get_loaded_tokens(mask: bool = True) -> List[str]:
         return toks
     return [f"{t[:3]}***{t[-2:]}" if len(t) > 5 else "***" for t in toks]
 
-def get_public_config() -> dict:
+def get_public_config() -> Dict[str, Any]:
     return {
         "allow_all": _ALLOW_ALL,
         "public_status": _PUBLIC_STATUS,
         "paths": sorted(_PUBLIC_PATHS),
         "prefixes": list(_PUBLIC_PREFIXES),
-        "tokens_ttl_sec": _TOKENS_TTL_SEC,
+        "tokens_ttl_sec": _tokens_ttl_sec(),
     }
 
 __all__ = [
     "require_api_key",
-    "get_loaded_tokens",
-    "get_public_config",
+    "extract_token", "token_matches",
+    "get_loaded_tokens", "get_public_config",
 ]
-
 
 
 
