@@ -1,14 +1,12 @@
-# /app/routes/debug.py
 from __future__ import annotations
 from fastapi import APIRouter, Request
-import os, platform, time
-from typing import Any, Dict
-from utils.auth import extract_token, token_matches, get_loaded_tokens, refresh_tokens_from_env
+from fastapi.responses import JSONResponse
+from utils.auth import extract_token, token_matches, refresh_tokens, get_loaded_tokens
 
-router = APIRouter(prefix="", tags=["Debug"])  # ציבורי
+router = APIRouter(tags=["debug"])
 
 @router.get("/_debug/auth", include_in_schema=False)
-async def debug_auth(request: Request):
+async def _debug_auth(request: Request):
     a = request.headers.get("authorization") or request.headers.get("Authorization")
     x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     t = extract_token(request, a, x)
@@ -22,29 +20,17 @@ async def debug_auth(request: Request):
         "tokens_loaded": get_loaded_tokens(mask=True),
     }
 
-@router.get("/debug/env")
-async def debug_env():
-    return {
-        "API_TOKENS": os.getenv("API_TOKENS"),
-        "ALGOGPT_TOKENS": os.getenv("ALGOGPT_TOKENS"),
-        "API_BEARER_TOKEN": bool(os.getenv("API_BEARER_TOKEN")),
-        "API_TOKENS_FILE": os.getenv("API_TOKENS_FILE"),
-        "SECURITY_PUBLIC_PATHS": os.getenv("SECURITY_PUBLIC_PATHS"),
-        "AUTH_TOKENS_TTL": os.getenv("AUTH_TOKENS_TTL"),
-        "ENV": os.getenv("ENV", "production"),
-        "platform": platform.platform(),
-        "time_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
-    }
+@router.post("/debug/refresh-auth", include_in_schema=False)
+async def _debug_refresh_auth():
+    info = refresh_tokens()
+    return {"ok": True, "detail": "Tokens reloaded from environment", **info, "tokens_masked": get_loaded_tokens(mask=True)}
 
-@router.post("/debug/refresh-auth")
-async def debug_refresh_auth():
-    toks = refresh_tokens_from_env()
-    return {
-        "ok": True,
-        "detail": "Tokens reloaded from environment",
-        "count": len(toks),
-        "tokens_masked": get_loaded_tokens(mask=True),
-    }
+@router.get("/debug/env", include_in_schema=False)
+async def _debug_env():
+    import os
+    keys = ("API_TOKEN","API_TOKENS","TOKENS_FILE","SECURITY_ALLOW_ALL")
+    return {"ok": True, "env": {k: os.getenv(k) for k in keys}}
+
 
 
 
