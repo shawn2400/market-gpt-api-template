@@ -1,4 +1,4 @@
-# /app/utils/auth.py
+cat > /app/utils/auth.py << 'EOF'
 from __future__ import annotations
 import os, re, time, logging, pathlib
 from typing import Optional, List, Dict, Any
@@ -58,23 +58,28 @@ _DEFAULT_PUBLIC_PATHS = {
 _DEFAULT_PUBLIC_PREFIXES = {"/price", "/static/", "/risk"}
 
 def _gather_sources() -> Dict[str, List[str]]:
-    # קורא מכמה שמות ENV נפוצים כדי שלא “נתפספס”
+    """
+    אוסף טוקנים ממספר מקורות:
+    - רשימת ENV: API_TOKENS, ALGOGPT_TOKENS
+    - יחיד ENV: API_BEARER_TOKEN, API_KEY, AUTH_TOKEN, RENDER_API_KEY
+    - קובץ: API_TOKENS_FILE (אם חסר – ננסה /app/tokens.txt אם קיים)
+    """
     env_multi = []
     for key in ("API_TOKENS","ALGOGPT_TOKENS"):
         env_multi += _split_tokens(os.getenv(key, ""))
 
     env_single = []
-    for key in ("API_BEARER_TOKEN","API_KEY","AUTH_TOKEN"):
+    for key in ("API_BEARER_TOKEN","API_KEY","AUTH_TOKEN","RENDER_API_KEY"):
         v = (os.getenv(key) or "").strip()
         if v:
             env_single.append(v)
 
-    file_tokens = _read_file_lines(os.getenv("API_TOKENS_FILE",""))
-    return {
-        "env_multi": env_multi,
-        "env_single": env_single,
-        "file_tokens": file_tokens,
-    }
+    token_file = os.getenv("API_TOKENS_FILE","").strip()
+    if not token_file and pathlib.Path("/app/tokens.txt").exists():
+        token_file = "/app/tokens.txt"
+    file_tokens = _read_file_lines(token_file)
+
+    return {"env_multi": env_multi, "env_single": env_single, "file_tokens": file_tokens}
 
 def _fresh() -> None:
     global _T_AT, _TOKENS
@@ -118,7 +123,7 @@ def get_public_paths() -> Dict[str, List[str]]:
 _QUERY_KEYS = ("api_key","apikey","apiKey","token","key")
 
 def _from_auth_header(authorization: Optional[str]) -> Optional[str]:
-    if not authorization:
+    if not authorization or not isinstance(authorization, str):
         return None
     s = authorization.strip()
     m = re.match(r"^\s*Bearer\s+(.+)\s*$", s, re.IGNORECASE)
@@ -128,15 +133,32 @@ def _from_auth_header(authorization: Optional[str]) -> Optional[str]:
     return s.strip().strip('"').strip("'")
 
 def extract_token(request: Request, authorization: Optional[str]=None, x_api_key: Optional[str]=None) -> Optional[str]:
+    """
+    חשוב: הפונקציה הזו נקראת גם דרך dependency וגם ישירות.
+    לכן אנחנו מנרמלים כל פרמטר שאינו str (למשל fastapi.params.Header) ל-None.
+    """
+    # normalize DI sentinels to strings/None
+    if authorization is not None and not isinstance(authorization, str):
+        authorization = None
+    if x_api_key is not None and not isinstance(x_api_key, str):
+        x_api_key = None
+
+    # 1) query first
     q = request.query_params
     for k in _QUERY_KEYS:
         if k in q and q[k]:
             return str(q[k]).strip().strip('"').strip("'")
-    if x_api_key:
+
+    # 2) explicit X-API-KEY header if provided
+    if x_api_key and isinstance(x_api_key, str):
         return x_api_key.strip().strip('"').strip("'")
+
+    # 3) explicit Authorization header if provided
     t = _from_auth_header(authorization)
     if t:
         return t
+
+    # 4) pull from request headers
     ah = request.headers.get("authorization") or request.headers.get("Authorization")
     if ah:
         t = _from_auth_header(ah)
@@ -144,7 +166,7 @@ def extract_token(request: Request, authorization: Optional[str]=None, x_api_key
             return t
     xh = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     if xh:
-        return xh.strip().strip('"').strip("'")
+        return str(xh).strip().strip('"').strip("'")
     return None
 
 def token_matches(tok: Optional[str]) -> bool:
@@ -177,6 +199,7 @@ async def guard_or_401(request: Request) -> Optional[JSONResponse]:
         return None
     except Exception:
         return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
+EOF
 
 
 
