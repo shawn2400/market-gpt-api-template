@@ -165,7 +165,88 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
 
     if not symbol:
         out_errors.append("missing_symbol")
-    if side not in ("BUY", "SELL",
+    if side not in ("BUY", "SELL", "LONG", "SHORT"):
+        out_errors.append("bad_side")
+    if entry <= 0:
+        out_errors.append("bad_entry")
+    if sl <= 0:
+        out_errors.append("bad_sl")
+    if tp1 <= 0:
+        out_errors.append("bad_tp1")
+
+    if out_errors:
+        return {"ok": False, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
+
+    if not _in_watchlist(symbol):
+        out_errors.append("symbol_not_in_watchlist")
+
+    fp_ok, px = _fresh_price_ok(symbol)
+    metrics["fresh_price_ok"] = fp_ok
+    metrics["last_price"] = px
+    if not fp_ok:
+        out_warns.append("stale_or_missing_price")
+
+    min_pct = float(MIN_TP_SL_DIFF_PCT)
+    if _pct(entry, sl) < min_pct:
+        out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
+    if _pct(entry, tp1) < min_pct:
+        out_errors.append(f"entry_tp1_too_close(<{min_pct:.3f}%)")
+
+    if _pct(entry, sl) > float(APPROVAL_MAX_SL_PCT):
+        out_errors.append(f"sl_too_far(>{APPROVAL_MAX_SL_PCT:.2f}%)")
+
+    rr = _rr(entry, sl, tp1, side)
+    metrics["rr"] = rr
+    if rr is None or rr < APPROVAL_RR_MIN:
+        out_errors.append(
+            f"rr_below_min({rr:.2f}<{APPROVAL_RR_MIN:.2f})" if rr is not None else "rr_invalid"
+        )
+
+    sp = tp.get("success_pct")
+    if sp is not None:
+        try:
+            spf = float(sp)
+            metrics["success_pct"] = spf
+            if spf < APPROVAL_SUCCESS_MIN:
+                out_errors.append(f"success_pct_below_min({spf:.1f}<{APPROVAL_SUCCESS_MIN:.1f})")
+        except Exception:
+            out_warns.append("success_pct_not_numeric")
+
+    lev = int(tp.get("leverage") or 0)
+    if lev <= 0:
+        out_warns.append("missing_leverage")
+    elif lev > MAX_LEVERAGE:
+        out_errors.append(f"leverage_above_cap(x{lev}>x{MAX_LEVERAGE})")
+    metrics["leverage"] = lev
+
+    budget = tp.get("budget")
+    if budget is not None and lev > 0:
+        try:
+            notional = float(budget) * float(lev)
+            metrics["notional_est"] = notional
+            if notional < MIN_NOTIONAL_USDT:
+                out_errors.append(f"notional_below_min(${notional:.2f} < ${MIN_NOTIONAL_USDT:.2f})")
+        except Exception:
+            out_warns.append("notional_est_failed")
+
+    out_errors.extend(_precision_checks(symbol, entry, sl, tp1))
+
+    now = time.time()
+    _purge_recent(now)
+    key = _key_for(tp)
+    last = _recent.get(key)
+    if last and (now - last < APPROVAL_DUP_COOLDOWN_SEC):
+        out_errors.append("duplicate_recent")
+    else:
+        _recent[key] = now
+
+    ok = (len(out_errors) == 0)
+    return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
+
+
+def can_auto_forward(tp: Dict[str, Any]) -> bool:
+    res = preflight_proposal(tp)
+    return bool(res.get("ok", False))
 
 
 
