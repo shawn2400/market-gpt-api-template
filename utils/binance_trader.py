@@ -1,182 +1,240 @@
-# utils/binance_trader.py
+# utils/binance_trade.py
 from __future__ import annotations
-import logging
-import time
-from typing import Dict, Any, Optional
+import os, time, hmac, hashlib
+from typing import Any, Dict, List, Optional, Tuple
 
-from utils.binance_client import (
-    futures_mark_price,
-    set_leverage,
-    place_limit_order,
-    futures_open_positions,
-)
-from utils.precision_utils import (
-    apply_price_tick_side,
-    apply_qty_step,
-    calc_quantity_from_budget,
-)
-from utils.orders_manager import record_order
+import httpx
 
-logger = logging.getLogger("algogpt.binance.trader")
+# מנסים לנצל את ה־utils הקיימים אצלך כשאפשר (מחיר, אקס’אינפו)
+try:
+    from utils.binance_client import get_price as _get_price_util, futures_exchange_info_safe
+except Exception:
+    _get_price_util = None
+    futures_exchange_info_safe = None  # נשתמש ב-/fapi/v1/exchangeInfo אם אין
 
-def _target_limit_from_mark(side: str, mark: float) -> float:
-    """
-    בוחר מחיר Limit שמקדם ביצוע מיידי (IOC) או Maker (GTX) בלי לדחוף את הספר חזק.
-    BUY → מעט מתחת ל-Mark, SELL → מעט מעל.
-    """
-    side = side.upper()
-    return (mark * 0.998) if side == "BUY" else (mark * 1.002)
+BINANCE_FAPI = os.getenv("BINANCE_FAPI_BASE", "https://fapi.binance.com")
 
-async def binance_futures_trade(
-    symbol: str,
-    side: str,
-    budget: float,
-    leverage: int = 10,
-    dry_run: bool = False,
-) -> Dict[str, Any]:
-    """
-    הזמנה ל-Binance Futures.
-    - Limit GTX (Post-Only) כברירת מחדל — ניתן לשנות ל-IOC אם תרצה.
-    - שינוי מינוף לפני שליחה (best-effort).
-    - qty נבחרת ע"פ budget×leverage + אכיפת MIN_NOTIONAL ו-stepSize.
-    - רישום ל-orders_manager גם ב-dry-run (status=SIMULATED).
-    """
-    symbol = symbol.upper().strip()
-    side = side.upper().strip()
-    if side not in ("BUY", "SELL"):
-        raise ValueError("side must be BUY or SELL")
+def _api_keys() -> Tuple[str, str]:
+    k = os.getenv("BINANCE_API_KEY", "").strip()
+    s = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not k or not s:
+        raise RuntimeError("BINANCE_API_KEY / BINANCE_API_SECRET missing")
+    return k, s
 
-    mark = futures_mark_price(symbol)
-    if mark is None or mark <= 0:
-        raise RuntimeError(f"Mark price unavailable for {symbol}")
+def _sign(params: Dict[str, Any], secret: str) -> str:
+    # סדר הפרמטרים כ־querystring
+    q = "&".join(f"{k}={params[k]}" for k in sorted(params.keys()))
+    return hmac.new(secret.encode(), q.encode(), hashlib.sha256).hexdigest()
 
-    # מחיר יעד → יישור tick לפי כיוון
-    raw_limit = _target_limit_from_mark(side, mark)
-    limit_px, _ = apply_price_tick_side(raw_limit, symbol, side)
+async def _request(
+    method: str,
+    path: str,
+    params: Dict[str, Any] | None = None,
+    signed: bool = True,
+    timeout: float = 10.0,
+) -> Any:
+    params = dict(params or {})
+    headers = {}
+    if signed:
+        key, sec = _api_keys()
+        params["timestamp"] = int(time.time() * 1000)
+        params.setdefault("recvWindow", 5000)
+        params["signature"] = _sign(params, sec)
+        headers["X-MBX-APIKEY"] = key
 
-    # כמות בטוחה לפי budget×leverage (מבטיח עמידה במינימוםים)
-    q = calc_quantity_from_budget(symbol, price=limit_px, budget_usd=float(budget), leverage=float(leverage))
-    if not q.get("ok"):
-        raise RuntimeError(f"quantity calc failed: {q.get('reason')} (need ≥ notional {q.get('min_notional')})")
-    qty = float(q["qty"])
+    url = f"{BINANCE_FAPI}{path}"
+    async with httpx.AsyncClient(timeout=timeout) as cli:
+        if method.upper() == "GET":
+            r = await cli.get(url, params=params, headers=headers)
+        elif method.upper() == "POST":
+            r = await cli.post(url, params=params, headers=headers)
+        elif method.upper() == "DELETE":
+            r = await cli.delete(url, params=params, headers=headers)
+        else:
+            raise RuntimeError(f"unsupported method {method}")
+    r.raise_for_status()
+    return r.json()
 
-    if dry_run:
-        oid = f"DRY-{int(time.time()*1000)}"
-        record_order(
-            symbol=symbol,
-            side=side,
-            qty=qty,
-            price=limit_px,
-            status="SIMULATED",
-            order_id=oid,
-            client_id=None,
-            dry_run=True,
-            tif="GTX",
-        )
-        logger.info(f"[DRY RUN] {side} {symbol} budget={budget} qty≈{qty:.8f} lev={leverage} limit={limit_px:.8f}")
-        return {
-            "symbol": symbol,
-            "side": side,
-            "qty": qty,
-            "entry": limit_px,
-            "leverage": leverage,
-            "dry_run": True,
-        }
+async def get_price(symbol: str) -> float:
+    if callable(_get_price_util):
+        try:
+            p = _get_price_util(symbol)
+            if p and p > 0:
+                return float(p)
+        except Exception:
+            pass
+    data = await _request("GET", "/fapi/v1/ticker/price", {"symbol": symbol}, signed=False)
+    return float(data["price"])
 
-    # שינוי מינוף (best-effort)
-    try:
-        set_leverage(symbol, leverage)
-    except Exception as e:
-        logger.error(f"[Leverage] failed for {symbol}: {e}")
+# ------- exchange info / filters -------
+_symbol_filters_cache: Dict[str, Dict[str, Any]] = {}
 
-    # שליחת LIMIT GTX (Post-Only) — Precision כבר מיושר, והלקוח יבצע עיגון נוסף כביטחון
-    resp = place_limit_order(
-        symbol=symbol,
-        side=side,
-        quantity=qty,
-        price=limit_px,
-        post_only=True,          # GTX
-        reduce_only=False,
-        position_side=None,
-        time_in_force=None,      # GTX יתועד כ-timeInForce
-    )
+async def _load_exchange_info() -> Dict[str, Any]:
+    if callable(futures_exchange_info_safe):
+        try:
+            info = futures_exchange_info_safe(force_refresh=False)
+            if info:
+                return info
+        except Exception:
+            pass
+    return await _request("GET", "/fapi/v1/exchangeInfo", signed=False)
 
-    # רישום ב-local orders log
-    order_id: Optional[str] = str(resp.get("orderId")) if "orderId" in resp else None
-    client_id: Optional[str] = resp.get("clientOrderId") or resp.get("newClientOrderId")
-    status = (resp.get("status") or "NEW").upper()
-    tif = (resp.get("timeInForce") or "GTX").upper()
-
-    record_order(
-        symbol=symbol,
-        side=side,
-        qty=float(resp.get("origQty") or qty),
-        price=float(resp.get("price") or limit_px),
-        status=status,
-        order_id=order_id or f"LOC-{int(time.time()*1000)}",
-        client_id=client_id,
-        dry_run=False,
-        tif=tif,
-    )
-
-    out = {
-        "symbol": symbol,
-        "side": side,
-        "qty": float(resp.get("origQty") or qty),
-        "entry": float(resp.get("price") or limit_px),
-        "leverage": leverage,
-        "order": {k: resp.get(k) for k in ("orderId", "clientOrderId", "status", "price", "origQty", "timeInForce")},
-    }
-    logger.info(f"[New LIMIT GTX] {out}")
+def _parse_filters(sym_info: Dict[str, Any]) -> Dict[str, Any]:
+    out = {"stepSize": 0.001, "minQty": 0.0, "tickSize": 0.01}
+    for f in sym_info.get("filters", []):
+        if f.get("filterType") == "LOT_SIZE":
+            out["stepSize"] = float(f.get("stepSize", out["stepSize"]))
+            out["minQty"] = float(f.get("minQty", out["minQty"]))
+        if f.get("filterType") == "PRICE_FILTER":
+            out["tickSize"] = float(f.get("tickSize", out["tickSize"]))
     return out
 
-def force_close_position(symbol: str) -> Dict[str, Any]:
-    """
-    סגירת פוזיציה קיימת ב-Reduce-Only עם LIMIT+IOC אגרסיבי (ללא Market).
-    LONG → SELL IOC מתחת ל-Mark; SHORT → BUY IOC מעל ה-Mark.
-    מיושר Precision לפני שליחה (step/tick).
-    """
-    symbol = symbol.upper().strip()
-    positions = futures_open_positions() or []
-    pos = next((p for p in positions if p.get("symbol") == symbol), None)
-    if not pos:
-        return {"symbol": symbol, "closedAmt": 0.0, "message": "no position for symbol"}
+async def get_symbol_filters(symbol: str) -> Dict[str, Any]:
+    s = symbol.upper()
+    if s in _symbol_filters_cache:
+        return _symbol_filters_cache[s]
+    info = await _load_exchange_info()
+    for sym in info.get("symbols", []):
+        if sym.get("symbol") == s:
+            f = _parse_filters(sym)
+            _symbol_filters_cache[s] = f
+            return f
+    # fallback
+    f = {"stepSize": 0.001, "minQty": 0.0, "tickSize": 0.01}
+    _symbol_filters_cache[s] = f
+    return f
 
-    amt = float(pos.get("positionAmt") or 0.0)
-    if amt == 0.0:
-        return {"symbol": symbol, "closedAmt": 0.0, "message": "no open amount"}
+def _round_step(x: float, step: float) -> float:
+    if step <= 0:
+        return x
+    return (int(x / step + 1e-12)) * step
 
-    mark = futures_mark_price(symbol)
-    if mark is None or mark <= 0:
-        raise RuntimeError(f"Mark price unavailable for {symbol}")
+def round_qty(symbol: str, qty: float, step: float) -> float:
+    q = _round_step(qty, step)
+    # נזהר שלא ליפול ל-0 בגלל עיגול
+    return max(q, 0.0)
 
-    if amt > 0:
-        side = "SELL"
-        raw_px = mark * 0.98
-    else:
-        side = "BUY"
-        raw_px = mark * 1.02
+def round_price(symbol: str, price: float, tick: float) -> float:
+    p = _round_step(price, tick)
+    return max(p, 0.0)
 
-    limit_px, _ = apply_price_tick_side(raw_px, symbol, side)
-    qty, _ = apply_qty_step(abs(amt), symbol)
+# ------- leverage / orders -------
+async def set_leverage(symbol: str, leverage: int) -> Any:
+    return await _request("POST", "/fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": leverage})
 
-    from utils.binance_client import place_limit_order as _place
-    resp = _place(
-        symbol=symbol,
-        side=side,
-        quantity=qty,
-        price=limit_px,
-        post_only=False,
-        reduce_only=True,
-        position_side=None,
-        time_in_force="IOC",
-    )
+async def place_market_order(symbol: str, side: str, qty: float, reduce_only: bool = False) -> Any:
+    params = {
+        "symbol": symbol.upper(),
+        "side": side.upper(),
+        "type": "MARKET",
+        "quantity": qty,
+        "reduceOnly": "true" if reduce_only else "false",
+    }
+    return await _request("POST", "/fapi/v1/order", params)
+
+async def place_tp_market(symbol: str, side: str, qty: float, stop_price: float) -> Any:
+    # TAKE_PROFIT_MARKET לסגירה (reduceOnly)
+    params = {
+        "symbol": symbol.upper(),
+        "side": "SELL" if side.upper() == "BUY" else "BUY",
+        "type": "TAKE_PROFIT_MARKET",
+        "stopPrice": stop_price,
+        "closePosition": "false",
+        "reduceOnly": "true",
+        "quantity": qty,
+    }
+    return await _request("POST", "/fapi/v1/order", params)
+
+async def place_sl_market(symbol: str, side: str, qty: float, stop_price: float) -> Any:
+    params = {
+        "symbol": symbol.upper(),
+        "side": "SELL" if side.upper() == "BUY" else "BUY",
+        "type": "STOP_MARKET",
+        "stopPrice": stop_price,
+        "closePosition": "false",
+        "reduceOnly": "true",
+        "quantity": qty,
+    }
+    return await _request("POST", "/fapi/v1/order", params)
+
+# ------- plan & execute -------
+async def plan_and_execute(
+    *,
+    symbol: str,
+    side: str,
+    leverage: int,
+    budget_usd: float,
+    tp_targets: Optional[List[float]] = None,
+    tp_splits: Optional[List[float]] = None,
+    sl_price: Optional[float] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    if leverage < 1 or leverage > 125:
+        raise ValueError("leverage out of range")
+    if budget_usd <= 0:
+        raise ValueError("budget_usd must be > 0")
+    side_up = side.upper()
+    if side_up not in ("BUY", "SELL"):
+        raise ValueError("side must be BUY/SELL")
+
+    price = await get_price(symbol)
+    filters = await get_symbol_filters(symbol)
+    step, tick = float(filters["stepSize"]), float(filters["tickSize"])
+
+    notional = budget_usd * leverage
+    qty_raw = notional / price
+    qty = round_qty(symbol, qty_raw, step)
+    if qty <= 0:
+        raise ValueError("calculated qty is zero; increase budget")
+
+    plan = {
+        "symbol": symbol.upper(),
+        "side": side_up,
+        "leverage": leverage,
+        "price": price,
+        "qty_raw": qty_raw,
+        "qty": qty,
+        "tp": [],
+        "sl": None,
+    }
+
+    # build TP
+    if tp_targets and tp_splits and len(tp_targets) == len(tp_splits):
+        rem = qty
+        for t, w in zip(tp_targets, tp_splits):
+            q = round_qty(symbol, qty * float(w), step)
+            rem -= q
+            plan["tp"].append({"stopPrice": round_price(symbol, float(t), tick), "qty": q})
+        if rem > 0 and plan["tp"]:
+            plan["tp"][-1]["qty"] = round_qty(symbol, plan["tp"][-1]["qty"] + rem, step)
+
+    # SL
+    if sl_price and sl_price > 0:
+        plan["sl"] = {"stopPrice": round_price(symbol, float(sl_price), tick), "qty": qty}
+
+    if dry_run:
+        return {"ok": True, "executed": False, "plan": plan}
+
+    # LIVE EXECUTION
+    await set_leverage(symbol, leverage)
+    entry = await place_market_order(symbol, side_up, qty, reduce_only=False)
+
+    placed_tp: List[Any] = []
+    for leg in plan["tp"]:
+        if leg["qty"] > 0:
+            placed_tp.append(await place_tp_market(symbol, side_up, leg["qty"], leg["stopPrice"]))
+
+    placed_sl = None
+    if plan["sl"] and plan["sl"]["qty"] > 0:
+        placed_sl = await place_sl_market(symbol, side_up, plan["sl"]["qty"], plan["sl"]["stopPrice"])
+
     return {
-        "symbol": symbol,
-        "closedAmt": amt,
-        "side": side,
-        "orderId": resp.get("orderId"),
-        "status": resp.get("status"),
+        "ok": True,
+        "executed": True,
+        "entry": entry,
+        "tp_orders": placed_tp,
+        "sl_order": placed_sl,
+        "plan": plan,
     }
 
 
