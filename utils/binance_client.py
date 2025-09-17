@@ -96,7 +96,7 @@ _index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
 _idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _idem_lock = threading.RLock()
 
-# ===== Account helpers =====
+# ===== Helpers (account / hedge detection) =====
 def _get_account_cached() -> Optional[Dict[str, Any]]:
     """פנימי: לוקח account עם קאש קצר, עם backoff על BAN/429."""
     now = _now()
@@ -151,61 +151,7 @@ def _effective_position_side_from_kwargs(kwargs: Dict[str, Any]) -> str:
     kwargs.pop("positionSide", None)
     return "BOTH"
 
-# ===== Ladder ENV =====
-LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
-LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
-LADDER_TP_DEFAULT_PCTS = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
-LADDER_TP_DEFAULT_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
-LADDER_TP_MAX_LEVELS = int(os.getenv("LADDER_TP_MAX_LEVELS", "5"))
-
-LADDER_SL_ENABLE = os.getenv("LADDER_SL_ENABLE", "0") in ("1","true","yes","on")
-LADDER_SL_DEFAULT_PCTS = os.getenv("LADDER_SL_DEFAULT_PCTS", "")
-LADDER_SL_MAX_LEVELS = int(os.getenv("LADDER_SL_MAX_LEVELS", "3"))
-
-TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
-_tp_ladder_last_at: Dict[str, float] = {}
-
-CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
-CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
-
-# ===== ClientOrderId ENV =====
-ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
-ORDER_ID_SUFFIX = os.getenv("ORDER_ID_SUFFIX", "").strip()
-ORDER_ID_INCLUDE_TS = os.getenv("ORDER_ID_INCLUDE_TS", "1").lower() in ("1","true","yes","on")
-ORDER_ID_MAXLEN = int(os.getenv("ORDER_ID_MAXLEN", "36"))
-
-def _sanitize_coid(s: str) -> str:
-    out = []
-    for ch in s:
-        out.append(ch if (ch.isalnum() or ch == "_") else "_")
-    return "".join(out)[:ORDER_ID_MAXLEN]
-
-def _coid(kind: str, symbol: str, level: int | None = None) -> str:
-    k = kind.upper()
-    if level is not None and k in ("TP", "SL"):
-        k = f"{k}{level}"
-    parts = []
-    if ORDER_ID_PREFIX:
-        parts.append(ORDER_ID_PREFIX)
-    parts.append(k)
-    parts.append(symbol.upper())
-    if level is not None and kind.upper() not in ("TP", "SL"):
-        parts.append(str(level))
-    if ORDER_ID_INCLUDE_TS:
-        parts.append(str(int(time.time() * 1000)))
-    if ORDER_ID_SUFFIX:
-        parts.append(ORDER_ID_SUFFIX)
-    return _sanitize_coid("_".join(parts))
-
-def _kind_from_kwargs(kwargs: dict) -> str:
-    t = str(kwargs.get("type", "")).upper()
-    if "TAKE_PROFIT" in t: return "TP"
-    if "STOP" in t: return "SL"
-    if t == "MARKET": return "MKT"
-    if t == "LIMIT":  return "LMT"
-    return "ORD"
-
-# ===== Helpers: exchangeInfo & ping =====
+# ===== ExchangeInfo / ping =====
 def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     ts = _now()
     if not force_refresh and _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
@@ -225,6 +171,37 @@ def fapi_ping() -> bool:
     except Exception as e:
         logger.warning("Futures ping failed: %s", e)
         return False
+
+# ===== Account & Positions =====
+def futures_balance() -> List[Dict[str, Any]]:
+    try:
+        data = _get_account_cached() or {}
+        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []
+    except Exception as e:
+        logger.error("Failed to fetch futures_balance: %s", e)
+        return []
+
+def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    try:
+        acc_info = _get_account_cached() or {}
+        positions = acc_info.get("positions", []) or []
+        out = []
+        su = symbol.upper() if symbol else None
+        for pos in positions:
+            amt = float(pos.get("positionAmt", "0") or 0.0)
+            if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
+                out.append(pos)
+        return out
+    except Exception as e:
+        logger.error("Failed to get open positions: %s", e); return []
+
+def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    return get_open_positions(symbol)
+
+def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
+    for p in get_open_positions(symbol):
+        return p
+    return None
 
 # ===== Filters & Rounding =====
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
@@ -248,7 +225,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
             "percentPrice": {"up": None, "down": None, "decimals": None},
         }
         for f in si.get("filters", []):
-            t = (f.get("filterType") or "").upper()
+            t = f.get("filterType")
             if t == "PRICE_FILTER":
                 filters["tickSize"] = f.get("tickSize")
                 filters["minPrice"] = f.get("minPrice")
@@ -257,7 +234,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
                 filters["minQty"] = f.get("minQty")
                 filters["maxQty"] = f.get("maxQty")
                 filters["stepSize"] = f.get("stepSize")
-            elif t == "MARKET_LOT_SIZE":
+            elif t == "MARKET_Lot_SIZE" or t == "MARKET_LOT_SIZE":
                 filters["mMinQty"] = f.get("minQty")
                 filters["mMaxQty"] = f.get("maxQty")
             elif t in ("MIN_NOTIONAL", "NOTIONAL"):
@@ -319,7 +296,6 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     need = _ensure_min_notional(symbol, price, qf)
     if need <= qf + 1e-12: return qty_str
     return _quantize_qty(symbol, need)
-
 # ===== Rate limiting buckets =====
 _bucket_reset_at = 0.0; _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
@@ -372,17 +348,14 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 def futures_index_price(symbol: str) -> Optional[float]:
-    """
-    Index price (premiumIndex). עם coalescing קל.
-    """
+    """Index price (premiumIndex). עם coalescing קל."""
     sym = symbol.upper()
     try:
         cached = _cache_get(_index_cache, sym)
         if cached is not None: return cached
     except Exception:
         pass
-
-    # 1) מתודה רשמית בספרייה
+    # 1) מתודה רשמית
     try:
         if hasattr(client, "futures_premium_index"):
             data = client.futures_premium_index(symbol=sym)
@@ -395,7 +368,7 @@ def futures_index_price(symbol: str) -> Optional[float]:
                 return val
     except Exception as e:
         logger.debug("futures_premium_index method failed: %s", e)
-    # 2) API פנימי בספרייה
+    # 2) API פנימי
     try:
         if hasattr(client, "_request_futures_api"):
             data = client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
@@ -427,6 +400,7 @@ def futures_index_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
+
 # ===== Open orders / history =====
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
@@ -580,7 +554,7 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
     # ===== Retry loop + טיפול מיוחד ב- -1106 (reduceOnly) =====
     def _maybe_retry_without_reduceonly(err: Exception) -> Optional[Dict[str, Any]]:
         msg = str(err).lower()
-        if "reduceonly" in msg and ("not required" in msg or "not allow" in msg) and "reduceonly" in (k.lower() for k in kwargs.keys()):
+        if "reduceonly" in msg and "not required" in msg and "reduceonly" in (k.lower() for k in kwargs.keys()):
             k2 = dict(kwargs)
             k2.pop("reduceOnly", None)
             try:
@@ -629,10 +603,7 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
     return err
 
 def futures_create_order(**kwargs) -> Dict[str, Any]:
-    """
-    עטיפה בטוחה ליצירת הזמנה — עם Idempotency, Percent-Guard, Backoff, WorkingType/recvWindow.
-    כולל סניטציה לפי סוג הזמנה, וניקוי reduceOnly אם אינו נדרש ב-One-Way.
-    """
+    """עטיפה בטוחה ליצירת הזמנה — עם Idempotency, Percent-Guard, Backoff, WorkingType/recvWindow."""
     sym = str(kwargs.get("symbol", "UNK")).upper()
 
     # Quantize
@@ -781,9 +752,7 @@ def place_tp_ladder(
         else:
             tprice = entry_price * (1.0 - pct/100.0)
 
-        # כימות פעם אחת לשימוש גם ב-stopPrice וגם ב-price (אם LIMIT TP)
         stop_q = _quantize_price(sym, float(tprice))
-
         kwargs = dict(
             symbol=sym,
             side=side,
@@ -795,12 +764,10 @@ def place_tp_ladder(
             recvWindow=RECV_WINDOW,
             newClientOrderId=_sanitize_coid((client_order_id_prefix or ORDER_ID_PREFIX or "TP") + f"_TP{i}_{sym}")
         )
-        # אם זה TAKE_PROFIT (Limit) – חייבים גם price וגם TIF (לפי Binance)
         if LADDER_TP_KIND == "TAKE_PROFIT":
             kwargs["price"] = stop_q
             kwargs["timeInForce"] = "GTC"
 
-        # ב-Hedge נעדיף reduceOnly; ב-One-Way ל-*MARKET טריגר לא נוסיף reduceOnly
         if reduce_only and _is_hedge_mode_runtime():
             kwargs["reduceOnly"] = True
         res = _safe_create_order(**kwargs)
@@ -833,37 +800,6 @@ def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str, Any]:
 
     _cancel_closing_orders(sym, types=("STOP", "STOP_MARKET"))
     return place_stop_market(sym, side, sprice, abs(amt), reduce_only=True, close_position=True)
-
-# ===== Account & Positions (public wrappers) =====
-def futures_balance() -> List[Dict[str, Any]]:
-    try:
-        data = _get_account_cached() or {}
-        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []
-    except Exception as e:
-        logger.error("Failed to fetch futures_balance: %s", e)
-        return []
-
-def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    try:
-        acc_info = _get_account_cached() or {}
-        positions = acc_info.get("positions", []) or []
-        out = []
-        su = symbol.upper() if symbol else None
-        for pos in positions:
-            amt = float(pos.get("positionAmt", "0") or 0.0)
-            if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
-                out.append(pos)
-        return out
-    except Exception as e:
-        logger.error("Failed to get open positions: %s", e); return []
-
-def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    return get_open_positions(symbol)
-
-def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
-    for p in get_open_positions(symbol):
-        return p
-    return None
 
 # ===== Klines =====
 def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
@@ -954,7 +890,7 @@ def futures_cancel_and_replace_limit(
         newClientOrderId=_sanitize_coid(client_order_id) if client_order_id else _coid("LMT", sym)
     )
 
-# --- Compatibility wrapper ---
+# --- Compatibility / convenience wrappers ---
 def place_limit_order(
     symbol: str,
     side: str,
@@ -1000,6 +936,24 @@ def place_limit_order(
         **{k: v for k, v in kwargs.items() if k not in {"tif"}}
     )
 
+# === Small exports for convenience ===
+def symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
+    """Alias תואם-עבר — מחזיר את פילטרי הסימבול (tickSize/stepSize/minNotional וכו')."""
+    return get_symbol_filters(symbol)
+
+def list_perp_usdt_symbols() -> List[str]:
+    """רשימת סמלי Futures PERPETUAL עם quote=USDT במצב TRADING/PENDING_TRADING."""
+    info = futures_exchange_info_safe() or {}
+    out: List[str] = []
+    for s in (info.get("symbols") or []):
+        if str(s.get("contractType") or "").upper() == "PERPETUAL" \
+           and str(s.get("quoteAsset") or "").upper() == "USDT" \
+           and str(s.get("status") or "") in ("TRADING", "PENDING_TRADING"):
+            name = str(s.get("symbol") or "").upper()
+            if name:
+                out.append(name)
+    return out
+
 # ===== Public export =====
 def get_futures_client() -> Client:
     return client
@@ -1007,13 +961,15 @@ def get_futures_client() -> Client:
 __all__ = [
     "client","fapi_ping","futures_exchange_info_safe","futures_balance",
     "futures_mark_price","futures_index_price","get_price",
-    "get_symbol_info","get_symbol_filters","get_open_positions","futures_open_positions_safe","get_single_position",
+    "get_symbol_info","get_symbol_filters","symbol_filters",
+    "get_open_positions","futures_open_positions_safe","get_single_position",
     "futures_create_order","place_limit_order","place_stop_market","modify_stop_loss","place_tp_ladder","set_breakeven_stop",
     "futures_cancel_all_orders","futures_cancel_order","get_open_orders","get_all_orders","set_leverage",
-    "futures_cancel_and_replace_limit",
+    "futures_cancel_and_replace_limit","list_perp_usdt_symbols",
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
