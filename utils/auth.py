@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import logging
 from typing import Optional, Set, List, Dict, Any
@@ -15,36 +16,9 @@ logger = logging.getLogger("algogpt.auth")
 def _b(v: str | None) -> bool:
     return str(v or "").lower() in ("1", "true", "yes", "on")
 
-def _split(s: str) -> List[str]:
-    raw = (s or "").replace("\n", ",").replace("\t", ",").strip()
-    return [p.strip() for p in raw.split(",") if p.strip()]
-
-# ─────────────────────────
-# Security config (public)
-# ─────────────────────────
-_ALLOW_ALL = _b(os.getenv("SECURITY_ALLOW_ALL"))
-_PUBLIC_STATUS = _b(os.getenv("SECURITY_PUBLIC_STATUS"))
-_PUBLIC_PATHS: Set[str] = set(_split(os.getenv("SECURITY_PUBLIC_PATHS", "")))
-_PUBLIC_PREFIXES: List[str] = _split(os.getenv("SECURITY_PUBLIC_PREFIXES", ""))
-
-def _is_public(path: str) -> bool:
-    if _ALLOW_ALL:
-        return True
-    # תמיד להתיר את /status כש SECURITY_PUBLIC_STATUS פעיל
-    if _PUBLIC_STATUS and path in ("/status/ping", "/status/all"):
-        return True
-    if path in _PUBLIC_PATHS:
-        return True
-    for pref in _PUBLIC_PREFIXES:
-        if pref and path.startswith(pref):
-            return True
-    return False
-
-# ─────────────────────────
-# Tokens cache (with TTL)
-# ─────────────────────────
-_TOKENS: Set[str] = set()
-_TOKENS_LOADED_AT = 0.0
+def _split_multi(s: str) -> List[str]:
+    """Split on commas/whitespace/newlines/tabs into a clean list."""
+    return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
 def _tokens_ttl_sec() -> float:
     try:
@@ -52,37 +26,89 @@ def _tokens_ttl_sec() -> float:
     except Exception:
         return 60.0
 
-def _load_tokens(force: bool = False) -> Set[str]:
-    """Load tokens from API_TOKENS and API_TOKENS_FILE with small TTL."""
-    global _TOKENS, _TOKENS_LOADED_AT
-    now = time.time()
-    ttl = _tokens_ttl_sec()
-    if not force and _TOKENS and (now - _TOKENS_LOADED_AT) < ttl:
-        return _TOKENS
+# ─────────────────────────
+# Public config (from ENV)
+# ─────────────────────────
+_ALLOW_ALL: bool = False
+_PUBLIC_STATUS: bool = False
+_PUBLIC_PATHS: Set[str] = set()
+_PUBLIC_PREFIXES: List[str] = []
 
+def _read_public_from_env() -> None:
+    """Load public paths/prefixes and flags from ENV."""
+    global _ALLOW_ALL, _PUBLIC_STATUS, _PUBLIC_PATHS, _PUBLIC_PREFIXES
+    _ALLOW_ALL = _b(os.getenv("SECURITY_ALLOW_ALL"))
+    _PUBLIC_STATUS = _b(os.getenv("SECURITY_PUBLIC_STATUS"))
+    _PUBLIC_PATHS = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS", "")))
+    _PUBLIC_PREFIXES = _split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES", ""))
+
+def _is_public(path: str) -> bool:
+    """Check if a path is public according to ENV."""
+    if _ALLOW_ALL:
+        return True
+    # Always allow status endpoints when SECURITY_PUBLIC_STATUS is on
+    if _PUBLIC_STATUS and path in ("/status/ping", "/status/all"):
+        return True
+    if path in _PUBLIC_PATHS:
+        return True
+    for pfx in _PUBLIC_PREFIXES:
+        if path.startswith(pfx):
+            return True
+    return False
+
+# ─────────────────────────
+# Tokens cache (with TTL)
+# ─────────────────────────
+_TOKENS: Set[str] = set()
+_TOKENS_LOADED_AT: float = 0.0
+
+def _read_tokens_from_env() -> Set[str]:
     toks: Set[str] = set()
-    # from env
-    toks.update(_split(os.getenv("API_TOKENS", "")))
-    # from file (one token per line)
+    toks.update(_split_multi(os.getenv("API_TOKENS", "")))
     fp = (os.getenv("API_TOKENS_FILE", "") or "").strip()
-    if fp:
+    if fp and os.path.isfile(fp):
         try:
-            if os.path.isfile(fp):
-                with open(fp, "r", encoding="utf-8") as fh:
-                    for ln in fh:
-                        ln = ln.strip()
-                        if ln:
-                            toks.add(ln)
+            with open(fp, "r", encoding="utf-8") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if ln:
+                        toks.add(ln)
         except Exception as e:
             logger.warning("auth: failed reading API_TOKENS_FILE %s: %s", fp, e)
+    return toks
 
-    _TOKENS = toks
-    _TOKENS_LOADED_AT = now
+def refresh_tokens_from_env() -> None:
+    """Force-reload tokens & public config from ENV."""
+    global _TOKENS, _TOKENS_LOADED_AT
+    _read_public_from_env()
+    _TOKENS = _read_tokens_from_env()
+    _TOKENS_LOADED_AT = time.time()
     logger.info("auth: loaded %d token(s)", len(_TOKENS))
-    return _TOKENS
 
-# prime cache on import
-_load_tokens(force=True)
+def _ensure_tokens_fresh() -> None:
+    if (time.time() - _TOKENS_LOADED_AT) >= _tokens_ttl_sec():
+        refresh_tokens_from_env()
+
+# Load once on import
+refresh_tokens_from_env()
+
+# ─────────────────────────
+# Introspection helpers
+# ─────────────────────────
+def get_loaded_tokens(mask: bool = True) -> List[str]:
+    _ensure_tokens_fresh()
+    toks = sorted(_TOKENS)
+    if not mask:
+        return toks
+    return [f"{t[:3]}***{t[-2:]}" if len(t) > 5 else "***" for t in toks]
+
+def get_public_paths() -> Dict[str, Any]:
+    _ensure_tokens_fresh()
+    return {"paths": sorted(_PUBLIC_PATHS), "prefixes": list(_PUBLIC_PREFIXES)}
+
+def allow_all() -> bool:
+    _ensure_tokens_fresh()
+    return _ALLOW_ALL
 
 # ─────────────────────────
 # Token extraction / check
@@ -96,13 +122,13 @@ def extract_token(
     if x_api_key and x_api_key.strip():
         return x_api_key.strip()
 
-    # Header: Authorization (Bearer <token> או טוקן גולמי)
+    # Header: Authorization (Bearer <token> or raw token)
     if authorization and authorization.strip():
         a = authorization.strip()
         parts = a.split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             return parts[1].strip()
-        return a  # יש קליינטים ששולחים רק טוקן
+        return a  # allow raw token
 
     # Query param fallback
     try:
@@ -116,7 +142,8 @@ def extract_token(
     return None
 
 def token_matches(token: Optional[str]) -> bool:
-    return bool(token and token in _load_tokens())
+    _ensure_tokens_fresh()
+    return bool(token and token in _TOKENS)
 
 # ─────────────────────────
 # FastAPI dependency
@@ -127,10 +154,10 @@ async def require_api_key(
     x_api_key: Optional[str] = Header(None),
 ) -> bool:
     """
-    תלויות אבטחה לראוטים מוגנים:
-    - מתיר נתיבים ציבוריים לפי ENV.
-    - אם לא ציבורי: דורש טוקן תקף (Bearer / X-API-Key / ?api_key=...).
+    Use as a FastAPI dependency to protect routes.
+    Honors public paths/prefixes from ENV. Raises 401 if token missing/invalid.
     """
+    # Public or preflight
     if request.method == "OPTIONS" or _is_public(request.url.path):
         return True
 
@@ -143,28 +170,11 @@ async def require_api_key(
 
     return True
 
-# ─────────────────────────
-# Introspection helpers
-# ─────────────────────────
-def get_loaded_tokens(mask: bool = True) -> List[str]:
-    toks = sorted(_load_tokens())
-    if not mask:
-        return toks
-    return [f"{t[:3]}***{t[-2:]}" if len(t) > 5 else "***" for t in toks]
-
-def get_public_config() -> Dict[str, Any]:
-    return {
-        "allow_all": _ALLOW_ALL,
-        "public_status": _PUBLIC_STATUS,
-        "paths": sorted(_PUBLIC_PATHS),
-        "prefixes": list(_PUBLIC_PREFIXES),
-        "tokens_ttl_sec": _tokens_ttl_sec(),
-    }
-
 __all__ = [
     "require_api_key",
     "extract_token", "token_matches",
-    "get_loaded_tokens", "get_public_config",
+    "get_loaded_tokens", "get_public_paths",
+    "allow_all", "refresh_tokens_from_env",
 ]
 
 
