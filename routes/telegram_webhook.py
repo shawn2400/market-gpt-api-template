@@ -81,7 +81,16 @@ except Exception:
         return []
 
 # ─────────── ConfirmStore & Callback Idempotency ───────────
-from utils.trade_executor import ConfirmStore
+try:
+    from utils.trade_executor import ConfirmStore
+except Exception:
+    class ConfirmStore:  # type: ignore
+        @staticmethod
+        def get(_cid: str) -> Optional[Dict[str, Any]]: return None
+        @staticmethod
+        def approve(_cid: str, approver: Optional[str] = None) -> None: ...
+        @staticmethod
+        def reject(_cid: str, approver: Optional[str] = None) -> None: ...
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 try:
@@ -251,7 +260,7 @@ async def commands(
             await _tg_answer_callback(TG_TOKEN, cbq_id, "לא נתמך")
             return {"ok": True}
 
-        rec = ConfirmStore.get(cid)
+        rec = ConfirmStore.get(cid) if hasattr(ConfirmStore, "get") else None
         if not rec or rec.get("status") != "pending":
             await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
             await _tg_answer_callback(TG_TOKEN, cbq_id, "פג תוקף/כבר טופל")
@@ -318,6 +327,54 @@ async def commands(
 
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.", html=False)
     return {"ok": True}
+
+# ─────────── REST status (WS/Executor) ───────────
+def _num_or_none(v: Any) -> Optional[float]:
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+@router.get("/status")
+async def telegram_status() -> Dict[str, Any]:
+    ws = _ws_get_counters()
+    ex = _exec_get_counters()
+
+    ttl_alert = int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC", "10"))
+    exec_stale = int(os.getenv("EXEC_TICK_STALE_WARN_SEC", "30"))
+    timeouts_burst_alert = int(os.getenv("EXEC_TIMEOUT_BURST_ALERT", "3"))
+
+    ws_state = "OK" if int(ws.get("ws_up") or 0) == 1 and (ws.get("last_event_age_sec") or 0) <= ttl_alert else "WARN"
+    ex_state = "OK"
+    age = ws.get("last_event_age_sec")
+    ex_age = ex.get("last_tick_age_sec")
+    if isinstance(ex_age, (int, float)) and ex_age is not None and ex_age > exec_stale:
+        ex_state = "WARN"
+    if int(ex.get("timeouts_burst") or 0) >= timeouts_burst_alert:
+        ex_state = "WARN"
+
+    combined = "PAUSE" if ws_state == "WARN" and (ws.get("last_event_age_sec") or 0) > ttl_alert * 3 else ("WARN" if ("WARN" in (ws_state, ex_state)) else "OK")
+
+    return {
+        "ok": True,
+        "state": combined,
+        "ws": {
+            "ws_up": int(ws.get("ws_up") or 0),
+            "reconnects": int(ws.get("reconnects") or 0),
+            "ewma_latency_ms": _num_or_none(ws.get("ewma_latency_ms")),
+            "last_event_age_sec": _num_or_none(ws.get("last_event_age_sec")),
+        },
+        "executor": {
+            "tick_ewma_ms": _num_or_none(ex.get("tick_ewma_ms")),
+            "tick_p95_ms": _num_or_none(ex.get("tick_p95_ms")),
+            "tick_p99_ms": _num_or_none(ex.get("tick_p99_ms")),
+            "last_tick_age_sec": _num_or_none(ex.get("last_tick_age_sec")),
+            "timeouts_burst": int(ex.get("timeouts_burst") or 0),
+            "no_trade_streak": int(ex.get("no_trade_streak") or 0),
+            "current_interval": int(ex.get("current_interval") or 0),
+        },
+        "reasons": ["healthy"] if combined == "OK" else (["stale_ws"] if ws_state != "OK" else ["executor_warn"]),
+    }
 
 
 
