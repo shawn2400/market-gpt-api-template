@@ -1,12 +1,9 @@
-# routes/executor.py
 from __future__ import annotations
 import logging
 from typing import Dict, Any, Optional, List
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-
 from utils.auth import require_api_key
 from utils.binance_client import (
     fapi_ping,
@@ -18,7 +15,6 @@ from utils.binance_client import (
 from utils.trade_executor import execute_trade_live
 
 logger = logging.getLogger("algogpt.routes.executor")
-
 router = APIRouter(
     prefix="/executor",
     tags=["Executor"],
@@ -26,20 +22,12 @@ router = APIRouter(
 )
 
 class ExecTradeRequest(BaseModel):
-    # תאימות pydantic v1/v2
-    class Config:
-        extra = "ignore"
-    try:
-        from pydantic import ConfigDict
-        model_config = ConfigDict(extra="ignore")  # type: ignore
-    except Exception:
-        pass
-
+    model_config = {"extra": "ignore"}
     symbol: str = Field(..., examples=["BTCUSDT"])
     side: str = Field(..., examples=["BUY", "SELL"])
     leverage: int = Field(10, ge=1, le=125)
-    budget_usd: Optional[float] = Field(None, ge=0, description="תקציב ב-USD (מועדף)")
-    budget: Optional[float] = Field(None, ge=0, description="שם ישן — שקול ל-budget_usd")
+    budget_usd: Optional[float] = Field(None, ge=0, description="Budget in USD (preferred)")
+    budget: Optional[float] = Field(None, ge=0, description="Legacy name — use budget_usd")
     quantity: Optional[float] = Field(None, ge=0)
     entry: Optional[float] = Field(None)
     sl: Optional[float] = Field(None)
@@ -48,8 +36,8 @@ class ExecTradeRequest(BaseModel):
     tp_splits: Optional[List[float]] = None
     sl_targets: Optional[List[float]] = None
     sl_splits: Optional[List[float]] = None
-    dry_run: bool = Field(True, description="True = סימולציה בלבד")
-    confirm_first: bool = Field(True, description="אישור בטלגרם לפני ביצוע")
+    dry_run: bool = Field(True, description="True = simulation only")
+    confirm_first: bool = Field(True, description="Require Telegram confirmation before execution")
     telegram_chat_id: Optional[int] = Field(None)
 
 @router.get("/ping")
@@ -62,7 +50,6 @@ async def ping() -> Dict[str, Any]:
 
 @router.get("/status")
 async def status() -> Dict[str, Any]:
-    # אפשר להרחיב בהמשך (קוצבים, last_tick וכו')
     return {"ok": True, "status": "running"}
 
 @router.get("/positions")
@@ -108,7 +95,6 @@ async def trade(req: ExecTradeRequest):
             budget_effective = float(req.budget_usd)
         elif req.budget and req.budget > 0:
             budget_effective = float(req.budget)
-
         args: Dict[str, Any] = {
             "symbol": req.symbol,
             "side": req.side,
@@ -128,7 +114,6 @@ async def trade(req: ExecTradeRequest):
             args["budget"] = budget_effective
         if req.quantity is not None:
             args["quantity"] = req.quantity
-
         res = await execute_trade_live(**args)
         ok = bool(res and res.get("ok", False))
         status_code = 200 if ok or req.dry_run else 409
@@ -140,7 +125,6 @@ async def trade(req: ExecTradeRequest):
     except Exception as e:
         logger.error("trade failed: %s", e)
         raise HTTPException(500, str(e))
-
 
 
 
