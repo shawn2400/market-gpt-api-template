@@ -6,11 +6,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from utils.auth import require_api_key
 
-# נסה להביא מחיר חי; אם אין – נשתמש בגיבוי 100_000.0
+# מחיר לייב אם קיים
 try:
     from utils.binance_client import get_price as _get_price_live
 except Exception:
     _get_price_live = None
+
+# Binance executor
+from utils.binance_futures_exec import BinanceFuturesExec
 
 router = APIRouter(tags=["trade (legacy)"])
 
@@ -25,14 +28,12 @@ def _idem_check(key: Optional[str], dry_run: bool) -> Optional[JSONResponse]:
     exp = _IDEM.get(key)
     if exp and exp > now:
         ttl = max(0, int(exp - now))
-        # שמרנו התנהגות "idem_conflict" כמו שראית
         return JSONResponse(status_code=409, content={"ok": False, "error": "idem_conflict",
                              "result": {"ok": False, "reason": "idem_conflict", "ttl_sec": ttl}})
-    # גם ב-dry_run נרשום מפתח כדי למנוע ספאם כפול מיידי
     _IDEM[key] = now + _IDEM_TTL_SEC
     return None
 
-# ---------- מודל קלט ----------
+# ---------- קלט ----------
 class TradeRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=32)
     side: Literal["BUY", "SELL"]
@@ -61,7 +62,7 @@ class TradeRequest(BaseModel):
             raise ValueError("tp_splits sum must be <= 1.0")
         return v
 
-# ---------- לוגיקה דינמית SL/TP ----------
+# ---------- לוגיקה SL/TP ----------
 def _price(symbol: str) -> float:
     if callable(_get_price_live):
         try:
@@ -76,16 +77,11 @@ def _sign(side: str) -> int:
     return +1 if side == "BUY" else -1
 
 def _round_qty(q: float) -> float:
-    # עיגול "אנושי": אל שלושה ספרות אחרי הנקודה (BTC/ETH)
     q = max(q, 0.0)
+    # BTC/ETH לרוב 0.001; אם תצטרך התאמה לסימבולים אחרים, נמשוך פילטרים מהאקסצ'יינג-אינפו
     return round(q, 3) if q >= 0.001 else (0.001 if q > 0 else 0.0)
 
 def _default_tp_sl(base: float, side: str) -> Tuple[List[float], List[Dict[str, Any]]]:
-    """
-    מחזיר: (tp_targets, sl_orders)
-    TP: +1.8% / +3.0% / +5.0% לביי (היפוך לסל)
-    SL:  -0.25% לביי (היפוך לסל)
-    """
     s = _sign(side)
     tps = [base * (1 + s * 0.018), base * (1 + s * 0.030), base * (1 + s * 0.050)]
     sl  = base * (1 - s * 0.0025)
@@ -95,13 +91,13 @@ def _build_result(req: TradeRequest) -> Dict[str, Any]:
     symbol = req.symbol.upper()
     side   = req.side
     base   = _price(symbol)
-    # כמות משוערת
+
     notional = float(req.budget_usd or 0.0) * max(1, int(req.leverage))
     qty = _round_qty(notional / base) if base > 0 else 0.0
 
-    # TP/SL דיפולט
     if req.tp_targets:
         tp_targets = [float(x) for x in req.tp_targets]
+        sl_orders = None
     else:
         tp_targets, sl_orders = _default_tp_sl(base, side)
 
@@ -117,10 +113,8 @@ def _build_result(req: TradeRequest) -> Dict[str, Any]:
         if q_i > 0:
             tp_orders.append({"type": "TAKE_PROFIT_MARKET", "stopPrice": float(tgt), "qty": q_i})
 
-    if 'sl_orders' not in locals():
-        # אם המשתמש סיפק tp_targets אבל לא סיפק SL, נכין SL דיפולט
+    if sl_orders is None:
         _, sl_orders = _default_tp_sl(base, side)
-    # SL לכל הכמות כדי שיהיה כיסוי מלא
     for s in sl_orders:
         s.setdefault("qty", qty)
 
@@ -158,32 +152,71 @@ def _build_result(req: TradeRequest) -> Dict[str, Any]:
         result["entry_price"] = float(req.entry)
     return result
 
-# ---------- אישור טלגרם (URL buttons) ----------
+# ---------- Binance EXEC ----------
+def _close_side(side: str) -> str:
+    return "SELL" if side.upper() == "BUY" else "BUY"
+
+def execute_real_trade(req: TradeRequest, preview: Dict[str, Any]) -> Dict[str, Any]:
+    """מבצע בפועל ב-Binance Futures: MARKET entry + TP/SL reduce-only."""
+    cli = BinanceFuturesExec()  # יקח API KEY/SECRET מה-ENV
+    symbol = req.symbol.upper()
+    side = req.side.upper()
+    qty = float(preview["qty"])
+
+    # One-way mode ובחירת מינוף
+    cli.set_position_side_dual(False)
+    cli.set_leverage(symbol, int(req.leverage))
+
+    # כניסה MARKET
+    entry = cli.order_market(symbol=symbol, side=side, quantity=qty)
+
+    # TP/SL reduce-only (צד הפוך)
+    cside = _close_side(side)
+    tp_ids, sl_ids = [], []
+    for tpo in preview["tp_orders"]:
+        r = cli.order_tp_or_sl_market(symbol, cside, float(tpo["stopPrice"]), float(tpo["qty"]),
+                                      kind="TAKE_PROFIT_MARKET")
+        tp_ids.append(r.get("orderId"))
+
+    for slo in preview["sl_orders"]:
+        r = cli.order_tp_or_sl_market(symbol, cside, float(slo["stopPrice"]), float(slo.get("qty", qty)),
+                                      kind="STOP_MARKET")
+        sl_ids.append(r.get("orderId"))
+
+    return {
+        "executed": True,
+        "entry_order": {"orderId": entry.get("orderId"), "status": entry.get("status")},
+        "tp_order_ids": tp_ids,
+        "sl_order_ids": sl_ids,
+    }
+
+# ---------- אישור טלגרם ----------
 _PENDING: Dict[str, Dict[str, Any]] = {}
-_PENDING_TTL = 120  # שניות
+_PENDING_TTL = 180  # שניות
 
 def _base_host(request: Request) -> str:
     host = os.getenv("PUBLIC_HOST", "").strip()
     if host:
         return host.rstrip("/")
-    # fallback – נגזר מהבקשה
     return f"{request.url.scheme}://{request.url.netloc}"
 
-def _mk_approval(symbol: str, side: str, leverage: int, budget: float,
-                 request: Request, result_preview: Dict[str, Any]) -> Dict[str, Any]:
+def _mk_approval(req: TradeRequest, request: Request, preview: Dict[str, Any]) -> Dict[str, Any]:
     aid  = secrets.token_urlsafe(16)
     tok  = secrets.token_urlsafe(12)
     now  = time.time()
     _PENDING[aid] = {
         "token": tok,
         "expires": now + _PENDING_TTL,
-        "req": {"symbol": symbol, "side": side, "leverage": leverage, "budget_usd": budget},
-        "result": result_preview,
+        "req": req.model_dump(),
+        "preview": preview,
     }
     base = _base_host(request)
-    approve_url = f"{base}/ops/approve?aid={aid}&tok={tok}"
-    reject_url  = f"{base}/ops/reject?aid={aid}&tok={tok}"
-    return {"id": aid, "token": tok, "approve_url": approve_url, "reject_url": reject_url}
+    return {
+        "id": aid,
+        "token": tok,
+        "approve_url": f"{base}/ops/approve?aid={aid}&tok={tok}",
+        "reject_url":  f"{base}/ops/reject?aid={aid}&tok={tok}",
+    }
 
 def _telegram_send(text: str, approve_url: str, reject_url: str) -> None:
     bot = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -191,12 +224,10 @@ def _telegram_send(text: str, approve_url: str, reject_url: str) -> None:
     if not bot or not chat:
         return
     import httpx
-    kb = {
-        "inline_keyboard": [[
-            {"text": "✅ Approve", "url": approve_url},
-            {"text": "❌ Reject",  "url": reject_url},
-        ]]
-    }
+    kb = {"inline_keyboard": [[
+        {"text": "✅ Approve", "url": approve_url},
+        {"text": "❌ Reject",  "url": reject_url},
+    ]]}
     try:
         with httpx.Client(timeout=10.0) as cli:
             cli.post(f"https://api.telegram.org/bot{bot}/sendMessage",
@@ -212,31 +243,39 @@ def trade_execute(
     _token: str = Depends(require_api_key),
     x_idempotency_key: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ):
-    # Idempotency
+    # Idempotency (409 על כפילות מיידית בשאינה dry_run)
     idem = _idem_check(x_idempotency_key, req.dry_run)
     if idem is not None and not req.dry_run:
         return idem
 
-    # נבנה תוצאה דינמית
-    res = _build_result(req)
+    preview = _build_result(req)
 
-    # Auto-approve? אם לא – שלח טלגרם לאישור
+    # confirm_first => אישור טלגרם אלא אם AUTO_APPROVE=1
     auto_approve = os.getenv("TELEGRAM_AUTO_APPROVE", "0").lower() in ("1", "true", "yes", "on")
     if req.confirm_first and not auto_approve:
-        ap = _mk_approval(req.symbol.upper(), req.side, int(req.leverage), float(req.budget_usd or 0.0),
-                          request=request, result_preview=res)
+        ap = _mk_approval(req, request, preview)
         _telegram_send(
-            text=f"Trade request\nSymbol: {req.symbol.upper()}\nSide: {req.side}\nLev: {req.leverage}\nBudget: {req.budget_usd or 0.0}\nDryRun: {req.dry_run}\n\nTap to approve/reject.",
+            text=(f"Trade request\n"
+                  f"Symbol: {req.symbol.upper()}\nSide: {req.side}\nLev: {req.leverage}\n"
+                  f"Budget: {req.budget_usd or 0.0}\nDryRun: {req.dry_run}\n\nTap to approve/reject."),
             approve_url=ap["approve_url"], reject_url=ap["reject_url"]
         )
         return JSONResponse(status_code=200, content={
             "ok": True, "pending_approval": True,
             "approve_url": ap["approve_url"], "reject_url": ap["reject_url"],
-            "result_preview": res
+            "result_preview": preview
         })
 
-    # אחרת – ממשיכים מיד (dry_run — סימולציה; בפועל הייתם מכניסים כאן שליחת הוראה לברוקר)
-    return JSONResponse(status_code=200, content={"ok": True, "error": None, "result": res})
+    # dry_run => סימולציה בלבד (תאימות בדיקות)
+    if req.dry_run:
+        return JSONResponse(status_code=200, content={"ok": True, "error": None, "result": preview})
+
+    # ביצוע אמיתי
+    exec_info = execute_real_trade(req, preview)
+    out = dict(preview)
+    out.update(exec_info)
+    return JSONResponse(status_code=200, content={"ok": True, "error": None, "result": out})
+
 
 
 
