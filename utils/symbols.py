@@ -32,7 +32,7 @@ try:
     futures_exchange_info_safe = _fex  # type: ignore
 except Exception as e:
     logger.warning("[Symbols] could not import futures_exchange_info_safe (%s)", e)
-    futures_exchange_info_safe = _fallback_futures_info
+    futures_exchange_info_safe = _fallback_futures_info  # type: ignore
 
 # ────────────────────────────────────────────────
 # Helpers
@@ -208,7 +208,7 @@ def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[Symbo
             return candidate
 
     # אם עדיין לא קיים — נסה להציע חלופות
-    suggestions = []
+    suggestions: List[str] = []
     try:
         suggestions = c.suggest(base or raw, q or DEFAULT_QUOTE, limit=6)
     except Exception:
@@ -219,12 +219,34 @@ def normalize_symbol(symbol: str, market: str = "futures", cache: Optional[Symbo
         f"Try: {', '.join(suggestions) if suggestions else 'check symbol/market'}"
     )
 
-__all__ = ["SymbolsCache", "normalize_symbol", "parse_symbol_parts", "DEFAULT_QUOTE", "SYMBOLS_TTL_SEC"]
+# אופציונלי: רשימת פרפטואלים בצד ה-USDT (נוח ל-scaners/menus)
+def list_perp_usdt_symbols(cache: Optional[SymbolsCache] = None) -> List[str]:
+    info = futures_exchange_info_safe(force_refresh=False) or {}
+    out: List[str] = []
+    for s in (info.get("symbols") or []):
+        if str(s.get("contractType") or "").upper() == "PERPETUAL" \
+           and str(s.get("quoteAsset") or "").upper() == "USDT" \
+           and str(s.get("status") or "") in ("TRADING", "PENDING_TRADING"):
+            name = str(s.get("symbol") or "").upper()
+            if name:
+                out.append(name)
+    return out
+
+def symbol_filters(symbol: str, cache: Optional[SymbolsCache] = None) -> Dict[str, Any]:
+    c = cache or SymbolsCache("futures")
+    return c.filters(symbol)
+
+__all__ = [
+    "SymbolsCache", "normalize_symbol", "parse_symbol_parts",
+    "list_perp_usdt_symbols", "symbol_filters",
+    "DEFAULT_QUOTE", "SYMBOLS_TTL_SEC",
+]
 
 if __name__ == "__main__":
     c = SymbolsCache("futures")
     print("has normalize:", hasattr(__import__(__name__), "normalize_symbol"))
     print("quotes count:", len(c.quotes()))
+
 
 
 
