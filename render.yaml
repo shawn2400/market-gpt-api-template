@@ -1,7 +1,7 @@
 # FILE: render.yaml
 services:
   # ─────────────────────────────────────────────
-  # Web ראשי — לא נוגעים בו כדי לא לשנות דיפלוי קיים
+  # Web ראשי (קיים) — לא נוגעים בו
   # ─────────────────────────────────────────────
   - type: web
     name: algogpt-docker
@@ -9,75 +9,62 @@ services:
     region: frankfurt
     plan: pro
     autoDeploy: false
-    # בכוונה אין dockerfilePath/envVars כאן כדי למנוע דריסה של ההגדרות הקיימות
 
   # ─────────────────────────────────────────────
-  # Web משני — ops-supervisor (Docker, אותו Dockerfile)
+  # Worker: ops-supervisor (Python)
   # ─────────────────────────────────────────────
-  - type: web
+  - type: worker
     name: ops-supervisor
-    env: docker
-    region: frankfurt
+    env: python
+    region: oregon
     plan: starter
-    dockerfilePath: Dockerfile
-    autoDeploy: false
+    buildCommand: pip install -r requirements-worker.txt
+    preDeployCommand: chmod +x ./ops/launch_with_env.sh || true
+    startCommand: ./ops/launch_with_env.sh python -u -m utils.ops_supervisor
     envVars:
-      # Core / Runtime
-      - key: PORT
-        value: "10001"
+      # ---- Auto-approve (רנטיים) ----
+      - key: OPS_POLICY_PATH
+        value: policies/ops_policy.yaml
+      - key: OPS_REQUIRE_ACTION_PARAM
+        value: "0"
+      - key: APPROVAL_AUTO_APPROVE_MAX_CRS
+        value: "3"
+      - key: APPROVAL_AUTO_APPROVE_SENSITIVE
+        value: "0"
+
+      # ---- כללי/נוחות ----
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: LOG_LEVEL
-        value: "INFO"
-      - key: PUBLIC_HOST
-        value: "https://ops-supervisor.onrender.com"
-      - key: OPS_POLICY_PATH
-        value: "policies/ops_policy.yaml"
-      - key: INSTANCE_ID
-        value: "ops-supervisor"
-
-      # Safety (בדיקות – כבוי כברירת מחדל)
-      - key: AUTO_RUN
-        value: "0"
-      - key: EXECUTE_TRADES
-        value: "0"
-      - key: AI_SCHED_ENABLE
-        value: "0"
-      - key: AI_SCHED_INTERVAL_SEC
-        value: "300"
-
-      # Redis (את ה-URL מגדירים בדשבורד), Namespace מבודד מהראשי
-      - key: REDIS_URL
-        value: "SET_IN_DASHBOARD"
+        value: INFO
       - key: REDIS_NAMESPACE
-        value: "ops-supervisor-web"
+        value: ops-supervisor-web
+      - key: PUBLIC_HOST
+        value: https://ops-approval-web.onrender.com
 
-      # Auth/Tokens — שונים מהראשי! (להגדיר בדשבורד בלבד)
-      - key: ALGOGPT_TOKENS
-        value: "SET_IN_DASHBOARD_SECONDARY"
-      - key: API_BEARER_TOKEN
-        value: "SET_IN_DASHBOARD_SECONDARY"
-      - key: WEBHOOK_HMAC_SECRET
-        value: "SET_IN_DASHBOARD_SECONDARY"
-
-      # OpenAI — להגדיר בדשבורד בלבד
+      # ---- סיקרטים/אינטגרציות (להגדיר בדשבורד; לא בקובץ) ----
+      - key: REDIS_URL
+        sync: false
       - key: OPENAI_API_KEY
-        value: "SET_IN_DASHBOARD"
+        sync: false
+      - key: API_BEARER_TOKEN
+        sync: false
+      - key: WEBHOOK_HMAC_SECRET
+        sync: false
 
-      # Telegram — כבוי כדי לא להתנגש בראשי; מלא רק אם צריך שליחה
+      # ---- טלגרם (אופציונלי; שמור על תאימות להגדרות שלך) ----
       - key: TELEGRAM_AUTO_WEBHOOK
-        value: "0"
+        value: "1"
       - key: TELEGRAM_ADMIN_ONLY
         value: "1"
       - key: TELEGRAM_ADMIN_IDS
-        value: "449087907"
+        value: "449087907,123456789"
       - key: TELEGRAM_CHAT_ID
         value: "449087907"
       - key: TELEGRAM_BOT_TOKEN
-        value: ""
+        sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
-        value: ""
-
+        sync: false
 
 
 
