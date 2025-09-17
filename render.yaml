@@ -21,7 +21,8 @@ services:
     pythonVersion: 3.11
     buildCommand: pip install -r requirements-worker.txt
     preDeployCommand: chmod +x ./ops/launch_with_env.sh || true
-    startCommand: ./ops/launch_with_env.sh python -u -m utils.ops_supervisor
+    # מריץ watchdog ברקע ואז את ה-supervisor עם env טעון
+    startCommand: bash -lc './ops/watchdog.sh & exec ./ops/launch_with_env.sh python -u -m utils.ops_supervisor'
 
     envVars:
       # ---- Auto-approve (Runtime) ----
@@ -30,7 +31,7 @@ services:
       - key: OPS_REQUIRE_ACTION_PARAM
         value: "0"
       - key: APPROVAL_AUTO_APPROVE_MAX_CRS
-        value: "3"
+        value: "6"          # הועלה ל-6 כדי לאפשר auto-heal רחב יותר
       - key: APPROVAL_AUTO_APPROVE_SENSITIVE
         value: "0"
 
@@ -43,6 +44,18 @@ services:
         value: ops-supervisor-web
       - key: PUBLIC_HOST
         value: https://ops-approval-web.onrender.com
+
+      # ---- Watchdog / HA ----
+      - key: PRIMARY_PUBLIC_HOST         # חייב להצביע לשירות הראשי עם /healthz תקין
+        value: https://algogpt-docker.onrender.com
+      - key: WATCHDOG_INTERVAL_SEC
+        value: "60"
+      - key: WATCHDOG_DEBOUNCE
+        value: "2"
+      - key: WATCHDOG_LOGS
+        value: /opt/render/project/src/logs/app.log
+      - key: RENDER_DEPLOY_HOOK_URL      # להגדיר בדשבורד (סוד) כדי לאפשר redeploy אוטומטי
+        sync: false
 
       # ---- סיקרטים/אינטגרציות (להגדיר בדשבורד; לא בקובץ) ----
       - key: REDIS_URL
@@ -67,6 +80,7 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+
 
 
 
