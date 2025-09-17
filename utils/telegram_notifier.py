@@ -17,8 +17,9 @@ logger = logging.getLogger("algogpt.tg")
 
 # ===================== Core Telegram Config =====================
 BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-CHAT_ID        = int(os.getenv("TELEGRAM_CHAT_ID", "0") or 0)
+CHAT_ID        = int(os.getenv("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_APPROVAL_CHAT_ID", "0")) or 0)
 API_BASE       = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+PUBLIC_HOST    = os.getenv("PUBLIC_HOST", "").strip().rstrip("/")
 
 # ===================== Explain flags =====================
 _EXPLAIN_ON              = os.getenv("OPS_EXPLAIN_TRADE_TELEGRAM", "1").lower() in ("1","true","yes","on")
@@ -58,7 +59,7 @@ OPS_MANUAL_TOUCHES            = set(_parse_list_env("OPS_MANUAL_TOUCHES", "tradi
 
 OPS_AUTO_APPROVE_NON_SENSITIVE = os.getenv("OPS_AUTO_APPROVE_NON_SENSITIVE", "1").lower() in ("1","true","yes","on")
 OPS_AUTO_CRS_MAX               = int(os.getenv("OPS_AUTO_CRS_MAX", "6"))
-OPS_APPROVAL_BASE              = os.getenv("OPS_APPROVAL_BASE", os.getenv("PUBLIC_HOST","")).rstrip("/")
+OPS_APPROVAL_BASE              = os.getenv("OPS_APPROVAL_BASE", PUBLIC_HOST).rstrip("/")
 WEBHOOK_HMAC_SECRET            = os.getenv("WEBHOOK_HMAC_SECRET","").strip()
 
 OPS_DIGEST_ENABLE              = os.getenv("OPS_DIGEST_ENABLE","1").lower() in ("1","true","yes","on")
@@ -251,7 +252,7 @@ async def _bundle_add(msg: str) -> None:
         _bundle_items.append(msg)
     await _bundle_schedule_flush()
 
-# ===================== Public Notifications =====================
+# ===================== Public Ops Notifications =====================
 async def notify_no_trades() -> None:
     return None
 
@@ -285,8 +286,8 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
     sym   = str(plan.get("symbol","")).upper()
     side  = str(plan.get("side","")).upper()
     lev   = int(plan.get("leverage", 0) or 0)
-    entry = float(plan.get("entry", 0.0) or 0.0)
-    sl    = float(plan.get("sl", 0.0) or 0.0)
+    entry = float(plan.get("entry", 0.0) or plan.get("entry_price", 0.0) or 0.0)
+    sl    = float(plan.get("sl", 0.0) or plan.get("sl_price", 0.0) or 0.0)
     tp    = float(plan.get("tp", 0.0) or 0.0)
     adx   = float(plan.get("adx", plan.get("dyn", {}).get("adx", 0.0)) or 0.0)
     atr   = float(plan.get("atr", plan.get("dyn", {}).get("atr_pct", 0.0)) or 0.0)
@@ -296,8 +297,8 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
     macdh = plan.get("macd_hist")
     rsi   = plan.get("rsi")
 
-    trend_ok = "✓" if (ema21 and ema50 and ((float(ema21) > float(ema50) and side=="LONG") or (float(ema21) < float(ema50) and side=="SHORT"))) else "✗"
-    macd_ok  = "✓" if (macdh is not None and ((side=="LONG" and float(macdh)>0) or (side=="SHORT" and float(macdh)<0))) else "✗"
+    trend_ok = "✓" if (ema21 and ema50 and ((float(ema21) > float(ema50) and side in ("LONG","BUY")) or (float(ema21) < float(ema50) and side in ("SHORT","SELL")))) else "✗"
+    macd_ok  = "✓" if (macdh is not None and ((side in ("LONG","BUY") and float(macdh)>0) or (side in ("SHORT","SELL") and float(macdh)<0))) else "✗"
 
     lines = [f"⚙️ <b>Explain Trade</b>", f"<b>{sym}</b> · <b>{side}</b> · lev=<b>{lev}</b>"]
     if ema21 and ema50: lines.append(f"EMA21{'>' if float(ema21)>float(ema50) else '<'}EMA50 {trend_ok}")
@@ -346,7 +347,7 @@ async def notify_daily_summary(summary: Dict[str, Any]) -> None:
 
 # ===================== Webhook Registration =====================
 async def register_webhook() -> bool:
-    public_host = os.getenv("PUBLIC_HOST", "").strip()
+    public_host = PUBLIC_HOST
     secret_token = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if not BOT_TOKEN or not public_host or not secret_token:
         return False
@@ -392,7 +393,8 @@ def _ts_pair(iso_utc: Optional[str]) -> Tuple[str, str]:
 
 def _sign(ticket_id: str, expires_epoch: int) -> str:
     msg = f"{ticket_id}:{expires_epoch}".encode("utf-8")
-    return hmac.new(WEBHOOK_HMAC_SECRET.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    secret = (os.getenv("WEBHOOK_HMAC_SECRET","") or WEBHOOK_HMAC_SECRET).encode("utf-8")
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest() if secret else ""
 
 def _ensure_urls(change: Dict[str, Any]) -> Dict[str, str]:
     tid = change.get("ticket_id", "")
@@ -401,20 +403,22 @@ def _ensure_urls(change: Dict[str, Any]) -> Dict[str, str]:
     reject_url  = change.get("reject_url")
     ticket_url  = change.get("ticket_url")
 
-    if OPS_APPROVAL_BASE and WEBHOOK_HMAC_SECRET and tid and not (approve_url and reject_url and ticket_url):
-        sig = _sign(tid, int(expires))
-        q = urlencode({"ticket_id": tid, "expires": int(expires), "sig": sig})
+    if OPS_APPROVAL_BASE and tid and not (approve_url and reject_url and ticket_url):
+        sig = _sign(tid, int(expires)) if WEBHOOK_HMAC_SECRET else ""
+        q = {"ticket_id": tid, "expires": int(expires)}
+        if sig: q["sig"] = sig
+        qs = urlencode(q)
         if OPS_REQUIRE_ACTION_PARAM:
-            approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}&action=approve"
-            reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}&action=reject"
+            approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{qs}&action=approve"
+            reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{qs}&action=reject"
         else:
-            approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{q}"
-            reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{q}"
+            approve_url = approve_url or f"{OPS_APPROVAL_BASE}/ops/approve?{qs}"
+            reject_url  = reject_url  or f"{OPS_APPROVAL_BASE}/ops/reject?{qs}"
         ticket_url  = ticket_url  or f"{OPS_APPROVAL_BASE}/ops/ticket/{quote(str(tid))}"
 
     return {"approve": approve_url or "", "reject": reject_url or "", "ticket": ticket_url or ""}
 
-# ===================== HE / EN / MIX Formatting =====================
+# ===================== HE / EN / MIX Formatting (Change Tickets) =====================
 def _format_change_he(change: Dict[str, Any]) -> str:
     tid = str(change.get("ticket_id","—"))
     ttl = int(change.get("ttl_sec", 600))
@@ -463,7 +467,7 @@ def _format_change_he(change: Dict[str, Any]) -> str:
     lines.append(f"{_em('🖥️','השפעת עומס (משוער)')}: CPU {_fmt_pct(cpu_pct)}, Mem {_fmt_pct(mem_pct)}, API/דקה {_fmt_int(api_rate)}")
     lines.append(f"{_em('💰','עלות (תקרה)')}: ${dollars_fmt} | טוקני AI: {_fmt_int(tokens)} | קריאות API: {_fmt_int(api_max)}")
     lines.append(f"{_em('⚙️','שינויים')}: " + (", ".join(changes) if changes else "—"))
-    lines.append(f"{_em('🔌','נגיעה ברכיבים')}: Trading={'כן' if t_trd else 'לא'}, Alerts={'כן' אם t_alr else 'לא'}, ENV={'כן' אם t_env else 'לא'}")
+    lines.append(f"{_em('🔌','נגיעה ברכיבים')}: Trading={'כן' if t_trd else 'לא'}, Alerts={'כן' if t_alr else 'לא'}, ENV={'כן' if t_env else 'לא'}")
     lines.append(f"{_em('🛡️','בטיחות')}: Canary={'ON' if canary else 'OFF'} | Rollback={'ON' if rollback else 'OFF'}")
     lines.append(_em("ℹ️", "לחיצה על \"אשר\" תפעיל Preflight → Canary → Promote → Post-verify עם ביטול/Rollback אוטומטי אם יש סטייה."))
     return "\n".join(lines)
@@ -560,6 +564,88 @@ async def send_change_approval_he(change: Dict[str, Any], chat_id: Optional[int]
         logger.warning({"event":"tg.approval_send_failed","error":str(e)})
         return {"ok": False, "error": str(e)}
 
+# ===================== Trade-specific notifications (NEW) =====================
+def _build_trade_urls(idem: str) -> Dict[str, str]:
+    if not PUBLIC_HOST:
+        return {"approve": "", "reject": "", "ticket": ""}
+    base = PUBLIC_HOST
+    q = {"id": idem}
+    qs = urlencode(q)
+    return {
+        "approve": f"{base}/trade/approve?{qs}",
+        "reject":  f"{base}/trade/reject?{qs}",
+        "ticket":  f"{base}/trade/ticket?{qs}",
+    }
+
+def _fmt_tp(tp_legs: List[Dict[str, Any]] | None) -> str:
+    if not tp_legs:
+        return "—"
+    parts = []
+    for leg in tp_legs:
+        sp = leg.get("stopPrice")
+        q  = leg.get("qty")
+        try:
+            parts.append(f"{float(sp):.2f}@{q}")
+        except Exception:
+            parts.append(f"{sp}@{q}")
+    return "; ".join(parts)
+
+async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
+    """
+    שולח הודעת אישור טרייד עם כפתורים Approve/Reject.
+    plan: כפי שמוחזר מ-binance_trade.plan_and_execute(dry_run=True) → plan sub-dict.
+    """
+    urls = _build_trade_urls(idem)
+    symbol  = plan.get("symbol", "")
+    side    = plan.get("side", "")
+    lev     = plan.get("leverage", "")
+    price   = plan.get("entry_price", plan.get("price", ""))
+    qty     = plan.get("qty", "")
+    sl      = (plan.get("sl") or {}).get("stopPrice")
+    tp_legs = plan.get("tp") or []
+
+    lines = [
+        f"🟡 <b>Trade Pending Approval</b>",
+        f"<b>{symbol}</b> · <b>{side}</b> · lev <b>{lev}</b>",
+        f"Entry ~ <code>{price}</code> · Qty <code>{qty}</code>",
+        f"TP: {_fmt_tp(tp_legs)}",
+        f"SL: <code>{sl}</code>",
+        f"Idempotency: <code>{idem}</code>",
+    ]
+    kb = {"inline_keyboard":[
+        [{"text":"✅ Approve", "url": urls["approve"]},
+         {"text":"❌ Reject",  "url": urls["reject"]}],
+    ]}
+    await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
+
+async def send_trade_opened(info: Dict[str, Any]) -> None:
+    plan = info.get("plan") or {}
+    s = plan.get("symbol","")
+    side = plan.get("side","")
+    qty = plan.get("qty","")
+    price = plan.get("entry_price", "")
+    await _tg_send(f"🟢 <b>Opened</b> {s} {side} · qty <code>{qty}</code> · ~<code>{price}</code>")
+
+async def send_trade_update(info: Dict[str, Any]) -> None:
+    # call periodically or on events (fills/partial TP/adjust SL etc.)
+    plan = info.get("plan") or {}
+    s = plan.get("symbol","")
+    side = plan.get("side","")
+    tp = _fmt_tp(plan.get("tp"))
+    sl = (plan.get("sl") or {}).get("stopPrice")
+    await _tg_send(f"📈 <b>Update</b> {s} {side}\nTP: {tp}\nSL: <code>{sl}</code>")
+
+async def send_trade_closed(info: Dict[str, Any]) -> None:
+    s = (info.get("plan") or {}).get("symbol","")
+    pnl = info.get("pnl", None)
+    if pnl is None:
+        await _tg_send(f"🔴 <b>Closed</b> {s}")
+    else:
+        try:
+            await _tg_send(f"🔴 <b>Closed</b> {s} · PnL <b>{float(pnl):.2f}</b> USDT")
+        except Exception:
+            await _tg_send(f"🔴 <b>Closed</b> {s} · PnL {pnl}")
+
 # ===================== Change Events Store (for Digest/EOD) =====================
 async def _store_change_event(ev: Dict[str, Any]) -> None:
     ev = dict(ev)
@@ -610,7 +696,7 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
         logger.debug({"event":"file.load.failed","err":str(e)})
     return out
 
-# ===================== Auto-Approve Router =====================
+# ===================== Auto-Approve Router (for change tickets) =====================
 def _is_very_sensitive(change: Dict[str, Any]) -> tuple[bool, str]:
     crs = float(change.get("crs", 0) or 0)
     if crs >= OPS_MANUAL_MIN_CRS:
@@ -815,12 +901,15 @@ __all__ = [
     "notify_sl_tp_update", "notify_info", "notify_error",
     "notify_heartbeat", "notify_daily_summary", "notify_ops_alert",
     "register_webhook",
-    # approvals
+    # approvals (change tickets)
     "format_change_approval_he", "send_change_approval_he",
     "route_change_ticket",
+    # trade notifications (NEW)
+    "send_trade_approval", "send_trade_opened", "send_trade_update", "send_trade_closed",
     # digests
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
 ]
+
 
 
 
