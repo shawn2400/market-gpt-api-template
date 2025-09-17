@@ -3,7 +3,11 @@ from __future__ import annotations
 import os, json, logging, random
 from typing import List, Dict, Any, Optional, Tuple
 
-from utils.redis_client import redis_client  # may be None if not configured
+# redis_client הוא אופציונלי; אם אין מחלקת Redis זמינה — נשתמש ב-None
+try:
+    from utils.redis_client import redis_client  # type: ignore
+except Exception:
+    redis_client = None  # type: ignore
 
 WATCHLIST_PATH = os.getenv("WATCHLIST_PATH", "watchlist.json")
 WATCHLIST_FALLBACK_PATH = os.getenv("WATCHLIST_FALLBACK_PATH", "watchlist_fallback.json")
@@ -251,7 +255,13 @@ def load_watchlist_env_or_fallback() -> List[str]:
     if env_wl:
         if "BTCUSDT" not in env_wl:
             env_wl.insert(0, "BTCUSDT")
-        return env_wl
+        # דה-דופ
+        out: List[str] = []
+        seen: set[str] = set()
+        for s in env_wl:
+            if s not in seen:
+                out.append(s); seen.add(s)
+        return out
 
     # JSON + min_quality
     try:
@@ -279,6 +289,12 @@ def load_watchlist_env_or_fallback() -> List[str]:
         if s not in seen:
             out.append(s); seen.add(s)
     return out
+
+__all__ = [
+    "WATCHLIST_PATH","WATCHLIST_FALLBACK_PATH","ANCHOR_SYMBOL",
+    "load_watchlist","save_watchlist","build_symbol_pool","compute_symbol_winrates",
+    "is_top10","get_symbol_prefs","load_watchlist_env_or_fallback",
+]
 
 
 
