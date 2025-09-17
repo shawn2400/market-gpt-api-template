@@ -1,4 +1,3 @@
-# /app/routes/executor.py
 from __future__ import annotations
 import time
 from typing import Any, Dict
@@ -24,7 +23,7 @@ def trade(
     symbol: str = Query(..., min_length=1, max_length=32),
     side: str = Query(..., pattern=r"^(?i)(BUY|SELL)$"),
     budget: float = Query(0.0, ge=0.0, description="Notional budget in quote currency"),
-    leverage: int = Query(1, ge=1, le=125),  # 👉 422 אוטומטי אם >125
+    leverage: int = Query(1, ge=1, le=125),
     dry_run: bool = Query(True),
     _token: str = Depends(require_api_key),
 ) -> Dict[str, Any]:
@@ -40,7 +39,8 @@ def trade(
         "dry_run": dry_run,
         "entry_policy": "MARKET_ESCALATION",
         "gate": {"enter_ok": True, "score": 0.0, "reasons": [], "metrics": {}},
-        "risk": {"ok": True, "score": 100.0, "reasons": [], "metrics": {}, "symbol": symbol.upper(), "side": side_up, "lev": leverage},
+        "risk": {"ok": True, "score": 100.0, "reasons": [], "metrics": {},
+                 "symbol": symbol.upper(), "side": side_up, "lev": leverage},
         "alloc_ok": True,
         "alloc_error": None,
         "guards": {"percent_price_bps": 0.0, "slippage_guard_bps": 80.0},
