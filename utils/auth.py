@@ -1,37 +1,38 @@
 from __future__ import annotations
 import os, re, time, logging, pathlib
-from typing import Optional, List, Dict, Any
-from fastapi import Request, Header
-from fastapi.responses import JSONResponse
+from typing import Optional, List, Dict, Any, Set
+from fastapi import Request, Header, HTTPException
 
 log = logging.getLogger("algogpt.auth")
 
+# ── helpers ──────────────────────────────────────────────────────────────────
 def _b(v: object) -> bool:
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
 def _split_tokens(s: str) -> List[str]:
     return [t.strip() for t in re.split(r"[,\s]+", (s or "").strip()) if t.strip()]
 
-def _read_file_lines(p: str) -> List[str]:
+def _read_file_lines(p: str | None) -> List[str]:
+    if not p:
+        return []
     try:
         path = pathlib.Path(p)
         if not path.exists():
-            log.warning({"event": "tokens_file_missing", "path": p})
             return []
-        content = path.read_text(encoding="utf-8")
-        log.debug({"event": "tokens_file_read", "path": p, "content": content})
-        return [ln.strip() for ln in content.splitlines() if ln.strip()]
+        return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except Exception as e:
-        log.warning({"event": "tokens_file_read_failed", "path": p, "error": str(e)})
+        log.warning({"event":"auth.tokens_file_read_failed","path":p,"error":str(e)})
         return []
 
-_TOKENS: set[str] = set()
+_TOKENS: Set[str] = set()
 _T_AT: float = 0.0
 _TTL: float = float(os.getenv("AUTH_TOKENS_TTL", "60") or 60)
+
 _ALLOW_ALL = _b(os.getenv("SECURITY_ALLOW_ALL", os.getenv("AUTH_ALLOW_ALL", "0")))
+
 _PUB_STATUS = _b(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
-_PUB_PATHS_CFG = set(x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PATHS", "")) if x)
-_PUB_PREFIXES_CFG = set(x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PREFIXES", "")) if x)
+_PUB_PATHS_CFG = {x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PATHS","")) if x}
+_PUB_PREFIXES_CFG = {x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PREFIXES","")) if x}
 
 _DEFAULT_PUBLIC_PATHS = {
     "/", "/openapi.json", "/health", "/healthz", "/readyz",
@@ -48,13 +49,13 @@ _DEFAULT_PUBLIC_PREFIXES = {"/price", "/static/", "/risk"}
 def _fresh() -> None:
     global _T_AT, _TOKENS
     now = time.time()
-    if now - _T_AT < _TTL and _TOKENS:
+    if _TOKENS and (now - _T_AT) < _TTL:
         return
     env_tokens = _split_tokens(os.getenv("API_TOKENS", ""))
-    file_tokens = _read_file_lines(os.getenv("API_TOKENS_FILE", ""))
-    _TOKENS = {t.strip() for t in (env_tokens + file_tokens) if t.strip()}
+    file_tokens = _read_file_lines(os.getenv("API_TOKENS_FILE",""))
+    _TOKENS = {t for t in (env_tokens + file_tokens) if t}
     _T_AT = now
-    log.info({"event": "auth.tokens_refreshed", "count": len(_TOKENS), "tokens": sorted(_TOKENS), "env_tokens": env_tokens, "file_tokens": file_tokens})
+    log.info({"event":"auth.tokens_refreshed","count":len(_TOKENS)})
 
 def refresh_tokens_from_env() -> List[str]:
     global _T_AT
@@ -70,40 +71,47 @@ def get_loaded_tokens(mask: bool = True) -> List[str]:
     arr = sorted(_TOKENS)
     if not mask:
         return arr
-    return [t[:2] + "…" + t[-2:] if len(t) > 4 else "***" for t in arr]
+    return [ (t[:2] + "…" + t[-2:]) if len(t) >= 4 else "***" for t in arr ]
 
 def get_public_paths() -> Dict[str, List[str]]:
     paths = set(_DEFAULT_PUBLIC_PATHS) if _PUB_STATUS else set()
     paths |= _PUB_PATHS_CFG
     prefixes = set(_DEFAULT_PUBLIC_PREFIXES) if _PUB_STATUS else set()
     prefixes |= _PUB_PREFIXES_CFG
-    log.debug({"event": "get_public_paths", "public_paths": sorted(paths), "public_prefixes": sorted(prefixes)})
     return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
 
-_QUERY_KEYS = ("api_key", "apikey", "apiKey", "token", "key")
+# ── token extraction ─────────────────────────────────────────────────────────
+_QUERY_KEYS = ("api_key","apikey","apiKey","token","key")
 
 def _from_auth_header(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
         return None
     s = authorization.strip()
-    m = re.match(r"^\s*Bearer\s+(.+)\s*$", s, re.IGNORECASE)
+    m = re.match(r"^\s*Bearer\s+(.+?)\s*$", s, re.IGNORECASE)
     if m:
         return m.group(1).strip().strip('"').strip("'")
-    m = re.match(r"^\s*Token\s+(.+)\s*$", s, re.IGNORECASE)
+    m = re.match(r"^\s*Token\s+(.+?)\s*$", s, re.IGNORECASE)
     if m:
         return m.group(1).strip().strip('"').strip("'")
     return s.strip().strip('"').strip("'")
 
-def extract_token(request: Request, authorization: Optional[str] = None, x_api_key: Optional[str] = None) -> Optional[str]:
-    q = request.query_params
+def extract_token(request: Request,
+                  authorization: Optional[str] = None,
+                  x_api_key: Optional[str] = None) -> Optional[str]:
+    # 1) query
     for k in _QUERY_KEYS:
-        if k in q and q[k]:
-            return str(q[k]).strip().strip('"').strip("'")
+        qv = request.query_params.get(k)
+        if qv:
+            return str(qv).strip().strip('"').strip("'")
+    # 2) header x-api-key
     if x_api_key:
         return x_api_key.strip().strip('"').strip("'")
-    t = _from_auth_header(authorization)
-    if t:
-        return t
+    # 3) header Authorization (dependency inject)
+    if authorization:
+        t = _from_auth_header(authorization)
+        if t:
+            return t
+    # 4) raw headers (just in case)
     ah = request.headers.get("authorization") or request.headers.get("Authorization")
     if ah:
         t = _from_auth_header(ah)
@@ -116,38 +124,30 @@ def extract_token(request: Request, authorization: Optional[str] = None, x_api_k
 
 def token_matches(tok: Optional[str]) -> bool:
     _fresh()
-    log.debug({"event": "token_check", "input_token": tok, "tokens_loaded": sorted(_TOKENS)})
-    return bool(tok and tok in _TOKENS)
+    ok = bool(tok and tok in _TOKENS)
+    log.debug({"event":"auth.token_check","ok": ok})
+    return ok
 
-async def require_api_key(request: Request, authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)) -> bool:
+# ── FastAPI dependency ───────────────────────────────────────────────────────
+async def require_api_key(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+) -> bool:
     if request.method.upper() == "OPTIONS":
-        log.debug({"event": "auth_skipped", "path": request.url.path, "reason": "OPTIONS_request"})
         return True
     p = request.url.path
     pub = get_public_paths()
-    log.debug({"event": "auth_check", "path": p, "public_paths": pub["paths"], "public_prefixes": pub["prefixes"]})
     if p in set(pub["paths"]) or any(p.startswith(pr) for pr in pub["prefixes"]):
-        log.debug({"event": "auth_skipped", "path": p, "reason": "public_path"})
         return True
     if allow_all():
-        log.debug({"event": "auth_skipped", "path": p, "reason": "allow_all"})
         return True
+
     tok = extract_token(request, authorization, x_api_key)
-    if not token_matches(tok):
-        log.debug({"event": "auth_failed", "path": p, "token": tok})
-        raise RuntimeError("Unauthorized")
-    log.debug({"event": "auth_success", "path": p, "token": tok})
-    return True
-
-async def guard_or_401(request: Request) -> Optional[JSONResponse]:
-    try:
-        await require_api_key(request)
-        return None
-    except Exception:
-        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
-
-
-
+    if token_matches(tok):
+        return True
+    # חשוב: 401 אמיתי, לא RuntimeError
+    raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 
