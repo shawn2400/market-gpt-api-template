@@ -16,10 +16,13 @@ def _read_file_lines(p: str) -> List[str]:
     try:
         path = pathlib.Path(p)
         if not path.exists():
+            log.warning({"event": "tokens_file_missing", "path": p})
             return []
-        return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        content = path.read_text(encoding="utf-8")
+        log.debug({"event": "tokens_file_read", "path": p, "content": content})
+        return [ln.strip() for ln in content.splitlines() if ln.strip()]
     except Exception as e:
-        log.warning({"event":"tokens_file_read_failed","path":p,"error":str(e)})
+        log.warning({"event": "tokens_file_read_failed", "path": p, "error": str(e)})
         return []
 
 _TOKENS: set[str] = set()
@@ -27,8 +30,8 @@ _T_AT: float = 0.0
 _TTL: float = float(os.getenv("AUTH_TOKENS_TTL", "60") or 60)
 _ALLOW_ALL = _b(os.getenv("SECURITY_ALLOW_ALL", os.getenv("AUTH_ALLOW_ALL", "0")))
 _PUB_STATUS = _b(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
-_PUB_PATHS_CFG = set(x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PATHS","")) if x)
-_PUB_PREFIXES_CFG = set(x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PREFIXES","")) if x)
+_PUB_PATHS_CFG = set(x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PATHS", "")) if x)
+_PUB_PREFIXES_CFG = set(x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PREFIXES", "")) if x)
 
 _DEFAULT_PUBLIC_PATHS = {
     "/", "/openapi.json", "/health", "/healthz", "/readyz",
@@ -48,10 +51,10 @@ def _fresh() -> None:
     if now - _T_AT < _TTL and _TOKENS:
         return
     env_tokens = _split_tokens(os.getenv("API_TOKENS", ""))
-    file_tokens = _read_file_lines(os.getenv("API_TOKENS_FILE",""))
+    file_tokens = _read_file_lines(os.getenv("API_TOKENS_FILE", ""))
     _TOKENS = {t.strip() for t in (env_tokens + file_tokens) if t.strip()}
     _T_AT = now
-    log.info({"event":"auth.tokens_refreshed","count":len(_TOKENS),"tokens":sorted(_TOKENS)})
+    log.info({"event": "auth.tokens_refreshed", "count": len(_TOKENS), "tokens": sorted(_TOKENS), "env_tokens": env_tokens, "file_tokens": file_tokens})
 
 def refresh_tokens_from_env() -> List[str]:
     global _T_AT
@@ -74,9 +77,10 @@ def get_public_paths() -> Dict[str, List[str]]:
     paths |= _PUB_PATHS_CFG
     prefixes = set(_DEFAULT_PUBLIC_PREFIXES) if _PUB_STATUS else set()
     prefixes |= _PUB_PREFIXES_CFG
+    log.debug({"event": "get_public_paths", "public_paths": sorted(paths), "public_prefixes": sorted(prefixes)})
     return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
 
-_QUERY_KEYS = ("api_key","apikey","apiKey","token","key")
+_QUERY_KEYS = ("api_key", "apikey", "apiKey", "token", "key")
 
 def _from_auth_header(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
@@ -90,9 +94,7 @@ def _from_auth_header(authorization: Optional[str]) -> Optional[str]:
         return m.group(1).strip().strip('"').strip("'")
     return s.strip().strip('"').strip("'")
 
-def extract_token(request: Request,
-                  authorization: Optional[str] = None,
-                  x_api_key: Optional[str] = None) -> Optional[str]:
+def extract_token(request: Request, authorization: Optional[str] = None, x_api_key: Optional[str] = None) -> Optional[str]:
     q = request.query_params
     for k in _QUERY_KEYS:
         if k in q and q[k]:
@@ -114,14 +116,10 @@ def extract_token(request: Request,
 
 def token_matches(tok: Optional[str]) -> bool:
     _fresh()
-    log.debug({"event":"token_check","input_token":tok,"tokens_loaded":sorted(_TOKENS)})
+    log.debug({"event": "token_check", "input_token": tok, "tokens_loaded": sorted(_TOKENS)})
     return bool(tok and tok in _TOKENS)
 
-async def require_api_key(
-    request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
-) -> bool:
+async def require_api_key(request: Request, authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)) -> bool:
     if request.method.upper() == "OPTIONS":
         log.debug({"event": "auth_skipped", "path": request.url.path, "reason": "OPTIONS_request"})
         return True
@@ -146,7 +144,7 @@ async def guard_or_401(request: Request) -> Optional[JSONResponse]:
         await require_api_key(request)
         return None
     except Exception:
-        return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
+        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
 
 
