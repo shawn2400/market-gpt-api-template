@@ -564,366 +564,264 @@ async def send_change_approval_he(change: Dict[str, Any], chat_id: Optional[int]
         logger.warning({"event":"tg.approval_send_failed","error":str(e)})
         return {"ok": False, "error": str(e)}
 
-# ===================== Trade-specific notifications (NEW) =====================
+# ===================== Trade-specific notifications (RICH) =====================
+from typing import Sequence
+
+def _try_get_live_price(symbol: str) -> Optional[float]:
+    # ננסה להשיג מחיר נוכחי מהקוד שלך; אם לא קיים/נכשל—נחזיר None
+    try:
+        from utils.binance_client import get_price  # קיים אצלך
+        p = get_price(symbol.upper())
+        return float(p) if p else None
+    except Exception:
+        return None
+
+def _fmt_usd(v: Any) -> str:
+    try:
+        return f"${float(v):.2f}"
+    except Exception:
+        return "—"
+
+def _fmt_num(v: Any, prec: int = 4) -> str:
+    try:
+        return f"{float(v):.{prec}f}"
+    except Exception:
+        return str(v) if v is not None else "—"
+
+def _fmt_pct_prob(p: Any) -> str:
+    try:
+        p = float(p)
+        if p <= 1.0:  # תומך גם ב-0..1 וגם ב-0..100
+            p *= 100.0
+        return f"{p:.0f}%"
+    except Exception:
+        return "—"
+
+def _fmt_eta(sec: Any) -> str:
+    try:
+        s = int(float(sec))
+        if s < 60:
+            return f"~{s}s"
+        m, s = divmod(s, 60)
+        if m < 60:
+            return f"~{m}m{s:02d}s"
+        h, m = divmod(m, 60)
+        return f"~{h}h {m}m"
+    except Exception:
+        return "—"
+
+def _tp_legs_to_lines(tp_legs: Optional[Sequence[Dict[str, Any]]],
+                      eta: Dict[str, Any] | None = None,
+                      probs: Dict[str, Any] | None = None) -> list[str]:
+    lines: list[str] = []
+    if not tp_legs:
+        return [f"🎯 TP: —"]
+    for i, leg in enumerate(tp_legs, start=1):
+        px = leg.get("stopPrice") or leg.get("price")
+        qty = leg.get("qty") or leg.get("size") or leg.get("split")
+        leg_eta = None
+        if eta:
+            leg_eta = eta.get(f"tp{i}_sec") or eta.get(f"tp{i}")
+        prob = None
+        if probs:
+            prob = probs.get(f"tp{i}") or probs.get(f"tp{i}_prob") or probs.get(f"prob_tp{i}")
+        qtxt = f"x{qty}" if (isinstance(qty,(int,float)) and float(qty) <= 1) else str(qty or "")
+        ptxt = _fmt_pct_prob(prob) if prob is not None else "—"
+        lines.append(f"🎯 TP{i}: <code>{_fmt_num(px, 4)}</code> · split <code>{qtxt}</code> · ETA { _fmt_eta(leg_eta) } · p={ptxt}")
+    return lines
+
+def _trade_kind(plan: Dict[str, Any]) -> str:
+    # futures/grid/spot/regular
+    kind = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "").lower()
+    if "grid" in kind:
+        return "Grid"
+    if "spot" in kind:
+        return "Spot"
+    return "Futures"
+
+def _fmt_side(side: str) -> str:
+    s = (side or "").upper()
+    if s in ("BUY","LONG"):
+        return "LONG 🟢"
+    if s in ("SELL","SHORT"):
+        return "SHORT 🔴"
+    return s or "—"
+
+def _fmt_order_type(order_type: str) -> str:
+    t = (order_type or "").upper()
+    if t == "LIMIT":
+        return "LIMIT ⛳"
+    if t == "MARKET":
+        return "MARKET ⚡"
+    return (order_type or "—").upper()
+
+def _trim_reason(reason: Any, limit: int = 240) -> str:
+    text = ""
+    if isinstance(reason, str):
+        text = reason
+    elif isinstance(reason, list):
+        text = "; ".join([str(x) for x in reason if x])
+    elif isinstance(reason, dict):
+        text = reason.get("why") or reason.get("explain") or reason.get("summary") or ""
+    text = text.strip()
+    if len(text) > limit:
+        text = text[:limit-1] + "…"
+    return text or "—"
+
 def _build_trade_urls(idem: str) -> Dict[str, str]:
     if not PUBLIC_HOST:
         return {"approve": "", "reject": "", "ticket": ""}
     base = PUBLIC_HOST
-    q = {"id": idem}
-    qs = urlencode(q)
+    qs = urlencode({"id": idem})
     return {
         "approve": f"{base}/trade/approve?{qs}",
         "reject":  f"{base}/trade/reject?{qs}",
         "ticket":  f"{base}/trade/ticket?{qs}",
     }
 
-def _fmt_tp(tp_legs: List[Dict[str, Any]] | None) -> str:
-    if not tp_legs:
-        return "—"
-    parts = []
-    for leg in tp_legs:
-        sp = leg.get("stopPrice")
-        q  = leg.get("qty")
-        try:
-            parts.append(f"{float(sp):.2f}@{q}")
-        except Exception:
-            parts.append(f"{sp}@{q}")
-    return "; ".join(parts)
-
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
     """
-    שולח הודעת אישור טרייד עם כפתורים Approve/Reject.
-    plan: כפי שמוחזר מ-binance_trade.plan_and_execute(dry_run=True) → plan sub-dict.
+    הודעת אישור טרייד עשירה עם כל הפרטים (LIMIT/MARKET, מינוף, מחיר נוכחי, SL/TP1-3 עם ETA, סיכויים, רווח צפוי וכו').
+    מצפה לשדות (אם חסר—נדלג/נציג '—'):
+      symbol, side, leverage, order_type, entry_price/limit_price/price,
+      now_price (אופציונלי—ננסה להשיג אם חסר), sl:{stopPrice}, tp:[{stopPrice,qty}],
+      budget_usd/expected_pnl_usd, probs:{overall,tp1,tp2,tp3}, eta:{entry_sec,tp1_sec,tp2_sec,tp3_sec},
+      reason/explain, trade_kind.
     """
-    urls = _build_trade_urls(idem)
-    symbol  = plan.get("symbol", "")
-    side    = plan.get("side", "")
-    lev     = plan.get("leverage", "")
-    price   = plan.get("entry_price", plan.get("price", ""))
-    qty     = plan.get("qty", "")
-    sl      = (plan.get("sl") or {}).get("stopPrice")
-    tp_legs = plan.get("tp") or []
+    symbol  = str(plan.get("symbol","")).upper()
+    side    = _fmt_side(str(plan.get("side","")))
+    lev     = plan.get("leverage") or plan.get("lev") or "—"
+    otype   = _fmt_order_type(str(plan.get("order_type") or plan.get("entry_type") or "MARKET"))
+    entry   = plan.get("entry_price") or plan.get("limit_price") or plan.get("price")
+    now_px  = plan.get("now_price")
+    if now_px in (None, 0, "0"):
+        now_px = _try_get_live_price(symbol)
+    sl_obj  = plan.get("sl") or {}
+    sl_px   = sl_obj.get("stopPrice") or sl_obj.get("price")
+    tp_legs = plan.get("tp") or plan.get("tp_orders") or []
+    budget  = plan.get("budget_usd") or plan.get("budget") or plan.get("budget_used")
+    exp_pnl = plan.get("expected_pnl_usd") or plan.get("expected_usd") or None
 
-    lines = [
-        f"🟡 <b>Trade Pending Approval</b>",
-        f"<b>{symbol}</b> · <b>{side}</b> · lev <b>{lev}</b>",
-        f"Entry ~ <code>{price}</code> · Qty <code>{qty}</code>",
-        f"TP: {_fmt_tp(tp_legs)}",
-        f"SL: <code>{sl}</code>",
-        f"Idempotency: <code>{idem}</code>",
-    ]
+    probs   = plan.get("prob") or plan.get("probs") or {}
+    eta     = plan.get("eta") or {}
+    eta_entry = eta.get("entry_sec") or eta.get("entry")  # שניות
+
+    reason  = plan.get("why") or plan.get("explain") or plan.get("reasons")
+    why_txt = _trim_reason(reason)
+
+    kind    = _trade_kind(plan)
+    created = plan.get("created_at")  # ISO
+    il_ts   = _fmt_il(time.time())
+
+    # שורת כותרת
+    lines: list[str] = []
+    lines.append(f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>")
+    lines.append(f"🪙 <b>{symbol}</b> · {side} · lev <b>{lev}</b> · {otype}")
+    lines.append(f"💫 Now ~ <code>{_fmt_num(now_px, 4)}</code> · 🎯 Entry ~ <code>{_fmt_num(entry, 4)}</code> · ⏳ ETA entry { _fmt_eta(eta_entry) }")
+    lines.append(f"🛡 SL: <code>{_fmt_num(sl_px, 4)}</code>")
+
+    # TP1/2/3
+    lines += _tp_legs_to_lines(tp_legs, eta=eta, probs=probs)
+
+    # סיכויים/כסף
+    overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
+    lines.append(f"📈 Success (overall): <b>{_fmt_pct_prob(overall_p)}</b> · "
+                 f"P(TP1): {_fmt_pct_prob(probs.get('tp1'))} · "
+                 f"P(TP2): {_fmt_pct_prob(probs.get('tp2'))} · "
+                 f"P(TP3): {_fmt_pct_prob(probs.get('tp3'))}")
+    lines.append(f"💸 Budget: {_fmt_usd(budget)} · Expected PnL: {_fmt_usd(exp_pnl)}")
+
+    # הסבר קצר
+    lines.append(f"🧠 Why: {why_txt}")
+
+    # זמנים
+    lines.append("— — —")
+    lines.append(f"🕒 {il_ts}")
+
+    # כפתורים
+    urls = _build_trade_urls(idem)
     kb = {"inline_keyboard":[
         [{"text":"✅ Approve", "url": urls["approve"]},
          {"text":"❌ Reject",  "url": urls["reject"]}],
+        [{"text":"🧾 Ticket", "url": urls["ticket"]}] if urls["ticket"] else []
     ]}
     await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
 
 async def send_trade_opened(info: Dict[str, Any]) -> None:
     plan = info.get("plan") or {}
     s = plan.get("symbol","")
-    side = plan.get("side","")
+    side = _fmt_side(plan.get("side",""))
     qty = plan.get("qty","")
-    price = plan.get("entry_price", "")
-    await _tg_send(f"🟢 <b>Opened</b> {s} {side} · qty <code>{qty}</code> · ~<code>{price}</code>")
+    price = plan.get("entry_price", plan.get("price",""))
+    otype = _fmt_order_type(plan.get("order_type",""))
+    lev = plan.get("leverage","—")
+    kind = _trade_kind(plan)
+    await _tg_send(f"🟢 <b>Opened</b> · <b>{kind}</b>\n"
+                   f"{s} {side} · qty <code>{qty}</code> · ~<code>{_fmt_num(price,4)}</code> · {otype} · lev <b>{lev}</b>")
 
 async def send_trade_update(info: Dict[str, Any]) -> None:
-    # call periodically or on events (fills/partial TP/adjust SL etc.)
     plan = info.get("plan") or {}
     s = plan.get("symbol","")
-    side = plan.get("side","")
-    tp = _fmt_tp(plan.get("tp"))
+    side = _fmt_side(plan.get("side",""))
+    tp = _tp_legs_to_lines(plan.get("tp"))
     sl = (plan.get("sl") or {}).get("stopPrice")
-    await _tg_send(f"📈 <b>Update</b> {s} {side}\nTP: {tp}\nSL: <code>{sl}</code>")
+    parts = [f"📈 <b>Update</b> {s} {side}", *tp, f"🛡 SL: <code>{_fmt_num(sl,4)}</code>"]
+    await _tg_send("\n".join(parts))
 
 async def send_trade_closed(info: Dict[str, Any]) -> None:
-    s = (info.get("plan") or {}).get("symbol","")
-    pnl = info.get("pnl", None)
-    if pnl is None:
-        await _tg_send(f"🔴 <b>Closed</b> {s}")
-    else:
+    """
+    דוח סיכום (פוסטמורטם) עם ניתוח קצר + ציוני תתי-מחלקות (1–10).
+    מצפה לשדות אופציונליים בתוך info:
+      pnl_usd, pnl_pct, hit: ["TP1","TP2",...], duration_sec,
+      went_well: [str], to_improve: [str],
+      scorecards: {"entry_engine": 8, "risk": 9, "sltp": 7, "router": 8, ...},
+      overall_score: 1..10
+    """
+    plan = info.get("plan") or {}
+    s = (plan.get("symbol") or info.get("symbol") or "").upper()
+    side = _fmt_side(plan.get("side",""))
+    kind = _trade_kind(plan)
+
+    pnl_usd = info.get("pnl_usd", info.get("pnl"))
+    pnl_pct = info.get("pnl_pct")
+    dur     = info.get("duration_sec")
+    hit     = info.get("hit") or []  # e.g. ["TP1","TP2"]
+    went    = info.get("went_well") or []
+    bad     = info.get("to_improve") or []
+    scores  = info.get("scorecards") or {}
+    overal  = info.get("overall_score")
+
+    entry = plan.get("entry_price") or plan.get("price")
+    exit  = info.get("exit_price") or info.get("avg_exit")
+
+    def _rate_line(k: str, v: Any) -> str:
         try:
-            await _tg_send(f"🔴 <b>Closed</b> {s} · PnL <b>{float(pnl):.2f}</b> USDT")
+            v = int(float(v))
+            return f"• {k}: {v}/10"
         except Exception:
-            await _tg_send(f"🔴 <b>Closed</b> {s} · PnL {pnl}")
+            return f"• {k}: —"
 
-# ===================== Change Events Store (for Digest/EOD) =====================
-async def _store_change_event(ev: Dict[str, Any]) -> None:
-    ev = dict(ev)
-    ev.setdefault("ts", _now())
-    ev.setdefault("date", datetime.fromtimestamp(ev["ts"], tz=timezone.utc).astimezone(_TZ_IL).strftime("%Y-%m-%d"))
-    data = json.dumps(ev, ensure_ascii=False)
-    if _redis:
+    lines = [f"🔴 <b>Closed</b> · <b>{kind}</b> · {s} {side}"]
+    lines.append(f"💰 PnL: <b>{_fmt_usd(pnl_usd)}</b> ({_fmt_pct_prob(pnl_pct) if pnl_pct is not None else '—'})")
+    lines.append(f"🎯 Hit: {', '.join(hit) if hit else '—'}")
+    lines.append(f"⏱ Duration: {_fmt_eta(dur)}")
+    lines.append(f"↔️ Prices: entry <code>{_fmt_num(entry,4)}</code> → exit <code>{_fmt_num(exit,4)}</code>")
+    if went:
+        lines.append("✅ Went well:")
+        for x in went[:5]:
+            lines.append(f"  • {x}")
+    if bad:
+        lines.append("⚠️ To improve:")
+        for x in bad[:5]:
+            lines.append(f"  • {x}")
+    if scores:
+        lines.append("🧪 Scores:")
+        for k,v in scores.items():
+            lines.append("  " + _rate_line(k,v))
+    if overal is not None:
         try:
-            await _redis.rpush("ops:changes", data)
-            return
-        except Exception as e:
-            logger.debug({"event":"redis.store.failed","err":str(e)})
-    # file fallback
-    try:
-        with open(_changes_file, "a", encoding="utf-8") as f:
-            f.write(data + "\n")
-    except Exception as e:
-        logger.debug({"event":"file.store.failed","err":str(e)})
-
-async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
-    out: List[Dict[str,Any]] = []
-    # Prefer Redis
-    if _redis:
-        try:
-            items = await _redis.lrange("ops:changes", 0, -1)
-            for line in items:
-                try:
-                    obj = json.loads(line)
-                    if float(obj.get("ts", 0)) >= ts_min:
-                        out.append(obj)
-                except Exception:
-                    pass
-            return out
-        except Exception as e:
-            logger.debug({"event":"redis.load.failed","err":str(e)})
-    # file fallback
-    try:
-        if os.path.exists(_changes_file):
-            with open(_changes_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        obj = json.loads(line.strip())
-                        if float(obj.get("ts", 0)) >= ts_min:
-                            out.append(obj)
-                    except Exception:
-                        pass
-    except Exception as e:
-        logger.debug({"event":"file.load.failed","err":str(e)})
-    return out
-
-# ===================== Auto-Approve Router (for change tickets) =====================
-def _is_very_sensitive(change: Dict[str, Any]) -> tuple[bool, str]:
-    crs = float(change.get("crs", 0) or 0)
-    if crs >= OPS_MANUAL_MIN_CRS:
-        return True, f"crs>={OPS_MANUAL_MIN_CRS}"
-    level = str(change.get("sensitive_level", "")).strip().lower()
-    if level and level in OPS_MANUAL_SENSITIVE_LEVELS:
-        return True, f"level={level}"
-    if bool(change.get("sensitive", False)):
-        touches = (change.get("touches") or {})
-        for t in OPS_MANUAL_TOUCHES:
-            if bool(touches.get(t, False)):
-                return True, f"sensitive+touches.{t}"
-    return False, ""
-
-async def _auto_approve_change(change: Dict[str, Any]) -> bool:
-    """Clicks the signed Approve URL (HTTP GET)."""
-    urls = _ensure_urls(change)
-    approve_url = urls.get("approve","")
-    if not approve_url:
-        return False
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.get(approve_url)
-            ok = (200 <= r.status_code < 300)
-            if not ok:
-                logger.warning({"event":"auto_approve.http_error","status":r.status_code,"body":r.text[:256]})
-            return ok
-    except Exception as e:
-        logger.warning({"event":"auto_approve.failed","error":str(e)})
-        return False
-
-async def route_change_ticket(change: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Strict policy:
-      - אם OPS_APPROVAL_STRICT=1 → אישור ידני רק אם _is_very_sensitive(change) == True
-      - אחרת (STRICT=0) → legacy: sensitive או CRS גבוה יבקשו ידני.
-    תמיד נרשם לדיג'סט/סוף-יום.
-    """
-    tid       = str(change.get("ticket_id",""))
-    plan      = change.get("plan","")
-    version   = change.get("version","")
-    crs       = float(change.get("crs", 0) or 0)
-    sensitive = bool(change.get("sensitive", False))
-
-    if OPS_APPROVAL_STRICT:
-        manual, reason = _is_very_sensitive(change)
-    else:
-        manual = (sensitive or crs >= OPS_AUTO_CRS_MAX)
-        reason = "legacy_sensitive_or_high_crs" if manual else ""
-
-    if manual:
-        await _store_change_event({
-            "kind":"change","ticket_id":tid,"status":"awaiting_manual",
-            "sensitive": sensitive,"crs": crs,"plan": plan,"version": version,
-            "reason": reason,
-        })
-        await send_change_approval_he(change)
-        return {"ok": True, "auto": False, "reason": reason}
-
-    # Auto-approve (שקט)
-    ok = await _auto_approve_change(change)
-    await _store_change_event({
-        "kind":"change","ticket_id":tid,
-        "status": "auto_approved" if ok else "auto_approve_failed",
-        "sensitive": sensitive,"crs": crs,"plan": plan,"version": version,
-        "reason": "strict_auto" if OPS_APPROVAL_STRICT else "legacy_auto",
-    })
-    if not ok:
-        # fallback נדיר – אם חתימה/URL לא תקפים: שולחים אישור ידני כדי לא להיתקע
-        await send_change_approval_he(change)
-    return {"ok": True, "auto": True}
-
-# ===================== Digest & EOD =====================
-async def send_ops_digest_now(hours: Optional[int] = None) -> None:
-    """Sends a bilingual (HE/EN) ops digest for the last N hours."""
-    interval_h = int(hours or OPS_DIGEST_INTERVAL_HOURS)
-    ts_min = _now() - interval_h * 3600
-    items = await _load_changes_since(ts_min)
-
-    if not items:
-        await _tg_send(f"🧭 דיג'סט ({interval_h}ש) — אין עדכונים.\n🧭 Digest ({interval_h}h) — No updates.")
-        return
-
-    total    = len(items)
-    auto_ok  = sum(1 for x in items if x.get("status")=="auto_approved")
-    auto_fail= sum(1 for x in items if x.get("status")=="auto_approve_failed")
-    manual   = sum(1 for x in items if x.get("status")=="awaiting_manual")
-
-    def _line(x: Dict[str,Any]) -> str:
-        ts = _fmt_il(x.get("ts"))
-        ver = x.get("version") or "—"
-        crs = x.get("crs","?")
-        sens = "Sensitive" if x.get("sensitive") else "Non-sens"
-        plan = (x.get("plan") or "—")
-        if len(plan) > 80: plan = plan[:77] + "…"
-        return f"• {ts} · v{ver} · CRS {crs} · {sens} · {x.get('status')}\n  ↳ {plan}"
-
-    last_lines = [_line(x) for x in items[-8:]]
-
-    msg = [
-        f"🧭 דיג'סט ({interval_h}ש) — סה\"כ {total} | Auto OK {auto_ok} | Auto Fail {auto_fail} | Manual {manual}",
-        f"🧭 Digest ({interval_h}h) — total {total} | Auto OK {auto_ok} | Auto Fail {auto_fail} | Manual {manual}",
-        "— — —",
-        *last_lines
-    ]
-    await _tg_send("\n".join(msg))
-
-async def send_eod_report_now() -> None:
-    """End-of-day bilingual report (HE/EN) for current IL day."""
-    now_il   = datetime.now(_TZ_IL)
-    start_il = now_il.replace(hour=0, minute=0, second=0, microsecond=0)
-    ts_min   = start_il.astimezone(timezone.utc).timestamp()
-    items    = await _load_changes_since(ts_min)
-
-    total    = len(items)
-    auto_ok  = sum(1 for x in items if x.get("status")=="auto_approved")
-    auto_fail= sum(1 for x in items if x.get("status")=="auto_approve_failed")
-    manual   = sum(1 for x in items if x.get("status")=="awaiting_manual")
-
-    def _short(x: Dict[str,Any]) -> str:
-        ts = _fmt_il(x.get("ts"))
-        ver = x.get("version") or "—"
-        crs = x.get("crs","?")
-        sens = "Sensitive" if x.get("sensitive") else "Non-sens"
-        plan = (x.get("plan") or "—")
-        if len(plan) > 100: plan = plan[:97] + "…"
-        return f"• {ts} · v{ver} · CRS {crs} · {sens} · {x.get('status')} · {plan}"
-
-    last = [_short(x) for x in items[-12:]]
-
-    msg = [
-        f"📘 דוח יומי — {now_il.strftime('%Y-%m-%d')} (IL)",
-        f"סה\"כ שינויים: {total} | Auto OK: {auto_ok} | Auto Fail: {auto_fail} | Manual: {manual}",
-        f"📘 End-of-Day — {now_il.strftime('%Y-%m-%d')} (IL)",
-        f"Total changes: {total} | Auto OK: {auto_ok} | Auto Fail: {auto_fail} | Manual: {manual}",
-        "— — —",
-        *last
-    ]
-    await _tg_send("\n".join(msg))
-
-# Background loops
-_digest_task: Optional[asyncio.Task] = None
-_eod_task: Optional[asyncio.Task] = None
-_schedulers_started: bool = False
-
-def _seconds_until_next_digest(now_il: Optional[datetime] = None) -> int:
-    """Align to next multiple of interval since midnight IL."""
-    now_il = now_il or datetime.now(_TZ_IL)
-    period = OPS_DIGEST_INTERVAL_HOURS * 3600
-    since_midnight = now_il.hour*3600 + now_il.minute*60 + now_il.second
-    rem = since_midnight % period
-    wait = (period - rem) if rem != 0 else period
-    return max(5, int(wait))
-
-def _seconds_until_eod(now_il: Optional[datetime] = None) -> int:
-    now_il = now_il or datetime.now(_TZ_IL)
-    target = now_il.replace(hour=OPS_EOD_HOUR_IL, minute=OPS_EOD_MINUTE_IL, second=0, microsecond=0)
-    if target <= now_il:
-        target = target + timedelta(days=1)
-    return max(5, int((target - now_il).total_seconds()))
-
-async def _digest_loop() -> None:
-    while True:
-        try:
-            await asyncio.sleep(_seconds_until_next_digest())
-            await send_ops_digest_now()
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.debug({"event":"digest.loop.err","err":str(e)})
-            await asyncio.sleep(5)
-
-async def _eod_loop() -> None:
-    while True:
-        try:
-            await asyncio.sleep(_seconds_until_eod())
-            await send_eod_report_now()
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.debug({"event":"eod.loop.err","err":str(e)})
-            await asyncio.sleep(5)
-
-async def ensure_ops_schedulers_started() -> None:
-    """Call this once on app startup."""
-    global _schedulers_started, _digest_task, _eod_task
-    if _schedulers_started:
-        return
-    loop = asyncio.get_event_loop()
-    if OPS_DIGEST_ENABLE:
-        _digest_task = loop.create_task(_digest_loop())
-    if OPS_EOD_ENABLE:
-        _eod_task = loop.create_task(_eod_loop())
-    _schedulers_started = True
-
-# ===================== Public API =====================
-__all__ = [
-    # flags & simple notifiers
-    "set_explain_enabled", "get_explain_enabled",
-    "notify_no_trades", "notify_scan_error", "notify_explain_trade",
-    "notify_sl_tp_update", "notify_info", "notify_error",
-    "notify_heartbeat", "notify_daily_summary", "notify_ops_alert",
-    "register_webhook",
-    # approvals (change tickets)
-    "format_change_approval_he", "send_change_approval_he",
-    "route_change_ticket",
-    # trade notifications (NEW)
-    "send_trade_approval", "send_trade_opened", "send_trade_update", "send_trade_closed",
-    # digests
-    "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
-]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            overal = int(float(overal))
+            lines.append(f"🏁 Overall: <b>{overal}/10</b>")
+        except Exception:
+            pass
+    await _tg_send("\n".join(lines))
