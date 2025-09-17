@@ -1,6 +1,9 @@
 # utils/auth.py
 from __future__ import annotations
-import os, time, logging
+
+import os
+import time
+import logging
 from typing import Optional, Set, List, Dict, Any
 from fastapi import Request, Header, HTTPException
 
@@ -27,7 +30,7 @@ _PUBLIC_PREFIXES: List[str] = _split(os.getenv("SECURITY_PUBLIC_PREFIXES", ""))
 def _is_public(path: str) -> bool:
     if _ALLOW_ALL:
         return True
-    # תמיד להתיר את /status כשSECURITY_PUBLIC_STATUS פעיל
+    # תמיד להתיר את /status כש SECURITY_PUBLIC_STATUS פעיל
     if _PUBLIC_STATUS and path in ("/status/ping", "/status/all"):
         return True
     if path in _PUBLIC_PATHS:
