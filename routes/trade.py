@@ -1,14 +1,12 @@
 # routes/trade.py
 from __future__ import annotations
+
 import logging
 from typing import Dict, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import (
-    BaseModel, Field, ConfigDict,
-    field_validator, model_validator
-)
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 from utils.auth import require_api_key
 from utils.trade_executor import execute_trade_live
@@ -20,6 +18,7 @@ router = APIRouter(
     tags=["Trades"],
     dependencies=[Depends(require_api_key)],
 )
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Models
@@ -37,12 +36,8 @@ class TradeRequest(BaseModel):
     leverage: int = Field(10, example=10, description="Binance Futures leverage (1..125)")
 
     # Allocation
-    budget_usd: Optional[float] = Field(
-        None, description="תקציב ב-USD (מועדף). שקול ל-budget."
-    )
-    budget: Optional[float] = Field(
-        None, description="Alias ישן ל-budget_usd (זהה לחלוטין)"
-    )
+    budget_usd: Optional[float] = Field(None, description="תקציב ב-USD (מועדף). שקול ל-budget.")
+    budget: Optional[float] = Field(None, description="Alias ישן ל-budget_usd (זהה לחלוטין)")
     quantity: Optional[float] = Field(None, example=0.001, description="כמות בחוזה/מטבע")
 
     # Entry/Exit
@@ -117,7 +112,6 @@ class TradeRequest(BaseModel):
 
     @model_validator(mode="after")
     def _post_validations(self) -> "TradeRequest":
-        # splits length checks (only if both provided)
         if self.tp_splits is not None and self.tp_targets is not None:
             if len(self.tp_splits) != len(self.tp_targets):
                 raise ValueError("tp_splits length must match tp_targets length")
@@ -130,11 +124,7 @@ class TradeRequest(BaseModel):
             if sum(self.sl_splits) > 1.0000001:
                 raise ValueError("sum(sl_splits) must be ≤ 1.0")
 
-        # If confirm_first requested, chat id should exist (route adds one more guard anyway)
-        if self.confirm_first and self.telegram_chat_id is None:
-            # לא חוסם dry_run כדי לאפשר בדיקה ללא צ׳אט
-            pass
-
+        # אם confirm_first=True אך אין chat_id — לא נחסום dry_run כדי לבדוק זרימה
         return self
 
 
@@ -189,21 +179,25 @@ async def post_trade_execute(req: TradeRequest) -> TradeResponse:
         if req.quantity is not None:
             args["quantity"] = req.quantity
 
-        logger.info({
-            "event": "trade_execute_request",
-            "symbol": req.symbol, "side": req.side,
-            "lev": req.leverage, "dry": req.dry_run,
-            "has_budget": budget_effective is not None, "has_qty": req.quantity is not None
-        })
+        logger.info(
+            {
+                "event": "trade_execute_request",
+                "symbol": req.symbol,
+                "side": req.side,
+                "lev": req.leverage,
+                "dry": req.dry_run,
+                "has_budget": budget_effective is not None,
+                "has_qty": req.quantity is not None,
+            }
+        )
 
         result = await execute_trade_live(**args)
 
         if not result or not result.get("ok", False):
-            # לא זורקים חריג — נשמר פורמט יציב ללקוח
             return TradeResponse(
                 ok=False,
                 error=(result or {}).get("reason") or (result or {}).get("error") or "execution_failed",
-                result=result
+                result=result,
             )
 
         return TradeResponse(ok=True, result=result)
@@ -213,6 +207,7 @@ async def post_trade_execute(req: TradeRequest) -> TradeResponse:
     except Exception as e:
         logger.exception("trade_execute_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
