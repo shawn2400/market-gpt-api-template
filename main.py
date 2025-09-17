@@ -164,16 +164,16 @@ def _split_multi(s: str) -> Iterable[str]:
     import re
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
-# ברירות מחדל — כולל /status/auth ו־/_debug/auth כדי שתמיד אפשר לאבחן טוקנים
+# ברירות מחדל — כולל /status/auth + נתיבי דיבוג
 DEFAULT_PUBLIC_PATHS = {
     "/", "/openapi.json", "/health", "/healthz", "/readyz",
     "/docs", "/redoc",
-    "/debug/health",
     "/telegram/webhook", "/telegram/callback", "/telegram/ping",
     "/provider/cryptopanic/webhook",
     "/status/ping", "/status/ws", "/status/executor", "/status/all",
-    "/status/auth",          # 👈 סטטוס אימות
-    "/_debug/auth",          # 👈 דיבוג אימות ציבורי
+    "/status/auth",             # 👈 סטטוס אימות ציבורי
+    "/debug/health",
+    "/debug/auth", "/_debug/auth",  # 👈 דיבוג אימות ציבורי
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
@@ -199,12 +199,10 @@ logger.info({
     "prefixes": sorted(EFFECTIVE_PUBLIC_PREFIXES),
 })
 
+# ---------- אימות גלובלי (שקוף לנתיבים ציבוריים) ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
-    # נורמליזציה של הנתיב: מסירים סלאש סופי (חוץ מ־"/")
-    raw_path = request.url.path
-    path = raw_path.rstrip("/") or "/"
-
+    path = request.url.path
     if request.method.upper() == "OPTIONS":
         return await call_next(request)
 
@@ -212,10 +210,9 @@ async def validate_token(request: Request, call_next):
     if path in EFFECTIVE_PUBLIC_PATHS:
         return await call_next(request)
 
-    # public prefixes (מתחשב גם בשוויון מלא וגם ב-childs)
+    # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
-        p = pfx.rstrip("/") or "/"
-        if path == p or path.startswith(p + "/"):
+        if path.startswith(pfx):
             return await call_next(request)
 
     # allow all?
@@ -223,11 +220,11 @@ async def validate_token(request: Request, call_next):
         return await call_next(request)
 
     # token-based
-    token = extract_token(
-        request,
-        request.headers.get("Authorization", ""),
-        request.headers.get("X-API-Key"),
-    )
+    # (נעזרים ב-extract_token כך שהוא יאסוף מ-Authorization / X-API-Key / query param
+    #  לפי המימוש אצלך ב-utils.auth)
+    a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    token = extract_token(request, a_hdr, x_hdr)
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
@@ -340,29 +337,7 @@ if not _route_exists("/status/auth"):
         public = get_public_paths()
         return {"ok": True, "tokens_count": len(toks), "tokens": toks, "public": public}
 
-# --- public debug auth endpoint (no deps) ---
-try:
-    from utils.auth import extract_token as _ex, token_matches as _tm, get_loaded_tokens as _gl
-except Exception:
-    def _ex(req,a,b): return None
-    def _tm(tok): return False
-    def _gl(mask=True): return []
-
-@app.get("/_debug/auth", include_in_schema=False)
-async def _debug_auth(request: Request):
-    a = request.headers.get("Authorization")
-    x = request.headers.get("X-API-Key")
-    t = _ex(request, a, x)
-    return {
-        "ok": True,
-        "auth_header": a,
-        "x_api_key": x,
-        "query": dict(request.query_params),
-        "extracted_token": t,
-        "matches": bool(_tm(t)),
-        "tokens_loaded": _gl(mask=True),
-    }
-
+# public price (prefix כלול כברירת מחדל)
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"
@@ -433,7 +408,7 @@ TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1",
 async def _startup_preflight_warmup():
     # לוג עזר: אילו טוקנים טעונים (מוסך)
     try:
-        logger.info({"event": "auth.tokens_loaded", "tokens": _gl(mask=True)})
+        logger.info({"event": "auth.tokens_loaded", "tokens": get_loaded_tokens(mask=True)})
     except Exception:
         pass
     try:
@@ -454,8 +429,64 @@ async def _startup_preflight_warmup():
 async def _startup_webhook():
     if not BOT_TOKEN or not TELEGRAM_AUTO_WEBHOOK:
         return
-    public_host = os.getenv("PUBLIC
+    public_host = os.getenv("PUBLIC_HOST", "").strip()
+    if not public_host:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/setWebhook", json={
+                "url": f"{public_host.rstrip('/')}/telegram/webhook",
+                "secret_token": WEBHOOK_SECRET,
+                "drop_pending_updates": True,
+                "max_connections": 40,
+            })
+    except Exception as e:
+        logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
 
+@app.on_event("startup")
+async def _startup_user_stream():
+    try:
+        if os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1", "true", "yes", "on"):
+            from utils import ws_user_stream
+            ws_user_stream.start()
+            logger.info({"event": "ws_user_stream_autostart"})
+    except Exception as e:
+        logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
+
+@app.on_event("startup")
+async def _ops_schedulers():
+    await ensure_ops_schedulers_started()
+
+# --- public debug auth endpoint (no deps, תמיד ציבורי ב-DEFAULT_PUBLIC_PATHS) ---
+try:
+    from utils.auth import extract_token, token_matches, get_loaded_tokens as _get_loaded_tokens
+except Exception:
+    def _get_loaded_tokens(mask: bool = True): return []
+    def extract_token(req, a, b): return None
+    def token_matches(tok): return False
+
+@app.get("/_debug/auth", include_in_schema=False)
+async def _debug_auth(request: Request):
+    a = request.headers.get("authorization") or request.headers.get("Authorization")
+    x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    t = extract_token(request, a, x)
+    return {"ok": True, "auth_header": a, "x_api_key": x,
+            "query": dict(request.query_params), "extracted_token": t,
+            "matches": bool(token_matches(t)), "tokens_loaded": _get_loaded_tokens(mask=True)}
+
+@app.get("/ops/digest/now", include_in_schema=False)
+async def ops_digest_now(hours: Optional[int] = None):
+    await send_ops_digest_now(hours)
+    return {"ok": True, "sent": True, "hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS", "3"))}
+
+@app.get("/ops/eod/now", include_in_schema=False)
+async def ops_eod_now():
+    await send_eod_report_now()
+    return {"ok": True, "sent": True}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
 
 
 
