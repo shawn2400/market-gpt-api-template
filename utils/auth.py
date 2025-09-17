@@ -1,9 +1,7 @@
-# /app/utils/auth.py
 from __future__ import annotations
-import os
-import time
+import os, time
 from typing import List, Dict, Optional
-from fastapi import Request, HTTPException, Depends
+from fastapi import Request, HTTPException
 
 _TOKENS: List[str] = []
 _LAST_LOAD_TS: float = 0.0
@@ -15,23 +13,17 @@ def _split_multi(s: str) -> List[str]:
 def _mask(tok: str) -> str:
     if not tok:
         return ""
-    if len(tok) <= 6:
-        return tok[0] + "…" + tok[-1]
-    return tok[:2] + "…" + tok[-2:]
+    return tok[:2] + "…" + tok[-2:] if len(tok) > 6 else tok[0] + "…" + tok[-1]
 
 def _load_tokens(force: bool = False) -> None:
     global _TOKENS, _LAST_LOAD_TS
     if not force and _TOKENS:
         return
     toks: List[str] = []
-    # single
     single = os.getenv("API_TOKEN", "").strip()
     if single:
         toks.append(single)
-    # multi
-    multi = os.getenv("API_TOKENS", "")
-    toks += _split_multi(multi)
-    # file
+    toks += _split_multi(os.getenv("API_TOKENS", ""))
     tok_file = os.getenv("TOKENS_FILE", "/app/tokens.txt").strip()
     try:
         if os.path.isfile(tok_file):
@@ -42,7 +34,6 @@ def _load_tokens(force: bool = False) -> None:
                         toks.append(t)
     except Exception:
         pass
-    # unique
     _TOKENS = list(dict.fromkeys(toks))
     _LAST_LOAD_TS = time.time()
 
@@ -59,12 +50,9 @@ def allow_all() -> bool:
     return os.getenv("SECURITY_ALLOW_ALL", "0").lower() in ("1", "true", "yes", "on")
 
 def extract_token(request: Request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
-    # priority: query ?api_key= → X-API-Key → Authorization: Bearer …
     q = request.query_params.get("api_key")
-    if q:
-        return q.strip()
-    if x_api_key:
-        return x_api_key.strip()
+    if q: return q.strip()
+    if x_api_key: return x_api_key.strip()
     if auth_header:
         parts = auth_header.strip().split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
@@ -90,8 +78,8 @@ def require_api_key(request: Request) -> str:
     return tok
 
 def get_public_paths():
-    # משמש /status/auth אם קוראים מפה; אפשר להחזיר ריק בבטחה
     return {"paths": [], "prefixes": []}
+
 
 
 
