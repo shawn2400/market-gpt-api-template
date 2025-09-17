@@ -18,11 +18,13 @@ services:
     env: python
     region: oregon
     plan: starter
+    pythonVersion: 3.11
     buildCommand: pip install -r requirements-worker.txt
     preDeployCommand: chmod +x ./ops/launch_with_env.sh || true
     startCommand: ./ops/launch_with_env.sh python -u -m utils.ops_supervisor
+
     envVars:
-      # ---- Auto-approve (רנטיים) ----
+      # ---- Auto-approve (Runtime) ----
       - key: OPS_POLICY_PATH
         value: policies/ops_policy.yaml
       - key: OPS_REQUIRE_ACTION_PARAM
@@ -52,7 +54,7 @@ services:
       - key: WEBHOOK_HMAC_SECRET
         sync: false
 
-      # ---- טלגרם (אופציונלי; שמור על תאימות להגדרות שלך) ----
+      # ---- טלגרם (אופציונלי; לשמור תאימות להגדרות שלך) ----
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "1"
       - key: TELEGRAM_ADMIN_ONLY
@@ -65,6 +67,7 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+
 
 
 
