@@ -185,6 +185,8 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health",
     "/_debug/auth", "/debug/env", "/debug/refresh-auth",
     "/executor/status",
+    # 👇 לאישור טלגרם ללא API key
+    "/ops/approve", "/ops/reject",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
@@ -267,6 +269,7 @@ for module_path in (
     "routes.multi_scan",
     "routes.system_autopilot",
     "routes.debug",
+    "routes.ops_approval",   # 👈 חדש
 ):
     if _try_include(module_path):
         try:
@@ -490,6 +493,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
