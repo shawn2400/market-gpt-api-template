@@ -5,12 +5,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-# מנסים לנצל את ה־utils הקיימים אצלך כשאפשר (מחיר, אקס’אינפו)
 try:
     from utils.binance_client import get_price as _get_price_util, futures_exchange_info_safe
 except Exception:
     _get_price_util = None
-    futures_exchange_info_safe = None  # נשתמש ב-/fapi/v1/exchangeInfo אם אין
+    futures_exchange_info_safe = None
 
 BINANCE_FAPI = os.getenv("BINANCE_FAPI_BASE", "https://fapi.binance.com")
 
@@ -22,19 +21,12 @@ def _api_keys() -> Tuple[str, str]:
     return k, s
 
 def _sign(params: Dict[str, Any], secret: str) -> str:
-    # סדר הפרמטרים כ־querystring
     q = "&".join(f"{k}={params[k]}" for k in sorted(params.keys()))
     return hmac.new(secret.encode(), q.encode(), hashlib.sha256).hexdigest()
 
-async def _request(
-    method: str,
-    path: str,
-    params: Dict[str, Any] | None = None,
-    signed: bool = True,
-    timeout: float = 10.0,
-) -> Any:
+async def _request(method: str, path: str, params: Dict[str, Any] | None = None, signed: bool = True, timeout: float = 10.0) -> Any:
     params = dict(params or {})
-    headers = {}
+    headers: Dict[str, str] = {}
     if signed:
         key, sec = _api_keys()
         params["timestamp"] = int(time.time() * 1000)
@@ -66,8 +58,8 @@ async def get_price(symbol: str) -> float:
     data = await _request("GET", "/fapi/v1/ticker/price", {"symbol": symbol}, signed=False)
     return float(data["price"])
 
-# ------- exchange info / filters -------
-_symbol_filters_cache: Dict[str, Dict[str, Any]] = {}
+# -------- exchange filters --------
+_symbol_filters_cache: Dict[str, Dict[str, float]] = {}
 
 async def _load_exchange_info() -> Dict[str, Any]:
     if callable(futures_exchange_info_safe):
@@ -79,17 +71,17 @@ async def _load_exchange_info() -> Dict[str, Any]:
             pass
     return await _request("GET", "/fapi/v1/exchangeInfo", signed=False)
 
-def _parse_filters(sym_info: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_filters(sym_info: Dict[str, Any]) -> Dict[str, float]:
     out = {"stepSize": 0.001, "minQty": 0.0, "tickSize": 0.01}
     for f in sym_info.get("filters", []):
         if f.get("filterType") == "LOT_SIZE":
             out["stepSize"] = float(f.get("stepSize", out["stepSize"]))
-            out["minQty"] = float(f.get("minQty", out["minQty"]))
+            out["minQty"]   = float(f.get("minQty",   out["minQty"]))
         if f.get("filterType") == "PRICE_FILTER":
             out["tickSize"] = float(f.get("tickSize", out["tickSize"]))
     return out
 
-async def get_symbol_filters(symbol: str) -> Dict[str, Any]:
+async def get_symbol_filters(symbol: str) -> Dict[str, float]:
     s = symbol.upper()
     if s in _symbol_filters_cache:
         return _symbol_filters_cache[s]
@@ -99,26 +91,22 @@ async def get_symbol_filters(symbol: str) -> Dict[str, Any]:
             f = _parse_filters(sym)
             _symbol_filters_cache[s] = f
             return f
-    # fallback
     f = {"stepSize": 0.001, "minQty": 0.0, "tickSize": 0.01}
     _symbol_filters_cache[s] = f
     return f
 
-def _round_step(x: float, step: float) -> float:
-    if step <= 0:
-        return x
-    return (int(x / step + 1e-12)) * step
+def _round_step_down(x: float, step: float) -> float:
+    if step <= 0: return x
+    return (int((x + 1e-12) / step)) * step
 
-def round_qty(symbol: str, qty: float, step: float) -> float:
-    q = _round_step(qty, step)
-    # נזהר שלא ליפול ל-0 בגלל עיגול
-    return max(q, 0.0)
+def round_qty(qty: float, step: float, min_qty: float) -> float:
+    q = _round_step_down(qty, step)
+    return q if q >= min_qty else 0.0
 
-def round_price(symbol: str, price: float, tick: float) -> float:
-    p = _round_step(price, tick)
-    return max(p, 0.0)
+def round_price(price: float, tick: float) -> float:
+    return _round_step_down(price, tick)
 
-# ------- leverage / orders -------
+# -------- low-level orders --------
 async def set_leverage(symbol: str, leverage: int) -> Any:
     return await _request("POST", "/fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": leverage})
 
@@ -133,7 +121,6 @@ async def place_market_order(symbol: str, side: str, qty: float, reduce_only: bo
     return await _request("POST", "/fapi/v1/order", params)
 
 async def place_tp_market(symbol: str, side: str, qty: float, stop_price: float) -> Any:
-    # TAKE_PROFIT_MARKET לסגירה (reduceOnly)
     params = {
         "symbol": symbol.upper(),
         "side": "SELL" if side.upper() == "BUY" else "BUY",
@@ -157,7 +144,32 @@ async def place_sl_market(symbol: str, side: str, qty: float, stop_price: float)
     }
     return await _request("POST", "/fapi/v1/order", params)
 
-# ------- plan & execute -------
+# -------- defaults (ENV) --------
+def _env_bps_csv(var: str, default: str) -> List[float]:
+    raw = (os.getenv(var, default) or "").strip()
+    out: List[float] = []
+    for p in raw.split(","):
+        p = p.strip()
+        if not p: continue
+        out.append(float(p))
+    return out
+
+def _env_floats_csv(var: str, default: str) -> List[float]:
+    return _env_bps_csv(var, default)
+
+def _default_tp_bps() -> List[float]:
+    # ברירת מחדל: 60/120/200 bps => 0.6%, 1.2%, 2.0%
+    return _env_bps_csv("DEFAULT_TP_BPS", "60,120,200")
+
+def _default_tp_splits() -> List[float]:
+    # ברירת מחדל: 0.34/0.33/0.33
+    return _env_floats_csv("DEFAULT_TP_SPLITS", "0.34,0.33,0.33")
+
+def _default_sl_bps() -> float:
+    # ברירת מחדל: 80bps = 0.8%
+    return float(os.getenv("DEFAULT_SL_BPS", "80"))
+
+# -------- plan & execute --------
 async def plan_and_execute(
     *,
     symbol: str,
@@ -170,72 +182,89 @@ async def plan_and_execute(
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     if leverage < 1 or leverage > 125:
-        raise ValueError("leverage out of range")
+        raise ValueError("leverage must be between 1 and 125")
     if budget_usd <= 0:
         raise ValueError("budget_usd must be > 0")
     side_up = side.upper()
     if side_up not in ("BUY", "SELL"):
-        raise ValueError("side must be BUY/SELL")
+        raise ValueError("side must be BUY or SELL")
 
     price = await get_price(symbol)
     filters = await get_symbol_filters(symbol)
-    step, tick = float(filters["stepSize"]), float(filters["tickSize"])
+    step, tick, min_qty = float(filters["stepSize"]), float(filters["tickSize"]), float(filters["minQty"])
 
     notional = budget_usd * leverage
     qty_raw = notional / price
-    qty = round_qty(symbol, qty_raw, step)
+    qty = round_qty(qty_raw, step, min_qty)
     if qty <= 0:
-        raise ValueError("calculated qty is zero; increase budget")
+        raise ValueError("calculated qty is zero; increase budget or leverage")
+
+    # ---- build TP/SL (defaults if missing) ----
+    dir_sign = 1 if side_up == "BUY" else -1
+
+    if not tp_targets:
+        bps_list = _default_tp_bps()
+        if dir_sign > 0:
+            tp_targets = [price * (1.0 + bps/10000.0) for bps in bps_list]
+        else:
+            tp_targets = [price * (1.0 - bps/10000.0) for bps in bps_list]
+    if not tp_splits:
+        tp_splits = _default_tp_splits()
+
+    # normalize splits
+    splits_sum = sum(tp_splits) if tp_splits else 0.0
+    if splits_sum > 1.0 + 1e-9:
+        raise ValueError("sum(tp_splits) must be <= 1")
+
+    # SL default
+    if not sl_price or sl_price <= 0:
+        sl_bps = _default_sl_bps()
+        if dir_sign > 0:
+            sl_price = price * (1.0 - sl_bps/10000.0)
+        else:
+            sl_price = price * (1.0 + sl_bps/10000.0)
+
+    # round & allocate
+    tp_legs: List[Dict[str, float]] = []
+    rem = qty
+    for t, w in zip(tp_targets, tp_splits):
+        q_leg = round_qty(qty * float(w), step, 0.0)
+        rem -= q_leg
+        tp_legs.append({"stopPrice": round_price(float(t), tick), "qty": q_leg})
+    if rem > 0 and tp_legs:
+        tp_legs[-1]["qty"] = round_qty(tp_legs[-1]["qty"] + rem, step, 0.0)
+
+    sl_leg = {"stopPrice": round_price(float(sl_price), tick), "qty": qty}
 
     plan = {
         "symbol": symbol.upper(),
         "side": side_up,
         "leverage": leverage,
-        "price": price,
+        "entry_price": price,
         "qty_raw": qty_raw,
         "qty": qty,
-        "tp": [],
-        "sl": None,
+        "tp": tp_legs,
+        "sl": sl_leg,
     }
-
-    # build TP
-    if tp_targets and tp_splits and len(tp_targets) == len(tp_splits):
-        rem = qty
-        for t, w in zip(tp_targets, tp_splits):
-            q = round_qty(symbol, qty * float(w), step)
-            rem -= q
-            plan["tp"].append({"stopPrice": round_price(symbol, float(t), tick), "qty": q})
-        if rem > 0 and plan["tp"]:
-            plan["tp"][-1]["qty"] = round_qty(symbol, plan["tp"][-1]["qty"] + rem, step)
-
-    # SL
-    if sl_price and sl_price > 0:
-        plan["sl"] = {"stopPrice": round_price(symbol, float(sl_price), tick), "qty": qty}
 
     if dry_run:
         return {"ok": True, "executed": False, "plan": plan}
 
-    # LIVE EXECUTION
+    # ---- LIVE ----
     await set_leverage(symbol, leverage)
     entry = await place_market_order(symbol, side_up, qty, reduce_only=False)
 
     placed_tp: List[Any] = []
-    for leg in plan["tp"]:
+    for leg in tp_legs:
         if leg["qty"] > 0:
             placed_tp.append(await place_tp_market(symbol, side_up, leg["qty"], leg["stopPrice"]))
 
     placed_sl = None
-    if plan["sl"] and plan["sl"]["qty"] > 0:
-        placed_sl = await place_sl_market(symbol, side_up, plan["sl"]["qty"], plan["sl"]["stopPrice"])
+    if sl_leg["qty"] > 0:
+        placed_sl = await place_sl_market(symbol, side_up, sl_leg["qty"], sl_leg["stopPrice"])
 
-    return {
-        "ok": True,
-        "executed": True,
-        "entry": entry,
-        "tp_orders": placed_tp,
-        "sl_order": placed_sl,
-        "plan": plan,
-    }
+    return {"ok": True, "executed": True, "entry": entry, "tp_orders": placed_tp, "sl_order": placed_sl, "plan": plan}
+
 
 
 
