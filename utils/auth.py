@@ -38,10 +38,11 @@ def _is_public(path: str) -> bool:
     return False
 
 # ─────────────────────────
-# Tokens cache
+# Tokens cache (with TTL)
 # ─────────────────────────
 _TOKENS: Set[str] = set()
 _TOKENS_LOADED_AT = 0.0
+
 def _tokens_ttl_sec() -> float:
     try:
         return float(os.getenv("AUTH_TOKENS_TTL", "60"))
@@ -57,10 +58,9 @@ def _load_tokens(force: bool = False) -> Set[str]:
         return _TOKENS
 
     toks: Set[str] = set()
-    # from env list
-    for t in _split(os.getenv("API_TOKENS", "")):
-        toks.add(t)
-    # from file lines
+    # from env
+    toks.update(_split(os.getenv("API_TOKENS", "")))
+    # from file (one token per line)
     fp = (os.getenv("API_TOKENS_FILE", "") or "").strip()
     if fp:
         try:
@@ -78,8 +78,11 @@ def _load_tokens(force: bool = False) -> Set[str]:
     logger.info("auth: loaded %d token(s)", len(_TOKENS))
     return _TOKENS
 
+# prime cache on import
+_load_tokens(force=True)
+
 # ─────────────────────────
-# Token extraction
+# Token extraction / check
 # ─────────────────────────
 def extract_token(
     request: Request,
@@ -96,9 +99,9 @@ def extract_token(
         parts = a.split()
         if len(parts) == 2 and parts[0].lower() == "bearer":
             return parts[1].strip()
-        return a  # חלק מהקליינטים שולחים רק טוקן
+        return a  # יש קליינטים ששולחים רק טוקן
 
-    # Optional query param fallback
+    # Query param fallback
     try:
         qp = request.query_params
         for k in ("api_key", "token"):
@@ -107,7 +110,6 @@ def extract_token(
                 return v.strip()
     except Exception:
         pass
-
     return None
 
 def token_matches(token: Optional[str]) -> bool:
@@ -126,7 +128,6 @@ async def require_api_key(
     - מתיר נתיבים ציבוריים לפי ENV.
     - אם לא ציבורי: דורש טוקן תקף (Bearer / X-API-Key / ?api_key=...).
     """
-    # Public או Preflight
     if request.method == "OPTIONS" or _is_public(request.url.path):
         return True
 
@@ -140,7 +141,7 @@ async def require_api_key(
     return True
 
 # ─────────────────────────
-# Introspection helpers (optional)
+# Introspection helpers
 # ─────────────────────────
 def get_loaded_tokens(mask: bool = True) -> List[str]:
     toks = sorted(_load_tokens())
@@ -162,6 +163,7 @@ __all__ = [
     "extract_token", "token_matches",
     "get_loaded_tokens", "get_public_config",
 ]
+
 
 
 
