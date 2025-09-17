@@ -1,93 +1,54 @@
-# routes/debug.py
+# /app/routes/debug.py
 from __future__ import annotations
-from fastapi import APIRouter, Query, Depends
-from typing import Dict, Any
-import os, platform, time, traceback
+from fastapi import APIRouter, Request
+import os, platform, time
+from typing import Any, Dict, Optional
 
-try:
-    import psutil  # optional
-except Exception:
-    psutil = None  # type: ignore
-
-from utils.auth import require_api_key, get_loaded_tokens, refresh_tokens_from_env
-
-router = APIRouter(
-    prefix="/debug",
-    tags=["Debug"],
-    dependencies=[Depends(require_api_key)],  # דורש טוקן, ניתן להסיר אם רוצים public
+from utils.auth import (
+    extract_token, token_matches,
+    get_loaded_tokens, refresh_tokens_from_env,
 )
 
-@router.get("")
-@router.get("/")
-def debug_router(
-    op: str = Query("ping", pattern="^(ping|health|tokens|refresh)$")
-) -> Dict[str, Any]:
-    """
-    Debug endpoint:
-      /debug?op=ping     → pong
-      /debug?op=health   → CPU, memory, env
-      /debug?op=tokens   → loaded tokens (masked)
-      /debug?op=refresh  → reload tokens from ENV
-    """
-    try:
-        if op == "ping":
-            return {"ok": True, "event": "ping", "pong": "ok"}
+router = APIRouter(prefix="", tags=["Debug"])  # בלי Depends — ציבורי
 
-        if op == "health":
-            mem: Dict[str, Any]
-            cpu = None
-            if psutil:
-                vm = psutil.virtual_memory()
-                mem = {
-                    "total_mb": round(vm.total / (1024 * 1024), 2),
-                    "used_mb": round(vm.used / (1024 * 1024), 2),
-                    "free_mb": round(vm.available / (1024 * 1024), 2),
-                    "percent": vm.percent,
-                }
-                cpu = psutil.cpu_percent(interval=0.3)
-            else:
-                mem = {"note": "psutil not installed"}
+@router.get("/_debug/auth", include_in_schema=False)
+async def debug_auth(request: Request):
+    a = request.headers.get("authorization") or request.headers.get("Authorization")
+    x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    t = extract_token(request, a, x)
+    return {
+        "ok": True,
+        "auth_header": a,
+        "x_api_key": x,
+        "query": dict(request.query_params),
+        "extracted_token": t,
+        "matches": bool(token_matches(t)),
+        "tokens_loaded": get_loaded_tokens(mask=True),
+    }
 
-            return {
-                "ok": True,
-                "event": "health",
-                "env": os.getenv("ENV", "production"),
-                "platform": platform.platform(),
-                "time_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
-                "cpu_percent": cpu,
-                "memory": mem,
-            }
+@router.get("/debug/env")
+async def debug_env():
+    return {
+        "API_TOKENS": os.getenv("API_TOKENS"),
+        "ALGOGPT_TOKENS": os.getenv("ALGOGPT_TOKENS"),
+        "API_BEARER_TOKEN": bool(os.getenv("API_BEARER_TOKEN")),
+        "API_TOKENS_FILE": os.getenv("API_TOKENS_FILE"),
+        "SECURITY_PUBLIC_PATHS": os.getenv("SECURITY_PUBLIC_PATHS"),
+        "AUTH_TOKENS_TTL": os.getenv("AUTH_TOKENS_TTL"),
+        "ENV": os.getenv("ENV", "production"),
+        "platform": platform.platform(),
+        "time_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+    }
 
-        if op == "tokens":
-            masked = get_loaded_tokens(mask=True)
-            return {
-                "ok": True,
-                "event": "tokens",
-                "count": len(masked),
-                "tokens_masked": masked,
-            }
-
-        if op == "refresh":
-            tokens = refresh_tokens_from_env()
-            return {
-                "ok": True,
-                "event": "refresh",
-                "detail": "Tokens reloaded from environment.",
-                "count": len(tokens),
-                "tokens_masked": get_loaded_tokens(mask=True),
-            }
-
-        return {"ok": False, "event": "invalid", "detail": f"Unknown op={op}"}
-
-    except Exception as e:
-        return {
-            "ok": False,
-            "event": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc().splitlines()[-5:],  # 5 שורות אחרונות בלבד
-        }
-
-
+@router.post("/debug/refresh-auth")
+async def debug_refresh_auth():
+    toks = refresh_tokens_from_env()
+    return {
+        "ok": True,
+        "detail": "Tokens reloaded from environment",
+        "count": len(toks),
+        "tokens_masked": get_loaded_tokens(mask=True),
+    }
 
 
 
