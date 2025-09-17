@@ -54,6 +54,49 @@ def _now() -> float:
 def _ms() -> int:
     return int(time.time() * 1000)
 
+# ===== Init Futures client (+ timeout) =====
+_client_lock = threading.RLock()
+client = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
+client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+
+# Time sync
+try:
+    try:
+        server_time = client.futures_time().get("serverTime")  # type: ignore
+    except Exception:
+        server_time = client.get_server_time().get("serverTime")
+    local_ms = int(time.time() * 1000)
+    offset = int(server_time) - local_ms
+    setattr(client, "TIME_OFFSET", offset)
+    try:
+        setattr(client, "timestamp_offset", offset)
+    except Exception:
+        pass
+    logger.info("Binance TIME_OFFSET set to %d ms", offset)
+except Exception as e:
+    logger.warning("Time sync failed: %s", e)
+
+# Optional WS fallback
+try:
+    from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
+except Exception:
+    ws_get_price = None  # type: ignore
+    ws_is_fresh = None   # type: ignore
+    ws_update_price = None  # type: ignore
+
+# ===== Caches =====
+_exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
+
+# price cache (coalescing)
+_price_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, mark)
+_index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
+
+# idempotency cache
+_idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_idem_lock = threading.RLock()
+
+# ===== Account helpers =====
 def _get_account_cached() -> Optional[Dict[str, Any]]:
     """פנימי: לוקח account עם קאש קצר, עם backoff על BAN/429."""
     now = _now()
@@ -162,49 +205,7 @@ def _kind_from_kwargs(kwargs: dict) -> str:
     if t == "LIMIT":  return "LMT"
     return "ORD"
 
-# ===== Init Futures client (+ timeout) =====
-_client_lock = threading.RLock()
-client = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
-client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
-
-# Time sync
-try:
-    try:
-        server_time = client.futures_time().get("serverTime")  # type: ignore
-    except Exception:
-        server_time = client.get_server_time().get("serverTime")
-    local_ms = int(time.time() * 1000)
-    offset = int(server_time) - local_ms
-    setattr(client, "TIME_OFFSET", offset)
-    try:
-        setattr(client, "timestamp_offset", offset)
-    except Exception:
-        pass
-    logger.info("Binance TIME_OFFSET set to %d ms", offset)
-except Exception as e:
-    logger.warning("Time sync failed: %s", e)
-
-# Optional WS fallback
-try:
-    from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
-except Exception:
-    ws_get_price = None  # type: ignore
-    ws_is_fresh = None   # type: ignore
-    ws_update_price = None  # type: ignore
-
-# ===== Caches =====
-_exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
-_account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
-
-# price cache (coalescing)
-_price_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, mark)
-_index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
-
-# idempotency cache
-_idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
-_idem_lock = threading.RLock()
-
-# ===== Helpers =====
+# ===== Helpers: exchangeInfo & ping =====
 def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     ts = _now()
     if not force_refresh and _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
@@ -224,37 +225,6 @@ def fapi_ping() -> bool:
     except Exception as e:
         logger.warning("Futures ping failed: %s", e)
         return False
-
-# ===== Account & Positions =====
-def futures_balance() -> List[Dict[str, Any]]:
-    try:
-        data = _get_account_cached() or {}
-        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []
-    except Exception as e:
-        logger.error("Failed to fetch futures_balance: %s", e)
-        return []
-
-def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    try:
-        acc_info = _get_account_cached() or {}
-        positions = acc_info.get("positions", []) or []
-        out = []
-        su = symbol.upper() if symbol else None
-        for pos in positions:
-            amt = float(pos.get("positionAmt", "0") or 0.0)
-            if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
-                out.append(pos)
-        return out
-    except Exception as e:
-        logger.error("Failed to get open positions: %s", e); return []
-
-def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    return get_open_positions(symbol)
-
-def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
-    for p in get_open_positions(symbol):
-        return p
-    return None
 
 # ===== Filters & Rounding =====
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
@@ -278,7 +248,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
             "percentPrice": {"up": None, "down": None, "decimals": None},
         }
         for f in si.get("filters", []):
-            t = f.get("filterType")
+            t = (f.get("filterType") or "").upper()
             if t == "PRICE_FILTER":
                 filters["tickSize"] = f.get("tickSize")
                 filters["minPrice"] = f.get("minPrice")
@@ -287,7 +257,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
                 filters["minQty"] = f.get("minQty")
                 filters["maxQty"] = f.get("maxQty")
                 filters["stepSize"] = f.get("stepSize")
-            elif t == "MARKET_Lot_SIZE" or t == "MARKET_LOT_SIZE":
+            elif t == "MARKET_LOT_SIZE":
                 filters["mMinQty"] = f.get("minQty")
                 filters["mMaxQty"] = f.get("maxQty")
             elif t in ("MIN_NOTIONAL", "NOTIONAL"):
@@ -610,7 +580,7 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
     # ===== Retry loop + טיפול מיוחד ב- -1106 (reduceOnly) =====
     def _maybe_retry_without_reduceonly(err: Exception) -> Optional[Dict[str, Any]]:
         msg = str(err).lower()
-        if "reduceonly" in msg and "not required" in msg and "reduceonly" in (k.lower() for k in kwargs.keys()):
+        if "reduceonly" in msg and ("not required" in msg or "not allow" in msg) and "reduceonly" in (k.lower() for k in kwargs.keys()):
             k2 = dict(kwargs)
             k2.pop("reduceOnly", None)
             try:
@@ -863,6 +833,37 @@ def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str, Any]:
 
     _cancel_closing_orders(sym, types=("STOP", "STOP_MARKET"))
     return place_stop_market(sym, side, sprice, abs(amt), reduce_only=True, close_position=True)
+
+# ===== Account & Positions (public wrappers) =====
+def futures_balance() -> List[Dict[str, Any]]:
+    try:
+        data = _get_account_cached() or {}
+        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []
+    except Exception as e:
+        logger.error("Failed to fetch futures_balance: %s", e)
+        return []
+
+def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    try:
+        acc_info = _get_account_cached() or {}
+        positions = acc_info.get("positions", []) or []
+        out = []
+        su = symbol.upper() if symbol else None
+        for pos in positions:
+            amt = float(pos.get("positionAmt", "0") or 0.0)
+            if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
+                out.append(pos)
+        return out
+    except Exception as e:
+        logger.error("Failed to get open positions: %s", e); return []
+
+def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    return get_open_positions(symbol)
+
+def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
+    for p in get_open_positions(symbol):
+        return p
+    return None
 
 # ===== Klines =====
 def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
