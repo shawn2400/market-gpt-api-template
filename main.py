@@ -234,7 +234,9 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ---------- include routers ----------
+# ---------- include routers (Auto-discovery of routes.*) ----------
+import pkgutil
+
 def _try_include(module_path: str) -> bool:
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -249,39 +251,18 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 
-for module_path in (
-    "routes.trade",
-    "routes.analytics",
-    "routes.decision",
-    "routes.backtest",
-    "routes.executor",
-    "routes.binance_status",
-    "routes.telegram_webhook",
-    "routes.telegram_webhook_secure",  # 👈 חדש: חיבור ה־secure webhook
-    "routes.telegram_callbacks",
-    "routes.grid",
-    "routes.executor_control",
-    "routes.ws_user_stream",
-    "routes.ai_analyze",
-    "routes.ws_user_status",
-    "routes.executor_status",
-    "routes.provider_cryptopanic",
-    "routes.scan",
-    "routes.multi_scan",
-    "routes.system_autopilot",
-    "routes.debug",
-    "routes.ops_approval",
-    "routes.telegram_bot",  # 👈 נשאר – health/test-ping/send/status
-):
-    if _try_include(module_path):
-        try:
-            for r in app.router.routes:
-                try:
-                    _registered_paths.add(getattr(r, "path", None))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+# 🔎 אוטו-דיסקברי של כל המודולים תחת routes/*
+for m in pkgutil.iter_modules(['routes']):
+    module_path = f"routes.{m.name}"
+    _try_include(module_path)
+    try:
+        for r in app.router.routes:
+            try:
+                _registered_paths.add(getattr(r, "path", None))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 def _route_exists(path: str) -> bool:
     try:
@@ -495,6 +476,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
