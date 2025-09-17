@@ -1,229 +1,179 @@
-# /app/utils/auth.py
+# utils/auth.py
 from __future__ import annotations
-
 import os
-import re
 import time
-import logging
-import pathlib
-from typing import Optional, List, Dict
+from typing import Iterable, List, Optional, Set, Tuple
 
-from fastapi import Request, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
+from fastapi.routing import APIRouter
 
-log = logging.getLogger("algogpt.auth")
+# ─────────────────────────────────────────────────────────────────────────────
+# טעינת טוקנים — תומך גם בקובץ וגם ב-ENV, באותם שמות שמשמשים ב/_debug/auth
+# ─────────────────────────────────────────────────────────────────────────────
 
+_TOKENS: Set[str] = set()
+_TOKENS_MTIME: Optional[float] = None
+_LAST_REFRESH: float = 0.0
 
-# ========== Helpers ==========
+_ENV_KEYS = (
+    "API_TOKENS",         # comma-separated
+    "ALGOGPT_TOKENS",     # comma-separated (תואם ישנים)
+    "API_BEARER_TOKEN",   # יחיד
+)
+_FILE_ENV = "API_TOKENS_FILE"   # default: /app/tokens.txt
+_DEFAULT_FILE = "/app/tokens.txt"
+_AUTH_TTL_SEC = int(os.getenv("AUTH_TOKENS_TTL", "0") or "0")  # 0=לא משתמש בזמן
 
-def _b(v: object) -> bool:
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+def _split_csv(s: str) -> Iterable[str]:
+    for part in (s or "").split(","):
+        p = part.strip()
+        if p:
+            yield p
 
-
-def _split_tokens(s: str) -> List[str]:
-    if not s:
-        return []
-    parts = re.split(r"[,\s]+", str(s).strip())
-    return [p.strip() for p in parts if p.strip()]
-
-
-def _read_file_lines(p: str) -> List[str]:
+def _read_file_tokens(path: str) -> Tuple[Set[str], Optional[float]]:
     try:
-        if not p:
-            return []
-        path = pathlib.Path(p)
-        if not path.exists():
-            log.warning({"event": "tokens_file_missing", "path": str(p)})
-            return []
-        vals: List[str] = []
-        for ln in path.read_text(encoding="utf-8").splitlines():
-            t = ln.strip()
-            if t and not t.startswith("#"):
-                vals.append(t)
-        return vals
-    except Exception as e:
-        log.warning({"event": "tokens_file_read_failed", "path": p, "error": str(e)})
-        return []
+        st = os.stat(path)
+        toks: Set[str] = set()
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                t = line.strip()
+                if t:
+                    toks.add(t)
+        return toks, st.st_mtime
+    except Exception:
+        return set(), None
 
+def _read_env_tokens() -> Set[str]:
+    out: Set[str] = set()
+    for k in _ENV_KEYS:
+        v = os.getenv(k, "").strip()
+        if not v:
+            continue
+        if k == "API_BEARER_TOKEN":
+            out.add(v)
+        else:
+            out.update(_split_csv(v))
+    return out
 
-# ========== State ==========
-
-_TOKENS: set[str] = set()
-_T_AT: float = 0.0
-_TTL: float = float(os.getenv("AUTH_TOKENS_TTL", "60") or 60)
-
-_ALLOW_ALL = _b(os.getenv("SECURITY_ALLOW_ALL", os.getenv("AUTH_ALLOW_ALL", "0")))
-_PUB_STATUS = _b(os.getenv("SECURITY_PUBLIC_STATUS", "1"))
-_PUB_PATHS_CFG = {x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PATHS", "")) if x}
-_PUB_PREFIXES_CFG = {x for x in re.split(r"[,\s]+", os.getenv("SECURITY_PUBLIC_PREFIXES", "")) if x}
-
-_DEFAULT_PUBLIC_PATHS = {
-    "/", "/openapi.json", "/health", "/healthz", "/readyz",
-    "/docs", "/redoc",
-    "/telegram/webhook", "/telegram/callback", "/telegram/ping",
-    "/provider/cryptopanic/webhook",
-    "/status/ping", "/status/ws", "/status/executor", "/status/all",
-    "/status/auth",
-    "/debug/health",
-    "/debug/env", "/debug/refresh-auth",
-    "/debug/auth", "/_debug/auth",
-    "/executor/status",
-}
-_DEFAULT_PUBLIC_PREFIXES = {"/price", "/static/", "/risk"}
-
-
-# ========== Loading / Refresh ==========
-
-def _gather_sources() -> Dict[str, List[str]]:
-    env_multi: List[str] = []
-    for key in ("API_TOKENS", "ALGOGPT_TOKENS"):
-        env_multi += _split_tokens(os.getenv(key, ""))
-
-    env_single: List[str] = []
-    for key in ("API_BEARER_TOKEN", "API_KEY", "AUTH_TOKEN"):
-        v = (os.getenv(key) or "").strip()
-        if v:
-            env_single.append(v)
-
-    file_tokens = _read_file_lines(os.getenv("API_TOKENS_FILE", ""))
-    return {"env_multi": env_multi, "env_single": env_single, "file_tokens": file_tokens}
-
-
-def _fresh() -> None:
-    """Refresh tokens set according to TTL."""
-    global _T_AT, _TOKENS
+def _load_tokens(force: bool = False) -> None:
+    global _TOKENS, _TOKENS_MTIME, _LAST_REFRESH
     now = time.time()
-    if _TOKENS and (now - _T_AT) < _TTL:
+    if not force and _AUTH_TTL_SEC > 0 and (now - _LAST_REFRESH) < _AUTH_TTL_SEC:
         return
-    src = _gather_sources()
-    combined = set(
-        t.strip()
-        for t in (src["env_multi"] + src["env_single"] + src["file_tokens"])
-        if t and t.strip()
-    )
-    _TOKENS = combined
-    _T_AT = now
-    log.info(
-        {
-            "event": "auth.tokens_refreshed",
-            "count": len(_TOKENS),
-            "sources": {k: len(v) for k, v in src.items()},
-        }
-    )
 
+    path = os.getenv(_FILE_ENV, _DEFAULT_FILE)
+    file_tokens, mtime = _read_file_tokens(path)
+    env_tokens = _read_env_tokens()
 
-def refresh_tokens_from_env() -> List[str]:
-    """Force-refresh and return full token list (unmasked)."""
-    global _T_AT
-    _T_AT = 0.0
-    _fresh()
-    return sorted(_TOKENS)
+    # קדימות: גם וגם (איחוד)
+    merged = set()
+    merged.update(file_tokens)
+    merged.update(env_tokens)
 
+    _TOKENS = merged
+    _TOKENS_MTIME = mtime
+    _LAST_REFRESH = now
 
-def allow_all() -> bool:
-    return _ALLOW_ALL
+def refresh_tokens() -> dict:
+    _load_tokens(force=True)
+    # מסכים להחזיר טוקנים מקוצרים ללוג/דיבוג
+    def _short(t: str) -> str:
+        return f"{t[:2]}…{t[-2:]}" if len(t) > 4 else t
+    return {
+        "ok": True,
+        "count": len(_TOKENS),
+        "tokens": sorted(_short(t) for t in _TOKENS),
+        "file": os.getenv(_FILE_ENV, _DEFAULT_FILE),
+        "ttl_sec": _AUTH_TTL_SEC,
+    }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# שליפת טוקן מהבקשה: query / header / bearer
+# ─────────────────────────────────────────────────────────────────────────────
 
-def get_loaded_tokens(mask: bool = True) -> List[str]:
-    _fresh()
-    arr = sorted(_TOKENS)
-    if not mask:
-        return arr
-    return [t[:2] + "…" + t[-2:] if len(t) > 4 else "***" for t in arr]
-
-
-def is_token_valid(token: Optional[str]) -> bool:
-    if not token:
-        return False
-    _fresh()
-    return token in _TOKENS
-
-
-def get_public_paths() -> Dict[str, List[str]]:
-    paths = set(_DEFAULT_PUBLIC_PATHS) if _PUB_STATUS else set()
-    paths |= _PUB_PATHS_CFG
-    prefixes = set(_DEFAULT_PUBLIC_PREFIXES) if _PUB_STATUS else set()
-    prefixes |= _PUB_PREFIXES_CFG
-    log.debug(
-        {"event": "get_public_paths", "public_paths": sorted(paths), "public_prefixes": sorted(prefixes)}
-    )
-    return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
-
-
-# ========== Extraction ==========
-
-_QUERY_KEYS = ("api_key", "apikey", "apiKey", "token", "key")
-
-
-def _from_auth_header(authorization: Optional[str]) -> Optional[str]:
-    """Extract bearer / token value out of Authorization header value (case-insensitive)."""
-    if not authorization or not isinstance(authorization, str):
+def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
+    if not authorization:
         return None
-    s = authorization.strip()
-    if not s:
+    auth = authorization.strip()
+    if not auth:
         return None
-
-    m = re.match(r"^\s*Bearer\s+(.+)\s*$", s, re.IGNORECASE)
-    if m:
-        return m.group(1).strip().strip('"').strip("'")
-
-    m = re.match(r"^\s*Token\s+(.+)\s*$", s, re.IGNORECASE)
-    if m:
-        return m.group(1).strip().strip('"').strip("'")
-
-    # Fallback: raw value
-    return s.strip().strip('"').strip("'")
-
-
-def extract_token(
-    request: Request,
-    authorization: Optional[str] = None,
-    x_api_key: Optional[str] = None,
-) -> Optional[str]:
-    """Extract token from: query-param / header X-API-Key / Authorization / raw headers fallback."""
-    q = request.query_params
-    for k in _QUERY_KEYS:
-        if k in q and q[k]:
-            return str(q[k]).strip().strip('"').strip("'")
-
-    if x_api_key and isinstance(x_api_key, str):
-        return x_api_key.strip().strip('"').strip("'")
-
-    t = _from_auth_header(authorization)
-    if t:
-        return t
-
-    # Fallback to raw headers (case variants)
-    ah = request.headers.get("authorization") or request.headers.get("Authorization")
-    if ah:
-        t = _from_auth_header(ah)
-        if t:
-            return t
-
-    xh = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    if xh:
-        return xh.strip().strip('"').strip("'")
-
+    parts = auth.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip() or None
     return None
 
+def _get_token_from_request(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+    authorization: Optional[str] = Header(default=None),
+) -> Tuple[Optional[str], str]:
+    """
+    מחזיר (token, source) כשה-token יכול להגיע מ:
+      • query param: ?api_key=...
+      • header: X-API-Key: ...
+      • header: Authorization: Bearer ...
+    """
+    # 1) query
+    q = request.query_params.get("api_key")
+    if q:
+        return q, "query"
+    # 2) X-API-Key
+    if x_api_key:
+        return x_api_key, "x-api-key"
+    # 3) Authorization: Bearer
+    b = _extract_bearer(authorization)
+    if b:
+        return b, "bearer"
+    return None, "none"
 
-# ========== FastAPI Dependency ==========
+# ─────────────────────────────────────────────────────────────────────────────
+# ה-Dependency לשימוש בנתיבים מאובטחים
+# ─────────────────────────────────────────────────────────────────────────────
 
 def require_api_key(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
-) -> str:
-    """
-    FastAPI dependency that enforces API key auth.
-    Accepts: query (?api_key=), header X-API-Key, or Authorization: Bearer/Token.
-    """
-    if allow_all():
-        return "public"
+    x_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+    authorization: Optional[str] = Header(default=None),
+):
+    _load_tokens(force=False)
+    token, source = _get_token_from_request(request, x_api_key, authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing API key")
 
-    token = extract_token(request, authorization, x_api_key)
-    if not is_token_valid(token):
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return token or ""
+    if token not in _TOKENS:
+        # ניסיון קטן לחלץ mismatch קלאסיים
+        hint = "use ?api_key=... or 'Authorization: Bearer ...' or 'X-API-Key: ...'"
+        raise HTTPException(status_code=401, detail=f"Invalid API key (via {source}); {hint}")
+
+    # החזר את הטוקן למי שצריך (אופציונלי)
+    return token
+
+# ─────────────────────────────────────────────────────────────────────────────
+# מסלולי דיבוג/ריענון — אופציונלי (לתאם עם הראוטר הראשי)
+# ─────────────────────────────────────────────────────────────────────────────
+
+router = APIRouter()
+
+@router.get("/_debug/auth")
+def debug_auth(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, convert_underscores=False),
+    authorization: Optional[str] = Header(default=None)
+):
+    _load_tokens(force=False)
+    token, source = _get_token_from_request(request, x_api_key, authorization)
+    return {
+        "ok": True,
+        "source": source,
+        "extracted_token": token,
+        "matches": bool(token and token in _TOKENS),
+        "tokens_loaded": sorted(list(_TOKENS)),
+    }
+
+@router.post("/debug/refresh-auth")
+def http_refresh_auth():
+    return refresh_tokens()
+
 
 
 
