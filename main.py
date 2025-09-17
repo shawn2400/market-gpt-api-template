@@ -257,6 +257,7 @@ for module_path in (
     "routes.executor",
     "routes.binance_status",
     "routes.telegram_webhook",
+    "routes.telegram_webhook_secure",  # 👈 חדש: חיבור ה־secure webhook
     "routes.telegram_callbacks",
     "routes.grid",
     "routes.executor_control",
@@ -269,7 +270,8 @@ for module_path in (
     "routes.multi_scan",
     "routes.system_autopilot",
     "routes.debug",
-    "routes.ops_approval",   # 👈 חדש
+    "routes.ops_approval",
+    "routes.telegram_bot",  # 👈 נשאר – health/test-ping/send/status
 ):
     if _try_include(module_path):
         try:
@@ -493,6 +495,9 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
+
+
 
 
 
