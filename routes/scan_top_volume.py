@@ -18,9 +18,7 @@ logger = logging.getLogger("algogpt.scan_top_volume")
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
-    # אם אין utils.auth בסביבה (בזמן import), נרצה לא להפיל את כל המודול
     def require_bearer_token():
-        # FastAPI יקבל את הפונקציה; לא נבדוק כלום כאן כדי לא לשבור ריצה
         return None
 
 # =====================
@@ -31,10 +29,8 @@ class _SymbolsCacheFallback:
         self.market = market
         self._ok = False
     def ensure(self) -> None:
-        # אין כשל; פשוט מצב "פתוח"
         self._ok = True
     def has(self, symbol: str) -> bool:
-        # לקבל הכל כברירת מחדל אם אין קאש אמיתי
         return True
 
 try:
@@ -45,7 +41,7 @@ except Exception:
     logger.warning("[scan_top_volume] utils.symbols.SymbolsCache not available, using fallback (no filtering)")
 
 # =====================
-# APIRouter (prefix אחיד כדי לא להתנגש עם routes/scan.py)
+# APIRouter
 # =====================
 router = APIRouter(
     prefix="/scan",
@@ -184,7 +180,6 @@ def _top_symbols_24h(
     rows.sort(key=_qv, reverse=True)
     symbols = [r["symbol"] for r in rows[:_clamp_limit(limit)]]
 
-    # סינון ע"י SymbolsCache (עם fallback אם אין)
     sym_cache = SymbolsCache(market=market)  # type: ignore
     try:
         sym_cache.ensure()
@@ -403,6 +398,7 @@ async def scan_single(
     )
 
 __all__ = ["router"]
+
 
 
 
