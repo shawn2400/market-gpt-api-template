@@ -12,13 +12,13 @@ except Exception:
 
 router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
-# --- מקור האמת לסריקה ---
+# --- מקור הסריקה ---
 try:
     from routes.scan_top_volume import scan_top_volume  # type: ignore
 except Exception:
     scan_top_volume = None  # type: ignore
 
-# --- שליחה לטלגרם: ננסה קודם notifier, ואם אין – API ישיר ---
+# --- שליחה לטלגרם: ננסה notifier, ואם אין – API ישיר ---
 _send_text = None
 _send_message = None
 try:
@@ -32,13 +32,11 @@ try:
 except Exception:
     pass
 
-# נשתמש ב-API ישיר במקרה ואין פונקציות:
 _BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 _TELEGRAM_API = f"https://api.telegram.org/bot{_BOT_TOKEN}" if _BOT_TOKEN else ""
 
 
 def _format_telegram_summary(payload: Dict[str, Any]) -> str:
-    """הודעת טקסט קומפקטית (fallback או הודעה משלימה)."""
     tf = payload.get("timeframe", "?")
     th = payload.get("threshold")
     parts = [f"🔎 Scan results ({tf}), threshold ≥ {th}"]
@@ -59,7 +57,6 @@ def _format_telegram_summary(payload: Dict[str, Any]) -> str:
 
 
 def _build_ops_urls(base_host: str, sig: Dict[str, Any], timeframe: str) -> Dict[str, str]:
-    """בונה קישורי /ops/approve|reject ציבוריים (ללא טוקן), עם פרמטרים בסיסיים."""
     from urllib.parse import urlencode
     q = {
         "symbol": sig.get("symbol"),
@@ -75,35 +72,23 @@ def _build_ops_urls(base_host: str, sig: Dict[str, Any], timeframe: str) -> Dict
 
 
 def _binance_chart_url(symbol: str, market: str, timeframe: str) -> str:
-    """קישור מהיר לגרף בבייננס (פיצ'רס/ספוט)."""
     sym = (symbol or "BTCUSDT").upper()
     if (market or "futures").lower().startswith("future"):
-        # Binance Futures chart
         return f"https://www.binance.com/en/futures/{sym}?interval={timeframe}"
-    # Spot chart
     return f"https://www.binance.com/en/trade/{sym}?type=spot&interval={timeframe}"
 
 
 async def _telegram_send_with_buttons(chat_id: str, text: str, buttons: List[List[Dict[str, str]]]) -> bool:
-    """
-    שולח הודעה עם inline keyboard.
-    1) אם יש utils.telegram_notifier.send_message(text=..., reply_markup=...), נשתמש בה.
-    2) אחרת נשתמש ב-HTTP ישיר ל-telegram sendMessage.
-    """
-    # ניסיון 1: notifier פנימי (אם קיים ותומך ב-reply_markup)
     if _send_message:
         try:
             _send_message(chat_id=chat_id, text=text, reply_markup={"inline_keyboard": buttons})  # type: ignore
             return True
         except Exception:
             pass
-
-    # ניסיון 2: API ישיר
     if not _TELEGRAM_API:
         return False
-
     try:
-        import httpx  # שימוש לוקאלי (יש לך כבר httpx בתכנה)
+        import httpx
         payload = {
             "chat_id": chat_id,
             "text": text,
@@ -119,27 +104,20 @@ async def _telegram_send_with_buttons(chat_id: str, text: str, buttons: List[Lis
 
 
 async def _telegram_send_text(chat_id: str, text: str) -> bool:
-    """שליחת טקסט רגיל בלבד (fallback)."""
-    # ניסיון 1: notifier פנימי send_text
     if _send_text:
         try:
             _send_text(chat_id=chat_id, text=text)  # type: ignore
             return True
         except Exception:
             pass
-
-    # ניסיון 2: notifier פנימי send_message ללא כפתורים
     if _send_message:
         try:
             _send_message(chat_id=chat_id, text=text)  # type: ignore
             return True
         except Exception:
             pass
-
-    # ניסיון 3: API ישיר
     if not _TELEGRAM_API:
         return False
-
     try:
         import httpx
         payload = {
@@ -169,13 +147,6 @@ async def scan_now(
     chat_id: Optional[str] = Query(None, description="Telegram chat id"),
     rich: bool = Query(False, description="Send rich Telegram message with inline buttons if notify=telegram"),
 ) -> Dict[str, Any]:
-    """
-    אליאס ל-/scan/top-volume:
-    - מסנן לפי threshold
-    - אופציונלית שולח לטלגרם טקסט או הודעה עשירה (inline buttons לאישור/דחייה).
-
-    כפתורים מכוונים ל-/ops/approve ו-/ops/reject, שהם נתיבים ציבוריים לפי ההגדרות ב-main.py.
-    """
     if not scan_top_volume:
         return {
             "ok": False,
@@ -184,14 +155,12 @@ async def scan_now(
             "count_total": 0,
         }
 
-    # parse CSV לסימבול יחיד (אם רק אחד)
     symbol_single: Optional[str] = None
     if symbols:
         parts = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         if len(parts) == 1:
             symbol_single = parts[0]
 
-    # בקשת הבסיס
     base: Dict[str, Any] = await scan_top_volume(
         market=market,
         quote=quote,
@@ -212,7 +181,6 @@ async def scan_now(
             "signals": [],
         }
 
-    # סינון סף
     filt = [s for s in items if isinstance(s, dict) and float(s.get("score", 0)) >= float(threshold)]
 
     out: Dict[str, Any] = {
@@ -227,7 +195,6 @@ async def scan_now(
         "mode": base.get("mode", "compact"),
     }
 
-    # --- התראה לטלגרם ---
     if notify and notify.lower() == "telegram":
         note = None
         sent = False
@@ -235,20 +202,14 @@ async def scan_now(
         if not chat_id:
             note = "notify=telegram requested but chat_id is missing"
         else:
-            # נקבע base_host חיצוני (PUBLIC_HOST) או לפי הבקשה
-            base_host = os.getenv("PUBLIC_HOST", "").strip()
-            if not base_host:
-                base_host = str(request.base_url).rstrip("/")
+            base_host = os.getenv("PUBLIC_HOST", "").strip() or str(request.base_url).rstrip("/")
 
             if rich:
-                # מגבלה ל-8 כפתורים (המשתמש ביקש 4–8 בו-זמנית)
                 top = filt[:8] if len(filt) > 8 else filt
                 if not top:
-                    # אם אין סיגנלים – נשלח טקסט מינימלי
                     msg = _format_telegram_summary({"timeframe": timeframe, "threshold": threshold, "signals": []})
                     sent = await _telegram_send_text(chat_id=chat_id, text=msg)
                 else:
-                    # נבנה מקבץ כפתורים: לכל סימבול – 2 כפתורים (Approve / Reject) + שורת קישור לגרף
                     buttons: List[List[Dict[str, str]]] = []
                     for sig in top:
                         urls = _build_ops_urls(base_host, sig, timeframe)
@@ -266,13 +227,10 @@ async def scan_now(
 
                     header = f"🔎 *Scan {timeframe}* (≥ {threshold}) — {len(top)}/{len(filt)} signals"
                     sent = await _telegram_send_with_buttons(chat_id=chat_id, text=header, buttons=buttons)
-
-                    # אם שליחת כפתורים נכשלה — נשלח טקסט רגיל כסיכום
                     if not sent:
                         msg = _format_telegram_summary({"timeframe": timeframe, "threshold": threshold, "signals": top})
                         sent = await _telegram_send_text(chat_id=chat_id, text=msg)
             else:
-                # לא rich — טקסט בלבד
                 msg = _format_telegram_summary({"timeframe": timeframe, "threshold": threshold, "signals": filt})
                 sent = await _telegram_send_text(chat_id=chat_id, text=msg)
 
