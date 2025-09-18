@@ -27,7 +27,6 @@ from .telegram_notifier_core import (
 logger = logging.getLogger("algogpt.tg")
 
 # ========= Optional estimation helpers (best-effort) =========
-# You said you added utils/estimation.py — we’ll use it if present, but won’t crash if not.
 try:
     from utils.estimation import make_estimations  # returns {probs, eta, tp_profit_usd, expected_pnl_usd}
 except Exception:
@@ -41,10 +40,6 @@ except Exception:
 
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
-    """
-    Sends a compact 'no trades' notice (only if SCAN_NO_TRADES_NOTIFY=1).
-    Optionally include reason and top-3 low-score symbols for transparency.
-    """
     if os.getenv("SCAN_NO_TRADES_NOTIFY", "0").lower() not in ("1", "true", "yes", "on"):
         return
     lines = ["📭 לא נמצאו טריידים תואמים לסף.", "No matching trades at the moment."]
@@ -177,17 +172,11 @@ def _trim_reason(reason: Any, limit: int = 240) -> str:
 
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
     """
-    Sends a rich approval card with:
-    • BSD header+footer (handled in core)
-    • BTC anchor (market mood)
-    • NOW price, Entry, SL, TP legs (with ETA/probabilities/profit-$ per TP if available)
-    • Overall success probability
-    • Budget, Expected PnL
-    • Order type, TTL
-    • Why (brief reason)
-    • Approve/Reject buttons (PUBLIC_HOST + OPS_SIGN_SECRET/WEBHOOK_HMAC_SECRET)
+    כרטיס אישור עשיר: עוגן שוק, now price, Entry, SL, TP (כולל ETA/Prob אם זמינים), Budget, Expected PnL, Order type, TTL,
+    ולמטה כפתורי אישור/דחייה.
+    • אם PUBLIC_HOST+OPS_SIGN_SECRET → כפתורי URL חתומים (approve/reject/ticket).
+    • אחרת → כפתורי callback_data ("CONFIRM:APPROVE:{idem}") שמטופלים ב-/telegram/callback.
     """
-    # Estimations (best-effort)
     est     = make_estimations(plan)
     probs   = est.get("probs") or {}
     eta     = est.get("eta") or {}
@@ -211,25 +200,18 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     why_txt = _trim_reason(reason)
     kind    = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
 
-    # TP lines with ETA/prob/profit-$
     tp_lines = _tp_legs_to_lines(tp_legs, eta=eta, probs=probs)
     if tp_lines and tp_pnl:
-        # replace tail "· p=XX%" with "· p=XX% · ⛽ $yy".
         new_lines = []
         for i, line in enumerate(tp_lines, start=1):
             gas = tp_pnl.get(f"tp{i}")
-            if gas is None:
-                new_lines.append(line)
-            else:
-                new_lines.append(line + f" · ⛽ {_fmt_usd(gas)}")
+            new_lines.append(line + (f" · ⛽ {_fmt_usd(gas)}" if gas is not None else ""))
         tp_lines = new_lines
 
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
 
-    # Market anchor (BTC)
     market_line = get_btc_anchor_summary()
 
-    # Build message
     lines: List[str] = []
     lines.append(f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>")
     lines.append(market_line)
@@ -265,14 +247,25 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     lines.append("— — —")
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
+    # קביעת כפתורים: URL חתומים אם יש PUBLIC_HOST+secret, אחרת callback_data
     urls = _build_trade_urls(idem, plan)
-    kb = {
-        "inline_keyboard": [
-            [{"text": "✅ אישור / Approve", "url": urls["approve"]},
-             {"text": "❌ דחייה / Reject",  "url": urls["reject"]}],
-            ([{"text": "🧾 Ticket", "url": urls["ticket"]}] if urls["ticket"] else [])
-        ]
-    }
+    use_urls = bool(PUBLIC_HOST and (urls["approve"] or urls["reject"]))
+    if use_urls:
+        kb = {
+            "inline_keyboard": [
+                [{"text": "✅ אישור / Approve", "url": urls["approve"]},
+                 {"text": "❌ דחייה / Reject",  "url": urls["reject"]}],
+                ([{"text": "🧾 Ticket", "url": urls["ticket"]}] if urls["ticket"] else [])
+            ]
+        }
+    else:
+        kb = {
+            "inline_keyboard": [
+                [{"text": "✅ אישור / Approve", "callback_data": f"CONFIRM:APPROVE:{idem}"},
+                 {"text": "❌ דחייה / Reject",  "callback_data": f"CONFIRM:REJECT:{idem}"}]
+            ]
+        }
+
     await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
 
 # ===================== Trade lifecycle short notifiers =====================
