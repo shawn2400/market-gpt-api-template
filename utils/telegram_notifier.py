@@ -1,3 +1,4 @@
+# utils/telegram_notifier.py
 from __future__ import annotations
 
 import os, asyncio, logging, json, time
@@ -38,6 +39,9 @@ except Exception:
 
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
+    """
+    שולח הודעת 'אין טריידים' (רק אם SCAN_NO_TRADES_NOTIFY=1).
+    """
     if os.getenv("SCAN_NO_TRADES_NOTIFY", "0").lower() not in ("1", "true", "yes", "on"):
         return
     lines = ["📭 לא נמצאו טריידים תואמים לסף.", "No matching trades at the moment."]
@@ -169,6 +173,10 @@ def _trim_reason(reason: Any, limit: int = 240) -> str:
     return text or "—"
 
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
+    """
+    שולח כרטיס אישור עשיר עם כפתורי ✅/❌ (callback_data) + לינק Ticket (אם יש).
+    """
+    # Estimations (best-effort)
     est     = make_estimations(plan)
     probs   = est.get("probs") or {}
     eta     = est.get("eta") or {}
@@ -192,6 +200,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     why_txt = _trim_reason(reason)
     kind    = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
 
+    # TP lines with ETA/prob/profit-$
     tp_lines = _tp_legs_to_lines(tp_legs, eta=eta, probs=probs)
     if tp_lines and tp_pnl:
         new_lines = []
@@ -234,7 +243,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
             lines.append(f"📊 <b>Allocation</b>: {float(plan['allocation_pct']):.0f}%")
         except Exception:
             pass
-    lines.append(f"🧠 <b>למה נבחר</b>: {why_txt}")   # ✅ תיקון תגית HTML
+    lines.append(f"🧠 <b>למה נבחר</b>: {why_txt}")
     lines.append("— — —")
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
@@ -251,12 +260,6 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
 
     kb = {"inline_keyboard": kb_rows}
     await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
-from __future__ import annotations
-from typing import Any, Dict, Optional, List
-
-from .telegram_notifier_core import (
-    _tg_send, _tp_legs_to_lines, _fmt_num, _fmt_side, _fmt_order_type, _fmt_il,
-)
 
 # ===================== Trade lifecycle short notifiers =====================
 async def send_trade_opened(info: Dict[str, Any]) -> None:
@@ -332,8 +335,6 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
 from .telegram_notifier_core import (
     format_change_approval_he, send_change_approval_he, route_change_ticket,
     send_ops_digest_now, send_eod_report_now, ensure_ops_schedulers_started,
-    # exports for __all__
-    set_explain_enabled, get_explain_enabled, should_auto_approve_trade
 )
 
 # ===================== Public API =====================
