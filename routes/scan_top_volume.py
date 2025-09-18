@@ -1,265 +1,191 @@
 # routes/scan_top_volume.py
 from __future__ import annotations
-import os
-import logging
-from typing import List, Dict, Any, Optional
+import os, time, math
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Query, Depends
-import httpx
-import numpy as np
-from pydantic import BaseModel, Field
 
-from utils.auth import require_bearer_token
-from utils.symbols import SymbolsCache   # ✅ בדיקת סימבולים חוקיים
+try:
+    from utils.auth import require_bearer_token  # type: ignore
+except Exception:
+    def require_bearer_token(): return None
 
-# ✅ שני ראוטרים תחת אותו prefix כדי שהנתיבים יהיו /scan/...
+from utils.telegram_notifier_core import telegram_send_markdown, build_trade_message
+from utils.estimation import suggest_entry, compute_sl_tp, probabilities, eta_minutes, profit_usd, brief_reason
+
+# לקליטת מחיר/קווים של BTC לצורך הקשר שוק
+try:
+    from utils.get_klines import get_klines_sync  # קיימת אצלך ב-startup
+except Exception:
+    get_klines_sync = None
+
+try:
+    from utils.binance_client import get_price
+except Exception:
+    def get_price(symbol: str) -> float: return 0.0
+
 router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
-router_symbols = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
-_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-_SCAN_MAX_LIMIT = min(int(os.getenv("SCAN_MAX_LIMIT", "10")), 10)
+_STATE: Dict[tuple, Dict[str, Any]] = {}
+_LAST_GOOD_TS = 0.0
 
-logger = logging.getLogger("algogpt.scan_top_volume")
+def _passes(sig: Dict[str, Any], min_score: float, require_side: bool) -> bool:
+    score_ok = float(sig.get("score") or 0) >= float(min_score or 0)
+    side = (sig.get("side") or "").upper()
+    side_ok = (not require_side) or (side in ("BUY", "SELL"))
+    return score_ok and side_ok
 
-# =====================
-# Models
-# =====================
-class IndicatorDetails(BaseModel):
-    trend: str
-    rsi: float
-    adx: float
-    ema21: float
-    ema50: float
-    close: float
-    volume: float
+def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, dedupe_window_sec: int) -> bool:
+    key = (sig["symbol"], sig["timeframe"])
+    now = time.time()
+    st = _STATE.get(key) or {"state":"disarmed", "last_ts":0.0, "last_score":0.0}
+    score = float(sig.get("score") or 0)
 
-class ScanSignal(BaseModel):
-    symbol: str
-    timeframe: str
-    side: Optional[str]
-    score: float
-    note: Optional[str]
-    details: Optional[IndicatorDetails] = None
-
-class ScanResponse(BaseModel):
-    ok: bool = True
-    count_total: int
-    returned: int
-    signals: List[ScanSignal] = Field(default_factory=list)
-    mode: Optional[str] = None
-    error: Optional[str] = None
-
-class SymbolListResponse(BaseModel):
-    ok: bool = True
-    market: str
-    quote: str
-    count_total: int
-    returned: int
-    symbols: List[str]
-
-# =====================
-# Indicators (NumPy)
-# =====================
-def _ema(arr: np.ndarray, period: int) -> np.ndarray:
-    alpha = 2.0 / (period + 1.0)
-    out = np.empty_like(arr, dtype=float)
-    out[0] = arr[0]
-    for i in range(1, len(arr)):
-        out[i] = alpha * arr[i] + (1 - alpha) * out[i-1]
-    return out
-
-def _rma(arr: np.ndarray, period: int) -> np.ndarray:
-    out = np.empty_like(arr, dtype=float)
-    out[0] = arr[:period].mean()
-    alpha = 1.0 / period
-    for i in range(1, len(arr)):
-        out[i] = (out[i-1] * (1 - alpha)) + alpha * arr[i]
-    return out
-
-def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
-    diff = np.diff(close, prepend=close[0])
-    gain = np.where(diff > 0, diff, 0.0)
-    loss = np.where(diff < 0, -diff, 0.0)
-    avg_gain = _rma(gain, period)
-    avg_loss = _rma(loss, period)
-    rs = np.where(avg_loss == 0, np.inf, avg_gain / avg_loss)
-    return 100.0 - (100.0 / (1.0 + rs))
-
-def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    prev_close = np.roll(close, 1); prev_close[0] = close[0]
-    tr = np.maximum.reduce([high - low, np.abs(high - prev_close), np.abs(low - prev_close)])
-    return _rma(tr, period)
-
-def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    up_move = high[1:] - high[:-1]
-    down_move = low[:-1] - low[1:]
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    tr = _atr(high, low, close, period)
-    plus_dm_full = np.concatenate([[0.0], plus_dm])
-    minus_dm_full = np.concatenate([[0.0], minus_dm])
-    plus_dm_rma = _rma(plus_dm_full, period)
-    minus_dm_rma = _rma(minus_dm_full, period)
-    plus_di = 100.0 * np.where(tr == 0, 0.0, plus_dm_rma / tr)
-    minus_di = 100.0 * np.where(tr == 0, 0.0, minus_dm_rma / tr)
-    dx = 100.0 * np.where((plus_di + minus_di) == 0, 0.0,
-                          np.abs(plus_di - minus_di) / (plus_di + minus_di))
-    return _rma(dx, period)
-
-# =====================
-# Binance helpers
-# =====================
-async def _fetch_24h() -> List[Dict[str, Any]]:
-    url = f"{_FAPI}/fapi/v1/ticker/24hr"
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        data = r.json()
-        return data if isinstance(data, list) else []
-
-def _clamp_limit(n: int) -> int:
-    return max(1, min(_SCAN_MAX_LIMIT, n))
-
-def _top_symbols_24h(tickers: List[Dict[str, Any]], quote: str, limit: int, market: str) -> List[str]:
-    """
-    בחירת סמלים עם quote מסוים (למשל USDT) ומיון לפי quoteVolume.
-    סינון בהתאם ל-SymbolsCache למניעת סמלים לא סחירים.
-    """
-    q = quote.upper()
-    rows = [t for t in tickers if isinstance(t, dict) and str(t.get("symbol", "")).endswith(q)]
-
-    def _qv(v: Any) -> float:
-        try:
-            return float(v.get("quoteVolume", 0.0))
-        except Exception:
-            return 0.0
-
-    rows.sort(key=_qv, reverse=True)
-    symbols = [r["symbol"] for r in rows[:_clamp_limit(limit)]]
-
-    # ✅ סינון לפי SymbolsCache
-    sym_cache = SymbolsCache(market=market)
-    sym_cache.ensure()
-    valid_symbols = [s for s in symbols if sym_cache.has(s)]
-    dropped = set(symbols) - set(valid_symbols)
-    if dropped:
-        logger.info(f"[scan_top_volume] Dropped {len(dropped)} invalid symbols: {', '.join(dropped)}")
-
-    return valid_symbols
-
-async def _klines(symbol: str, interval: str, limit: int) -> Optional[List[List[Any]]]:
-    url = f"{_FAPI}/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": int(limit)}
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        r = await client.get(url, params=params)
-        r.raise_for_status()
-        data = r.json()
-        return data if isinstance(data, list) else None
-
-def _analyze_rows(rows: List[List[Any]], interval: str) -> ScanSignal:
-    idx_high, idx_low, idx_close, idx_vol = 2, 3, 4, 5
-    close = np.array([float(r[idx_close]) for r in rows], dtype=float)
-    high  = np.array([float(r[idx_high])  for r in rows], dtype=float)
-    low   = np.array([float(r[idx_low])   for r in rows], dtype=float)
-    vol   = float(rows[-1][idx_vol])
-
-    rsi_last = float(_rsi(close, 14)[-1])
-    ema21 = float(_ema(close, 21)[-1])
-    ema50 = float(_ema(close, 50)[-1])
-    adx14 = float(_adx(high, low, close, 14)[-1])
-
-    trend = "UP" if ema21 >= ema50 else "DOWN"
-    direction, note = None, None
-    if adx14 >= 20:
-        if close[-1] >= ema21 >= ema50:
-            direction, note = "LONG", "EMA21>=EMA50 & ADX>=20"
-        elif close[-1] <= ema21 <= ema50:
-            direction, note = "SHORT", "EMA21<=EMA50 & ADX>=20"
-        else:
-            note = "structure mixed"
+    changed = False
+    if st["state"] == "disarmed":
+        if score >= min_score:
+            st["state"] = "armed"
+            changed = True
     else:
-        note = "ADX<20"
+        if score < rearm_score:
+            st["state"] = "disarmed"
 
-    score = 5.0
-    if direction:
-        score = 6.5 + min(3.0, max(0.0, (adx14 - 20.0) * 0.1))
+    recently = (now - st["last_ts"]) < max(0, dedupe_window_sec)
+    st["last_ts"] = now; st["last_score"] = score
+    _STATE[key] = st
+    return changed and not recently
 
-    symbol = rows[0][0] if isinstance(rows[0], list) else "?"
-    return ScanSignal(
-        symbol=symbol,
-        timeframe=interval,
-        side="BUY" if direction == "LONG" else ("SELL" if direction == "SHORT" else None),
-        score=round(score, 2),
-        note=note,
-        details=IndicatorDetails(
-            trend=trend, rsi=round(rsi_last, 2), adx=round(adx14, 2),
-            ema21=round(ema21, 6), ema50=round(ema50, 6),
-            close=round(float(close[-1]), 6), volume=vol
-        )
-    )
+def _ema(series: List[float], period: int) -> float:
+    if not series or period <= 1: return series[-1] if series else 0.0
+    k = 2.0 / (period + 1.0)
+    ema = series[0]
+    for x in series[1:]:
+        ema = x * k + ema * (1 - k)
+    return ema
 
-# =====================
-# Routes
-# =====================
+def _btc_market_ctx(timeframe: str) -> Optional[Dict[str, Any]]:
+    """הפקת הקשר שוק BTC: מחיר, EMA21/50, מגמה UP/DOWN/SIDE."""
+    try:
+        price = float(get_price("BTCUSDT") or 0.0)
+    except Exception:
+        price = 0.0
 
-@router_symbols.get("/symbols/top-volume", response_model=SymbolListResponse, summary="Top-volume symbols")
-async def get_symbols_top_volume(
-    market: str = Query("futures"),
-    quote: str = Query("USDT"),
-    limit: int = Query(5, ge=1, le=100),
-) -> SymbolListResponse:
-    tickers = await _fetch_24h()
-    symbols = _top_symbols_24h(tickers, quote=quote, limit=limit, market=market)
-    return SymbolListResponse(ok=True, market=market, quote=quote,
-                              count_total=len(symbols), returned=len(symbols), symbols=symbols)
+    if get_klines_sync:
+        try:
+            kl = get_klines_sync("BTCUSDT", interval=timeframe, limit=120)
+            closes = [float(x[4]) for x in kl if len(x) >= 5]  # מחיר סגירה
+            if len(closes) >= 60:
+                e21 = _ema(closes[-60:], 21)
+                e50 = _ema(closes[-60:], 50)
+                if e21 > e50 * 1.002: trend = "UP"
+                elif e21 < e50 * 0.998: trend = "DOWN"
+                else: trend = "SIDE"
+                return {"price": price, "ema21": e21, "ema50": e50, "trend": trend}
+        except Exception:
+            pass
 
-@router.get("/top-volume", response_model=ScanResponse, summary="Compact scan on top-volume list")
+    # fallback מינימלי
+    return {"price": price, "ema21": 0.0, "ema50": 0.0, "trend": "SIDE"}
+
+async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
+                               min_score: float, found_filtered: bool) -> None:
+    global _LAST_GOOD_TS
+    hb_hours = float(os.getenv("HEARTBEAT_HOURS", "0") or 0)
+    if hb_hours <= 0 or notify != "telegram" or not chat_id:
+        return
+    now = time.time()
+    if found_filtered:
+        _LAST_GOOD_TS = now
+        return
+    if _LAST_GOOD_TS == 0.0:
+        _LAST_GOOD_TS = now
+        return
+    if (now - _LAST_GOOD_TS) >= hb_hours*3600:
+        low = float(os.getenv("HEARTBEAT_MIN_SCORE", "4.0"))
+        age_min = int((now - _LAST_GOOD_TS)//60)
+        txt = (f"בס\"ד\n"
+               f"ℹ️ *Heartbeat*: לא נמצאו טריידים שעברו סף {min_score} מזה ~{age_min} ד׳.\n"
+               f"נמצאו רק ציונים נמוכים יותר (למשל ~{low}-{max(low,min_score-0.5):.1f}).\n"
+               f"_בעזרת השם נעשה ונצליח_ 🙏")
+        await telegram_send_markdown(chat_id, txt, None)
+        _LAST_GOOD_TS = now
+
+@router.get("/top-volume", summary="Scan with post-filter/notify/ttl/heartbeat + BTC context")
 async def scan_top_volume(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
-    limit: int = Query(5, ge=1, le=100),
+    limit: int = Query(10, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
-    symbol: Optional[str] = Query(None, description="Filter for a single symbol"),
-) -> ScanResponse:
-    try:
-        limit = _clamp_limit(limit)
-        tickers = await _fetch_24h()
-        symbols = _top_symbols_24h(tickers, quote=quote, limit=limit, market=market)
-        if symbol:
-            s = symbol.upper().strip()
-            symbols = [x for x in symbols if x.upper() == s] or [s]
+    # פוסט־פילטר:
+    min_score: float = Query(7.0),
+    require_side: bool = Query(True),
+    # התראות:
+    notify: Optional[str] = Query(None),
+    chat_id: Optional[str] = Query(None),
+    rich: bool = Query(True),
+    ttl_sec: int = Query(900, ge=60, le=86400),
+    rearm_score: float = Query(6.0),
+    dedupe_window_sec: int = Query(300, ge=0, le=3600),
+    # פרמטרים כלכליים:
+    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE","5"))),
+    stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT","50"))),
+):
+    # 1) הבא איתותים גולמיים (החלף במימוש שלך)
+    signals_raw: List[Dict[str, Any]] = await _compute_signals(market, quote, limit, timeframe, kline_limit)
 
-        results: List[ScanSignal] = []
-        for sym in symbols:
-            try:
-                rows = await _klines(sym, timeframe, kline_limit)
-                if not rows or len(rows) < 60:
-                    results.append(ScanSignal(symbol=sym, timeframe=timeframe,
-                                              side=None, score=0.0, note="not enough data"))
-                    continue
-                res = _analyze_rows(rows, timeframe)
-                res.symbol = sym
-                results.append(res)
-            except Exception:
-                results.append(ScanSignal(symbol=sym, timeframe=timeframe,
-                                          side=None, score=0.0, note="analyze error"))
+    # 2) סינון
+    filtered = [s for s in signals_raw if _passes(s, min_score, require_side)]
+    notified = 0
+    public_host = os.getenv("PUBLIC_HOST", "").strip()
 
-        return ScanResponse(ok=True, count_total=len(symbols),
-                            returned=len(results), signals=results, mode="compact")
-    except Exception as e:
-        return ScanResponse(ok=False, count_total=0, returned=0, signals=[],
-                            error=f"{type(e).__name__}: {e}")
+    # 2.5) BTC market context
+    btc_ctx = _btc_market_ctx(timeframe)
 
-@router.get("/single", response_model=ScanResponse, summary="Scan a single symbol (alias)")
-async def scan_single(
-    symbol: str = Query(...),
-    timeframe: str = Query("15m"),
-    market: str = Query("futures"),
-) -> ScanResponse:
-    # משתמש בפונקציה הראשית כדי להחזיר תוצאה אחידה
-    return await scan_top_volume(market=market, quote="USDT",
-                                 limit=1, timeframe=timeframe,
-                                 kline_limit=200, symbol=symbol)
+    # 3) שליחת התראות רק אחרי המסנן
+    if notify == "telegram" and chat_id:
+        for s in filtered:
+            if _should_notify(s, min_score, rearm_score, dedupe_window_sec):
+                entry = suggest_entry(s)
+                sltp  = compute_sl_tp(s)
+                probs = probabilities(s)
+                eta   = eta_minutes(s, sltp["R"])
+                pnl   = profit_usd(s, sltp, leverage, stake_usdt)
+                reason = brief_reason(s)
+                payload = {"entry": entry, "sltp": sltp, "probs": probs, "eta": eta, "pnl": pnl, "reason": reason}
+                msg = build_trade_message(s, ttl_sec, public_host, leverage, stake_usdt, payload, btc_ctx=btc_ctx)
+                await telegram_send_markdown(chat_id, msg["text"], msg["keyboard"])
+                notified += 1
+
+    # 4) Heartbeat
+    await _heartbeat_if_needed(chat_id, notify, min_score, found_filtered=bool(filtered))
+
+    return {
+        "ok": True,
+        "count_total": len(signals_raw),
+        "returned": len(filtered),
+        "notified": notified,
+        "signals": filtered,
+        "mode": "compact",
+        "error": None
+    }
+
+@router.get("/now", summary="Alias to /scan/top-volume")
+async def scan_now(**kwargs):
+    return await scan_top_volume(**kwargs)
+
+# ---- דמו בלבד: החלף למימוש שלך של חישוב איתותים ----
+async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
+    """
+    מימוש הדוגמה מחזיר רשימה ריקה. אצלך יש מחשב איתותים קיים – חבר אותו כאן.
+    חובה להחזיר:
+    {
+      'symbol','timeframe','side' ('BUY'/'SELL' או None),
+      'score':float,'note':str,
+      'details': {'trend','rsi','adx','ema21','ema50','close','atr'?}
+    }
+    """
+    return []
+
 
 
 
