@@ -1,30 +1,24 @@
 # routes/ops_guard.py
 from __future__ import annotations
-import os, hmac, hashlib, time
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
+from typing import Optional
+import logging
 
-router = APIRouter(prefix="/ops", tags=["Ops"])
+router = APIRouter(tags=["ops"])
 
-OPS_SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET") or "ops_local_secret").encode()
+logger = logging.getLogger("algogpt.ops_guard.route")
 
-def _verify(symbol: str, tf: str, side: str, score: float, exp: int, sig: str) -> None:
-    if int(exp) < int(time.time()):
-        raise HTTPException(status_code=400, detail="Expired: ההודעה פגה, נא לסרוק מחדש")
-    base = f"{symbol}|{tf}|{side}|{score}|{exp}"
-    expect = hmac.new(OPS_SIGN_SECRET, base.encode(), hashlib.sha256).hexdigest()[:32]
-    if not hmac.compare_digest(expect, sig):
-        raise HTTPException(status_code=400, detail="Invalid signature")
+try:
+    from utils.ops_guard import ops_tick  # מחובר למנגנון Degrade/TTL וכו'
+except Exception:
+    async def ops_tick(**kw): return None
 
-@router.get("/approve")
-async def approve(symbol: str, side: str, tf: str, score: float,
-                  src: str = "scan", exp: int = Query(...), sig: str = Query(...)):
-    _verify(symbol, tf, side, score, exp, sig)
-    # TODO: בצע את הפעולה בפועל (פתיחת פוזיציה)
-    return {"ok": True, "action": "approved", "symbol": symbol, "side": side, "tf": tf}
+@router.get("/ops/guard/tick", include_in_schema=False)
+async def ops_guard_tick(
+    ws_reconnects: Optional[int] = Query(None),
+    price_ttl_sec: Optional[float] = Query(None),
+    exec_batch_timeout: bool = Query(False),
+):
+    await ops_tick(ws_reconnects=ws_reconnects, price_ttl_sec=price_ttl_sec, exec_batch_timeout=exec_batch_timeout)
+    return {"ok": True, "ws_reconnects": ws_reconnects, "price_ttl_sec": price_ttl_sec, "exec_batch_timeout": exec_batch_timeout}
 
-@router.get("/reject")
-async def reject(symbol: str, side: str, tf: str, score: float,
-                 src: str = "scan", exp: int = Query(...), sig: str = Query(...)):
-    _verify(symbol, tf, side, score, exp, sig)
-    # TODO: ביטול/ניקוי תור
-    return {"ok": True, "action": "rejected", "symbol": symbol, "side": side, "tf": tf}
