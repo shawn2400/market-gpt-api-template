@@ -1,40 +1,32 @@
-# utils/telegram_notifier.py
+# utils/telegram_notifier.py (Part 1/2)
 from __future__ import annotations
-"""
-עטיפת נוחות לשיגור הודעות/אישורים לטלגרם עבור טריידים.
-— משתמש בליבה utils/telegram_notifier_core
-— כולל הודעות סריקה/שגיאה/Heartbeat/סיכום יום
-— כרטיס אישור עשיר עם קישורי Approve/Reject
-"""
 
-import os
-import asyncio
-import logging
-import json
-import time
+import os, asyncio, logging, json, time
 from typing import Any, Dict, Optional, List
 
 from .telegram_notifier_core import (
     # cfg
     BOT_TOKEN, CHAT_ID, API_BASE, PUBLIC_HOST,
     # explain flags
-    set_explain_enabled, get_explain_enabled, EXPLAIN_MIN_SCORE,
+    set_explain_enabled, get_explain_enabled,
+    EXPLAIN_MIN_SCORE,
     # send helpers
     _tg_send, _tg_send_with_markup, _bundle_add,
     # store / digests
     _store_change_event, _load_changes_since,
     # fmt helpers
-    _fmt_il, _fmt_usd, _fmt_num, _fmt_pct, _fmt_pct_prob, _fmt_eta, _em,
+    _fmt_il, _fmt_usd, _fmt_num, _fmt_pct_prob, _fmt_eta, _em,
     _fmt_side, _fmt_order_type, _tp_legs_to_lines, _try_get_live_price,
-    # urls / policy
+    # urls / approvals
     _ensure_ticket_urls, _build_trade_urls, should_auto_approve_trade,
-    # anchor
+    # market anchor
     get_btc_anchor_summary,
 )
 
 logger = logging.getLogger("algogpt.tg")
 
 # ========= Optional estimation helpers (best-effort) =========
+# אם הוספת utils/estimation.py – נשתמש בו. אחרת לא נקרוס.
 try:
     from utils.estimation import make_estimations  # returns {probs, eta, tp_profit_usd, expected_pnl_usd}
 except Exception:
@@ -48,6 +40,10 @@ except Exception:
 
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
+    """
+    שולח הודעת 'אין טריידים' (רק אם SCAN_NO_TRADES_NOTIFY=1).
+    אופציונלית מוסיף סיבה ו־top-3 סימבולים עם ציון נמוך-גבולי.
+    """
     if os.getenv("SCAN_NO_TRADES_NOTIFY", "0").lower() not in ("1", "true", "yes", "on"):
         return
     lines = ["📭 לא נמצאו טריידים תואמים לסף.", "No matching trades at the moment."]
@@ -173,21 +169,19 @@ def _trim_reason(reason: Any, limit: int = 240) -> str:
         text = "; ".join([str(x) for x in reason if x])
     elif isinstance(reason, dict):
         text = reason.get("why") or reason.get("explain") or reason.get("summary") or ""
-    text = (text or "").strip()
+    text = text.strip()
     if len(text) > limit:
         text = text[: limit - 1] + "…"
     return text or "—"
 
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
     """
-    הודעת אישור עשירה עם:
-    • מצב שוק BTC Anchor
-    • NOW price, Entry, SL, TP Legs (עם ETA/סיכויים/רווח $ אם קיים)
-    • Success probability
-    • Budget, Expected PnL
-    • Order type, TTL
-    • Why (תקציר)
-    • כפתורי Approve/Reject
+    שולח כרטיס אישור עשיר:
+    • שורת Anchor BTC  · NOW price, Entry, SL, TP (עם ETA/Prob/Profit$ אם זמינים)
+    • Budget + Expected PnL
+    • Order type + TTL
+    • סיבה מקוצרת (why)
+    • כפתורי אישור/דחייה כ-callback_data (נקלטים ע"י /telegram/callback), ו־Ticket כ-URL
     """
     # Estimations (best-effort)
     est     = make_estimations(plan)
@@ -219,18 +213,12 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
         new_lines = []
         for i, line in enumerate(tp_lines, start=1):
             gas = tp_pnl.get(f"tp{i}")
-            if gas is None:
-                new_lines.append(line)
-            else:
-                new_lines.append(line + f" · ⛽ {_fmt_usd(gas)}")
+            new_lines.append(line + (f" · ⛽ {_fmt_usd(gas)}" if gas is not None else ""))
         tp_lines = new_lines
 
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
-
-    # Market anchor (BTC)
     market_line = get_btc_anchor_summary()
 
-    # Build message
     lines: List[str] = []
     lines.append(f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>")
     lines.append(market_line)
@@ -242,9 +230,9 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
         lines += tp_lines
     lines.append(
         f"📈 <b>הסתברות כוללת</b>: <b>{_fmt_pct_prob(overall_p)}</b> · "
-        f"P(T1): {_fmt_pct_prob(probs.get('tp1'))} · "
-        f"P(T2): {_fmt_pct_prob(probs.get('tp2'))} · "
-        f"P(T3): {_fmt_pct_prob(probs.get('tp3'))}"
+        f"P(T1): {_fmt_pct_prob((probs or {}).get('tp1'))} · "
+        f"P(T2): {_fmt_pct_prob((probs or {}).get('tp2'))} · "
+        f"P(T3): {_fmt_pct_prob((probs or {}).get('tp3'))}"
     )
     lines.append(f"💸 <b>השקעה</b>: {_fmt_usd(budget)}")
     if exp_pnl is not None:
@@ -266,15 +254,27 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     lines.append("— — —")
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
+    # ✅ מעבר ל-callback_data עבור Approve/Reject; Ticket נשאר URL (אם זמין)
     urls = _build_trade_urls(idem, plan)
-    kb = {
-        "inline_keyboard": [
-            [{"text": "✅ אישור / Approve", "url": urls["approve"]},
-             {"text": "❌ דחייה / Reject",  "url": urls["reject"]}],
-            ([{"text": "🧾 Ticket", "url": urls["ticket"]}] if urls["ticket"] else [])
+    kb_rows: List[List[Dict[str, Any]]] = [
+        [
+            {"text": "✅ אישור / Approve", "callback_data": f"CONFIRM:APPROVE:{idem}"},
+            {"text": "❌ דחייה / Reject",  "callback_data": f"CONFIRM:REJECT:{idem}"},
         ]
-    }
+    ]
+    if urls.get("ticket"):
+        kb_rows.append([{"text": "🧾 Ticket", "url": urls["ticket"]}])
+
+    kb = {"inline_keyboard": kb_rows}
     await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
+# utils/telegram_notifier.py (Part 2/2)
+from __future__ import annotations
+
+from typing import Any, Dict, Optional, List
+
+from .telegram_notifier_core import (
+    _tg_send, _tp_legs_to_lines, _fmt_num, _fmt_side, _fmt_order_type, _fmt_il,
+)
 
 # ===================== Trade lifecycle short notifiers =====================
 async def send_trade_opened(info: Dict[str, Any]) -> None:
@@ -318,10 +318,11 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
     entry = plan.get("entry_price") or plan.get("price")
     exit  = info.get("exit_price") or info.get("avg_exit")
 
+    from .telegram_notifier_core import _fmt_pct_prob, _fmt_usd
     lines = [f"🔴 <b>Closed</b> · <b>{kind}</b> · {s} {side}"]
     lines.append(f"💰 PnL: <b>{_fmt_usd(pnl_usd)}</b> ({_fmt_pct_prob(pnl_pct) if pnl_pct is not None else '—'})")
     lines.append(f"🎯 Hit: {', '.join(hit) if hit else '—'}")
-    lines.append(f"⏱ Duration: {_fmt_eta(dur)}")
+    lines.append(f"⏱ Duration: {dur if dur is not None else '—'}")
     lines.append(f"↔️ Prices: entry <code>{_fmt_num(entry,4)}</code> → exit <code>{_fmt_num(exit,4)}</code>")
     if went:
         lines.append("✅ Went well:")
@@ -345,6 +346,12 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
             pass
     await _tg_send("\n".join(lines))
 
+# ===================== Change Tickets (re-exports) =====================
+from .telegram_notifier_core import (
+    format_change_approval_he, send_change_approval_he, route_change_ticket,
+    send_ops_digest_now, send_eod_report_now, ensure_ops_schedulers_started,
+)
+
 # ===================== Public API =====================
 __all__ = [
     # flags & simple notifiers
@@ -355,7 +362,13 @@ __all__ = [
     "register_webhook",
     # trade approvals / updates
     "send_trade_approval", "send_trade_opened", "send_trade_update", "send_trade_closed",
+    # change approvals & digests
+    "format_change_approval_he", "send_change_approval_he", "route_change_ticket",
+    "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
+    # policy helper
+    "should_auto_approve_trade",
 ]
+
 
 
 
