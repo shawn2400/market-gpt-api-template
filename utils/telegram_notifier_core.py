@@ -21,6 +21,18 @@ CHAT_ID     = int(os.getenv("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_APPROVAL_CHA
 API_BASE    = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").strip().rstrip("/")
 
+# ===================== Decorative prefix/suffix (BSD) =====================
+OPS_DECORATE_BSD = os.getenv("OPS_DECORATE_BSD", "1").lower() in ("1", "true", "yes", "on")
+BSD_PREFIX = os.getenv("OPS_BSD_PREFIX_TEXT", 'בס"ד').strip()
+BSD_SUFFIX = os.getenv("OPS_BSD_SUFFIX_TEXT", "בעזרת השם נעשה ונצליח 🙏").strip()
+
+def _decorate(text: str) -> str:
+    if not OPS_DECORATE_BSD:
+        return text
+    t = (text or "").strip()
+    head = t if t.startswith(BSD_PREFIX) else f"{BSD_PREFIX}\n{t}"
+    return head if head.endswith(BSD_SUFFIX) else f"{head}\n{BSD_SUFFIX}"
+
 # ===================== Explain flags =====================
 _EXPLAIN_ON          = os.getenv("OPS_EXPLAIN_TRADE_TELEGRAM", "1").lower() in ("1","true","yes","on")
 EXPLAIN_COOLDOWN_SEC = int(os.getenv("OPS_EXPLAIN_COOLDOWN_SEC", "45"))
@@ -58,7 +70,7 @@ AUTO_APPROVE_NIGHT = os.getenv("AUTO_APPROVE_NIGHT","0").lower() in ("1","true",
 NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()
 AUTO_APPROVE_TIER  = os.getenv("AUTO_APPROVE_TIER","").strip().lower()
 
-# ===================== SL/TP defaults (fallbacks) =====================
+# ===================== SL/TP defaults (fallbacks for presentation) =====================
 def _csv_floats(s: str) -> List[float]:
     out: List[float] = []
     for x in (s or "").split(","):
@@ -105,6 +117,7 @@ def _fmt_il(ts: float | int | None = None) -> str:
     dt = datetime.fromtimestamp(ts or _now(), tz=timezone.utc).astimezone(_TZ_IL)
     return dt.strftime("%Y-%m-%d %H:%M:%S IL")
 
+# --- rate-limit & dedup ---
 def _rl_tick() -> None:
     global _rl_win_start, _rl_sent_in_win
     now = _now()
@@ -136,15 +149,7 @@ def _dedup_allow(text: str) -> bool:
                 _dedup_map.pop(k, None)
     return True
 
-# ===================== Low-level send (with prayer header/footer) =====================
-_PRAYER_HDR = os.getenv("MSG_HEADER_BSD", "בס\"ד").strip()
-_PRAYER_FTR = os.getenv("MSG_FOOTER_BH", "בעזרת ה׳ נעשה ונצליח ✨🙏").strip()
-
-def _wrap_blessing(text: str) -> str:
-    head = f"<b>{_PRAYER_HDR}</b>\n" if _PRAYER_HDR else ""
-    foot = f"\n\n<i>{_PRAYER_FTR}</i>" if _PRAYER_FTR else ""
-    return head + text + foot
-
+# ===================== Low-level send =====================
 async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
     if not BOT_TOKEN or (chat_id is None and CHAT_ID == 0):
         logger.debug({"event":"tg.skip_send","reason":"missing_token_or_chat"})
@@ -152,8 +157,8 @@ async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
     if not _rl_allow():
         logger.debug({"event":"tg.rate_limited","drop":True})
         return
-    wrapped = _wrap_blessing(text)
-    if not _dedup_allow(wrapped):
+    text = _decorate(text)
+    if not _dedup_allow(text):
         logger.debug({"event":"tg.dup_suppressed"})
         return
     cid = chat_id if chat_id is not None else CHAT_ID
@@ -162,7 +167,7 @@ async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/sendMessage", data={
                 "chat_id": cid,
-                "text": wrapped,
+                "text": text,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             })
@@ -176,10 +181,9 @@ async def _http_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_i
     if not _rl_allow():
         logger.debug({"event":"tg.rate_limited","drop":True})
         return
+    text = _decorate(text)
     keytext = text + json.dumps(reply_markup, sort_keys=True, ensure_ascii=False)
-    wrapped = _wrap_blessing(text)
-    keytext_wrapped = wrapped + json.dumps(reply_markup, sort_keys=True, ensure_ascii=False)
-    if not _dedup_allow(keytext_wrapped):
+    if not _dedup_allow(keytext):
         logger.debug({"event":"tg.dup_suppressed"})
         return
     cid = chat_id if chat_id is not None else CHAT_ID
@@ -188,7 +192,7 @@ async def _http_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_i
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/sendMessage", json={
                 "chat_id": cid,
-                "text": wrapped,
+                "text": text,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
                 "reply_markup": reply_markup,
@@ -218,49 +222,7 @@ async def _tg_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id:
             loop.run_until_complete(_http_send_with_markup(text, reply_markup, chat_id=chat_id))
             loop.close()
 
-# ===================== Bundling =====================
-def _win_tick() -> None:
-    global _win_start, _sent_in_win
-    now = _now()
-    if _win_start == 0.0 or (now - _win_start) >= 60.0:
-        _win_start = now
-        _sent_in_win = 0
-
-async def _bundle_flush() -> None:
-    global _bundle_items
-    async with _bundle_lock:
-        if not _bundle_items:
-            return
-        items = _bundle_items[:BUNDLE_MAX_ITEMS]
-        more = len(_bundle_items) - len(items)
-        _bundle_items = []
-    lines = [f"{BUNDLE_TITLE}", ""]
-    for it in items:
-        lines.append(f"• {it}")
-    if more > 0:
-        lines.append(f"\n…and {more} more")
-    await _tg_send("\n".join(lines))
-
-async def _bundle_schedule_flush() -> None:
-    global _bundle_task
-    async with _bundle_lock:
-        if _bundle_task and not _bundle_task.done():
-            return
-        async def _delayed():
-            try:
-                await asyncio.sleep(BUNDLE_WINDOW_SEC)
-                await _bundle_flush()
-            except Exception as e:
-                logger.debug({"event":"bundle.flush.err","err":str(e)})
-        _bundle_task = asyncio.create_task(_delayed())
-
-async def _bundle_add(msg: str) -> None:
-    global _bundle_items
-    async with _bundle_lock:
-        _bundle_items.append(msg)
-    await _bundle_schedule_flush()
-
-# ===================== Change store =====================
+# ===================== Change store (for digests/EOD) =====================
 async def _store_change_event(ev: Dict[str, Any]) -> None:
     ev = dict(ev)
     ev.setdefault("ts", _now())
@@ -360,55 +322,6 @@ def _build_trade_urls(idem: str, plan: Dict[str, Any]) -> Dict[str, str]:
         "ticket":  f"{PUBLIC_HOST}/trade/ticket?{qs}",
     }
 
-# ===================== Night windows =====================
-def _parse_night_windows(spec: str) -> List[Tuple[int,int]]:
-    out: List[Tuple[int,int]] = []
-    for chunk in (spec or "").split(","):
-        chunk = chunk.strip()
-        if not chunk: continue
-        if "-" in chunk:
-            a,b = chunk.split("-",1)
-            try:
-                out.append((int(a), int(b)))
-            except Exception: pass
-        else:
-            try:
-                h = int(chunk)
-                out.append((h,h))
-            except Exception: pass
-    return out
-
-_NIGHT_WINDOWS = _parse_night_windows(NIGHT_HOURS_SPEC)
-
-def _is_now_night_il(now: Optional[datetime] = None) -> bool:
-    if not AUTO_APPROVE_NIGHT or not _NIGHT_WINDOWS:
-        return False
-    now = now or datetime.now(_TZ_IL)
-    h = now.hour
-    for a,b in _NIGHT_WINDOWS:
-        if a <= b and a <= h <= b:
-            return True
-        if a > b and (h >= a or h <= b):
-            return True
-    return False
-
-# ===================== Auto-approval decision for trades =====================
-def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
-    if TELEGRAM_AUTO_APPROVE:
-        return True
-    tier = (str(plan.get("tier") or plan.get("account_tier") or "").strip().lower())
-    if AUTO_APPROVE_TIER and tier == AUTO_APPROVE_TIER:
-        return True
-    if _is_now_night_il():
-        return True
-    try:
-        budget = float(plan.get("budget_usd") or plan.get("budget") or plan.get("budget_used") or 0.0)
-    except Exception:
-        budget = 0.0
-    if AUTO_APPROVE_BUDGET_MAX_USD and budget <= AUTO_APPROVE_BUDGET_MAX_USD:
-        return True
-    return False
-
 # ===================== Numeric / text formatting =====================
 def _fmt_usd(v: Any) -> str:
     try: return f"${float(v):.2f}"
@@ -447,7 +360,7 @@ def _em(emoji: str, text: str) -> str:
 # ===================== Public helpers for trade text =====================
 def _try_get_live_price(symbol: str) -> Optional[float]:
     try:
-        from utils.binance_client import get_price
+        from utils.binance_client import get_price  # אצלך קיים
         p = get_price(symbol.upper())
         return float(p) if p else None
     except Exception:
@@ -481,13 +394,54 @@ def _tp_legs_to_lines(tp_legs: Optional[Sequence[Dict[str, Any]]],
         lines.append(f"🎯 TP{i}: <code>{_fmt_num(px, 4)}</code> · split <code>{qtxt}</code> · ETA {_fmt_eta(leg_eta)} · p={ptxt}")
     return lines
 
+# ===================== BTC Anchor (market mood) =====================
+def _ema(vals: List[float], period: int) -> Optional[float]:
+    if not vals or len(vals) < period:
+        return None
+    k = 2.0 / (period + 1)
+    ema = vals[0]
+    for v in vals[1:]:
+        ema = v * k + ema * (1 - k)
+    return float(ema)
+
+def get_btc_anchor_summary() -> str:
+    """Returns short BTC market mood line, best-effort, never throws."""
+    sym = "BTCUSDT"
+    try:
+        from utils.get_klines import get_klines_sync
+        kl = get_klines_sync(sym, interval=os.getenv("ANCHOR_INTERVAL","1h"), limit=60)
+        closes = [float(r[4]) for r in kl if r and len(r) > 4]
+        if len(closes) >= 30:
+            ema21 = _ema(closes[-30:], 21)
+            ema50 = _ema(closes[-60:], 50) if len(closes) >= 60 else _ema(closes, 50)
+        else:
+            ema21 = _ema(closes, 21)
+            ema50 = _ema(closes, 50)
+        last = closes[-1] if closes else _try_get_live_price(sym)
+        trend = "⬆️ Bullish" if (ema21 and ema50 and ema21 > ema50) else ("⬇️ Bearish" if (ema21 and ema50 and ema21 < ema50) else "➡️ Side")
+        arrow = ">" if (ema21 and ema50 and ema21 > ema50) else "<" if (ema21 and ema50 and ema21 < ema50) else "≈"
+        return f"🧭 BTC: {_fmt_num(last,2)} · {trend} (EMA21{arrow}EMA50)"
+    except Exception:
+        price = _try_get_live_price(sym)
+        return f"🧭 BTC: {_fmt_num(price,2)} · mood: —"
+
+# ===================== Public API (exports) =====================
 __all__ = [
+    # config
     "BOT_TOKEN","CHAT_ID","API_BASE","PUBLIC_HOST",
+    # explain flags
     "set_explain_enabled","get_explain_enabled","EXPLAIN_MIN_SCORE","EXPLAIN_COOLDOWN_SEC","EXPLAIN_MAX_PER_MIN",
+    # send
     "_tg_send","_tg_send_with_markup","_bundle_add",
+    # store
     "_store_change_event","_load_changes_since",
+    # fmt helpers
     "_fmt_il","_fmt_usd","_fmt_num","_fmt_pct","_fmt_pct_prob","_fmt_eta","_em",
     "_fmt_side","_fmt_order_type","_tp_legs_to_lines","_try_get_live_price",
+    # urls/auto-approve
     "_ensure_ticket_urls","_build_trade_urls","should_auto_approve_trade",
+    # anchor
+    "get_btc_anchor_summary",
 ]
+
 
