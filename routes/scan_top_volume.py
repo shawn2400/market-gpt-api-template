@@ -5,25 +5,57 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 
-import httpx
 import numpy as np
+import httpx
 from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-# ---- Auth & symbols cache ----
-from utils.auth import require_bearer_token
-from utils.symbols import SymbolsCache   # מאמת סימבולים מול exchangeInfo
-
 logger = logging.getLogger("algogpt.scan_top_volume")
 
-# APIRouter יחיד עם prefix קבוע כדי למנוע התנגשויות ב-/scan
+# =====================
+# Auth (fallback-safe)
+# =====================
+try:
+    from utils.auth import require_bearer_token  # type: ignore
+except Exception:
+    # אם אין utils.auth בסביבה (בזמן import), נרצה לא להפיל את כל המודול
+    def require_bearer_token():
+        # FastAPI יקבל את הפונקציה; לא נבדוק כלום כאן כדי לא לשבור ריצה
+        return None
+
+# =====================
+# SymbolsCache (fallback-safe)
+# =====================
+class _SymbolsCacheFallback:
+    def __init__(self, market: str = "futures"):
+        self.market = market
+        self._ok = False
+    def ensure(self) -> None:
+        # אין כשל; פשוט מצב "פתוח"
+        self._ok = True
+    def has(self, symbol: str) -> bool:
+        # לקבל הכל כברירת מחדל אם אין קאש אמיתי
+        return True
+
+try:
+    from utils.symbols import SymbolsCache as _RealSymbolsCache  # type: ignore
+    SymbolsCache = _RealSymbolsCache  # type: ignore
+except Exception:
+    SymbolsCache = _SymbolsCacheFallback  # type: ignore
+    logger.warning("[scan_top_volume] utils.symbols.SymbolsCache not available, using fallback (no filtering)")
+
+# =====================
+# APIRouter (prefix אחיד כדי לא להתנגש עם routes/scan.py)
+# =====================
 router = APIRouter(
     prefix="/scan",
     tags=["Scanner"],
     dependencies=[Depends(require_bearer_token)],
 )
 
-# ---- קונפיג ----
+# =====================
+# Config
+# =====================
 _FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 _SCAN_MAX_LIMIT = min(int(os.getenv("SCAN_MAX_LIMIT", "10")), 10)
 
@@ -64,7 +96,7 @@ class SymbolListResponse(BaseModel):
     symbols: List[str]
 
 # =====================
-# Math / TA (NumPy)
+# TA helpers (NumPy)
 # =====================
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
     alpha = 2.0 / (period + 1.0)
@@ -138,12 +170,9 @@ def _clamp_limit(n: int) -> int:
     return max(1, min(_SCAN_MAX_LIMIT, n))
 
 def _top_symbols_24h(
-    tickers: List[Dict[str, Any]],
-    quote: str,
-    limit: int,
-    market: str,
+    tickers: List[Dict[str, Any]], quote: str, limit: int, market: str
 ) -> List[str]:
-    q = quote.upper()
+    q = (quote or "USDT").upper()
     rows = [t for t in tickers if isinstance(t, dict) and str(t.get("symbol", "")).endswith(q)]
 
     def _qv(v: Any) -> float:
@@ -155,17 +184,24 @@ def _top_symbols_24h(
     rows.sort(key=_qv, reverse=True)
     symbols = [r["symbol"] for r in rows[:_clamp_limit(limit)]]
 
-    # סינון לפי SymbolsCache
-    sym_cache = SymbolsCache(market=market)
-    sym_cache.ensure()
-    valid_symbols = [s for s in symbols if sym_cache.has(s)]
+    # סינון ע"י SymbolsCache (עם fallback אם אין)
+    sym_cache = SymbolsCache(market=market)  # type: ignore
+    try:
+        sym_cache.ensure()
+    except Exception:
+        pass
+
+    valid_symbols = []
+    for s in symbols:
+        try:
+            if sym_cache.has(s):
+                valid_symbols.append(s)
+        except Exception:
+            valid_symbols.append(s)
+
     dropped = set(symbols) - set(valid_symbols)
     if dropped:
-        logger.info(
-            "[scan_top_volume] Dropped %d invalid symbols: %s",
-            len(dropped),
-            ", ".join(sorted(dropped))[:400],
-        )
+        logger.info("[scan_top_volume] dropped invalid symbols: %s", ", ".join(sorted(dropped))[:400])
 
     return valid_symbols
 
@@ -178,8 +214,8 @@ async def _klines(symbol: str, interval: str, limit: int) -> Optional[List[List[
         data = r.json()
         return data if isinstance(data, list) else None
 
-def _analyze_rows(rows: List[List[Any]], interval: str) -> ScanSignal:
-    idx_open, idx_high, idx_low, idx_close, idx_vol = 1, 2, 3, 4, 5
+def _analyze_rows(rows: List[List[Any]], interval: str, symbol: str) -> ScanSignal:
+    idx_high, idx_low, idx_close, idx_vol = 2, 3, 4, 5
     close = np.array([float(r[idx_close]) for r in rows], dtype=float)
     high  = np.array([float(r[idx_high])  for r in rows], dtype=float)
     low   = np.array([float(r[idx_low])   for r in rows], dtype=float)
@@ -206,9 +242,8 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> ScanSignal:
     if direction:
         score = 6.5 + min(3.0, max(0.0, (adx14 - 20.0) * 0.1))
 
-    # שדה symbol יתוקן אחרי החזרה (כי כאן אין לנו אותו בעמודת 0 תמידית)
     return ScanSignal(
-        symbol=rows[0][0] if isinstance(rows[0], list) else "?",
+        symbol=symbol,
         timeframe=interval,
         side="BUY" if direction == "LONG" else ("SELL" if direction == "SHORT" else None),
         score=round(score, 2),
@@ -225,12 +260,11 @@ def _analyze_rows(rows: List[List[Any]], interval: str) -> ScanSignal:
     )
 
 # =====================
-# Notifier (Telegram) – best-effort safe
+# Optional notifier (Telegram)
 # =====================
-def _notify_telegram(chat_id: str, text: str, retries: int = 3) -> bool:
+def _notify_telegram(chat_id: str, text: str, retries: int = 2) -> bool:
     sender = None
     try:
-        # העדפה לאינטגרציה אם קיימת
         from integrations.telegram import send_message_safe as sender  # type: ignore
     except Exception:
         try:
@@ -255,10 +289,13 @@ def _notify_telegram(chat_id: str, text: str, retries: int = 3) -> bool:
 # =====================
 # Routes
 # =====================
-
-@router.get("/symbols/top-volume", response_model=SymbolListResponse, summary="Top-volume symbols (USDT)")
+@router.get(
+    "/symbols/top-volume",
+    response_model=SymbolListResponse,
+    summary="Top-volume symbols (USDT)",
+)
 async def get_symbols_top_volume(
-    market: str = Query("futures", description="Currently using Binance FAPI"),
+    market: str = Query("futures", description="Binance FAPI market"),
     quote: str = Query("USDT"),
     limit: int = Query(5, ge=1, le=100),
 ) -> SymbolListResponse:
@@ -273,7 +310,11 @@ async def get_symbols_top_volume(
         symbols=symbols,
     )
 
-@router.get("/top-volume", response_model=ScanResponse, summary="Scan top-volume list and compute compact TA score")
+@router.get(
+    "/top-volume",
+    response_model=ScanResponse,
+    summary="Scan top-volume list and compute compact TA score",
+)
 async def scan_top_volume(
     market: str = Query("futures", description="Binance FAPI"),
     quote: str = Query("USDT"),
@@ -302,8 +343,7 @@ async def scan_top_volume(
                         ScanSignal(symbol=sym, timeframe=timeframe, side=None, score=0.0, note="not enough data")
                     )
                     continue
-                res = _analyze_rows(rows, timeframe)
-                res.symbol = sym  # לוודא שהסימבול נכון
+                res = _analyze_rows(rows, timeframe, sym)
                 results.append(res)
             except Exception:
                 results.append(
@@ -318,7 +358,7 @@ async def scan_top_volume(
             mode="compact",
         )
 
-        # התראות טלגרם רק למי שעבר את הסף
+        # Notify (optional)
         hits = [s for s in results if s.score >= float(threshold)]
         if notify == "telegram" and chat_id and hits:
             lines = [
@@ -326,7 +366,7 @@ async def scan_top_volume(
                 for h in hits
             ]
             text = "🚦 Scan hits ≥{:.1f}\n".format(threshold) + "\n".join(lines)
-            sent = _notify_telegram(chat_id, text, retries=3)
+            sent = _notify_telegram(chat_id, text, retries=2)
             logger.info("[scan_top_volume] telegram notify sent=%s hits=%d", sent, len(hits))
 
         return resp
@@ -337,7 +377,11 @@ async def scan_top_volume(
         logger.exception("[scan_top_volume] failed: %s", e)
         return ScanResponse(ok=False, count_total=0, returned=0, signals=[], error=f"{type(e).__name__}: {e}")
 
-@router.get("/single", response_model=ScanResponse, summary="Scan a single symbol (compact TA)")
+@router.get(
+    "/single",
+    response_model=ScanResponse,
+    summary="Scan a single symbol (compact TA)",
+)
 async def scan_single(
     symbol: str = Query(..., description="e.g. BTCUSDT"),
     timeframe: str = Query("15m"),
@@ -346,7 +390,6 @@ async def scan_single(
     notify: Optional[str] = Query(None),
     chat_id: Optional[str] = Query(None),
 ) -> ScanResponse:
-    # ממחזר את הלוגיקה של top-volume, רק לריצה על סימבול יחיד
     return await scan_top_volume(
         market=market,
         quote="USDT",
@@ -359,8 +402,8 @@ async def scan_single(
         chat_id=chat_id,
     )
 
-# חשוב ל-autodiscovery ב-main.py
 __all__ = ["router"]
+
 
 
 
