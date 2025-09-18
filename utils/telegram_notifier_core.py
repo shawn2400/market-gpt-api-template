@@ -1,7 +1,22 @@
-# utils/telegram_notifier_core.py
+# utils/telegram_notifier_core.py  (Part 1/2)
 from __future__ import annotations
+"""
+ליבה ל־Telegram Notifier:
+- קונפיגורציה, קישוט הודעות (BSD), Rate-limit + Dedup
+- שליחה עם/בלי מקלדת
+- Bundling (איגוד הודעות) + פלש
+- עזרי זמן/פורמט
+- Auto-Approve policy helper
+- חנות שינויים (Redis/קובץ) — ההמשך בחלק 2
+"""
 
-import os, time, asyncio, logging, hashlib, hmac, json
+import os
+import time
+import asyncio
+import logging
+import hashlib
+import hmac
+import json
 from typing import Any, Dict, Optional, List, Tuple, Sequence
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode, quote
@@ -67,47 +82,8 @@ try:
 except Exception:
     AUTO_APPROVE_BUDGET_MAX_USD = 0.0
 AUTO_APPROVE_NIGHT = os.getenv("AUTO_APPROVE_NIGHT","0").lower() in ("1","true","yes","on")
-NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()  # e.g. "23-06"
-AUTO_APPROVE_TIER  = os.getenv("AUTO_APPROVE_TIER","").strip().lower()
-OPS_REQUIRE_ACTION_PARAM = os.getenv("OPS_REQUIRE_ACTION_PARAM","0").lower() in ("1","true","yes","on")
-
-def _parse_night(spec: str) -> Optional[Tuple[int,int]]:
-    try:
-        a, b = spec.split("-", 1)
-        return (int(a), int(b))
-    except Exception:
-        return None
-
-def _is_now_night(spec: str) -> bool:
-    rng = _parse_night(spec)
-    if not rng:
-        return False
-    a, b = rng
-    h = datetime.utcnow().hour
-    if a == b:
-        return True
-    if a < b:
-        return a <= h < b
-    # wrap midnight
-    return h >= a or h < b
-
-def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
-    """
-    Heuristic opt-in. אם מותר ב־ENV — נאשר אוטומטית טריידים קטנים/ברורים, למשל בלילה.
-    כלל: TELEGRAM_AUTO_APPROVE=1 AND (budget<=AUTO_APPROVE_BUDGET_MAX_USD) AND (אופציונלי: לילה/טיר).
-    """
-    if not TELEGRAM_AUTO_APPROVE:
-        return False
-    try:
-        budget = float(plan.get("budget_usd") or plan.get("budget") or 0.0)
-    except Exception:
-        budget = 0.0
-    if AUTO_APPROVE_BUDGET_MAX_USD and budget > AUTO_APPROVE_BUDGET_MAX_USD:
-        return False
-    if AUTO_APPROVE_NIGHT and NIGHT_HOURS_SPEC and not _is_now_night(NIGHT_HOURS_SPEC):
-        return False
-    # אופציונלי: tiers לפי score/side…
-    return True
+NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()  # e.g. "23-06" (IL time)
+AUTO_APPROVE_TIER  = (os.getenv("AUTO_APPROVE_TIER","") or "").strip().lower()  # e.g. "top10", "lowvol", etc. (אופציונלי שלך)
 
 # ===================== SL/TP defaults (fallbacks for presentation) =====================
 def _csv_floats(s: str) -> List[float]:
@@ -129,12 +105,12 @@ except Exception:
 DEFAULT_TP_BPS    = _csv_floats(os.getenv("DEFAULT_TP_BPS",""))
 DEFAULT_TP_SPLITS = _csv_floats(os.getenv("DEFAULT_TP_SPLITS",""))
 
-# ===================== Optional Redis (for digests) =====================
+# ===================== Optional Redis (for digests/change-log) =====================
 _redis = None
 try:
     _redis_url = os.getenv("REDIS_URL","").strip()
     if _redis_url:
-        import redis.asyncio as aioredis
+        import redis.asyncio as aioredis  # type: ignore
         _redis = aioredis.from_url(_redis_url, decode_responses=True)
 except Exception as _e:
     logger.debug({"event":"redis.disabled","reason":str(_e)})
@@ -243,6 +219,7 @@ async def _tg_send(text: str, chat_id: Optional[int] = None) -> None:
     try:
         await _http_send(text, chat_id=chat_id)
     except RuntimeError:
+        # fallback when called from non-async context
         try:
             asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id))
         except Exception:
@@ -261,28 +238,109 @@ async def _tg_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id:
             loop.run_until_complete(_http_send_with_markup(text, reply_markup, chat_id=chat_id))
             loop.close()
 
+# ===================== Bundling helpers =====================
+async def _flush_bundle() -> None:
+    """Flush bundled alerts immediately."""
+    global _bundle_items, _bundle_task
+    async with _bundle_lock:
+        if not _bundle_items:
+            return
+        text = f"{BUNDLE_TITLE}\n" + "\n".join(_bundle_items)
+        _bundle_items = []
+        _bundle_task = None
+    await _tg_send(text)
+
+async def _bundle_timer() -> None:
+    try:
+        await asyncio.sleep(max(5, BUNDLE_WINDOW_SEC))
+        await _flush_bundle()
+    except Exception as e:
+        logger.debug({"event":"bundle.timer.failed","err":str(e)})
+
+async def _bundle_add(text: str) -> None:
+    if not BUNDLE_ENABLE:
+        await _tg_send(text)
+        return
+    async with _bundle_lock:
+        _bundle_items.append(text)
+        if len(_bundle_items) >= BUNDLE_MAX_ITEMS:
+            await _flush_bundle()
+            return
+        global _bundle_task
+        if not _bundle_task or _bundle_task.done():
+            _bundle_task = asyncio.create_task(_bundle_timer())
+
+# ===================== Auto-approve policy =====================
+def _in_night_hours_il() -> bool:
+    if not NIGHT_HOURS_SPEC:
+        return False
+    try:
+        rng = NIGHT_HOURS_SPEC.replace(" ", "")
+        if "-" not in rng:
+            return False
+        a, b = rng.split("-", 1)
+        a = int(a); b = int(b)
+        now_il = datetime.now(timezone.utc).astimezone(_TZ_IL)
+        h = now_il.hour
+        if a <= b:
+            return a <= h < b
+        # wrap-around (e.g. 23-06)
+        return h >= a or h < b
+    except Exception:
+        return False
+
+def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
+    """כללים מינימליים: דגל כולל, תקציב מקסימלי, אופציונלי – שעות לילה/טיר."""
+    if not TELEGRAM_AUTO_APPROVE:
+        return False
+    try:
+        budget = float(plan.get("budget_usd") or plan.get("budget") or 0.0)
+    except Exception:
+        budget = 0.0
+    if AUTO_APPROVE_BUDGET_MAX_USD and budget > AUTO_APPROVE_BUDGET_MAX_USD:
+        return False
+    if AUTO_APPROVE_NIGHT and not _in_night_hours_il():
+        return False
+    # אפשר להרחיב לפי AUTO_APPROVE_TIER/score וכו'
+    return True
+# utils/telegram_notifier_core.py  (Part 2/2)
+from __future__ import annotations
+
+import os, json, hashlib, hmac, logging
+from typing import Any, Dict, Optional, List, Sequence
+from datetime import datetime, timezone, timedelta
+from urllib.parse import urlencode, quote
+
+logger = logging.getLogger("algogpt.tg.core2")
+
+# ייבוא סמוי של משתנים/פונקציות מהחלק הראשון (בקובץ האמיתי זה אותו מודול)
+# כאן מניחים שהחלק הראשון נטען לפני זה (באותו קובץ בפועל).
+
 # ===================== Change store (for digests/EOD) =====================
 async def _store_change_event(ev: Dict[str, Any]) -> None:
+    """Append change event to Redis (if configured) or to local file."""
+    from .telegram_notifier_core import _redis, _changes_file  # type: ignore
+    from .telegram_notifier_core import _now  # type: ignore
+
     ev = dict(ev)
     ev.setdefault("ts", _now())
-    ev.setdefault("date", datetime.fromtimestamp(ev["ts"], tz=timezone.utc).astimezone(_TZ_IL).strftime("%Y-%m-%d"))
-    data = json.dumps(ev, ensure_ascii=False)
-    if _redis:
-        try:
-            await _redis.rpush("ops:changes", data)
-            return
-        except Exception as e:
-            logger.debug({"event":"redis.store.failed","err":str(e)})
     try:
+        if _redis:
+            try:
+                await _redis.rpush("ops:changes", json.dumps(ev, ensure_ascii=False))
+                return
+            except Exception as e:
+                logger.debug({"event":"redis.store.failed","err":str(e)})
         with open(_changes_file, "a", encoding="utf-8") as f:
-            f.write(data + "\n")
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
     except Exception as e:
         logger.debug({"event":"file.store.failed","err":str(e)})
 
 async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
     out: List[Dict[str,Any]] = []
-    if _redis:
-        try:
+    from .telegram_notifier_core import _redis, _changes_file  # type: ignore
+    try:
+        if _redis:
             items = await _redis.lrange("ops:changes", 0, -1)
             for line in items:
                 try:
@@ -292,9 +350,7 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
                 except Exception:
                     pass
             return out
-        except Exception as e:
-            logger.debug({"event":"redis.load.failed","err":str(e)})
-    try:
+        # file fallback
         if os.path.exists(_changes_file):
             with open(_changes_file, "r", encoding="utf-8") as f:
                 for line in f:
@@ -305,7 +361,7 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
                     except Exception:
                         pass
     except Exception as e:
-        logger.debug({"event":"file.load.failed","err":str(e)})
+        logger.debug({"event":"load_changes.failed","err":str(e)})
     return out
 
 # ===================== URL helpers (approval links) =====================
@@ -322,11 +378,14 @@ def _sign(ticket_id: str, expires_epoch: int) -> str:
     return hmac.new(secret, msg, hashlib.sha256).hexdigest()
 
 def _ensure_ticket_urls(change: Dict[str, Any]) -> Dict[str, str]:
+    from .telegram_notifier_core import PUBLIC_HOST  # type: ignore
     tid     = change.get("ticket_id", "")
-    expires = int(change.get("ops_expires") or (_now() + int(change.get("ttl_sec", 600))))
+    expires = int(change.get("ops_expires") or (int(time.time()) + int(change.get("ttl_sec", 600))))
     approve_url = change.get("approve_url")
     reject_url  = change.get("reject_url")
     ticket_url  = change.get("ticket_url")
+    OPS_REQUIRE_ACTION_PARAM = os.getenv("OPS_REQUIRE_ACTION_PARAM","0").lower() in ("1","true","yes","on")
+
     if PUBLIC_HOST and tid and not (approve_url and reject_url and ticket_url):
         sig = _sign(tid, int(expires))
         q = {"ticket_id": tid, "expires": int(expires)}
@@ -342,16 +401,16 @@ def _ensure_ticket_urls(change: Dict[str, Any]) -> Dict[str, str]:
     return {"approve": approve_url or "", "reject": reject_url or "", "ticket": ticket_url or ""}
 
 def _build_trade_urls(idem: str, plan: Dict[str, Any]) -> Dict[str, str]:
-    # כיבוד approve_url/reject_url שקיבלת בפליילואד
-    for k in ("approve_url","reject_url","ticket_url"):
-        if plan.get(k):
-            return {
-                "approve": str(plan.get("approve_url","")),
-                "reject":  str(plan.get("reject_url","")),
-                "ticket":  str(plan.get("ticket_url","")),
-            }
+    # כיבוד approve_url/reject_url אם הגיעו בפליילואד
+    if plan.get("approve_url") or plan.get("reject_url") or plan.get("ticket_url"):
+        return {
+            "approve": str(plan.get("approve_url","")),
+            "reject":  str(plan.get("reject_url","")),
+            "ticket":  str(plan.get("ticket_url","")),
+        }
+    from .telegram_notifier_core import PUBLIC_HOST  # type: ignore
     if not PUBLIC_HOST:
-        return {"approve": "", "reject": "", "ticket": ""}  # ישתמשו ב-callback_data
+        return {"approve": "", "reject": "", "ticket": ""}
     qs = urlencode({"id": idem})
     return {
         "approve": f"{PUBLIC_HOST}/trade/approve?{qs}",
@@ -394,15 +453,6 @@ def _fmt_eta(sec: Any) -> str:
 def _em(emoji: str, text: str) -> str:
     return f"{emoji} {text}"
 
-# ===================== Public helpers for trade text =====================
-def _try_get_live_price(symbol: str) -> Optional[float]:
-    try:
-        from utils.binance_client import get_price  # אצלך קיים
-        p = get_price(symbol.upper())
-        return float(p) if p else None
-    except Exception:
-        return None
-
 def _fmt_side(side: str) -> str:
     s = (side or "").upper()
     if s in ("BUY","LONG"):  return "LONG 🟢"
@@ -426,10 +476,22 @@ def _tp_legs_to_lines(tp_legs: Optional[Sequence[Dict[str, Any]]],
         qty  = leg.get("qty") or leg.get("size") or leg.get("split")
         leg_eta = (eta or {}).get(f"tp{i}") or (eta or {}).get(f"tp{i}_sec")
         prob = (probs or {}).get(f"tp{i}") or (probs or {}).get(f"tp{i}_prob") or (probs or {}).get(f"prob_tp{i}")
-        qtxt = f"x{qty}" if (isinstance(qty,(int,float)) and float(qty) <= 1) else str(qty or "")
+        try:
+            qtxt = f"x{qty}" if (isinstance(qty,(int,float)) and float(qty) <= 1) else str(qty or "")
+        except Exception:
+            qtxt = str(qty or "")
         ptxt = _fmt_pct_prob(prob) if prob is not None else "—"
         lines.append(f"🎯 TP{i}: <code>{_fmt_num(px, 4)}</code> · split <code>{qtxt}</code> · ETA {_fmt_eta(leg_eta)} · p={ptxt}")
     return lines
+
+# ===================== Price helpers =====================
+def _try_get_live_price(symbol: str) -> Optional[float]:
+    try:
+        from utils.binance_client import get_price  # קיים אצלך
+        p = get_price(symbol.upper())
+        return float(p) if p is not None else None
+    except Exception:
+        return None
 
 # ===================== BTC Anchor (market mood) =====================
 def _ema(vals: List[float], period: int) -> Optional[float]:
@@ -442,18 +504,17 @@ def _ema(vals: List[float], period: int) -> Optional[float]:
     return float(ema)
 
 def get_btc_anchor_summary() -> str:
-    """Returns short BTC market mood line, best-effort, never throws."""
     sym = "BTCUSDT"
     try:
         from utils.get_klines import get_klines_sync
+        import os
         kl = get_klines_sync(sym, interval=os.getenv("ANCHOR_INTERVAL","1h"), limit=60)
         closes = [float(r[4]) for r in kl if r and len(r) > 4]
         if len(closes) >= 30:
             ema21 = _ema(closes[-30:], 21)
             ema50 = _ema(closes[-60:], 50) if len(closes) >= 60 else _ema(closes, 50)
         else:
-            ema21 = _ema(closes, 21)
-            ema50 = _ema(closes, 50)
+            ema21 = _ema(closes, 21); ema50 = _ema(closes, 50)
         last = closes[-1] if closes else _try_get_live_price(sym)
         trend = "⬆️ Bullish" if (ema21 and ema50 and ema21 > ema50) else ("⬇️ Bearish" if (ema21 and ema50 and ema21 < ema50) else "➡️ Side")
         arrow = ">" if (ema21 and ema50 and ema21 > ema50) else "<" if (ema21 and ema50 and ema21 < ema50) else "≈"
@@ -462,12 +523,47 @@ def get_btc_anchor_summary() -> str:
         price = _try_get_live_price(sym)
         return f"🧭 BTC: {_fmt_num(price,2)} · mood: —"
 
+# ===================== Simple change-ticket helpers / stubs =====================
+async def format_change_approval_he(change: Dict[str, Any]) -> str:
+    title = change.get("title") or change.get("summary") or "שינוי"
+    why = change.get("why") or change.get("reason") or "—"
+    return f"🧾 <b>{title}</b>\nלמה: {why}"
+
+async def send_change_approval_he(change: Dict[str, Any]) -> None:
+    from .telegram_notifier_core import _tg_send_with_markup  # type: ignore
+    urls = _ensure_ticket_urls(change)
+    kb = {"inline_keyboard": [
+        [{"text": "✅ אישור", "url": urls["approve"]},
+         {"text": "❌ דחייה", "url": urls["reject"]}],
+        ([{"text": "🎟️ Ticket", "url": urls["ticket"]}] if urls["ticket"] else [])
+    ]}
+    txt = await format_change_approval_he(change)
+    await _tg_send_with_markup(txt, kb)
+
+async def route_change_ticket(change: Dict[str, Any]) -> str:
+    # כאן אפשר לממש שמירה במערכת הכרטיסים שלך. נחזיר ticket_id אם קיים.
+    return str(change.get("ticket_id") or "")
+
+async def send_ops_digest_now() -> None:
+    from .telegram_notifier_core import _flush_bundle  # type: ignore
+    await _flush_bundle()
+
+async def send_eod_report_now(summary: Dict[str, Any]) -> None:
+    from .telegram_notifier_core import _tg_send  # type: ignore
+    pnl = summary.get("pnl","—")
+    t = summary.get("time","")
+    await _tg_send(f"📘 EOD {t} · PnL: {pnl}")
+
+async def ensure_ops_schedulers_started() -> bool:
+    # אם יש לך סקדיולרים פנימיים – תאתחל כאן. בינתיים no-op.
+    return True
+
 # ===================== Public API (exports) =====================
 __all__ = [
-    # config
+    # config-like (some are in Part 1)
     "BOT_TOKEN","CHAT_ID","API_BASE","PUBLIC_HOST",
     # explain flags
-    "set_explain_enabled","get_explain_enabled","EXPLAIN_MIN_SCORE","EXPLAIN_COOLDOWN_SEC","EXPLAIN_MAX_PER_MIN",
+    "set_explain_enabled","get_explain_enabled","EXPLAIN_MIN_SCORE",
     # send
     "_tg_send","_tg_send_with_markup","_bundle_add",
     # store
@@ -478,8 +574,12 @@ __all__ = [
     # urls/auto-approve
     "_ensure_ticket_urls","_build_trade_urls","should_auto_approve_trade",
     # anchor
-    "get_btc_anchor_summary"
+    "get_btc_anchor_summary",
+    # ops/change helpers
+    "format_change_approval_he","send_change_approval_he","route_change_ticket",
+    "send_ops_digest_now","send_eod_report_now","ensure_ops_schedulers_started",
 ]
+
 
 
 
