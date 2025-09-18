@@ -174,7 +174,6 @@ def _split_multi(s: str) -> Iterable[str]:
     import re
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
-# ברירות מחדל — כולל /status/auth + נתיבי דיבוג
 DEFAULT_PUBLIC_PATHS = {
     "/", "/openapi.json", "/health", "/healthz", "/readyz",
     "/docs", "/redoc",
@@ -185,12 +184,10 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health",
     "/_debug/auth", "/debug/env", "/debug/refresh-auth",
     "/executor/status",
-    # 👇 לאישור טלגרם ללא API key
     "/ops/approve", "/ops/reject",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
-# מה־ENV
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS", "")))
 CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
 
@@ -210,7 +207,7 @@ logger.info({
     "prefixes": sorted(EFFECTIVE_PUBLIC_PREFIXES),
 })
 
-# ---------- אימות גלובלי (שקוף לנתיבים ציבוריים) ----------
+# ---------- אימות גלובלי ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     path = request.url.path
@@ -234,7 +231,7 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-# ---------- include routers (Auto-discovery of routes.*) ----------
+# ---------- include routers ----------
 import pkgutil
 
 def _try_include(module_path: str) -> bool:
@@ -250,6 +247,10 @@ def _try_include(module_path: str) -> bool:
     return False
 
 _registered_paths = set()
+
+# ✅ include מפורש לסורק לפני האוטו-דיסקברי
+for _mod in ("routes.scan_top_volume", "routes.scan_now_alias"):
+    _try_include(_mod)
 
 # 🔎 אוטו-דיסקברי של כל המודולים תחת routes/*
 for m in pkgutil.iter_modules(['routes']):
@@ -327,7 +328,7 @@ if not _route_exists("/status/auth"):
         public = get_public_paths()
         return {"ok": True, "tokens_count": len(toks), "tokens": toks, "public": public}
 
-# public price (prefix כלול כברירת מחדל)
+# public price
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"
@@ -476,6 +477,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
