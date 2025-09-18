@@ -1,9 +1,9 @@
 # routes/scan_now_alias.py
 from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
-from typing import Optional, Dict, Any, List
+from typing import Optional, List, Dict, Any
 
-# auth (fallback בטוח)
+# --- auth (fallback בטוח) ---
 try:
     from utils.auth import require_bearer_token  # type: ignore
 except Exception:
@@ -12,95 +12,140 @@ except Exception:
 
 router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
-# נייבא את המימוש הראשי של הסורק
+# --- נייבא את הסורק הראשי ---
 try:
     from routes.scan_top_volume import scan_top_volume  # type: ignore
 except Exception:
     scan_top_volume = None
 
-@router.get("/now", summary="Alias to /scan/top-volume with optional POST-FILTER")
+
+def _passes_side(s: Optional[str]) -> bool:
+    return s in ("BUY", "SELL")
+
+
+def _post_filter(signals: List[Dict[str, Any]],
+                 min_score: Optional[float],
+                 require_side: bool) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for sig in signals or []:
+        score_ok = True if (min_score is None) else (float(sig.get("score") or 0.0) >= float(min_score))
+        side_ok = True if not require_side else _passes_side(sig.get("side"))
+        if score_ok and side_ok:
+            out.append(sig)
+    return out
+
+
+@router.get("/now", summary="Alias to /scan/top-volume (with post-filter + notify-on-filtered)")
 async def scan_now(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
     limit: int = Query(10, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
+
+    # תמיכה בסימבול בודד לשמירת תאימות (אם נשלח כאן, נפנה ל-top_volume עם symbol=)
     symbols: Optional[str] = Query(None, description="CSV e.g. BTCUSDT,ETHUSDT"),
-    # סף ניקוד: תאימות לאחור (אותו שם כמו קודם)
-    threshold: Optional[float] = Query(None, description="Minimum score (legacy)"),
-    # אלטרנטיבה יותר מפורשת (מפה ל-threshold אם לא סופק):
-    min_score: Optional[float] = Query(None, description="Minimum score to keep"),
-    # סינון תוצאות ללא צד (side null) כברירת מחדל
-    require_side: bool = Query(True, description="Keep only BUY/SELL signals"),
-    # פרמטרים של התראה (מועברים למימוש הראשי; כאן אין שליחה נוספת)
-    notify: Optional[str] = Query(None, description="telegram / none"),
+
+    # סף ישן/תואם לאחור (נשמר לתאימות, אבל נעדיף min_score)
+    threshold: Optional[float] = Query(None, description="Deprecated alias for min_score"),
+
+    # פרמטרים חדשים לפוסט-פילטר:
+    min_score: Optional[float] = Query(None, description="Minimum score after scan"),
+    require_side: bool = Query(False, description="If true, require side to be BUY/SELL (exclude null)"),
+
+    # התראות:
+    notify: Optional[str] = Query(None, description="telegram | none"),
     chat_id: Optional[str] = Query(None),
-    rich: Optional[int] = Query(None, description="1 for rich telegram buttons"),
-) -> Dict[str, Any]:
+    rich: int = Query(0, ge=0, le=1, description="If 1, try to send rich message with buttons"),
+):
     """
-    אליאס ל-/scan/top-volume, עם סינון משלים בצד ה-API:
-    - מחזיר רק BUY/SELL אם require_side=true (ברירת מחדל)
-    - מסנן לפי ניקוד score>=min_score/threshold אם ניתן
-    הערה: ההתראות (notify) מתבצעות במימוש הראשי. האליאס רק מסנן את הפלט החוזר.
+    שלבי עבודה:
+    1) מריצים את scan_top_volume ללא notify כדי לקבל תוצאות גולמיות.
+    2) מפעילים פוסט-פילטר (min_score/require_side).
+    3) אם יש notify=telegram – שולחים התראות *רק* על המסוננים:
+       כדי לעשות reuse ללוגיקת ההתראות שכבר קיימת ב-scan_top_volume,
+       נקרא אליו שוב לכל סימבול שעבר פילטר עם symbol=..., notify=telegram.
     """
     if not scan_top_volume:
-        return {"ok": False, "error": "scan_top_volume not available (import failed)", "returned": 0, "count_total": 0, "signals": []}
+        return {"ok": False, "error": "scan_top_volume not available (import failed)",
+                "returned": 0, "count_total": 0}
 
-    # תאימות: אם לא סופק min_score – נשתמש ב-threshold הישן
+    # תאימות: אם לא הועבר min_score אבל הועבר threshold – נשתמש בו:
     if min_score is None and threshold is not None:
         min_score = threshold
 
-    # אם הועברו סמלים — המרה לרשימה ובחירת סימבול יחיד (כמו קודם)
-    symbol = None
+    # האם יש סימבול יחיד שנשלח? (לשמירת תאימות)
+    single_symbol: Optional[str] = None
     if symbols:
         parts = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         if len(parts) == 1:
-            symbol = parts[0]
+            single_symbol = parts[0]
 
-    # קריאה למימוש הראשי (שגם יכול לבצע סינונים/התראות משלו)
-    base: Dict[str, Any] = await scan_top_volume(
+    # --- שלב 1: סריקה ללא notify (גולמי) ---
+    raw = await scan_top_volume(
         market=market,
         quote=quote,
         limit=limit,
         timeframe=timeframe,
         kline_limit=kline_limit,
-        symbol=symbol,
-        threshold=min_score if min_score is not None else (threshold if threshold is not None else 0.0),
-        notify=notify,
-        chat_id=chat_id,
+        symbol=single_symbol,
+        threshold=min_score if min_score is not None else 0.0,  # כדי לא להגביל מוקדם מדי
+        notify=None,
+        chat_id=None,
         rich=rich,
     )
 
-    signals: List[Dict[str, Any]] = list(base.get("signals") or [])
-    count_total = int(base.get("count_total") or len(signals))
+    # נוודא פורמט צפוי
+    ok = bool(raw and isinstance(raw, dict) and raw.get("ok", False))
+    signals = (raw.get("signals") if ok else []) or []
+    count_total = int(raw.get("count_total") or len(signals))
+    mode = raw.get("mode") or "compact"
 
-    # פוסט-פילטר בצד האליאס (שקוף ולא שולח התראות בעצמו)
-    filtered: List[Dict[str, Any]] = []
-    for s in signals:
-        side = (s.get("side") or "").upper()
-        score = float(s.get("score") or 0.0)
-        if require_side and side not in ("BUY", "SELL"):
-            continue
-        if min_score is not None and score < float(min_score):
-            continue
-        filtered.append(s)
+    # --- שלב 2: פוסט-פילטר ---
+    filtered = _post_filter(signals, min_score=min_score, require_side=require_side)
 
+    # --- שלב 3: אם ביקשת התראה – נשלח רק למסוננים ---
+    notified = 0
+    notify_error: Optional[str] = None
+    if notify and notify.lower() == "telegram" and chat_id:
+        try:
+            # נבצע reuse: לכל סימבול שעבר פילטר – נקרא שוב ל-top_volume
+            # עם symbol=<X> ו-notify=telegram (הוא ישלח את ההודעה, כולל rich אם קיים).
+            for sig in filtered:
+                sym = sig.get("symbol")
+                if not sym:
+                    continue
+                _ = await scan_top_volume(
+                    market=market,
+                    quote=quote,
+                    limit=1,  # לא צריך יותר
+                    timeframe=timeframe,
+                    kline_limit=kline_limit,
+                    symbol=str(sym),
+                    threshold=min_score if min_score is not None else 0.0,
+                    notify="telegram",
+                    chat_id=chat_id,
+                    rich=rich,
+                )
+                notified += 1
+        except Exception as e:
+            notify_error = str(e)
+
+    # תשובה לקליינט: רק המסוננים
     return {
         "ok": True,
-        "market": market,
-        "quote": quote,
-        "mode": base.get("mode") or "compact",
-        "count_total": count_total,
-        "returned": len(filtered),
-        "signals": filtered,
-        "applied_filters": {
-            "require_side": require_side,
-            "min_score": min_score,
-        },
-        "error": None if base.get("ok") else (base.get("error") or "upstream_error"),
+        "count_total": count_total,        # כמה היו גולמיים
+        "returned": len(filtered),         # כמה אחרי פילטר
+        "signals": filtered,               # רק המסוננים
+        "mode": mode,
+        "notified": notified,
+        "notify_error": notify_error,
+        "post_filter": {"min_score": min_score, "require_side": require_side},
     }
 
+
 __all__ = ["router"]
+
 
 
 
