@@ -1,187 +1,115 @@
 # routes/ops_approve.py
 from __future__ import annotations
-from fastapi import APIRouter, Query, Request
 from typing import Optional, Dict, Any
 import os
-import asyncio
+import time
+import httpx
+from fastapi import APIRouter, Query
 
-router = APIRouter(prefix="/ops", tags=["Ops"])  # בכוונה ללא דרישת טוקן (ציבורי) – כמו ב-main.py
+router = APIRouter(prefix="/ops", tags=["Ops"])
 
-# קביעות ברירת מחדל לביצוע הטרייד אחרי אישור
-OPS_DEFAULTS = {
-    "market": os.getenv("OPS_DEFAULT_MARKET", "futures"),
-    "account_id": os.getenv("OPS_DEFAULT_ACCOUNT", "main"),
-    "budget": float(os.getenv("OPS_DEFAULT_BUDGET", "10")),
-    "leverage": int(os.getenv("OPS_DEFAULT_LEVERAGE", "10")),
-    "grids": int(os.getenv("OPS_DEFAULT_GRIDS", "3")),
-    "dry_run": (os.getenv("OPS_DRY_RUN", "0").lower() in ("1", "true", "yes", "on")),
-    "side_spot_buy": os.getenv("OPS_SPOT_BUY", "BUY"),     # עבור spot
-    "side_spot_sell": os.getenv("OPS_SPOT_SELL", "SELL"),
-    "side_fut_long": os.getenv("OPS_FUT_LONG", "LONG"),    # עבור futures
-    "side_fut_short": os.getenv("OPS_FUT_SHORT", "SHORT"),
-}
+# ⚙️ קריאה פנימית אל /grid/trade
+PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").rstrip("/")
+INTERNAL_TOKEN = os.getenv("OPS_INTERNAL_TOKEN") or os.getenv("API_TOKEN") or os.getenv("TOKEN")
 
-# אסימון פנימי עבור קריאה עצמית ל-/grid/trade (מוגן)
-INTERNAL_TOKEN = os.getenv("OPS_INTERNAL_TOKEN", os.getenv("API_TOKEN", os.getenv("TOKEN", ""))).strip()
+def _bool(x: Optional[str | bool]) -> Optional[bool]:
+    if isinstance(x, bool):
+        return x
+    if x is None:
+        return None
+    s = str(x).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return None
 
+async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not PUBLIC_HOST:
+        return {"ok": False, "error": "PUBLIC_HOST not set"}
+    if not INTERNAL_TOKEN:
+        return {"ok": False, "error": "OPS_INTERNAL_TOKEN not set"}
+    url = f"{PUBLIC_HOST}/grid/trade"
+    headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(url, headers=headers, json=payload)
+            data = r.json() if r.headers.get("content-type","").startswith("application/json") else {"text": r.text}
+            return {"ok": r.status_code < 400, "status": r.status_code, "response": data}
+    except Exception as e:
+        return {"ok": False, "error": f"http_error: {e}"}
 
-async def _place_grid_trade(
-    base_url: str,
-    auth_token: str,
-    symbol: str,
-    side: str,
-    market: str,
-    account_id: str,
-    budget: float,
-    leverage: Optional[int],
-    grids: int,
-    dry_run: bool,
+@router.get("/approve", summary="Approve trade from Telegram/ops and trigger grid/trade")
+async def ops_approve(
+    symbol: str = Query(..., description="e.g. BTCUSDT"),
+    side: str = Query(..., description="BUY/SELL for spot or LONG/SHORT for futures"),
+    # אופציונלי: מטא־דטה מהסריקה
+    tf: Optional[str] = Query("15m", description="timeframe"),
+    score: Optional[float] = Query(None),
+    src: Optional[str] = Query("scan"),
+    chat_id: Optional[str] = Query(None),
+    # פרמטרים למסחר
+    market: str = Query("futures", description="futures|spot"),
+    account_id: str = Query("main"),
+    budget: float = Query(10.0),
+    leverage: Optional[int] = Query(10),
+    grids: int = Query(3),
+    dry_run: Optional[bool] = Query(True),
 ) -> Dict[str, Any]:
-    """שולח POST ל-/grid/trade בשרת הנוכחי."""
-    import httpx
+    """
+    מאשר טרייד ומטריגר grid/trade פנימי עם הטוקן של השרת.
+    נתיב ציבורי (לפי המידלוואר), לא דורש API key מהקליינט.
+    """
     payload: Dict[str, Any] = {
-        "symbol": symbol,
-        "side": side,
+        "symbol": symbol.upper(),
+        "side": side.upper(),
         "budget": float(budget),
         "grids": int(grids),
-        "dry_run": bool(dry_run),
-        "market": market,
+        "dry_run": bool(_bool(dry_run) if dry_run is not None else True),
+        "market": market.lower(),
         "account_id": account_id,
+        # שדות עזר (לא מזיקים אם /grid/trade מתעלם מהם)
+        "meta": {
+            "source": src or "ops",
+            "timeframe": tf,
+            "score": score,
+            "approved_via": "GET /ops/approve",
+            "ts": int(time.time()),
+            "chat_id": chat_id,
+        },
     }
-    if market.lower().startswith("future"):
-        payload["leverage"] = int(leverage or 1)
+    if leverage is not None:
+        payload["leverage"] = int(leverage)
 
-    headers = {}
-    if auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
-    headers["Content-Type"] = "application/json"
-
-    async with httpx.AsyncClient(timeout=20.0) as cli:
-        r = await cli.post(f"{base_url.rstrip('/')}/grid/trade", json=payload, headers=headers)
-        try:
-            data = r.json()
-        except Exception:
-            data = {"status_code": r.status_code, "text": r.text}
-        data["_http_status"] = r.status_code
-        return data
-
-
-def _map_side_for_market(scan_side: str, market: str) -> str:
-    """
-    scan_side מגיע בדרך כלל BUY/SELL.
-    נעשה מיפוי:
-      - futures: BUY -> LONG, SELL -> SHORT
-      - spot: נשאיר BUY/SELL
-    """
-    s = (scan_side or "").upper()
-    if market.lower().startswith("future"):
-        if s == "BUY":
-            return OPS_DEFAULTS["side_fut_long"]
-        if s == "SELL":
-            return OPS_DEFAULTS["side_fut_short"]
-        return OPS_DEFAULTS["side_fut_long"]
-    # spot
-    if s in ("BUY", "SELL"):
-        return s
-    return OPS_DEFAULTS["side_spot_buy"]
-
-
-async def _telegram_notify(chat_id: Optional[str], text: str) -> None:
-    """נשלח הודעת טלגרם קטנה אם ניתן (best-effort)."""
-    if not chat_id:
-        return
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not bot_token:
-        return
-    import httpx
-    api = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(api, json=payload)
-    except Exception:
-        pass
-
-
-@router.get("/approve", summary="Approve trade from Telegram (public)")
-async def ops_approve(
-    request: Request,
-    symbol: str = Query(...),
-    side: str = Query(..., description="BUY/SELL from scan; will be mapped to LONG/SHORT for futures"),
-    tf: Optional[str] = Query(None, description="Timeframe (meta)"),
-    score: Optional[float] = Query(None),
-    src: Optional[str] = Query(None, description="source tag, e.g., scan"),
-    market: Optional[str] = Query(None, description="Override market, default from env"),
-    account_id: Optional[str] = Query(None),
-    budget: Optional[float] = Query(None),
-    leverage: Optional[int] = Query(None),
-    grids: Optional[int] = Query(None),
-    dry_run: Optional[bool] = Query(None),
-    chat_id: Optional[str] = Query(None, description="Optional chat to echo status"),
-) -> Dict[str, Any]:
-    base_url = os.getenv("PUBLIC_HOST", "").strip() or str(request.base_url).rstrip("/")
-    mkt = (market or OPS_DEFAULTS["market"]).lower()
-    acct = account_id or OPS_DEFAULTS["account_id"]
-    budg = float(budget if budget is not None else OPS_DEFAULTS["budget"])
-    lev = int(leverage if leverage is not None else OPS_DEFAULTS["leverage"])
-    grd = int(grids if grids is not None else OPS_DEFAULTS["grids"])
-    dry = bool(OPS_DEFAULTS["dry_run"] if dry_run is None else dry_run)
-
-    eff_side = _map_side_for_market(side, mkt)
-
-    # בצע בפועל:
-    res = await _place_grid_trade(
-        base_url=base_url,
-        auth_token=INTERNAL_TOKEN,
-        symbol=symbol.upper(),
-        side=eff_side,
-        market=mkt,
-        account_id=acct,
-        budget=budg,
-        leverage=lev if mkt.startswith("future") else None,
-        grids=grd,
-        dry_run=dry,
-    )
-    ok = bool(res.get("ok", False)) and (200 <= int(res.get("_http_status", 0)) < 300)
-
-    # החזר למשתמש + הודעה לטלגרם
-    msg = (
-        f"✅ APPROVED {symbol.upper()} {eff_side} (market={mkt}, budget={budg}, "
-        f"grids={grd}{', lev='+str(lev) if mkt.startswith('future') else ''}, "
-        f"dry_run={dry}) — {'OK' if ok else 'FAILED'}"
-    )
-    asyncio.create_task(_telegram_notify(chat_id, msg))
-
+    result = await _post_grid_trade(payload)
     return {
-        "ok": ok,
+        "ok": bool(result.get("ok")),
         "action": "approve",
         "symbol": symbol.upper(),
-        "side_effective": eff_side,
-        "market": mkt,
-        "account_id": acct,
-        "budget": budg,
-        "grids": grd,
-        "leverage": lev if mkt.startswith("future") else None,
-        "dry_run": dry,
-        "tf": tf,
-        "score": score,
-        "src": src or "scan",
-        "grid_trade_result": res,
-        "note": "Triggered /grid/trade",
+        "side": side.upper(),
+        "market": market.lower(),
+        "request": payload,
+        "result": result,
     }
 
-
-@router.get("/reject", summary="Reject trade from Telegram (public)")
+@router.get("/reject", summary="Reject trade (no-op, with audit echo)")
 async def ops_reject(
-    request: Request,
     symbol: str = Query(...),
-    side: Optional[str] = Query(None),
-    tf: Optional[str] = Query(None),
+    side: str = Query(...),
+    tf: Optional[str] = Query("15m"),
     score: Optional[float] = Query(None),
-    src: Optional[str] = Query(None),
+    src: Optional[str] = Query("scan"),
     chat_id: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
-    msg = f"⛔ REJECTED {symbol.upper()} {side or ''} (tf={tf}, score={score})"
-    import asyncio
-    asyncio.create_task(_telegram_notify(chat_id, msg))
-    return {"ok": True, "action": "reject", "symbol": symbol.upper(), "side": side, "tf": tf, "score": score, "src": src or "scan"}
+    """
+    דחיית טרייד (ללא פעולה למסחר) — מחזיר אקו לטובת לוג/טלגרם.
+    """
+    return {
+        "ok": True,
+        "action": "reject",
+        "symbol": symbol.upper(),
+        "side": side.upper(),
+        "meta": {"source": src, "timeframe": tf, "score": score, "chat_id": chat_id, "ts": int(time.time())},
+    }
+
+__all__ = ["router"]
