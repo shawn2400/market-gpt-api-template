@@ -67,8 +67,47 @@ try:
 except Exception:
     AUTO_APPROVE_BUDGET_MAX_USD = 0.0
 AUTO_APPROVE_NIGHT = os.getenv("AUTO_APPROVE_NIGHT","0").lower() in ("1","true","yes","on")
-NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()
+NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()  # e.g. "23-06"
 AUTO_APPROVE_TIER  = os.getenv("AUTO_APPROVE_TIER","").strip().lower()
+OPS_REQUIRE_ACTION_PARAM = os.getenv("OPS_REQUIRE_ACTION_PARAM","0").lower() in ("1","true","yes","on")
+
+def _parse_night(spec: str) -> Optional[Tuple[int,int]]:
+    try:
+        a, b = spec.split("-", 1)
+        return (int(a), int(b))
+    except Exception:
+        return None
+
+def _is_now_night(spec: str) -> bool:
+    rng = _parse_night(spec)
+    if not rng:
+        return False
+    a, b = rng
+    h = datetime.utcnow().hour
+    if a == b:
+        return True
+    if a < b:
+        return a <= h < b
+    # wrap midnight
+    return h >= a or h < b
+
+def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
+    """
+    Heuristic opt-in. אם מותר ב־ENV — נאשר אוטומטית טריידים קטנים/ברורים, למשל בלילה.
+    כלל: TELEGRAM_AUTO_APPROVE=1 AND (budget<=AUTO_APPROVE_BUDGET_MAX_USD) AND (אופציונלי: לילה/טיר).
+    """
+    if not TELEGRAM_AUTO_APPROVE:
+        return False
+    try:
+        budget = float(plan.get("budget_usd") or plan.get("budget") or 0.0)
+    except Exception:
+        budget = 0.0
+    if AUTO_APPROVE_BUDGET_MAX_USD and budget > AUTO_APPROVE_BUDGET_MAX_USD:
+        return False
+    if AUTO_APPROVE_NIGHT and NIGHT_HOURS_SPEC and not _is_now_night(NIGHT_HOURS_SPEC):
+        return False
+    # אופציונלי: tiers לפי score/side…
+    return True
 
 # ===================== SL/TP defaults (fallbacks for presentation) =====================
 def _csv_floats(s: str) -> List[float]:
@@ -270,8 +309,6 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
     return out
 
 # ===================== URL helpers (approval links) =====================
-OPS_REQUIRE_ACTION_PARAM = os.getenv("OPS_REQUIRE_ACTION_PARAM","0").lower() in ("1","true","yes","on")
-
 def _get_sign_secret() -> bytes:
     # תמיכה ב־OPS_SIGN_SECRET (חדש). אם לא קיים — fallback ל־WEBHOOK_HMAC_SECRET הישן.
     sec = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","") or "").encode("utf-8")
@@ -314,7 +351,7 @@ def _build_trade_urls(idem: str, plan: Dict[str, Any]) -> Dict[str, str]:
                 "ticket":  str(plan.get("ticket_url","")),
             }
     if not PUBLIC_HOST:
-        return {"approve": "", "reject": "", "ticket": ""}
+        return {"approve": "", "reject": "", "ticket": ""}  # ישתמשו ב-callback_data
     qs = urlencode({"id": idem})
     return {
         "approve": f"{PUBLIC_HOST}/trade/approve?{qs}",
@@ -441,7 +478,8 @@ __all__ = [
     # urls/auto-approve
     "_ensure_ticket_urls","_build_trade_urls","should_auto_approve_trade",
     # anchor
-    "get_btc_anchor_summary",
+    "get_btc_anchor_summary"
 ]
+
 
 
