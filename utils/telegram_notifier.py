@@ -1,4 +1,3 @@
-# utils/telegram_notifier.py (Part 1/2)
 from __future__ import annotations
 
 import os, asyncio, logging, json, time
@@ -26,7 +25,6 @@ from .telegram_notifier_core import (
 logger = logging.getLogger("algogpt.tg")
 
 # ========= Optional estimation helpers (best-effort) =========
-# אם הוספת utils/estimation.py – נשתמש בו. אחרת לא נקרוס.
 try:
     from utils.estimation import make_estimations  # returns {probs, eta, tp_profit_usd, expected_pnl_usd}
 except Exception:
@@ -40,10 +38,6 @@ except Exception:
 
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
-    """
-    שולח הודעת 'אין טריידים' (רק אם SCAN_NO_TRADES_NOTIFY=1).
-    אופציונלית מוסיף סיבה ו־top-3 סימבולים עם ציון נמוך-גבולי.
-    """
     if os.getenv("SCAN_NO_TRADES_NOTIFY", "0").lower() not in ("1", "true", "yes", "on"):
         return
     lines = ["📭 לא נמצאו טריידים תואמים לסף.", "No matching trades at the moment."]
@@ -108,7 +102,7 @@ async def register_webhook() -> bool:
         logger.warning({"event": "register_webhook_failed", "error": str(e)})
         return False
 
-# ===================== Explain Trade (throttled upstream in core) =====================
+# ===================== Explain Trade =====================
 async def notify_explain_trade(plan: Dict[str, Any]) -> None:
     if not get_explain_enabled():
         return
@@ -175,15 +169,6 @@ def _trim_reason(reason: Any, limit: int = 240) -> str:
     return text or "—"
 
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
-    """
-    שולח כרטיס אישור עשיר:
-    • שורת Anchor BTC  · NOW price, Entry, SL, TP (עם ETA/Prob/Profit$ אם זמינים)
-    • Budget + Expected PnL
-    • Order type + TTL
-    • סיבה מקוצרת (why)
-    • כפתורי אישור/דחייה כ-callback_data (נקלטים ע"י /telegram/callback), ו־Ticket כ-URL
-    """
-    # Estimations (best-effort)
     est     = make_estimations(plan)
     probs   = est.get("probs") or {}
     eta     = est.get("eta") or {}
@@ -207,7 +192,6 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     why_txt = _trim_reason(reason)
     kind    = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
 
-    # TP lines with ETA/prob/profit-$
     tp_lines = _tp_legs_to_lines(tp_legs, eta=eta, probs=probs)
     if tp_lines and tp_pnl:
         new_lines = []
@@ -250,11 +234,11 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
             lines.append(f"📊 <b>Allocation</b>: {float(plan['allocation_pct']):.0f}%")
         except Exception:
             pass
-    lines.append(f"🧠 <b>למה נבחר</b>: {why_txt}")
+    lines.append(f"🧠 <b>למה נבחר</b>: {why_txt}")   # ✅ תיקון תגית HTML
     lines.append("— — —")
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
-    # ✅ מעבר ל-callback_data עבור Approve/Reject; Ticket נשאר URL (אם זמין)
+    # ✅ callback_data; Ticket (אם יש) נשאר URL
     urls = _build_trade_urls(idem, plan)
     kb_rows: List[List[Dict[str, Any]]] = [
         [
@@ -267,9 +251,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
 
     kb = {"inline_keyboard": kb_rows}
     await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
-# utils/telegram_notifier.py (Part 2/2)
 from __future__ import annotations
-
 from typing import Any, Dict, Optional, List
 
 from .telegram_notifier_core import (
@@ -350,6 +332,8 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
 from .telegram_notifier_core import (
     format_change_approval_he, send_change_approval_he, route_change_ticket,
     send_ops_digest_now, send_eod_report_now, ensure_ops_schedulers_started,
+    # exports for __all__
+    set_explain_enabled, get_explain_enabled, should_auto_approve_trade
 )
 
 # ===================== Public API =====================
