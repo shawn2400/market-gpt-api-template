@@ -58,7 +58,7 @@ AUTO_APPROVE_NIGHT = os.getenv("AUTO_APPROVE_NIGHT","0").lower() in ("1","true",
 NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()
 AUTO_APPROVE_TIER  = os.getenv("AUTO_APPROVE_TIER","").strip().lower()
 
-# ===================== SL/TP defaults (fallbacks for presentation) =====================
+# ===================== SL/TP defaults (fallbacks) =====================
 def _csv_floats(s: str) -> List[float]:
     out: List[float] = []
     for x in (s or "").split(","):
@@ -136,7 +136,15 @@ def _dedup_allow(text: str) -> bool:
                 _dedup_map.pop(k, None)
     return True
 
-# ===================== Low-level send =====================
+# ===================== Low-level send (with prayer header/footer) =====================
+_PRAYER_HDR = os.getenv("MSG_HEADER_BSD", "בס\"ד").strip()
+_PRAYER_FTR = os.getenv("MSG_FOOTER_BH", "בעזרת ה׳ נעשה ונצליח ✨🙏").strip()
+
+def _wrap_blessing(text: str) -> str:
+    head = f"<b>{_PRAYER_HDR}</b>\n" if _PRAYER_HDR else ""
+    foot = f"\n\n<i>{_PRAYER_FTR}</i>" if _PRAYER_FTR else ""
+    return head + text + foot
+
 async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
     if not BOT_TOKEN or (chat_id is None and CHAT_ID == 0):
         logger.debug({"event":"tg.skip_send","reason":"missing_token_or_chat"})
@@ -144,7 +152,8 @@ async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
     if not _rl_allow():
         logger.debug({"event":"tg.rate_limited","drop":True})
         return
-    if not _dedup_allow(text):
+    wrapped = _wrap_blessing(text)
+    if not _dedup_allow(wrapped):
         logger.debug({"event":"tg.dup_suppressed"})
         return
     cid = chat_id if chat_id is not None else CHAT_ID
@@ -153,7 +162,7 @@ async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/sendMessage", data={
                 "chat_id": cid,
-                "text": text,
+                "text": wrapped,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             })
@@ -168,7 +177,9 @@ async def _http_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_i
         logger.debug({"event":"tg.rate_limited","drop":True})
         return
     keytext = text + json.dumps(reply_markup, sort_keys=True, ensure_ascii=False)
-    if not _dedup_allow(keytext):
+    wrapped = _wrap_blessing(text)
+    keytext_wrapped = wrapped + json.dumps(reply_markup, sort_keys=True, ensure_ascii=False)
+    if not _dedup_allow(keytext_wrapped):
         logger.debug({"event":"tg.dup_suppressed"})
         return
     cid = chat_id if chat_id is not None else CHAT_ID
@@ -177,7 +188,7 @@ async def _http_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_i
         async with httpx.AsyncClient(timeout=10.0) as cli:
             await cli.post(f"{API_BASE}/sendMessage", json={
                 "chat_id": cid,
-                "text": text,
+                "text": wrapped,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
                 "reply_markup": reply_markup,
@@ -249,7 +260,7 @@ async def _bundle_add(msg: str) -> None:
         _bundle_items.append(msg)
     await _bundle_schedule_flush()
 
-# ===================== Change store (for digests/EOD) =====================
+# ===================== Change store =====================
 async def _store_change_event(ev: Dict[str, Any]) -> None:
     ev = dict(ev)
     ev.setdefault("ts", _now())
@@ -299,8 +310,13 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
 # ===================== URL helpers (approval links) =====================
 OPS_REQUIRE_ACTION_PARAM = os.getenv("OPS_REQUIRE_ACTION_PARAM","0").lower() in ("1","true","yes","on")
 
+def _get_sign_secret() -> bytes:
+    # תמיכה ב־OPS_SIGN_SECRET (חדש). אם לא קיים — fallback ל־WEBHOOK_HMAC_SECRET הישן.
+    sec = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","") or "").encode("utf-8")
+    return sec
+
 def _sign(ticket_id: str, expires_epoch: int) -> str:
-    secret = (os.getenv("WEBHOOK_HMAC_SECRET","") or "").encode("utf-8")
+    secret = _get_sign_secret()
     if not secret:
         return ""
     msg = f"{ticket_id}:{expires_epoch}".encode("utf-8")
@@ -327,9 +343,9 @@ def _ensure_ticket_urls(change: Dict[str, Any]) -> Dict[str, str]:
     return {"approve": approve_url or "", "reject": reject_url or "", "ticket": ticket_url or ""}
 
 def _build_trade_urls(idem: str, plan: Dict[str, Any]) -> Dict[str, str]:
-    # אם הועברו approve_url/reject_url/ticket_url בפלֵיילואד — נכבד אותם
+    # כיבוד approve_url/reject_url שקיבלת בפליילואד
     for k in ("approve_url","reject_url","ticket_url"):
-        if plan.get(k):  # אם כבר קיימים – החזר כפי שהם
+        if plan.get(k):
             return {
                 "approve": str(plan.get("approve_url","")),
                 "reject":  str(plan.get("reject_url","")),
@@ -346,7 +362,6 @@ def _build_trade_urls(idem: str, plan: Dict[str, Any]) -> Dict[str, str]:
 
 # ===================== Night windows =====================
 def _parse_night_windows(spec: str) -> List[Tuple[int,int]]:
-    # "00-06,22-23" → [(0,6),(22,23)]
     out: List[Tuple[int,int]] = []
     for chunk in (spec or "").split(","):
         chunk = chunk.strip()
@@ -371,22 +386,14 @@ def _is_now_night_il(now: Optional[datetime] = None) -> bool:
     now = now or datetime.now(_TZ_IL)
     h = now.hour
     for a,b in _NIGHT_WINDOWS:
-        if a <= b and a <= h <= b:      # רגיל
+        if a <= b and a <= h <= b:
             return True
-        if a > b and (h >= a or h <= b):  # חלון חוצה חצות
+        if a > b and (h >= a or h <= b):
             return True
     return False
 
 # ===================== Auto-approval decision for trades =====================
 def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
-    """
-    כללים:
-      1) TELEGRAM_AUTO_APPROVE=1 → תמיד מאשר.
-      2) אם tier של הלקוח/חשבון תואם AUTO_APPROVE_TIER → מאשר.
-      3) אם בלילה (לפי NIGHT_HOURS) → מאשר.
-      4) תקציב <= AUTO_APPROVE_BUDGET_MAX_USD → מאשר.
-      אחרת → אישור ידני בטלגרם.
-    """
     if TELEGRAM_AUTO_APPROVE:
         return True
     tier = (str(plan.get("tier") or plan.get("account_tier") or "").strip().lower())
@@ -440,7 +447,7 @@ def _em(emoji: str, text: str) -> str:
 # ===================== Public helpers for trade text =====================
 def _try_get_live_price(symbol: str) -> Optional[float]:
     try:
-        from utils.binance_client import get_price  # אצלך קיים
+        from utils.binance_client import get_price
         p = get_price(symbol.upper())
         return float(p) if p else None
     except Exception:
@@ -475,17 +482,12 @@ def _tp_legs_to_lines(tp_legs: Optional[Sequence[Dict[str, Any]]],
     return lines
 
 __all__ = [
-    # config
     "BOT_TOKEN","CHAT_ID","API_BASE","PUBLIC_HOST",
-    # explain flags
     "set_explain_enabled","get_explain_enabled","EXPLAIN_MIN_SCORE","EXPLAIN_COOLDOWN_SEC","EXPLAIN_MAX_PER_MIN",
-    # send
     "_tg_send","_tg_send_with_markup","_bundle_add",
-    # store
     "_store_change_event","_load_changes_since",
-    # fmt helpers
     "_fmt_il","_fmt_usd","_fmt_num","_fmt_pct","_fmt_pct_prob","_fmt_eta","_em",
     "_fmt_side","_fmt_order_type","_tp_legs_to_lines","_try_get_live_price",
-    # urls/auto-approve
     "_ensure_ticket_urls","_build_trade_urls","should_auto_approve_trade",
 ]
+
