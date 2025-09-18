@@ -1,26 +1,34 @@
 # utils/telegram_notifier.py
 from __future__ import annotations
+"""
+עטיפת נוחות לשיגור הודעות/אישורים לטלגרם עבור טריידים.
+— משתמש בליבה utils/telegram_notifier_core
+— כולל הודעות סריקה/שגיאה/Heartbeat/סיכום יום
+— כרטיס אישור עשיר עם קישורי Approve/Reject
+"""
 
-import os, asyncio, logging, json, time
+import os
+import asyncio
+import logging
+import json
+import time
 from typing import Any, Dict, Optional, List
-from datetime import datetime
 
 from .telegram_notifier_core import (
     # cfg
     BOT_TOKEN, CHAT_ID, API_BASE, PUBLIC_HOST,
     # explain flags
-    set_explain_enabled, get_explain_enabled,
-    EXPLAIN_MIN_SCORE,
+    set_explain_enabled, get_explain_enabled, EXPLAIN_MIN_SCORE,
     # send helpers
     _tg_send, _tg_send_with_markup, _bundle_add,
     # store / digests
     _store_change_event, _load_changes_since,
     # fmt helpers
-    _fmt_il, _fmt_usd, _fmt_num, _fmt_pct_prob, _fmt_eta, _em,
+    _fmt_il, _fmt_usd, _fmt_num, _fmt_pct, _fmt_pct_prob, _fmt_eta, _em,
     _fmt_side, _fmt_order_type, _tp_legs_to_lines, _try_get_live_price,
-    # urls / approvals
+    # urls / policy
     _ensure_ticket_urls, _build_trade_urls, should_auto_approve_trade,
-    # market anchor
+    # anchor
     get_btc_anchor_summary,
 )
 
@@ -165,18 +173,23 @@ def _trim_reason(reason: Any, limit: int = 240) -> str:
         text = "; ".join([str(x) for x in reason if x])
     elif isinstance(reason, dict):
         text = reason.get("why") or reason.get("explain") or reason.get("summary") or ""
-    text = text.strip()
+    text = (text or "").strip()
     if len(text) > limit:
         text = text[: limit - 1] + "…"
     return text or "—"
 
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
     """
-    כרטיס אישור עשיר: עוגן שוק, now price, Entry, SL, TP (כולל ETA/Prob אם זמינים), Budget, Expected PnL, Order type, TTL,
-    ולמטה כפתורי אישור/דחייה.
-    • אם PUBLIC_HOST+OPS_SIGN_SECRET → כפתורי URL חתומים (approve/reject/ticket).
-    • אחרת → כפתורי callback_data ("CONFIRM:APPROVE:{idem}") שמטופלים ב-/telegram/callback.
+    הודעת אישור עשירה עם:
+    • מצב שוק BTC Anchor
+    • NOW price, Entry, SL, TP Legs (עם ETA/סיכויים/רווח $ אם קיים)
+    • Success probability
+    • Budget, Expected PnL
+    • Order type, TTL
+    • Why (תקציר)
+    • כפתורי Approve/Reject
     """
+    # Estimations (best-effort)
     est     = make_estimations(plan)
     probs   = est.get("probs") or {}
     eta     = est.get("eta") or {}
@@ -194,24 +207,30 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     tp_legs = plan.get("tp") or plan.get("tp_orders") or []
     budget  = plan.get("budget_usd") or plan.get("budget") or plan.get("budget_used")
     ttl_sec = int(plan.get("ttl_sec") or os.getenv("TRADE_APPROVAL_TTL_SEC", "600"))
-    eta_entry = eta.get("entry_sec") or eta.get("entry")
+    eta_entry = (eta or {}).get("entry_sec") or (eta or {}).get("entry")
 
     reason  = plan.get("why") or plan.get("explain") or plan.get("reasons")
     why_txt = _trim_reason(reason)
     kind    = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
 
+    # TP lines with ETA/prob/profit-$
     tp_lines = _tp_legs_to_lines(tp_legs, eta=eta, probs=probs)
     if tp_lines and tp_pnl:
         new_lines = []
         for i, line in enumerate(tp_lines, start=1):
             gas = tp_pnl.get(f"tp{i}")
-            new_lines.append(line + (f" · ⛽ {_fmt_usd(gas)}" if gas is not None else ""))
+            if gas is None:
+                new_lines.append(line)
+            else:
+                new_lines.append(line + f" · ⛽ {_fmt_usd(gas)}")
         tp_lines = new_lines
 
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
 
+    # Market anchor (BTC)
     market_line = get_btc_anchor_summary()
 
+    # Build message
     lines: List[str] = []
     lines.append(f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>")
     lines.append(market_line)
@@ -247,25 +266,14 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     lines.append("— — —")
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
-    # קביעת כפתורים: URL חתומים אם יש PUBLIC_HOST+secret, אחרת callback_data
     urls = _build_trade_urls(idem, plan)
-    use_urls = bool(PUBLIC_HOST and (urls["approve"] or urls["reject"]))
-    if use_urls:
-        kb = {
-            "inline_keyboard": [
-                [{"text": "✅ אישור / Approve", "url": urls["approve"]},
-                 {"text": "❌ דחייה / Reject",  "url": urls["reject"]}],
-                ([{"text": "🧾 Ticket", "url": urls["ticket"]}] if urls["ticket"] else [])
-            ]
-        }
-    else:
-        kb = {
-            "inline_keyboard": [
-                [{"text": "✅ אישור / Approve", "callback_data": f"CONFIRM:APPROVE:{idem}"},
-                 {"text": "❌ דחייה / Reject",  "callback_data": f"CONFIRM:REJECT:{idem}"}]
-            ]
-        }
-
+    kb = {
+        "inline_keyboard": [
+            [{"text": "✅ אישור / Approve", "url": urls["approve"]},
+             {"text": "❌ דחייה / Reject",  "url": urls["reject"]}],
+            ([{"text": "🧾 Ticket", "url": urls["ticket"]}] if urls["ticket"] else [])
+        ]
+    }
     await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
 
 # ===================== Trade lifecycle short notifiers =====================
@@ -337,12 +345,6 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
             pass
     await _tg_send("\n".join(lines))
 
-# ===================== Change Tickets (re-exports) =====================
-from .telegram_notifier_core import (
-    format_change_approval_he, send_change_approval_he, route_change_ticket,
-    send_ops_digest_now, send_eod_report_now, ensure_ops_schedulers_started,
-)
-
 # ===================== Public API =====================
 __all__ = [
     # flags & simple notifiers
@@ -353,11 +355,6 @@ __all__ = [
     "register_webhook",
     # trade approvals / updates
     "send_trade_approval", "send_trade_opened", "send_trade_update", "send_trade_closed",
-    # change approvals & digests
-    "format_change_approval_he", "send_change_approval_he", "route_change_ticket",
-    "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
-    # policy helper
-    "should_auto_approve_trade",
 ]
 
 
