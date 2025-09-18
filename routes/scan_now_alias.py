@@ -9,10 +9,8 @@ except Exception:
     def require_bearer_token():
         return None
 
-# נרשם גם הוא תחת /scan כדי לא להתנגש עם מודולים אחרים
 router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
-# נשתמש בפונקציה מהמודול הראשי אם נטען; אם לא – נזרוק 503 עדין
 try:
     from routes.scan_top_volume import scan_top_volume  # type: ignore
 except Exception:
@@ -35,7 +33,6 @@ async def scan_now(
 
     symbol = None
     if symbols:
-        # אם התקבל CSV ובו סימבול אחד — נעביר אותו כ-symbol
         parts = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         if len(parts) == 1:
             symbol = parts[0]
@@ -53,3 +50,4 @@ async def scan_now(
     )
 
 __all__ = ["router"]
+
