@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 import logging
-from typing import List, Optional, Dict, Any, Iterable
+from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger("algogpt.auth")
 
@@ -25,6 +25,22 @@ def _mask(tok: str) -> str:
 _TOKENS: List[str] = []
 _ALLOW_ALL: bool = False
 
+def _extend_with_api_tokens(toks: List[str]) -> List[str]:
+    # Multi-value envs
+    for k in ("API_TOKENS", "ALGOGPT_API_TOKENS", "ALGOGPT_TOKENS"):
+        v = os.getenv(k, "")
+        if v.strip():
+            toks.extend(_split_multi(v))
+    # Single-value fallbacks
+    for k in ("API_BEARER_TOKEN", "PRIMARY_API_TOKEN",
+              "ALGOGPT_API_TOKEN", "ALGOGPT_TOKEN",
+              "API_TOKEN", "TOKEN"):
+        v = os.getenv(k, "").strip()
+        if v:
+            toks.append(v)
+    # de-dup & clean
+    return list(dict.fromkeys([t for t in toks if t]))
+
 def load_tokens_from_env() -> List[str]:
     toks: List[str] = []
     # 1) AUTH_TOKENS (רשימה בפסיקים/רווחים/שורות)
@@ -42,6 +58,9 @@ def load_tokens_from_env() -> List[str]:
         except Exception as e:
             logger.warning({"event": "auth.tokens_file_read_failed", "file": path, "error": str(e)})
 
+    # הוספת מקורות API_* נוספים
+    toks = _extend_with_api_tokens(toks)
+
     # ניקוי כפילויות וריקים
     toks = [t for t in toks if t]
     uniq = list(dict.fromkeys(toks))
@@ -50,7 +69,8 @@ def load_tokens_from_env() -> List[str]:
 def refresh_tokens_from_env() -> Dict[str, Any]:
     global _TOKENS, _ALLOW_ALL
     _TOKENS = load_tokens_from_env()
-    _ALLOW_ALL = _coerce_bool(os.getenv("ALLOW_ALL", "0"))
+    # ALLOW_ALL או AUTH_ALLOW_ALL (fallback)
+    _ALLOW_ALL = _coerce_bool(os.getenv("ALLOW_ALL", os.getenv("AUTH_ALLOW_ALL", "0")))
     logger.info({
         "event": "auth.tokens_loaded",
         "allow_all": _ALLOW_ALL,
@@ -112,6 +132,9 @@ def require_bearer_token(Authorization: Optional[str] = None, X_API_Key: Optiona
         raise HTTPException(status_code=401, detail="Invalid API key")
     return tok
 
+# תאימות לשם הישן בקוד אחר
+require_api_key = require_bearer_token
+
 # ----------------- Public paths exposure (ל־/status/auth) -----------------
 def _split_env(s: str) -> List[str]:
     return [x for x in _split_multi(s)]
@@ -121,6 +144,7 @@ def get_public_paths() -> Dict[str, Any]:
     paths = set(_split_env(os.getenv("SECURITY_PUBLIC_PATHS", "")))
     prefixes = set(_split_env(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
     return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
+
 
 
 
