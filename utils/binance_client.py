@@ -1,4 +1,5 @@
 # utils/binance_client.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, math, logging, threading
 from typing import Any, Dict, List, Optional, Iterable, Tuple
@@ -31,8 +32,8 @@ DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
 # Percent-Guard
-PERCENT_GUARD_ENABLE = os.getenv("PERCENT_GUARD_ENABLE", "1") in ("1","true","yes","on")
-PERCENT_GUARD_BPS = int(os.getenv("PERCENT_GUARD_BPS", "50"))  # ±0.50% ברירת מחדל
+PERCENT_GUARD_ENABLE = os.getenv("PERCENT_GUARD_ENABLE", "1").lower() in ("1","true","yes","on")
+PERCENT_GUARD_BPS = int(os.getenv("PERCENT_GUARD_BPS", "50"))  # ±0.50%
 
 # Idempotency
 IDEMP_TTL_SEC = int(os.getenv("IDEMP_TTL_SEC", "900"))
@@ -48,6 +49,20 @@ ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))
 HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
 _HEDGE_MODE_CACHE: Optional[bool] = None
 
+# ===== Order ID / Cancel policy (ENV) =====
+ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
+CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
+CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
+
+# ===== TP ladder params (ENV) =====
+LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1").lower() in ("1","true","yes","on")
+LADDER_TP_DEFAULT_PCTS = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
+LADDER_TP_DEFAULT_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
+LADDER_TP_MAX_LEVELS = int(os.getenv("LADDER_TP_MAX_LEVELS", "5"))
+TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
+LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
+
+# ===== Utils =====
 def _now() -> float:
     return time.time()
 
@@ -95,6 +110,38 @@ _index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
 # idempotency cache
 _idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _idem_lock = threading.RLock()
+
+# tp ladder cooldown
+_tp_ladder_last_at: Dict[str, float] = {}
+
+# ===== COID helpers =====
+def _sanitize_coid(coid: str) -> str:
+    coid = (coid or "").strip()
+    # Binance מגביל תווים; נשמור על אלפאנומרי, '_', '-', ':'
+    safe = []
+    for ch in coid:
+        if ch.isalnum() or ch in ("_", "-", ":"):
+            safe.append(ch)
+    s = "".join(safe)
+    return s[:36]  # hard cap סביר
+
+def _kind_from_kwargs(kwargs: Dict[str, Any]) -> str:
+    t = str(kwargs.get("type") or "").upper()
+    if not t:
+        return "ORD"
+    if "MARKET" in t and "STOP" not in t and "PROFIT" not in t:
+        return "MKT"
+    if "LIMIT" in t:
+        return "LMT"
+    if "STOP" in t:
+        return "STP"
+    if "PROFIT" in t:
+        return "TP"
+    return t[:3]
+
+def _coid(kind: str, symbol: str) -> str:
+    pref = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "ALG")
+    return _sanitize_coid(f"{pref}_{kind}_{symbol.upper()}_{int(_ms()%10**9)}")
 
 # ===== Helpers (account / hedge detection) =====
 def _get_account_cached() -> Optional[Dict[str, Any]]:
@@ -296,6 +343,7 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     need = _ensure_min_notional(symbol, price, qf)
     if need <= qf + 1e-12: return qty_str
     return _quantize_qty(symbol, need)
+
 # ===== Rate limiting buckets =====
 _bucket_reset_at = 0.0; _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
@@ -636,15 +684,13 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     eff_ps = _effective_position_side_from_kwargs(kwargs)  # עשוי להסיר positionSide
     is_trigger_market = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
     if not _is_hedge_mode_runtime():
-        # בחשבון One-Way: ב-*MARKET טריגר עדיף לא לשלוח reduceOnly מלכתחילה
+        # One-Way: ב-*MARKET טריגר עדיף לא לשלוח reduceOnly מראש
         if is_trigger_market and "reduceOnly" in kwargs:
             kwargs.pop("reduceOnly", None)
-        # אם closePosition True – אין quantity/reduceOnly
         if kwargs.get("closePosition"):
             kwargs.pop("quantity", None)
             kwargs.pop("reduceOnly", None)
     else:
-        # Hedge: אם closePosition → אין quantity/reduceOnly
         if kwargs.get("closePosition"):
             kwargs.pop("quantity", None)
             kwargs.pop("reduceOnly", None)
@@ -713,6 +759,15 @@ def modify_stop_loss(
         client_order_id=coid
     )
 
+def _csv_floats(s: str) -> List[float]:
+    out: List[float] = []
+    for x in (s or "").split(","):
+        x = x.strip()
+        if not x: continue
+        try: out.append(float(x))
+        except Exception: pass
+    return out
+
 def place_tp_ladder(
     symbol: str,
     entry_side: str,
@@ -734,12 +789,12 @@ def place_tp_ladder(
     sym = symbol.upper()
     side = "SELL" if entry_side.upper() == "BUY" else "BUY"
     if not tp_percents:
-        tp_percents = [float(x) for x in LADDER_TP_DEFAULT_PCTS.split(",") if x.strip()]
+        tp_percents = _csv_floats(LADDER_TP_DEFAULT_PCTS)
     if not splits:
-        splits = [float(x) for x in LADDER_TP_DEFAULT_SPLITS.split(",") if x.strip()]
+        splits = _csv_floats(LADDER_TP_DEFAULT_SPLITS)
     tp_percents = tp_percents[:LADDER_TP_MAX_LEVELS]
     splits = splits[:len(tp_percents)]
-    if abs(sum(splits) - 1.0) > 1e-6:
+    if abs(sum(splits) - 1.0) > 1e-6 and len(splits) > 0:
         s = sum(splits); splits = [x/s for x in splits]
 
     placed = []; errors = []
@@ -969,6 +1024,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
