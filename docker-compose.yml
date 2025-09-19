@@ -1,3 +1,5 @@
+mkdir -p /app
+cat <<'EOF' > /app/docker-compose.yml
 version: "3.9"
 
 services:
@@ -30,22 +32,36 @@ services:
       - algodata:/app/data
     deploy:
       resources:
-        limits:
-          cpus: "1.0"
-          memory: 1.5G
-        reservations:
-          cpus: "0.5"
-          memory: 512M
+        limits: { cpus: "1.0", memory: 1.5G }
+        reservations: { cpus: "0.5", memory: 512M }
+
+  manager:
+    build: .
+    container_name: algogpt_manager
+    restart: always
+    env_file: [.env]
+    depends_on:
+      redis:
+        condition: service_healthy
+      algogpt:
+        condition: service_started
+    command: >
+      bash -lc "python -m app.manager.loop"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS ${PRIMARY_PUBLIC_HOST:-http://localhost:10000}/status/all >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - algodata:/app/data
 
   nginx:
     image: nginx:stable-alpine
     container_name: nginx
     restart: always
-    depends_on:
-      - algogpt
+    depends_on: [algogpt]
     ports:
       - "80:80"
-      # - "443:443"  # TLS כשיהיה לך דומיין
     volumes:
       - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./static:/app/static:ro
@@ -59,10 +75,8 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: always
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG || exit 1"]
       interval: 10s
@@ -85,8 +99,7 @@ services:
     container_name: cadvisor
     restart: unless-stopped
     privileged: true
-    ports:
-      - "8080:8080"
+    ports: ["8080:8080"]
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:rw
@@ -97,10 +110,8 @@ services:
     image: prom/blackbox-exporter:latest
     container_name: blackbox
     restart: unless-stopped
-    ports:
-      - "9115:9115"
-    command:
-      - --config.file=/etc/blackbox/blackbox.yml
+    ports: ["9115:9115"]
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
     volumes:
       - ./monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
 
@@ -108,8 +119,7 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     restart: unless-stopped
-    ports:
-      - "9090:9090"
+    ports: ["9090:9090"]
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alerts:/etc/prometheus/alerts:ro
@@ -127,8 +137,7 @@ services:
     image: prom/alertmanager:latest
     container_name: alertmanager
     restart: unless-stopped
-    ports:
-      - "9093:9093"
+    ports: ["9093:9093"]
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:
@@ -139,8 +148,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    ports: ["3000:3000"]
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
@@ -155,8 +163,7 @@ services:
     image: alpine:3.19
     container_name: sqlite_backup
     restart: unless-stopped
-    depends_on:
-      - algogpt
+    depends_on: [algogpt]
     volumes:
       - algodata:/app/data:ro
       - backup_data:/backups
@@ -183,6 +190,8 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
+EOF
+
 
 
 
