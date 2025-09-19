@@ -1,13 +1,43 @@
 # utils/cache_fallback.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, logging
+import os, time, logging
 from collections import defaultdict, deque
-from typing import Deque, Dict, List
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
-logger = logging.getLogger("algogpt.redis")
+logger = logging.getLogger("algogpt.cache")
 
+# -------- key/value tiny cache (sync) --------
+# key -> (value, expire_ts or None)
+_KV_CACHE: Dict[str, Tuple[Any, Optional[float]]] = {}
+
+def set_value(key: str, value: Any, ttl_sec: Optional[float] = None) -> None:
+    exp = (time.time() + float(ttl_sec)) if ttl_sec else None
+    _KV_CACHE[key] = (value, exp)
+
+def get_value(key: str, default: Any = None) -> Any:
+    tup = _KV_CACHE.get(key)
+    if not tup:
+        return default
+    val, exp = tup
+    if exp and time.time() > exp:
+        try:
+            del _KV_CACHE[key]
+        except Exception:
+            pass
+        return default
+    return val
+
+def get_or_set(key: str, factory, ttl_sec: Optional[float] = None) -> Any:
+    val = get_value(key, None)
+    if val is not None:
+        return val
+    val = factory()
+    set_value(key, val, ttl_sec)
+    return val
+
+# -------- list-like API with optional Redis backend (async) --------
 REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
-
 _VALID_SCHEMES = ("redis://", "rediss://", "unix://")
 _use_memory_only = True
 _aioredis = None
@@ -15,7 +45,7 @@ _redis = None
 
 try:
     if REDIS_URL and REDIS_URL.startswith(_VALID_SCHEMES):
-        import redis.asyncio as aioredis  # redis>=4.2
+        import redis.asyncio as aioredis  # type: ignore
         _aioredis = aioredis
         _redis = aioredis.from_url(
             REDIS_URL,
@@ -63,9 +93,9 @@ async def lpush(key: str, value: str):
 async def ltrim(key: str, start: int, stop: int):
     async def _fb():
         dq = _mem_lists[key]
-        if start < 0: start = 0
-        if stop < 0:  stop = 0
-        keep = list(dq)[start: stop + 1]
+        s = max(0, start)
+        e = max(0, stop) + 1  # inclusive in Redis
+        keep = list(dq)[s:e]
         dq.clear()
         dq.extend(keep)
         return True
@@ -74,10 +104,8 @@ async def ltrim(key: str, start: int, stop: int):
     return await _safe_call(_redis.ltrim(key, start, stop), _fb)
 
 async def lrange(key: str, start: int, stop: int) -> List[str]:
-    """מקביל ל־LRANGE ב־Redis, עם fallback לזיכרון"""
     async def _fb():
         dq = _mem_lists[key]
-        # Redis כולל את stop, Python slicing לא → מוסיפים +1
         return list(dq)[start: stop + 1]
     if _use_memory_only:
         return await _fb()
@@ -90,6 +118,12 @@ async def ping() -> bool:
         return (await _redis.ping()) is True
     except Exception:
         return False
+
+__all__ = [
+    "set_value", "get_value", "get_or_set",
+    "lpush", "ltrim", "lrange", "ping",
+]
+
 
 
 
