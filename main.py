@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import time
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Iterable
@@ -38,10 +39,8 @@ try:
 except Exception:
     async def ensure_ops_schedulers_started() -> None:  # type: ignore
         return None
-
     async def send_ops_digest_now(hours: Optional[int] = None) -> None:  # type: ignore
         return None
-
     async def send_eod_report_now() -> None:  # type: ignore
         return None
 
@@ -64,7 +63,6 @@ except Exception:
             @classmethod
             def flush_all(cls):
                 ...
-
             flush = reset = flush_all
 
 # ✅ runtime counters (עם fallback)
@@ -78,7 +76,6 @@ except Exception:
             "ttl_sec": None,
             "inter_event_ewma_ms": None,
         }
-
     def exec_get_counters() -> Dict[str, Any]:  # type: ignore
         return {
             "tick_ewma_ms": None,
@@ -90,9 +87,16 @@ except Exception:
             "current_interval": int(os.getenv("SCAN_INTERVAL", "60")),
         }
 
+# ✅ Trade Manager (אופציונלי) — לולאת ניהול פוזיציות
+TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
+TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", "20"))
+try:
+    from utils.trade_manager import manage_open_trades_loop  # type: ignore
+except Exception:
+    manage_open_trades_loop = None  # type: ignore
+
 def _coerce_log_level(val):
     import logging as _l
-
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
         return int(val)
     m = {
@@ -123,6 +127,7 @@ app = FastAPI(
 )
 
 # ---------- RequestValidationError => 422 ----------
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
@@ -222,7 +227,6 @@ PUBLIC_STATUS = os.getenv("SECURITY_PUBLIC_STATUS", "1").lower() in ("1", "true"
 
 def _split_multi(s: str) -> Iterable[str]:
     import re
-
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
 DEFAULT_PUBLIC_PATHS = {
@@ -382,6 +386,7 @@ if not _route_exists("/status/executor"):
         st = exec_get_counters()
         return {"ok": True, **st}
 
+# ✅ עדכון: /status/all כולל manager
 if not _route_exists("/status/all"):
     @app.get("/status/all")
     async def status_all():
@@ -391,11 +396,13 @@ if not _route_exists("/status/all"):
             ping_ok = False
         ws = ws_user_status()
         ex = exec_get_counters()
+        manager_enabled = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
         return {
             "ok": True,
             "version": APP_VERSION,
             "ws": ws,
             "executor": ex,
+            "manager": {"enabled": manager_enabled},
             "binance_ping_ok": ping_ok,
         }
 
@@ -405,7 +412,6 @@ try:
 except Exception:
     def get_loaded_tokens(mask: bool = True):  # type: ignore
         return []
-
     def get_public_paths():  # type: ignore
         return {"paths": [], "prefixes": []}
 
@@ -541,7 +547,6 @@ async def _startup_user_stream():
     try:
         if os.getenv("USER_STREAM_ENABLE", "1").lower() in ("1", "true", "yes", "on"):
             from utils import ws_user_stream  # type: ignore
-
             ws_user_stream.start()
             logger.info({"event": "ws_user_stream_autostart"})
     except Exception as e:
@@ -550,6 +555,13 @@ async def _startup_user_stream():
 @app.on_event("startup")
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
+
+# ✅ הפעלה אופציונלית של לולאת ניהול פוזיציות (ללא עומס מיותר)
+@app.on_event("startup")
+async def _start_trade_manager_loop():
+    if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
+        asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC))
+        logger.info({"event": "trade_manager_loop_started", "interval_sec": TRADE_MANAGER_INTERVAL_SEC})
 
 # --- public debug auth endpoint ---
 try:
@@ -561,10 +573,8 @@ try:
 except Exception:
     def _get_loaded_tokens(mask: bool = True):  # type: ignore
         return []
-
     def _extract_token(req, a, b):  # type: ignore
         return None
-
     def _token_matches(tok):  # type: ignore
         return False
 
@@ -599,7 +609,6 @@ async def ops_eod_now():
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(
         "main:app",
         host=os.getenv("BIND_HOST", "0.0.0.0"),
