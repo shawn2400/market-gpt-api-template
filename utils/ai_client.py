@@ -1,27 +1,35 @@
 # utils/ai_client.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, logging
+import os
+import logging
 from typing import Optional, Dict
 
 logger = logging.getLogger("algogpt.ai")
 
-# optional openai client
+# Optional OpenAI client (graceful fallback if lib/env missing)
 try:
     from openai import AsyncOpenAI  # type: ignore
 except Exception:
     AsyncOpenAI = None  # type: ignore
 
 _API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o").strip()
+_BASE_URL = (os.getenv("OPENAI_BASE") or os.getenv("OPENAI_BASE_URL") or "").strip()
 
 _client = None
 if AsyncOpenAI and _API_KEY:
     try:
-        _client = AsyncOpenAI(api_key=_API_KEY)
+        # allow overriding base_url via env if provided
+        _client = AsyncOpenAI(api_key=_API_KEY, base_url=_BASE_URL or None)
     except Exception as e:
         logger.warning("OpenAI init failed: %s", e)
         _client = None
+else:
+    if not _API_KEY:
+        logger.info("OPENAI_API_KEY not set; AI features disabled")
+    if not AsyncOpenAI:
+        logger.info("openai SDK not available; AI features disabled")
 
 async def chat(
     prompt: str,
@@ -30,13 +38,18 @@ async def chat(
     max_tokens: int = 256,
     model: Optional[str] = None,
 ) -> Optional[str]:
+    """
+    Async chat wrapper. Returns str on success or None on failure/unavailable.
+    """
     if not _client:
         return None
     try:
         resp = await _client.chat.completions.create(
-            model=model or _MODEL,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": prompt}],
+            model=(model or _MODEL),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
             temperature=temperature,
             max_tokens=max_tokens,
         )
@@ -46,15 +59,24 @@ async def chat(
         return None
 
 def ai_healthcheck() -> Dict[str, object]:
-    """שמור מינימלי לבריאות – לא קורא לרשת, רק מצהיר על זמינות."""
+    """
+    Lightweight health: no network call. Synchronous for broad compatibility.
+    """
     return {
-        "ok": True,
-        "client": bool(_client),
+        "ok": True,                    # module loaded
+        "client": bool(_client),       # client constructed
         "model": _MODEL,
         "api_key_set": bool(_API_KEY),
+        "base_url": _BASE_URL or "https://api.openai.com/v1",
     }
 
-__all__ = ["chat", "ai_healthcheck"]
+async def ai_healthcheck_async() -> Dict[str, object]:
+    """
+    Async alias for frameworks expecting an awaitable.
+    """
+    return ai_healthcheck()
+
+__all__ = ["chat", "ai_healthcheck", "ai_healthcheck_async"]
 
 
 
