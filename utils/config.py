@@ -61,8 +61,9 @@ class Settings:
     BINANCE_FUTURES_HTTP_BASE: str = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
     # Auth
-    AUTH_ALLOW_ALL: bool = _env_bool("AUTH_ALLOW_ALL", False)
-    # Comma-separated tokens: ALGOGPT_API_TOKENS, API_TOKENS, ALGOGPT_TOKEN, API_TOKEN (first non-empty used)
+    # קבל גם ALLOW_ALL כ-fallback
+    AUTH_ALLOW_ALL: bool = _env_bool("ALLOW_ALL", _env_bool("AUTH_ALLOW_ALL", False))
+    # Comma-separated tokens set we load below
     API_TOKENS: Set[str] = field(default_factory=set)
 
     # Headers & query param names we accept for auth extraction
@@ -191,28 +192,33 @@ _SENTINELS = {"PUT_REAL_API_TOKEN", "CHANGE_ME", "REPLACE_ME", "YOUR_TOKEN_HERE"
 
 def _load_tokens_from_env() -> Set[str]:
     candidates: List[str] = []
+
     # Multi-value first
-    for k in ("ALGOGPT_API_TOKENS", "API_TOKENS", "ALGOGPT_TOKENS"):
+    for k in ("AUTH_TOKENS", "ALGOGPT_API_TOKENS", "API_TOKENS", "ALGOGPT_TOKENS"):
         v = os.getenv(k, "")
         if v.strip():
             candidates.extend(_split_csv(v))
+
     # Single-value fallbacks
-    for k in ("ALGOGPT_API_TOKEN", "ALGOGPT_TOKEN", "API_TOKEN", "TOKEN"):
+    for k in ("PRIMARY_API_TOKEN", "API_BEARER_TOKEN",
+              "ALGOGPT_API_TOKEN", "ALGOGPT_TOKEN",
+              "API_TOKEN", "TOKEN"):
         v = os.getenv(k, "")
         if v.strip():
             candidates.append(v.strip())
 
-    # From file (one token per line)
-    path = os.getenv("API_TOKENS_FILE", "").strip()
-    if path:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        candidates.append(line)
-        except Exception as e:
-            log.warning("Could not read API_TOKENS_FILE %s: %s", path, e)
+    # From file(s) (one token per line)
+    for file_env in ("API_TOKENS_FILE", "AUTH_TOKENS_FILE"):
+        path = os.getenv(file_env, "").strip()
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            candidates.append(line)
+            except Exception as e:
+                log.warning("Could not read %s %s: %s", file_env, path, e)
 
     # Filter sentinels / empties / duplicates
     cleaned: Set[str] = set()
@@ -295,9 +301,9 @@ def strip_bearer_prefix(value: str) -> str:
 def debug_dump() -> Dict[str, object]:
     return get_settings().as_dict()
 
-
 # Initialize immediately on import
 load_settings()
+
 
 
 
