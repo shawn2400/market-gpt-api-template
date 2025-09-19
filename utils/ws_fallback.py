@@ -1,16 +1,18 @@
-# -*- coding: utf-8 -*-
 # utils/ws_fallback.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, json, time, tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Tuple, Any
 
-# לא מיבאים binance_client.get_price כדי להימנע מתלות מעגלית.
-# נשתמש ב־HTTP ישיר כ־fallback ל־mark/index price.
 try:
-    import httpx  # type: ignore
+    import httpx  # optional
 except Exception:
     httpx = None  # type: ignore
+
+# in-memory cache the routers מצפים לו
+# symbol -> (price, ts_ms)
+LAST_PRICE_CACHE: Dict[str, Tuple[float, int]] = {}
 
 _WS_CACHE_PATH = Path(os.getenv("WS_CACHE_PATH", "static/cache/ws_prices.json"))
 _FRESH_TTL = int(os.getenv("PRICE_WS_FRESH_TTL", "20"))
@@ -18,11 +20,11 @@ _HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").
 
 def _read_cache() -> Dict[str, Any]:
     try:
-        if not _WS_CACHE_PATH.exists():
-            return {}
-        return json.loads(_WS_CACHE_PATH.read_text(encoding="utf-8"))
+        if _WS_CACHE_PATH.exists():
+            return json.loads(_WS_CACHE_PATH.read_text(encoding="utf-8"))
     except Exception:
-        return {}
+        pass
+    return {}
 
 def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
     try:
@@ -34,29 +36,38 @@ def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
             tmp_name = tmp.name
         os.replace(tmp_name, path)
     except Exception:
-        # כתיבה לא־אטומית (fallback)
         try:
             path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         except Exception:
             pass
 
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
 def is_price_fresh(symbol: str, max_age_sec: int | None = None) -> bool:
-    """בודק אם המחיר ב-WS cache טרי מספיק עבור הסימבול הנתון."""
     max_age = _FRESH_TTL if max_age_sec is None else int(max_age_sec)
     sym = symbol.upper()
+    # prefer memory
+    if sym in LAST_PRICE_CACHE:
+        _, ts_ms = LAST_PRICE_CACHE[sym]
+        if (time.time() - ts_ms / 1000.0) <= max_age:
+            return True
+    # fallback file
     data = _read_cache()
     rec = data.get(sym)
     if not rec:
         return False
     try:
         ts = float(rec.get("ts") or 0.0)
+        return (time.time() - ts) <= max_age
     except Exception:
         return False
-    return (time.time() - ts) <= max_age
 
 def get_last_ts(symbol: str) -> float:
-    """מחזיר חותמת הזמן (epoch seconds) של המחיר האחרון מה־WS cache, או 0.0 אם אין."""
     sym = symbol.upper()
+    if sym in LAST_PRICE_CACHE:
+        _, ts_ms = LAST_PRICE_CACHE[sym]
+        return ts_ms / 1000.0
     data = _read_cache()
     rec = data.get(sym)
     if not rec:
@@ -68,16 +79,17 @@ def get_last_ts(symbol: str) -> float:
         return 0.0
 
 def get_price_age(symbol: str) -> Optional[float]:
-    """מחזיר גיל המחיר בשניות, או None אם אין נתון."""
     ts = get_last_ts(symbol)
     if ts <= 0:
         return None
     return max(0.0, time.time() - ts)
 
 def update_price(symbol: str, price: float, ts: Optional[float] = None) -> None:
-    """מעדכן/שומר מחיר ב־WS cache (לשימוש פנימי או ע״י שכבות אחרות)."""
+    sym = symbol.upper()
+    ts_ms = int((ts or time.time()) * 1000)
+    LAST_PRICE_CACHE[sym] = (float(price), ts_ms)
+    # also persist to file
     try:
-        sym = symbol.upper()
         data = _read_cache()
         data[sym] = {"price": float(price), "ts": float(ts or time.time())}
         _atomic_write_json(_WS_CACHE_PATH, data)
@@ -85,14 +97,13 @@ def update_price(symbol: str, price: float, ts: Optional[float] = None) -> None:
         pass
 
 def _http_mark_price(symbol: str) -> Optional[float]:
-    """מביא mark/index price ב־HTTP ישיר (fallback עדין, ללא תלות בספריית הלקוח)."""
     if httpx is None:
         return None
     sym = symbol.upper()
-    # ננסה premiumIndex (מכיל indexPrice ולעיתים markPrice). אם אין markPrice — נחזיר indexPrice.
     try:
         url = f"{_HTTP_BASE}/fapi/v1/premiumIndex"
-        with httpx.Client(timeout=float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))) as cli:
+        timeout = float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))
+        with httpx.Client(timeout=timeout) as cli:
             r = cli.get(url, params={"symbol": sym})
             r.raise_for_status()
             data = r.json()
@@ -110,10 +121,14 @@ def _http_mark_price(symbol: str) -> Optional[float]:
     return None
 
 def get_price(symbol: str) -> Optional[float]:
-    """
-    מחזיר מחיר אחרון: קודם Cache מ-WS (אם טרי), אחרת HTTP mark/index. אם הכל נכשל — None.
-    """
     sym = symbol.upper()
+    # memory first
+    tup = LAST_PRICE_CACHE.get(sym)
+    if tup:
+        px, ts_ms = tup
+        if px > 0 and (time.time() - ts_ms / 1000.0) <= _FRESH_TTL:
+            return float(px)
+    # file cache
     data = _read_cache()
     rec = data.get(sym)
     if rec:
@@ -121,20 +136,19 @@ def get_price(symbol: str) -> Optional[float]:
             px = float(rec.get("price") or 0.0)
             ts = float(rec.get("ts") or 0.0)
             if px > 0 and (time.time() - ts) <= _FRESH_TTL:
+                # warm memory
+                update_price(sym, px, ts)
                 return px
         except Exception:
             pass
-
-    # Fallback ל-HTTP (mark/index)
+    # HTTP fallback
     mp = _http_mark_price(sym)
     if mp and mp > 0:
-        # נשמור בקאש כדי לשפר זרימה בפניות הבאות
         update_price(sym, mp)
         return mp
-
     return None
 
-__all__ = ["is_price_fresh", "get_price", "get_last_ts", "get_price_age", "update_price"]
+__all__ = ["LAST_PRICE_CACHE", "is_price_fresh", "get_price", "get_last_ts", "get_price_age", "update_price"]
 
 
 
