@@ -34,9 +34,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 def _split_csv(s: str | None) -> List[str]:
+    """פיצול לפי פסיקים/רווחים/שורות."""
     if not s:
         return []
-    return [x.strip() for x in s.split(",") if x.strip()]
+    import re
+    return [x.strip() for x in re.split(r"[,\s]+", s) if x.strip()]
 
 def _load_json_env(name: str, fallback: Dict | str = "{}") -> Dict:
     raw = os.getenv(name)
@@ -61,9 +63,13 @@ class Settings:
     BINANCE_FUTURES_HTTP_BASE: str = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 
     # Auth
-    # קבל גם ALLOW_ALL כ-fallback
-    AUTH_ALLOW_ALL: bool = _env_bool("ALLOW_ALL", _env_bool("AUTH_ALLOW_ALL", False))
-    # Comma-separated tokens set we load below
+    # דגל פתיחה גלובלי: honor לכל אחד מהשמות (תואם utils.auth)
+    AUTH_ALLOW_ALL: bool = (
+        _env_bool("ALLOW_ALL", False) or
+        _env_bool("AUTH_ALLOW_ALL", False) or
+        _env_bool("SECURITY_ALLOW_ALL", False)
+    )
+    # סט טוקנים ייטען למטה
     API_TOKENS: Set[str] = field(default_factory=set)
 
     # Headers & query param names we accept for auth extraction
@@ -81,13 +87,13 @@ class Settings:
     AUTH_BEARER_PREFIXES: List[str] = field(default_factory=lambda: [
         "Bearer", "Token", "JWT"
     ])
-    # Public paths that should be accessible without auth
+    # Public paths (מודולים מסוימים עשויים להיעזר בזה; בפועל האכיפה במידלוור הראשי)
     AUTH_PUBLIC_PATHS: Set[str] = field(default_factory=lambda: {
         "/", "/ping", "/status", "/healthz",
         "/docs", "/redoc", "/openapi.json",
     })
 
-    # Trade / policy knobs (kept here for visibility; modules may still read via os.getenv)
+    # Trade / policy knobs
     ALLOW_MARKET_ENTRY: bool = _env_bool("ALLOW_MARKET_ENTRY", True)
     ENTRY_BAND_BPS: float = _env_float("ENTRY_BAND_BPS", 8.5)
     STOP_BAND_BPS: float = _env_float("STOP_BAND_BPS", 10.0)
@@ -193,13 +199,13 @@ _SENTINELS = {"PUT_REAL_API_TOKEN", "CHANGE_ME", "REPLACE_ME", "YOUR_TOKEN_HERE"
 def _load_tokens_from_env() -> Set[str]:
     candidates: List[str] = []
 
-    # Multi-value first
+    # מקורות מרובי ערכים (כולל החדש AUTH_TOKENS + תאימות לאחור)
     for k in ("AUTH_TOKENS", "ALGOGPT_API_TOKENS", "API_TOKENS", "ALGOGPT_TOKENS"):
         v = os.getenv(k, "")
         if v.strip():
             candidates.extend(_split_csv(v))
 
-    # Single-value fallbacks
+    # מקורות חד-ערכיים (תמיכה לאחור)
     for k in ("PRIMARY_API_TOKEN", "API_BEARER_TOKEN",
               "ALGOGPT_API_TOKEN", "ALGOGPT_TOKEN",
               "API_TOKEN", "TOKEN"):
@@ -207,8 +213,8 @@ def _load_tokens_from_env() -> Set[str]:
         if v.strip():
             candidates.append(v.strip())
 
-    # From file(s) (one token per line)
-    for file_env in ("API_TOKENS_FILE", "AUTH_TOKENS_FILE"):
+    # מקבצי טוקנים — שורה לכל טוקן (גם AUTH_TOKENS_FILE וגם API_TOKENS_FILE)
+    for file_env in ("AUTH_TOKENS_FILE", "API_TOKENS_FILE"):
         path = os.getenv(file_env, "").strip()
         if path:
             try:
@@ -220,7 +226,7 @@ def _load_tokens_from_env() -> Set[str]:
             except Exception as e:
                 log.warning("Could not read %s %s: %s", file_env, path, e)
 
-    # Filter sentinels / empties / duplicates
+    # ניקוי: סנטינלים/ריקים/כפילויות
     cleaned: Set[str] = set()
     for t in candidates:
         tt = t.strip()
@@ -255,7 +261,6 @@ def load_settings() -> Settings:
     s.API_TOKENS = _load_tokens_from_env()
     s.LADDER_TP_DEFAULT_PCTS = _load_tp_defaults("LADDER_TP_DEFAULT_PCTS", s.LADDER_TP_DEFAULT_PCTS)
     s.LADDER_TP_DEFAULT_SPLITS = _load_tp_defaults("LADDER_TP_DEFAULT_SPLITS", s.LADDER_TP_DEFAULT_SPLITS)
-    # Log once
     log.info("[Config] %s env=%s | tokens=%d | allow_all=%s",
              s.APP_NAME, s.ENV, len(s.API_TOKENS), s.AUTH_ALLOW_ALL)
     _settings = s
@@ -270,7 +275,6 @@ def reload_settings() -> Settings:
 # Convenience for auth module (if it wishes to delegate to config)
 def is_public_path(path: str) -> bool:
     s = get_settings()
-    # match exact, and also allow prefix for docs assets
     if path in s.AUTH_PUBLIC_PATHS:
         return True
     if path.startswith("/docs") or path.startswith("/redoc"):
@@ -303,6 +307,7 @@ def debug_dump() -> Dict[str, object]:
 
 # Initialize immediately on import
 load_settings()
+
 
 
 
