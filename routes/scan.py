@@ -3,7 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 from typing import List, Optional
 import os, requests, pandas as pd
-from pydantic import BaseModel, Field
+
+# תאימות Pydantic v1/v2
+try:
+    from pydantic import BaseModel, Field, ConfigDict
+    _PYD_V2 = True
+except Exception:
+    from pydantic import BaseModel, Field
+    _PYD_V2 = False
 
 from utils.indicators import prepare_indicators_for_backtest
 
@@ -13,29 +20,37 @@ router = APIRouter(prefix="/scan", tags=["Scan"])
 # =====================
 # Models
 # =====================
-class IndicatorSet(BaseModel):
-    # תאימות Pydantic v1/v2: מתירים extra כדי לא לרוץ על שדות לא מוכרים
-    class Config:
-        extra = "ignore"
-    try:
-        # Pydantic v2
-        from pydantic import ConfigDict
-        model_config = ConfigDict(extra="ignore")  # type: ignore
-    except Exception:
-        pass
-
-    rsi: Optional[float] = None
-    ema_21: Optional[float] = None
-    adx: Optional[float] = None
-    atr: Optional[float] = None
-    vwap_trend: Optional[bool] = None
-    ema_50: Optional[float] = None
-    macd: Optional[float] = None
-    macd_signal: Optional[float] = None
-    macd_hist: Optional[float] = None
-    bb_mid: Optional[float] = None
-    bb_upper: Optional[float] = None
-    bb_lower: Optional[float] = None
+if _PYD_V2:
+    class IndicatorSet(BaseModel):
+        model_config = ConfigDict(extra="ignore")  # pydantic v2
+        rsi: Optional[float] = None
+        ema_21: Optional[float] = None
+        adx: Optional[float] = None
+        atr: Optional[float] = None
+        vwap_trend: Optional[bool] = None
+        ema_50: Optional[float] = None
+        macd: Optional[float] = None
+        macd_signal: Optional[float] = None
+        macd_hist: Optional[float] = None
+        bb_mid: Optional[float] = None
+        bb_upper: Optional[float] = None
+        bb_lower: Optional[float] = None
+else:
+    class IndicatorSet(BaseModel):
+        class Config:  # pydantic v1
+            extra = "ignore"
+        rsi: Optional[float] = None
+        ema_21: Optional[float] = None
+        adx: Optional[float] = None
+        atr: Optional[float] = None
+        vwap_trend: Optional[bool] = None
+        ema_50: Optional[float] = None
+        macd: Optional[float] = None
+        macd_signal: Optional[float] = None
+        macd_hist: Optional[float] = None
+        bb_mid: Optional[float] = None
+        bb_upper: Optional[float] = None
+        bb_lower: Optional[float] = None
 
 class ScanSignal(BaseModel):
     symbol: str
@@ -117,6 +132,7 @@ async def scan_symbols(
             out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
                                   interval=interval, ok=False, error=str(e)))
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
+
 
 
 
