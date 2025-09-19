@@ -1,6 +1,3 @@
-הנה גרסה מלאה ומתוקנת של `main.py` (1-1), עם fallback מתוקן ל־`ConfirmStore` כולל `pending` כדי שלא תראה את השגיאה יותר, והסרתי ייבוא כפול מיותר:
-
-```python
 # main.py
 from __future__ import annotations
 
@@ -20,6 +17,9 @@ from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
+from fastapi.openapi.utils import get_openapi
+from fnmatch import fnmatch
+import pkgutil
 
 from utils.auth import extract_token, allow_all, token_matches
 from utils.binance_client import (
@@ -32,7 +32,7 @@ from utils.json_logger import setup_json_logging
 from utils.metrics_middleware import MetricsMiddleware
 from utils.response_limits import ResponseSizeLimiter
 
-# ✅ notifier (fallback בטוח)
+# notifier (safe fallback)
 try:
     from utils.telegram_notifier import (
         ensure_ops_schedulers_started,
@@ -47,7 +47,7 @@ except Exception:
     async def send_eod_report_now() -> None:  # type: ignore
         return None
 
-# ✅ InternalAuthMiddleware (fallback no-op אם לא קיים)
+# InternalAuthMiddleware (safe no-op fallback)
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
 except Exception:
@@ -55,7 +55,7 @@ except Exception:
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
 
-# ✅ ConfirmStore (fallback בטוח) — כולל pending כדי למנוע שגיאות בראוטרים אחרים
+# ConfirmStore (safe fallback with pending attribute)
 try:
     from utils.trade_executor import ConfirmStore  # type: ignore
 except Exception:
@@ -63,16 +63,14 @@ except Exception:
         from utils.auto_executor import ConfirmStore  # type: ignore
     except Exception:
         class ConfirmStore:  # type: ignore
-            pending: list = []  # מאגר בקשות ממתינות (לצרכים תצוגתיים)
-
+            pending: Dict[str, Any] = {}
             @classmethod
             def flush_all(cls):
-                cls.pending.clear()
+                cls.pending = {}
+            # compat aliases often used elsewhere
+            flush = reset = flush_all
 
-            # שמות חלופיים אם קוד אחר קורא להם
-            reset = flush = flush_all
-
-# ✅ runtime counters (עם fallback)
+# runtime counters (safe fallback)
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters  # type: ignore
 except Exception:
@@ -94,8 +92,8 @@ except Exception:
             "current_interval": int(os.getenv("SCAN_INTERVAL", "60")),
         }
 
-# ✅ Trade Manager (אופציונלי) — לולאת ניהול פוזיציות
-TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
+# Trade Manager (optional)
+TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", "20"))
 try:
     from utils.trade_manager import manage_open_trades_loop  # type: ignore
@@ -119,7 +117,7 @@ def _coerce_log_level(val):
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
-# יצירת תיקיות בסיס
+# ensure base folders exist
 for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -130,10 +128,10 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
-    description="AlgoGPT - מסחר אלגוריתמי",
+    description="AlgoGPT - Algorithmic Trading",
 )
 
-# ---------- RequestValidationError => 422 ----------
+# ---------- Validation error => 422 ----------
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
@@ -141,10 +139,7 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
         content={"detail": exc.errors()},
     )
 
-# ---------- OpenAPI סינון ----------
-from fastapi.openapi.utils import get_openapi
-from fnmatch import fnmatch
-
+# ---------- OpenAPI filtering ----------
 def custom_openapi():
     if getattr(app, "openapi_schema", None):
         return app.openapi_schema
@@ -227,7 +222,7 @@ app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
-# ---------- נתיבים ציבוריים (ENV) ----------
+# ---------- Public paths (from env) ----------
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC", "1").lower() in ("1", "true", "yes", "on")
 PUBLIC_STATUS = os.getenv("SECURITY_PUBLIC_STATUS", "1").lower() in ("1", "true", "yes", "on")
 
@@ -283,7 +278,7 @@ logger.info(
     }
 )
 
-# ---------- אימות גלובלי ----------
+# ---------- Global auth middleware ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     path = request.url.path
@@ -308,8 +303,6 @@ async def validate_token(request: Request, call_next):
     return await call_next(request)
 
 # ---------- include routers ----------
-import pkgutil
-
 def _try_include(module_path: str) -> bool:
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -326,11 +319,11 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 
-# ✅ include מפורש למסלולים חשובים לפני האוטו-דיסקברי
+# explicit includes before auto-discovery
 for _mod in ("routes.scan_top_volume", "routes.scan_now_alias", "routes.ops_guard"):
     _try_include(_mod)
 
-# 🔎 אוטו-דיסקברי של כל המודולים תחת routes/*
+# auto-discover routes/*
 for m in pkgutil.iter_modules(["routes"]):
     module_path = f"routes.{m.name}"
     _try_include(module_path)
@@ -392,7 +385,7 @@ if not _route_exists("/status/executor"):
         st = exec_get_counters()
         return {"ok": True, **st}
 
-# ✅ עדכון: /status/all כולל manager
+# /status/all also reports manager
 if not _route_exists("/status/all"):
     @app.get("/status/all")
     async def status_all():
@@ -402,7 +395,7 @@ if not _route_exists("/status/all"):
             ping_ok = False
         ws = ws_user_status()
         ex = exec_get_counters()
-        manager_enabled = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
+        manager_enabled = os.getenv("MANAGER_ENABLE", "1").lower() in ("1", "true", "yes", "on")
         return {
             "ok": True,
             "version": APP_VERSION,
@@ -412,7 +405,7 @@ if not _route_exists("/status/all"):
             "binance_ping_ok": ping_ok,
         }
 
-# 👇 סטטוס אימות/טוקנים — ציבורי כברירת מחדל
+# auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -426,12 +419,10 @@ if not _route_exists("/status/auth"):
     async def status_auth():
         toks = get_loaded_tokens(mask=True)
         public = get_public_paths()
-        # שמירה על תאימות לאחור עם כלי בדיקה קיימים
         return {
             "ok": True,
             "tokens_count": len(toks),
             "tokens": toks,
-            "tokens_preview": toks,  # alias ידידותי
             "public": public,
         }
 
@@ -564,7 +555,7 @@ async def _startup_user_stream():
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
-# ✅ הפעלה אופציונלית של לולאת ניהול פוזיציות (ללא עומס מיותר)
+# optional trade manager loop
 @app.on_event("startup")
 async def _start_trade_manager_loop():
     if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
@@ -622,7 +613,7 @@ if __name__ == "__main__":
         host=os.getenv("BIND_HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "10001")),
     )
-```
+
 
 
 
