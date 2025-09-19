@@ -1,56 +1,60 @@
 # utils/ai_client.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, logging
-from typing import Optional
-from openai import AsyncOpenAI
+from typing import Optional, Dict
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("algogpt.ai")
 
-# --- Load API key ---
-api_key = os.getenv("OPENAI_API_KEY", "").strip()
-if not api_key:
-    logger.error("❌ OPENAI_API_KEY not set!")
+# optional openai client
+try:
+    from openai import AsyncOpenAI  # type: ignore
+except Exception:
+    AsyncOpenAI = None  # type: ignore
 
-# --- Create OpenAI client ---
-client: Optional[AsyncOpenAI] = None
-if api_key:
+_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+_client = None
+if AsyncOpenAI and _API_KEY:
     try:
-        client = AsyncOpenAI(api_key=api_key)
+        _client = AsyncOpenAI(api_key=_API_KEY)
     except Exception as e:
-        logger.error("❌ Failed to init AsyncOpenAI: %s", e)
-        client = None
-
+        logger.warning("OpenAI init failed: %s", e)
+        _client = None
 
 async def chat(
     prompt: str,
     system: str = "You are a professional crypto analyst.",
     temperature: float = 0.3,
     max_tokens: int = 256,
-    model: str | None = None,
+    model: Optional[str] = None,
 ) -> Optional[str]:
-    """
-    Async wrapper ל־OpenAI ChatCompletion (API >= 1.0.0).
-    מחזיר string או None אם נכשל.
-    """
-    if client is None:
-        logger.error("❌ OpenAI client not available")
+    if not _client:
         return None
-
     try:
-        resp = await client.chat.completions.create(
-            model=model or os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
+        resp = await _client.chat.completions.create(
+            model=model or _MODEL,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return resp.choices[0].message.content.strip()
+        return (resp.choices[0].message.content or "").strip()
     except Exception as e:
-        logger.error("❌ OpenAI chat failed: %s", e)
+        logger.warning("OpenAI chat failed: %s", e)
         return None
 
+def ai_healthcheck() -> Dict[str, object]:
+    """שמור מינימלי לבריאות – לא קורא לרשת, רק מצהיר על זמינות."""
+    return {
+        "ok": True,
+        "client": bool(_client),
+        "model": _MODEL,
+        "api_key_set": bool(_API_KEY),
+    }
+
+__all__ = ["chat", "ai_healthcheck"]
 
 
 
