@@ -1,4 +1,5 @@
-# utils/telegram_notifier_core.py  (Part 1/2)
+# utils/telegram_notifier_core.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 """
 ליבה ל־Telegram Notifier:
@@ -7,7 +8,7 @@ from __future__ import annotations
 - Bundling (איגוד הודעות) + פלש
 - עזרי זמן/פורמט
 - Auto-Approve policy helper
-- חנות שינויים (Redis/קובץ) — ההמשך בחלק 2
+- חנות שינויים (Redis/קובץ)
 """
 
 import os
@@ -83,7 +84,7 @@ except Exception:
     AUTO_APPROVE_BUDGET_MAX_USD = 0.0
 AUTO_APPROVE_NIGHT = os.getenv("AUTO_APPROVE_NIGHT","0").lower() in ("1","true","yes","on")
 NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()  # e.g. "23-06" (IL time)
-AUTO_APPROVE_TIER  = (os.getenv("AUTO_APPROVE_TIER","") or "").strip().lower()  # e.g. "top10", "lowvol", etc. (אופציונלי שלך)
+AUTO_APPROVE_TIER  = (os.getenv("AUTO_APPROVE_TIER","") or "").strip().lower()
 
 # ===================== SL/TP defaults (fallbacks for presentation) =====================
 def _csv_floats(s: str) -> List[float]:
@@ -219,7 +220,6 @@ async def _tg_send(text: str, chat_id: Optional[int] = None) -> None:
     try:
         await _http_send(text, chat_id=chat_id)
     except RuntimeError:
-        # fallback when called from non-async context
         try:
             asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id))
         except Exception:
@@ -290,7 +290,6 @@ def _in_night_hours_il() -> bool:
         return False
 
 def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
-    """כללים מינימליים: דגל כולל, תקציב מקסימלי, אופציונלי – שעות לילה/טיר."""
     if not TELEGRAM_AUTO_APPROVE:
         return False
     try:
@@ -301,27 +300,10 @@ def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
         return False
     if AUTO_APPROVE_NIGHT and not _in_night_hours_il():
         return False
-    # אפשר להרחיב לפי AUTO_APPROVE_TIER/score וכו'
     return True
-# utils/telegram_notifier_core.py  (Part 2/2)
-from __future__ import annotations
 
-import os, json, hashlib, hmac, logging
-from typing import Any, Dict, Optional, List, Sequence
-from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode, quote
-
-logger = logging.getLogger("algogpt.tg.core2")
-
-# ייבוא סמוי של משתנים/פונקציות מהחלק הראשון (בקובץ האמיתי זה אותו מודול)
-# כאן מניחים שהחלק הראשון נטען לפני זה (באותו קובץ בפועל).
-
-# ===================== Change store (for digests/EOD) =====================
+# ===================== Change store =====================
 async def _store_change_event(ev: Dict[str, Any]) -> None:
-    """Append change event to Redis (if configured) or to local file."""
-    from .telegram_notifier_core import _redis, _changes_file  # type: ignore
-    from .telegram_notifier_core import _now  # type: ignore
-
     ev = dict(ev)
     ev.setdefault("ts", _now())
     try:
@@ -338,7 +320,6 @@ async def _store_change_event(ev: Dict[str, Any]) -> None:
 
 async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
     out: List[Dict[str,Any]] = []
-    from .telegram_notifier_core import _redis, _changes_file  # type: ignore
     try:
         if _redis:
             items = await _redis.lrange("ops:changes", 0, -1)
@@ -350,7 +331,6 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
                 except Exception:
                     pass
             return out
-        # file fallback
         if os.path.exists(_changes_file):
             with open(_changes_file, "r", encoding="utf-8") as f:
                 for line in f:
@@ -378,7 +358,6 @@ def _sign(ticket_id: str, expires_epoch: int) -> str:
     return hmac.new(secret, msg, hashlib.sha256).hexdigest()
 
 def _ensure_ticket_urls(change: Dict[str, Any]) -> Dict[str, str]:
-    from .telegram_notifier_core import PUBLIC_HOST  # type: ignore
     tid     = change.get("ticket_id", "")
     expires = int(change.get("ops_expires") or (int(time.time()) + int(change.get("ttl_sec", 600))))
     approve_url = change.get("approve_url")
@@ -408,7 +387,6 @@ def _build_trade_urls(idem: str, plan: Dict[str, Any]) -> Dict[str, str]:
             "reject":  str(plan.get("reject_url","")),
             "ticket":  str(plan.get("ticket_url","")),
         }
-    from .telegram_notifier_core import PUBLIC_HOST  # type: ignore
     if not PUBLIC_HOST:
         return {"approve": "", "reject": "", "ticket": ""}
     qs = urlencode({"id": idem})
@@ -507,7 +485,6 @@ def get_btc_anchor_summary() -> str:
     sym = "BTCUSDT"
     try:
         from utils.get_klines import get_klines_sync
-        import os
         kl = get_klines_sync(sym, interval=os.getenv("ANCHOR_INTERVAL","1h"), limit=60)
         closes = [float(r[4]) for r in kl if r and len(r) > 4]
         if len(closes) >= 30:
@@ -530,7 +507,6 @@ async def format_change_approval_he(change: Dict[str, Any]) -> str:
     return f"🧾 <b>{title}</b>\nלמה: {why}"
 
 async def send_change_approval_he(change: Dict[str, Any]) -> None:
-    from .telegram_notifier_core import _tg_send_with_markup  # type: ignore
     urls = _ensure_ticket_urls(change)
     kb = {"inline_keyboard": [
         [{"text": "✅ אישור", "url": urls["approve"]},
@@ -545,11 +521,9 @@ async def route_change_ticket(change: Dict[str, Any]) -> str:
     return str(change.get("ticket_id") or "")
 
 async def send_ops_digest_now() -> None:
-    from .telegram_notifier_core import _flush_bundle  # type: ignore
     await _flush_bundle()
 
 async def send_eod_report_now(summary: Dict[str, Any]) -> None:
-    from .telegram_notifier_core import _tg_send  # type: ignore
     pnl = summary.get("pnl","—")
     t = summary.get("time","")
     await _tg_send(f"📘 EOD {t} · PnL: {pnl}")
@@ -560,25 +534,18 @@ async def ensure_ops_schedulers_started() -> bool:
 
 # ===================== Public API (exports) =====================
 __all__ = [
-    # config-like (some are in Part 1)
     "BOT_TOKEN","CHAT_ID","API_BASE","PUBLIC_HOST",
-    # explain flags
     "set_explain_enabled","get_explain_enabled","EXPLAIN_MIN_SCORE",
-    # send
     "_tg_send","_tg_send_with_markup","_bundle_add",
-    # store
     "_store_change_event","_load_changes_since",
-    # fmt helpers
     "_fmt_il","_fmt_usd","_fmt_num","_fmt_pct","_fmt_pct_prob","_fmt_eta","_em",
     "_fmt_side","_fmt_order_type","_tp_legs_to_lines","_try_get_live_price",
-    # urls/auto-approve
     "_ensure_ticket_urls","_build_trade_urls","should_auto_approve_trade",
-    # anchor
     "get_btc_anchor_summary",
-    # ops/change helpers
     "format_change_approval_he","send_change_approval_he","route_change_ticket",
     "send_ops_digest_now","send_eod_report_now","ensure_ops_schedulers_started",
 ]
+
 
 
 
