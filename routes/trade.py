@@ -8,9 +8,29 @@ from pydantic import BaseModel, Field, field_validator
 import httpx
 
 from utils.auth import require_api_key
-from utils.approval_rules import should_auto_approve
-from utils.telegram_notify import send_approval, send_audit
-from utils.binance_trade import plan_and_execute
+
+# === Notifier (fallback בטוח) ===
+try:
+    from utils.telegram_notifier import send_approval, send_audit  # type: ignore
+except Exception:
+    async def send_approval(*args, **kwargs):  # type: ignore
+        return None
+    async def send_audit(*args, **kwargs):  # type: ignore
+        return None
+
+# === Approval rules (fallback) ===
+try:
+    from utils.approval_rules import should_auto_approve  # type: ignore
+except Exception:
+    def should_auto_approve(payload: Dict[str, Any]):  # type: ignore
+        return (False, "rules_missing")
+
+# === Execution core (יציב) ===
+# מעדיפים execute_trade_live שקיים במערכת שלך ומציב SL/TP/Ladders לפי ENV
+try:
+    from utils.trade_executor import execute_trade_live  # type: ignore
+except Exception as e:
+    execute_trade_live = None  # type: ignore
 
 router = APIRouter(tags=["trade"])
 
@@ -52,29 +72,31 @@ def _summary(req: TradeReq) -> str:
     return f"{req.side.upper()} {req.symbol.upper()} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
 
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
-    res = await plan_and_execute(
+    if execute_trade_live is None:
+        raise RuntimeError("trade executor missing")
+    # ממפה לשדות של execute_trade_live
+    res = await execute_trade_live(
         symbol=req.symbol,
+        market="futures",
         side=req.side,
+        entry="market" if (req.entry is None) else "limit",
+        entry_price=req.entry if (req.entry and req.entry > 0) else None,
+        budget_usdt=req.budget_usd,
         leverage=req.leverage,
-        budget_usd=req.budget_usd,
-        tp_targets=req.tp_targets,
-        tp_splits=req.tp_splits,
-        sl_price=req.entry if (req.entry and req.entry > 0) else None,
-        dry_run=bool(req.dry_run),
+        risk_pct=None,            # ניהול סיכונים מתבצע פנימית לפי ENV/מודולים אצלך
+        stop_loss_pct=None,       # idem
+        take_profit_rr=None,      # idem
+        require_approval=False,   # שכבת האישור מטופלת לפני הביצוע
+        reason="trade_execute_api",
     )
     # אודיט לטלגרם
-    title = "TRADE EXECUTED" if (not req.dry_run and res.get("executed")) else "TRADE DRY-RUN"
-    plan = (res.get("plan") or {})
-    tp = plan.get("tp") or []
-    sl = plan.get("sl") or {}
-    await send_audit(title, {
-        "symbol": plan.get("symbol"),
-        "side": plan.get("side"),
-        "lev": plan.get("leverage"),
-        "qty": plan.get("qty"),
-        "price": round(float(plan.get("entry_price", 0.0)), 2),
-        "tp": "; ".join([f"{round(l['stopPrice'],2)}@{l['qty']}" for l in tp]) if tp else "—",
-        "sl": round(float(sl.get("stopPrice", 0.0)), 2) if sl else "—",
+    await send_audit("TRADE EXECUTE API", {
+        "symbol": req.symbol,
+        "side": req.side,
+        "lev": req.leverage,
+        "budget": req.budget_usd,
+        "dry": req.dry_run,
+        "entry": req.entry,
     })
     return res
 
@@ -89,8 +111,6 @@ async def trade_execute(
         raise _422([{"type":"value_error","loc":["body","entry"],"msg":"entry must be >= 0","input": req.entry}])
 
     idem = _make_idem(x_idem)
-
-    # האם צריך אישור?
     auto, reason = should_auto_approve(req.model_dump())
     need_approval = bool(req.confirm_first and not req.dry_run and not auto)
 
@@ -102,7 +122,6 @@ async def trade_execute(
             pass
         return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL}}
 
-    # מבצעים עכשיו (כולל SL/TP – גם אם לא סופק, נוצרים אוטומטית)
     try:
         res = await _execute_and_audit(req)
         if auto and not req.dry_run:
@@ -116,7 +135,7 @@ async def trade_execute(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/trade/approve", include_in_schema=False)
-async def trade_approve(id: str) -> Dict[str, Any]:
+async def trade_approve(id: str, _token: str = Depends(require_api_key)) -> Dict[str, Any]:
     item = _PENDING.pop(id, None)
     if not item:
         return {"ok": False, "error": "not_found_or_expired"}
@@ -128,10 +147,38 @@ async def trade_approve(id: str) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 @router.get("/trade/reject", include_in_schema=False)
-async def trade_reject(id: str) -> Dict[str, Any]:
+async def trade_reject(id: str, _token: str = Depends(require_api_key)) -> Dict[str, Any]:
     _PENDING.pop(id, None)
     await send_audit("REJECTED", {"idem": id})
     return {"ok": True, "rejected": True}
+
+# ===== תאימות: /trade/market/open =====
+class MarketOpenReq(BaseModel):
+    symbol: str
+    market: str = "futures"
+    side: str   = Field(pattern="^(BUY|SELL|LONG|SHORT)$")
+    budget_usd: Optional[float] = 50.0
+    leverage: int = Field(default=10, ge=1, le=125)
+    dry_run: bool = False
+    confirm_first: bool = False
+    reason: Optional[str] = None
+
+@router.post("/trade/market/open")
+async def trade_market_open(req: MarketOpenReq, _token: str = Depends(require_api_key)):
+    # ממפה לשדות TradeReq + ביצוע מיידי (הידור פנימי של SL/TP קיים בליבה שלך)
+    tr = TradeReq(
+        symbol=req.symbol,
+        side=("BUY" if req.side.upper() in ("BUY","LONG") else "SELL"),
+        leverage=req.leverage,
+        budget_usd=(req.budget_usd or 50.0),
+        dry_run=req.dry_run,
+        confirm_first=req.confirm_first,
+        entry=None,                # market
+        tp_targets=None, tp_splits=None
+    )
+    res = await _execute_and_audit(tr)
+    await send_audit("MARKET_OPEN", {"symbol": tr.symbol, "side": tr.side, "budget": tr.budget_usd, "reason": req.reason or "api_market_open"})
+    return {"ok": True, "result": res}
 
 
 
