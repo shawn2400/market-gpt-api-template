@@ -4,17 +4,26 @@ from __future__ import annotations
 import os, time, math, logging, threading
 from typing import Any, Dict, List, Optional, Iterable, Tuple
 
-from binance.client import Client
-from binance.exceptions import BinanceAPIException
-
 logger = logging.getLogger("algogpt.binance")
+
+# ===== Optional import (don't crash on import) =====
+try:
+    from binance.client import Client  # type: ignore
+    from binance.exceptions import BinanceAPIException  # type: ignore
+    _BINANCE_AVAILABLE = True
+except Exception as _e:
+    Client = object  # type: ignore
+    class BinanceAPIException(Exception):  # type: ignore
+        pass
+    _BINANCE_AVAILABLE = False
+    logger.warning("[binance_client] python-binance not installed (%s) — running in stub mode", _e)
 
 # ===== ENV =====
 API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+# אל תתרסק בזמן import — נזהיר בלבד, הלקוח יאותחל רק כשצריך.
 if not API_KEY or not API_SECRET:
-    logger.error("[binance_client] Missing API keys")
-    raise RuntimeError("Missing Binance API keys")
+    logger.warning("[binance_client] Missing API keys (BINANCE_API_KEY/SECRET). Client will stay lazy-uninitialized.")
 
 HTTP_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))
 WORKING_TYPE = os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE").upper()
@@ -25,7 +34,6 @@ ORD_BUCKET_WINDOW = int(os.getenv("ORDERS_BUCKET_WINDOW_SEC", "10"))
 ORD_QPS_BUCKET = int(os.getenv("ORDERS_QPS_BUCKET", "4"))
 BACKOFF_BASE_MS = int(os.getenv("ORDER_BACKOFF_BASE_MS", "120"))
 BACKOFF_MAX_MS  = int(os.getenv("ORDER_BACKOFF_MAX_MS",  "1600"))
-# ↓ ברירת מחדל עדינה יותר כדי לא ליצור סערת רטריים
 BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "2"))
 
 DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP", "0.001")
@@ -64,11 +72,8 @@ TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
 
 # ===== Utils =====
-def _now() -> float:
-    return time.time()
-
-def _ms() -> int:
-    return int(time.time() * 1000)
+def _now() -> float: return time.time()
+def _ms() -> int: return int(time.time() * 1000)
 
 # ===== Optional WS fallback =====
 try:
@@ -82,15 +87,12 @@ except Exception:
 _exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
 
-# price cache (coalescing)
 _price_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, mark)
 _index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
 
-# idempotency cache
 _idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _idem_lock = threading.RLock()
 
-# tp ladder cooldown
 _tp_ladder_last_at: Dict[str, float] = {}
 
 # ===== Lazy Binance Client (לא ליצור בזמן import) =====
@@ -101,22 +103,27 @@ _client_ban_until: float = 0.0  # עד מתי להמתין לפני ניסיון
 
 def _init_client() -> Optional[Client]:
     """
-    יוצר Client של binance באופן בטוח, בלי להפיל את התהליך אם יש BAN.
-    שים לב: python-binance מבצע ping() ב-__init__, לכן זה עטוף try/except.
+    יוצר Client של binance באופן בטוח, בלי להפיל את התהליך אם יש BAN/חוסר ספרייה/מפתחות.
+    python-binance נדרש; אם חסר — נשארים ב־stub.
     """
     global _CLIENT, _client_ban_until
 
-    # אם יש BAN ידוע – אל תנסה עדיין
+    if not _BINANCE_AVAILABLE:
+        logger.warning("python-binance unavailable — client stub active")
+        return None
+    if not (API_KEY and API_SECRET):
+        logger.warning("BINANCE API keys missing — client will remain uninitialized until keys provided")
+        return None
+
     now = _now()
     if _client_ban_until and now < _client_ban_until:
         return None
 
     try:
         c = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
-        # להכריח FUTURES base
         c.API_URL = _BINANCE_HTTP_BASE
 
-        # Sync time (לא קריטי; עטוף try)
+        # Sync time (best-effort)
         try:
             try:
                 server_time = c.futures_time().get("serverTime")  # type: ignore
@@ -138,7 +145,6 @@ def _init_client() -> Optional[Client]:
     except BinanceAPIException as e:
         s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
         if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
-            # קיבלנו BAN כבר בזמן init → אל תפיל וורקר, רק דחה יצירה.
             backoff = max(ACCOUNT_ON_BAN_BACKOFF, 10)
             _client_ban_until = _now() + backoff
             logger.error("Binance client init rate-limited/banned; deferring %.0fs", backoff)
@@ -158,28 +164,32 @@ def _get_client() -> Optional[Client]:
 
 class _ClientProxy:
     """
-    פרוקסי נטען-בעצלנות: כל גישה ל-attrib תפעיל יצירת Client רק בעת הצורך.
-    אם יש BAN – נזרקת שגיאה, והקריאות העוטפות כבר מטפלות בזה ב-try/except.
+    פרוקסי נטען-בעצלנות: כל גישה תנסה לאתחל Client רק בעת הצורך.
+    אם לקוח לא זמין (אין ספרייה/מפתחות/ban) — נזרקת שגיאה רכה.
     """
     def __getattr__(self, name: str):
         c = _get_client()
         if c is None:
-            raise RuntimeError("Binance REST unavailable (client not ready / banned)")
+            raise RuntimeError("Binance REST unavailable (library/keys missing or client not ready/banned)")
         return getattr(c, name)
 
 # החלפה: במקום ליצור Client בזמן import, נשתמש בפרוקסי
 client: Client | _ClientProxy = _ClientProxy()
 
+# תאימות לאחור — מודולים שציפו לפונקציה get_client()
+def get_client():
+    """תאימות: מחזיר Client אמיתי אם מאותחל, אחרת None (לא מנסה לאתחל בכוח)."""
+    return _CLIENT
+
 # ===== COID helpers =====
 def _sanitize_coid(coid: str) -> str:
     coid = (coid or "").strip()
-    # Binance מגביל תווים; נשמור על אלפאנומרי, '_', '-', ':'
     safe = []
     for ch in coid:
         if ch.isalnum() or ch in ("_", "-", ":"):
             safe.append(ch)
     s = "".join(safe)
-    return s[:36]  # hard cap סביר
+    return s[:36]
 
 def _kind_from_kwargs(kwargs: Dict[str, Any]) -> str:
     t = str(kwargs.get("type") or "").upper()
@@ -399,6 +409,7 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     need = _ensure_min_notional(symbol, price, qf)
     if need <= qf + 1e-12: return qty_str
     return _quantize_qty(symbol, need)
+
 # ===== Rate limiting buckets =====
 _bucket_reset_at = 0.0; _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
@@ -451,14 +462,12 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 def futures_index_price(symbol: str) -> Optional[float]:
-    """Index price (premiumIndex). עם coalescing קל."""
     sym = symbol.upper()
     try:
         cached = _cache_get(_index_cache, sym)
         if cached is not None: return cached
     except Exception:
         pass
-    # 1) מתודה רשמית
     try:
         if hasattr(client, "futures_premium_index"):
             data = client.futures_premium_index(symbol=sym)
@@ -466,12 +475,9 @@ def futures_index_price(symbol: str) -> Optional[float]:
                 data = data[0]
             p = data.get("indexPrice")
             if p is not None:
-                val = float(p)
-                _cache_put(_index_cache, sym, val)
-                return val
+                val = float(p); _cache_put(_index_cache, sym, val); return val
     except Exception as e:
         logger.debug("futures_premium_index method failed: %s", e)
-    # 2) API פנימי
     try:
         if hasattr(client, "_request_futures_api"):
             data = client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
@@ -479,12 +485,9 @@ def futures_index_price(symbol: str) -> Optional[float]:
                 data = data[0]
             p = data.get("indexPrice")
             if p is not None:
-                val = float(p)
-                _cache_put(_index_cache, sym, val)
-                return val
+                val = float(p); _cache_put(_index_cache, sym, val); return val
     except Exception as e:
         logger.debug("_request_futures_api premiumIndex failed: %s", e)
-    # 3) HTTP ישיר
     try:
         import httpx  # type: ignore
         base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
@@ -497,9 +500,7 @@ def futures_index_price(symbol: str) -> Optional[float]:
                 data = data[0]
             p = data.get("indexPrice")
             if p is not None:
-                val = float(p)
-                _cache_put(_index_cache, sym, val)
-                return val
+                val = float(p); _cache_put(_index_cache, sym, val); return val
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
@@ -626,8 +627,7 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
     kwargs.setdefault("workingType", WORKING_TYPE)
     kwargs.setdefault("recvWindow", RECV_WINDOW)
 
-    # כבדוק Hedge/One-Way וסניטציית positionSide
-    eff_ps = _effective_position_side_from_kwargs(kwargs)  # עשוי להסיר positionSide ב-One-Way
+    _effective_position_side_from_kwargs(kwargs)  # Hedge/One-Way sanitize
 
     if not str(kwargs.get("newClientOrderId", "")).strip():
         sym = str(kwargs.get("symbol", "UNK")).upper()
@@ -654,7 +654,6 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
         if idem_hit is not None:
             return idem_hit
 
-    # ===== Retry loop + טיפול מיוחד ב- -1106 (reduceOnly) =====
     def _maybe_retry_without_reduceonly(err: Exception) -> Optional[Dict[str, Any]]:
         msg = str(err).lower()
         if "reduceonly" in msg and "not required" in msg and "reduceonly" in (k.lower() for k in kwargs.keys()):
@@ -678,11 +677,9 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
             return res
         except BinanceAPIException as e:
             s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
-            # טיפול רייטלימיט
             if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
                 logger.warning("Rate-limited, attempt=%s; qps=%s base=%sms", attempt, _dyn_qps, _dyn_backoff_base)
                 _note_rate_limit_hit(); _backoff_sleep(attempt); continue
-            # נסה ללא reduceOnly אם רלוונטי
             retry = _maybe_retry_without_reduceonly(e)
             if retry is not None:
                 return retry
@@ -691,7 +688,6 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
             if coid: _idem_put(coid, err)
             return err
         except Exception as e:
-            # נסה ללא reduceOnly אם זה המקרה
             retry = _maybe_retry_without_reduceonly(e)
             if retry is not None:
                 return retry
@@ -709,7 +705,6 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     """עטיפה בטוחה ליצירת הזמנה — עם Idempotency, Percent-Guard, Backoff, WorkingType/recvWindow."""
     sym = str(kwargs.get("symbol", "UNK")).upper()
 
-    # Quantize
     if "price" in kwargs and kwargs["price"] is not None:
         kwargs["price"] = _quantize_price(sym, float(kwargs["price"]))
     if "stopPrice" in kwargs and kwargs["stopPrice"] is not None:
@@ -728,18 +723,15 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
             qty_q = _ensure_min_notional_qty(sym, float(ref_price), qty_q)
         kwargs["quantity"] = qty_q
 
-    # סוג הזמנה → סניטציה
     typ = str(kwargs.get("type") or "").upper()
     if "MARKET" in typ and "timeInForce" in kwargs:
         kwargs.pop("timeInForce", None)
     if typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
         kwargs.pop("price", None)
 
-    # Hedge/One-Way: סניטציה של positionSide ו־reduceOnly
-    eff_ps = _effective_position_side_from_kwargs(kwargs)  # עשוי להסיר positionSide
+    _effective_position_side_from_kwargs(kwargs)
     is_trigger_market = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
     if not _is_hedge_mode_runtime():
-        # One-Way: ב-*MARKET טריגר עדיף לא לשלוח reduceOnly מראש
         if is_trigger_market and "reduceOnly" in kwargs:
             kwargs.pop("reduceOnly", None)
         if kwargs.get("closePosition"):
@@ -773,7 +765,6 @@ def place_stop_market(
         kwargs["closePosition"] = True
     else:
         kwargs["quantity"] = qqty
-        # ב-One-Way והזמנת טריגר MARKET לא נשלח reduceOnly מראש; ב-Hedge זה בסדר
         if reduce_only and _is_hedge_mode_runtime():
             kwargs["reduceOnly"] = True
     if client_order_id:
@@ -866,7 +857,7 @@ def place_tp_ladder(
         kwargs = dict(
             symbol=sym,
             side=side,
-            type=LADDER_TP_KIND,  # TAKE_PROFIT_MARKET או TAKE_PROFIT
+            type=LADDER_TP_KIND,
             stopPrice=stop_q,
             closePosition=False,
             quantity=_ensure_min_notional_qty(sym, float(tprice), _quantize_qty(sym, qty_i)),
@@ -914,7 +905,7 @@ def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str, Any]:
 # ===== Klines =====
 def get_klines_df(symbol: str, interval: str="5m", limit: int=50):
     try:
-        import pandas as pd
+        import pandas as pd  # type: ignore
     except Exception:
         return None
     try:
@@ -942,7 +933,6 @@ def close_all_positions() -> Dict[str,Any]:
             if abs(amt) <= 1e-12: continue
             side = "SELL" if amt>0 else "BUY"
             try:
-                # One-Way עלול לזרוק -1106 על reduceOnly → נשתמש ב-_safe_create_order עם retry פנימי
                 res = _safe_create_order(symbol=sym, side=side, type="MARKET",
                                          reduceOnly=True, quantity=_quantize_qty(sym, abs(amt)),
                                          newClientOrderId=_coid("MKT", sym))
@@ -1048,11 +1038,9 @@ def place_limit_order(
 
 # === Small exports for convenience ===
 def symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
-    """Alias תואם-עבר — מחזיר את פילטרי הסימבול (tickSize/stepSize/minNotional וכו')."""
     return get_symbol_filters(symbol)
 
 def list_perp_usdt_symbols() -> List[str]:
-    """רשימת סמלי Futures PERPETUAL עם quote=USDT במצב TRADING/PENDING_TRADING."""
     info = futures_exchange_info_safe() or {}
     out: List[str] = []
     for s in (info.get("symbols") or []):
@@ -1070,7 +1058,7 @@ def get_futures_client() -> Client | _ClientProxy:
     return client
 
 __all__ = [
-    "client","fapi_ping","futures_exchange_info_safe","futures_balance",
+    "client","get_client","fapi_ping","futures_exchange_info_safe","futures_balance",
     "futures_mark_price","futures_index_price","get_price",
     "get_symbol_info","get_symbol_filters","symbol_filters",
     "get_open_positions","futures_open_positions_safe","get_single_position",
@@ -1080,6 +1068,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
