@@ -4,9 +4,13 @@ import os
 import logging
 from typing import List, Optional, Dict, Any
 
+from fastapi import Header, HTTPException, Request
+
 logger = logging.getLogger("algogpt.auth")
 
-# ---------- helpers ----------
+# ==============================
+# Helpers
+# ==============================
 def _coerce_bool(val: Optional[str]) -> bool:
     return str(val or "").strip().lower() in ("1", "true", "yes", "on", "y")
 
@@ -21,24 +25,41 @@ def _mask(tok: str) -> str:
         return tok[0] + "…" + tok[-1]
     return tok[:2] + "…" + tok[-2:]
 
-# ---------- storage ----------
+# ==============================
+# Load tokens from ENV (canonical + fallbacks)
+# ==============================
+_CANON_ENV = "AUTH_TOKENS"
+_DEPRECATED_MULTI_ENVS = ("ALGOGPT_TOKENS", "API_TOKENS", "ALGOGPT_API_TOKENS")
+_SINGLE_FALLBACKS = (
+    "PRIMARY_API_TOKEN", "API_BEARER_TOKEN", "API_TOKEN", "ALGOGPT_API_TOKEN", "ALGOGPT_TOKEN", "TOKEN"
+)
+_FILE_ENVS = ("AUTH_TOKENS_FILE", "API_TOKENS_FILE")
+_SENTINELS = {"PUT_REAL_API_TOKEN", "CHANGE_ME", "REPLACE_ME", "YOUR_TOKEN_HERE", "TOKEN"}
+
 _TOKENS: List[str] = []
 _ALLOW_ALL: bool = False
 
 def _extend_with_api_tokens(toks: List[str]) -> List[str]:
-    # multi-value envs
-    for k in ("AUTH_TOKENS", "API_TOKENS", "ALGOGPT_API_TOKENS", "ALGOGPT_TOKENS"):
+    # Canonical
+    canon = os.getenv(_CANON_ENV, "")
+    if canon.strip():
+        toks.extend(_split_multi(canon))
+
+    # Deprecated (multi) — add + warn
+    for k in _DEPRECATED_MULTI_ENVS:
         v = os.getenv(k, "")
         if v.strip():
+            logger.warning("AUTH deprecation: %s is set; please move to %s only.", k, _CANON_ENV)
             toks.extend(_split_multi(v))
-    # single-value fallbacks
-    for k in ("PRIMARY_API_TOKEN", "API_BEARER_TOKEN", "ALGOGPT_API_TOKEN",
-              "ALGOGPT_TOKEN", "API_TOKEN", "TOKEN"):
+
+    # Single-value fallbacks
+    for k in _SINGLE_FALLBACKS:
         v = os.getenv(k, "").strip()
         if v:
             toks.append(v)
-    # from files (one token per line)
-    for file_env in ("AUTH_TOKENS_FILE", "API_TOKENS_FILE"):
+
+    # From files (one token per line)
+    for file_env in _FILE_ENVS:
         path = os.getenv(file_env, "").strip()
         if not path:
             continue
@@ -51,10 +72,16 @@ def _extend_with_api_tokens(toks: List[str]) -> List[str]:
         except Exception as e:
             logger.warning({"event": "auth.tokens_file_read_failed", "file": path, "error": str(e)})
 
-    # cleanup
-    toks = [t for t in toks if t]
-    uniq = list(dict.fromkeys(toks))
-    return uniq
+    # Cleanup: drop empties/sentinels, keep order & uniqueness
+    cleaned: List[str] = []
+    seen: set[str] = set()
+    for t in toks:
+        tt = t.strip()
+        if not tt or tt in _SENTINELS or tt in seen:
+            continue
+        cleaned.append(tt)
+        seen.add(tt)
+    return cleaned
 
 def load_tokens_from_env() -> List[str]:
     toks: List[str] = []
@@ -62,6 +89,7 @@ def load_tokens_from_env() -> List[str]:
     return toks
 
 def refresh_tokens_from_env() -> Dict[str, Any]:
+    """Reload tokens + allow_all from environment."""
     global _TOKENS, _ALLOW_ALL
     _TOKENS = load_tokens_from_env()
     # respect both ALLOW_ALL and AUTH_ALLOW_ALL
@@ -74,11 +102,11 @@ def refresh_tokens_from_env() -> Dict[str, Any]:
     })
     return {"ok": True, "count": len(_TOKENS), "allow_all": _ALLOW_ALL}
 
-# public alias some routes מחפשים
+# Public alias (יש ראוטרים שמחפשים)
 def refresh_tokens() -> Dict[str, Any]:
     return refresh_tokens_from_env()
 
-# initial load
+# Initial load
 refresh_tokens_from_env()
 
 def get_loaded_tokens(mask: bool = True) -> List[str]:
@@ -87,7 +115,9 @@ def get_loaded_tokens(mask: bool = True) -> List[str]:
 def allow_all() -> bool:
     return _ALLOW_ALL
 
-# ---------- request helpers ----------
+# ==============================
+# Request token extraction
+# ==============================
 def _extract_bearer_from_auth_header(h: Optional[str]) -> Optional[str]:
     if not h:
         return None
@@ -98,16 +128,22 @@ def _extract_bearer_from_auth_header(h: Optional[str]) -> Optional[str]:
         return parts[0].strip()
     return None
 
-def extract_token(request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
+_QUERY_KEYS = ("api_key", "apikey", "token", "key", "auth")
+
+def extract_token(request: Request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
+    # Canonical: X-API-Key
     if x_api_key:
         return x_api_key.strip()
+    # Back-compat: Authorization: Bearer …
     tok = _extract_bearer_from_auth_header(auth_header or "")
     if tok:
         return tok
+    # Query fallbacks
     try:
-        qtok = request.query_params.get("token")
-        if qtok:
-            return qtok.strip()
+        for k in _QUERY_KEYS:
+            qtok = request.query_params.get(k)
+            if qtok:
+                return qtok.strip()
     except Exception:
         pass
     return None
@@ -119,18 +155,26 @@ def token_matches(token: Optional[str]) -> bool:
         return False
     return token in _TOKENS
 
-# ---------- FastAPI dependency ----------
-def require_bearer_token(Authorization: Optional[str] = None, X_API_Key: Optional[str] = None):
-    from fastapi import HTTPException
-    tok = X_API_Key or _extract_bearer_from_auth_header(Authorization)
+# ==============================
+# FastAPI dependencies
+# ==============================
+async def require_api_key(
+    request: Request,
+    # FastAPI ממפה X-API-Key → x_api_key (אין צורך convert_underscores פה)
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    Authorization: Optional[str] = Header(None),
+):
+    tok = extract_token(request, Authorization, x_api_key)
     if not token_matches(tok):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return tok
 
-# compat alias – יש ראוטרים שדורשים אותו בשם הזה
-require_api_key = require_bearer_token
+# תאימות: יש קוד שקורא לשם הזה
+require_bearer_token = require_api_key
 
-# ---------- public paths for /status/auth ----------
+# ==============================
+# Public paths helpers (ל- /status/auth)
+# ==============================
 def _split_env(s: str) -> List[str]:
     return [x for x in _split_multi(s)]
 
@@ -138,6 +182,7 @@ def get_public_paths() -> Dict[str, Any]:
     paths = set(_split_env(os.getenv("SECURITY_PUBLIC_PATHS", "")))
     prefixes = set(_split_env(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
     return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
+
 
 
 
