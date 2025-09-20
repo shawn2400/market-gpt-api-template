@@ -4,7 +4,7 @@ import os
 import logging
 from typing import List, Optional, Dict, Any
 
-from fastapi import Header, HTTPException  # ✅ חשוב כדי לקלוט כותרות
+from fastapi import Header, HTTPException
 
 logger = logging.getLogger("algogpt.auth")
 
@@ -28,17 +28,30 @@ _TOKENS: List[str] = []
 _ALLOW_ALL: bool = False
 
 def _extend_with_api_tokens(toks: List[str]) -> List[str]:
-    # multi-value envs
+    """
+    אוספים טוקנים מכל מגוון השמות ההיסטוריים כדי לא לשבור תאימות,
+    אך בפועל ממליצים על API_TOKEN יחיד.
+    """
+    # multi-value envs (מופרדים בפסיקים/רווחים/שבירת שורה)
     for k in ("AUTH_TOKENS", "API_TOKENS", "ALGOGPT_API_TOKENS", "ALGOGPT_TOKENS"):
         v = os.getenv(k, "")
         if v.strip():
             toks.extend(_split_multi(v))
-    # single-value fallbacks
-    for k in ("PRIMARY_API_TOKEN", "API_BEARER_TOKEN", "API_BEARER",
-              "ALGOGPT_API_TOKEN", "ALGOGPT_TOKEN", "API_TOKEN", "TOKEN"):
+
+    # single-value fallbacks (שמות היסטוריים/וורקרים)
+    for k in (
+        "PRIMARY_API_TOKEN",
+        "API_BEARER_TOKEN",
+        "API_BEARER",
+        "ALGOGPT_API_TOKEN",
+        "ALGOGPT_TOKEN",
+        "API_TOKEN",
+        "TOKEN",
+    ):
         v = os.getenv(k, "").strip()
         if v:
             toks.append(v)
+
     # from files (one token per line)
     for file_env in ("AUTH_TOKENS_FILE", "API_TOKENS_FILE"):
         path = os.getenv(file_env, "").strip()
@@ -51,9 +64,11 @@ def _extend_with_api_tokens(toks: List[str]) -> List[str]:
                     if t:
                         toks.append(t)
         except Exception as e:
-            logger.warning({"event": "auth.tokens_file_read_failed", "file": path, "error": str(e)})
+            logger.warning(
+                {"event": "auth.tokens_file_read_failed", "file": path, "error": str(e)}
+            )
 
-    # cleanup
+    # cleanup + unique (preserve order)
     toks = [t for t in toks if t]
     uniq = list(dict.fromkeys(toks))
     return uniq
@@ -68,12 +83,14 @@ def refresh_tokens_from_env() -> Dict[str, Any]:
     _TOKENS = load_tokens_from_env()
     # respect both ALLOW_ALL and AUTH_ALLOW_ALL
     _ALLOW_ALL = _coerce_bool(os.getenv("ALLOW_ALL", os.getenv("AUTH_ALLOW_ALL", "0")))
-    logger.info({
-        "event": "auth.tokens_loaded",
-        "allow_all": _ALLOW_ALL,
-        "count": len(_TOKENS),
-        "tokens": [_mask(t) for t in _TOKENS],
-    })
+    logger.info(
+        {
+            "event": "auth.tokens_loaded",
+            "allow_all": _ALLOW_ALL,
+            "count": len(_TOKENS),
+            "tokens": [_mask(t) for t in _TOKENS],
+        }
+    )
     return {"ok": True, "count": len(_TOKENS), "allow_all": _ALLOW_ALL}
 
 # public alias (יש קוד שקורא לשם הזה)
@@ -89,7 +106,7 @@ def get_loaded_tokens(mask: bool = True) -> List[str]:
 def allow_all() -> bool:
     return _ALLOW_ALL
 
-# ---------- header parsing ----------
+# ---------- header/query parsing ----------
 def _extract_bearer_from_auth_header(h: Optional[str]) -> Optional[str]:
     if not h:
         return None
@@ -98,6 +115,26 @@ def _extract_bearer_from_auth_header(h: Optional[str]) -> Optional[str]:
         return parts[1].strip()
     if len(parts) == 1 and parts[0]:  # token without "Bearer"
         return parts[0].strip()
+    return None
+
+def extract_token(request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
+    """
+    פונקציית עזר לשימוש ידני ברואטרים (אם צריך):
+    1) X-API-Key
+    2) Authorization: Bearer <token>
+    3) query param: ?token=...
+    """
+    if x_api_key:
+        return x_api_key.strip()
+    tok = _extract_bearer_from_auth_header(auth_header or "")
+    if tok:
+        return tok
+    try:
+        qtok = request.query_params.get("token")
+        if qtok:
+            return qtok.strip()
+    except Exception:
+        pass
     return None
 
 def token_matches(token: Optional[str]) -> bool:
@@ -114,7 +151,7 @@ def require_bearer_token(
 ):
     """
     מקבל טוקן או מהכותרת 'X-API-Key' או מהכותרת 'Authorization: Bearer ...'
-    ומוודא שהוא קיים ב־_TOKENS (או ALLOW_ALL).
+    ומוודא שהוא קיים ב־_TOKENS (או כשALLOW_ALL=1).
     """
     tok = X_API_Key or _extract_bearer_from_auth_header(Authorization)
     if not token_matches(tok):
@@ -132,6 +169,7 @@ def get_public_paths() -> Dict[str, Any]:
     paths = set(_split_env(os.getenv("SECURITY_PUBLIC_PATHS", "")))
     prefixes = set(_split_env(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
     return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
+
 
 
 
