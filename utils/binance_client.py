@@ -25,7 +25,8 @@ ORD_BUCKET_WINDOW = int(os.getenv("ORDERS_BUCKET_WINDOW_SEC", "10"))
 ORD_QPS_BUCKET = int(os.getenv("ORDERS_QPS_BUCKET", "4"))
 BACKOFF_BASE_MS = int(os.getenv("ORDER_BACKOFF_BASE_MS", "120"))
 BACKOFF_MAX_MS  = int(os.getenv("ORDER_BACKOFF_MAX_MS",  "1600"))
-BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "6"))
+# ↓ ברירת מחדל עדינה יותר כדי לא ליצור סערת רטריים
+BINANCE_MAX_RETRIES = int(os.getenv("BINANCE_MAX_RETRIES", "2"))
 
 DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP", "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
@@ -69,29 +70,7 @@ def _now() -> float:
 def _ms() -> int:
     return int(time.time() * 1000)
 
-# ===== Init Futures client (+ timeout) =====
-_client_lock = threading.RLock()
-client = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
-client.API_URL = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
-
-# Time sync
-try:
-    try:
-        server_time = client.futures_time().get("serverTime")  # type: ignore
-    except Exception:
-        server_time = client.get_server_time().get("serverTime")
-    local_ms = int(time.time() * 1000)
-    offset = int(server_time) - local_ms
-    setattr(client, "TIME_OFFSET", offset)
-    try:
-        setattr(client, "timestamp_offset", offset)
-    except Exception:
-        pass
-    logger.info("Binance TIME_OFFSET set to %d ms", offset)
-except Exception as e:
-    logger.warning("Time sync failed: %s", e)
-
-# Optional WS fallback
+# ===== Optional WS fallback =====
 try:
     from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
 except Exception:
@@ -113,6 +92,83 @@ _idem_lock = threading.RLock()
 
 # tp ladder cooldown
 _tp_ladder_last_at: Dict[str, float] = {}
+
+# ===== Lazy Binance Client (לא ליצור בזמן import) =====
+_BINANCE_HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+_client_lock = threading.RLock()
+_CLIENT: Optional[Client] = None
+_client_ban_until: float = 0.0  # עד מתי להמתין לפני ניסיון יצירה שוב
+
+def _init_client() -> Optional[Client]:
+    """
+    יוצר Client של binance באופן בטוח, בלי להפיל את התהליך אם יש BAN.
+    שים לב: python-binance מבצע ping() ב-__init__, לכן זה עטוף try/except.
+    """
+    global _CLIENT, _client_ban_until
+
+    # אם יש BAN ידוע – אל תנסה עדיין
+    now = _now()
+    if _client_ban_until and now < _client_ban_until:
+        return None
+
+    try:
+        c = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
+        # להכריח FUTURES base
+        c.API_URL = _BINANCE_HTTP_BASE
+
+        # Sync time (לא קריטי; עטוף try)
+        try:
+            try:
+                server_time = c.futures_time().get("serverTime")  # type: ignore
+            except Exception:
+                server_time = c.get_server_time().get("serverTime")
+            local_ms = int(time.time() * 1000)
+            offset = int(server_time) - local_ms
+            setattr(c, "TIME_OFFSET", offset)
+            try:
+                setattr(c, "timestamp_offset", offset)
+            except Exception:
+                pass
+            logger.info("Binance TIME_OFFSET set to %d ms", offset)
+        except Exception as e:
+            logger.warning("Time sync failed: %s", e)
+
+        _CLIENT = c
+        return _CLIENT
+    except BinanceAPIException as e:
+        s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
+        if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
+            # קיבלנו BAN כבר בזמן init → אל תפיל וורקר, רק דחה יצירה.
+            backoff = max(ACCOUNT_ON_BAN_BACKOFF, 10)
+            _client_ban_until = _now() + backoff
+            logger.error("Binance client init rate-limited/banned; deferring %.0fs", backoff)
+            return None
+        logger.error("Binance client init failed: %s", e)
+        return None
+    except Exception as e:
+        logger.error("Binance client init failed: %s", e)
+        return None
+
+def _get_client() -> Optional[Client]:
+    global _CLIENT
+    with _client_lock:
+        if _CLIENT is not None:
+            return _CLIENT
+        return _init_client()
+
+class _ClientProxy:
+    """
+    פרוקסי נטען-בעצלנות: כל גישה ל-attrib תפעיל יצירת Client רק בעת הצורך.
+    אם יש BAN – נזרקת שגיאה, והקריאות העוטפות כבר מטפלות בזה ב-try/except.
+    """
+    def __getattr__(self, name: str):
+        c = _get_client()
+        if c is None:
+            raise RuntimeError("Binance REST unavailable (client not ready / banned)")
+        return getattr(c, name)
+
+# החלפה: במקום ליצור Client בזמן import, נשתמש בפרוקסי
+client: Client | _ClientProxy = _ClientProxy()
 
 # ===== COID helpers =====
 def _sanitize_coid(coid: str) -> str:
@@ -343,7 +399,6 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     need = _ensure_min_notional(symbol, price, qf)
     if need <= qf + 1e-12: return qty_str
     return _quantize_qty(symbol, need)
-
 # ===== Rate limiting buckets =====
 _bucket_reset_at = 0.0; _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
@@ -1010,7 +1065,8 @@ def list_perp_usdt_symbols() -> List[str]:
     return out
 
 # ===== Public export =====
-def get_futures_client() -> Client:
+def get_futures_client() -> Client | _ClientProxy:
+    """מחזיר את הפרוקסי (Lazy). אם הלקוח כבר מאותחל – הפרוקסי יעביר הלאה לשכבה בפועל."""
     return client
 
 __all__ = [
@@ -1024,6 +1080,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
