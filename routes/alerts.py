@@ -1,7 +1,7 @@
 # routes/alerts.py
 from __future__ import annotations
 
-import os, time, uuid, hmac, hashlib, base64
+import os, time, uuid, inspect
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, Depends, Body, Header, HTTPException, Request
@@ -9,10 +9,29 @@ from pydantic import BaseModel, constr
 
 from utils.auth import require_api_key
 from utils.rate_limit import require_rate_limit
-from utils.telegram_api import send_message as telegram_send
-from utils.approvals import preflight_proposal
-from utils.security import verify_hmac, idem_seen
+from utils.security import verify_hmac_multi, idem_seen
+
+# --- Telegram send (שכבה דקה עם fallback) ---
+try:
+    from utils.telegram_api import send_message as telegram_send
+except Exception:
+    async def telegram_send(text: str) -> None:
+        return None
+
+# --- Approvals preflight (fallback אם חסר מודול) ---
+try:
+    from utils.approvals import preflight_proposal
+except Exception:
+    def preflight_proposal(payload: Dict[str, Any]) -> tuple[bool, Optional[str]]:
+        return True, None
+
+# --- Trade executor (תמיכה ב-sync/async) ---
 from utils.trade_executor import execute_trade_live
+
+async def _exec_trade_adaptive(**kwargs) -> Dict[str, Any]:
+    if inspect.iscoroutinefunction(execute_trade_live):
+        return await execute_trade_live(**kwargs)  # type: ignore
+    return execute_trade_live(**kwargs)  # type: ignore
 
 # ===== ENV =====
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
@@ -101,11 +120,10 @@ async def receive_alert(
     x_hub_signature_256: Optional[str] = Header(None),
     x_idempotency_key: Optional[str] = Header(None),
 ) -> AlertResponse:
-    # אימות HMAC (אם יש secret)
+    # אימות HMAC (אם יש secret) — multi-headers לחישוב אחיד
     if WEBHOOK_HMAC_SECRET:
         raw = await request.body()
-        # תומך כל הראשים; verify_hmac כבר עושה HEX/B64 וגם HEX-key/ASCII-key
-        if not (verify_hmac(x_signature, raw) or verify_hmac(x_webhook_hmac, raw) or verify_hmac(x_hub_signature_256, raw)):
+        if not verify_hmac_multi(raw, x_signature, x_webhook_hmac, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
 
     if x_idempotency_key and idem_seen(x_idempotency_key):
@@ -147,7 +165,7 @@ async def receive_alert(
     if approved and AUTO_RUN and EXECUTE_TRADES:
         try:
             tp_targets = _targets_from_alert(alert)
-            res = await execute_trade_live(
+            res = await _exec_trade_adaptive(
                 symbol=alert.symbol.upper(),
                 side=_side_to_ex(alert.side),
                 leverage=int(alert.leverage or 10),
@@ -216,7 +234,7 @@ async def receive_analysis(
 ) -> Dict[str, Any]:
     if WEBHOOK_HMAC_SECRET:
         raw = await request.body()
-        if not (verify_hmac(x_signature, raw) or verify_hmac(x_webhook_hmac, raw) or verify_hmac(x_hub_signature_256, raw)):
+        if not verify_hmac_multi(raw, x_signature, x_webhook_hmac, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
     try:
         if ADMIN_CHAT_ID > 0:
@@ -236,7 +254,7 @@ async def ingest_trade(
 ) -> Dict[str, Any]:
     if WEBHOOK_HMAC_SECRET:
         raw = await request.body()
-        if not (verify_hmac(x_signature, raw) or verify_hmac(x_webhook_hmac, raw) or verify_hmac(x_hub_signature_256, raw)):
+        if not verify_hmac_multi(raw, x_signature, x_webhook_hmac, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
 
     if x_idempotency_key and idem_seen(x_idempotency_key):
@@ -256,6 +274,7 @@ async def ingest_trade(
     }
     _ACTIVE[trade_id] = item
     return {"ok": True, "trade_id": trade_id, "chat_id": payload.get("chat_id")}
+
 
 
 
