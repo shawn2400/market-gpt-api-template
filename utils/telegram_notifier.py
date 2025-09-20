@@ -37,6 +37,10 @@ except Exception:
             "expected_pnl_usd": plan.get("expected_pnl_usd"),
         }
 
+# ====== Alias לשמירה על תאימות ישנה (מודולים שעדיין קוראים _send) ======
+async def _send(text: str) -> None:
+    await _tg_send(text)
+
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
     """
@@ -206,7 +210,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
         new_lines = []
         for i, line in enumerate(tp_lines, start=1):
             gas = tp_pnl.get(f"tp{i}")
-            new_lines.append(line + (f" · ⛽ {_fmt_usd(gas)}" if gas is not None else ""))
+            new_lines.append(line + (f" · ⛽ {_fmt_usd(gas)}" if gas is not None else ""))  # noqa: E501
         tp_lines = new_lines
 
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
@@ -352,8 +356,9 @@ __all__ = [
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
     # policy helper
     "should_auto_approve_trade",
+    # backward-compat
+    "_send",
 ]
-
 
 
 
