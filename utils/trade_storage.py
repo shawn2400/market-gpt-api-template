@@ -25,6 +25,20 @@ def load_json(name: str, default: Optional[Any] = None) -> Any:
     with p.open("r", encoding="utf-8") as f:
         return json.load(f)
 
+# --- aliases for backward-compat ---
+def put_json(name: str, obj: Any) -> bool:
+    try:
+        save_json(name, obj)
+        return True
+    except Exception:
+        return False
+
+def get_json(name: str) -> Optional[Any]:
+    try:
+        return load_json(name, None)
+    except Exception:
+        return None
+
 # --- payload cache files (optionally mirrored to redis if available) ---
 # soft optional redis
 try:
@@ -37,7 +51,7 @@ def _get_redis_client():
     if not (redis and url):
         return None
     try:
-        return redis.from_url(url)
+        return redis.from_url(url, decode_responses=True)
     except Exception:
         return None
 
@@ -83,7 +97,11 @@ def cleanup_static(max_files: int = 500) -> None:
         except Exception:
             continue
 
-__all__ = ["save_json", "load_json", "save_payload", "load_trades", "cleanup_static"]
+__all__ = [
+    "save_json", "load_json", "put_json", "get_json",
+    "save_payload", "load_trades", "cleanup_static",
+]
+
 
 
 
