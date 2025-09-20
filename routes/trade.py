@@ -9,7 +9,6 @@ import httpx
 
 from utils.auth import require_api_key
 
-# === Notifier (fallback בטוח) ===
 try:
     from utils.telegram_notifier import send_approval, send_audit  # type: ignore
 except Exception:
@@ -18,23 +17,20 @@ except Exception:
     async def send_audit(*args, **kwargs):  # type: ignore
         return None
 
-# === Approval rules (fallback) ===
 try:
     from utils.approval_rules import should_auto_approve  # type: ignore
 except Exception:
     def should_auto_approve(payload: Dict[str, Any]):  # type: ignore
         return (False, "rules_missing")
 
-# === Execution core (יציב) ===
-# מעדיפים execute_trade_live שקיים במערכת שלך ומציב SL/TP/Ladders לפי ENV
 try:
     from utils.trade_executor import execute_trade_live  # type: ignore
-except Exception as e:
+except Exception:
     execute_trade_live = None  # type: ignore
 
 router = APIRouter(tags=["trade"])
 
-_PENDING: Dict[str, Dict[str, Any]] = {}   # idem -> payload
+_PENDING: Dict[str, Dict[str, Any]] = {}
 _PENDING_TTL = 60 * 5
 
 def _make_idem(x: Optional[str]) -> str:
@@ -74,7 +70,6 @@ def _summary(req: TradeReq) -> str:
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
-    # ממפה לשדות של execute_trade_live
     res = await execute_trade_live(
         symbol=req.symbol,
         market="futures",
@@ -83,13 +78,12 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         entry_price=req.entry if (req.entry and req.entry > 0) else None,
         budget_usdt=req.budget_usd,
         leverage=req.leverage,
-        risk_pct=None,            # ניהול סיכונים מתבצע פנימית לפי ENV/מודולים אצלך
-        stop_loss_pct=None,       # idem
-        take_profit_rr=None,      # idem
-        require_approval=False,   # שכבת האישור מטופלת לפני הביצוע
+        risk_pct=None,
+        stop_loss_pct=None,
+        take_profit_rr=None,
+        require_approval=False,
         reason="trade_execute_api",
     )
-    # אודיט לטלגרם
     await send_audit("TRADE EXECUTE API", {
         "symbol": req.symbol,
         "side": req.side,
@@ -152,7 +146,6 @@ async def trade_reject(id: str, _token: str = Depends(require_api_key)) -> Dict[
     await send_audit("REJECTED", {"idem": id})
     return {"ok": True, "rejected": True}
 
-# ===== תאימות: /trade/market/open =====
 class MarketOpenReq(BaseModel):
     symbol: str
     market: str = "futures"
@@ -165,7 +158,6 @@ class MarketOpenReq(BaseModel):
 
 @router.post("/trade/market/open")
 async def trade_market_open(req: MarketOpenReq, _token: str = Depends(require_api_key)):
-    # ממפה לשדות TradeReq + ביצוע מיידי (הידור פנימי של SL/TP קיים בליבה שלך)
     tr = TradeReq(
         symbol=req.symbol,
         side=("BUY" if req.side.upper() in ("BUY","LONG") else "SELL"),
@@ -173,12 +165,13 @@ async def trade_market_open(req: MarketOpenReq, _token: str = Depends(require_ap
         budget_usd=(req.budget_usd or 50.0),
         dry_run=req.dry_run,
         confirm_first=req.confirm_first,
-        entry=None,                # market
+        entry=None,
         tp_targets=None, tp_splits=None
     )
     res = await _execute_and_audit(tr)
     await send_audit("MARKET_OPEN", {"symbol": tr.symbol, "side": tr.side, "budget": tr.budget_usd, "reason": req.reason or "api_market_open"})
     return {"ok": True, "result": res}
+
 
 
 
