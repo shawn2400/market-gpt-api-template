@@ -22,6 +22,7 @@ from fnmatch import fnmatch
 import pkgutil
 
 from utils.auth import extract_token, allow_all, token_matches
+# ⚠️ תואם לגרסת ה-Lazy של binance_client: אין side-effects בזמן import
 from utils.binance_client import (
     fapi_ping,
     futures_balance,
@@ -67,8 +68,7 @@ except Exception:
             @classmethod
             def flush_all(cls):
                 cls.pending = {}
-            # compat aliases often used elsewhere
-            flush = reset = flush_all
+            flush = reset = flush_all  # compat
 
 # runtime counters (safe fallback)
 try:
@@ -124,7 +124,7 @@ for d in ("static", "logs", "data"):
     except Exception as e:
         logger.warning({"event": "mkdir_failed", "dir": d, "error": str(e)})
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.1")
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
@@ -404,7 +404,6 @@ if not _route_exists("/status/all"):
             "manager": {"enabled": manager_enabled},
             "binance_ping_ok": ping_ok,
         }
-
 # auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
@@ -452,6 +451,11 @@ async def price(symbol: str):
 
 @app.get("/readyz")
 async def readyz():
+    """
+    בדיקת מוכנות שאינה מפילה את השרת בזמן BAN:
+    - כל הגישות עטופות ב-try/except.
+    - מסתפקת ב-True/False ולא זורקת חריגות.
+    """
     details: Dict[str, Any] = {}
     err: Optional[str] = None
     try:
@@ -501,15 +505,21 @@ TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1",
 
 @app.on_event("startup")
 async def _startup_preflight_warmup():
+    """
+    חימום עדין שאינו מפיל את השרת במקרה של BAN.
+    כל קריאה עטופה ב-try/except. אין side-effects חוסמי-אתחול.
+    """
     try:
         from utils.auth import get_loaded_tokens  # type: ignore
         logger.info({"event": "auth.tokens_loaded", "tokens": get_loaded_tokens(mask=True)})
     except Exception:
         pass
+    # Exchange info → ממורכז בקאש פנימי; אם BAN – רק התראה
     try:
         _ = futures_exchange_info_safe(force_refresh=True)
     except Exception as e:
         logger.warning({"event": "warmup.exinfo_failed", "error": str(e)})
+    # מחיר לדוגמה (Lazy client ידאג לא להפיל)
     try:
         _ = get_price("BTCUSDT")
         try:
@@ -613,6 +623,7 @@ if __name__ == "__main__":
         host=os.getenv("BIND_HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "10001")),
     )
+
 
 
 
