@@ -1,5 +1,20 @@
 import React, { useEffect, useState } from "react";
 
+const API_BASE = (window.API_BASE || "").replace(/\/+$/,"") || "";
+
+function authHeaders() {
+  const tok = window.API_TOKEN || "";
+  return {
+    "X-API-Key": tok,
+    "Authorization": "Bearer " + tok,
+  };
+}
+
+async function jget(path) {
+  const r = await fetch(API_BASE + path, { headers: authHeaders() });
+  return r.json();
+}
+
 export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [accountId, setAccountId] = useState("");
@@ -7,58 +22,38 @@ export default function App() {
   const [trades, setTrades] = useState([]);
   const [pnl, setPnl] = useState(null);
 
-  // טעינת חשבונות בהתחלה
   useEffect(() => {
-    fetch("/ui/grid/accounts", {
-      headers: { "Authorization": "Bearer " + (window.API_TOKEN || "") }
-    })
-      .then(r => r.json())
+    jget("/ui/grid/accounts")
       .then(data => {
         if (data.ok) {
           setAccounts(data.accounts || []);
-          if (data.accounts && data.accounts.length > 0) {
-            setAccountId(data.accounts[0]);
-          }
+          if (data.accounts?.length) setAccountId(data.accounts[0]);
         }
       })
       .catch(console.error);
   }, []);
 
-  // טוען מידע לפי account_id
   const loadData = () => {
     if (!accountId) return;
-
-    fetch(`/ui/grid/active?account_id=${accountId}`, {
-      headers: { "Authorization": "Bearer " + (window.API_TOKEN || "") }
-    })
-      .then(r => r.json())
+    jget(`/ui/grid/active?account_id=${encodeURIComponent(accountId)}`)
       .then(d => setActiveGrids(d.active || []))
       .catch(console.error);
 
-    fetch(`/ui/grid/trades?account_id=${accountId}`, {
-      headers: { "Authorization": "Bearer " + (window.API_TOKEN || "") }
-    })
-      .then(r => r.json())
+    jget(`/ui/grid/trades?account_id=${encodeURIComponent(accountId)}`)
       .then(d => setTrades(d.trades || []))
       .catch(console.error);
 
-    fetch(`/ui/grid/pnl?account_id=${accountId}`, {
-      headers: { "Authorization": "Bearer " + (window.API_TOKEN || "") }
-    })
-      .then(r => r.json())
+    jget(`/ui/grid/pnl?account_id=${encodeURIComponent(accountId)}`)
       .then(d => setPnl(d.summary || null))
       .catch(console.error);
   };
 
-  useEffect(() => {
-    loadData();
-  }, [accountId]);
+  useEffect(() => { loadData(); }, [accountId]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
       <h1 className="text-2xl font-bold mb-4">AlgoGPT Grid Dashboard</h1>
 
-      {/* בחירת חשבון */}
       <div className="mb-6">
         <label className="mr-2">בחר חשבון:</label>
         <select
@@ -67,9 +62,7 @@ export default function App() {
           className="bg-gray-800 border border-gray-600 p-2 rounded"
         >
           {accounts.map((acc) => (
-            <option key={acc} value={acc}>
-              {acc}
-            </option>
+            <option key={acc} value={acc}>{acc}</option>
           ))}
         </select>
         <button
@@ -80,7 +73,6 @@ export default function App() {
         </button>
       </div>
 
-      {/* גרידים פעילים */}
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-2">גרידים פעילים</h2>
         {activeGrids.length === 0 ? (
@@ -97,9 +89,7 @@ export default function App() {
               {activeGrids.map((g, i) => (
                 <tr key={i} className="hover:bg-gray-800">
                   <td className="p-2 border border-gray-700">{g.symbol}</td>
-                  <td className="p-2 border border-gray-700">
-                    {g.orders ? g.orders.length : 0}
-                  </td>
+                  <td className="p-2 border border-gray-700">{g.orders ? g.orders.length : 0}</td>
                 </tr>
               ))}
             </tbody>
@@ -107,7 +97,6 @@ export default function App() {
         )}
       </div>
 
-      {/* טריידים */}
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-2">טריידים</h2>
         {trades.length === 0 ? (
@@ -142,7 +131,6 @@ export default function App() {
         )}
       </div>
 
-      {/* סיכום PnL */}
       <div>
         <h2 className="text-xl font-semibold mb-2">סיכום PnL</h2>
         {!pnl ? (
@@ -154,5 +142,6 @@ export default function App() {
     </div>
   );
 }
+
 
 
