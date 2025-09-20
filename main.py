@@ -8,32 +8,49 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Iterable
 
+import pkgutil
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.openapi.utils import get_openapi
 from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-from fastapi.openapi.utils import get_openapi
 from fnmatch import fnmatch
-import pkgutil
 
 from utils.auth import extract_token, allow_all, token_matches
-# ⚠️ תואם לגרסת ה-Lazy של binance_client: אין side-effects בזמן import
-from utils.binance_client import (
-    fapi_ping,
-    futures_balance,
-    get_price,
-    futures_exchange_info_safe,
-)
 from utils.json_logger import setup_json_logging
 from utils.metrics_middleware import MetricsMiddleware
 from utils.response_limits import ResponseSizeLimiter
 
-# notifier (safe fallback)
+# ---- Binance client: נסה לייבא, ואם לא – נפעיל נפילות עדינות ----
+try:
+    # תואם ל־lazy client – אין side effects בזמן import
+    from utils.binance_client import (
+        fapi_ping,
+        futures_balance,
+        get_price,
+        futures_exchange_info_safe,
+    )
+except Exception:
+    # Fallbacks שלא מפילים את האפליקציה אם לקוח הבורסה לא מחווט
+    def fapi_ping() -> bool:  # type: ignore
+        return False
+
+    def futures_balance():  # type: ignore
+        return None
+
+    def get_price(symbol: str) -> Optional[float]:  # type: ignore
+        return None
+
+    def futures_exchange_info_safe(force_refresh: bool = False):  # type: ignore
+        return None
+
+
+# ---- Telegram notifier (fallbacks) ----
 try:
     from utils.telegram_notifier import (
         ensure_ops_schedulers_started,
@@ -43,12 +60,15 @@ try:
 except Exception:
     async def ensure_ops_schedulers_started() -> None:  # type: ignore
         return None
+
     async def send_ops_digest_now(hours: Optional[int] = None) -> None:  # type: ignore
         return None
+
     async def send_eod_report_now() -> None:  # type: ignore
         return None
 
-# InternalAuthMiddleware (safe no-op fallback)
+
+# ---- InternalAuthMiddleware (no-op fallback) ----
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
 except Exception:
@@ -56,7 +76,8 @@ except Exception:
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
 
-# ConfirmStore (safe fallback with pending attribute)
+
+# ---- ConfirmStore (fallback) ----
 try:
     from utils.trade_executor import ConfirmStore  # type: ignore
 except Exception:
@@ -65,12 +86,15 @@ except Exception:
     except Exception:
         class ConfirmStore:  # type: ignore
             pending: Dict[str, Any] = {}
+
             @classmethod
             def flush_all(cls):
                 cls.pending = {}
-            flush = reset = flush_all  # compat
 
-# runtime counters (safe fallback)
+            flush = reset = flush_all  # תאימות
+
+
+# ---- runtime counters (fallbacks) ----
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters  # type: ignore
 except Exception:
@@ -81,6 +105,7 @@ except Exception:
             "ttl_sec": None,
             "inter_event_ewma_ms": None,
         }
+
     def exec_get_counters() -> Dict[str, Any]:  # type: ignore
         return {
             "tick_ewma_ms": None,
@@ -92,13 +117,15 @@ except Exception:
             "current_interval": int(os.getenv("SCAN_INTERVAL", "60")),
         }
 
-# Trade Manager (optional)
+
+# ---- Trade Manager (אופציונלי) ----
 TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", "20"))
 try:
     from utils.trade_manager import manage_open_trades_loop  # type: ignore
 except Exception:
     manage_open_trades_loop = None  # type: ignore
+
 
 def _coerce_log_level(val):
     import logging as _l
@@ -114,10 +141,11 @@ def _coerce_log_level(val):
     }
     return m.get(str(val).strip().lower(), _l.INFO)
 
+
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
-# ensure base folders exist
+# ---- תיקיית בסיסים ----
 for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -125,6 +153,7 @@ for d in ("static", "logs", "data"):
         logger.warning({"event": "mkdir_failed", "dir": d, "error": str(e)})
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.1")
+
 app = FastAPI(
     title="AlgoGPT API",
     version=APP_VERSION,
@@ -132,12 +161,15 @@ app = FastAPI(
 )
 
 # ---------- Validation error => 422 ----------
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=HTTP_422_UNPROCESSABLE_ENTITY,
         content={"detail": exc.errors()},
     )
+
 
 # ---------- OpenAPI filtering ----------
 def custom_openapi():
@@ -152,12 +184,8 @@ def custom_openapi():
     )
 
     max_ops = int(os.getenv("OPENAPI_PUBLIC_MAX_OPS", "30"))
-    hide_patterns = [
-        p.strip() for p in os.getenv("OPENAPI_HIDE_PATTERNS", "").split(",") if p.strip()
-    ]
-    include_tags = {
-        t.strip() for t in os.getenv("OPENAPI_INCLUDE_TAGS", "").split(",") if t.strip()
-    }
+    hide_patterns = [p.strip() for p in os.getenv("OPENAPI_HIDE_PATTERNS", "").split(",") if p.strip()]
+    include_tags = {t.strip() for t in os.getenv("OPENAPI_INCLUDE_TAGS", "").split(",") if t.strip()}
 
     new_paths: Dict[str, Any] = {}
     count = 0
@@ -179,7 +207,6 @@ def custom_openapi():
                 continue
             if max_ops > 0 and count >= max_ops:
                 continue
-
             new_methods[method] = op
             count += 1
 
@@ -189,6 +216,7 @@ def custom_openapi():
     schema["paths"] = new_paths
     app.openapi_schema = schema
     return app.openapi_schema
+
 
 app.openapi = custom_openapi
 
@@ -200,15 +228,9 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
-CORS_ALLOWED = (
-    [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o]
-)
-CORS_ALLOW_CREDENTIALS_CFG = (
-    os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
-)
-CORS_ALLOW_CREDENTIALS_EFFECTIVE = (
-    CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
-)
+CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o]
+CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
+CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -226,9 +248,11 @@ app.mount("/metrics", make_asgi_app())
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC", "1").lower() in ("1", "true", "yes", "on")
 PUBLIC_STATUS = os.getenv("SECURITY_PUBLIC_STATUS", "1").lower() in ("1", "true", "yes", "on")
 
+
 def _split_multi(s: str) -> Iterable[str]:
     import re
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
+
 
 DEFAULT_PUBLIC_PATHS = {
     "/",
@@ -302,6 +326,7 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
+
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
     try:
@@ -312,18 +337,17 @@ def _try_include(module_path: str) -> bool:
             return True
         logger.warning({"event": "router_missing_router_attr", "router": module_path})
     except Exception as e:
-        logger.warning(
-            {"event": "router_register_failed", "router": module_path, "error": str(e)}
-        )
+        logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
     return False
+
 
 _registered_paths = set()
 
-# explicit includes before auto-discovery
+# כולל במפורש כמה בסיסיים לפני auto-discover
 for _mod in ("routes.scan_top_volume", "routes.scan_now_alias", "routes.ops_guard"):
     _try_include(_mod)
 
-# auto-discover routes/*
+# auto-discover for routes/*
 for m in pkgutil.iter_modules(["routes"]):
     module_path = f"routes.{m.name}"
     _try_include(module_path)
@@ -336,6 +360,7 @@ for m in pkgutil.iter_modules(["routes"]):
     except Exception:
         pass
 
+
 def _route_exists(path: str) -> bool:
     try:
         for r in app.router.routes:
@@ -344,6 +369,7 @@ def _route_exists(path: str) -> bool:
     except Exception:
         pass
     return False
+
 
 # ---------- base routes ----------
 @app.get("/")
@@ -356,9 +382,11 @@ async def root():
         "version": APP_VERSION,
     }
 
+
 @app.get("/health")
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
+
 
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health():
@@ -369,9 +397,11 @@ async def debug_health():
         "version": APP_VERSION,
     }
 
+
 @app.get("/status/ping")
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
+
 
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
@@ -379,13 +409,15 @@ if not _route_exists("/status/ws"):
         st = ws_user_status()
         return {"ok": True, **st}
 
+
 if not _route_exists("/status/executor"):
     @app.get("/status/executor")
     async def status_executor():
         st = exec_get_counters()
         return {"ok": True, **st}
 
-# /status/all also reports manager
+
+# /status/all גם מדווח מנהל
 if not _route_exists("/status/all"):
     @app.get("/status/all")
     async def status_all():
@@ -404,14 +436,17 @@ if not _route_exists("/status/all"):
             "manager": {"enabled": manager_enabled},
             "binance_ping_ok": ping_ok,
         }
+
 # auth status/public paths (public)
 try:
-    from utils.auth import get_loaded_tokens, get_public_paths
+    from utils.auth import get_loaded_tokens, get_public_paths  # type: ignore
 except Exception:
     def get_loaded_tokens(mask: bool = True):  # type: ignore
         return []
+
     def get_public_paths():  # type: ignore
         return {"paths": [], "prefixes": []}
+
 
 if not _route_exists("/status/auth"):
     @app.get("/status/auth")
@@ -424,6 +459,7 @@ if not _route_exists("/status/auth"):
             "tokens": toks,
             "public": public,
         }
+
 
 # public price
 @app.get("/price/{symbol}")
@@ -448,6 +484,7 @@ async def price(symbol: str):
         "ts": ts,
         "error": err,
     }
+
 
 @app.get("/readyz")
 async def readyz():
@@ -483,6 +520,7 @@ async def readyz():
 
     return {"ok": (err is None), "error": err, "details": details}
 
+
 @app.post("/flush")
 async def flush_kill_switch():
     done = False
@@ -497,11 +535,13 @@ async def flush_kill_switch():
             logger.warning({"event": "flush_failed", "err": str(e)})
     return {"ok": True, "flushed": done}
 
+
 # ---------- Telegram webhook auto-setup ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
+
 
 @app.on_event("startup")
 async def _startup_preflight_warmup():
@@ -514,12 +554,14 @@ async def _startup_preflight_warmup():
         logger.info({"event": "auth.tokens_loaded", "tokens": get_loaded_tokens(mask=True)})
     except Exception:
         pass
-    # Exchange info → ממורכז בקאש פנימי; אם BAN – רק התראה
+
+    # Exchange info → ממורכז בקאש; אם BAN – רק התראה
     try:
         _ = futures_exchange_info_safe(force_refresh=True)
     except Exception as e:
         logger.warning({"event": "warmup.exinfo_failed", "error": str(e)})
-    # מחיר לדוגמה (Lazy client ידאג לא להפיל)
+
+    # מחיר לדוגמה (Lazy client אמור לא להפיל)
     try:
         _ = get_price("BTCUSDT")
         try:
@@ -529,6 +571,7 @@ async def _startup_preflight_warmup():
             pass
     except Exception as e:
         logger.warning({"event": "warmup.price_failed", "error": str(e)})
+
 
 @app.on_event("startup")
 async def _startup_webhook():
@@ -551,6 +594,7 @@ async def _startup_webhook():
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
 
+
 @app.on_event("startup")
 async def _startup_user_stream():
     try:
@@ -561,9 +605,11 @@ async def _startup_user_stream():
     except Exception as e:
         logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
 
+
 @app.on_event("startup")
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
+
 
 # optional trade manager loop
 @app.on_event("startup")
@@ -571,6 +617,7 @@ async def _start_trade_manager_loop():
     if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
         asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC))
         logger.info({"event": "trade_manager_loop_started", "interval_sec": TRADE_MANAGER_INTERVAL_SEC})
+
 
 # --- public debug auth endpoint ---
 try:
@@ -582,10 +629,13 @@ try:
 except Exception:
     def _get_loaded_tokens(mask: bool = True):  # type: ignore
         return []
+
     def _extract_token(req, a, b):  # type: ignore
         return None
+
     def _token_matches(tok):  # type: ignore
         return False
+
 
 @app.get("/_debug/auth", include_in_schema=False)
 async def _debug_auth(request: Request):
@@ -602,6 +652,7 @@ async def _debug_auth(request: Request):
         "tokens_loaded": _get_loaded_tokens(mask=True),
     }
 
+
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
     await send_ops_digest_now(hours)
@@ -611,13 +662,16 @@ async def ops_digest_now(hours: Optional[int] = None):
         "hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS", "3")),
     }
 
+
 @app.get("/ops/eod/now", include_in_schema=False)
 async def ops_eod_now():
     await send_eod_report_now()
     return {"ok": True, "sent": True}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "main:app",
         host=os.getenv("BIND_HOST", "0.0.0.0"),
