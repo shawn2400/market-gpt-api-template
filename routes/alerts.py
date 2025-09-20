@@ -1,18 +1,22 @@
 # routes/alerts.py
 from __future__ import annotations
+
 import os
 import time
 import uuid
-from typing import Optional, Dict, Any, List, Tuple
+import hmac
+import hashlib
+import base64
+from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, Depends, Body, Header, HTTPException, Request
-from pydantic import BaseModel, Field, constr
+from pydantic import BaseModel, constr
 
 from utils.auth import require_api_key
 from utils.rate_limit import require_rate_limit
 from utils.telegram_api import send_message as telegram_send
 from utils.approvals import preflight_proposal
-from utils.security import verify_hmac, idem_seen
+from utils.security import idem_seen  # נשארים עם מנגנון האידמפטנסי הקיים
 from utils.trade_executor import execute_trade_live
 
 # ===== ENV =====
@@ -107,27 +111,76 @@ def _mk_id(base: Optional[str] = None) -> str:
     return base or f"t_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
 
+# ================= Unified HMAC (כמו debug) =================
+def _get_secret_bytes() -> bytes:
+    """
+    מחזיר את הסוד כ־bytes. תומך ב־hex (64 תווים) או ASCII.
+    """
+    s = (WEBHOOK_HMAC_SECRET or "").strip()
+    if len(s) == 64:
+        try:
+            return bytes.fromhex(s)
+        except Exception:
+            pass
+    return s.encode("utf-8")
+
+
+def _clean_sig(v: Optional[str]) -> str:
+    """
+    מנקה prefix מסוג sha256= אם קיים, ומחזיר מחרוזת נקייה להשוואה.
+    """
+    v = (v or "").strip()
+    if v.lower().startswith("sha256="):
+        v = v.split("=", 1)[1].strip()
+    return v
+
+
+def _hmac_matches(raw: bytes, *candidates: Optional[str]) -> bool:
+    """
+    בודק התאמה של מועמדי חתימה (מכמה כותרות) מול HEX/B64 של HMAC-SHA256 על raw body.
+    """
+    if not WEBHOOK_HMAC_SECRET:
+        # אם אין סוד – אין אימות, נחשב כ־OK
+        return True
+
+    secret = _get_secret_bytes()
+    digest = hmac.new(secret, raw, hashlib.sha256).digest()
+    hex_srv = hashlib.sha256(digest).hexdigest()  # שגוי – צריך hexdigest של HMAC, לא של digest
+    # תיקון: hexdigest של HMAC ישירות:
+    hex_srv = hmac.new(secret, raw, hashlib.sha256).hexdigest()
+    b64_srv = base64.b64encode(digest).decode()
+
+    for c in candidates:
+        c = _clean_sig(c)
+        if not c:
+            continue
+        if c.lower() == hex_srv or c == b64_srv:
+            return True
+    return False
+
+
 # ================= Routes =================
 @router.post("/trades/active", response_model=AlertResponse)
 async def receive_alert(
     alert: TradeAlert,
     request: Request,
     x_signature: Optional[str] = Header(None),
+    x_webhook_hmac: Optional[str] = Header(None),
+    x_hub_signature_256: Optional[str] = Header(None),
     x_idempotency_key: Optional[str] = Header(None),
 ) -> AlertResponse:
     """
     יוצר טיקט Active חדש, מחזיר id, ושומר ב־_ACTIVE.
     לא זורק 500 על בעיות טלגרם/Executor/אישור – רק 4xx על קלט/חתימה.
     """
-    # אימות HMAC (אם יש סוד בקונפיג)
+    # אימות HMAC (אם יש סוד בקונפיג) – חותמים על raw body, תומכים בכמה כותרות
     if WEBHOOK_HMAC_SECRET:
         raw = await request.body()
-        if not verify_hmac(x_signature, raw):
+        if not _hmac_matches(raw, x_signature, x_webhook_hmac, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
 
     # Idempotency (מניעת כפילויות)
     if x_idempotency_key and idem_seen(x_idempotency_key):
-        # אם טיקט כבר קיים, נחזיר אותו. אם לא – נייצר מפתח חדש בכל זאת.
         alert_id = x_idempotency_key
         existing = _ACTIVE.get(alert_id)
         if existing:
@@ -211,8 +264,6 @@ async def update_trade_status(
     1) {"id": "...", "approved": true, "executed": false, ...}
     2) {"trade_id": "...", "updates": {"approved": true, ...}}
     """
-    # אימות חתימה (אם FE שולח חתימה) – אופציונלי
-    # לא נפיל את המסלול רק על זה אם אין סוד
     trade_id = payload.get("id") or payload.get("trade_id")
     if not trade_id:
         raise HTTPException(status_code=422, detail="missing trade id")
@@ -251,10 +302,12 @@ async def receive_analysis(
     request: Request,
     payload: Dict[str, Any] = Body(...),
     x_signature: Optional[str] = Header(None),
+    x_webhook_hmac: Optional[str] = Header(None),
+    x_hub_signature_256: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
     if WEBHOOK_HMAC_SECRET:
         raw = await request.body()
-        if not verify_hmac(x_signature, raw):
+        if not _hmac_matches(raw, x_signature, x_webhook_hmac, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
     try:
         if ADMIN_CHAT_ID > 0:
@@ -269,6 +322,8 @@ async def ingest_trade(
     request: Request,
     payload: Dict[str, Any] = Body(...),
     x_signature: Optional[str] = Header(None),
+    x_webhook_hmac: Optional[str] = Header(None),
+    x_hub_signature_256: Optional[str] = Header(None),
     x_idempotency_key: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
     """
@@ -277,7 +332,7 @@ async def ingest_trade(
     """
     if WEBHOOK_HMAC_SECRET:
         raw = await request.body()
-        if not verify_hmac(x_signature, raw):
+        if not _hmac_matches(raw, x_signature, x_webhook_hmac, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
 
     if x_idempotency_key and idem_seen(x_idempotency_key):
@@ -305,6 +360,7 @@ async def ingest_trade(
     _ACTIVE[trade_id] = item
 
     return {"ok": True, "trade_id": trade_id, "chat_id": payload.get("chat_id")}
+
 
 
 
