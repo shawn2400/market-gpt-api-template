@@ -6,16 +6,26 @@ from fastapi import APIRouter, Path, HTTPException
 from pydantic import BaseModel
 import httpx
 
-from utils.ws_fallback import get_price as get_cached_price, update_price
-from utils.binance_client import futures_mark_price  # מחזיר float
+# ws_fallback הוא רשותי: אם לא קיים – נשתמש בפונקציות no-op
 try:
-    from utils.redis_client import redis_client
+    from utils.ws_fallback import get_price as get_cached_price, update_price
+except Exception:
+    def get_cached_price(symbol: str) -> Optional[float]:  # type: ignore
+        return None
+    def update_price(symbol: str, price: float) -> None:  # type: ignore
+        return None
+
+from utils.binance_client import futures_mark_price  # מחזיר float
+
+# Redis רשותי
+try:
+    from utils.redis_client import redis_client  # type: ignore
 except Exception:
     redis_client = None  # type: ignore
 
 logger = logging.getLogger("algogpt.price")
 
-# ✅ חשוב: prefix כדי לא להתנגש עם "/" של ה־app הראשי
+# ✅ prefix כדי לא להתנגש עם "/" של ה־app הראשי
 router = APIRouter(prefix="/price", tags=["Price"])
 
 BIN_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
@@ -60,26 +70,31 @@ async def _redis_set(key: str, value: float, ex: int = 30):
         logger.warning(f"[PRICE] Redis set failed: {e}")
 
 async def _binance_fapi_mark(symbol: str) -> Optional[float]:
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        r = await client.get(f"{BIN_FAPI}/fapi/v1/premiumIndex", params={"symbol": symbol})
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        try:
-            return float(data.get("markPrice", 0) or 0)
-        except Exception:
-            return None
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{BIN_FAPI}/fapi/v1/premiumIndex", params={"symbol": symbol})
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            # לפי Binance, המפתח הוא markPrice, אך לעיתים מתקבל מערך — נכבד את שני המקרים
+            if isinstance(data, list) and data:
+                data = data[0]
+            return float(data.get("markPrice", 0) or 0) or None
+    except Exception as e:
+        logger.warning(f"[PRICE] FAPI premiumIndex failed for {symbol}: {e}")
+        return None
 
 async def _binance_spot_price(symbol: str) -> Optional[float]:
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        r = await client.get(f"{BIN_SPOT}/api/v3/ticker/price", params={"symbol": symbol})
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        try:
-            return float(data.get("price", 0) or 0)
-        except Exception:
-            return None
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{BIN_SPOT}/api/v3/ticker/price", params={"symbol": symbol})
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return float(data.get("price", 0) or 0) or None
+    except Exception as e:
+        logger.warning(f"[PRICE] SPOT ticker failed for {symbol}: {e}")
+        return None
 
 @router.get("/{symbol}", response_model=PriceResponse, operation_id="getPriceSymbol", summary="Get latest price (multi-source fallback)")
 async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSDT")) -> PriceResponse:
@@ -95,7 +110,7 @@ async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSD
     if local is not None:
         return PriceResponse(ok=True, symbol=sym, price=float(local), source="cache", ts=time.time())
 
-    # 3) utils.binance_client
+    # 3) utils.binance_client (סינכרוני – נריץ ב־thread)
     try:
         px = await asyncio.to_thread(futures_mark_price, sym)
         if px and px > 0:
