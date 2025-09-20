@@ -1,7 +1,8 @@
 # routes/precision.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, Query
 from typing import Dict, Any, Optional
+
+from fastapi import APIRouter, Depends, Query
 
 from utils.auth import require_api_key
 from utils.precision_utils import (
@@ -18,7 +19,7 @@ router = APIRouter(
 
 @router.post("/refresh")
 def api_refresh_exchange_info() -> Dict[str, Any]:
-    """ריענון ExchangeInfo מהבורסה (tick/step/minNotional)"""
+    """ריענון ExchangeInfo מהבורסה (tick/step/minNotional)."""
     refresh_exchange_info()
     return {"ok": True, "refreshed": True}
 
@@ -28,13 +29,25 @@ def api_price_tick(
     price: float = Query(..., description="raw price"),
     side: Optional[str] = Query(None, description="BUY/SELL (אם לא הועבר → floor רגיל)"),
 ) -> Dict[str, Any]:
-    """עיגון מחיר ל-tickSize (BUY=down / SELL=up אם side קיים)"""
+    """
+    עיגון מחיר ל-tickSize.
+    אם side=BUY → עיגול מטה (floor); אם side=SELL → עיגול מעלה (ceil).
+    אם side לא הועבר, מבצעים עיגול מטה (כניסה בטוחה ל- BUY).
+    """
     s = (side or "").upper().strip()
     if s in ("BUY", "SELL"):
         dec, s_fmt = apply_price_tick_side(price, symbol, s)
     else:
-        dec, s_fmt = apply_price_tick_side(price, symbol, "BUY")  # floor רגיל
-    return {"ok": True, "symbol": symbol.upper(), "side": s or None, "in": price, "out": dec, "out_str": s_fmt}
+        # שימוש ב-BUY כדי לקבל floor רגיל (בטוח יותר להצבה)
+        dec, s_fmt = apply_price_tick_side(price, symbol, "BUY")
+    return {
+        "ok": True,
+        "symbol": symbol.upper(),
+        "side": s or None,
+        "in": price,
+        "out": dec,
+        "out_str": s_fmt,
+    }
 
 @router.get("/qty_from_budget")
 def api_qty_from_budget(
@@ -48,6 +61,7 @@ def api_qty_from_budget(
     """
     res = calc_quantity_from_budget(symbol, price=price, budget_usd=budget, leverage=leverage)
     return {"ok": bool(res.get("ok")), "symbol": symbol.upper(), **res}
+
 
 
 
