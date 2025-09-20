@@ -5,43 +5,29 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 import os, time, json, httpx
 
-# --- Auth dependency (Bearer) ---
-try:
-    from utils.auth import require_api_key
-except Exception:
-    def require_api_key():
-        return None
+from utils.auth import require_api_key  # ✅ אל תגדיר דיפנדנסי פנימי
 
-# --- HMAC / Redis / Validator ---
 from utils.hmac_utils import verify_hmac, idem_seen
 from utils.redis_client import redis_client as RED
 from utils.trade_validator import validate_proposal
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
 
-# --- Telegram config ---
 BOT = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID_DEFAULT = (os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("ADMIN_CHAT_ID", "")).strip()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT}"
 TIMEOUT = float(os.getenv("TELEGRAM_HTTP_TIMEOUT", "15"))
 
-# --- Storage backend switch ---
 USE_REDIS_TRADES = os.getenv("USE_REDIS_TRADES","0").lower() in ("1","true","yes")
 if USE_REDIS_TRADES and not RED:
-    USE_REDIS_TRADES = False  # fail-soft to memory
+    USE_REDIS_TRADES = False
 
-# ====== Models ======
 class TradeIn(BaseModel):
-    # מזהה טרייד חיצוני (מהבוט/וורקר)
     trade_id: str = Field(..., min_length=4, max_length=64)
-
-    # סוג טרייד
     trade_type: str = Field(..., pattern="^(FUTURES|SPOT|GRID)$")
     symbol: str
-    side: Optional[str] = None            # FUTURES/SPOT (LONG/SHORT; ב-SPOT רק LONG)
+    side: Optional[str] = None
     current_price: float
-
-    # FUTURES/SPOT
     entry: Optional[float] = None
     sl: Optional[float] = None
     tp1: Optional[float] = None
@@ -53,28 +39,20 @@ class TradeIn(BaseModel):
     budget_usd: Optional[float] = None
     notional_usd: Optional[float] = None
     qty: Optional[float] = None
-
-    # ETA (אופציונלי, לפי worker/bot)
     eta_sl: Optional[str] = None
     eta_tp1: Optional[str] = None
     eta_tp2: Optional[str] = None
     eta_tp3: Optional[str] = None
-
-    # GRID
     grid_min: Optional[float] = None
     grid_max: Optional[float] = None
     grid_levels: Optional[int] = None
     grid_step_pct: Optional[float] = None
     grid_take_profit_pct: Optional[float] = None
     grid_side: Optional[str] = None
-
-    # misc
-    tp_scale: Optional[str] = None        # JSON [50,30,20]
+    tp_scale: Optional[str] = None
     chat_id: int | str | None = None
-
-    # הקשר ולידציה
     interval: Optional[str] = Field(default=os.getenv("DEFAULT_INTERVAL","15m"))
-    market: Optional[str] = Field(default=os.getenv("DEFAULT_MARKET","futures"))
+    market: Optional[str]  = Field(default=os.getenv("DEFAULT_MARKET","futures"))
 
 class TradeOut(BaseModel):
     ok: bool = True
@@ -82,33 +60,23 @@ class TradeOut(BaseModel):
     message_id: Optional[int] = None
     chat_id: Optional[str | int] = None
 
-# ====== Store (Redis/In-Mem) ======
 _TRADES: Dict[str, Dict[str, Any]] = {}
 
 def _decode_map(d: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize Redis hgetall result (str->native), keep as strings where unknown."""
     out: Dict[str, Any] = {}
     for k, v in (d or {}).items():
-        if isinstance(v, bytes):
-            v = v.decode("utf-8", "ignore")
-        if isinstance(k, bytes):
-            k = k.decode("utf-8", "ignore")
-        # try to cast json for lists/dicts
-        if isinstance(v, str) and v and v[0] in "[{":
+        if isinstance(v, bytes): v = v.decode("utf-8", "ignore")
+        if isinstance(k, bytes): k = k.decode("utf-8", "ignore")
+        if isinstance(v, str) and v and v[0] in "[{]":
             try:
-                out[k] = json.loads(v)
-                continue
+                out[k] = json.loads(v); continue
             except Exception:
                 pass
-        # try float/int
         try:
-            if v is None:
-                out[k] = v
-            elif str(v).isdigit():
-                out[k] = int(v)
+            if v is None: out[k] = v
+            elif str(v).isdigit(): out[k] = int(v)
             else:
-                out[k] = float(v)
-                continue
+                out[k] = float(v); continue
         except Exception:
             out[k] = v
     return out
@@ -149,7 +117,6 @@ def _update_trade(tid: str, **updates):
         if tid in _TRADES:
             _TRADES[tid].update(updates)
 
-# ====== Formatting ======
 def _fmt(x) -> str:
     try: return f"{float(x):.6f}"
     except Exception: return "—"
@@ -178,7 +145,6 @@ def _format_trade_message(rec: Dict[str, Any]) -> str:
             lines.append(f"_Reason_: {rec.get('reason')}")
         return "\n".join(lines)
 
-    # FUTURES / SPOT
     side = rec.get("side","")
     lev  = f"x{rec.get('leverage')}" if (ttype=="FUTURES" and rec.get("leverage")) else ""
     lines = [
@@ -211,7 +177,6 @@ def _inline_keyboard(trade_id: str) -> dict:
         ]
     }
 
-# ====== Endpoints ======
 @router.post("/trade-ingest", response_model=TradeOut)
 async def trade_ingest(
     payload: TradeIn = Body(...),
@@ -222,7 +187,6 @@ async def trade_ingest(
     if not BOT:
         raise HTTPException(500, "TELEGRAM_BOT_TOKEN not configured")
 
-    # --- HMAC verify + idempotency dedup ---
     raw = json.dumps(payload.model_dump(), separators=(",", ":"), ensure_ascii=False).encode()
     if not verify_hmac(x_signature, raw, x_timestamp):
         raise HTTPException(401, "Invalid signature or timestamp")
@@ -232,23 +196,16 @@ async def trade_ingest(
                         message_id=int(rec.get("message_id") or 0) or None,
                         chat_id=rec.get("chat_id"))
 
-    # --- Pre-Flight Validator (קשיח) ---
     proposal = {
-        "symbol": payload.symbol,
-        "side": payload.side,
-        "entry": payload.entry,
-        "sl": payload.sl,
-        "tp1": payload.tp1,
-        "tp2": payload.tp2,
-        "tp3": payload.tp3,
-        "leverage": payload.leverage,
-        "current_price": payload.current_price,
+        "symbol": payload.symbol, "side": payload.side,
+        "entry": payload.entry, "sl": payload.sl,
+        "tp1": payload.tp1, "tp2": payload.tp2, "tp3": payload.tp3,
+        "leverage": payload.leverage, "current_price": payload.current_price,
         "success_pct": payload.success_pct,
     }
     val = await validate_proposal(proposal, interval=(payload.interval or "15m"),
                                   market=(payload.market or "futures"))
     if not val["ok"]:
-        # חוסם בפרודקשן לפי VALIDATOR_STRICT=1 (ראה .env)
         return {"ok": False, "errors": val["errors"], "warnings": val["warnings"]}, 422
 
     rec = payload.model_dump()
@@ -259,7 +216,6 @@ async def trade_ingest(
         "near": json.dumps({"tp1":False,"tp2":False,"tp3":False,"sl":False}),
     })
 
-    # GRID: חישוב קווי רשת ל-watchdog
     if rec["trade_type"] == "GRID":
         try:
             gmin = float(rec.get("grid_min") or 0)
@@ -272,13 +228,11 @@ async def trade_ingest(
         except Exception:
             rec["grid_lines"] = json.dumps([])
 
-    # טקסט + כפתורים
     txt = _format_trade_message(rec)
     if val.get("warnings"):
         txt += "\n\n⚠️ *Validator warnings:*\n" + "\n".join(f"- {w}" for w in val["warnings"])
     kb = _inline_keyboard(rec["trade_id"])
 
-    # שליחה לטלגרם
     body = {
         "chat_id": payload.chat_id or CHAT_ID_DEFAULT,
         "text": txt,
@@ -291,7 +245,6 @@ async def trade_ingest(
         try:
             r.raise_for_status()
         except httpx.HTTPStatusError as e:
-            # במקרה של כשל — לא לשמור ל-store כדי לא להשאיר "יתום"
             raise HTTPException(e.response.status_code, f"telegram_send_error: {e.response.text}") from e
         resp = r.json()
         msg = resp.get("result", {})
@@ -300,7 +253,6 @@ async def trade_ingest(
         _store_trade(rec)
         return TradeOut(ok=True, trade_id=rec["trade_id"], message_id=rec["message_id"], chat_id=rec["chat_id"])
 
-# Active list
 class ActiveOut(BaseModel):
     ok: bool = True
     count: int
@@ -311,7 +263,6 @@ def trades_active():
     items = _all_active()
     return ActiveOut(ok=True, count=len(items), items=items)
 
-# Update
 class UpdateReq(BaseModel):
     trade_id: str
     updates: Dict[str, Any]
@@ -321,7 +272,6 @@ def trades_update(payload: UpdateReq):
     _update_trade(payload.trade_id, **payload.updates)
     return {"ok": True}
 
-# Analysis (notify)
 class AnalysisIn(BaseModel):
     chat_id: int | str
     text: str
