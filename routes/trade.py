@@ -9,22 +9,25 @@ import httpx
 
 from utils.auth import require_api_key
 
-# ——— טלגרם: אישור דינמי + נוטיפיקציות ———
+# === Telegram notifiers (best-effort) ===
 try:
-    from utils.telegram_notifier import (
-        send_trade_approval,   # כרטיס אישור עשיר עם כפתורים
-        notify_ops_alert,      # "audit" קל
-        should_auto_approve_trade,
-    )  # type: ignore
+    # נשתמש בשמות הקיימים בליבה החדשה
+    from utils.telegram_notifier import send_trade_approval as send_approval  # type: ignore
+    from utils.telegram_notifier import notify_ops_alert as send_audit        # type: ignore
 except Exception:
-    async def send_trade_approval(*args, **kwargs):  # type: ignore
+    async def send_approval(*args, **kwargs):  # type: ignore
         return None
-    async def notify_ops_alert(*args, **kwargs):  # type: ignore
+    async def send_audit(*args, **kwargs):     # type: ignore
         return None
-    def should_auto_approve_trade(payload: Dict[str, Any]) -> bool:  # type: ignore
-        return False
 
-# ——— מבצע לייב ———
+# === Auto-approve rules (אם קיימות) ===
+try:
+    from utils.approval_rules import should_auto_approve  # type: ignore
+except Exception:
+    def should_auto_approve(payload: Dict[str, Any]):  # type: ignore
+        return (False, "rules_missing")
+
+# === Trade executor (חי) ===
 try:
     from utils.trade_executor import execute_trade_live  # type: ignore
 except Exception:
@@ -32,8 +35,9 @@ except Exception:
 
 router = APIRouter(tags=["trade"])
 
+# זיכרון בקשות בהמתנה לאישור ידני
 _PENDING: Dict[str, Dict[str, Any]] = {}
-_PENDING_TTL = 60 * 5
+_PENDING_TTL = 60 * 5  # 5 דקות
 
 def _make_idem(x: Optional[str]) -> str:
     return x or f"{int(time.time()*1000)}_{secrets.token_hex(6)}"
@@ -52,9 +56,9 @@ class TradeReq(BaseModel):
     @field_validator("side")
     @classmethod
     def _side_ok(cls, v: str) -> str:
-        if v.upper() not in ("BUY", "SELL"):
-            raise ValueError("side must be BUY or SELL")
-        return v
+        if v.upper() not in ("BUY","SELL","LONG","SHORT"):
+            raise ValueError("side must be BUY/SELL/LONG/SHORT")
+        return "BUY" if v.upper() in ("BUY","LONG") else "SELL"
 
     @field_validator("tp_splits")
     @classmethod
@@ -69,39 +73,24 @@ def _422(detail: Any) -> HTTPException:
 def _summary(req: TradeReq) -> str:
     return f"{req.side.upper()} {req.symbol.upper()} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
 
-async def _audit(tag: str, data: Dict[str, Any]) -> None:
-    try:
-        txt = f"{tag}: " + ", ".join(f"{k}={v}" for k, v in data.items())
-        await notify_ops_alert(txt)
-    except Exception:
-        pass
-
-def _gc_pending() -> None:
-    now = time.time()
-    dead = [k for k, v in _PENDING.items() if now - float(v.get("ts", 0)) > _PENDING_TTL]
-    for k in dead:
-        _PENDING.pop(k, None)
-
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
     res = await execute_trade_live(
         symbol=req.symbol,
+        market="futures",
         side=req.side,
-        leverage=int(req.leverage),
-        budget=float(req.budget_usd),
-        dry_run=bool(req.dry_run),
-        entry=(float(req.entry) if (req.entry is not None and float(req.entry) > 0) else None),
-        sl=None,
-        tp=None,
-        tp_targets=(req.tp_targets if req.tp_targets else None),
-        confirm_first=False,
-        telegram_chat_id=None,
+        entry="market" if (req.entry is None) else "limit",
+        entry_price=req.entry if (req.entry and req.entry > 0) else None,
+        budget_usdt=req.budget_usd,
+        leverage=req.leverage,
+        risk_pct=None,
+        stop_loss_pct=None,
+        take_profit_rr=None,
+        require_approval=False,
+        reason="trade_execute_api",
     )
-    await _audit("TRADE_EXECUTE_API", {
-        "symbol": req.symbol, "side": req.side, "lev": req.leverage,
-        "budget": req.budget_usd, "dry": req.dry_run, "entry": req.entry,
-    })
+    await send_audit(f"TRADE EXECUTE API · {_summary(req)}")
     return res
 
 @router.post("/trade/execute")
@@ -114,27 +103,28 @@ async def trade_execute(
     if req.entry is not None and req.entry < 0:
         raise _422([{"type":"value_error","loc":["body","entry"],"msg":"entry must be >= 0","input": req.entry}])
 
-    _gc_pending()
     idem = _make_idem(x_idem)
-
-    auto = bool(should_auto_approve_trade(req.model_dump()))
+    auto, reason = should_auto_approve(req.model_dump())
     need_approval = bool(req.confirm_first and not req.dry_run and not auto)
 
     if need_approval:
-        # נשמור במאגר מקומי (מאומת ע"י /ops/approve עם חתימה)
+        # נשמור בקשה + TTL
         _PENDING[idem] = {"ts": time.time(), "req": req.model_dump()}
-        # שליחת כרטיס אישור עשיר בטלגרם
+        # נכין plan מינימלי עבור הודעת אישור עשירה
+        plan = {
+            "symbol": req.symbol,
+            "side": req.side,
+            "leverage": req.leverage,
+            "entry_price": req.entry,
+            "budget_usd": req.budget_usd,
+            "tp": [{"stopPrice": t} for t in (req.tp_targets or [])],
+            "ttl_sec": _PENDING_TTL,
+            "trade_kind": "Futures",
+            "order_type": "MARKET" if req.entry is None else "LIMIT",
+            "why": "trade_execute_api_confirm_first",
+        }
         try:
-            plan = {
-                "symbol": req.symbol,
-                "side": req.side,
-                "leverage": req.leverage,
-                "entry_price": req.entry,
-                "tp": ([{"stopPrice": x} for x in (req.tp_targets or [])] if req.tp_targets else []),
-                "budget_usd": req.budget_usd,
-                "trade_kind": "Futures",
-            }
-            await send_trade_approval(idem, plan, chat_id=None)
+            await send_approval(idem, plan)  # inline keyboard +/או לינקים
         except Exception:
             pass
         return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL}}
@@ -142,7 +132,7 @@ async def trade_execute(
     try:
         res = await _execute_and_audit(req)
         if auto and not req.dry_run:
-            await _audit("AUTO_APPROVED", {"idem": idem})
+            await send_audit(f"AUTO-APPROVED · idem={idem} · reason={reason}")
         return {"ok": True, "error": None, "result": res}
     except ValueError as ve:
         raise _422([{"type":"value_error","loc":["body"],"msg":str(ve)}])
@@ -151,11 +141,9 @@ async def trade_execute(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# שימו לב: ה־URLs הפומביים לאישור מגיעים דרך /ops/approve (ללא API Key).
-# אלו נשארים לשימוש פנימי/ידני בלבד.
-
+# נקודות קצה ציבוריות (לינקים בהודעות טלגרם)
 @router.get("/trade/approve", include_in_schema=False)
-async def trade_approve(id: str, _token: str = Depends(require_api_key)) -> Dict[str, Any]:
+async def trade_approve(id: str) -> Dict[str, Any]:
     item = _PENDING.pop(id, None)
     if not item:
         return {"ok": False, "error": "not_found_or_expired"}
@@ -167,10 +155,19 @@ async def trade_approve(id: str, _token: str = Depends(require_api_key)) -> Dict
         return {"ok": False, "error": str(e)}
 
 @router.get("/trade/reject", include_in_schema=False)
-async def trade_reject(id: str, _token: str = Depends(require_api_key)) -> Dict[str, Any]:
+async def trade_reject(id: str) -> Dict[str, Any]:
     _PENDING.pop(id, None)
-    await _audit("REJECTED", {"idem": id})
+    await send_audit(f"REJECTED · idem={id}")
     return {"ok": True, "rejected": True}
+
+# תאימות לאחראי־אישורים הישן (ops_approval)
+# נספק alias לשמות שהקובץ ההוא מצפה להם:
+TradeRequest = TradeReq  # alias
+def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    # עטיפה סינכרונית דקה עבור ops_approval (ירוץ ב-uvicorn loop)
+    import anyio
+    return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
