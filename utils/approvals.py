@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import time
-import math
 import hashlib
 import json
 from typing import Dict, Any, List, Optional, Tuple
@@ -14,20 +13,17 @@ from typing import Dict, Any, List, Optional, Tuple
 def _as_bool(s: Optional[str], default: bool = False) -> bool:
     return str(s).strip().lower() in {"1", "true", "yes", "on"} if s is not None else default
 
-
 def _as_float(s: Optional[str], default: float) -> float:
     try:
         return float(str(s).strip())
     except Exception:
         return default
 
-
 def _as_int(s: Optional[str], default: int) -> int:
     try:
         return int(str(s).strip())
     except Exception:
         return default
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Policy (ניתן לשליטה דרך .env)
@@ -50,13 +46,11 @@ MAX_LEVERAGE = _as_int(os.getenv("MAX_LEVERAGE", "35"), 35)
 # ──────────────────────────────────────────────────────────────────────────────
 _recent: Dict[str, float] = {}  # key->last_ts
 
-
 def _purge_recent(now: float) -> None:
     cut = now - max(60, APPROVAL_DUP_COOLDOWN_SEC)
     for k, ts in list(_recent.items()):
         if ts < cut:
             _recent.pop(k, None)
-
 
 def _key_for(tp: Dict[str, Any]) -> str:
     base = {
@@ -70,7 +64,6 @@ def _key_for(tp: Dict[str, Any]) -> str:
     }
     raw = json.dumps(base, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Utils
@@ -89,13 +82,11 @@ def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
     except Exception:
         return None
 
-
 def _pct(a: float, b: float) -> float:
     try:
         return abs((a - b) / b) * 100.0
     except Exception:
         return 0.0
-
 
 def _in_watchlist(sym: str) -> bool:
     if not REQUIRE_IN_WATCHLIST:
@@ -103,25 +94,22 @@ def _in_watchlist(sym: str) -> bool:
     wl = [x.strip().upper() for x in (WATCHLIST_CSV or "").split(",") if x.strip()]
     return (not wl) or (sym.upper() in wl)
 
-
 def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
     if not APPROVAL_REQUIRE_FRESH_PRICE:
         return (True, None)
     try:
-        from utils.ws_fallback import is_price_fresh, get_price
+        from utils.ws_fallback import is_price_fresh, get_price  # type: ignore
         ok = is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC)
         px = float(get_price(symbol) or 0.0)
         return (bool(ok), px if px > 0 else None)
     except Exception:
         return (False, None)
 
-
 def _aligned(val: float, step: float, tol: float = 1e-10) -> bool:
     if step <= 0:
         return True
     k = round(val / step)
     return abs(k * step - val) <= max(tol, step * 1e-8)
-
 
 def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[str]:
     """
@@ -144,7 +132,6 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
     except Exception:
         pass
     return out
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
@@ -243,10 +230,10 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
     ok = (len(out_errors) == 0)
     return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
-
 def can_auto_forward(tp: Dict[str, Any]) -> bool:
     res = preflight_proposal(tp)
     return bool(res.get("ok", False))
+
 
 
 
