@@ -1,44 +1,63 @@
 # routes/debug_hmac.py
-from fastapi import APIRouter, Request
+from __future__ import annotations
 import os, hmac, hashlib, base64
+from fastapi import APIRouter, Request
+from starlette.responses import JSONResponse
 
 router = APIRouter()
 
-def _extract_sig(s: str) -> str:
-    s = (s or "").strip()
-    if s.lower().startswith("sha256="):
-        return s.split("=", 1)[1].strip()
-    return s
+def _get_secret_bytes() -> bytes:
+    s = os.getenv("WEBHOOK_HMAC_SECRET", "") or ""
+    s = s.strip()
+    if len(s) == 64:
+        try:
+            return bytes.fromhex(s)
+        except Exception:
+            pass
+    return s.encode("utf-8")
 
-@router.post("/_debug/echo-hmac", include_in_schema=False)
+def _clean_sig(v: str) -> str:
+    v = (v or "").strip()
+    if v.lower().startswith("sha256="):
+        v = v.split("=", 1)[1].strip()
+    return v
+
+@router.post("/_debug/echo-hmac")
 async def echo_hmac(request: Request):
-    # הסוד שטעון בשרת
-    secret_str = os.getenv("WEBHOOK_HMAC_SECRET", "")
-    secret = secret_str.encode("utf-8")
+    raw = await request.body()
+    secret = _get_secret_bytes()
+    hex_srv = hmac.new(secret, raw, hashlib.sha256).hexdigest()
+    b64_srv = base64.b64encode(hmac.new(secret, raw, hashlib.sha256).digest()).decode()
 
-    # גוף RAW בדיוק כפי שהתקבל
-    body_bytes = await request.body()
+    # מה הגיע בכותרות
+    hdrs = request.headers
+    cand_names = ["x-webhook-hmac", "x-hub-signature-256", "x-signature"]
+    got = {}
+    for n in cand_names:
+        v = hdrs.get(n, "")
+        got[n] = v
 
-    # חישוב digest
-    digest = hmac.new(secret, body_bytes, hashlib.sha256).digest()
-    hex_sig = digest.hex()
-    b64_sig = base64.b64encode(digest).decode()
+    # ניקוי prefix sha256=
+    got_clean = {n: _clean_sig(v) for n, v in got.items()}
 
-    # מה הגיע בכותרות (לבדיקה)
-    hdr = request.headers.get("x-webhook-hmac") or request.headers.get("x-hub-signature-256") or ""
-    given = _extract_sig(hdr)
+    # האם יש התאמה כלשהי (hex/b64)
+    match_hex = any(_clean_sig(v).lower() == hex_srv for v in got.values())
+    match_b64 = any(_clean_sig(v) == b64_srv for v in got.values())
 
-    return {
+    # לא לחשוף סוד מלא בלוג/תגובה
+    secret_hint = os.getenv("WEBHOOK_HMAC_SECRET", "")
+    if len(secret_hint) > 10:
+        secret_hint = secret_hint[:6] + "..." + secret_hint[-4:]
+
+    return JSONResponse({
         "ok": True,
-        "received_len": len(body_bytes),
-        "received_preview": body_bytes[:200].decode("utf-8", "ignore"),
-        "env_secret_len": len(secret_str),
-        "expected": {
-            "hex": hex_sig,
-            "b64": b64_sig,
-            "with_prefix_hex": f"sha256={hex_sig}",
-            "with_prefix_b64": f"sha256={b64_sig}",
-        },
-        "given_header_raw": hdr,
-        "given_normalized": given,
-    }
+        "len_body": len(raw),
+        "secret_hint": secret_hint,
+        "server_hex": hex_srv,
+        "server_b64": b64_srv,
+        "headers_raw": got,
+        "headers_clean": got_clean,
+        "match_hex": match_hex,
+        "match_b64": match_b64,
+    })
+
