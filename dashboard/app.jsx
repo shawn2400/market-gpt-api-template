@@ -1,6 +1,8 @@
+```jsx
+// dashboard/app.jsx
 import React, { useEffect, useState } from "react";
 
-const API_BASE = (window.API_BASE || "").replace(/\/+$/,"") || "";
+const API_BASE = (window.API_BASE || "").replace(/\/+$/, "") || "";
 
 function authHeaders() {
   const tok = window.API_TOKEN || "";
@@ -12,6 +14,12 @@ function authHeaders() {
 
 async function jget(path) {
   const r = await fetch(API_BASE + path, { headers: authHeaders() });
+  if (!r.ok) {
+    if (r.status === 401) {
+      throw new Error("Unauthorized – בדוק את window.API_TOKEN / window.API_BASE");
+    }
+    throw new Error(`HTTP ${r.status}`);
+  }
   return r.json();
 }
 
@@ -21,39 +29,57 @@ export default function App() {
   const [activeGrids, setActiveGrids] = useState([]);
   const [trades, setTrades] = useState([]);
   const [pnl, setPnl] = useState(null);
+  const [err, setErr] = useState("");
 
+  // טעינת חשבונות בהתחלה
   useEffect(() => {
     jget("/ui/grid/accounts")
-      .then(data => {
+      .then((data) => {
         if (data.ok) {
-          setAccounts(data.accounts || []);
-          if (data.accounts?.length) setAccountId(data.accounts[0]);
+          const list = Array.isArray(data.accounts) ? data.accounts : [];
+          setAccounts(list);
+          if (list.length) setAccountId(list[0]);
+        } else {
+          setErr("Accounts API returned !ok");
         }
       })
-      .catch(console.error);
+      .catch((e) => setErr(String(e)));
   }, []);
 
+  // טוען מידע לפי account_id
   const loadData = () => {
     if (!accountId) return;
+    setErr("");
+
     jget(`/ui/grid/active?account_id=${encodeURIComponent(accountId)}`)
-      .then(d => setActiveGrids(d.active || []))
-      .catch(console.error);
+      .then((d) => setActiveGrids(Array.isArray(d.active) ? d.active : []))
+      .catch((e) => setErr(String(e)));
 
     jget(`/ui/grid/trades?account_id=${encodeURIComponent(accountId)}`)
-      .then(d => setTrades(d.trades || []))
-      .catch(console.error);
+      .then((d) => setTrades(Array.isArray(d.trades) ? d.trades : []))
+      .catch((e) => setErr(String(e)));
 
     jget(`/ui/grid/pnl?account_id=${encodeURIComponent(accountId)}`)
-      .then(d => setPnl(d.summary || null))
-      .catch(console.error);
+      .then((d) => setPnl(d?.summary ?? null))
+      .catch((e) => setErr(String(e)));
   };
 
-  useEffect(() => { loadData(); }, [accountId]);
+  useEffect(() => {
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
       <h1 className="text-2xl font-bold mb-4">AlgoGPT Grid Dashboard</h1>
 
+      {err && (
+        <div className="mb-4 bg-red-800/60 border border-red-500 rounded p-3 text-sm">
+          {err}
+        </div>
+      )}
+
+      {/* בחירת חשבון */}
       <div className="mb-6">
         <label className="mr-2">בחר חשבון:</label>
         <select
@@ -62,7 +88,9 @@ export default function App() {
           className="bg-gray-800 border border-gray-600 p-2 rounded"
         >
           {accounts.map((acc) => (
-            <option key={acc} value={acc}>{acc}</option>
+            <option key={acc} value={acc}>
+              {acc}
+            </option>
           ))}
         </select>
         <button
@@ -73,6 +101,7 @@ export default function App() {
         </button>
       </div>
 
+      {/* גרידים פעילים */}
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-2">גרידים פעילים</h2>
         {activeGrids.length === 0 ? (
@@ -89,7 +118,9 @@ export default function App() {
               {activeGrids.map((g, i) => (
                 <tr key={i} className="hover:bg-gray-800">
                   <td className="p-2 border border-gray-700">{g.symbol}</td>
-                  <td className="p-2 border border-gray-700">{g.orders ? g.orders.length : 0}</td>
+                  <td className="p-2 border border-gray-700">
+                    {Array.isArray(g.orders) ? g.orders.length : 0}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -97,6 +128,7 @@ export default function App() {
         )}
       </div>
 
+      {/* טריידים */}
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-2">טריידים</h2>
         {trades.length === 0 ? (
@@ -122,7 +154,9 @@ export default function App() {
                   <td className="p-2 border border-gray-700">{t.side}</td>
                   <td className="p-2 border border-gray-700">{t.entry_price}</td>
                   <td className="p-2 border border-gray-700">{t.stop_price}</td>
-                  <td className="p-2 border border-gray-700">{t.tp_prices?.join(", ")}</td>
+                  <td className="p-2 border border-gray-700">
+                    {Array.isArray(t.tp_prices) ? t.tp_prices.join(", ") : ""}
+                  </td>
                   <td className="p-2 border border-gray-700">{t.realized_pnl}</td>
                 </tr>
               ))}
@@ -131,17 +165,22 @@ export default function App() {
         )}
       </div>
 
+      {/* סיכום PnL */}
       <div>
         <h2 className="text-xl font-semibold mb-2">סיכום PnL</h2>
         {!pnl ? (
           <p>אין נתונים.</p>
         ) : (
-          <pre className="bg-gray-800 p-4 rounded">{JSON.stringify(pnl, null, 2)}</pre>
+          <pre className="bg-gray-800 p-4 rounded overflow-auto">
+            {JSON.stringify(pnl, null, 2)}
+          </pre>
         )}
       </div>
     </div>
   );
 }
+```
+
 
 
 
