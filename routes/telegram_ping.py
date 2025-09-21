@@ -1,11 +1,10 @@
-from __future__ import annotations
 from fastapi import APIRouter
-
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
 @router.get("/ping", summary="Telegram ping")
 async def telegram_ping():
     return {"ok": True}
+
 
 
 
