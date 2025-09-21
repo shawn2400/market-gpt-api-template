@@ -45,7 +45,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     procps psmisc \
  && rm -rf /var/lib/apt/lists/*
 
-# ספריות מה-builder
+# ספריות שהותקנו בשכבת הבילד
 COPY --from=builder /install /usr/local
 
 # משתמש לא-שורש
