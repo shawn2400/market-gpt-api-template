@@ -1,3 +1,4 @@
+# utils/trade_executor.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, math, time, logging, asyncio, json, hashlib
@@ -618,8 +619,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     if slip_bps_now >= SLIPPAGE_GUARD_BPS:
         return {"ok": False, "reason": "slippage_guard", "slip_bps": slip_bps_now}
 
-    limit_str, limit_p = _q_price(sym, limit_price)
-    stop_str , stop_p  = _q_price(sym, stop_price)
+    limit_str, limit_p = _q_price(sym, float(limit_price))
+    stop_str , stop_p  = _q_price(sym, float(stop_price))
     qty_str  , _       = _q_qty(sym, qty)
 
     eff_ps = _effective_position_side(position_side)
@@ -704,6 +705,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
+
 # ─────────── Public API ───────────
 def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[float]]]) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
     tp_targets: Optional[List[float]] = None
@@ -991,6 +993,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
