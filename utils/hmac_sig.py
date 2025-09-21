@@ -7,7 +7,6 @@ def sig_legacy(secret: str, ticket_id: str, action: str, expires: str) -> str:
     return hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
 
 def sig_canonical(secret: str, **params) -> str:
-    # canonical על מפתחות מוכרים, לפי סדר אלפביתי (ללא sig)
     allow = {"action","by","expires","require","ticket_id","version"}
     filt = {k: str(v) for k, v in params.items() if k in allow and v is not None}
     canon = "&".join(f"{k}={filt[k]}" for k in sorted(filt))
@@ -48,4 +47,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
