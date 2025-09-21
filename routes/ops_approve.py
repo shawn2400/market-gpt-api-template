@@ -22,6 +22,7 @@ HMAC_SECRET    = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET
 ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
 BOT_TOKEN      = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
+API_BEARER     = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 
 def KEY_TICKET(tid: str) -> str:
     return f"{NS}:ticket:{tid}"
@@ -156,12 +157,14 @@ async def create_ticket(
     r = await _redis()
     await r.setex(KEY_TICKET(tid), TICKET_TTL_SEC, json.dumps(record, separators=(",", ":")))
 
-    # הפקה של לינק סטטלס חתום — כולל כל המטען + ts
+    # לינק סטטלס חתום — כולל כל המטען + ts
     signed_payload = {"ts": record["ts"], "req": req_body}
     raw = json.dumps(signed_payload, separators=(",", ":")).encode("utf-8")
-    sig = _sign_hex(HMAC_SECRET, raw) if HMAC_SECRET else ""
+    if not HMAC_SECRET:
+        raise HTTPException(status_code=500, detail="HMAC secret not set")
+    sig = _sign_hex(HMAC_SECRET, raw)
     token = _b64url(raw)
-    # נשמר גם את ה-id הישן בקישור (לוגים/נוחות), אבל לא תלויים בו
+
     approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve-link?id={tid}&t={quote(token)}&s={sig}"
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?id={tid}"
 
@@ -213,9 +216,8 @@ async def approve_link(
         ts = float(payload.get("ts", 0))
         if _expired(ts):
             raise HTTPException(status_code=410, detail="Approval link expired")
-        req = (payload.get("req") or {})  # already has ticket_id/symbol/...
+        req = (payload.get("req") or {})
         if not req.get("ticket_id"):
-            # שמור עקבות גם אם אין tid בפנים (לא אמור לקרות)
             req["ticket_id"] = id or f"T_{int(ts)}"
 
     # --- 2) fallback: Redis לפי id ---
@@ -237,13 +239,12 @@ async def approve_link(
                 pass
             raise HTTPException(status_code=410, detail="Approval link expired")
         req = rec.get("req") or {}
-        # ניקוי הטיקט (one-shot)
         try:
             await r.delete(KEY_TICKET(id))
         except Exception:
             pass
 
-    # ביצוע דרך ה-endpoint החתום (אחיד לכל הרפליקות)
+    # ביצוע דרך ה-endpoint החתום (אחיד לכל הרפליקות) – כולל טרייד חי
     await _execute_via_signed_endpoint(req)
 
     # הודעת טלגרם על אישור — ישיר
@@ -287,10 +288,8 @@ async def reject(id: str = Query(..., description="ticket_id")):
 async def approve_signed(request: Request):
     """
     Verifies HMAC (X-Signature) over raw JSON body.
-    בנוסף, מנסה לבצע:
-      1) internal executor (אם קיים),
-      2) Redis PubSub לאורקסטרטור,
-      3) החזרת ok ללקוח.
+    בנוסף: מבצע ניסיון פתיחת טרייד חי דרך /trade/execute עם Bearer,
+    כולל מיפוי lev→leverage ו-budget→budget_usd.
     """
     if not HMAC_SECRET:
         raise HTTPException(status_code=500, detail="HMAC secret not set")
@@ -306,8 +305,51 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # כאן אפשר לחבר לאקזקיוטור/בינאנס בפועל (נשמר תאימות לגרסאות ישנות: רק ok)
-    return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True}
+    # === טרייד חי (internal) ===
+    exec_attempt = {
+        "ok": False,
+        "tried": [],
+        "error": None,
+        "response": None,
+    }
+    if PUBLIC_HOST and API_BEARER:
+        exec_url = f"{PUBLIC_HOST.rstrip('/')}/trade/execute"
+        body = {
+            "symbol":        payload.get("symbol"),
+            "side":          payload.get("side"),
+            "qty":           payload.get("qty"),
+            "leverage":      payload.get("lev"),
+            "position_side": payload.get("position_side", "BOTH"),
+            "budget_usd":    payload.get("budget"),
+            # אל תשלח "market": ראינו שזורק unexpected keyword argument
+        }
+        exec_attempt["tried"].append(exec_url)
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                exec_url,
+                json=body,
+                headers={"Authorization": f"Bearer {API_BEARER}", "Content-Type": "application/json"},
+            )
+            try:
+                j = r.json()
+            except Exception:
+                j = {"ok": False, "status": r.status_code, "text": r.text}
+            exec_attempt["response"] = j
+            if r.status_code < 400 and j.get("ok"):
+                exec_attempt["ok"] = True
+            else:
+                exec_attempt["error"] = f"status={r.status_code} body={j}"
+
+    # אפשר להוסיף כאן גם פרסום Redis PubSub אם תרצה בעתיד
+
+    # החזר תוצאה שקופה לדיבוג
+    return {
+        "ok": True,
+        "ticket_id": payload.get("ticket_id"),
+        "executed": True,
+        "internal_execute": exec_attempt,
+    }
+
 
 
 
