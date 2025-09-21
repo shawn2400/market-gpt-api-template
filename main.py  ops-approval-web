@@ -1,0 +1,40 @@
+# main.py  (ops-approval-web)
+from __future__ import annotations
+
+import os
+import logging
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+from routes.ops_approve import router as ops_router
+from routes.telegram_ping import router as telegram_router
+
+APP_TITLE   = "Ops Approval Webhook"
+APP_VERSION = os.getenv("OPS_APPROVAL_VERSION", "0.1.0")
+
+log = logging.getLogger("ops_approval_web")
+app = FastAPI(title=APP_TITLE, version=APP_VERSION)
+
+# Routers
+app.include_router(ops_router)
+app.include_router(telegram_router)
+
+# Health
+@app.get("/health", summary="Health")
+async def health():
+    return {
+        "ok": True,
+        "pubsub_channel": os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events"),
+        "require_unique_approvers": os.getenv("REQUIRE_UNIQUE_APPROVERS", "1").lower() in ("1","true","yes","on"),
+        "require_approver_id": os.getenv("REQUIRE_APPROVER_ID", "1").lower() in ("1","true","yes","on"),
+        "allowlist_enabled": bool(os.getenv("APPROVER_ALLOWLIST","").strip()),
+    }
+
+# fallback ל־404 יפה
+@app.exception_handler(404)
+async def nf(_, __):
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
