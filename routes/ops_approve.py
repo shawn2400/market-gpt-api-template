@@ -61,7 +61,6 @@ async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
     raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
     sig = _sign_hex(HMAC_SECRET, raw)
     url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve/signed"
-
     async with httpx.AsyncClient(timeout=15.0) as cli:
         r = await cli.post(
             url,
@@ -161,21 +160,50 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
         raise HTTPException(status_code=410, detail="Approval link expired")
 
     req = rec.get("req") or {}
+    # ביצוע פעולת האישור החתומה
     await _execute_via_signed_endpoint(req)
 
+    # שליחת הודעת טלגרם על אישור
+    try:
+        sym = req.get("symbol", "")
+        side = req.get("side", "")
+        qty  = req.get("qty", "")
+        await _send_telegram_text(
+            f"✅ <b>Approved</b>\n"
+            f"• Ticket: <code>{id}</code>\n"
+            f"• {sym} {side} qty={qty}\n"
+            f"— — —\nExecuted via signed endpoint."
+        )
+    except Exception:
+        pass
+
+    # ניקוי הטיקט
     try:
         await r.delete(KEY_TICKET(id))
     except Exception:
         pass
+
     return _html("✅ Approved! Order executed on Binance Futures.")
 
 @router.get("/ops/reject", summary="Reject ticket (delete from Redis)")
 async def reject(id: str = Query(..., description="ticket_id")):
+    # מחיקה מה-Redis
     try:
         r = await _redis()
         await r.delete(KEY_TICKET(id))
     except Exception:
         pass
+
+    # הודעת טלגרם על דחייה
+    try:
+        await _send_telegram_text(
+            f"❌ <b>Rejected</b>\n"
+            f"• Ticket: <code>{id}</code>\n"
+            f"— — —\nNo action was taken."
+        )
+    except Exception:
+        pass
+
     return _html("❌ Rejected. Order cancelled.")
 
 # -------- Added: signed execution endpoint --------
@@ -210,15 +238,12 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # TODO: לחבר לביצוע בפועל (Binance / internal executor).
-    # עכשיו רק סוגר לולאה לטובת approve-link.
+    # TODO: לחבר כאן לאקזקיוטר/בינאנס בפועל.
     return {
         "ok": True,
         "ticket_id": payload.get("ticket_id"),
         "executed": True,
     }
-
-
 
 
 
