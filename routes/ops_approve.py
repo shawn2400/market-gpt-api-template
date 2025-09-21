@@ -37,7 +37,7 @@ async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=15.0) as cli:
             r = await cli.post(url, headers=headers, json=payload)
-            data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"text": r.text}
+            data = r.json() if (r.headers.get("content-type", "") or "").startswith("application/json") else {"text": r.text}
             return {"ok": r.status_code < 400, "status": r.status_code, "response": data}
     except Exception as e:
         return {"ok": False, "error": f"http_error: {e}"}
@@ -120,6 +120,7 @@ def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
         return False
     try:
         mac = hmac.new(_SIGN_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+        # השוואה קבועת־זמן
         return hmac.compare_digest(mac, (sig_hex or "").strip().lower())
     except Exception:
         return False
@@ -127,7 +128,7 @@ def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
 @router.post("/approve/signed", summary="Approve via signed HMAC (body) and trigger grid/trade")
 async def ops_approve_signed(
     request: Request,
-    x_signature: str = Header(default=""),  # ✅ בלי convert_underscores=False → מאפשר 'X-Signature'
+    x_signature: str = Header(default="", alias="X-Signature"),  # קולט בדיוק את X-Signature
 ):
     """
     הגוף נחתם מול OPS_SIGN_SECRET (או WEBHOOK_HMAC_SECRET).
@@ -154,8 +155,15 @@ async def ops_approve_signed(
     lev    = body.get("lev") or body.get("leverage") or 10
     position_side = (body.get("position_side") or "BOTH").upper()
 
-    if not symbol or side not in {"BUY","SELL","LONG","SHORT"}:
+    if not symbol or side not in {"BUY", "SELL", "LONG", "SHORT"}:
         return JSONResponse(status_code=400, content={"detail": "invalid symbol/side"})
+
+    # אם חסר budget אבל יש qty – ניתן דיפולט עדין מה-ENV (לפי /grid/trade שדורש budget)
+    if budget is None and qty is not None:
+        try:
+            budget = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
+        except Exception:
+            budget = 5.0
 
     req_payload: Dict[str, Any] = {
         "symbol": symbol,
@@ -183,6 +191,7 @@ async def ops_approve_signed(
     }
 
 __all__ = ["router"]
+
 
 
 
