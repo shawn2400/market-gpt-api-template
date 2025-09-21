@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, json, time, hmac, hashlib, httpx, secrets
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, HTTPException, Body, Query
+from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
 
 # Redis (async)
@@ -14,11 +14,11 @@ except Exception:
 router = APIRouter(tags=["ops-approval"])
 
 # -------------------- CFG --------------------
-NS            = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL     = os.getenv("REDIS_URL", "")
-PUBLIC_HOST   = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
-HMAC_SECRET   = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
-ADMIN_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
+NS             = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL      = os.getenv("REDIS_URL", "")
+PUBLIC_HOST    = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
+HMAC_SECRET    = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
 TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
 
 def KEY_TICKET(tid: str) -> str:
@@ -59,8 +59,11 @@ async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
     sig = _sign_hex(HMAC_SECRET, raw)
     url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve/signed"
     async with httpx.AsyncClient(timeout=15.0) as cli:
-        r = await cli.post(url, content=raw,
-                           headers={"Content-Type": "application/json", "X-Signature": sig})
+        r = await cli.post(
+            url,
+            content=raw,
+            headers={"Content-Type": "application/json", "X-Signature": sig},
+        )
         try:
             j = r.json()
         except Exception:
@@ -170,6 +173,46 @@ async def reject(id: str = Query(..., description="ticket_id")):
     except Exception:
         pass
     return _html("❌ Rejected. Order cancelled.")
+
+# -------- Added: signed execution endpoint --------
+@router.post("/ops/approve/signed", summary="Internal signed approve endpoint")
+async def approve_signed(request: Request):
+    """
+    Verifies HMAC (X-Signature) over raw JSON body.
+    Expects payload like:
+    {
+      "action": "approve",
+      "ticket_id": "T_xxx",
+      "symbol": "...",
+      "side": "BUY|SELL",
+      "qty": 0.001,
+      "price": null,
+      "lev": 10,
+      "position_side": "BOTH|LONG|SHORT",
+      "budget": 10
+    }
+    """
+    if not HMAC_SECRET:
+        raise HTTPException(status_code=500, detail="HMAC secret not set")
+
+    raw = await request.body()
+    got = request.headers.get("X-Signature", "") or ""
+    want = _sign_hex(HMAC_SECRET, raw)
+    if not hmac.compare_digest(got, want):
+        raise HTTPException(status_code=401, detail="Bad signature")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # TODO: כאן לחבר למימוש ההרצה בפועל (בינאנס/אקזקיוטר פנימי).
+    # בשלב זה נחזיר ok True כדי לסגור את הלופ מול approve-link.
+    return {
+        "ok": True,
+        "ticket_id": payload.get("ticket_id"),
+        "executed": True,
+    }
 
 
 
