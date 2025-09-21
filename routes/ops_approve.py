@@ -93,29 +93,41 @@ async def _send_telegram_text_direct(
 async def _execute_internal(body: Dict[str, Any]) -> Dict[str, Any]:
     """
     קורא ל-/trade/execute בתוך אותה אפליקציה עם Bearer.
-    מקבל body בסכימה: symbol, side, qty, lev, budget, position_side.
-    ממפה ל: symbol, side, qty, leverage, budget_usd, position_side.
+    input (backward compat from ticket): symbol, side, qty, lev, budget, position_side, note?
+    mapped → TradeReq: symbol, side, quantity, leverage, budget_usd, position_side, note
     """
     if not API_BEARER_TOKEN:
         raise HTTPException(status_code=500, detail="API_BEARER_TOKEN not set")
 
+    # --- mapping & validation ---
+    symbol = (body.get("symbol") or "").upper().strip()
+    side   = (body.get("side") or "").upper().strip()
+    quantity = float(body.get("quantity") or body.get("qty") or 0)
+    leverage = int(body.get("leverage") or body.get("lev") or 0)
+    budget_usd = float(body.get("budget_usd") or body.get("budget") or 0.0)
+    position_side = (body.get("position_side") or "BOTH").upper()
+    note = body.get("note") or "approved ticket"
+
+    if not (symbol and side and quantity > 0 and leverage > 0 and budget_usd > 0):
+        raise HTTPException(status_code=422, detail={
+            "invalid_execute_payload": {
+                "symbol": symbol, "side": side, "quantity": quantity,
+                "leverage": leverage, "budget_usd": budget_usd, "position_side": position_side
+            }
+        })
+
     payload = {
-        "symbol": body.get("symbol"),
-        "side": body.get("side"),
-        "qty": body.get("qty"),
-        "leverage": int(body.get("lev") or body.get("leverage") or 0),
-        "budget_usd": float(body.get("budget") or body.get("budget_usd") or 0.0),
-        "position_side": (body.get("position_side") or "BOTH"),
+        "symbol": symbol,
+        "side": side,
+        "quantity": quantity,
+        "leverage": leverage,
+        "budget_usd": budget_usd,
+        "position_side": position_side,
+        "note": note,
     }
-    # ולידציות בסיסיות
-    if not (payload["symbol"] and payload["side"] and payload["qty"] and payload["leverage"] and payload["budget_usd"]):
-        raise HTTPException(status_code=422, detail={"invalid_execute_payload": payload})
 
     headers = {"Authorization": f"Bearer {API_BEARER_TOKEN}", "Content-Type": "application/json"}
-    url = f"{(PUBLIC_HOST or '').rstrip('/') or ''}/trade/execute"
-    if not url:
-        # קריאה יחסית – בתוך אותו שרת
-        url = "/trade/execute"
+    url = f"{(PUBLIC_HOST or '').rstrip('/')}/trade/execute" if (PUBLIC_HOST or "").strip() else "/trade/execute"
 
     async with httpx.AsyncClient(timeout=20.0) as cli:
         r = await cli.post(url, json=payload, headers=headers)
@@ -129,8 +141,7 @@ async def _execute_internal(body: Dict[str, Any]) -> Dict[str, Any]:
 
 async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
     """
-    לשמירת תאימות לאחור: קריאה ל-/ops/approve/signed (שהיום גם מבצע בפועל)
-    עם חתימת HMAC בכותרת X-Signature.
+    תאימות לאחור (אם עדיין בשימוש): קריאה ל-/ops/approve/signed עם HMAC.
     """
     if not PUBLIC_HOST:
         raise HTTPException(status_code=500, detail="PUBLIC_HOST not set")
@@ -178,6 +189,7 @@ async def create_ticket(
         "lev": lev,
         "position_side": position_side,
         "budget": budget,
+        "note": note,
     }
     record = {"ts": time.time(), "req": req_body, "note": note}
 
@@ -226,7 +238,7 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
 
     req = rec.get("req") or {}
 
-    # ביצוע בפועל (פנימי)
+    # ביצוע בפועל (פנימי) – כולל מיפוי לשמות החדשים
     exec_res = await _execute_internal(req)
 
     # הודעת טלגרם על אישור
@@ -276,7 +288,6 @@ async def approve_signed(request: Request):
         exec_res = await _execute_internal(payload)
         return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "internal_execute": exec_res}
     except HTTPException as he:
-        # חשיפה שקופה של שגיאת ה-executor
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -299,6 +310,7 @@ async def reject(id: str = Query(..., description="ticket_id")):
         pass
 
     return _html("❌ Rejected. Order cancelled.")
+
 
 
 
