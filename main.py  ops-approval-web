@@ -1,3 +1,4 @@
+# main.py
 from fastapi import FastAPI
 from routes.ops_approve import router as ops_router
 from routes.telegram_ping import router as tg_router
@@ -12,9 +13,10 @@ async def health():
 async def whoami():
     return {"ok": True, "service": "ops-approval-web", "version": "0.1.0"}
 
-# כולל רק את הראוטרים שלנו – בלי middlewares/אימות מהאפליקציה הגדולה
+# include only our routers
 app.include_router(ops_router)
 app.include_router(tg_router)
+
 
 
 
