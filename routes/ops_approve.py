@@ -1,6 +1,6 @@
 # routes/ops_approve.py
 from __future__ import annotations
-import os, json, time, hmac, hashlib, httpx, secrets, asyncio
+import os, json, time, hmac, hashlib, httpx, secrets
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
@@ -14,20 +14,20 @@ except Exception:
 router = APIRouter(tags=["ops-approval"])
 
 # -------------------- CFG --------------------
-NS                   = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL            = os.getenv("REDIS_URL", "")
-PUBLIC_HOST          = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
-HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
-ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-BOT_TOKEN            = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-API_BEARER           = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
-PUBSUB_CHANNEL       = os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events")
-AUTO_OPEN_ON_APPROVE = os.getenv("AUTO_OPEN_ON_APPROVE", "1") not in ("0", "false", "False")
-EXECUTE_TRADES       = os.getenv("EXECUTE_TRADES", "1") not in ("0", "false", "False")
+NS             = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL      = os.getenv("REDIS_URL", "")
+PUBLIC_HOST    = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
+HMAC_SECRET    = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
+BOT_TOKEN      = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
+PUBSUB_CHAN    = os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events")
 
 def KEY_TICKET(tid: str) -> str:
     return f"{NS}:ticket:{tid}"
+
+def KEY_APPROVED(tid: str) -> str:
+    return f"{NS}:approved:{tid}"
 
 # -------------------- utils --------------------
 def _html(msg: str) -> HTMLResponse:
@@ -56,7 +56,8 @@ def _sign_hex(secret_hex: str, payload: bytes) -> str:
 
 async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
     """
-    קורא ל- /ops/approve/signed על ה-PUBLIC_HOST עם חתימת HMAC בכותרת X-Signature.
+    לגיבוי/דיבוג בלבד: קריאה ישירה חזרה ל-/ops/approve/signed (עם HMAC).
+    ה-flow העיקרי יעבור דרך pubsub.
     """
     if not PUBLIC_HOST:
         raise HTTPException(status_code=500, detail="PUBLIC_HOST not set")
@@ -76,7 +77,7 @@ async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(status_code=502, detail=f"approve/signed failed: {j}")
         return j
 
-# ---------- Telegram (DIRECT ONLY) ----------
+# ---------- Telegram (DIRECT) ----------
 async def _send_telegram_text_direct(
     text: str,
     *,
@@ -108,66 +109,6 @@ async def _send_telegram_text_direct(
         if res.status_code >= 400 or not data.get("ok"):
             raise HTTPException(status_code=502, detail={"telegram_error": data, "status": res.status_code})
         return data
-
-# ---------- Local executor helpers ----------
-async def _try_call_internal_executor(req: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    ניסיון אקזקיושן דרך ראוטים פנימיים אם קיימים:
-      1) /trade/market
-      2) /trade/open
-    מחזיר dict עם מפתחות: ok, tried, status, response (אם יש).
-    """
-    if not PUBLIC_HOST or not API_BEARER:
-        return {"ok": False, "tried": [], "error": "missing PUBLIC_HOST/API_BEARER"}
-
-    tried = []
-    headers = {"Authorization": f"Bearer {API_BEARER}", "Content-Type": "application/json"}
-
-    async with httpx.AsyncClient(timeout=20.0) as cli:
-        # 1) /trade/market
-        url1 = f"{PUBLIC_HOST.rstrip('/')}/trade/market"
-        tried.append(url1)
-        try:
-            r1 = await cli.post(url1, json={
-                "symbol": req.get("symbol"),
-                "side": req.get("side"),
-                "qty": req.get("qty"),
-                "lev": req.get("lev"),
-                "position_side": req.get("position_side", "BOTH"),
-                "budget": req.get("budget"),
-                "reduce_only": False,
-                "note": f"approved:{req.get('ticket_id')}",
-            }, headers=headers)
-            j1 = r1.json() if r1.headers.get("content-type","").startswith("application/json") else {"text": r1.text}
-            if r1.status_code < 400 and (j1.get("ok") is True or "orderId" in json.dumps(j1)):
-                return {"ok": True, "tried": tried, "status": r1.status_code, "response": j1}
-        except Exception as e:
-            pass
-
-        # 2) /trade/open
-        url2 = f"{PUBLIC_HOST.rstrip('/')}/trade/open"
-        tried.append(url2)
-        try:
-            r2 = await cli.post(url2, json=req, headers=headers)
-            j2 = r2.json() if r2.headers.get("content-type","").startswith("application/json") else {"text": r2.text}
-            if r2.status_code < 400 and (j2.get("ok") is True or "orderId" in json.dumps(j2)):
-                return {"ok": True, "tried": tried, "status": r2.status_code, "response": j2}
-        except Exception as e:
-            pass
-
-    return {"ok": False, "tried": tried, "error": "no internal executor routes responded with ok"}
-
-async def _publish_redis_event(kind: str, data: Dict[str, Any]) -> Optional[int]:
-    """
-    פרסום לאפיק Pub/Sub כדי שה־Manager יבצע.
-    """
-    try:
-        r = await _redis()
-        msg = {"kind": kind, "ts": time.time(), **data}
-        n = await r.publish(PUBSUB_CHANNEL, json.dumps(msg, separators=(",", ":")))
-        return n
-    except Exception:
-        return None
 
 # -------------------- API --------------------
 
@@ -222,7 +163,7 @@ async def create_ticket(
         "telegram_result": tg_resp,
     }
 
-@router.get("/ops/approve-link", summary="Approve ticket via Redis -> calls /ops/approve/signed")
+@router.get("/ops/approve-link", summary="Approve ticket via Redis -> publish to manager + signed fallback")
 async def approve_link(id: str = Query(..., description="ticket_id")):
     r = await _redis()
     raw = await r.get(KEY_TICKET(id))
@@ -238,37 +179,66 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
         raise HTTPException(status_code=410, detail="Approval link expired")
 
     req = rec.get("req") or {}
-    await _execute_via_signed_endpoint(req)
+    # Idempotency guard – אם כבר אישרנו בעבר, אל תכפיל
+    if await r.get(KEY_APPROVED(id)):
+        return _html("✅ Already approved and dispatched.")
 
+    # ---- הנתיב הרשמי: פרסום ב-Redis PubSub כדי שהמנהל/אקזקיוטור יבצעו LIVE ----
+    msg = {
+        "event": "ops_approve",
+        "ticket_id": id,
+        "payload": req,
+        "ts": time.time(),
+        "source": "approve-link",
+        "path": "redis_pubsub",
+    }
+    await r.publish(PUBSUB_CHAN, json.dumps(msg, separators=(",", ":")))
+    await r.setex(KEY_APPROVED(id), 600, "1")  # למנוע דאבל
+
+    # הודעת טלגרם על Dispatch
     try:
         sym = req.get("symbol", "")
         side = req.get("side", "")
         qty  = req.get("qty", "")
+        lev  = req.get("lev", "")
         await _send_telegram_text_direct(
-            f"✅ <b>Approved</b>\n"
+            f"📤 <b>Dispatch</b>\n"
             f"• Ticket: <code>{id}</code>\n"
-            f"• {sym} {side} qty={qty}\n"
-            f"— — —\nExecuted via signed endpoint."
+            f"• {sym} {side} qty={qty} lev={lev}\n"
+            f"• Path: <code>redis_pubsub</code>"
         )
     except Exception:
         pass
 
+    # מחיקת הטיקט מה-store
     try:
         await r.delete(KEY_TICKET(id))
     except Exception:
         pass
 
-    return _html("✅ Approved! Order executed (or queued) via executor/manager.")
+    return _html("✅ Approved! Order dispatched to manager via Redis PubSub.")
 
-# -------- Signed execution endpoint --------
+@router.get("/ops/reject", summary="Reject ticket (delete from Redis)")
+async def reject(id: str = Query(..., description="ticket_id")):
+    try:
+        r = await _redis()
+        await r.delete(KEY_TICKET(id))
+    except Exception:
+        pass
+    try:
+        await _send_telegram_text_direct(
+            f"❌ <b>Rejected</b>\n"
+            f"• Ticket: <code>{id}</code>\n"
+            f"— — —\nNo action was taken."
+        )
+    except Exception:
+        pass
+    return _html("❌ Rejected. Order cancelled.")
+
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint")
 async def approve_signed(request: Request):
     """
-    Verifies HMAC (X-Signature) over raw JSON body.
-    Then attempts to EXECUTE:
-      1) Call internal /trade/market (or /trade/open) with Bearer.
-      2) If missing -> publish to Redis Pub/Sub for manager.
-    Returns JSON with detailed path taken.
+    אימות HMAC ושליחת האירוע לאקזקיוטור דרך Redis PubSub (אותו ערוץ כמו approve-link).
     """
     if not HMAC_SECRET:
         raise HTTPException(status_code=500, detail="HMAC secret not set")
@@ -284,44 +254,37 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    ticket_id = payload.get("ticket_id")
-    # Ensure required fields exist
-    for k in ("symbol", "side", "qty", "lev", "position_side", "budget"):
-        if k not in payload:
-            raise HTTPException(status_code=422, detail=f"Missing field: {k}")
+    tid = (payload or {}).get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    exec_result: Dict[str, Any] = {"path": None}
+    r = await _redis()
+    msg = {
+        "event": "ops_approve",
+        "ticket_id": tid,
+        "payload": payload,
+        "ts": time.time(),
+        "source": "approve-signed",
+        "path": "redis_pubsub",
+    }
+    await r.publish(PUBSUB_CHAN, json.dumps(msg, separators=(",", ":")))
+    await r.setex(KEY_APPROVED(tid), 600, "1")
 
-    if EXECUTE_TRADES and AUTO_OPEN_ON_APPROVE:
-        # Try internal executor routes first
-        exec_try = await _try_call_internal_executor(payload)
-        exec_result["internal_executor"] = exec_try
-        if exec_try.get("ok"):
-            exec_result["path"] = "internal_executor"
-        else:
-            # publish to manager via redis
-            pub = await _publish_redis_event("approved", {"ticket_id": ticket_id, "req": payload})
-            exec_result["redis_pubsub"] = {"published_to": PUBSUB_CHANNEL, "receivers": pub}
-            exec_result["path"] = "redis_pubsub"
-    else:
-        # Manager-only path
-        pub = await _publish_redis_event("approved", {"ticket_id": ticket_id, "req": payload})
-        exec_result["redis_pubsub"] = {"published_to": PUBSUB_CHANNEL, "receivers": pub}
-        exec_result["path"] = "redis_pubsub"
-
-    # Telegram notify (best effort)
+    # הודעת טלגרם – דיספאץ׳
     try:
-        p = payload
+        sym = payload.get("symbol", "")
+        side = payload.get("side", "")
+        qty  = payload.get("qty", "")
+        lev  = payload.get("lev", "")
         await _send_telegram_text_direct(
             f"📤 <b>Dispatch</b>\n"
-            f"• Ticket: <code>{ticket_id}</code>\n"
-            f"• {p.get('symbol')} {p.get('side')} qty={p.get('qty')} lev={p.get('lev')}\n"
-            f"• Path: <code>{exec_result.get('path')}</code>"
+            f"• Ticket: <code>{tid}</code>\n"
+            f"• {sym} {side} qty={qty} lev={lev}\n"
+            f"• Path: <code>redis_pubsub</code>"
         )
     except Exception:
         pass
 
-    return {"ok": True, "ticket_id": ticket_id, "executed": True, "exec_result": exec_result}
+    return {"ok": True, "ticket_id": tid, "executed": True, "path": "redis_pubsub"}
+
 
 
 
