@@ -1,40 +1,21 @@
-# main.py  (ops-approval-web)
-from __future__ import annotations
-import os, logging
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-
-# חשוב: ודא שקיים routes/__init__.py (קובץ ריק) כדי שהייבוא יעבוד
 from routes.ops_approve import router as ops_router
-from routes.telegram_ping import router as telegram_router
+from routes.telegram_ping import router as tg_router
 
-APP_TITLE   = "Ops Approval Webhook"
-APP_VERSION = os.getenv("OPS_APPROVAL_VERSION", "0.1.0")
-log = logging.getLogger("ops_approval_web")
+app = FastAPI(title="Ops Approval Webhook", version="0.1.0")
 
-app = FastAPI(title=APP_TITLE, version=APP_VERSION)
-
-# Register routers (זה מה שמכניס /ops/* ו-/telegram/ping לסכמה)
-app.include_router(ops_router)
-app.include_router(telegram_router)
-
-@app.get("/health", summary="Health")
+@app.get("/health")
 async def health():
-    return {
-        "ok": True,
-        "pubsub_channel": os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events"),
-        "require_unique_approvers": os.getenv("REQUIRE_UNIQUE_APPROVERS","1").lower() in ("1","true","yes","on"),
-        "require_approver_id": os.getenv("REQUIRE_APPROVER_ID","1").lower() in ("1","true","yes","on"),
-        "allowlist_enabled": bool(os.getenv("APPROVER_ALLOWLIST","").strip()),
-    }
+    return {"ok": True}
 
-@app.exception_handler(404)
-async def _nf(_, __):
-    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+@app.get("/__whoami", include_in_schema=False)
+async def whoami():
+    return {"ok": True, "service": "ops-approval-web", "version": "0.1.0"}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
+# include routers
+app.include_router(ops_router)
+app.include_router(tg_router)
+
 
 
 
