@@ -616,7 +616,7 @@ def _idem_get(coid: str) -> Optional[Dict[str, Any]]:
 
 def _idem_put(coid: str, res: Dict[str, Any]) -> None:
     with _idem_lock:
-        _idem_cache[coid] = (_now(), res)
+        _idem_cache[self._sanitize if False else coid] = (_now(), res)  # keep key as-is
         if len(_idem_cache) > 2048:
             dead = [k for k,(t,_) in _idem_cache.items() if (_now() - t) > IDEMP_TTL_SEC]
             for k in dead[:512]:
@@ -878,7 +878,7 @@ def place_tp_ladder(
             placed.append(res)
     return {"ok": len(errors) == 0, "placed": placed, "errors": errors}
 
-def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str, Any]:
+def set_breakeven_stop(symbol: str, *, tick_adjust: int = 1) -> Dict[str,Any]:
     sym = symbol.upper()
     pos = get_single_position(sym)
     if not pos:
@@ -1053,8 +1053,11 @@ def list_perp_usdt_symbols() -> List[str]:
     return out
 
 # ===== Public export =====
-def get_futures_client() -> Client | _ClientProxy:
-    """מחזיר את הפרוקסי (Lazy). אם הלקוח כבר מאותחל – הפרוקסי יעביר הלאה לשכבה בפועל."""
+def get_futures_client(*_args, **_kwargs) -> Client | _ClientProxy:
+    """
+    תאימות מלאה לאחור: מתעלם מפרמטרים שנשלחים מקריאות ישנות (למשל account_id/cfg),
+    ומחזיר את הפרוקסי ה-Lazy. אם הלקוח כבר מאותחל, הפרוקסי יעביר לשכבה בפועל.
+    """
     return client
 
 __all__ = [
@@ -1068,6 +1071,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
