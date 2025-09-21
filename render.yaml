@@ -1,8 +1,6 @@
 # FILE: render.yaml
 services:
-  # ─────────────────────────────────────────────
-  # Web ראשי (קיים) — לא נוגעים בו
-  # ─────────────────────────────────────────────
+  # ───────── Web ראשי (קיים) ─────────
   - type: web
     name: algogpt-docker
     env: docker
@@ -10,43 +8,42 @@ services:
     plan: pro
     autoDeploy: false
 
-  # ─────────────────────────────────────────────
-  # Worker: ops-supervisor (Python)
-  # ─────────────────────────────────────────────
+  # ───────── Worker: ops-supervisor ─────────
   - type: worker
     name: ops-supervisor
     env: python
-    region: oregon
+    region: frankfurt           # ← מומלץ להתאים ל-Redis/WEB (היה oregon)
     plan: starter
     pythonVersion: 3.11
     buildCommand: pip install -r requirements-worker.txt
     preDeployCommand: chmod +x ./ops/launch_with_env.sh || true
-    # מריץ watchdog ברקע ואז את ה-supervisor עם env טעון
     startCommand: bash -lc './ops/watchdog.sh & exec ./ops/launch_with_env.sh python -u -m utils.ops_supervisor'
 
     envVars:
-      # ---- Auto-approve (Runtime) ----
+      # ---- Policy / runtime ----
       - key: OPS_POLICY_PATH
         value: policies/ops_policy.yaml
       - key: OPS_REQUIRE_ACTION_PARAM
         value: "0"
       - key: APPROVAL_AUTO_APPROVE_MAX_CRS
-        value: "6"          # הועלה ל-6 כדי לאפשר auto-heal רחב יותר
+        value: "6"
       - key: APPROVAL_AUTO_APPROVE_SENSITIVE
         value: "0"
 
-      # ---- כללי/נוחות ----
+      # ---- כללי ----
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: LOG_LEVEL
         value: INFO
       - key: REDIS_NAMESPACE
         value: ops-supervisor-web
-      - key: PUBLIC_HOST
+      - key: APPROVAL_PUBSUB_CHANNEL      # ← נוסף
+        value: ops:ticket:events
+      - key: PUBLIC_HOST                  # ops-approval-web (API האישור)
         value: https://ops-approval-web.onrender.com
 
       # ---- Watchdog / HA ----
-      - key: PRIMARY_PUBLIC_HOST         # חייב להצביע לשירות הראשי עם /healthz תקין
+      - key: PRIMARY_PUBLIC_HOST          # ה־API הראשי שבו /healthz תקין
         value: https://algogpt-docker.onrender.com
       - key: WATCHDOG_INTERVAL_SEC
         value: "60"
@@ -54,20 +51,20 @@ services:
         value: "2"
       - key: WATCHDOG_LOGS
         value: /opt/render/project/src/logs/app.log
-      - key: RENDER_DEPLOY_HOOK_URL      # להגדיר בדשבורד (סוד) כדי לאפשר redeploy אוטומטי
+      - key: RENDER_DEPLOY_HOOK_URL
         sync: false
 
-      # ---- סיקרטים/אינטגרציות (להגדיר בדשבורד; לא בקובץ) ----
+      # ---- סודות (להזין בדשבורד) ----
       - key: REDIS_URL
+        sync: false
+      - key: WEBHOOK_HMAC_SECRET
         sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: API_BEARER_TOKEN
         sync: false
-      - key: WEBHOOK_HMAC_SECRET
-        sync: false
 
-      # ---- טלגרם (אופציונלי; לשמור תאימות להגדרות שלך) ----
+      # ---- טלגרם (אם רלוונטי) ----
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "1"
       - key: TELEGRAM_ADMIN_ONLY
@@ -80,6 +77,7 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+
 
 
 
