@@ -1,8 +1,6 @@
-# routes/ops_approve.py
 from __future__ import annotations
 from typing import Optional, Dict, Any
 import os, time, hmac, hashlib, json, logging
-
 import httpx
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import JSONResponse
@@ -15,15 +13,12 @@ except Exception:
 router = APIRouter(prefix="/ops", tags=["Ops"])
 log = logging.getLogger("ops.approval")
 
-# ---- trade forward (optional) ----
 PUBLIC_HOST    = os.getenv("PUBLIC_HOST", "").rstrip("/")
 INTERNAL_TOKEN = os.getenv("OPS_INTERNAL_TOKEN") or os.getenv("API_TOKEN") or os.getenv("TOKEN")
 
 async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
-    if not PUBLIC_HOST:
-        return {"ok": False, "error": "PUBLIC_HOST not set"}
-    if not INTERNAL_TOKEN:
-        return {"ok": False, "error": "OPS_INTERNAL_TOKEN not set"}
+    if not PUBLIC_HOST:    return {"ok": False, "error": "PUBLIC_HOST not set"}
+    if not INTERNAL_TOKEN: return {"ok": False, "error": "OPS_INTERNAL_TOKEN not set"}
     url = f"{PUBLIC_HOST}/grid/trade"
     headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}", "Content-Type": "application/json"}
     try:
@@ -35,7 +30,6 @@ async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": f"http_error: {e}"}
 
-# ---- approvals (tickets) ----
 PUBSUB_CHANNEL = os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events")
 REDIS_URL      = os.getenv("REDIS_URL", "")
 NS             = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
@@ -79,7 +73,6 @@ def _bool(x):
 
 @router.get("/approve", summary="Approve trade OR ticket (auto-detect)")
 async def ops_approve(
-    # ticket mode
     ticket_id: Optional[str] = Query(None),
     action:   Optional[str] = Query(None, pattern="^(approve|reject)$"),
     expires:  Optional[int] = Query(None, ge=0),
@@ -87,7 +80,6 @@ async def ops_approve(
     by:       Optional[str] = Query(None),
     require:  Optional[int] = Query(None, ge=1, le=2),
     version:  Optional[str] = Query(None),
-    # trade mode (back-compat)
     symbol:   Optional[str] = Query(None),
     side:     Optional[str] = Query(None),
     tf:       Optional[str] = Query("15m"),
@@ -101,7 +93,7 @@ async def ops_approve(
     grids:    int = Query(3),
     dry_run:  Optional[bool] = Query(True),
 ):
-    # ---- ticket branch ----
+    # ----- ticket branch -----
     if ticket_id or action or expires or sig or require or version:
         _assert(WEBHOOK_SECRET, "HMAC secret not configured")
         _assert(ticket_id is not None, "ticket_id required")
@@ -143,7 +135,7 @@ async def ops_approve(
         log.info("ticket_decision", extra=event)
         return JSONResponse({"ok": True, "mode": "ticket", **event})
 
-    # ---- trade branch (back-compat) ----
+    # ----- trade branch (back-compat) -----
     _assert(symbol is not None and side is not None, "symbol & side required")
     payload: Dict[str, Any] = {
         "symbol": (symbol or "").upper(),
@@ -168,7 +160,6 @@ async def ops_approve(
     result = await _post_grid_trade(payload)
     return {"ok": bool(result.get("ok")), "mode": "trade", "action": "approve", "request": payload, "result": result}
 
-# Reject echo (unchanged)
 @router.get("/reject", summary="Reject trade (echo)")
 async def ops_reject(
     symbol: str,
@@ -185,7 +176,6 @@ async def ops_reject(
         "side": side.upper(),
         "meta": {"source": src, "timeframe": tf, "score": score, "chat_id": chat_id, "ts": int(time.time())},
     }
-
 
 
 
