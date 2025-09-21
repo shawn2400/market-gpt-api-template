@@ -74,12 +74,13 @@ def _bool(x):
 @router.get("/approve", summary="Approve trade OR ticket (auto-detect)")
 async def ops_approve(
     ticket_id: Optional[str] = Query(None),
-    action:   Optional[str] = Query(None, pattern="^(approve|reject)$"),
+    action:   Optional[str] = Query(None, regex="^(approve|reject)$"),  # ← כאן התיקון: regex (לא pattern)
     expires:  Optional[int] = Query(None, ge=0),
     sig:      Optional[str] = Query(None),
     by:       Optional[str] = Query(None),
-    require:  Optional[int] = Query(None, ge=1, le=2),
+    require:  Optional[int] = Query(None, ge=1, le=2),   # אופציונלי (נדרש רק ב-canonical)
     version:  Optional[str] = Query(None),
+    # trade:
     symbol:   Optional[str] = Query(None),
     side:     Optional[str] = Query(None),
     tf:       Optional[str] = Query("15m"),
@@ -176,8 +177,6 @@ async def ops_reject(
         "side": side.upper(),
         "meta": {"source": src, "timeframe": tf, "score": score, "chat_id": chat_id, "ts": int(time.time())},
     }
-
-
 
 
 
