@@ -1,10 +1,9 @@
 # routes/ops_approve.py
 from __future__ import annotations
-import os, json, time, hmac, hashlib, httpx, secrets, base64
+import os, json, time, hmac, hashlib, httpx, secrets
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
-from urllib.parse import quote, unquote
 
 # Redis (async)
 try:
@@ -15,14 +14,14 @@ except Exception:
 router = APIRouter(tags=["ops-approval"])
 
 # -------------------- CFG --------------------
-NS             = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL      = os.getenv("REDIS_URL", "")
-PUBLIC_HOST    = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
-HMAC_SECRET    = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
-ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-BOT_TOKEN      = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
-API_BEARER     = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+NS                  = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL           = os.getenv("REDIS_URL", "")
+PUBLIC_HOST         = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
+HMAC_SECRET         = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+ADMIN_CHAT_ID       = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
+BOT_TOKEN           = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+API_BEARER_TOKEN    = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+TICKET_TTL_SEC      = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
 
 def KEY_TICKET(tid: str) -> str:
     return f"{NS}:ticket:{tid}"
@@ -52,40 +51,6 @@ def _sign_hex(secret_hex: str, payload: bytes) -> str:
     key = bytes.fromhex(secret_hex) if len(secret_hex) == 64 else secret_hex.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-def _b64url_decode(s: str) -> bytes:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
-
-async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    קורא ל- /ops/approve/signed על ה-PUBLIC_HOST עם חתימת HMAC בכותרת X-Signature.
-    """
-    if not PUBLIC_HOST:
-        raise HTTPException(status_code=500, detail="PUBLIC_HOST not set")
-    if not HMAC_SECRET:
-        raise HTTPException(status_code=500, detail="WEBHOOK_HMAC_SECRET/OPS_SIGN_SECRET not set")
-
-    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    sig = _sign_hex(HMAC_SECRET, raw)
-    url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve/signed"
-    async with httpx.AsyncClient(timeout=15.0) as cli:
-        r = await cli.post(
-            url,
-            content=raw,
-            headers={"Content-Type": "application/json", "X-Signature": sig},
-        )
-        try:
-            j = r.json()
-        except Exception:
-            j = {"ok": False, "status": r.status_code, "text": r.text}
-        if r.status_code >= 400 or not j.get("ok"):
-            raise HTTPException(status_code=502, detail=f"approve/signed failed: {j}")
-        return j
-
-# ---------- Telegram (DIRECT ONLY) ----------
 async def _send_telegram_text_direct(
     text: str,
     *,
@@ -93,8 +58,7 @@ async def _send_telegram_text_direct(
     reject_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    שליחה ישירה ל-Telegram sendMessage (ללא fallback). מחזירה את כל JSON התשובה.
-    נזרוק 4xx/5xx אם אין TOKEN/CHAT או אם ה-API מחזיר שגיאה.
+    שליחה ישירה ל-Telegram sendMessage. מחזירה את כל JSON התשובה.
     """
     if not BOT_TOKEN:
         raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
@@ -117,10 +81,74 @@ async def _send_telegram_text_direct(
 
     async with httpx.AsyncClient(timeout=12.0) as cli:
         res = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
-        data = res.json()
+        try:
+            data = res.json()
+        except Exception:
+            data = {"ok": False, "status": res.status_code, "text": res.text}
         if res.status_code >= 400 or not data.get("ok"):
             raise HTTPException(status_code=502, detail={"telegram_error": data, "status": res.status_code})
         return data
+
+# -------- Internal executor --------
+async def _execute_internal(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    קורא ל-/trade/execute בתוך אותה אפליקציה עם Bearer.
+    מקבל body בסכימה: symbol, side, qty, lev, budget, position_side.
+    ממפה ל: symbol, side, qty, leverage, budget_usd, position_side.
+    """
+    if not API_BEARER_TOKEN:
+        raise HTTPException(status_code=500, detail="API_BEARER_TOKEN not set")
+
+    payload = {
+        "symbol": body.get("symbol"),
+        "side": body.get("side"),
+        "qty": body.get("qty"),
+        "leverage": int(body.get("lev") or body.get("leverage") or 0),
+        "budget_usd": float(body.get("budget") or body.get("budget_usd") or 0.0),
+        "position_side": (body.get("position_side") or "BOTH"),
+    }
+    # ולידציות בסיסיות
+    if not (payload["symbol"] and payload["side"] and payload["qty"] and payload["leverage"] and payload["budget_usd"]):
+        raise HTTPException(status_code=422, detail={"invalid_execute_payload": payload})
+
+    headers = {"Authorization": f"Bearer {API_BEARER_TOKEN}", "Content-Type": "application/json"}
+    url = f"{(PUBLIC_HOST or '').rstrip('/') or ''}/trade/execute"
+    if not url:
+        # קריאה יחסית – בתוך אותו שרת
+        url = "/trade/execute"
+
+    async with httpx.AsyncClient(timeout=20.0) as cli:
+        r = await cli.post(url, json=payload, headers=headers)
+        try:
+            j = r.json()
+        except Exception:
+            j = {"ok": False, "status": r.status_code, "text": r.text}
+        if r.status_code >= 400 or not j.get("ok"):
+            raise HTTPException(status_code=502, detail={"execute_error": j, "status": r.status_code})
+        return j
+
+async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    לשמירת תאימות לאחור: קריאה ל-/ops/approve/signed (שהיום גם מבצע בפועל)
+    עם חתימת HMAC בכותרת X-Signature.
+    """
+    if not PUBLIC_HOST:
+        raise HTTPException(status_code=500, detail="PUBLIC_HOST not set")
+    if not HMAC_SECRET:
+        raise HTTPException(status_code=500, detail="WEBHOOK_HMAC_SECRET/OPS_SIGN_SECRET not set")
+
+    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    sig = _sign_hex(HMAC_SECRET, raw)
+    url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve/signed"
+    async with httpx.AsyncClient(timeout=15.0) as cli:
+        r = await cli.post(url, content=raw, headers={"Content-Type": "application/json", "X-Signature": sig})
+        try:
+            j = r.json()
+        except Exception:
+            j = {"ok": False, "status": r.status_code, "text": r.text}
+        if r.status_code >= 400 or not j.get("ok"):
+            raise HTTPException(status_code=502, detail=f"approve/signed failed: {j}")
+        return j
 
 # -------------------- API --------------------
 
@@ -153,19 +181,10 @@ async def create_ticket(
     }
     record = {"ts": time.time(), "req": req_body, "note": note}
 
-    # שמירה ברדיס (לתיעוד/דיבוג/תאימות לאחור)
     r = await _redis()
     await r.setex(KEY_TICKET(tid), TICKET_TTL_SEC, json.dumps(record, separators=(",", ":")))
 
-    # לינק סטטלס חתום — כולל כל המטען + ts
-    signed_payload = {"ts": record["ts"], "req": req_body}
-    raw = json.dumps(signed_payload, separators=(",", ":")).encode("utf-8")
-    if not HMAC_SECRET:
-        raise HTTPException(status_code=500, detail="HMAC secret not set")
-    sig = _sign_hex(HMAC_SECRET, raw)
-    token = _b64url(raw)
-
-    approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve-link?id={tid}&t={quote(token)}&s={sig}"
+    approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve-link?id={tid}"
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?id={tid}"
 
     pretty = (
@@ -177,94 +196,92 @@ async def create_ticket(
 
     tg_resp = await _send_telegram_text_direct(pretty, approve_url=approve_url, reject_url=reject_url)
 
-    return {
-        "ok": True,
-        "ticket_id": tid,
-        "approve_url": approve_url,
-        "reject_url": reject_url,
-        "telegram_result": tg_resp,
-    }
+    return {"ok": True, "ticket_id": tid, "approve_url": approve_url, "reject_url": reject_url, "telegram_result": tg_resp}
 
-@router.get("/ops/approve-link", summary="Approve ticket (stateless signed token + Redis fallback)")
-async def approve_link(
-    id: Optional[str] = Query(None, description="ticket_id (legacy for logs)"),
-    t: Optional[str]  = Query(None, description="base64url signed token (preferred)"),
-    s: Optional[str]  = Query(None, description="hex HMAC signature over token payload"),
-):
-    """
-    זרימה:
-    1) אם יש token (t,s) – מאמתים HMAC+TTL → מבצעים.
-    2) אחרת, מנסים Redis לפי id (תאימות לאחור).
-    """
-    req: Dict[str, Any] | None = None
+@router.get("/ops/ticket/{ticket_id}", summary="Debug: fetch ticket from Redis (requires Bearer)")
+async def get_ticket(ticket_id: str):
+    r = await _redis()
+    raw = await r.get(KEY_TICKET(ticket_id))
+    if not raw:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    try:
+        return {"ok": True, "ticket": json.loads(raw)}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Corrupted ticket payload")
 
-    # --- 1) token-first (סטטלס מלא) ---
-    if t and s:
-        try:
-            raw = _b64url_decode(unquote(t))
-        except Exception:
-            raise HTTPException(status_code=400, detail="Bad token encoding")
-        if not HMAC_SECRET:
-            raise HTTPException(status_code=500, detail="HMAC secret not set")
-        want = _sign_hex(HMAC_SECRET, raw)
-        if not hmac.compare_digest(s, want):
-            raise HTTPException(status_code=401, detail="Bad token signature")
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid token JSON")
-        ts = float(payload.get("ts", 0))
-        if _expired(ts):
-            raise HTTPException(status_code=410, detail="Approval link expired")
-        req = (payload.get("req") or {})
-        if not req.get("ticket_id"):
-            req["ticket_id"] = id or f"T_{int(ts)}"
+@router.get("/ops/approve-link", summary="Approve ticket via Redis -> execute trade")
+async def approve_link(id: str = Query(..., description="ticket_id")):
+    r = await _redis()
+    raw = await r.get(KEY_TICKET(id))
+    if not raw:
+        raise HTTPException(status_code=404, detail="Invalid or expired approval id")
+    try:
+        rec = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Corrupted ticket payload")
 
-    # --- 2) fallback: Redis לפי id ---
-    if req is None:
-        if not id:
-            raise HTTPException(status_code=400, detail="Missing id or signed token")
-        r = await _redis()
-        raw = await r.get(KEY_TICKET(id))
-        if not raw:
-            raise HTTPException(status_code=404, detail="Invalid or expired approval id")
-        try:
-            rec = json.loads(raw)
-        except Exception:
-            raise HTTPException(status_code=500, detail="Corrupted ticket payload")
-        if _expired(rec.get("ts", 0)):
-            try:
-                await r.delete(KEY_TICKET(id))
-            except Exception:
-                pass
-            raise HTTPException(status_code=410, detail="Approval link expired")
-        req = rec.get("req") or {}
-        try:
-            await r.delete(KEY_TICKET(id))
-        except Exception:
-            pass
+    if _expired(rec.get("ts", 0)):
+        await r.delete(KEY_TICKET(id))
+        raise HTTPException(status_code=410, detail="Approval link expired")
 
-    # ביצוע דרך ה-endpoint החתום (אחיד לכל הרפליקות) – כולל טרייד חי
-    await _execute_via_signed_endpoint(req)
+    req = rec.get("req") or {}
 
-    # הודעת טלגרם על אישור — ישיר
+    # ביצוע בפועל (פנימי)
+    exec_res = await _execute_internal(req)
+
+    # הודעת טלגרם על אישור
     try:
         sym = req.get("symbol", "")
         side = req.get("side", "")
         qty  = req.get("qty", "")
-        tid  = req.get("ticket_id", id or "")
         await _send_telegram_text_direct(
             f"✅ <b>Approved</b>\n"
-            f"• Ticket: <code>{tid}</code>\n"
+            f"• Ticket: <code>{id}</code>\n"
             f"• {sym} {side} qty={qty}\n"
-            f"— — —\nExecuted via signed endpoint."
+            f"— — —\nExecuted internally: <code>{json.dumps(exec_res, ensure_ascii=False)}</code>"
         )
+    except Exception:
+        pass
+
+    # ניקוי הטיקט
+    try:
+        await r.delete(KEY_TICKET(id))
     except Exception:
         pass
 
     return _html("✅ Approved! Order executed (stateless link).")
 
-@router.get("/ops/reject", summary="Reject ticket (delete from Redis if exists)")
+# -------- Signed execution endpoint --------
+@router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade)")
+async def approve_signed(request: Request):
+    """
+    Verifies HMAC (X-Signature) over raw JSON body and EXECUTES trade internally.
+    """
+    if not HMAC_SECRET:
+        raise HTTPException(status_code=500, detail="HMAC secret not set")
+
+    raw = await request.body()
+    got = request.headers.get("X-Signature", "") or ""
+    want = _sign_hex(HMAC_SECRET, raw)
+    if not hmac.compare_digest(got, want):
+        raise HTTPException(status_code=401, detail="Bad signature")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # ביצוע בפועל (פנימי)
+    try:
+        exec_res = await _execute_internal(payload)
+        return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "internal_execute": exec_res}
+    except HTTPException as he:
+        # חשיפה שקופה של שגיאת ה-executor
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+@router.get("/ops/reject", summary="Reject ticket (delete from Redis)")
 async def reject(id: str = Query(..., description="ticket_id")):
     try:
         r = await _redis()
@@ -282,73 +299,6 @@ async def reject(id: str = Query(..., description="ticket_id")):
         pass
 
     return _html("❌ Rejected. Order cancelled.")
-
-# -------- Signed execution endpoint --------
-@router.post("/ops/approve/signed", summary="Internal signed approve endpoint")
-async def approve_signed(request: Request):
-    """
-    Verifies HMAC (X-Signature) over raw JSON body.
-    בנוסף: מבצע ניסיון פתיחת טרייד חי דרך /trade/execute עם Bearer,
-    כולל מיפוי lev→leverage ו-budget→budget_usd.
-    """
-    if not HMAC_SECRET:
-        raise HTTPException(status_code=500, detail="HMAC secret not set")
-
-    raw = await request.body()
-    got = request.headers.get("X-Signature", "") or ""
-    want = _sign_hex(HMAC_SECRET, raw)
-    if not hmac.compare_digest(got, want):
-        raise HTTPException(status_code=401, detail="Bad signature")
-
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
-    # === טרייד חי (internal) ===
-    exec_attempt = {
-        "ok": False,
-        "tried": [],
-        "error": None,
-        "response": None,
-    }
-    if PUBLIC_HOST and API_BEARER:
-        exec_url = f"{PUBLIC_HOST.rstrip('/')}/trade/execute"
-        body = {
-            "symbol":        payload.get("symbol"),
-            "side":          payload.get("side"),
-            "qty":           payload.get("qty"),
-            "leverage":      payload.get("lev"),
-            "position_side": payload.get("position_side", "BOTH"),
-            "budget_usd":    payload.get("budget"),
-            # אל תשלח "market": ראינו שזורק unexpected keyword argument
-        }
-        exec_attempt["tried"].append(exec_url)
-        async with httpx.AsyncClient(timeout=15.0) as cli:
-            r = await cli.post(
-                exec_url,
-                json=body,
-                headers={"Authorization": f"Bearer {API_BEARER}", "Content-Type": "application/json"},
-            )
-            try:
-                j = r.json()
-            except Exception:
-                j = {"ok": False, "status": r.status_code, "text": r.text}
-            exec_attempt["response"] = j
-            if r.status_code < 400 and j.get("ok"):
-                exec_attempt["ok"] = True
-            else:
-                exec_attempt["error"] = f"status={r.status_code} body={j}"
-
-    # אפשר להוסיף כאן גם פרסום Redis PubSub אם תרצה בעתיד
-
-    # החזר תוצאה שקופה לדיבוג
-    return {
-        "ok": True,
-        "ticket_id": payload.get("ticket_id"),
-        "executed": True,
-        "internal_execute": exec_attempt,
-    }
 
 
 
