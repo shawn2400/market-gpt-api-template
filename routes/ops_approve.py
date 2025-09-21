@@ -18,7 +18,7 @@ NS            = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "o
 REDIS_URL     = os.getenv("REDIS_URL", "")
 PUBLIC_HOST   = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
 HMAC_SECRET   = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
-ADMIN_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")  # מי שיקבל את ההודעה בטלגרם
+ADMIN_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
 TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
 
 def KEY_TICKET(tid: str) -> str:
@@ -70,10 +70,6 @@ async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
         return j
 
 async def _send_telegram_text(text: str) -> Optional[Dict[str, Any]]:
-    """
-    שולח דרך ראוטר השרת /telegram/ping (קיים אצלך), כדי לא לגעת ישירות ב־Bot API.
-    אם אין ADMIN_CHAT_ID – לא שולח, ומחזיר None.
-    """
     if not ADMIN_CHAT_ID or not PUBLIC_HOST:
         return None
     ping_url = f"{PUBLIC_HOST.rstrip('/')}/telegram/ping"
@@ -91,19 +87,6 @@ async def _send_telegram_text(text: str) -> Optional[Dict[str, Any]]:
 async def create_ticket(
     payload: Dict[str, Any] = Body(..., description="symbol, side, qty, lev, budget, optional: note, position_side"),
 ):
-    """
-    יוצר טיקט ב-Redis ושולח הודעת אישור בטלגרם עם כפתורים.
-    גוף צפוי, למשל:
-    {
-      "symbol": "BTCUSDT",
-      "side": "BUY",
-      "qty": 0.001,
-      "lev": 10,
-      "budget": 10,
-      "note": "live",
-      "position_side": "BOTH"  # אופציונלי, ברירת מחדל BOTH
-    }
-    """
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
     qty    = float(payload.get("qty") or 0)
@@ -139,7 +122,6 @@ async def create_ticket(
     approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve-link?id={tid}"
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?id={tid}"
 
-    # הודעת טלגרם קצרה + כפתורים (באמצעות ראוטר /telegram/ping)
     pretty = (
         "⚠️ Approval Needed\n"
         f"• Ticket: {tid}\n"
@@ -174,7 +156,6 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
     req = rec.get("req") or {}
     await _execute_via_signed_endpoint(req)
 
-    # מחיקה לאחר ביצוע
     try:
         await r.delete(KEY_TICKET(id))
     except Exception:
