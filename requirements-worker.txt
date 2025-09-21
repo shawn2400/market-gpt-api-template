@@ -1,4 +1,4 @@
-# Worker-only deps (אין FastAPI/uvicorn/gunicorn כאן)
+# Worker-only deps (ל-ops-supervisor) — בלי FastAPI/uvicorn/gunicorn
 aiohttp==3.10.11
 httpx==0.28.1
 redis==6.4.0
@@ -8,11 +8,12 @@ prometheus-client==0.23.1
 websockets==15.0.1
 typing_extensions==4.15.0
 
-# אם ה-worker שולח טלגרם:
+# אם ה-worker שולח לטלגרם:
 python-telegram-bot==20.6
 
-# אם יש שימוש ב-OpenAI:
+# אם ה-worker משתמש ב-OpenAI:
 openai==1.37.0
+
 
 
 
