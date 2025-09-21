@@ -21,7 +21,8 @@ _HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").
 def _read_cache() -> Dict[str, Any]:
     try:
         if _WS_CACHE_PATH.exists():
-            return json.loads(_WS_CACHE_PATH.read_text(encoding="utf-8"))
+            txt = _WS_CACHE_PATH.read_text(encoding="utf-8")
+            return json.loads(txt) if txt else {}
     except Exception:
         pass
     return {}
@@ -149,6 +150,7 @@ def get_price(symbol: str) -> Optional[float]:
     return None
 
 __all__ = ["LAST_PRICE_CACHE", "is_price_fresh", "get_price", "get_last_ts", "get_price_age", "update_price"]
+
 
 
 
