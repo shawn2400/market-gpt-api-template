@@ -34,9 +34,11 @@ async def echo_hmac(request: Request):
     b64_srv = base64.b64encode(digest).decode()
 
     hdrs = request.headers
-    cand = {"x-signature": hdrs.get("x-signature",""),
-            "x-webhook-hmac": hdrs.get("x-webhook-hmac",""),
-            "x-hub-signature-256": hdrs.get("x-hub-signature-256","")}
+    cand = {
+        "x-signature": hdrs.get("x-signature",""),
+        "x-webhook-hmac": hdrs.get("x-webhook-hmac",""),
+        "x-hub-signature-256": hdrs.get("x-hub-signature-256",""),
+    }
     cand_clean = {k:_clean_sig(v) for k,v in cand.items()}
 
     match_hex = any(_clean_sig(v).lower() == hex_srv for v in cand.values())
@@ -57,7 +59,11 @@ async def echo_hmac(request: Request):
         "headers_clean": cand_clean,
         "match_hex": match_hex,
         "match_b64": match_b64,
-        "secret_hints": {"OPS_SIGN_SECRET": mask(s1), "WEBHOOK_HMAC_SECRET": mask(s2), "using": used_name},
+        "secret_hints": {
+            "OPS_SIGN_SECRET": mask(s1),
+            "WEBHOOK_HMAC_SECRET": mask(s2),
+            "using": used_name
+        },
     })
 
 
