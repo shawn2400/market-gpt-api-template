@@ -1,160 +1,166 @@
+# routes/ops_approve.py
 from __future__ import annotations
-from typing import Optional, Dict, Any
-import os, time, hmac, hashlib, json, logging
-import httpx
-from fastapi import APIRouter, Query, HTTPException
+
+import os
+import hmac
+import json
+import hashlib
+import base64
+from typing import Any, Dict, Optional, Tuple
+
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
+# אופציונלי: שימוש לוגי/אכסון בקשות (אם קיים), עם פולבאק שקט
 try:
-    import redis.asyncio as aioredis
+    from utils.trade_executor import ConfirmStore  # type: ignore
 except Exception:
-    aioredis = None
-
-router = APIRouter(prefix="/ops", tags=["Ops"])
-log = logging.getLogger("ops.approval")
-
-PUBLIC_HOST    = os.getenv("PUBLIC_HOST", "").rstrip("/")
-INTERNAL_TOKEN = os.getenv("OPS_INTERNAL_TOKEN") or os.getenv("API_TOKEN") or os.getenv("TOKEN")
-
-async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
-    if not PUBLIC_HOST:    return {"ok": False, "error": "PUBLIC_HOST not set"}
-    if not INTERNAL_TOKEN: return {"ok": False, "error": "OPS_INTERNAL_TOKEN not set"}
-    url = f"{PUBLIC_HOST}/grid/trade"
-    headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}", "Content-Type": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=15.0) as cli:
-            r = await cli.post(url, headers=headers, json=payload)
-            ctype = (r.headers.get("content-type","") or "").split(";")[0].strip().lower()
-            data = r.json() if ctype == "application/json" else {"text": r.text}
-            return {"ok": r.status_code < 400, "status": r.status_code, "response": data}
-    except Exception as e:
-        return {"ok": False, "error": f"http_error: {e}"}
+        from utils.auto_executor import ConfirmStore  # type: ignore
+    except Exception:
+        class ConfirmStore:  # type: ignore
+            pending: Dict[str, Any] = {}
+            @classmethod
+            def flush_all(cls) -> None:
+                cls.pending = {}
+            flush = reset = flush_all
 
-PUBSUB_CHANNEL = os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events")
-REDIS_URL      = os.getenv("REDIS_URL", "")
-NS             = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-WEBHOOK_SECRET = os.getenv("WEBHOOK_HMAC_SECRET", "")
-ALLOWLIST      = {x.strip() for x in (os.getenv("APPROVER_ALLOWLIST","")).split(",") if x.strip()}
-REQUIRE_UNIQUE = os.getenv("REQUIRE_UNIQUE_APPROVERS", "1").lower() in ("1","true","yes","on")
-REQUIRE_ID     = os.getenv("REQUIRE_APPROVER_ID", "1").lower() in ("1","true","yes","on")
+router = APIRouter()
 
-KEY_TICKET = lambda tid: f"{NS}:ticket:{tid}"
-KEY_DEC    = lambda tid: f"{NS}:ticket:{tid}:decisions"
+# ---------- עזר חתימה ----------
 
-async def _redis():
-    if not aioredis:
-        raise RuntimeError("redis.asyncio not available")
-    if not REDIS_URL:
-        raise RuntimeError("REDIS_URL not set")
-    return await aioredis.from_url(REDIS_URL, decode_responses=True)
+def _secret_bytes() -> Tuple[bytes, str]:
+    """
+    העדפה: WEBHOOK_HMAC_SECRET; אם חסר → OPS_SIGN_SECRET.
+    אם המחרוזת באורך 64 תווים — ננסה לפרש כ-HEX, אחרת UTF-8.
+    """
+    raw = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+    used = "WEBHOOK_HMAC_SECRET" if os.getenv("WEBHOOK_HMAC_SECRET") else "OPS_SIGN_SECRET"
+    if len(raw) == 64:
+        try:
+            return bytes.fromhex(raw), used
+        except Exception:
+            pass
+    return raw.encode("utf-8"), used
 
-def _sig_legacy(ticket_id: str, action: str, expires: str) -> str:
-    if not WEBHOOK_SECRET: return ""
-    base = f"{ticket_id}|{action}|{expires}".encode("utf-8")
-    return hmac.new(WEBHOOK_SECRET.encode("utf-8"), base, hashlib.sha256).hexdigest()
 
-def _sig_canonical(qs_params: Dict[str, Optional[str]]) -> str:
-    if not WEBHOOK_SECRET: return ""
-    allow = {"ticket_id","action","expires","require","version","by"}
-    items = {k: v for k, v in qs_params.items() if k in allow and v is not None}
-    canon = "&".join(f"{k}={items[k]}" for k in sorted(items))
-    return hmac.new(WEBHOOK_SECRET.encode("utf-8"), canon.encode("utf-8"), hashlib.sha256).hexdigest()
+def _clean_sig(v: Optional[str]) -> str:
+    v = (v or "").strip()
+    # תומך בפורמט GitHub: "sha256=<hex>"
+    if v.lower().startswith("sha256="):
+        v = v.split("=", 1)[1].strip()
+    return v
 
-def _assert(cond: bool, msg: str):
-    if not cond:
-        raise HTTPException(status_code=400, detail=msg)
 
-def _bool(x):
-    if x is None: return None
-    s = str(x).strip().lower()
-    if s in ("1","true","yes","on"): return True
-    if s in ("0","false","no","off"): return False
-    return None
+def _read_body_and_verify(headers: Dict[str, str], body: bytes) -> Tuple[bool, Dict[str, str], Dict[str, str], str, str]:
+    secret, used_name = _secret_bytes()
+    digest = hmac.new(secret, body, hashlib.sha256).digest()
+    hex_srv = digest.hex()
+    b64_srv = base64.b64encode(digest).decode()
 
-@router.get("/approve", summary="Approve trade OR ticket (auto-detect)")
-async def ops_approve(
-    ticket_id: Optional[str] = Query(None),
-    action:   Optional[str] = Query(None, pattern="^(approve|reject)$"),
-    expires:  Optional[int] = Query(None, ge=0),
-    sig:      Optional[str] = Query(None),
-    by:       Optional[str] = Query(None),
-    require:  Optional[int] = Query(None, ge=1, le=2),
-    version:  Optional[str] = Query(None),
-    symbol:   Optional[str] = Query(None),
-    side:     Optional[str] = Query(None),
-    tf:       Optional[str] = Query("15m"),
-    score:    Optional[float] = Query(None),
-    src:      Optional[str] = Query("scan"),
-    chat_id:  Optional[str] = Query(None),
-    market:   str = Query("futures"),
-    account_id: str = Query("main"),
-    budget:   float = Query(10.0),
-    leverage: Optional[int] = Query(10),
-    grids:    int = Query(3),
-    dry_run:  Optional[bool] = Query(True),
-):
-    # ----- ticket branch -----
-    if ticket_id or action or expires or sig or require or version:
-        _assert(WEBHOOK_SECRET, "HMAC secret not configured")
-        _assert(ticket_id is not None, "ticket_id required")
-        _assert(action in ("approve","reject"), "action must be approve|reject")
-        _assert(expires is not None, "expires required")
-        _assert(sig is not None, "sig required")
-        _assert(int(time.time()) <= int(expires), "Link expired")
-        if REQUIRE_ID: _assert(by is not None, "Approver id required")
-        if by and ALLOWLIST: _assert(by in ALLOWLIST, "Approver not allowed")
-
-        qs = {"ticket_id": ticket_id,"action": action,"expires": str(expires),
-              "require": str(require) if require is not None else None,
-              "version": version,"by": by}
-        expected_legacy = _sig_legacy(ticket_id, action, str(expires))
-        expected_canon  = _sig_canonical(qs)
-        provided = (sig or "").strip().lower()
-        _assert(provided in (expected_legacy, expected_canon), "Invalid signature")
-
-        r = await _redis()
-        if REQUIRE_UNIQUE and by:
-            added = await r.sadd(KEY_DEC(ticket_id), by)
-            _assert(added == 1, "Duplicate approver for this ticket")
-
-        exists = await r.exists(KEY_TICKET(ticket_id))
-        _assert(exists == 1, "Unknown or expired ticket")
-
-        event = {"id": ticket_id, "status": "approved" if action == "approve" else "rejected",
-                 "by": by or "unknown", "ts": int(time.time())}
-        await r.publish(PUBSUB_CHANNEL, json.dumps(event))
-        log.info("ticket_decision", extra=event)
-        return JSONResponse({"ok": True, "mode": "ticket", **event})
-
-    # ----- trade branch (optional/back-compat) -----
-    _assert(symbol is not None and side is not None, "symbol & side required")
-    payload: Dict[str, Any] = {
-        "symbol": (symbol or "").upper(),
-        "side": (side or "").upper(),
-        "budget": float(budget),
-        "grids": int(grids),
-        "dry_run": bool(_bool(dry_run) if dry_run is not None else True),
-        "market": (market or "").lower(),
-        "account_id": account_id,
-        "meta": {"source": src or "ops","timeframe": tf,"score": score,
-                 "approved_via": "GET /ops/approve","ts": int(time.time()),"chat_id": chat_id},
+    # ניקוי כותרות מועמדות
+    raw_headers = {
+        "x-signature": headers.get("x-signature", ""),
+        "x-webhook-hmac": headers.get("x-webhook-hmac", ""),
+        "x-hub-signature-256": headers.get("x-hub-signature-256", ""),
     }
-    if leverage is not None:
-        payload["leverage"] = int(leverage)
-    result = await _post_grid_trade(payload)
-    return {"ok": bool(result.get("ok")), "mode": "trade", "action": "approve", "request": payload, "result": result}
+    clean_headers = {k: _clean_sig(v) for k, v in raw_headers.items()}
 
-@router.get("/reject", summary="Reject trade (echo)")
-async def ops_reject(
-    symbol: str,
-    side: str,
-    tf: Optional[str] = "15m",
-    score: Optional[float] = None,
-    src: Optional[str] = "scan",
-    chat_id: Optional[str] = None,
-):
-    return {"ok": True,"action": "reject","symbol": symbol.upper(),"side": side.upper(),
-            "meta": {"source": src,"timeframe": tf,"score": score,"chat_id": chat_id,"ts": int(time.time())}}
+    # השוואה
+    match_hex = any(_clean_sig(v).lower() == hex_srv for v in raw_headers.values() if v)
+    match_b64 = any(_clean_sig(v) == b64_srv for v in raw_headers.values() if v)
+    ok = match_hex or match_b64
+
+    return ok, raw_headers, clean_headers, hex_srv, b64_srv
+
+
+# ---------- מודל/ולידציה קלה ----------
+
+def _parse_json_or_400(raw: bytes) -> Dict[str, Any]:
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+
+def _validate_payload(p: Dict[str, Any]) -> None:
+    """
+    ולידציה מינימלית בלבד—משאירה את הבדיקות העמוקות לשכבות אחרות.
+    דורשת לפחות: action, ticket_id, symbol, side, qty
+    """
+    required = ["action", "ticket_id", "symbol", "side", "qty"]
+    missing = [k for k in required if k not in p]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Missing required fields: {', '.join(missing)}")
+
+
+# ---------- ראוטים ----------
+
+@router.post("/ops/approve", tags=["Ops"])
+async def ops_approve(request: Request):
+    """
+    נקודת אישור *ללא* חתימה (לשימוש פנימי/בדיקות).
+    """
+    raw = await request.body()
+    payload = _parse_json_or_400(raw)
+    _validate_payload(payload)
+
+    # אופציונלי: שמירת הבקשה ב-ConfirmStore
+    try:
+        tid = str(payload.get("ticket_id", ""))
+        ConfirmStore.pending[tid] = {"payload": payload, "approved": True}
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "approved": True, "echo": payload})
+
+
+@router.post("/ops/approve/signed", tags=["Ops"])
+async def ops_approve_signed(request: Request):
+    """
+    נקודת אישור *חתומה*.
+    תומך בכותרות:
+      - X-Signature  (hex)
+      - X-Webhook-Hmac (base64/hex)
+      - X-Hub-Signature-256 (sha256=<hex>)
+    """
+    raw = await request.body()
+    ok, raw_hdrs, clean_hdrs, hex_srv, b64_srv = _read_body_and_verify(request.headers, raw)
+    if not ok:
+        # מחזירים 401 כדי לא להדליף את הסוד—עם פרטי דיבוג עדינים
+        raise HTTPException(status_code=401, detail={"error": "Bad signature", "server_hex": hex_srv, "server_b64": b64_srv})
+
+    payload = _parse_json_or_400(raw)
+    _validate_payload(payload)
+
+    # אופציונלי: שמירת הבקשה ב-ConfirmStore
+    try:
+        tid = str(payload.get("ticket_id", ""))
+        ConfirmStore.pending[tid] = {"payload": payload, "approved": True, "signed": True}
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "approved": True, "echo": payload})
+
+
+@router.post("/ops/reject", tags=["Ops"])
+async def ops_reject(request: Request):
+    """
+    דחיית טיקט (לא מחייב חתימה).
+    """
+    raw = await request.body()
+    payload = _parse_json_or_400(raw)
+    ticket_id = str(payload.get("ticket_id", "")) or ""
+    if not ticket_id:
+        raise HTTPException(status_code=422, detail="Missing ticket_id")
+
+    try:
+        # מסמנים כנדחה
+        ConfirmStore.pending[ticket_id] = {"payload": payload, "approved": False}
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "approved": False, "echo": payload})
 
 
 
