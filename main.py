@@ -7,7 +7,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Iterable
-from fnmatch import fnmatch  # ✅ היה חסר - נדרש ל-openapi filtering
+from fnmatch import fnmatch  # ✅ דרוש ל-openapi filtering
 
 import pkgutil
 import httpx
@@ -228,7 +228,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/ops/approve",
     "/ops/approve/signed",
     "/ops/reject",
-    # ✅ ראוטי דיבוג HMAC ציבוריים
+    # ✅ דיבוג HMAC (ציבורי)
     "/_debug/hmac",
     "/_debug/echo-hmac",
 }
@@ -294,19 +294,26 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 
-# כולל כמה בסיסיים לפני auto-discover
+# אפשר להגביל אילו ראוטרים לטעון כדי למנוע שגיאות לא חיוניות
+ROUTES_ONLY = {s.strip() for s in (os.getenv("ROUTES_ONLY", "")).split(",") if s.strip()}
+
+# כולל כמה בסיסיים לפני auto-discover (מבטיחים שהקריטיים יהיו זמינים)
 for _mod in (
     "routes.scan_top_volume",
     "routes.scan_now_alias",
     "routes.ops_guard",
     "routes.telegram_ping",
-    "routes.debug_hmac",   # ✅ להבטיח טעינה
+    "routes.debug_hmac",    # ✅ דיבוג חתימות
+    "routes.ops_approve",   # ✅ POST /ops/approve/signed
 ):
-    _try_include(_mod)
+    if not ROUTES_ONLY or _mod in ROUTES_ONLY:
+        _try_include(_mod)
 
 # auto-discover for routes/*
 for m in pkgutil.iter_modules(["routes"]):
     module_path = f"routes.{m.name}"
+    if ROUTES_ONLY and module_path not in ROUTES_ONLY:
+        continue
     _try_include(module_path)
     try:
         for r in app.router.routes:
@@ -571,6 +578,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
