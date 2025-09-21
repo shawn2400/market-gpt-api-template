@@ -12,8 +12,10 @@ async def health():
 async def whoami():
     return {"ok": True, "service": "ops-approval-web", "version": "0.1.0"}
 
+# include only our routers (אין middlewares ואין auth)
 app.include_router(ops_router)
 app.include_router(tg_router)
+
 
 
 
