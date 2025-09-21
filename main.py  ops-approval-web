@@ -1,8 +1,10 @@
-# main.py (ops-approval-web)
+# main.py  (ops-approval-web)
 from __future__ import annotations
 import os, logging
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+
+# חשוב: ודא שקיים routes/__init__.py (קובץ ריק) כדי שהייבוא יעבוד
 from routes.ops_approve import router as ops_router
 from routes.telegram_ping import router as telegram_router
 
@@ -12,7 +14,7 @@ log = logging.getLogger("ops_approval_web")
 
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 
-# Register routers
+# Register routers (זה מה שמכניס /ops/* ו-/telegram/ping לסכמה)
 app.include_router(ops_router)
 app.include_router(telegram_router)
 
@@ -33,5 +35,6 @@ async def _nf(_, __):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
+
 
 
