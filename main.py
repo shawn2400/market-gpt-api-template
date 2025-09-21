@@ -93,7 +93,6 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.1")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
-from fastapi.exceptions import RequestValidationError
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
@@ -124,7 +123,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN","").strip()
-_cao = os.getenv("CORS_ALLOW_ORIGINS", os.getenv("CORS_ALLOW_ORGINS","*"))
+_cao = os.getenv("CORS_ALLOW_ORIGINS", os.getenv("CORS_ALLOW_ORIGINS","*"))
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
@@ -150,7 +149,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/status/ping", "/status/ws", "/status/executor", "/status/all", "/status/auth",
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
-    "/_debug/hmac", "/_debug/echo-hmac",
+    "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
@@ -194,7 +193,7 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 
-# NEW: מכבד ENV בשם ROUTES_ONLY (פסיקים)
+# מכבד ENV בשם ROUTES_ONLY (פסיקים)
 _routes_only = [m.strip() for m in os.getenv("ROUTES_ONLY","").split(",") if m.strip()]
 
 if _routes_only:
@@ -225,19 +224,25 @@ def _route_exists(path: str) -> bool:
 # ---------- base routes ----------
 @app.get("/")
 async def root(): return {"ok":True,"status":"ok","service":"app_full","title":"AlgoGPT API","version":APP_VERSION}
+
 @app.get("/health")
 async def health(): return {"ok":True,"status":"ok","version":APP_VERSION}
+
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health(): return {"ok":True,"status":"ok","env":os.getenv("ENV","prod"),"version":APP_VERSION}
+
 @app.get("/status/ping")
 async def status_ping(): return {"ok":True,"ts_ms":int(time.time()*1000)}
 
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
     async def status_ws(): st = ws_user_status(); return {"ok":True, **st}
+
 if not _route_exists("/status/executor"):
     @app.get("/status/executor")
     async def status_executor(): st = exec_get_counters(); return {"ok":True, **st}
+
+# /status/all
 if not _route_exists("/status/all"):
     @app.get("/status/all")
     async def status_all():
@@ -248,6 +253,7 @@ if not _route_exists("/status/all"):
         return {"ok":True,"version":APP_VERSION,"ws":ws,"executor":ex,
                 "manager":{"enabled":manager_enabled},"binance_ping_ok":ping_ok}
 
+# auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -260,6 +266,7 @@ if not _route_exists("/status/auth"):
         toks = get_loaded_tokens(mask=True); public = get_public_paths()
         return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
 
+# public price
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"; ts = int(time.time()*1000); err = ""
@@ -270,6 +277,7 @@ async def price(symbol: str):
         p = None; ok = False; err = str(e)
     return {"ok":ok,"symbol":symbol.upper(),"price":float(p) if p is not None else None,"source":src,"ts":ts,"error":err}
 
+# readiness שאינה מפילה בעת BAN
 @app.get("/readyz")
 async def readyz():
     details: Dict[str, Any] = {}; err: Optional[str] = None
@@ -288,6 +296,7 @@ async def readyz():
         except Exception: details[f"price_{s}"] = None
     return {"ok":(err is None), "error":err, "details":details}
 
+# flush confirm-store
 @app.post("/flush")
 async def flush_kill_switch():
     done = False
@@ -299,6 +308,41 @@ async def flush_kill_switch():
             logger.warning({"event":"flush_failed","err":str(e)})
     return {"ok":True,"flushed":done}
 
+# --- public debug auth endpoint ---
+try:
+    from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
+except Exception:
+    def _get_loaded_tokens(mask: bool = True): return []
+    def _extract_token(req, a, b): return None
+    def _token_matches(tok): return False
+
+@app.get("/_debug/auth", include_in_schema=False)
+async def _debug_auth(request: Request):
+    a = request.headers.get("authorization") or request.headers.get("Authorization")
+    x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    t = _extract_token(request, a, x)
+    return {"ok":True,"auth_header":a,"x_api_key":x,"query":dict(request.query_params),
+            "extracted_token":t,"matches":bool(_token_matches(t)),
+            "tokens_loaded":_get_loaded_tokens(mask=True)}
+
+# --- debug routes listing ---
+@app.get("/_debug/routes", include_in_schema=False)
+async def _debug_routes():
+    paths = sorted({getattr(r, "path", None) for r in app.router.routes if getattr(r, "path", None)})
+    return {"paths": paths}
+
+# --- ops digest/eod now (optional) ---
+@app.get("/ops/digest/now", include_in_schema=False)
+async def ops_digest_now(hours: Optional[int] = None):
+    await send_ops_digest_now(hours)
+    return {"ok":True,"sent":True,"hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))}
+
+@app.get("/ops/eod/now", include_in_schema=False)
+async def ops_eod_now():
+    await send_eod_report_now()
+    return {"ok":True,"sent":True}
+
+# ---------- startup hooks ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -343,7 +387,8 @@ async def _startup_user_stream():
         logger.warning({"event":"ws_user_stream_autostart_failed","error":str(e)})
 
 @app.on_event("startup")
-async def _ops_schedulers(): await ensure_ops_schedulers_started()
+async def _ops_schedulers():
+    await ensure_ops_schedulers_started()
 
 @app.on_event("startup")
 async def _start_trade_manager_loop():
@@ -351,35 +396,10 @@ async def _start_trade_manager_loop():
         asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC))
         logger.info({"event":"trade_manager_loop_started","interval_sec":TRADE_MANAGER_INTERVAL_SEC})
 
-# --- public debug auth endpoint ---
-try:
-    from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
-except Exception:
-    def _get_loaded_tokens(mask: bool = True): return []
-    def _extract_token(req, a, b): return None
-    def _token_matches(tok): return False
-
-from fastapi import Request
-@app.get("/_debug/auth", include_in_schema=False)
-async def _debug_auth(request: Request):
-    a = request.headers.get("authorization") or request.headers.get("Authorization")
-    x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    t = _extract_token(request, a, x)
-    return {"ok":True,"auth_header":a,"x_api_key":x,"query":dict(request.query_params),
-            "extracted_token":t,"matches":bool(_token_matches(t)),
-            "tokens_loaded":_get_loaded_tokens(mask=True)}
-
-@app.get("/ops/digest/now", include_in_schema=False)
-async def ops_digest_now(hours: Optional[int] = None):
-    await send_ops_digest_now(hours)
-    return {"ok":True,"sent":True,"hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))}
-
-@app.get("/ops/eod/now", include_in_schema=False)
-async def ops_eod_now(): await send_eod_report_now(); return {"ok":True,"sent":True}
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
+
 
 
 
