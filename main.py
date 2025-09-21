@@ -228,6 +228,9 @@ DEFAULT_PUBLIC_PATHS = {
     "/ops/approve",
     "/ops/approve/signed",
     "/ops/reject",
+    # ✅ ראוטי דיבוג HMAC ציבוריים
+    "/_debug/hmac",
+    "/_debug/echo-hmac",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
@@ -291,8 +294,14 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 
-# כולל כמה בסיסיים לפני auto-discover (✅ הוספתי routes.telegram_ping)
-for _mod in ("routes.scan_top_volume", "routes.scan_now_alias", "routes.ops_guard", "routes.telegram_ping"):
+# כולל כמה בסיסיים לפני auto-discover
+for _mod in (
+    "routes.scan_top_volume",
+    "routes.scan_now_alias",
+    "routes.ops_guard",
+    "routes.telegram_ping",
+    "routes.debug_hmac",   # ✅ להבטיח טעינה
+):
     _try_include(_mod)
 
 # auto-discover for routes/*
@@ -562,6 +571,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
