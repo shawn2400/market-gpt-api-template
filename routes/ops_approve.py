@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/ops", tags=["Ops"])
 
+# ⚙️ קריאה פנימית אל /grid/trade
 PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").rstrip("/")
 INTERNAL_TOKEN = os.getenv("OPS_INTERNAL_TOKEN") or os.getenv("API_TOKEN") or os.getenv("TOKEN")
 
@@ -31,7 +32,7 @@ async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "PUBLIC_HOST not set"}
     if not INTERNAL_TOKEN:
         return {"ok": False, "error": "OPS_INTERNAL_TOKEN not set"}
-    url = f"{PUBLIC_HOST}/grid/trade"
+    url = f"{PUBLIC_HOST}/grid/trade"}
     headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=15.0) as cli:
@@ -45,10 +46,12 @@ async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
 async def ops_approve(
     symbol: str = Query(..., description="e.g. BTCUSDT"),
     side: str = Query(..., description="BUY/SELL for spot or LONG/SHORT for futures"),
+    # אופציונלי: מטא־דטה מהסריקה
     tf: Optional[str] = Query("15m", description="timeframe"),
     score: Optional[float] = Query(None),
     src: Optional[str] = Query("scan"),
     chat_id: Optional[str] = Query(None),
+    # פרמטרים למסחר
     market: str = Query("futures", description="futures|spot"),
     account_id: str = Query("main"),
     budget: float = Query(10.0),
@@ -56,6 +59,10 @@ async def ops_approve(
     grids: int = Query(3),
     dry_run: Optional[bool] = Query(True),
 ) -> Dict[str, Any]:
+    """
+    מאשר טרייד ומטריגר grid/trade פנימי עם הטוקן של השרת.
+    נתיב ציבורי (לפי המידלוואר), לא דורש API key מהקליינט.
+    """
     payload: Dict[str, Any] = {
         "symbol": symbol.upper(),
         "side": side.upper(),
@@ -64,6 +71,7 @@ async def ops_approve(
         "dry_run": bool(_bool(dry_run) if dry_run is not None else True),
         "market": market.lower(),
         "account_id": account_id,
+        # שדות עזר (לא מזיקים אם /grid/trade מתעלם מהם)
         "meta": {
             "source": src or "ops",
             "timeframe": tf,
@@ -96,6 +104,9 @@ async def ops_reject(
     src: Optional[str] = Query("scan"),
     chat_id: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
+    """
+    דחיית טרייד (ללא פעולה למסחר) — מחזיר אקו לטובת לוג/טלגרם.
+    """
     return {
         "ok": True,
         "action": "reject",
@@ -107,16 +118,11 @@ async def ops_reject(
 # ---------- Signed approve ----------
 _SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","")).strip()
 
-def _calc_hmac_hex(raw: bytes) -> str:
-    if not _SIGN_SECRET:
-        return ""
-    return hmac.new(_SIGN_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
-
 def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
     if not _SIGN_SECRET:
         return False
     try:
-        mac = _calc_hmac_hex(raw)
+        mac = hmac.new(_SIGN_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
         return hmac.compare_digest(mac, (sig_hex or "").strip().lower())
     except Exception:
         return False
@@ -124,21 +130,15 @@ def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
 @router.post("/approve/signed", summary="Approve via signed HMAC (body) and trigger grid/trade")
 async def ops_approve_signed(
     request: Request,
-    x_signature: str = Header(default="", convert_underscores=False),
-    x_signature_hex: str = Header(default="", convert_underscores=False),
-    x_debug: str = Header(default="", convert_underscores=False),
+    x_signature: str = Header(default=""),  # ←←← תיקון: מאפשר 'X-Signature'
 ):
     """
     גוף הבקשה נחתם מול OPS_SIGN_SECRET (או WEBHOOK_HMAC_SECRET).
-    דוגמה:
+    דוגמה לגוף:
     {"action":"approve","ticket_id":"T1","symbol":"BTCUSDT","side":"BUY","qty":0.001,"price":null,"lev":10,"position_side":"BOTH","budget":null}
     """
     raw = await request.body()
-    sig = (x_signature or x_signature_hex or "").strip().lower()
-    ok = _hmac_valid(raw, sig)
-    if not ok:
-        if (x_debug or "").strip() == "1":
-            return JSONResponse(status_code=401, content={"detail": "Bad signature", "expected": _calc_hmac_hex(raw), "got": sig or None})
+    if not _hmac_valid(raw, x_signature):
         return JSONResponse(status_code=401, content={"detail": "Bad signature"})
 
     try:
@@ -160,6 +160,7 @@ async def ops_approve_signed(
     if not symbol or side not in {"BUY","SELL","LONG","SHORT"}:
         return JSONResponse(status_code=400, content={"detail": "invalid symbol/side"})
 
+    # נבנה payload כללי ל-grid/trade (או נתיב פנימי אחר אם קיים אצלך)
     req_payload: Dict[str, Any] = {
         "symbol": symbol,
         "side": "BUY" if side in ("BUY","LONG") else "SELL",
@@ -186,6 +187,7 @@ async def ops_approve_signed(
     }
 
 __all__ = ["router"]
+
 
 
 
