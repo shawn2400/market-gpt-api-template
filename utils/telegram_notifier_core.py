@@ -118,13 +118,13 @@ except Exception as _e:
 
 _changes_file = os.getenv("OPS_CHANGES_FILE", "/tmp/ops_changes.jsonl")
 
-# ===================== Helpers =====================
-def set_explain_enabled(v: bool) -> None:
-    global _EXPLAIN_ON
-    _EXPLAIN_ON = bool(v)
-
-def get_explain_enabled() -> bool:
-    return bool(_EXPLAIN_ON)
+# ===================== WS TTL suppression =====================
+# אם אין לך ENV – זה בסדר. ברירת המחדל מושתקת (1). כדי לא להשקיט: SUPPRESS_WS_TTL_ALERTS=0
+SUPPRESS_WS_TTL_ALERTS = os.getenv("SUPPRESS_WS_TTL_ALERTS", "1").lower() in ("1","true","yes","on")
+_WS_TTL_PATTERNS = (
+    "WS price TTL גבוה",
+    "WS price TTL high",
+)
 
 def _now() -> float: return time.time()
 def _now_dt_utc() -> datetime: return datetime.now(timezone.utc)
@@ -165,8 +165,45 @@ def _dedup_allow(text: str) -> bool:
                 _dedup_map.pop(k, None)
     return True
 
+# --- WS TTL router ---
+async def _store_change_event(ev: Dict[str, Any]) -> None:
+    ev = dict(ev)
+    ev.setdefault("ts", _now())
+    try:
+        if _redis:
+            try:
+                await _redis.rpush("ops:changes", json.dumps(ev, ensure_ascii=False))
+                return
+            except Exception as e:
+                logger.debug({"event":"redis.store.failed","err":str(e)})
+        with open(_changes_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug({"event":"file.store.failed","err":str(e)})
+
+def _is_ws_ttl_alert(text: str) -> bool:
+    t = (text or "").strip()
+    return any(pat in t for pat in _WS_TTL_PATTERNS)
+
+def _maybe_route_ws_ttl(text: str) -> bool:
+    """
+    אם זו התראת WS TTL – לא שולחים לטלגרם, רק שומרים לרשומת דוח יומי.
+    מחזיר True אם צריך לסנן/לא לשלוח.
+    """
+    if not SUPPRESS_WS_TTL_ALERTS:
+        return False
+    if _is_ws_ttl_alert(text):
+        try:
+            asyncio.create_task(_store_change_event({"kind": "ws_ttl_stale", "text": text, "ts": _now()}))
+        except Exception:
+            pass
+        return True
+    return False
+
 # ===================== Low-level send =====================
 async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
+    if _maybe_route_ws_ttl(text):
+        return
     if not BOT_TOKEN or (chat_id is None and CHAT_ID == 0):
         logger.debug({"event":"tg.skip_send","reason":"missing_token_or_chat"})
         return
@@ -191,6 +228,8 @@ async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
         logger.warning({"event":"tg.send_failed","error":str(e)})
 
 async def _http_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id: Optional[int] = None) -> None:
+    if _maybe_route_ws_ttl(text):
+        return
     if not BOT_TOKEN or (chat_id is None and CHAT_ID == 0):
         logger.debug({"event":"tg.skip_send","reason":"missing_token_or_chat"})
         return
@@ -303,21 +342,6 @@ def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
     return True
 
 # ===================== Change store =====================
-async def _store_change_event(ev: Dict[str, Any]) -> None:
-    ev = dict(ev)
-    ev.setdefault("ts", _now())
-    try:
-        if _redis:
-            try:
-                await _redis.rpush("ops:changes", json.dumps(ev, ensure_ascii=False))
-                return
-            except Exception as e:
-                logger.debug({"event":"redis.store.failed","err":str(e)})
-        with open(_changes_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
-    except Exception as e:
-        logger.debug({"event":"file.store.failed","err":str(e)})
-
 async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
     out: List[Dict[str,Any]] = []
     try:
@@ -526,7 +550,14 @@ async def send_ops_digest_now() -> None:
 async def send_eod_report_now(summary: Dict[str, Any]) -> None:
     pnl = summary.get("pnl","—")
     t = summary.get("time","")
-    await _tg_send(f"📘 EOD {t} · PnL: {pnl}")
+    # סיכום WS TTL מאתמול בחצות
+    from datetime import timezone as tz
+    day0_il = datetime.now(tz.utc).astimezone(_TZ_IL).replace(hour=0, minute=0, second=0, microsecond=0)
+    today0 = day0_il.astimezone(tz.utc).timestamp()
+    items = await _load_changes_since(today0)
+    ws_items = [it for it in items if it.get("kind") == "ws_ttl_stale"]
+    last_ws = (ws_items[-1]["text"] if ws_items else "—")
+    await _tg_send(f"📘 EOD {t} · PnL: {pnl}\n🛰️ WS TTL Alerts today: {len(ws_items)}\nאחרון: {last_ws}")
 
 async def ensure_ops_schedulers_started() -> bool:
     # אם יש לך סקדיולרים פנימיים – תאתחל כאן. בינתיים no-op.
@@ -545,6 +576,7 @@ __all__ = [
     "format_change_approval_he","send_change_approval_he","route_change_ticket",
     "send_ops_digest_now","send_eod_report_now","ensure_ops_schedulers_started",
 ]
+
 
 
 
