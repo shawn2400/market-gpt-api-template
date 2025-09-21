@@ -50,6 +50,9 @@ def _sign_hex(secret_hex: str, payload: bytes) -> str:
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    קורא ל- /ops/approve/signed על ה-PUBLIC_HOST עם חתימת HMAC בכותרת X-Signature.
+    """
     if not PUBLIC_HOST:
         raise HTTPException(status_code=500, detail="PUBLIC_HOST not set")
     if not HMAC_SECRET:
@@ -58,6 +61,7 @@ async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
     raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
     sig = _sign_hex(HMAC_SECRET, raw)
     url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve/signed"
+
     async with httpx.AsyncClient(timeout=15.0) as cli:
         r = await cli.post(
             url,
@@ -206,8 +210,8 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # TODO: כאן לחבר למימוש ההרצה בפועל (בינאנס/אקזקיוטר פנימי).
-    # בשלב זה נחזיר ok True כדי לסגור את הלופ מול approve-link.
+    # TODO: לחבר לביצוע בפועל (Binance / internal executor).
+    # עכשיו רק סוגר לולאה לטובת approve-link.
     return {
         "ok": True,
         "ticket_id": payload.get("ticket_id"),
