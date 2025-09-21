@@ -19,7 +19,7 @@ REDIS_URL      = os.getenv("REDIS_URL", "")
 PUBLIC_HOST    = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
 HMAC_SECRET    = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+BOT_TOKEN      = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
 
 def KEY_TICKET(tid: str) -> str:
@@ -76,49 +76,42 @@ async def _execute_via_signed_endpoint(body: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(status_code=502, detail=f"approve/signed failed: {j}")
         return j
 
-async def _send_telegram_text(text: str, *, approve_url: str | None = None, reject_url: str | None = None) -> Optional[Dict[str, Any]]:
+# ---------- Telegram (DIRECT ONLY) ----------
+async def _send_telegram_text_direct(
+    text: str,
+    *,
+    approve_url: Optional[str] = None,
+    reject_url: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    מנסה קודם שליחה ישירה ל-Telegram (sendMessage) עם אינליין-כפתורים.
-    אם אין TOKEN או נכשל – נופל חזרה ל-/telegram/ping.
+    שליחה ישירה ל-Telegram sendMessage (ללא fallback). מחזירה את כל JSON התשובה.
+    נזרוק 4xx/5xx אם אין TOKEN/CHAT או אם ה-API מחזיר שגיאה.
     """
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
     if not ADMIN_CHAT_ID:
-        return None
+        raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID/ADMIN_CHAT_ID not set")
 
-    # 1) Direct Telegram API (אם יש טוקן)
-    if BOT_TOKEN:
-        try:
-            payload: Dict[str, Any] = {
-                "chat_id": int(ADMIN_CHAT_ID) if ADMIN_CHAT_ID.isdigit() else ADMIN_CHAT_ID,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-            if approve_url or reject_url:
-                payload["reply_markup"] = {
-                    "inline_keyboard": [[
-                        {"text": "✅ Approve", "url": approve_url or PUBLIC_HOST},
-                        {"text": "❌ Reject",  "url": reject_url  or PUBLIC_HOST},
-                    ]]
-                }
-            async with httpx.AsyncClient(timeout=10.0) as cli:
-                tg = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
-                j = tg.json()
-                if j.get("ok"):
-                    return j
-        except Exception:
-            pass  # ננסה fallback
+    payload: Dict[str, Any] = {
+        "chat_id": int(ADMIN_CHAT_ID) if str(ADMIN_CHAT_ID).isdigit() else ADMIN_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if approve_url or reject_url:
+        payload["reply_markup"] = {
+            "inline_keyboard": [[
+                {"text": "✅ Approve", "url": approve_url or PUBLIC_HOST or "https://example.com"},
+                {"text": "❌ Reject",  "url": reject_url  or PUBLIC_HOST or "https://example.com"},
+            ]]
+        }
 
-    # 2) Fallback – route פנימי שלך
-    if PUBLIC_HOST:
-        try:
-            ping_url = f"{PUBLIC_HOST.rstrip('/')}/telegram/ping"
-            params = {"chat_id": ADMIN_CHAT_ID, "text": text}
-            async with httpx.AsyncClient(timeout=10.0) as cli:
-                rr = await cli.get(ping_url, params=params)
-                return rr.json()
-        except Exception:
-            return None
-    return None
+    async with httpx.AsyncClient(timeout=12.0) as cli:
+        res = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
+        data = res.json()
+        if res.status_code >= 400 or not data.get("ok"):
+            raise HTTPException(status_code=502, detail={"telegram_error": data, "status": res.status_code})
+        return data
 
 # -------------------- API --------------------
 
@@ -163,14 +156,16 @@ async def create_ticket(
         f"• {symbol} {side} qty={qty} lev={lev} budget={budget}\n"
         f"• Note: {note}\n— — —\nבחר:"
     )
-    tg = await _send_telegram_text(pretty, approve_url=approve_url, reject_url=reject_url)
+
+    # שליחה ישירה בלבד + החזרת כל תגובת הטלגרם לצורך דיבוג שקוף
+    tg_resp = await _send_telegram_text_direct(pretty, approve_url=approve_url, reject_url=reject_url)
 
     return {
         "ok": True,
         "ticket_id": tid,
         "approve_url": approve_url,
         "reject_url": reject_url,
-        "telegram": tg,
+        "telegram_result": tg_resp,   # כולל message_id/chat וכו'
     }
 
 @router.get("/ops/approve-link", summary="Approve ticket via Redis -> calls /ops/approve/signed")
@@ -191,12 +186,12 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
     req = rec.get("req") or {}
     await _execute_via_signed_endpoint(req)
 
-    # הודעת טלגרם על אישור
+    # הודעת טלגרם על אישור — ישיר
     try:
         sym = req.get("symbol", "")
         side = req.get("side", "")
         qty  = req.get("qty", "")
-        await _send_telegram_text(
+        await _send_telegram_text_direct(
             f"✅ <b>Approved</b>\n"
             f"• Ticket: <code>{id}</code>\n"
             f"• {sym} {side} qty={qty}\n"
@@ -221,9 +216,9 @@ async def reject(id: str = Query(..., description="ticket_id")):
     except Exception:
         pass
 
-    # הודעת טלגרם על דחייה
+    # הודעת טלגרם על דחייה — ישיר
     try:
-        await _send_telegram_text(
+        await _send_telegram_text_direct(
             f"❌ <b>Rejected</b>\n"
             f"• Ticket: <code>{id}</code>\n"
             f"— — —\nNo action was taken."
@@ -238,18 +233,6 @@ async def reject(id: str = Query(..., description="ticket_id")):
 async def approve_signed(request: Request):
     """
     Verifies HMAC (X-Signature) over raw JSON body.
-    Expects payload like:
-    {
-      "action": "approve",
-      "ticket_id": "T_xxx",
-      "symbol": "...",
-      "side": "BUY|SELL",
-      "qty": 0.001,
-      "price": null,
-      "lev": 10,
-      "position_side": "BOTH|LONG|SHORT",
-      "budget": 10
-    }
     """
     if not HMAC_SECRET:
         raise HTTPException(status_code=500, detail="HMAC secret not set")
@@ -265,7 +248,7 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # TODO: לחבר כאן לאקזקיוטר/בינאנס בפועל.
+    # TODO: לחבר כאן לאקזקיוטור/בינאנס בפועל.
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True}
 
 
