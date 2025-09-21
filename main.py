@@ -7,6 +7,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Iterable
+from fnmatch import fnmatch  # ✅ היה חסר - נדרש ל-openapi filtering
 
 import pkgutil
 import httpx
@@ -290,8 +291,8 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 
-# כולל כמה בסיסיים לפני auto-discover
-for _mod in ("routes.scan_top_volume", "routes.scan_now_alias", "routes.ops_guard"):
+# כולל כמה בסיסיים לפני auto-discover (✅ הוספתי routes.telegram_ping)
+for _mod in ("routes.scan_top_volume", "routes.scan_now_alias", "routes.ops_guard", "routes.telegram_ping"):
     _try_include(_mod)
 
 # auto-discover for routes/*
@@ -561,6 +562,7 @@ async def ops_eod_now():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
+
 
 
 
