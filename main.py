@@ -162,6 +162,9 @@ async def _validation_handler(request: Request, exc: RequestValidationError):
     )
 
 # ---------- OpenAPI filtering ----------
+from fnmatch import fnmatch
+from fastapi.openapi.utils import get_openapi
+
 def custom_openapi():
     if getattr(app, "openapi_schema", None):
         return app.openapi_schema
@@ -264,6 +267,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/refresh-auth",
     "/executor/status",
     "/ops/approve",
+    "/ops/approve/signed",
     "/ops/reject",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
