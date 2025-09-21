@@ -5,22 +5,15 @@ import os
 import time
 import hmac
 import hashlib
-import json
-
 import httpx
-from fastapi import APIRouter, Query, Request, Header, HTTPException
-
-from utils.trade_executor import execute_trade_live  # <- לשימוש בנתיב החתום
+from fastapi import APIRouter, Query, Request, Header
+from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/ops", tags=["Ops"])
 
 # ⚙️ קריאה פנימית אל /grid/trade
 PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").rstrip("/")
 INTERNAL_TOKEN = os.getenv("OPS_INTERNAL_TOKEN") or os.getenv("API_TOKEN") or os.getenv("TOKEN")
-
-# 🔐 חתימה
-OPS_SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET", "") or os.getenv("WEBHOOK_HMAC_SECRET", "")).strip()
-API_TOKEN = (os.getenv("API_TOKEN", "") or os.getenv("API_BEARER_TOKEN", "")).strip()
 
 def _bool(x: Optional[str | bool]) -> Optional[bool]:
     if isinstance(x, bool):
@@ -48,19 +41,6 @@ async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": r.status_code < 400, "status": r.status_code, "response": data}
     except Exception as e:
         return {"ok": False, "error": f"http_error: {e}"}
-
-def _verify_hmac(body: bytes, sig_hex: str) -> bool:
-    if not OPS_SIGN_SECRET or not sig_hex:
-        return False
-    mac = hmac.new(OPS_SIGN_SECRET.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(mac, sig_hex.lower())
-
-def _verify_api_key(x_api_key: str | None) -> None:
-    if not API_TOKEN:
-        return
-    if not x_api_key or x_api_key.strip() != API_TOKEN:
-        # אם יש לך מידלוואר שמוודא API Key — אפשר להוריד את זה.
-        raise HTTPException(status_code=401, detail="Invalid API key")
 
 @router.get("/approve", summary="Approve trade from Telegram/ops and trigger grid/trade")
 async def ops_approve(
@@ -135,75 +115,88 @@ async def ops_reject(
         "meta": {"source": src, "timeframe": tf, "score": score, "chat_id": chat_id, "ts": int(time.time())},
     }
 
-# ✅ נתיב חתום שמבצע טרייד עם ה-executor (MARKET/HYBRID לפי ההגדרות שלך)
-@router.post("/approve/signed", include_in_schema=False, tags=["ops"])
-async def approve_signed(
+# ---------- Signed approve ----------
+_SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","")).strip()
+
+def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
+    if not _SIGN_SECRET:
+        return False
+    try:
+        mac = hmac.new(_SIGN_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(mac, (sig_hex or "").strip().lower())
+    except Exception:
+        return False
+
+@router.post("/approve/signed", summary="Approve via signed HMAC (body) and trigger grid/trade")
+async def ops_approve_signed(
     request: Request,
-    x_signature: str = Header(default=""),
-    x_api_key: str | None = Header(default=None),
+    x_signature: str = Header(default="", convert_underscores=False),
 ):
     """
-    גוף JSON לדוגמה:
+    גוף הבקשה נחתם מול OPS_SIGN_SECRET (או WEBHOOK_HMAC_SECRET).
+    מצופה body דמוי:
     {
       "action": "approve",
       "ticket_id": "T1",
       "symbol": "BTCUSDT",
       "side": "BUY",
-      "qty": 0.001,                 # אופציונלי אם שולחים budget
-      "budget": null,               # אופציונלי אם שולחים qty
-      "price": null,                # anchor אופציונלי
-      "lev": 10,                    # אופציונלי (אם חסר – דינמי/ברירת מחדל)
-      "position_side": "BOTH"       # BOTH/LONG/SHORT
+      "qty": 0.001,          # או budget
+      "price": null,         # אופציונלי, מידע
+      "lev": 10,             # leverage
+      "position_side": "BOTH",
+      "budget": null
     }
-    הכותרות:
-      X-Signature = hex(hmac_sha256(body, OPS_SIGN_SECRET))
-      X-API-Key   = ${API_TOKEN}    (אם קיים מידלוואר אפשר לוותר, פה זה וולונטרי)
     """
-    body = await request.body()
-    # אימות API key (וולונטרי אם כבר יש מידלוואר)
-    try:
-        _verify_api_key(x_api_key)
-    except HTTPException:
-        # אם יש לך נתיבים פומביים תחת /ops — תוכל לבטל את הוולידציה הזו.
-        raise
-
-    if not _verify_hmac(body, x_signature):
-        raise HTTPException(status_code=401, detail="Bad signature")
+    raw = await request.body()
+    if not _hmac_valid(raw, x_signature):
+        return JSONResponse(status_code=401, content={"detail": "Bad signature"})
 
     try:
-        payload = json.loads(body.decode("utf-8"))
+        body = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="bad json")
+        return JSONResponse(status_code=400, content={"detail": "Bad JSON"})
 
-    if str(payload.get("action", "")).lower() != "approve":
-        raise HTTPException(status_code=400, detail="bad action")
+    action = str(body.get("action") or "approve").lower()
+    if action != "approve":
+        return JSONResponse(status_code=400, content={"detail": "unsupported action"})
 
-    symbol = str(payload["symbol"]).upper()
-    side   = str(payload["side"]).upper()
-    qty_raw = payload.get("qty")
-    qty = float(qty_raw) if (qty_raw is not None and str(qty_raw).strip() != "") else None
-    lev = payload.get("lev")
-    budget = payload.get("budget")
-    entry  = payload.get("price")
-    pos_side = payload.get("position_side") or "BOTH"
+    symbol = str(body.get("symbol") or "").upper()
+    side   = str(body.get("side") or "").upper()
+    qty    = body.get("qty")
+    budget = body.get("budget")
+    lev    = body.get("lev") or body.get("leverage") or 10
+    position_side = (body.get("position_side") or "BOTH").upper()
 
-    leverage = int(lev) if lev is not None else int(float(os.getenv("MIN_LEVERAGE", "5")))
-    chat_id_env = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
+    if not symbol or side not in {"BUY","SELL","LONG","SHORT"}:
+        return JSONResponse(status_code=400, content={"detail": "invalid symbol/side"})
 
-    res = await execute_trade_live(
-        symbol, side,
-        budget=budget,
-        leverage=leverage,
-        dry_run=False,
-        quantity=qty,
-        entry=entry,
-        confirm_first=False,            # אישור כבר נעשה – זה נתיב החתימה
-        telegram_chat_id=chat_id_env,
-        position_side=pos_side,
-    )
-    ok = bool(res.get("ok"))
-    return {"ok": ok, "executed": res}
+    # נבנה payload כללי ל-grid/trade (או נתיב פנימי אחר אם קיים אצלך)
+    req_payload: Dict[str, Any] = {
+        "symbol": symbol,
+        "side": "BUY" if side in ("BUY","LONG") else "SELL",
+        "leverage": int(lev),
+        "dry_run": False,
+        "market": "futures",
+        "meta": {
+            "approved_via": "POST /ops/approve/signed",
+            "position_side": position_side,
+            "ticket_id": body.get("ticket_id"),
+            "ts": int(time.time()),
+        }
+    }
+    if qty is not None:
+        req_payload["quantity"] = float(qty)
+    if budget is not None:
+        req_payload["budget"] = float(budget)
+
+    result = await _post_grid_trade(req_payload)
+    return {
+        "ok": bool(result.get("ok")),
+        "request": req_payload,
+        "result": result,
+    }
 
 __all__ = ["router"]
+
 
 
