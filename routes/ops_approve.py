@@ -85,7 +85,7 @@ async def _send_telegram_text_direct(
 ) -> Dict[str, Any]:
     """
     שליחה ישירה ל-Telegram sendMessage (ללא fallback). מחזירה את כל JSON התשובה.
-    נזרוק 4xx/5xx אם אין TOKEN/CHAT או אם ה-API מחזיר שגיאה.
+    זורק 4xx/5xx אם אין TOKEN/CHAT או אם ה-API מחזיר שגיאה.
     """
     if not BOT_TOKEN:
         raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
@@ -114,7 +114,6 @@ async def _send_telegram_text_direct(
         return data
 
 # -------------------- API --------------------
-
 @router.post("/ops/ticket", summary="Create approval ticket and send Telegram inline buttons (LIVE)")
 async def create_ticket(
     payload: Dict[str, Any] = Body(..., description="symbol, side, qty, lev, budget, optional: note, position_side"),
@@ -157,7 +156,6 @@ async def create_ticket(
         f"• Note: {note}\n— — —\nבחר:"
     )
 
-    # שליחה ישירה בלבד + החזרת כל תגובת הטלגרם לצורך דיבוג שקוף
     tg_resp = await _send_telegram_text_direct(pretty, approve_url=approve_url, reject_url=reject_url)
 
     return {
@@ -250,8 +248,6 @@ async def approve_signed(request: Request):
 
     # TODO: לחבר כאן לאקזקיוטור/בינאנס בפועל.
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True}
-
-
 
 
 
