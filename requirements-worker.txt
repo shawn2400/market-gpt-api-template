@@ -1,6 +1,6 @@
-# Worker-only deps (ל-ops-supervisor) — בלי FastAPI/uvicorn/gunicorn
+# Worker-only deps (ops-supervisor) — בלי FastAPI/uvicorn/gunicorn
 aiohttp==3.10.11
-httpx==0.28.1
+httpx==0.25.2          # ← תואם ל-python-telegram-bot 20.6
 redis==6.4.0
 PyYAML==6.0.2
 python-dotenv==1.1.1
@@ -13,6 +13,7 @@ python-telegram-bot==20.6
 
 # אם ה-worker משתמש ב-OpenAI:
 openai==1.37.0
+
 
 
 
