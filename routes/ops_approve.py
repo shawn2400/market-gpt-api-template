@@ -32,12 +32,12 @@ async def _post_grid_trade(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "PUBLIC_HOST not set"}
     if not INTERNAL_TOKEN:
         return {"ok": False, "error": "OPS_INTERNAL_TOKEN not set"}
-    url = f"{PUBLIC_HOST}/grid/trade"}
+    url = f"{PUBLIC_HOST}/grid/trade"
     headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=15.0) as cli:
             r = await cli.post(url, headers=headers, json=payload)
-            data = r.json() if r.headers.get("content-type","").startswith("application/json") else {"text": r.text}
+            data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"text": r.text}
             return {"ok": r.status_code < 400, "status": r.status_code, "response": data}
     except Exception as e:
         return {"ok": False, "error": f"http_error: {e}"}
@@ -71,7 +71,6 @@ async def ops_approve(
         "dry_run": bool(_bool(dry_run) if dry_run is not None else True),
         "market": market.lower(),
         "account_id": account_id,
-        # שדות עזר (לא מזיקים אם /grid/trade מתעלם מהם)
         "meta": {
             "source": src or "ops",
             "timeframe": tf,
@@ -104,9 +103,7 @@ async def ops_reject(
     src: Optional[str] = Query("scan"),
     chat_id: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
-    """
-    דחיית טרייד (ללא פעולה למסחר) — מחזיר אקו לטובת לוג/טלגרם.
-    """
+    """דחיית טרייד (ללא פעולה למסחר) — מחזיר אקו לטובת לוג/טלגרם."""
     return {
         "ok": True,
         "action": "reject",
@@ -116,7 +113,7 @@ async def ops_reject(
     }
 
 # ---------- Signed approve ----------
-_SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","")).strip()
+_SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET", "") or os.getenv("WEBHOOK_HMAC_SECRET", "")).strip()
 
 def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
     if not _SIGN_SECRET:
@@ -130,10 +127,10 @@ def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
 @router.post("/approve/signed", summary="Approve via signed HMAC (body) and trigger grid/trade")
 async def ops_approve_signed(
     request: Request,
-    x_signature: str = Header(default=""),  # ←←← תיקון: מאפשר 'X-Signature'
+    x_signature: str = Header(default=""),  # ✅ בלי convert_underscores=False → מאפשר 'X-Signature'
 ):
     """
-    גוף הבקשה נחתם מול OPS_SIGN_SECRET (או WEBHOOK_HMAC_SECRET).
+    הגוף נחתם מול OPS_SIGN_SECRET (או WEBHOOK_HMAC_SECRET).
     דוגמה לגוף:
     {"action":"approve","ticket_id":"T1","symbol":"BTCUSDT","side":"BUY","qty":0.001,"price":null,"lev":10,"position_side":"BOTH","budget":null}
     """
@@ -160,10 +157,9 @@ async def ops_approve_signed(
     if not symbol or side not in {"BUY","SELL","LONG","SHORT"}:
         return JSONResponse(status_code=400, content={"detail": "invalid symbol/side"})
 
-    # נבנה payload כללי ל-grid/trade (או נתיב פנימי אחר אם קיים אצלך)
     req_payload: Dict[str, Any] = {
         "symbol": symbol,
-        "side": "BUY" if side in ("BUY","LONG") else "SELL",
+        "side": "BUY" if side in ("BUY", "LONG") else "SELL",
         "leverage": int(lev),
         "dry_run": False,
         "market": "futures",
@@ -187,6 +183,7 @@ async def ops_approve_signed(
     }
 
 __all__ = ["router"]
+
 
 
 
