@@ -1,115 +1,115 @@
 # utils/security.py
 from __future__ import annotations
-import os, hmac, hashlib, base64
-from typing import Optional
+import hmac, hashlib, os, time, logging
+from typing import Iterable, Optional, Tuple
+from fastapi import Request
 
-# נסה לייבא מנגנון idempotency אמיתי; אם אין – נפעיל fallback בזיכרון.
-try:
-    from .idempotency import claim as _claim
-except Exception:
-    _SEEN_KEYS: set[str] = set()
-    def _claim(key: str) -> bool:
-        # True = חדש (נתבע עכשיו); False = כבר נראה (כפילות)
-        if key in _SEEN_KEYS:
-            return False
-        _SEEN_KEYS.add(key)
-        return True
+log = logging.getLogger("algogpt.security")
 
-_SECRET_RAW = os.getenv("WEBHOOK_HMAC_SECRET", "").strip()
+# ──────────────────────────────────────────────────────────────────────────────
+# HMAC helpers
+# ──────────────────────────────────────────────────────────────────────────────
+_DEFAULT_SECRET = os.getenv("ALERTS_WEBHOOK_SECRET", "").strip()
 
-def _secret_bytes() -> bytes:
+def _normalize_sig_header(sig: str) -> str:
+    """מקבל חתימה מ־Header—מחזיר ההקס בלבד (תומך בפורמט 'sha256=...')."""
+    s = (sig or "").strip()
+    if "=" in s:
+        algo, val = s.split("=", 1)
+        if algo.lower() in ("sha256", "hmac-sha256"):
+            return val.strip()
+    return s
+
+def _hmac_sha256_hex(secret: str, data: bytes) -> str:
+    return hmac.new(secret.encode("utf-8"), data, hashlib.sha256).hexdigest()
+
+def _build_signing_payload(body: bytes, ts: Optional[str]) -> bytes:
     """
-    מחזיר bytes של הסוד:
-    - אם הסוד נראה כמו HEX באורך 64 → bytes.fromhex
-    - אחרת ASCII כמות שהוא (תאימות ישנה)
+    אם מגיע timestamp header נחתום על 'ts.body' (מונע replay).
+    אחרת – נחתום על body בלבד.
     """
-    s = (_SECRET_RAW or "").strip()
-    if len(s) == 64:
+    if ts:
+        return (ts.encode("utf-8") + b"." + body)
+    return body
+
+async def verify_request_hmac(
+    request: Request,
+    *,
+    secret: Optional[str] = None,
+    sig_header_names: Iterable[str] = ("X-Signature", "X-Hub-Signature-256", "X-AlgoGPT-Signature"),
+    ts_header_names: Iterable[str] = ("X-Signature-Timestamp", "X-AlgoGPT-Timestamp"),
+    max_skew_sec: int = 180,
+) -> Tuple[bool, str]:
+    """
+    אימות HMAC על בקשת FastAPI.
+    - בודק מספר שמות Header אפשריים.
+    - אם יש Timestamp – בודק חלון זמן (מונע replay).
+    - מחזיר (ok, reason).
+    """
+    secret = (secret or _DEFAULT_SECRET or "").strip()
+    if not secret:
+        return (False, "missing_secret")
+
+    # body as-is
+    body = await request.body()
+
+    # חתימה מהכותרות
+    hdr_sig = None
+    for name in sig_header_names:
+        v = request.headers.get(name)
+        if v:
+            hdr_sig = _normalize_sig_header(v)
+            break
+    if not hdr_sig:
+        return (False, "missing_signature_header")
+
+    # timestamp (אופציונלי)
+    ts_val: Optional[str] = None
+    for name in ts_header_names:
+        v = request.headers.get(name)
+        if v:
+            ts_val = v.strip()
+            break
+
+    # בדיקת skew אם יש timestamp
+    if ts_val:
         try:
-            return bytes.fromhex(s)
+            ts_float = float(ts_val)
+            skew = abs(time.time() - ts_float)
+            if skew > max_skew_sec:
+                return (False, f"timestamp_skew({int(skew)}s)")
         except Exception:
-            pass
-    return s.encode("utf-8")
+            return (False, "bad_timestamp")
 
-def _secret_bytes_ascii() -> bytes:
-    # תמיד ASCII (לשימור תאימות ישנה)
-    return (_SECRET_RAW or "").encode("utf-8")
+    payload = _build_signing_payload(body, ts_val)
+    expected = _hmac_sha256_hex(secret, payload)
+    try:
+        if not hmac.compare_digest(expected, hdr_sig):
+            return (False, "bad_signature")
+    except Exception:
+        return (False, "compare_failed")
+    return (True, "ok")
 
-def _clean_sig(v: Optional[str]) -> str:
-    v = (v or "").strip()
-    if v.lower().startswith("sha256="):
-        v = v.split("=", 1)[1].strip()
-    return v
+# ──────────────────────────────────────────────────────────────────────────────
+# Bearer fallback (אם HMAC לא מופעל)
+# ──────────────────────────────────────────────────────────────────────────────
+_BEARER = os.getenv("ALERTS_BEARER", "").strip()
 
-def verify_hmac(signature_maybe: Optional[str], raw_body: bytes) -> bool:
-    """
-    אימות HMAC-SHA256 מול שתי וריאציות מפתח:
-    1) מפתח HEX מוצהר (new)
-    2) מפתח ASCII טהור (old)
-    תומך חתימה ב-HEX או Base64, עם/בלי prefix sha256=
-    """
-    if not _SECRET_RAW:
-        return True
-    sig = _clean_sig(signature_maybe)
-    if not sig:
+def verify_bearer(request: Request, *, token: Optional[str] = None) -> bool:
+    tok = (token or _BEARER or "").strip()
+    if not tok:
+        return False
+    auth = request.headers.get("Authorization", "") or request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return False
+    got = auth.split(" ", 1)[1].strip()
+    try:
+        return hmac.compare_digest(got, tok)
+    except Exception:
         return False
 
-    # new: HEX/ASCII-resolved (מנסה HEX אחרת ASCII)
-    s_new = _secret_bytes()
-    mac_new = hmac.new(s_new, raw_body, hashlib.sha256).digest()
-    hex_new = hmac.new(s_new, raw_body, hashlib.sha256).hexdigest()
-    b64_new = base64.b64encode(mac_new).decode()
+__all__ = ["verify_request_hmac", "verify_bearer"]
 
-    # old: ASCII-key מפורש
-    s_old = _secret_bytes_ascii()
-    mac_old = hmac.new(s_old, raw_body, hashlib.sha256).digest()
-    hex_old = hmac.new(s_old, raw_body, hashlib.sha256).hexdigest()
-    b64_old = base64.b64encode(mac_old).decode()
-
-    cand = sig.strip()
-    return (
-        hmac.compare_digest(cand.lower(), hex_new)
-        or hmac.compare_digest(cand, b64_new)
-        or hmac.compare_digest(cand.lower(), hex_old)
-        or hmac.compare_digest(cand, b64_old)
-    )
-
-def verify_hmac_multi(raw_body: bytes, *candidates: Optional[str]) -> bool:
-    """
-    אימות מול מספר כותרות אפשריות (X-Signature / X-Webhook-HMAC / X-Hub-Signature-256).
-    חוסך חישובים כפולים ומיישר התנהגות.
-    """
-    if not _SECRET_RAW:
-        return True
-
-    # חשב פעם אחת עבור שני סוגי הסוד
-    s_new = _secret_bytes()
-    mac_new = hmac.new(s_new, raw_body, hashlib.sha256).digest()
-    hex_new = hmac.new(s_new, raw_body, hashlib.sha256).hexdigest()
-    b64_new = base64.b64encode(mac_new).decode()
-
-    s_old = _secret_bytes_ascii()
-    mac_old = hmac.new(s_old, raw_body, hashlib.sha256).digest()
-    hex_old = hmac.new(s_old, raw_body, hashlib.sha256).hexdigest()
-    b64_old = base64.b64encode(mac_old).decode()
-
-    for c in candidates:
-        c = _clean_sig(c)
-        if not c:
-            continue
-        if (
-            hmac.compare_digest(c.lower(), hex_new) or c == b64_new
-            or hmac.compare_digest(c.lower(), hex_old) or c == b64_old
-        ):
-            return True
-    return False
-
-def idem_seen(key: str) -> bool:
-    """
-    True אם כבר ראינו את המפתח (כפילות); False אם חדש.
-    (שימו לב: _claim מחזיר True כשמצליח "לתבוע" מפתח חדש; לכן כאן ההיפוך.)
-    """
-    return not _claim(key)
 
 
 
