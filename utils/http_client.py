@@ -1,7 +1,7 @@
 # utils/http_client.py
 from __future__ import annotations
 import os, asyncio, time, random, logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -138,7 +138,7 @@ def _stable_key(url: str, params: Optional[Dict[str, Any]]) -> str:
     try:
         # Serialize params in a stable order
         items = sorted((str(k), str(v)) for k, v in params.items())
-        return f"{url}?{ '&'.join([f'{k}={v}' for k,v in items]) }"
+        return f"{url}?{'&'.join([f'{k}={v}' for k, v in items])}"
     except Exception:
         return url
 
@@ -214,7 +214,7 @@ async def _safe_call(
                     retry_after = None
                     try:
                         resp_headers = getattr(getattr(e, "response", None), "headers", {}) or {}
-                        retry_after = _retry_after_seconds(resp_headers)
+                        retry_after = _retry_after_seconds(resp_headers)  # type: ignore[arg-type]
                     except Exception:
                         retry_after = None
                     # Jittered backoff
@@ -291,6 +291,7 @@ __all__ = [
     "get_client", "close_client", "set_http_concurrency",
     "circuit_breaker_open", "circuit_breaker_status",
 ]
+
 
 
 
