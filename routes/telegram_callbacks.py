@@ -11,6 +11,10 @@ Telegram callback router:
 
 import os
 import logging
+import time
+import hmac
+import hashlib
+import json
 from typing import Any, Dict
 
 from fastapi import APIRouter, Request, HTTPException, Header
@@ -90,6 +94,41 @@ async def _disable_kb(chat_id: int, message_id: int) -> None:
     except Exception as e:
         logger.warning(f"[tg] editMessageReplyMarkup failed: {e}")
 
+# --- Signed approve POST helper ---
+PUBLIC_HOST = os.getenv("PUBLIC_HOST","").rstrip("/")
+OPS_SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","")).strip()
+API_TOKEN = (os.getenv("API_TOKEN","") or os.getenv("API_BEARER_TOKEN","")).strip()
+
+async def _post_signed_approval(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    מקבל payload {'symbol','side','qty' או 'budget','price','lev','position_side', ...}
+    ושולח POST חתום ל-/ops/approve/signed. מחזיר תשובת השרת.
+    """
+    if not PUBLIC_HOST:
+        return {"ok": False, "error": "PUBLIC_HOST not set"}
+    if not OPS_SIGN_SECRET:
+        return {"ok": False, "error": "OPS_SIGN_SECRET not set"}
+
+    body = dict(payload)
+    body.setdefault("action", "approve")
+    body.setdefault("ticket_id", f"tg_{int(time.time())}")
+
+    raw = json.dumps(body, ensure_ascii=False, separators=(",",":")).encode("utf-8")
+    sig = hmac.new(OPS_SIGN_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+
+    url = f"{PUBLIC_HOST}/ops/approve/signed"
+    headers = {"X-Signature": sig, "Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["X-API-Key"] = API_TOKEN
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(url, content=raw, headers=headers)
+            data = r.json() if r.headers.get("content-type","").startswith("application/json") else {"text": r.text}
+            return {"ok": r.status_code < 400, "status": r.status_code, "response": data}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 @router.post("/callback")
 async def callback_handler(
     req: Request,
@@ -143,10 +182,15 @@ async def callback_handler(
 
     if action == "APPROVE":
         ConfirmStore.approve(cid, approver=str(uid))
-        await _tg_answer_callback(cb_id, "אושר ✅")
+        # שליחת ביצוע חתום + פידבק קצר
+        payload = (rec.get("payload") or {}).copy()
+        payload.setdefault("position_side", "BOTH")
+        result = await _post_signed_approval(payload)
+        status_txt = "✅ בוצע" if result.get("ok") else f"⚠️ כשל בביצוע"
+        await _tg_answer_callback(cb_id, status_txt)
         if chat_id and message_id:
             await _disable_kb(chat_id, message_id)
-        return JSONResponse(content={"ok": True})
+        return JSONResponse(content={"ok": True, "posted": result})
 
     if action == "REJECT":
         ConfirmStore.reject(cid, approver=str(uid))
@@ -157,6 +201,7 @@ async def callback_handler(
 
     await _tg_answer_callback(cb_id, "פעולה לא מזוהה")
     return {"ok": True}
+
 
 
 
