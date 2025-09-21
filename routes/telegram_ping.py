@@ -8,3 +8,4 @@ router = APIRouter(prefix="/telegram", tags=["Telegram"])
 async def ping():
     return {"ok": True}
 
+
