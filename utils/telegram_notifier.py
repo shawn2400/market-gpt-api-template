@@ -177,9 +177,6 @@ def _trim_reason(reason: Any, limit: int = 240) -> str:
     return text or "—"
 
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
-    """
-    שולח כרטיס אישור עשיר עם כפתורי ✅/❌ (callback_data) + לינק Ticket (אם יש).
-    """
     # Estimations (best-effort)
     est     = make_estimations(plan)
     probs   = est.get("probs") or {}
@@ -204,13 +201,12 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     why_txt = _trim_reason(reason)
     kind    = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
 
-    # TP lines with ETA/prob/profit-$
     tp_lines = _tp_legs_to_lines(tp_legs, eta=eta, probs=probs)
     if tp_lines and tp_pnl:
         new_lines = []
         for i, line in enumerate(tp_lines, start=1):
             gas = tp_pnl.get(f"tp{i}")
-            new_lines.append(line + (f" · ⛽ {_fmt_usd(gas)}" if gas is not None else ""))  # noqa: E501
+            new_lines.append(line + (f" · ⛽ {_fmt_usd(gas)}" if gas is not None else ""))
         tp_lines = new_lines
 
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
@@ -251,7 +247,6 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     lines.append("— — —")
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
-    # ✅ callback_data; Ticket (אם יש) נשאר URL
     urls = _build_trade_urls(idem, plan)
     kb_rows: List[List[Dict[str, Any]]] = [
         [
@@ -343,22 +338,18 @@ from .telegram_notifier_core import (
 
 # ===================== Public API =====================
 __all__ = [
-    # flags & simple notifiers
     "set_explain_enabled", "get_explain_enabled",
     "notify_no_trades", "notify_scan_error", "notify_explain_trade",
     "notify_sl_tp_update", "notify_info", "notify_error",
     "notify_heartbeat", "notify_daily_summary", "notify_ops_alert",
     "register_webhook",
-    # trade approvals / updates
     "send_trade_approval", "send_trade_opened", "send_trade_update", "send_trade_closed",
-    # change approvals & digests
     "format_change_approval_he", "send_change_approval_he", "route_change_ticket",
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
-    # policy helper
     "should_auto_approve_trade",
-    # backward-compat
     "_send",
 ]
+
 
 
 
