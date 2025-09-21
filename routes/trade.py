@@ -11,7 +11,6 @@ from utils.auth import require_api_key
 
 # === Telegram notifiers (best-effort) ===
 try:
-    # נשתמש בשמות הקיימים בליבה החדשה
     from utils.telegram_notifier import send_trade_approval as send_approval  # type: ignore
     from utils.telegram_notifier import notify_ops_alert as send_audit        # type: ignore
 except Exception:
@@ -45,11 +44,13 @@ def _make_idem(x: Optional[str]) -> str:
 class TradeReq(BaseModel):
     symbol: str
     side: str
+    quantity: float = Field(gt=0)
     leverage: int = Field(ge=1, le=125)
     budget_usd: float = Field(gt=0)
+    position_side: Optional[str] = "BOTH"
+    note: Optional[str] = None
     dry_run: bool = False
     confirm_first: bool = False
-    entry: Optional[float] = None
     tp_targets: Optional[List[float]] = None
     tp_splits: Optional[List[float]] = None
 
@@ -59,6 +60,16 @@ class TradeReq(BaseModel):
         if v.upper() not in ("BUY","SELL","LONG","SHORT"):
             raise ValueError("side must be BUY/SELL/LONG/SHORT")
         return "BUY" if v.upper() in ("BUY","LONG") else "SELL"
+
+    @field_validator("position_side")
+    @classmethod
+    def _ps_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return "BOTH"
+        v2 = v.upper()
+        if v2 not in ("BOTH","LONG","SHORT"):
+            raise ValueError("position_side must be BOTH/LONG/SHORT")
+        return v2
 
     @field_validator("tp_splits")
     @classmethod
@@ -71,26 +82,29 @@ def _422(detail: Any) -> HTTPException:
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
 
 def _summary(req: TradeReq) -> str:
-    return f"{req.side.upper()} {req.symbol.upper()} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
+    return f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
 
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
+    """
+    קריאה נקייה ל-execute_trade_live ללא פרמטרים שלא נתמכים.
+    נשלחים רק: symbol, side, quantity, leverage, budget_usd, position_side, note.
+    """
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
+
     res = await execute_trade_live(
         symbol=req.symbol,
-        market="futures",
         side=req.side,
-        entry="market" if (req.entry is None) else "limit",
-        entry_price=req.entry if (req.entry and req.entry > 0) else None,
-        budget_usdt=req.budget_usd,
+        quantity=req.quantity,
         leverage=req.leverage,
-        risk_pct=None,
-        stop_loss_pct=None,
-        take_profit_rr=None,
-        require_approval=False,
-        reason="trade_execute_api",
+        budget_usd=req.budget_usd,
+        position_side=req.position_side or "BOTH",
+        note=req.note or "trade_execute_api",
     )
-    await send_audit(f"TRADE EXECUTE API · {_summary(req)}")
+    try:
+        await send_audit(f"TRADE EXECUTE API · {_summary(req)}")
+    except Exception:
+        pass
     return res
 
 @router.post("/trade/execute")
@@ -100,9 +114,6 @@ async def trade_execute(
     _token: str = Depends(require_api_key),
     x_idem: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ) -> Dict[str, Any]:
-    if req.entry is not None and req.entry < 0:
-        raise _422([{"type":"value_error","loc":["body","entry"],"msg":"entry must be >= 0","input": req.entry}])
-
     idem = _make_idem(x_idem)
     auto, reason = should_auto_approve(req.model_dump())
     need_approval = bool(req.confirm_first and not req.dry_run and not auto)
@@ -110,21 +121,21 @@ async def trade_execute(
     if need_approval:
         # נשמור בקשה + TTL
         _PENDING[idem] = {"ts": time.time(), "req": req.model_dump()}
-        # נכין plan מינימלי עבור הודעת אישור עשירה
+        # plan מינימלי להודעת אישור
         plan = {
             "symbol": req.symbol,
             "side": req.side,
             "leverage": req.leverage,
-            "entry_price": req.entry,
+            "quantity": req.quantity,
             "budget_usd": req.budget_usd,
             "tp": [{"stopPrice": t} for t in (req.tp_targets or [])],
             "ttl_sec": _PENDING_TTL,
             "trade_kind": "Futures",
-            "order_type": "MARKET" if req.entry is None else "LIMIT",
+            "order_type": "MARKET",  # אין כאן limit/entry – שמרנו פשטות
             "why": "trade_execute_api_confirm_first",
         }
         try:
-            await send_approval(idem, plan)  # inline keyboard +/או לינקים
+            await send_approval(idem, plan)  # inline keyboard / links
         except Exception:
             pass
         return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL}}
@@ -132,7 +143,10 @@ async def trade_execute(
     try:
         res = await _execute_and_audit(req)
         if auto and not req.dry_run:
-            await send_audit(f"AUTO-APPROVED · idem={idem} · reason={reason}")
+            try:
+                await send_audit(f"AUTO-APPROVED · idem={idem} · reason={reason}")
+            except Exception:
+                pass
         return {"ok": True, "error": None, "result": res}
     except ValueError as ve:
         raise _422([{"type":"value_error","loc":["body"],"msg":str(ve)}])
@@ -157,16 +171,18 @@ async def trade_approve(id: str) -> Dict[str, Any]:
 @router.get("/trade/reject", include_in_schema=False)
 async def trade_reject(id: str) -> Dict[str, Any]:
     _PENDING.pop(id, None)
-    await send_audit(f"REJECTED · idem={id}")
+    try:
+        await send_audit(f"REJECTED · idem={id}")
+    except Exception:
+        pass
     return {"ok": True, "rejected": True}
 
 # תאימות לאחראי־אישורים הישן (ops_approval)
-# נספק alias לשמות שהקובץ ההוא מצפה להם:
 TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    # עטיפה סינכרונית דקה עבור ops_approval (ירוץ ב-uvicorn loop)
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
