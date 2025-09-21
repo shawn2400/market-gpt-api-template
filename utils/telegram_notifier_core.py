@@ -9,6 +9,8 @@ from __future__ import annotations
 - עזרי זמן/פורמט
 - Auto-Approve policy helper
 - חנות שינויים (Redis/קובץ)
+- דיכוי התראות WS TTL כברירת מחדל (לדוח EOD)
+- Heartbeat שעה־שעה ללא ENV
 """
 
 import os
@@ -27,7 +29,7 @@ try:
     from zoneinfo import ZoneInfo
     _TZ_IL = ZoneInfo("Asia/Jerusalem")
 except Exception:
-    _TZ_IL = timezone(timedelta(hours=3))  # Fallback UTC+3
+    _TZ_IL = timezone(timedelta(hours=3))
 
 logger = logging.getLogger("algogpt.tg")
 
@@ -38,7 +40,7 @@ API_BASE    = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").strip().rstrip("/")
 
 # ===================== Decorative prefix/suffix (BSD) =====================
-OPS_DECORATE_BSD = os.getenv("OPS_DECORATE_BSD", "1").lower() in ("1", "true", "yes", "on")
+OPS_DECORATE_BSD = os.getenv("OPS_DECORATE_BSD", "1").lower() in ("1","true","yes","on")
 BSD_PREFIX = os.getenv("OPS_BSD_PREFIX_TEXT", 'בס"ד').strip()
 BSD_SUFFIX = os.getenv("OPS_BSD_SUFFIX_TEXT", "בעזרת השם נעשה ונצליח 🙏").strip()
 
@@ -83,10 +85,10 @@ try:
 except Exception:
     AUTO_APPROVE_BUDGET_MAX_USD = 0.0
 AUTO_APPROVE_NIGHT = os.getenv("AUTO_APPROVE_NIGHT","0").lower() in ("1","true","yes","on")
-NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()  # e.g. "23-06" (IL time)
+NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()
 AUTO_APPROVE_TIER  = (os.getenv("AUTO_APPROVE_TIER","") or "").strip().lower()
 
-# ===================== SL/TP defaults (fallbacks for presentation) =====================
+# ===================== SL/TP defaults =====================
 def _csv_floats(s: str) -> List[float]:
     out: List[float] = []
     for x in (s or "").split(","):
@@ -118,8 +120,7 @@ except Exception as _e:
 
 _changes_file = os.getenv("OPS_CHANGES_FILE", "/tmp/ops_changes.jsonl")
 
-# ===================== WS TTL suppression =====================
-# אם אין לך ENV – זה בסדר. ברירת המחדל מושתקת (1). כדי לא להשקיט: SUPPRESS_WS_TTL_ALERTS=0
+# ===================== WS TTL suppression (default: ON) =====================
 SUPPRESS_WS_TTL_ALERTS = os.getenv("SUPPRESS_WS_TTL_ALERTS", "1").lower() in ("1","true","yes","on")
 _WS_TTL_PATTERNS = (
     "WS price TTL גבוה",
@@ -133,7 +134,6 @@ def _fmt_il(ts: float | int | None = None) -> str:
     dt = datetime.fromtimestamp(ts or _now(), tz=timezone.utc).astimezone(_TZ_IL)
     return dt.strftime("%Y-%m-%d %H:%M:%S IL")
 
-# --- rate-limit & dedup ---
 def _rl_tick() -> None:
     global _rl_win_start, _rl_sent_in_win
     now = _now()
@@ -165,7 +165,6 @@ def _dedup_allow(text: str) -> bool:
                 _dedup_map.pop(k, None)
     return True
 
-# --- WS TTL router ---
 async def _store_change_event(ev: Dict[str, Any]) -> None:
     ev = dict(ev)
     ev.setdefault("ts", _now())
@@ -186,10 +185,6 @@ def _is_ws_ttl_alert(text: str) -> bool:
     return any(pat in t for pat in _WS_TTL_PATTERNS)
 
 def _maybe_route_ws_ttl(text: str) -> bool:
-    """
-    אם זו התראת WS TTL – לא שולחים לטלגרם, רק שומרים לרשומת דוח יומי.
-    מחזיר True אם צריך לסנן/לא לשלוח.
-    """
     if not SUPPRESS_WS_TTL_ALERTS:
         return False
     if _is_ws_ttl_alert(text):
@@ -279,7 +274,6 @@ async def _tg_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id:
 
 # ===================== Bundling helpers =====================
 async def _flush_bundle() -> None:
-    """Flush bundled alerts immediately."""
     global _bundle_items, _bundle_task
     async with _bundle_lock:
         if not _bundle_items:
@@ -323,7 +317,6 @@ def _in_night_hours_il() -> bool:
         h = now_il.hour
         if a <= b:
             return a <= h < b
-        # wrap-around (e.g. 23-06)
         return h >= a or h < b
     except Exception:
         return False
@@ -341,7 +334,7 @@ def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
         return False
     return True
 
-# ===================== Change store =====================
+# ===================== Change store (load) =====================
 async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
     out: List[Dict[str,Any]] = []
     try:
@@ -370,7 +363,6 @@ async def _load_changes_since(ts_min: float) -> List[Dict[str,Any]]:
 
 # ===================== URL helpers (approval links) =====================
 def _get_sign_secret() -> bytes:
-    # תמיכה ב־OPS_SIGN_SECRET (חדש). אם לא קיים — fallback ל־WEBHOOK_HMAC_SECRET הישן.
     sec = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","") or "").encode("utf-8")
     return sec
 
@@ -404,7 +396,6 @@ def _ensure_ticket_urls(change: Dict[str, Any]) -> Dict[str, str]:
     return {"approve": approve_url or "", "reject": reject_url or "", "ticket": ticket_url or ""}
 
 def _build_trade_urls(idem: str, plan: Dict[str, Any]) -> Dict[str, str]:
-    # כיבוד approve_url/reject_url אם הגיעו בפליילואד
     if plan.get("approve_url") or plan.get("reject_url") or plan.get("ticket_url"):
         return {
             "approve": str(plan.get("approve_url","")),
@@ -489,7 +480,7 @@ def _tp_legs_to_lines(tp_legs: Optional[Sequence[Dict[str, Any]]],
 # ===================== Price helpers =====================
 def _try_get_live_price(symbol: str) -> Optional[float]:
     try:
-        from utils.binance_client import get_price  # קיים אצלך
+        from utils.binance_client import get_price
         p = get_price(symbol.upper())
         return float(p) if p is not None else None
     except Exception:
@@ -541,7 +532,6 @@ async def send_change_approval_he(change: Dict[str, Any]) -> None:
     await _tg_send_with_markup(txt, kb)
 
 async def route_change_ticket(change: Dict[str, Any]) -> str:
-    # כאן אפשר לממש שמירה במערכת הכרטיסים שלך. נחזיר ticket_id אם קיים.
     return str(change.get("ticket_id") or "")
 
 async def send_ops_digest_now() -> None:
@@ -550,7 +540,6 @@ async def send_ops_digest_now() -> None:
 async def send_eod_report_now(summary: Dict[str, Any]) -> None:
     pnl = summary.get("pnl","—")
     t = summary.get("time","")
-    # סיכום WS TTL מאתמול בחצות
     from datetime import timezone as tz
     day0_il = datetime.now(tz.utc).astimezone(_TZ_IL).replace(hour=0, minute=0, second=0, microsecond=0)
     today0 = day0_il.astimezone(tz.utc).timestamp()
@@ -559,8 +548,27 @@ async def send_eod_report_now(summary: Dict[str, Any]) -> None:
     last_ws = (ws_items[-1]["text"] if ws_items else "—")
     await _tg_send(f"📘 EOD {t} · PnL: {pnl}\n🛰️ WS TTL Alerts today: {len(ws_items)}\nאחרון: {last_ws}")
 
+# ===================== Heartbeat (every ~60m, no ENV) =====================
+_heartbeat_task: Optional[asyncio.Task] = None
+
+async def _heartbeat_loop() -> None:
+    # ברירת מחדל: אחת לשעה. רוצה 30 דק'? שנה את המספר ל-1800.
+    interval_sec = 3600
+    while True:
+        try:
+            await asyncio.sleep(interval_sec)
+            if BOT_TOKEN and CHAT_ID:
+                now_il = datetime.now(timezone.utc).astimezone(_TZ_IL).strftime("%Y-%m-%d %H:%M IL")
+                await _tg_send(f"🫀 Heartbeat · סריקה פעילה · אין טריידים חדשים · {now_il}")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug({"event":"heartbeat.error","err":str(e)})
+
 async def ensure_ops_schedulers_started() -> bool:
-    # אם יש לך סקדיולרים פנימיים – תאתחל כאן. בינתיים no-op.
+    global _heartbeat_task
+    if (_heartbeat_task is None) or _heartbeat_task.done():
+        _heartbeat_task = asyncio.create_task(_heartbeat_loop())
     return True
 
 # ===================== Public API (exports) =====================
