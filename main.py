@@ -18,17 +18,15 @@ from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-from fnmatch import fnmatch
-from fastapi.exceptions import RequestValidationError  # (פעם אחת בלבד)
+from fastapi.exceptions import RequestValidationError
 
 from utils.auth import extract_token, allow_all, token_matches
 from utils.json_logger import setup_json_logging
 from utils.metrics_middleware import MetricsMiddleware
 from utils.response_limits import ResponseSizeLimiter
 
-# ---- Binance client: נסה לייבא, ואם לא – נפעיל נפילות עדינות ----
+# ---- Binance client: נסה לייבא, ואם לא – פולבאקים ----
 try:
-    # תואם ל־lazy client – אין side effects בזמן import
     from utils.binance_client import (
         fapi_ping,
         futures_balance,
@@ -36,22 +34,18 @@ try:
         futures_exchange_info_safe,
     )
 except Exception:
-    # Fallbacks שלא מפילים את האפליקציה אם לקוח הבורסה לא מחווט
     def fapi_ping() -> bool:  # type: ignore
         return False
-
     def futures_balance():  # type: ignore
         return None
-
     def get_price(symbol: str) -> Optional[float]:  # type: ignore
         return None
-
     def futures_exchange_info_safe(force_refresh: bool = False):  # type: ignore
         return None
 
 # ---- Telegram notifier (fallbacks) ----
 try:
-    from utils.telegram_notifier_core import (  # עדכון ל־core
+    from utils.telegram_notifier_core import (
         ensure_ops_schedulers_started,
         send_ops_digest_now,
         send_eod_report_now,
@@ -59,14 +53,12 @@ try:
 except Exception:
     async def ensure_ops_schedulers_started() -> None:  # type: ignore
         return None
-
     async def send_ops_digest_now(hours: Optional[int] = None) -> None:  # type: ignore
         return None
-
     async def send_eod_report_now() -> None:  # type: ignore
         return None
 
-# ---- InternalAuthMiddleware (no-op fallback) ----
+# ---- InternalAuthMiddleware (fallback) ----
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
 except Exception:
@@ -83,25 +75,17 @@ except Exception:
     except Exception:
         class ConfirmStore:  # type: ignore
             pending: Dict[str, Any] = {}
-
             @classmethod
             def flush_all(cls):
                 cls.pending = {}
-
-            flush = reset = flush_all  # תאימות
+            flush = reset = flush_all
 
 # ---- runtime counters (fallbacks) ----
 try:
     from utils.runtime_counters import ws_user_status, exec_get_counters  # type: ignore
 except Exception:
     def ws_user_status() -> Dict[str, Any]:  # type: ignore
-        return {
-            "running": False,
-            "reconnects": None,
-            "ttl_sec": None,
-            "inter_event_ewma_ms": None,
-        }
-
+        return {"running": False, "reconnects": None, "ttl_sec": None, "inter_event_ewma_ms": None}
     def exec_get_counters() -> Dict[str, Any]:  # type: ignore
         return {
             "tick_ewma_ms": None,
@@ -125,20 +109,13 @@ def _coerce_log_level(val):
     import logging as _l
     if isinstance(val, int) or (isinstance(val, str) and str(val).isdigit()):
         return int(val)
-    m = {
-        "debug": _l.DEBUG,
-        "info": _l.INFO,
-        "warning": _l.WARNING,
-        "warn": _l.WARNING,
-        "error": _l.ERROR,
-        "critical": _l.CRITICAL,
-    }
+    m = {"debug": _l.DEBUG, "info": _l.INFO, "warning": _l.WARNING, "warn": _l.WARNING, "error": _l.ERROR, "critical": _l.CRITICAL}
     return m.get(str(val).strip().lower(), _l.INFO)
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
-# ---- תיקיית בסיסים ----
+# ---- תיקיות בסיס ----
 for d in ("static", "logs", "data"):
     try:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -147,51 +124,32 @@ for d in ("static", "logs", "data"):
 
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.1")
 
-app = FastAPI(
-    title="AlgoGPT API",
-    version=APP_VERSION,
-    description="AlgoGPT - Algorithmic Trading",
-)
+app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(
-        status_code=HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors()},
-    )
+    return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 # ---------- OpenAPI filtering ----------
-from fnmatch import fnmatch
-from fastapi.openapi.utils import get_openapi
-
 def custom_openapi():
     if getattr(app, "openapi_schema", None):
         return app.openapi_schema
 
-    schema = get_openapi(
-        title=app.title,
-        version=APP_VERSION,
-        description=app.description,
-        routes=app.routes,
-    )
-
+    schema = get_openapi(title=app.title, version=APP_VERSION, description=app.description, routes=app.routes)
     max_ops = int(os.getenv("OPENAPI_PUBLIC_MAX_OPS", "30"))
     hide_patterns = [p.strip() for p in os.getenv("OPENAPI_HIDE_PATTERNS", "").split(",") if p.strip()]
     include_tags = {t.strip() for t in os.getenv("OPENAPI_INCLUDE_TAGS", "").split(",") if t.strip()}
 
     new_paths: Dict[str, Any] = {}
     count = 0
-
     for path in sorted(schema.get("paths", {}).keys()):
         methods = schema["paths"][path]
         new_methods = {}
         path_hidden = any(fnmatch(path, pat) for pat in hide_patterns)
-
-        for method in list(methods.keys()):
+        for method, op in list(methods.items()):
             if method.startswith("x-"):
                 continue
-            op = methods[method]
             if op.get("x-internal") is True:
                 continue
             if include_tags and not include_tags.intersection(set(op.get("tags") or [])):
@@ -202,10 +160,8 @@ def custom_openapi():
                 continue
             new_methods[method] = op
             count += 1
-
         if new_methods:
             new_paths[path] = new_methods
-
     schema["paths"] = new_paths
     app.openapi_schema = schema
     return app.openapi_schema
@@ -220,7 +176,9 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
-CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORGINS", os.getenv("CORS_ALLOW_ORIGINS", "*")).split(",") if o]  # תמיכה בשתי צורות
+# שימור תאימות: תמיכה בשני שמות ENV (עם/בלי טייפו)
+_cao = os.getenv("CORS_ALLOW_ORIGINS", os.getenv("CORS_ALLOW_ORGINS", "*"))
+CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
 
@@ -332,7 +290,7 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 
-# כולל במפורש כמה בסיסיים לפני auto-discover
+# כולל כמה בסיסיים לפני auto-discover
 for _mod in ("routes.scan_top_volume", "routes.scan_now_alias", "routes.ops_guard"):
     _try_include(_mod)
 
@@ -361,13 +319,7 @@ def _route_exists(path: str) -> bool:
 # ---------- base routes ----------
 @app.get("/")
 async def root():
-    return {
-        "ok": True,
-        "status": "ok",
-        "service": "app_full",
-        "title": "AlgoGPT API",
-        "version": APP_VERSION,
-    }
+    return {"ok": True, "status": "ok", "service": "app_full", "title": "AlgoGPT API", "version": APP_VERSION}
 
 @app.get("/health")
 async def health():
@@ -375,12 +327,7 @@ async def health():
 
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health():
-    return {
-        "ok": True,
-        "status": "ok",
-        "env": os.getenv("ENV", "prod"),
-        "version": APP_VERSION,
-    }
+    return {"ok": True, "status": "ok", "env": os.getenv("ENV", "prod"), "version": APP_VERSION}
 
 @app.get("/status/ping")
 async def status_ping():
@@ -424,7 +371,6 @@ try:
 except Exception:
     def get_loaded_tokens(mask: bool = True):  # type: ignore
         return []
-
     def get_public_paths():  # type: ignore
         return {"paths": [], "prefixes": []}
 
@@ -433,12 +379,7 @@ if not _route_exists("/status/auth"):
     async def status_auth():
         toks = get_loaded_tokens(mask=True)
         public = get_public_paths()
-        return {
-            "ok": True,
-            "tokens_count": len(toks),
-            "tokens": toks,
-            "public": public,
-        }
+        return {"ok": True, "tokens_count": len(toks), "tokens": toks, "public": public}
 
 # public price
 @app.get("/price/{symbol}")
@@ -455,14 +396,7 @@ async def price(symbol: str):
         p = None
         ok = False
         err = str(e)
-    return {
-        "ok": ok,
-        "symbol": symbol.upper(),
-        "price": float(p) if p is not None else None,
-        "source": src,
-        "ts": ts,
-        "error": err,
-    }
+    return {"ok": ok, "symbol": symbol.upper(), "price": float(p) if p is not None else None, "source": src, "ts": ts, "error": err}
 
 @app.get("/readyz")
 async def readyz():
@@ -520,23 +454,18 @@ TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1",
 
 @app.on_event("startup")
 async def _startup_preflight_warmup():
-    """
-    חימום עדין שאינו מפיל את השרת במקרה של BAN.
-    כל קריאה עטופה ב-try/except. אין side-effects חוסמי-אתחול.
-    """
+    """חימום עדין שאינו מפיל את השרת במקרה של BAN."""
     try:
         from utils.auth import get_loaded_tokens  # type: ignore
         logger.info({"event": "auth.tokens_loaded", "tokens": get_loaded_tokens(mask=True)})
     except Exception:
         pass
 
-    # Exchange info → ממורכז בקאש; אם BAN – רק התראה
     try:
         _ = futures_exchange_info_safe(force_refresh=True)
     except Exception as e:
         logger.warning({"event": "warmup.exinfo_failed", "error": str(e)})
 
-    # מחיר לדוגמה (Lazy client אמור לא להפיל)
     try:
         _ = get_price("BTCUSDT")
         try:
@@ -599,10 +528,8 @@ try:
 except Exception:
     def _get_loaded_tokens(mask: bool = True):  # type: ignore
         return []
-
     def _extract_token(req, a, b):  # type: ignore
         return None
-
     def _token_matches(tok):  # type: ignore
         return False
 
@@ -624,11 +551,7 @@ async def _debug_auth(request: Request):
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
     await send_ops_digest_now(hours)
-    return {
-        "ok": True,
-        "sent": True,
-        "hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS", "3")),
-    }
+    return {"ok": True, "sent": True, "hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS", "3"))}
 
 @app.get("/ops/eod/now", include_in_schema=False)
 async def ops_eod_now():
@@ -637,12 +560,8 @@ async def ops_eod_now():
 
 if __name__ == "__main__":
     import uvicorn
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST", "0.0.0.0"), port=int(os.getenv("PORT", "10001")))
 
-    uvicorn.run(
-        "main:app",
-        host=os.getenv("BIND_HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", "10001")),
-    )
 
 
 
