@@ -6,21 +6,18 @@ from starlette.responses import JSONResponse
 
 router = APIRouter()
 
-def _get_secret_bytes() -> bytes:
-    """
-    עדיפות:
-    1) OPS_SIGN_SECRET (אם קיים)
-    2) WEBHOOK_HMAC_SECRET
-    אם הסטרינג באורך 64 תווים hex – נהפוך ל-bytes. אחרת, ניקח UTF-8.
-    """
-    raw = os.getenv("OPS_SIGN_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET") or ""
-    s = raw.strip()
-    if len(s) == 64:
+def _get_secret_bytes() -> tuple[bytes, str]:
+    # העדפה: WEBHOOK_HMAC_SECRET; אם חסר — OPS_SIGN_SECRET
+    raw = os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or ""
+    raw = raw.strip()
+    used = "WEBHOOK_HMAC_SECRET" if os.getenv("WEBHOOK_HMAC_SECRET") else "OPS_SIGN_SECRET"
+    # אם זה בדיוק 64 תווי hex – פרש כ-hex, אחרת כ-utf8
+    if len(raw) == 64:
         try:
-            return bytes.fromhex(s)
+            return bytes.fromhex(raw), used
         except Exception:
             pass
-    return s.encode("utf-8")
+    return raw.encode("utf-8"), used
 
 def _clean_sig(v: str) -> str:
     v = (v or "").strip()
@@ -28,51 +25,39 @@ def _clean_sig(v: str) -> str:
         v = v.split("=", 1)[1].strip()
     return v
 
-@router.get("/_debug/hmac")
-async def hmac_info():
-    # public ping (לבדיקת 200 ללא מפתח)
-    return JSONResponse({"ok": True})
-
 @router.post("/_debug/hmac")
-async def hmac_compute(request: Request):
-    """
-    מחשב HMAC-SHA256 על גוף הבקשה (raw bytes) עם אותו סוד של /ops/approve/signed.
-    מחזיר גם HEX וגם Base64 לצורך השוואה.
-    """
-    body = await request.body()
-    secret = _get_secret_bytes()
-    digest = hmac.new(secret, body, hashlib.sha256).digest()
+async def echo_hmac(request: Request):
+    raw = await request.body()
+    secret, used_name = _get_secret_bytes()
+    digest = hmac.new(secret, raw, hashlib.sha256).digest()
     hex_srv = digest.hex()
     b64_srv = base64.b64encode(digest).decode()
 
     hdrs = request.headers
-    cand_names = ["x-signature", "x-webhook-hmac", "x-hub-signature-256"]
-    got_raw = {n: hdrs.get(n, "") for n in cand_names}
-    got_clean = {n: _clean_sig(v) for n, v in got_raw.items()}
+    cand = {"x-signature": hdrs.get("x-signature",""),
+            "x-webhook-hmac": hdrs.get("x-webhook-hmac",""),
+            "x-hub-signature-256": hdrs.get("x-hub-signature-256","")}
+    cand_clean = {k:_clean_sig(v) for k,v in cand.items()}
 
-    match_hex = any(_clean_sig(v).lower() == hex_srv for v in got_raw.values())
-    match_b64 = any(_clean_sig(v) == b64_srv for v in got_raw.values())
+    match_hex = any(_clean_sig(v).lower() == hex_srv for v in cand.values())
+    match_b64 = any(_clean_sig(v) == b64_srv for v in cand.values())
 
-    def _hint(k: str) -> str:
-        val = os.getenv(k, "")
-        if len(val) > 10:
-            return f"{val[:6]}...{val[-4:]}"
-        return val
+    # hints
+    s1 = os.getenv("OPS_SIGN_SECRET",""); s2 = os.getenv("WEBHOOK_HMAC_SECRET","")
+    def mask(s: str) -> str:
+        if not s: return ""
+        return s[:6]+"..."+s[-4:] if len(s) > 10 else "***"
 
     return JSONResponse({
         "ok": True,
-        "len_body": len(body),
+        "len_body": len(raw),
         "server_hex": hex_srv,
         "server_b64": b64_srv,
-        "headers_raw": got_raw,
-        "headers_clean": got_clean,
+        "headers_raw": cand,
+        "headers_clean": cand_clean,
         "match_hex": match_hex,
         "match_b64": match_b64,
-        "secret_hints": {
-            "OPS_SIGN_SECRET": _hint("OPS_SIGN_SECRET"),
-            "WEBHOOK_HMAC_SECRET": _hint("WEBHOOK_HMAC_SECRET"),
-            "using": "OPS_SIGN_SECRET" if os.getenv("OPS_SIGN_SECRET") else "WEBHOOK_HMAC_SECRET",
-        },
+        "secret_hints": {"OPS_SIGN_SECRET": mask(s1), "WEBHOOK_HMAC_SECRET": mask(s2), "using": used_name},
     })
 
 
