@@ -14,12 +14,13 @@ except Exception:
 router = APIRouter(tags=["ops-approval"])
 
 # -------------------- CFG --------------------
-NS             = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL      = os.getenv("REDIS_URL", "")
-PUBLIC_HOST    = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
-HMAC_SECRET    = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
-ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
+NS              = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL       = os.getenv("REDIS_URL", "")
+PUBLIC_HOST     = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
+HMAC_SECRET     = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+ADMIN_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
+TICKET_TTL_SEC  = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 30 דקות
+PUBSUB_CHANNEL  = os.getenv("APPROVAL_PUBSUB_CHANNEL", "ops:ticket:events")
 
 def KEY_TICKET(tid: str) -> str:
     return f"{NS}:ticket:{tid}"
@@ -79,7 +80,7 @@ async def _send_telegram_text(text: str) -> Optional[Dict[str, Any]]:
     if not ADMIN_CHAT_ID or not PUBLIC_HOST:
         return None
     ping_url = f"{PUBLIC_HOST.rstrip('/')}/telegram/ping"
-    params = {"chat_id": ADMIN_CHAT_ID, "text": text}
+    params = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
     async with httpx.AsyncClient(timeout=10.0) as cli:
         try:
             rr = await cli.get(ping_url, params=params)
@@ -129,12 +130,13 @@ async def create_ticket(
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?id={tid}"
 
     pretty = (
-        "⚠️ Approval Needed\n"
-        f"• Ticket: {tid}\n"
+        "⚠️ <b>Approval Needed</b>\n"
+        f"• Ticket: <code>{tid}</code>\n"
         f"• {symbol} {side} qty={qty} lev={lev} budget={budget}\n"
-        f"• Note: {note}\n— — —\nבחר:"
+        f"• Note: {note}\n— — —\nבחר:\n"
+        f"✅ {approve_url}\n❌ {reject_url}"
     )
-    tg = await _send_telegram_text(pretty + f"\n✅ {approve_url}\n❌ {reject_url}")
+    tg = await _send_telegram_text(pretty)
 
     return {
         "ok": True,
@@ -163,16 +165,16 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
     # ביצוע פעולת האישור החתומה
     await _execute_via_signed_endpoint(req)
 
-    # שליחת הודעת טלגרם על אישור
+    # הודעת טלגרם על אישור
     try:
         sym = req.get("symbol", "")
         side = req.get("side", "")
         qty  = req.get("qty", "")
         await _send_telegram_text(
-            f"✅ <b>Approved</b>\n"
+            "✅ <b>Approved</b>\n"
             f"• Ticket: <code>{id}</code>\n"
             f"• {sym} {side} qty={qty}\n"
-            f"— — —\nExecuted via signed endpoint."
+            "— — —\nExecuted via signed endpoint."
         )
     except Exception:
         pass
@@ -197,21 +199,21 @@ async def reject(id: str = Query(..., description="ticket_id")):
     # הודעת טלגרם על דחייה
     try:
         await _send_telegram_text(
-            f"❌ <b>Rejected</b>\n"
+            "❌ <b>Rejected</b>\n"
             f"• Ticket: <code>{id}</code>\n"
-            f"— — —\nNo action was taken."
+            "— — —\nNo action was taken."
         )
     except Exception:
         pass
 
     return _html("❌ Rejected. Order cancelled.")
 
-# -------- Added: signed execution endpoint --------
+# -------- Signed execution endpoint --------
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint")
 async def approve_signed(request: Request):
     """
-    Verifies HMAC (X-Signature) over raw JSON body.
-    Expects payload like:
+    מאמת HMAC (X-Signature) על גוף ה-JSON הגולמי ומפרסם אירוע ל-Pub/Sub.
+    צורת payload צפויה:
     {
       "action": "approve",
       "ticket_id": "T_xxx",
@@ -238,11 +240,37 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # TODO: לחבר כאן לאקזקיוטר/בינאנס בפועל.
+    # פרסום אירוע ל-Redis Pub/Sub כדי שהאקסקיוטור יבצע טרייד בפועל
+    try:
+        r = await _redis()
+        event = {
+            "type": "approval",
+            "action": "approve",
+            "ts": time.time(),
+            "payload": payload,
+        }
+        await r.publish(PUBSUB_CHANNEL, json.dumps(event, separators=(",", ":")))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"pubsub failed: {e}")
+
+    # (אופציונלי) פינג לטלגרם לסימון "נשלח לאקזקיוטור"
+    try:
+        p = payload
+        await _send_telegram_text(
+            "📤 <b>Dispatch</b>\n"
+            f"• Ticket: <code>{p.get('ticket_id','')}</code>\n"
+            f"• {p.get('symbol','')} {p.get('side','')} qty={p.get('qty','')} lev={p.get('lev','')}\n"
+            f"— — —\nPublished to <code>{PUBSUB_CHANNEL}</code>."
+        )
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "ticket_id": payload.get("ticket_id"),
         "executed": True,
+        "published": True,
+        "channel": PUBSUB_CHANNEL,
     }
 
 
