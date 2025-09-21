@@ -1,4 +1,3 @@
-# routes/telegram_ping.py
 from __future__ import annotations
 from fastapi import APIRouter
 
