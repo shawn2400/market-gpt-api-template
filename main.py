@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional, Iterable
 import pkgutil
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
@@ -20,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 from fnmatch import fnmatch
+from fastapi.exceptions import RequestValidationError  # (פעם אחת בלבד)
 
 from utils.auth import extract_token, allow_all, token_matches
 from utils.json_logger import setup_json_logging
@@ -49,10 +49,9 @@ except Exception:
     def futures_exchange_info_safe(force_refresh: bool = False):  # type: ignore
         return None
 
-
 # ---- Telegram notifier (fallbacks) ----
 try:
-    from utils.telegram_notifier import (
+    from utils.telegram_notifier_core import (  # עדכון ל־core
         ensure_ops_schedulers_started,
         send_ops_digest_now,
         send_eod_report_now,
@@ -67,7 +66,6 @@ except Exception:
     async def send_eod_report_now() -> None:  # type: ignore
         return None
 
-
 # ---- InternalAuthMiddleware (no-op fallback) ----
 try:
     from app.middlewares import InternalAuthMiddleware  # type: ignore
@@ -75,7 +73,6 @@ except Exception:
     class InternalAuthMiddleware(BaseHTTPMiddleware):  # type: ignore
         async def dispatch(self, request: Request, call_next):
             return await call_next(request)
-
 
 # ---- ConfirmStore (fallback) ----
 try:
@@ -92,7 +89,6 @@ except Exception:
                 cls.pending = {}
 
             flush = reset = flush_all  # תאימות
-
 
 # ---- runtime counters (fallbacks) ----
 try:
@@ -117,7 +113,6 @@ except Exception:
             "current_interval": int(os.getenv("SCAN_INTERVAL", "60")),
         }
 
-
 # ---- Trade Manager (אופציונלי) ----
 TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", "20"))
@@ -125,7 +120,6 @@ try:
     from utils.trade_manager import manage_open_trades_loop  # type: ignore
 except Exception:
     manage_open_trades_loop = None  # type: ignore
-
 
 def _coerce_log_level(val):
     import logging as _l
@@ -140,7 +134,6 @@ def _coerce_log_level(val):
         "critical": _l.CRITICAL,
     }
     return m.get(str(val).strip().lower(), _l.INFO)
-
 
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL", "INFO")))
@@ -161,15 +154,12 @@ app = FastAPI(
 )
 
 # ---------- Validation error => 422 ----------
-from fastapi.exceptions import RequestValidationError  # noqa: E402
-
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=HTTP_422_UNPROCESSABLE_ENTITY,
         content={"detail": exc.errors()},
     )
-
 
 # ---------- OpenAPI filtering ----------
 def custom_openapi():
@@ -217,7 +207,6 @@ def custom_openapi():
     app.openapi_schema = schema
     return app.openapi_schema
 
-
 app.openapi = custom_openapi
 
 # ---------- Middlewares ----------
@@ -228,7 +217,7 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN", "").strip()
-CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o]
+CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in os.getenv("CORS_ALLOW_ORGINS", os.getenv("CORS_ALLOW_ORIGINS", "*")).split(",") if o]  # תמיכה בשתי צורות
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
 
@@ -248,11 +237,9 @@ app.mount("/metrics", make_asgi_app())
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC", "1").lower() in ("1", "true", "yes", "on")
 PUBLIC_STATUS = os.getenv("SECURITY_PUBLIC_STATUS", "1").lower() in ("1", "true", "yes", "on")
 
-
 def _split_multi(s: str) -> Iterable[str]:
     import re
     return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
-
 
 DEFAULT_PUBLIC_PATHS = {
     "/",
@@ -326,7 +313,6 @@ async def validate_token(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
     return await call_next(request)
 
-
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
     try:
@@ -339,7 +325,6 @@ def _try_include(module_path: str) -> bool:
     except Exception as e:
         logger.warning({"event": "router_register_failed", "router": module_path, "error": str(e)})
     return False
-
 
 _registered_paths = set()
 
@@ -360,7 +345,6 @@ for m in pkgutil.iter_modules(["routes"]):
     except Exception:
         pass
 
-
 def _route_exists(path: str) -> bool:
     try:
         for r in app.router.routes:
@@ -369,7 +353,6 @@ def _route_exists(path: str) -> bool:
     except Exception:
         pass
     return False
-
 
 # ---------- base routes ----------
 @app.get("/")
@@ -382,11 +365,9 @@ async def root():
         "version": APP_VERSION,
     }
 
-
 @app.get("/health")
 async def health():
     return {"ok": True, "status": "ok", "version": APP_VERSION}
-
 
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health():
@@ -397,11 +378,9 @@ async def debug_health():
         "version": APP_VERSION,
     }
 
-
 @app.get("/status/ping")
 async def status_ping():
     return {"ok": True, "ts_ms": int(time.time() * 1000)}
-
 
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
@@ -409,13 +388,11 @@ if not _route_exists("/status/ws"):
         st = ws_user_status()
         return {"ok": True, **st}
 
-
 if not _route_exists("/status/executor"):
     @app.get("/status/executor")
     async def status_executor():
         st = exec_get_counters()
         return {"ok": True, **st}
-
 
 # /status/all גם מדווח מנהל
 if not _route_exists("/status/all"):
@@ -447,7 +424,6 @@ except Exception:
     def get_public_paths():  # type: ignore
         return {"paths": [], "prefixes": []}
 
-
 if not _route_exists("/status/auth"):
     @app.get("/status/auth")
     async def status_auth():
@@ -459,7 +435,6 @@ if not _route_exists("/status/auth"):
             "tokens": toks,
             "public": public,
         }
-
 
 # public price
 @app.get("/price/{symbol}")
@@ -484,7 +459,6 @@ async def price(symbol: str):
         "ts": ts,
         "error": err,
     }
-
 
 @app.get("/readyz")
 async def readyz():
@@ -520,7 +494,6 @@ async def readyz():
 
     return {"ok": (err is None), "error": err, "details": details}
 
-
 @app.post("/flush")
 async def flush_kill_switch():
     done = False
@@ -535,13 +508,11 @@ async def flush_kill_switch():
             logger.warning({"event": "flush_failed", "err": str(e)})
     return {"ok": True, "flushed": done}
 
-
 # ---------- Telegram webhook auto-setup ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
-
 
 @app.on_event("startup")
 async def _startup_preflight_warmup():
@@ -572,7 +543,6 @@ async def _startup_preflight_warmup():
     except Exception as e:
         logger.warning({"event": "warmup.price_failed", "error": str(e)})
 
-
 @app.on_event("startup")
 async def _startup_webhook():
     if not BOT_TOKEN or not TELEGRAM_AUTO_WEBHOOK:
@@ -594,7 +564,6 @@ async def _startup_webhook():
     except Exception as e:
         logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
 
-
 @app.on_event("startup")
 async def _startup_user_stream():
     try:
@@ -605,11 +574,9 @@ async def _startup_user_stream():
     except Exception as e:
         logger.warning({"event": "ws_user_stream_autostart_failed", "error": str(e)})
 
-
 @app.on_event("startup")
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
-
 
 # optional trade manager loop
 @app.on_event("startup")
@@ -617,7 +584,6 @@ async def _start_trade_manager_loop():
     if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
         asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC))
         logger.info({"event": "trade_manager_loop_started", "interval_sec": TRADE_MANAGER_INTERVAL_SEC})
-
 
 # --- public debug auth endpoint ---
 try:
@@ -636,7 +602,6 @@ except Exception:
     def _token_matches(tok):  # type: ignore
         return False
 
-
 @app.get("/_debug/auth", include_in_schema=False)
 async def _debug_auth(request: Request):
     a = request.headers.get("authorization") or request.headers.get("Authorization")
@@ -652,7 +617,6 @@ async def _debug_auth(request: Request):
         "tokens_loaded": _get_loaded_tokens(mask=True),
     }
 
-
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
     await send_ops_digest_now(hours)
@@ -662,12 +626,10 @@ async def ops_digest_now(hours: Optional[int] = None):
         "hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS", "3")),
     }
 
-
 @app.get("/ops/eod/now", include_in_schema=False)
 async def ops_eod_now():
     await send_eod_report_now()
     return {"ok": True, "sent": True}
-
 
 if __name__ == "__main__":
     import uvicorn
