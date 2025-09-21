@@ -1,3 +1,4 @@
+# routes/ops_approve.py
 from __future__ import annotations
 from typing import Optional, Dict, Any
 import os, time, hmac, hashlib, json, logging
@@ -81,7 +82,7 @@ async def ops_approve(
     require:  Optional[int] = Query(None, ge=1, le=2),
     version:  Optional[str] = Query(None),
 
-    # trade-back-compat (לא חובה לקריאת טיקט)
+    # trade (fallback)
     symbol:   Optional[str] = Query(None),
     side:     Optional[str] = Query(None),
     tf:       Optional[str] = Query("15m"),
@@ -95,7 +96,7 @@ async def ops_approve(
     grids:    int = Query(3),
     dry_run:  Optional[bool] = Query(True),
 ):
-    # ----- TICKET BRANCH -----
+    # ----- ticket branch -----
     if ticket_id or action or expires or sig or require or version:
         _assert(WEBHOOK_SECRET, "HMAC secret not configured")
         _assert(ticket_id is not None, "ticket_id required")
@@ -107,9 +108,12 @@ async def ops_approve(
         if by and ALLOWLIST: _assert(by in ALLOWLIST, "Approver not allowed")
 
         qs = {
-            "ticket_id": ticket_id, "action": action, "expires": str(expires),
+            "ticket_id": ticket_id,
+            "action": action,
+            "expires": str(expires),
             "require": str(require) if require is not None else None,
-            "version": version, "by": by,
+            "version": version,
+            "by": by,
         }
         expected_legacy = _sig_legacy(ticket_id, action, str(expires))
         expected_canon  = _sig_canonical(qs)
@@ -134,7 +138,7 @@ async def ops_approve(
         log.info("ticket_decision", extra=event)
         return JSONResponse({"ok": True, "mode": "ticket", **event})
 
-    # ----- TRADE BRANCH (אופציונלי) -----
+    # ----- trade branch (optional back-compat) -----
     _assert(symbol is not None and side is not None, "symbol & side required")
     payload: Dict[str, Any] = {
         "symbol": (symbol or "").upper(),
@@ -155,6 +159,7 @@ async def ops_approve(
     }
     if leverage is not None:
         payload["leverage"] = int(leverage)
+
     result = await _post_grid_trade(payload)
     return {"ok": bool(result.get("ok")), "mode": "trade", "action": "approve", "request": payload, "result": result}
 
@@ -174,6 +179,7 @@ async def ops_reject(
         "side": side.upper(),
         "meta": {"source": src, "timeframe": tf, "score": score, "chat_id": chat_id, "ts": int(time.time())},
     }
+
 
 
 
