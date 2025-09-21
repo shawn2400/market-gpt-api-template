@@ -107,11 +107,16 @@ async def ops_reject(
 # ---------- Signed approve ----------
 _SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("WEBHOOK_HMAC_SECRET","")).strip()
 
+def _calc_hmac_hex(raw: bytes) -> str:
+    if not _SIGN_SECRET:
+        return ""
+    return hmac.new(_SIGN_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+
 def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
     if not _SIGN_SECRET:
         return False
     try:
-        mac = hmac.new(_SIGN_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+        mac = _calc_hmac_hex(raw)
         return hmac.compare_digest(mac, (sig_hex or "").strip().lower())
     except Exception:
         return False
@@ -120,14 +125,20 @@ def _hmac_valid(raw: bytes, sig_hex: str) -> bool:
 async def ops_approve_signed(
     request: Request,
     x_signature: str = Header(default="", convert_underscores=False),
+    x_signature_hex: str = Header(default="", convert_underscores=False),
+    x_debug: str = Header(default="", convert_underscores=False),
 ):
     """
     גוף הבקשה נחתם מול OPS_SIGN_SECRET (או WEBHOOK_HMAC_SECRET).
-    דוגמה לגוף:
+    דוגמה:
     {"action":"approve","ticket_id":"T1","symbol":"BTCUSDT","side":"BUY","qty":0.001,"price":null,"lev":10,"position_side":"BOTH","budget":null}
     """
     raw = await request.body()
-    if not _hmac_valid(raw, x_signature):
+    sig = (x_signature or x_signature_hex or "").strip().lower()
+    ok = _hmac_valid(raw, sig)
+    if not ok:
+        if (x_debug or "").strip() == "1":
+            return JSONResponse(status_code=401, content={"detail": "Bad signature", "expected": _calc_hmac_hex(raw), "got": sig or None})
         return JSONResponse(status_code=401, content={"detail": "Bad signature"})
 
     try:
