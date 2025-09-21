@@ -2,41 +2,43 @@
 from __future__ import annotations
 from fastapi import APIRouter, Query, HTTPException, Request
 from typing import List, Dict, Any, Optional
-import os, time, asyncio
+import os, asyncio, logging
+
 import pandas as pd
-import requests
+import httpx
 from pydantic import BaseModel, Field
 
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ai_analysis import analyze_with_ai
+from utils.rate_limit import allow as rl_allow
 
-FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+logger = logging.getLogger("algogpt.scan")
+
+FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+SCAN_HTTP_TIMEOUT = float(os.getenv("SCAN_HTTP_TIMEOUT", "10.0"))
+SCAN_MAX_SYMBOLS = int(os.getenv("SCAN_MAX_SYMBOLS", "60"))  # ביטחון נגד עומס
 router = APIRouter(prefix="/scan", tags=["Scan"])
 
-# ========= Rate limiting (פשוט/זול בזיכרון) =========
-_rate_state: Dict[str, List[float]] = {}
-def _rl(ip: str, limit=30, window=60):
-    now = time.time()
-    calls = [c for c in _rate_state.get(ip, []) if now - c < window]
-    if len(calls) >= limit:
-        _rate_state[ip] = calls
-        return False
-    calls.append(now)
-    _rate_state[ip] = calls
-    return True
-
-# ========= Binance helper =========
-def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
+# ========= Binance helper (async, לא חוסם) =========
+async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
     sym = symbol.strip().upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
     url = f"{FUTURES_BASE}/fapi/v1/klines"
-    r = requests.get(url, params={"symbol": sym, "interval": interval, "limit": int(limit)}, timeout=10)
-    r.raise_for_status()
-    arr = r.json()
+    params = {"symbol": sym, "interval": interval, "limit": int(limit)}
+    async with httpx.AsyncClient(timeout=SCAN_HTTP_TIMEOUT) as cli:
+        r = await cli.get(url, params=params)
+        r.raise_for_status()
+        arr = r.json()
+
     if not arr:
         return pd.DataFrame()
-    cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
+
+    cols = [
+        "open_time","open","high","low","close","volume",
+        "close_time","qv","nTrades","taker_base","taker_quote","x"
+    ]
+    # מקצרים למספר העמודות המוחזר בפועל
     df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
     for c in ("open","high","low","close","volume"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -98,26 +100,36 @@ async def scan_symbols(
     request: Request = None
 ) -> MultiScanResponse:
     ip = (request.client.host if request and request.client else "unknown")
-    if not _rl(ip):
+
+    # Rate limit (Redis אם יש, אחרת זיכרון)
+    allowed, _remaining = await rl_allow("scan_multi", ip, limit=int(os.getenv("SCAN_RL_LIMIT", "30")),
+                                         window_sec=int(os.getenv("SCAN_RL_WINDOW", "60")))
+    if not allowed:
         raise HTTPException(429, "Rate limit exceeded")
 
-    out: List[ScanSignal] = []
-    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    syms = [s if s.endswith("USDT") else s + "USDT" for s in syms]
+    syms_raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not syms_raw:
+        raise HTTPException(400, "No symbols provided")
+
+    if len(syms_raw) > SCAN_MAX_SYMBOLS:
+        syms_raw = syms_raw[:SCAN_MAX_SYMBOLS]
+
+    syms = [s if s.endswith("USDT") else s + "USDT" for s in syms_raw]
     want = [f.strip() for f in ai_fields.split(",")] if ai_fields else []
 
-    for s in syms:
+    out: List[ScanSignal] = []
+
+    async def _process(sym: str) -> ScanSignal:
         try:
-            df = _fetch_klines(s, interval, limit)
+            df = await _fetch_klines(sym, interval, limit)
             if df.empty:
-                out.append(ScanSignal(symbol=s, interval=interval, ok=False, error="no data"))
-                continue
-            ind = prepare_indicators_for_backtest(df)
+                return ScanSignal(symbol=sym, interval=interval, ok=False, error="no data")
+            ind = await asyncio.to_thread(prepare_indicators_for_backtest, df)
             row = ind.iloc[-1].to_dict()
 
             ai_txt: Optional[str] = None
             if include_ai:
-                slim = {"symbol": s}
+                slim = {"symbol": sym}
                 for k in want:
                     if k in row:
                         slim[k] = row[k]
@@ -127,12 +139,25 @@ async def scan_symbols(
                 except Exception as e:
                     ai_txt = f"AI error: {e}"
 
-            out.append(ScanSignal(symbol=s, interval=interval,
-                                  indicators=IndicatorSet(**row), analysis=ai_txt))
+            return ScanSignal(symbol=sym, interval=interval,
+                              indicators=IndicatorSet(**row), analysis=ai_txt)
+        except httpx.HTTPError as he:
+            return ScanSignal(symbol=sym, interval=interval, ok=False, error=f"http: {he}")
         except Exception as e:
-            out.append(ScanSignal(symbol=s, interval=interval, ok=False, error=str(e)))
+            logger.warning("scan error %s: %s", sym, e)
+            return ScanSignal(symbol=sym, interval=interval, ok=False, error=str(e))
+
+    # להריץ במקביל בצורה מדודה
+    sem = asyncio.Semaphore(int(os.getenv("SCAN_CONCURRENCY", "6")))
+    async def _guarded(sym: str) -> ScanSignal:
+        async with sem:
+            return await _process(sym)
+
+    results = await asyncio.gather(*[_guarded(s) for s in syms], return_exceptions=False)
+    out.extend(results)
 
     return MultiScanResponse(ok=True, count_total=len(syms), returned=len(out), signals=out)
+
 
 
 
