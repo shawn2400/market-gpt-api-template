@@ -1,11 +1,7 @@
-# main.py  (ops-approval-web)
 from __future__ import annotations
-
-import os
-import logging
+import os, logging
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-
 from routes.ops_approve import router as ops_router
 from routes.telegram_ping import router as telegram_router
 
@@ -19,7 +15,6 @@ app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 app.include_router(ops_router)
 app.include_router(telegram_router)
 
-# Health
 @app.get("/health", summary="Health")
 async def health():
     return {
@@ -30,11 +25,11 @@ async def health():
         "allowlist_enabled": bool(os.getenv("APPROVER_ALLOWLIST","").strip()),
     }
 
-# fallback ל־404 יפה
 @app.exception_handler(404)
-async def nf(_, __):
+async def _nf(_, __):
     return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
+
