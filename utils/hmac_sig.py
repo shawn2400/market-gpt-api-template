@@ -1,55 +1,51 @@
 # utils/hmac_sig.py
 from __future__ import annotations
 import argparse, hmac, hashlib
-from typing import Dict
 
-def hmac_hex(secret: str, data: bytes) -> str:
-    return hmac.new(secret.encode("utf-8"), data, hashlib.sha256).hexdigest()
-
-def legacy(secret: str, ticket_id: str, action: str, expires: str) -> str:
+def sig_legacy(secret: str, ticket_id: str, action: str, expires: str) -> str:
     base = f"{ticket_id}|{action}|{expires}".encode("utf-8")
-    return hmac_hex(secret, base)
+    return hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
 
-def canonical(secret: str, params: Dict[str, str]) -> str:
-    # חותמים בדיוק על k=v ממויין (ללא sig), במפתחות: action, by, expires, require, ticket_id, version
-    allowed = {"action", "by", "expires", "require", "ticket_id", "version"}
-    filtered = {k: v for k, v in params.items() if k in allowed and v is not None}
-    canon = "&".join(f"{k}={filtered[k]}" for k in sorted(filtered.keys()))
-    return hmac_hex(secret, canon.encode("utf-8"))
+def sig_canonical(secret: str, **params) -> str:
+    # canonical על מפתחות מוכרים, לפי סדר אלפביתי (ללא sig)
+    allow = {"action","by","expires","require","ticket_id","version"}
+    filt = {k: str(v) for k, v in params.items() if k in allow and v is not None}
+    canon = "&".join(f"{k}={filt[k]}" for k in sorted(filt))
+    return hmac.new(secret.encode("utf-8"), canon.encode("utf-8"), hashlib.sha256).hexdigest()
 
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="mode", required=True)
 
-    p1 = sub.add_parser("legacy")
-    p1.add_argument("--secret", required=True)
-    p1.add_argument("--ticket-id", required=True)
-    p1.add_argument("--action", required=True, choices=["approve","reject"])
-    p1.add_argument("--expires", required=True)
+    a = sub.add_parser("legacy")
+    a.add_argument("--secret", required=True)
+    a.add_argument("--ticket-id", required=True)
+    a.add_argument("--action", required=True)
+    a.add_argument("--expires", required=True)
 
-    p2 = sub.add_parser("canonical")
-    p2.add_argument("--secret", required=True)
-    p2.add_argument("--ticket-id", required=True)
-    p2.add_argument("--action", required=True, choices=["approve","reject"])
-    p2.add_argument("--expires", required=True)
-    p2.add_argument("--require", required=True)
-    p2.add_argument("--version", required=True)
-    p2.add_argument("--by", required=False)
+    b = sub.add_parser("canonical")
+    b.add_argument("--secret", required=True)
+    b.add_argument("--ticket-id", required=True)
+    b.add_argument("--action", required=True)
+    b.add_argument("--expires", required=True)
+    b.add_argument("--require")
+    b.add_argument("--version")
+    b.add_argument("--by")
 
     args = p.parse_args()
-
     if args.mode == "legacy":
-        print(legacy(args.secret, args.ticket_id, args.action, args.expires))
+        print(sig_legacy(args.secret, args.ticket_id, args.action, args.expires))
     else:
-        params = {
-            "action": args.action,
-            "by": args.by,
-            "expires": args.expires,
-            "require": args.require,
-            "ticket_id": args.ticket_id,
-            "version": args.version,
-        }
-        print(canonical(args.secret, params))
+        print(sig_canonical(
+            args.secret,
+            ticket_id=args.ticket_id,
+            action=args.action,
+            expires=args.expires,
+            require=args.require,
+            version=args.version,
+            by=args.by,
+        ))
 
 if __name__ == "__main__":
     main()
+
