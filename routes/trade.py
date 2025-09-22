@@ -45,23 +45,20 @@ def _make_idem(x: Optional[str]) -> str:
 class TradeReq(BaseModel):
     symbol: str
     side: str
-    quantity: float = Field(gt=0)            # קלט חיצוני
+    quantity: float = Field(gt=0)           # קלט חיצוני: quantity
     leverage: int = Field(ge=1, le=125)
-    budget_usd: float = Field(gt=0)          # קלט חיצוני
+    budget_usd: float = Field(gt=0)         # קלט חיצוני: budget_usd
     position_side: Optional[str] = "BOTH"
     note: Optional[str] = None
     dry_run: bool = False
     confirm_first: bool = False
-
-    # תמיכה מלאה בפרמטרים ש־executor מכיר:
-    entry: Optional[float] = None
-    sl: Optional[float] = None
+    # יעדי TP/SL – אופציונלי; המערכת תדע לייצר באופן דינמי אם מופעל ENV של ladder
     tp: Optional[float] = None
+    sl: Optional[float] = None
     tp_targets: Optional[List[float]] = None
     tp_splits: Optional[List[float]] = None
     sl_targets: Optional[List[float]] = None
     sl_splits: Optional[List[float]] = None
-    reduce_only: bool = False
 
     @field_validator("side")
     @classmethod
@@ -92,16 +89,15 @@ def _422(detail: Any) -> HTTPException:
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
 
 def _summary(req: TradeReq) -> str:
-    return (f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} "
-            f"lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}")
+    return f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
 
 # ---------- Internal execution adapter ----------
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
     """
-    מתאם קריאה ל-execute_trade_live עם מפתחות שה־executor מכיר.
-    * budget_usd -> budget
-    * quantity 그대로
-    * מעביר TP/SL (יחיד או סליידרים), entry, flags, וכו'.
+    מתאם קריאה ל-execute_trade_live עם מפתחות שהוא מכיר:
+      - budget     (ממופה מ-budget_usd)
+      - quantity   (זהה)
+      - מעבירים גם dry_run, confirm_first, tp/sl/tp_targets/... אם נשלחו.
     """
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
@@ -113,17 +109,16 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         leverage=req.leverage,
         dry_run=req.dry_run,
         quantity=req.quantity,
-        entry=req.entry,
-        sl=req.sl,
+        position_side=req.position_side or "BOTH",
+        confirm_first=req.confirm_first,
+        note=req.note or "trade_execute_api",
+        # אופציונלי – רק אם נשלח יועבר
         tp=req.tp,
+        sl=req.sl,
         tp_targets=req.tp_targets,
         tp_splits=req.tp_splits,
         sl_targets=req.sl_targets,
         sl_splits=req.sl_splits,
-        confirm_first=req.confirm_first,
-        telegram_chat_id=None,  # אופציונלי
-        position_side=req.position_side or "BOTH",
-        reduce_only=req.reduce_only,
     )
     try:
         await send_audit(f"TRADE EXECUTE API · {_summary(req)}")
@@ -159,10 +154,10 @@ async def trade_execute(
             "leverage": req.leverage,
             "quantity": req.quantity,
             "budget_usd": req.budget_usd,
-            "tp": [{"stopPrice": t} for t in (req.tp_targets or ([] if req.tp is None else [req.tp]))],
+            "tp": [{"stopPrice": t} for t in (req.tp_targets or [])],
             "ttl_sec": _PENDING_TTL,
             "trade_kind": "Futures",
-            "order_type": "LIMIT" if (req.entry is not None) else "MARKET",
+            "order_type": "MARKET",
             "why": "trade_execute_api_confirm_first",
         }
         try:
