@@ -9,19 +9,22 @@ services:
     autoDeploy: false          # פריסה ידנית בלבד
     autoscale: false           # ביטול Autoscaling
     numInstances: 1            # רפליקה אחת בלבד
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
     envVars:
-      - key: WEB_CONCURRENCY   # וורקר יחיד בתוך הרפליקה
+      - key: WEB_CONCURRENCY
         value: "1"
       - key: HEALTHCHECK_PATH
         value: "/healthz"
-    healthCheckPath: /healthz
-    dockerfilePath: ./Dockerfile
+    # <<< חשוב: Override לפקודת הריצה כדי לכפות worker יחיד
+    dockerCommand: >
+      uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
 
   # ───────── Worker: ops-supervisor ─────────
   - type: worker
     name: ops-supervisor
     env: python
-    region: frankfurt           # מותאם לאיזור של ה-Web/Redis
+    region: frankfurt
     plan: starter
     pythonVersion: 3.11
     buildCommand: pip install -r requirements-worker.txt
@@ -86,6 +89,7 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+
 
 
 
