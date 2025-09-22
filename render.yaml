@@ -1,18 +1,27 @@
 # FILE: render.yaml
 services:
-  # ───────── Web ראשי (קיים) ─────────
+  # ───────── Web ראשי ─────────
   - type: web
     name: algogpt-docker
     env: docker
     region: frankfurt
     plan: pro
-    autoDeploy: false
+    autoDeploy: false          # נשאר כבוי (אתה שולט ידנית)
+    autoscale: false           # <<< מבטל AutoScaling
+    numInstances: 1            # <<< רפליקה אחת בלבד
+    envVars:
+      - key: WEB_CONCURRENCY   # <<< וורקר יחיד בתוך הרפליקה
+        value: "1"
+      - key: HEALTHCHECK_PATH
+        value: "/healthz"
+    healthCheckPath: /healthz
+    dockerfilePath: ./Dockerfile
 
   # ───────── Worker: ops-supervisor ─────────
   - type: worker
     name: ops-supervisor
     env: python
-    region: frankfurt           # ← מומלץ להתאים ל-Redis/WEB (היה oregon)
+    region: frankfurt
     plan: starter
     pythonVersion: 3.11
     buildCommand: pip install -r requirements-worker.txt
@@ -37,13 +46,13 @@ services:
         value: INFO
       - key: REDIS_NAMESPACE
         value: ops-supervisor-web
-      - key: APPROVAL_PUBSUB_CHANNEL      # ← נוסף
+      - key: APPROVAL_PUBSUB_CHANNEL
         value: ops:ticket:events
-      - key: PUBLIC_HOST                  # ops-approval-web (API האישור)
+      - key: PUBLIC_HOST
         value: https://ops-approval-web.onrender.com
 
       # ---- Watchdog / HA ----
-      - key: PRIMARY_PUBLIC_HOST          # ה־API הראשי שבו /healthz תקין
+      - key: PRIMARY_PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
       - key: WATCHDOG_INTERVAL_SEC
         value: "60"
@@ -54,7 +63,7 @@ services:
       - key: RENDER_DEPLOY_HOOK_URL
         sync: false
 
-      # ---- סודות (להזין בדשבורד) ----
+      # ---- סודות (מוזנים בדשבורד) ----
       - key: REDIS_URL
         sync: false
       - key: WEBHOOK_HMAC_SECRET
@@ -64,7 +73,7 @@ services:
       - key: API_BEARER_TOKEN
         sync: false
 
-      # ---- טלגרם (אם רלוונטי) ----
+      # ---- טלגרם ----
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "1"
       - key: TELEGRAM_ADMIN_ONLY
@@ -77,6 +86,7 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+
 
 
 
