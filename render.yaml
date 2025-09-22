@@ -6,11 +6,11 @@ services:
     env: docker
     region: frankfurt
     plan: pro
-    autoDeploy: false          # נשאר כבוי (אתה שולט ידנית)
-    autoscale: false           # <<< מבטל AutoScaling
-    numInstances: 1            # <<< רפליקה אחת בלבד
+    autoDeploy: false          # פריסה ידנית בלבד
+    autoscale: false           # ביטול Autoscaling
+    numInstances: 1            # רפליקה אחת בלבד
     envVars:
-      - key: WEB_CONCURRENCY   # <<< וורקר יחיד בתוך הרפליקה
+      - key: WEB_CONCURRENCY   # וורקר יחיד בתוך הרפליקה
         value: "1"
       - key: HEALTHCHECK_PATH
         value: "/healthz"
@@ -21,7 +21,7 @@ services:
   - type: worker
     name: ops-supervisor
     env: python
-    region: frankfurt
+    region: frankfurt           # מותאם לאיזור של ה-Web/Redis
     plan: starter
     pythonVersion: 3.11
     buildCommand: pip install -r requirements-worker.txt
@@ -63,7 +63,7 @@ services:
       - key: RENDER_DEPLOY_HOOK_URL
         sync: false
 
-      # ---- סודות (מוזנים בדשבורד) ----
+      # ---- סודות (להזנה ב-Dashboard) ----
       - key: REDIS_URL
         sync: false
       - key: WEBHOOK_HMAC_SECRET
@@ -73,7 +73,7 @@ services:
       - key: API_BEARER_TOKEN
         sync: false
 
-      # ---- טלגרם ----
+      # ---- טלגרם (אם רלוונטי) ----
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "1"
       - key: TELEGRAM_ADMIN_ONLY
@@ -86,6 +86,7 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+
 
 
 
