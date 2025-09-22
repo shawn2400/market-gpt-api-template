@@ -163,6 +163,21 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
+# ---------- rndr-id יציב בכל תשובה ----------
+INSTANCE_ID = (
+    os.getenv("RENDER_INSTANCE_ID")
+    or os.getenv("INSTANCE_ID")
+    or os.getenv("HOSTNAME")
+    or "unknown"
+)
+
+@app.middleware("http")
+async def add_server_identity_header(request: Request, call_next):
+    resp = await call_next(request)
+    # מזהה יציב של הרפליקה — לא רנדומי פר־בקשה
+    resp.headers["rndr-id"] = INSTANCE_ID
+    return resp
+
 # ---------- Global auth middleware ----------
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
@@ -399,6 +414,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
+
 
 
 
