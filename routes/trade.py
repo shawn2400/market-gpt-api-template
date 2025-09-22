@@ -1,6 +1,6 @@
 # routes/trade.py
 from __future__ import annotations
-import time, secrets
+import time, secrets, inspect
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -45,9 +45,9 @@ def _make_idem(x: Optional[str]) -> str:
 class TradeReq(BaseModel):
     symbol: str
     side: str
-    quantity: float = Field(gt=0)           # ← קלט חיצוני: quantity
+    quantity: float = Field(gt=0)           # ← קלט חיצוני
     leverage: int = Field(ge=1, le=125)
-    budget_usd: float = Field(gt=0)         # ← קלט חיצוני: budget_usd
+    budget_usd: float = Field(gt=0)         # ← קלט חיצוני
     position_side: Optional[str] = "BOTH"
     note: Optional[str] = None
     dry_run: bool = False
@@ -87,25 +87,85 @@ def _summary(req: TradeReq) -> str:
     return f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
 
 # ---------- Internal execution adapter ----------
+def _build_kwargs_for_executor(req: TradeReq) -> Dict[str, Any]:
+    """
+    בונה kwargs בהתאם לחתימה בפועל של execute_trade_live.
+    אין ניחושים – קוראים את signature ובוחרים שמות שנתמכים.
+    """
+    sig = inspect.signature(execute_trade_live)  # type: ignore
+    params = set(sig.parameters.keys())
+    kwargs: Dict[str, Any] = {}
+
+    # תמיד ננסה לשים שדות נפוצים אם קיימים בחתימה
+    base_map = {
+        "symbol": req.symbol,
+        "side": req.side,
+        "leverage": req.leverage,
+        "position_side": (req.position_side or "BOTH"),
+        "note": (req.note or "trade_execute_api"),
+    }
+    for k, v in base_map.items():
+        if k in params:
+            kwargs[k] = v
+
+    # quantity/size/qty
+    for qname in ("quantity", "qty", "size", "amount"):
+        if qname in params:
+            kwargs[qname] = req.quantity
+            break
+
+    # budget / notional
+    for bname in ("budget", "budget_usd", "budget_usdt", "notional", "notional_usd", "notional_usdt"):
+        if bname in params:
+            kwargs[bname] = req.budget_usd
+            break
+
+    return kwargs
+
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
-    """
-    מתאם קריאה ל-execute_trade_live עם מפתחות שהוא מכיר:
-    - qty  (לא quantity)
-    - budget (לא budget_usd / budget_usdt)
-    - ללא market/entry/entry_price/require_approval/...
-    """
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
 
-    res = await execute_trade_live(
-        symbol=req.symbol,
-        side=req.side,
-        qty=req.quantity,                      # ← mapping
-        leverage=req.leverage,
-        budget=req.budget_usd,                 # ← mapping
-        position_side=req.position_side or "BOTH",
-        note=req.note or "trade_execute_api",
-    )
+    kwargs = _build_kwargs_for_executor(req)
+
+    # ניסיון ראשון
+    try:
+        res = await execute_trade_live(**kwargs)  # type: ignore
+    except TypeError as e:
+        # אם עדיין קיבלנו unexpected keyword – נרד לסט מינימלי:
+        sig = inspect.signature(execute_trade_live)  # type: ignore
+        params = set(sig.parameters.keys())
+        minimal = {k: v for k, v in kwargs.items() if k in params}
+
+        # ודא שיש לנו את ההכרחיים (symbol/side/quantity/leverage/budget כל עוד קיימים בחתימה)
+        for must in ("symbol", "side"):
+            if must in params:
+                minimal[must] = getattr(req, must)
+
+        # החזרות שדות בסיס אם קיימים בחתימה
+        if "leverage" in params:
+            minimal["leverage"] = req.leverage
+        if "position_side" in params:
+            minimal["position_side"] = req.position_side or "BOTH"
+        if "note" in params:
+            minimal["note"] = req.note or "trade_execute_api"
+
+        # כמות
+        if not any(k in minimal for k in ("quantity", "qty", "size", "amount")):
+            for qname in ("quantity", "qty", "size", "amount"):
+                if qname in params:
+                    minimal[qname] = req.quantity
+                    break
+
+        # תקציב
+        if not any(k in minimal for k in ("budget", "budget_usd", "budget_usdt", "notional", "notional_usd", "notional_usdt")):
+            for bname in ("budget", "budget_usd", "budget_usdt", "notional", "notional_usd", "notional_usdt"):
+                if bname in params:
+                    minimal[bname] = req.budget_usd
+                    break
+
+        res = await execute_trade_live(**minimal)  # type: ignore
+
     try:
         await send_audit(f"TRADE EXECUTE API · {_summary(req)}")
     except Exception:
@@ -131,9 +191,7 @@ async def trade_execute(
     need_approval = bool(req.confirm_first and not req.dry_run and not auto)
 
     if need_approval:
-        # נשמור בקשה + TTL
         _PENDING[idem] = {"ts": time.time(), "req": req.model_dump()}
-        # plan מינימלי עבור הודעת אישור
         plan = {
             "symbol": req.symbol,
             "side": req.side,
@@ -194,6 +252,7 @@ TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
