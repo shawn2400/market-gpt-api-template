@@ -163,7 +163,7 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- rndr-id יציב בכל תשובה ----------
+# ---------- rndr-id יציב משלנו ----------
 INSTANCE_ID = (
     os.getenv("RENDER_INSTANCE_ID")
     or os.getenv("INSTANCE_ID")
@@ -174,8 +174,8 @@ INSTANCE_ID = (
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
     resp = await call_next(request)
-    # מזהה יציב של הרפליקה — לא רנדומי פר־בקשה
-    resp.headers["rndr-id"] = INSTANCE_ID
+    # מזהה יציב של הרפליקה – לא נדרס ע״י Render
+    resp.headers["x-app-instance-id"] = INSTANCE_ID
     return resp
 
 # ---------- Global auth middleware ----------
@@ -265,8 +265,15 @@ if not _route_exists("/status/all"):
         except Exception: ping_ok = False
         ws = ws_user_status(); ex = exec_get_counters()
         manager_enabled = os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
-        return {"ok":True,"version":APP_VERSION,"ws":ws,"executor":ex,
-                "manager":{"enabled":manager_enabled},"binance_ping_ok":ping_ok}
+        return {
+            "ok": True,
+            "version": APP_VERSION,
+            "instance": INSTANCE_ID,  # ← מזהה רפליקה יציב גם בגוף התשובה
+            "ws": ws,
+            "executor": ex,
+            "manager": {"enabled": manager_enabled},
+            "binance_ping_ok": ping_ok
+        }
 
 # auth status/public paths (public)
 try:
@@ -414,6 +421,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
+
 
 
 
