@@ -46,7 +46,7 @@ class TradeReq(BaseModel):
     side: str
     quantity: float = Field(gt=0)
     leverage: int = Field(ge=1, le=125)
-    budget_usd: float = Field(gt=0)
+    budget_usd: float = Field(gt=0)  # נשמר ב-API (לוג/אישור) — לא נשלח ל-executor
     position_side: Optional[str] = "BOTH"
     note: Optional[str] = None
     dry_run: bool = False
@@ -88,7 +88,7 @@ def _summary(req: TradeReq) -> str:
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
     """
     קריאה נקייה ל-execute_trade_live ללא פרמטרים שלא נתמכים.
-    API קולט budget_usd, וה־executor מקבל budget_usdt (מיפוי מבוצע כאן).
+    **לא מעבירים budget בכלל** — משתמשים ב-quantity שכבר התקבל ב-API.
     """
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
@@ -98,7 +98,6 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         side=req.side,
         quantity=req.quantity,
         leverage=req.leverage,
-        budget_usdt=req.budget_usd,           # <- מיפוי לשם שנתמך ע"י executor
         position_side=req.position_side or "BOTH",
         note=req.note or "trade_execute_api",
     )
