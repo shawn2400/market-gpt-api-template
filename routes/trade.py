@@ -41,12 +41,13 @@ _PENDING_TTL = 60 * 5  # 5 דקות
 def _make_idem(x: Optional[str]) -> str:
     return x or f"{int(time.time()*1000)}_{secrets.token_hex(6)}"
 
+# ---------- Public API Schema ----------
 class TradeReq(BaseModel):
     symbol: str
     side: str
-    quantity: float = Field(gt=0)
+    quantity: float = Field(gt=0)           # ← קלט חיצוני: quantity
     leverage: int = Field(ge=1, le=125)
-    budget_usd: float = Field(gt=0)  # נשמר ב-API (לוג/אישור) — לא נשלח ל-executor
+    budget_usd: float = Field(gt=0)         # ← קלט חיצוני: budget_usd
     position_side: Optional[str] = "BOTH"
     note: Optional[str] = None
     dry_run: bool = False
@@ -58,19 +59,19 @@ class TradeReq(BaseModel):
     @classmethod
     def _side_ok(cls, v: str) -> str:
         vu = v.upper()
-        if vu not in ("BUY", "SELL", "LONG", "SHORT"):
+        if vu not in ("BUY","SELL","LONG","SHORT"):
             raise ValueError("side must be BUY/SELL/LONG/SHORT")
-        return "BUY" if vu in ("BUY", "LONG") else "SELL"
+        return "BUY" if vu in ("BUY","LONG") else "SELL"
 
     @field_validator("position_side")
     @classmethod
     def _ps_ok(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return "BOTH"
-        vu = v.upper()
-        if vu not in ("BOTH", "LONG", "SHORT"):
+        v2 = v.upper()
+        if v2 not in ("BOTH","LONG","SHORT"):
             raise ValueError("position_side must be BOTH/LONG/SHORT")
-        return vu
+        return v2
 
     @field_validator("tp_splits")
     @classmethod
@@ -85,10 +86,13 @@ def _422(detail: Any) -> HTTPException:
 def _summary(req: TradeReq) -> str:
     return f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
 
+# ---------- Internal execution adapter ----------
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
     """
-    קריאה נקייה ל-execute_trade_live ללא פרמטרים שלא נתמכים.
-    **לא מעבירים budget בכלל** — משתמשים ב-quantity שכבר התקבל ב-API.
+    מתאם קריאה ל-execute_trade_live עם מפתחות שהוא מכיר:
+    - qty  (לא quantity)
+    - budget (לא budget_usd / budget_usdt)
+    - ללא market/entry/entry_price/require_approval/...
     """
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
@@ -96,8 +100,9 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
     res = await execute_trade_live(
         symbol=req.symbol,
         side=req.side,
-        quantity=req.quantity,
+        qty=req.quantity,                      # ← mapping
         leverage=req.leverage,
+        budget=req.budget_usd,                 # ← mapping
         position_side=req.position_side or "BOTH",
         note=req.note or "trade_execute_api",
     )
@@ -107,6 +112,7 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         pass
     return res
 
+# ---------- Endpoints ----------
 @router.post("/trade/execute")
 async def trade_execute(
     req: TradeReq,
@@ -115,13 +121,19 @@ async def trade_execute(
     x_idem: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ) -> Dict[str, Any]:
     idem = _make_idem(x_idem)
-    auto, reason = should_auto_approve(req.model_dump())
+
+    # חישוב אוטו־אישור (אם קיימים חוקים)
+    try:
+        auto, reason = should_auto_approve(req.model_dump())
+    except Exception:
+        auto, reason = (False, "rules_missing")
+
     need_approval = bool(req.confirm_first and not req.dry_run and not auto)
 
     if need_approval:
         # נשמור בקשה + TTL
         _PENDING[idem] = {"ts": time.time(), "req": req.model_dump()}
-        # plan מינימלי להודעת אישור
+        # plan מינימלי עבור הודעת אישור
         plan = {
             "symbol": req.symbol,
             "side": req.side,
@@ -131,11 +143,11 @@ async def trade_execute(
             "tp": [{"stopPrice": t} for t in (req.tp_targets or [])],
             "ttl_sec": _PENDING_TTL,
             "trade_kind": "Futures",
-            "order_type": "MARKET",  # שמרנו פשטות – ללא limit/entry
+            "order_type": "MARKET",
             "why": "trade_execute_api_confirm_first",
         }
         try:
-            await send_approval(idem, plan)  # inline keyboard / links
+            await send_approval(idem, plan)
         except Exception:
             pass
         return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL}}
@@ -151,7 +163,7 @@ async def trade_execute(
     except ValueError as ve:
         raise _422([{"type":"value_error","loc":["body"],"msg":str(ve)}])
     except httpx.HTTPStatusError as he:
-        raise HTTPException(status_code=502, detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text})
+        raise HTTPException(status_code=502, detail={"error":"binance_http", "status": he.response.status_code, "body": he.response.text})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -182,6 +194,7 @@ TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
