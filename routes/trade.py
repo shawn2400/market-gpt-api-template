@@ -57,19 +57,20 @@ class TradeReq(BaseModel):
     @field_validator("side")
     @classmethod
     def _side_ok(cls, v: str) -> str:
-        if v.upper() not in ("BUY","SELL","LONG","SHORT"):
+        vu = v.upper()
+        if vu not in ("BUY", "SELL", "LONG", "SHORT"):
             raise ValueError("side must be BUY/SELL/LONG/SHORT")
-        return "BUY" if v.upper() in ("BUY","LONG") else "SELL"
+        return "BUY" if vu in ("BUY", "LONG") else "SELL"
 
     @field_validator("position_side")
     @classmethod
     def _ps_ok(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return "BOTH"
-        v2 = v.upper()
-        if v2 not in ("BOTH","LONG","SHORT"):
+        vu = v.upper()
+        if vu not in ("BOTH", "LONG", "SHORT"):
             raise ValueError("position_side must be BOTH/LONG/SHORT")
-        return v2
+        return vu
 
     @field_validator("tp_splits")
     @classmethod
@@ -87,7 +88,7 @@ def _summary(req: TradeReq) -> str:
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
     """
     קריאה נקייה ל-execute_trade_live ללא פרמטרים שלא נתמכים.
-    נשלחים רק: symbol, side, quantity, leverage, budget_usd, position_side, note.
+    API קולט budget_usd, וה־executor מקבל budget_usdt (מיפוי מבוצע כאן).
     """
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
@@ -97,7 +98,7 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         side=req.side,
         quantity=req.quantity,
         leverage=req.leverage,
-        budget_usd=req.budget_usd,
+        budget_usdt=req.budget_usd,           # <- מיפוי לשם שנתמך ע"י executor
         position_side=req.position_side or "BOTH",
         note=req.note or "trade_execute_api",
     )
@@ -131,7 +132,7 @@ async def trade_execute(
             "tp": [{"stopPrice": t} for t in (req.tp_targets or [])],
             "ttl_sec": _PENDING_TTL,
             "trade_kind": "Futures",
-            "order_type": "MARKET",  # אין כאן limit/entry – שמרנו פשטות
+            "order_type": "MARKET",  # שמרנו פשטות – ללא limit/entry
             "why": "trade_execute_api_confirm_first",
         }
         try:
@@ -151,7 +152,7 @@ async def trade_execute(
     except ValueError as ve:
         raise _422([{"type":"value_error","loc":["body"],"msg":str(ve)}])
     except httpx.HTTPStatusError as he:
-        raise HTTPException(status_code=502, detail={"error":"binance_http", "status": he.response.status_code, "body": he.response.text})
+        raise HTTPException(status_code=502, detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -182,8 +183,6 @@ TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
-
-
 
 
 
