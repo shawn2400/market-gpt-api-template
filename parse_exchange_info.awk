@@ -1,15 +1,14 @@
 cd /app
 
 cat > parse_exchange_info.awk <<'AWK'
-# Output columns per symbol: SYMBOL  STATUS  TICKSIZE  MINPRICE  STEPSIZE  MINQTY
+# Output: SYMBOL  STATUS  TICKSIZE  MINPRICE  STEPSIZE  MINQTY
 BEGIN{
-  RS="\"symbol\":\"";   # each record starts right after "symbol":
+  RS="\"symbol\":\"";
   OFS="\t";
 }
-NR==1 { next }          # skip preamble before first symbol
+NR==1 { next }
 {
   rec = $0
-  # symbol until next "
   split(rec, a, "\""); symbol = a[1]
 
   status=minPrice=tickSize=minQty=stepSize=""
