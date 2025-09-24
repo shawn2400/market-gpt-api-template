@@ -1,6 +1,7 @@
+cd /app
+
 cat > parse_exchange_info.awk <<'AWK'
 # מוציא לכל סימבול: SYMBOL  STATUS  TICKSIZE  MINPRICE  STEPSIZE  MINQTY
-# עובד גם על ה־JSON המלא של Binance וגם על קובץ לוקאלי ששמרת.
 BEGIN{
   RS="\"symbol\":\"";   # כל רשומה מתחילה אחרי "symbol":
   OFS="\t";
