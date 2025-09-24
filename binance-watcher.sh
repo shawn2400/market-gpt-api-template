@@ -2,12 +2,12 @@ cat > binance-watcher.sh <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_URL="${API_URL:-https://fapi.binance.com/fapi/v1/exchangeInfo}"  # USDT-M Futures
+API_URL="${API_URL:-https://fapi.binance.com/fapi/v1/exchangeInfo}"
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 PARSER="${PARSER:-$SCRIPT_DIR/parse_exchange_info.awk}"
 
-mode="${1:-once}"               # once | notify
-source_arg="${2:-}"             # אופציונלי: קובץ מקומי או URL
+mode="${1:-once}"      # once | notify
+source_arg="${2:-}"    # optional: local file or URL
 
 get_json() {
   if [[ -n "$source_arg" ]]; then
@@ -48,6 +48,7 @@ esac
 BASH
 
 chmod +x binance-watcher.sh
+
 
 
 
