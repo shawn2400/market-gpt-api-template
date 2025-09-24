@@ -52,6 +52,7 @@ class TradeReq(BaseModel):
     note: Optional[str] = None
     dry_run: bool = False
     confirm_first: bool = False
+
     # יעדי TP/SL – אופציונלי; המערכת תדע לייצר באופן דינמי אם מופעל ENV של ladder
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -64,9 +65,9 @@ class TradeReq(BaseModel):
     @classmethod
     def _side_ok(cls, v: str) -> str:
         vu = v.upper()
-        if vu not in ("BUY","SELL","LONG","SHORT"):
+        if vu not in ("BUY", "SELL", "LONG", "SHORT"):
             raise ValueError("side must be BUY/SELL/LONG/SHORT")
-        return "BUY" if vu in ("BUY","LONG") else "SELL"
+        return "BUY" if vu in ("BUY", "LONG") else "SELL"
 
     @field_validator("position_side")
     @classmethod
@@ -74,7 +75,7 @@ class TradeReq(BaseModel):
         if v is None:
             return "BOTH"
         v2 = v.upper()
-        if v2 not in ("BOTH","LONG","SHORT"):
+        if v2 not in ("BOTH", "LONG", "SHORT"):
             raise ValueError("position_side must be BOTH/LONG/SHORT")
         return v2
 
@@ -89,7 +90,10 @@ def _422(detail: Any) -> HTTPException:
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
 
 def _summary(req: TradeReq) -> str:
-    return f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
+    return (
+        f"{req.side.upper()} {req.symbol.upper()} "
+        f"qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
+    )
 
 # ---------- Internal execution adapter ----------
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
@@ -111,7 +115,6 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         quantity=req.quantity,
         position_side=req.position_side or "BOTH",
         confirm_first=req.confirm_first,
-        note=req.note or "trade_execute_api",
         # אופציונלי – רק אם נשלח יועבר
         tp=req.tp,
         sl=req.sl,
@@ -121,7 +124,8 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         sl_splits=req.sl_splits,
     )
     try:
-        await send_audit(f"TRADE EXECUTE API · {_summary(req)}")
+        extra = f" · note={req.note}" if req.note else ""
+        await send_audit(f"TRADE EXECUTE API · {_summary(req)}{extra}")
     except Exception:
         pass
     return res
@@ -164,7 +168,11 @@ async def trade_execute(
             await send_approval(idem, plan)
         except Exception:
             pass
-        return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL}}
+        return {
+            "ok": False,
+            "error": "pending_approval",
+            "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL},
+        }
 
     try:
         res = await _execute_and_audit(req)
@@ -175,9 +183,12 @@ async def trade_execute(
                 pass
         return {"ok": True, "error": None, "result": res}
     except ValueError as ve:
-        raise _422([{"type":"value_error","loc":["body"],"msg":str(ve)}])
+        raise _422([{"type": "value_error", "loc": ["body"], "msg": str(ve)}])
     except httpx.HTTPStatusError as he:
-        raise HTTPException(status_code=502, detail={"error":"binance_http", "status": he.response.status_code, "body": he.response.text})
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text},
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -208,6 +219,7 @@ TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
