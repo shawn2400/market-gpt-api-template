@@ -213,7 +213,7 @@ if _routes_only:
     for module_path in _routes_only:
         _try_include(module_path)
 else:
-    # בסיסיים קודם (+ auto_trade שהוספנו כאן)
+    # בסיסיים קודם (+ auto_trade)
     for _mod in (
         "routes.scan_top_volume",
         "routes.scan_now_alias",
@@ -221,11 +221,11 @@ else:
         "routes.telegram_ping",
         "routes.debug_hmac",
         "routes.ops_approve",
-        "routes.trade",        # ← מסלול ה-trade הקיים
-        "routes.auto_trade",   # ← חדש: בוחר LONG/SHORT אוטומטי
+        "routes.trade",        # מסלול ה-trade הקיים
+        "routes.auto_trade",   # חדש: בחירת LONG/SHORT אוטומטית
     ):
         _try_include(_mod)
-    # auto-discover לשאר routes/*
+    # auto-discover
     for m in pkgutil.iter_modules(["routes"]):
         module_path = f"routes.{m.name}"
         _try_include(module_path)
@@ -427,6 +427,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
