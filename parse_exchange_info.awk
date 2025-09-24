@@ -3,33 +3,62 @@ cd /app
 cat > parse_exchange_info.awk <<'AWK'
 # מוציא לכל סימבול: SYMBOL  STATUS  TICKSIZE  MINPRICE  STEPSIZE  MINQTY
 BEGIN{
-  RS="\"symbol\":\"";   # כל רשומה מתחילה אחרי "symbol":
+  RS="\"symbol\":\"";   # כל רשומה מתחילה מיד אחרי "symbol":
   OFS="\t";
 }
 NR==1 { next }          # לדלג על כל מה שלפני הרשומה הראשונה
 {
   rec = $0
 
-  # שם הסימבול הוא עד ה-"
+  # שם הסימבול עד ה-".
   split(rec, a, "\""); symbol = a[1]
 
   status=minPrice=tickSize=minQty=stepSize=""
 
-  # סטטוס
-  if (match(rec, /"status":"([^"]+)"/, m)) status = m[1]
+  # --- status ---
+  if (match(rec, /"status":"[^"]+"/)) {
+    tmp = substr(rec, RSTART, RLENGTH)
+    sub(/^"status":"/, "", tmp)
+    sub(/"$/, "", tmp)
+    status = tmp
+  }
 
-  # מחיר/טיק מתוך PRICE_FILTER של אותה רשומה
-  if (match(rec, /"PRICE_FILTER"[^}]*"minPrice":"([^"]+)"/, m)) minPrice = m[1]
-  if (match(rec, /"PRICE_FILTER"[^}]*"tickSize":"([^"]+)"/, m)) tickSize = m[1]
+  # --- PRICE_FILTER: minPrice ---
+  if (match(rec, /"PRICE_FILTER"[^}]*"minPrice":"[^"]+"/)) {
+    tmp = substr(rec, RSTART, RLENGTH)
+    sub(/^.*"minPrice":"/, "", tmp)
+    sub(/".*$/, "", tmp)
+    minPrice = tmp
+  }
 
-  # כמות/סטפ מתוך LOT_SIZE של אותה רשומה
-  if (match(rec, /"LOT_SIZE"[^}]*"minQty":"([^"]+)"/, m))   minQty   = m[1]
-  if (match(rec, /"LOT_SIZE"[^}]*"stepSize":"([^"]+)"/, m)) stepSize = m[1]
+  # --- PRICE_FILTER: tickSize ---
+  if (match(rec, /"PRICE_FILTER"[^}]*"tickSize":"[^"]+"/)) {
+    tmp = substr(rec, RSTART, RLENGTH)
+    sub(/^.*"tickSize":"/, "", tmp)
+    sub(/".*$/, "", tmp)
+    tickSize = tmp
+  }
 
-  # הדפסה רק אם יש סימבול וסטטוס
+  # --- LOT_SIZE: minQty ---
+  if (match(rec, /"LOT_SIZE"[^}]*"minQty":"[^"]+"/)) {
+    tmp = substr(rec, RSTART, RLENGTH)
+    sub(/^.*"minQty":"/, "", tmp)
+    sub(/".*$/, "", tmp)
+    minQty = tmp
+  }
+
+  # --- LOT_SIZE: stepSize ---
+  if (match(rec, /"LOT_SIZE"[^}]*"stepSize":"[^"]+"/)) {
+    tmp = substr(rec, RSTART, RLENGTH)
+    sub(/^.*"stepSize":"/, "", tmp)
+    sub(/".*$/, "", tmp)
+    stepSize = tmp
+  }
+
   if (symbol!="" && status!="")
     print symbol, status, tickSize, minPrice, stepSize, minQty
 }
 AWK
+
 
 
