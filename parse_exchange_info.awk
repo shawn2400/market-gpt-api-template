@@ -6,11 +6,11 @@ BEGIN{
   RS="\"symbol\":\"";   # כל רשומה מתחילה מיד אחרי "symbol":
   OFS="\t";
 }
-NR==1 { next }          # לדלג על מה שלפני הרשומה הראשונה
+NR==1 { next }          # לדלג על הכותרת שמלפני הרשומה הראשונה
 {
   rec = $0
 
-  # שם הסימבול עד ה-".
+  # שם הסימבול עד ה-"
   split(rec, a, "\""); symbol = a[1]
 
   status=minPrice=tickSize=minQty=stepSize=""
@@ -54,6 +54,7 @@ NR==1 { next }          # לדלג על מה שלפני הרשומה הראשו�
     print symbol, status, tickSize, minPrice, stepSize, minQty
 }
 AWK
+
 
 
 
