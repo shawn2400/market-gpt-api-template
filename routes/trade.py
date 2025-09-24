@@ -1,10 +1,12 @@
 # routes/trade.py
 from __future__ import annotations
+import os
 import time, secrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
+from pydantic.fields import FieldValidationInfo
 import httpx
 
 from utils.auth import require_api_key
@@ -71,12 +73,23 @@ class TradeReq(BaseModel):
 
     @field_validator("position_side")
     @classmethod
-    def _ps_ok(cls, v: Optional[str]) -> Optional[str]:
+    def _ps_ok(cls, v: Optional[str], info: FieldValidationInfo) -> Optional[str]:
+        """
+        במצב Hedge, אם מתקבל BOTH – נמפה אוטומטית לפי side:
+        BUY -> LONG, SELL -> SHORT. אחרת נשאיר כפי שנשלח.
+        """
+        side = (info.data.get("side") or "").upper()  # BUY/SELL אחרי הוולידטור הקודם
+        hedge = os.getenv("BINANCE_FORCE_HEDGE_MODE", "true").lower() in ("1", "true", "yes", "on")
+
         if v is None:
-            return "BOTH"
+            return "LONG" if (hedge and side == "BUY") else ("SHORT" if (hedge and side == "SELL") else "BOTH")
+
         v2 = v.upper()
         if v2 not in ("BOTH", "LONG", "SHORT"):
             raise ValueError("position_side must be BOTH/LONG/SHORT")
+
+        if hedge and v2 == "BOTH":
+            return "LONG" if side == "BUY" else "SHORT"
         return v2
 
     @field_validator("tp_splits")
@@ -219,6 +232,7 @@ TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
