@@ -2,14 +2,30 @@ cat > binance-watcher.sh <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_URL="${API_URL:-https://fapi.binance.com/fapi/v1/exchangeInfo}"  # USDT-M Futures
+# ברירת מחדל: למשוך מה־API של USDT-M Futures
+API_URL="${API_URL:-https://fapi.binance.com/fapi/v1/exchangeInfo}"
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 PARSER="${PARSER:-$SCRIPT_DIR/parse_exchange_info.awk}"
 
-mode="${1:-once}"   # once | notify
+mode="${1:-once}"               # once | notify
+source_arg="${2:-}"             # רשות: קובץ לוקאלי או URL חלופי
 
-# הורדה ופרסור
-json="$(curl -sSL "$API_URL")"
+get_json() {
+  if [[ -n "$source_arg" ]]; then
+    if [[ -f "$source_arg" ]]; then
+      cat -- "$source_arg"
+    elif [[ "$source_arg" =~ ^https?:// ]]; then
+      curl -sSL "$source_arg"
+    else
+      echo "Source not found: $source_arg" >&2
+      exit 2
+    fi
+  else
+    curl -sSL "$API_URL"
+  fi
+}
+
+json="$(get_json)"
 out="$(printf '%s' "$json" | awk -f "$PARSER")"
 
 case "$mode" in
@@ -26,11 +42,12 @@ case "$mode" in
     done <<< "$out"
     ;;
   *)
-    echo "usage: $0 [once|notify]" >&2
+    echo "usage: $0 [once|notify] [optional: file_or_url]" >&2
     exit 1
     ;;
 esac
 BASH
 
 chmod +x binance-watcher.sh
+
 
