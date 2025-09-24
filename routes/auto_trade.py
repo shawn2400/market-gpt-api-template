@@ -6,62 +6,53 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
+from utils.strategy_auto import pick_side_for_symbol
+from utils.trade_executor import execute_trade_live  # מבצע בפועל בורסה
+# לחלופין אפשר לייבא את TradeReq+המתאם מה- /routes/trade.py אם מעדיפים
 
-# Telegram (best effort)
-try:
-    from utils.telegram_notifier import send_trade_approval as send_approval  # type: ignore
-    from utils.telegram_notifier import notify_ops_alert as send_audit        # type: ignore
-except Exception:
-    async def send_approval(*args, **kwargs):  # type: ignore
-        return None
-    async def send_audit(*args, **kwargs):     # type: ignore
-        return None
+router = APIRouter(prefix="/auto", tags=["Auto Trade"])
 
-# Strategy + executor
-from utils.strategy_auto import decide as decide_auto
-try:
-    from utils.trade_executor import execute_trade_live  # type: ignore
-except Exception:
-    execute_trade_live = None  # type: ignore
-
-router = APIRouter(tags=["trade"])
-
-class AutoReq(BaseModel):
-    symbol: str
-    budget_usd: float = Field(gt=0)
-    quantity: Optional[float] = Field(default=None, gt=0)
-    confirm_first: bool = True
+class AutoTradeReq(BaseModel):
+    symbol: str = Field(..., examples=["BTCUSDT"])
+    budget_usd: float = Field(..., gt=0, examples=[10])
+    leverage: int = Field(..., ge=1, le=125, examples=[10])
+    quantity: Optional[float] = Field(None, gt=0)  # אופציונלי: אם לא — יחושב ע"פ תקציב
     dry_run: bool = False
+    confirm_first: bool = False
     note: Optional[str] = None
+    # אילוץ-צד ידני (לא חובה): "LONG"/"SHORT"
+    force_position_side: Optional[str] = None
 
-@router.post("/trade/auto")
-async def trade_auto(req: AutoReq, _token: str = Depends(require_api_key)) -> Dict[str, Any]:
-    if execute_trade_live is None:
-        raise HTTPException(status_code=500, detail="trade executor missing")
+@router.post("/trade")
+async def auto_trade(req: AutoTradeReq, _token: str = Depends(require_api_key)) -> Dict[str, Any]:
+    """
+    בחירת LONG/SHORT דינמית → ביצוע טרייד עם TP/SL אוטומטיים (לפי ENV של ה־executor/manager).
+    """
+    # אם המשתמש לא אילץ צד — בחר אוטומטית
+    if req.force_position_side:
+        ps = req.force_position_side.strip().upper()
+        if ps not in ("LONG", "SHORT"):
+            raise HTTPException(status_code=422, detail="force_position_side must be LONG or SHORT")
+        side = "BUY" if ps == "LONG" else "SELL"
+        position_side = ps
+        reason = "forced_by_request"
+    else:
+        side, position_side, reason = await pick_side_for_symbol(req.symbol)
 
-    try:
-        plan = decide_auto(req.symbol, budget_usd=req.budget_usd, qty_override=req.quantity)
-    except ValueError as ve:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"auto_decide_failed: {e}")
-
-    # נבצע/נשלח לאישור – TP/SL נוצרים אוטומטית ע"י ה-executor (LADDER_*=1)
+    # מבצעים את הטרייד (ה־trade_executor מכיל TP/SL/BE/Ladder לפי ENV)
     try:
         res = await execute_trade_live(
-            symbol=plan["symbol"],
-            side=plan["side"],
+            symbol=req.symbol,
+            side=side,                              # BUY/SELL
             budget=req.budget_usd,
-            leverage=plan["leverage"],
+            leverage=req.leverage,
             dry_run=req.dry_run,
-            quantity=plan["quantity"],
-            position_side=plan["position_side"],
+            quantity=req.quantity,                   # יכול להיות None → המנוע יחשב
+            position_side=position_side,            # LONG/SHORT
             confirm_first=req.confirm_first,
+            note=req.note or f"auto:{reason}",
         )
-        try:
-            await send_audit(f"AUTO-TRADE PLAN · {plan['side']} {plan['symbol']} qty≈{plan['quantity']:.6f} lev={plan['leverage']} (adx={plan['adx']:.1f} ema21={plan['ema21']:.1f} ema50={plan['ema50']:.1f})")
-        except Exception:
-            pass
-        return {"ok": True, "plan": plan, "result": res}
+        return {"ok": True, "error": None, "result": res, "decider": {"side": side, "position_side": position_side, "reason": reason}}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"execute_failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
