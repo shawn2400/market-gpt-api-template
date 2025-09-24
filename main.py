@@ -68,13 +68,8 @@ except Exception:
                 "timeouts_burst": 0,"no_trade_streak": 0,"current_interval": int(os.getenv("SCAN_INTERVAL","60"))}
 
 # ---- Trade Manager (אופציונלי) ----
-def _truthy(v: str, default: str="1") -> bool:
-    return (v or default).lower() in ("1","true","yes","on")
-
-# תואם גם ל-TRADE_MANAGER_ENABLE וגם ל-MANAGER_ENABLE (כדי לא ליפול על שם ENV)
-TRADE_MANAGER_ENABLE = _truthy(os.getenv("TRADE_MANAGER_ENABLE", os.getenv("MANAGER_ENABLE", "1")))
-TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", os.getenv("TM_UPDATE_COOLDOWN_SEC","20")))
-
+TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
+TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20"))
 try:
     from utils.trade_manager import manage_open_trades_loop  # type: ignore
 except Exception:
@@ -94,7 +89,7 @@ for d in ("static","logs","data"):
     try: Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.1")
+APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
@@ -154,7 +149,6 @@ DEFAULT_PUBLIC_PATHS = {
     "/status/ping", "/status/ws", "/status/executor", "/status/all", "/status/auth",
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
-    "/trade/approve", "/trade/reject",     # ← הוספנו כדי שאישור/דחייה בטלגרם יהיו ציבוריים
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
@@ -169,7 +163,7 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- מזהה רפליקה יציב ----------
+# ---------- rndr-id יציב משלנו ----------
 INSTANCE_ID = (
     os.getenv("RENDER_INSTANCE_ID")
     or os.getenv("INSTANCE_ID")
@@ -181,7 +175,7 @@ INSTANCE_ID = (
 async def add_server_identity_header(request: Request, call_next):
     resp = await call_next(request)
     resp.headers["x-app-instance-id"] = INSTANCE_ID
-    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור לבדיקה קיימת
+    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור לבדיקות קיימות
     return resp
 
 # ---------- Global auth middleware ----------
@@ -213,19 +207,25 @@ def _try_include(module_path: str) -> bool:
     return False
 
 _registered_paths = set()
-
-# מכבד ENV בשם ROUTES_ONLY (פסיקים)
 _routes_only = [m.strip() for m in os.getenv("ROUTES_ONLY","").split(",") if m.strip()]
 
 if _routes_only:
     for module_path in _routes_only:
         _try_include(module_path)
 else:
-    # בסיסיים קודם
-    for _mod in ("routes.scan_top_volume","routes.scan_now_alias","routes.ops_guard",
-                 "routes.telegram_ping","routes.debug_hmac","routes.ops_approve"):
+    # בסיסיים קודם (+ auto_trade שהוספנו כאן)
+    for _mod in (
+        "routes.scan_top_volume",
+        "routes.scan_now_alias",
+        "routes.ops_guard",
+        "routes.telegram_ping",
+        "routes.debug_hmac",
+        "routes.ops_approve",
+        "routes.trade",        # ← מסלול ה-trade הקיים
+        "routes.auto_trade",   # ← חדש: בוחר LONG/SHORT אוטומטי
+    ):
         _try_include(_mod)
-    # auto-discover
+    # auto-discover לשאר routes/*
     for m in pkgutil.iter_modules(["routes"]):
         module_path = f"routes.{m.name}"
         _try_include(module_path)
@@ -270,15 +270,14 @@ if not _route_exists("/status/all"):
         try: ping_ok = bool(fapi_ping())
         except Exception: ping_ok = False
         ws = ws_user_status(); ex = exec_get_counters()
-        # שמרנו תאימות לשם הישן בדוח מצב
-        manager_enabled_env = os.getenv("MANAGER_ENABLE","1")
+        manager_enabled = os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
         return {
             "ok": True,
             "version": APP_VERSION,
             "instance": INSTANCE_ID,
             "ws": ws,
             "executor": ex,
-            "manager": {"enabled": (manager_enabled_env.lower() in ("1","true","yes","on"))},
+            "manager": {"enabled": manager_enabled},
             "binance_ping_ok": ping_ok
         }
 
@@ -428,6 +427,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
