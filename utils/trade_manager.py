@@ -148,7 +148,6 @@ def _offset_bps(base: float, bps: float, sign: int) -> float:
 # SL/TP helpers (MARK_PRICE triggers)
 # ──────────────────────────────────────────────────────────────────────────────
 def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
-    """בטל הזמנות TP/SL פעילות לפי סוגים, בהתאם למדיניות פריפיקס."""
     try:
         orders = get_open_orders(symbol) or []
     except Exception:
@@ -180,7 +179,6 @@ def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
 
 
 def _current_stop(symbol: str, side: str) -> Optional[float]:
-    """מאחזר את מחיר ה-STOP הפעיל הקרוב ביותר (MARKET/STOP) לפי צד הפוזיציה."""
     try:
         orders = get_open_orders(symbol) or []
     except Exception:
@@ -195,7 +193,6 @@ def _current_stop(symbol: str, side: str) -> Optional[float]:
             stops.append(sp)
     if not stops:
         return None
-    # LONG → הגבוה ביותר; SHORT → הנמוך ביותר
     return max(stops) if side.upper() == "LONG" else min(stops)
 
 
@@ -206,7 +203,6 @@ def modify_stop_loss(
     position_side: str = "LONG",
     qty_hint: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """ביטול SL ישן → יצירת STOP_MARKET חדש (MARK_PRICE)."""
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"))
@@ -247,7 +243,6 @@ def modify_take_profit(
     position_side: str = "LONG",
     qty_hint: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """ביטול TP ישן → TAKE_PROFIT (limit) עם OFFSET קטן (או MARKET לפי צורך)."""
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     _cancel_closing_orders(sym, ("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
@@ -740,6 +735,7 @@ async def _be_guard_tick():
             logger.info("[tm.be_guard] %s BE set", symbol)
         except Exception as e:
             logger.error("[tm.be_guard] error: %s", e)
+
 
 
 
