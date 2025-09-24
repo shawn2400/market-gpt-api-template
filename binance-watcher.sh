@@ -50,3 +50,4 @@ BASH
 chmod +x binance-watcher.sh
 
 
+
