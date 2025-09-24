@@ -89,7 +89,7 @@ for d in ("static","logs","data"):
     try: Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
 
-APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.1")
+APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
@@ -132,6 +132,7 @@ app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE)
 
+app.add_mmiddleware = app.add_middleware  # alias small typo guard (no-op)
 app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
@@ -174,8 +175,9 @@ INSTANCE_ID = (
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
     resp = await call_next(request)
-    # מזהה יציב של הרפליקה – לא נדרס ע״י Render
+    # מזהה יציב של הרפליקה – לא נדרס ע"י Render
     resp.headers["x-app-instance-id"] = INSTANCE_ID
+    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור לבדיקות קיימות
     return resp
 
 # ---------- Global auth middleware ----------
@@ -268,7 +270,7 @@ if not _route_exists("/status/all"):
         return {
             "ok": True,
             "version": APP_VERSION,
-            "instance": INSTANCE_ID,  # ← מזהה רפליקה יציב גם בגוף התשובה
+            "instance": INSTANCE_ID,
             "ws": ws,
             "executor": ex,
             "manager": {"enabled": manager_enabled},
@@ -420,7 +422,8 @@ async def _start_trade_manager_loop():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10001")))
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
