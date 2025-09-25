@@ -167,3 +167,17 @@ async def _manager_loop():
 async def _startup():
     if MANAGER_ENABLE:
         asyncio.create_task(_manager_loop())
+
+# ---- Standalone runner (so we can: python -m routes.manager)
+def main() -> None:
+    if not MANAGER_ENABLE:
+        print("MANAGER_ENABLE=0 — exiting.")
+        return
+    try:
+        asyncio.run(_manager_loop())
+    except KeyboardInterrupt:
+        pass
+
+if __name__ == "__main__":
+    main()
+
