@@ -616,7 +616,7 @@ def _idem_get(coid: str) -> Optional[Dict[str, Any]]:
 
 def _idem_put(coid: str, res: Dict[str, Any]) -> None:
     with _idem_lock:
-        # שמור את המקור כפי שהוא; אם תרצה סניטציה – החלף ל: _sanitize_coid(coid)
+        # FIX: remove invalid reference to self._sanitize; store by the original coid key
         _idem_cache[coid] = (_now(), res)
         if len(_idem_cache) > 2048:
             dead = [k for k,(t,_) in _idem_cache.items() if (_now() - t) > IDEMP_TTL_SEC]
@@ -944,74 +944,6 @@ def close_all_positions() -> Dict[str,Any]:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# ===== Futures last/Best price (Mark → Futures last → Spot) =====
-def futures_last_price(symbol: str) -> Optional[float]:
-    """
-    ניסיון להבאת lastPrice של Futures (USDT-M) דרך REST.
-    """
-    sym = str(symbol or "").upper().strip()
-    if not sym:
-        return None
-
-    # נסה דרך לקוח python-binance (קריאה ישירה ל־futures API):
-    try:
-        data = client._request_futures_api("get", "ticker/price", data={"symbol": sym})  # type: ignore
-        if isinstance(data, dict):
-            p = data.get("price")
-            if p is not None:
-                return float(p)
-    except Exception:
-        pass
-
-    # HTTP ישיר (fallback)
-    try:
-        import requests
-        base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-        url = f"{base}/fapi/v1/ticker/price"
-        r = requests.get(url, params={"symbol": sym}, timeout=HTTP_TIMEOUT)
-        if r.ok:
-            d = r.json()
-            if isinstance(d, dict) and d.get("price") is not None:
-                return float(d["price"])
-    except Exception:
-        pass
-
-    return None
-
-def get_best_price(symbol: str) -> Optional[float]:
-    """
-    עדיפות: Futures Mark Price → Futures lastPrice → Spot lastPrice.
-    """
-    sym = str(symbol or "").upper().strip()
-    if not sym:
-        return None
-
-    # 1) Mark
-    try:
-        p = futures_mark_price(sym)
-        if p:
-            return float(p)
-    except Exception:
-        pass
-
-    # 2) Futures last
-    try:
-        p = futures_last_price(sym)
-        if p:
-            return float(p)
-    except Exception:
-        pass
-
-    # 3) Spot last (ממומש כאן כ־get_price עם עדיפות Mark/WS; עדיין מספק last של Spot אם צריך)
-    try:
-        p = get_price(sym)
-        if p:
-            return float(p)
-    except Exception:
-        pass
-
-    return None
-
 # ===== Price facade with WS + coalescing =====
 def get_price(symbol: str) -> Optional[float]:
     try:
@@ -1131,7 +1063,7 @@ def get_futures_client(*_args, **_kwargs) -> Client | _ClientProxy:
 
 __all__ = [
     "client","get_client","fapi_ping","futures_exchange_info_safe","futures_balance",
-    "futures_mark_price","futures_index_price","get_price","futures_last_price","get_best_price",
+    "futures_mark_price","futures_index_price","get_price",
     "get_symbol_info","get_symbol_filters","symbol_filters",
     "get_open_positions","futures_open_positions_safe","get_single_position",
     "futures_create_order","place_limit_order","place_stop_market","modify_stop_loss","place_tp_ladder","set_breakeven_stop",
@@ -1140,6 +1072,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
