@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, time, asyncio, logging, pkgutil, httpx
 from pathlib import Path
-from typing import Any, Dict, Optional, Iterable
+from typing import Any, Dict, Optional, Iterable, List
 from fnmatch import fnmatch
 
 from fastapi import FastAPI, Request
@@ -52,9 +52,35 @@ except Exception:
         from utils.auto_executor import ConfirmStore  # type: ignore
     except Exception:
         class ConfirmStore:  # type: ignore
-            pending: Dict[str, Any] = {}
+            """
+            Fallback in-memory confirm store compatible with routes.manager.
+            """
+            _P: Dict[str, Dict[str, Any]] = {}
+
             @classmethod
-            def flush_all(cls): cls.pending = {}
+            def pending(cls) -> List[Dict[str, Any]]:
+                return list(cls._P.values())
+
+            @classmethod
+            def create(cls, payload: Dict[str, Any]) -> str:
+                tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
+                payload["ticket_id"] = tid
+                cls._P[tid] = payload
+                return tid
+
+            @classmethod
+            def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
+                it = cls._P.pop(ticket_id, None)
+                if not it:
+                    return {"ok": False, "error": "not_found"}
+                it["approved"] = approved
+                it["decided_ts"] = int(time.time())
+                return {"ok": True, "approved": approved, "ticket_id": ticket_id}
+
+            @classmethod
+            def flush_all(cls) -> None:
+                cls._P.clear()
+
             flush = reset = flush_all
 
 # ---- runtime counters (fallbacks) ----
@@ -427,6 +453,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
