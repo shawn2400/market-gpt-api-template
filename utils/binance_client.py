@@ -56,7 +56,8 @@ ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))
 
 # ===== Hedge/One-Way detection (runtime + override) =====
 HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
-_HEDGE_MODE_CACHE: Optional[bool] = None
+HEDGE_MODE_TTL_SEC = int(os.getenv("HEDGE_MODE_TTL_SEC", "30"))  # חדש: TTL לקאש מצב hedge/one-way
+_HEDGE_MODE_CACHE: Dict[str, Any] = {"ts": 0.0, "val": None}     # {"ts": float, "val": bool|None}
 
 # ===== Order ID / Cancel policy (ENV) =====
 ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
@@ -70,6 +71,7 @@ LADDER_TP_DEFAULT_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25"
 LADDER_TP_MAX_LEVELS = int(os.getenv("LADDER_TP_MAX_LEVELS", "5"))
 TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
+LADDER_TP_PRICE_OFFSET_TICKS = int(os.getenv("LADDER_TP_PRICE_OFFSET_TICKS", "0"))  # חדש: אופסט למחיר LIMIT ב-TP
 
 # ===== Utils =====
 def _now() -> float: return time.time()
@@ -236,19 +238,38 @@ def _get_account_cached() -> Optional[Dict[str, Any]]:
         return _account_cache["data"]
 
 def _is_hedge_mode_runtime() -> bool:
-    """True אם החשבון במצב Hedge; אחרת False (One-Way). כיבוד override דרך HEDGE_MODE."""
-    global _HEDGE_MODE_CACHE
+    """
+    True אם החשבון במצב Hedge; אחרת False (One-Way). כיבוד override דרך HEDGE_MODE.
+    משופר: שימוש ב-Cache עם TTL כדי להפחית עומס קריאות לחשבון.
+    """
+    # Respect explicit override first
     if HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"):
         return True
     if HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):
         return False
+
+    # Cache check
+    now = _now()
+    try:
+        ts = float(_HEDGE_MODE_CACHE.get("ts") or 0.0)
+        val = _HEDGE_MODE_CACHE.get("val")
+        if val is not None and (now - ts) <= HEDGE_MODE_TTL_SEC:
+            return bool(val)
+    except Exception:
+        pass
+
+    # Refresh from account
     try:
         acc = _get_account_cached() or {}
         dual = bool(acc.get("dualSidePosition"))
-        _HEDGE_MODE_CACHE = dual
+        _HEDGE_MODE_CACHE["ts"] = now
+        _HEDGE_MODE_CACHE["val"] = dual
         return dual
     except Exception:
-        return False  # שמרני
+        # שמרני — נחזיר False (One-Way) במקרה כשל
+        _HEDGE_MODE_CACHE["ts"] = now
+        _HEDGE_MODE_CACHE["val"] = False
+        return False
 
 def _effective_position_side_from_kwargs(kwargs: Dict[str, Any]) -> str:
     """
@@ -379,7 +400,7 @@ def _quantize_price(symbol: str, price: float) -> str:
     f = get_symbol_filters(symbol) or {}
     tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
     if tick <= 0: tick = float(DEFAULT_PRICE_TICK_STR)
-    steps = round(price / tick)
+    steps = round(price / tick)  # שומר על התנהגות קיימת (nearest)
     adj = steps * tick
     decs = _decimals_from_step(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
     return f"{adj:.{decs}f}"
@@ -504,7 +525,6 @@ def futures_index_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
-
 # ===== Open orders / history =====
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
@@ -867,7 +887,17 @@ def place_tp_ladder(
             newClientOrderId=_sanitize_coid((client_order_id_prefix or ORDER_ID_PREFIX or "TP") + f"_TP{i}_{sym}")
         )
         if LADDER_TP_KIND == "TAKE_PROFIT":
-            kwargs["price"] = stop_q
+            # LIMIT TP: הוסף אופסט לפי פוזיציה (חדש, נשלט ע"י LADDER_TP_PRICE_OFFSET_TICKS)
+            f = get_symbol_filters(sym) or {}
+            tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
+            offset_ticks = max(0, int(LADDER_TP_PRICE_OFFSET_TICKS))
+            price_val = float(stop_q)
+            if offset_ticks > 0:
+                if side == "SELL":  # סוגר LONG — עדיף מעט גבוה מ-stopPrice
+                    price_val = price_val + tick * offset_ticks
+                else:               # סוגר SHORT — עדיף מעט נמוך מ-stopPrice
+                    price_val = price_val - tick * offset_ticks
+            kwargs["price"] = _quantize_price(sym, price_val)
             kwargs["timeInForce"] = "GTC"
 
         if reduce_only and _is_hedge_mode_runtime():
@@ -1072,6 +1102,7 @@ __all__ = [
     "get_klines_df","close_all_positions","get_futures_client",
     "DEFAULT_QTY_STEP_STR","DEFAULT_PRICE_TICK_STR","DEFAULT_MIN_NOTIONAL",
 ]
+
 
 
 
