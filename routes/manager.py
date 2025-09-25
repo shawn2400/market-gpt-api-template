@@ -10,7 +10,7 @@ logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
 
 # ---- Config / Paths ----
-BASE_DIR   = Path(os.getenv("BASE_DIR", "/opt/render/project/src"))
+BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))  # שינוי ברירת-מחדל: /app לדוקר
 INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "10"))
@@ -180,4 +180,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
