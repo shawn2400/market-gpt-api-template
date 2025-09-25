@@ -1,3 +1,4 @@
+# app/signals_engine.py
 from __future__ import annotations
 import os, sys, re, asyncio, logging, json, inspect
 from typing import Optional, Dict, Any, List
@@ -61,60 +62,46 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
     }
 
 # ---------- executor adapter ----------
-async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
+async def _execute_via_trade_executor(sig: Dict[str, Any], *, dry: bool) -> Dict[str, Any]:
     """
-    תומך אוטומטית בחתימות נפוצות:
-      1) async def execute_trade_live(sig: dict) -> dict
-      2) def   execute_trade_live(sig: dict) -> dict
-      3) async def execute_trade_live(symbol, side, entry, sl, tps, lev, qty) -> dict
-      4) def   execute_trade_live(symbol, side, entry, sl, tps, lev, qty) -> dict
+    מתאים ל-execute_trade_live שלך (kwargs). מנסה גם app.trade_executor וגם utils.trade_executor.
     """
-    try:
-        from app.trade_executor import execute_trade_live
-    except Exception as e:
-        raise RuntimeError(f"trade_executor missing: {e}")
+    exc = None
+    execute_trade_live = None
+    for modpath in ("app.trade_executor", "utils.trade_executor"):
+        try:
+            mod = __import__(modpath, fromlist=["execute_trade_live"])
+            execute_trade_live = getattr(mod, "execute_trade_live")
+            break
+        except Exception as e:
+            exc = e
+            continue
+    if not execute_trade_live:
+        raise RuntimeError(f"trade_executor missing: {exc}")
 
-    fn = execute_trade_live
-    try:
-        sigspec = inspect.signature(fn)
-    except Exception:
-        sigspec = None
-
-    params = {
+    # בניית kwargs לפי החתימה בפועל שלך
+    kwargs: Dict[str, Any] = {
         "symbol": sig["symbol"],
-        "side": sig["side"],
-        "entry": sig["entry"],
-        "sl": sig["sl"],
-        "tps": sig["tps"],
-        "lev": sig.get("lev") or 0.0,
-        "qty": sig.get("qty") or 0.0,
+        "side": sig["side"],  # LONG/SHORT ייתמך אצלך ומנורמל ל-BUY/SELL
+        "dry_run": bool(dry),
     }
+    if sig.get("entry", 0) > 0: kwargs["entry"] = float(sig["entry"])
+    if sig.get("sl", 0)    > 0: kwargs["sl"]    = float(sig["sl"])
+    if sig.get("tps"):           kwargs["tp_targets"] = list(sig["tps"])
+    if sig.get("lev", 0)  > 0:   kwargs["leverage"]   = int(float(sig["lev"]))
+    if sig.get("qty", 0)  > 0:   kwargs["quantity"]   = float(sig["qty"])
 
-    is_coro = inspect.iscoroutinefunction(fn)
-    use_single = False
-    if sigspec:
-        p = list(sigspec.parameters.values())
-        if len(p) == 1:
-            use_single = True
-        else:
-            for x in p:
-                n = (x.name or "").lower()
-                if n in ("sig","signal","payload","data"):
-                    use_single = True
-                    break
+    # אפשר להעביר chat id אם קיים, ובמצב dry לא לדרוש אישור
+    if os.getenv("TELEGRAM_CHAT_ID"):
+        try:
+            kwargs["telegram_chat_id"] = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
+        except Exception:
+            pass
+    if dry:
+        kwargs["confirm_first"] = False  # ללא אישור ידני בסימולציה
 
-    try:
-        if use_single:
-            if is_coro:
-                return await fn(sig)  # type: ignore
-            return await asyncio.to_thread(fn, sig)  # type: ignore
-        else:
-            args = (params["symbol"], params["side"], params["entry"], params["sl"], params["tps"], params["lev"], params["qty"])
-            if is_coro:
-                return await fn(*args)  # type: ignore
-            return await asyncio.to_thread(fn, *args)  # type: ignore
-    except Exception as e:
-        raise RuntimeError(f"trade_executor failed: {e}")
+    # הפונקציה אצלך async – נקרא ישירות
+    return await execute_trade_live(**kwargs)  # type: ignore
 
 async def _start_user_stream_if_enabled():
     if (os.getenv("USER_STREAM_ENABLE","0").strip().lower() in ("1","true","on","yes")):
@@ -143,15 +130,13 @@ async def handle_signal(sig: Dict[str, Any]):
         )
     )
 
-    if mode == "dry":
-        log.info({"event":"dry_run","sig":sig})
-        return
-
+    dry = (mode == "dry")
     try:
-        res = await _execute_via_trade_executor(sig)
-        await _tg_send(f"✅ Executed {sig['symbol']} {sig['side']} | {json.dumps(res)[:400]}")
+        res = await _execute_via_trade_executor(sig, dry=dry)
+        # הודעה מקוצרת כדי לא לחרוג מאורך
+        await _tg_send(f"✅ {('DRY ' if dry else '')}Executed {sig['symbol']} {sig['side']} | {json.dumps(res)[:400]}")
     except Exception as e:
-        log.warning({"event":"execute_fallback","err":str(e)})
+        log.warning({"event":"execute_failed","err":str(e)})
         await _tg_send(f"⚠️ Execution failed via trade_executor\n{e}")
 
 async def main():
