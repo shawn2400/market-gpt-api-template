@@ -58,16 +58,17 @@ def dry_run_trade(
     exposure_usd = round(budget * leverage, 2)
 
     if norm_side == "LONG":
-        sl_pct = abs(_pct_change(float(sl), entry))
-        tp_pct = _pct_change(float(tp), entry)  # חיובי צפוי
+        sl_pct = abs(_pct_change(float(sl), entry))         # כמה נגדנו עד ל-SL (יחסית ל-entry)
+        tp_pct = _pct_change(float(tp), entry)              # כמה לטובתנו עד ל-TP (צפוי חיובי)
         tp_pnl = round((float(tp) - entry) * qty_est, 2)
-        sl_pnl = round((float(sl) - entry) * qty_est, 2)  # שלילי צפוי
+        sl_pnl = round((float(sl) - entry) * qty_est, 2)    # צפוי שלילי
     else:
         # SHORT
-        sl_pct = abs(_pct_change(entry, float(sl)))   # כמה נגדנו עד ל-SL
-        tp_pct = abs(_pct_change(entry, float(tp)))   # כמה לטובתנו עד ל-TP
+        # מדידה סימטרית תמיד ביחס ל-entry:
+        sl_pct = abs(_pct_change(float(sl), entry))         # כמה נגדנו עד ל-SL
+        tp_pct = abs(_pct_change(float(tp), entry))         # כמה לטובתנו עד ל-TP
         tp_pnl = round((entry - float(tp)) * qty_est, 2)
-        sl_pnl = round((entry - float(sl)) * qty_est, 2)  # שלילי צפוי
+        sl_pnl = round((entry - float(sl)) * qty_est, 2)    # צפוי שלילי
 
     rr = round(tp_pct / sl_pct, 3) if sl_pct > 0 else None
 
