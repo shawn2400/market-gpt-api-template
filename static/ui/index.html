@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AlgoGPT Dashboard</title>
+  <style>html,body{margin:0;background:#0b1220;color:#fff;font-family:Inter,Arial}</style>
+  <!-- הגדרות זמניות: ה-Gateway יחליף את הערכים האלו ב-template או תשאיר ידני -->
+  <script>
+    window.API_BASE = ""; // שורש ה-Gateway עצמו (יחסי)
+    window.API_TOKEN = "{{API_BEARER_TOKEN_PLACEHOLDER}}";
+  </script>
+  <!-- React + ReactDOM + Babel (dev) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- AI Chat sidebar (placeholder) -->
+  <div id="ai-chat" style="position:fixed;top:0;left:0;width:340px;height:100%;background:#0f172a;border-right:1px solid #1f2937;display:flex;flex-direction:column;z-index:50;padding:12px">
+    <div style="font-weight:700;margin-bottom:8px">AI Chat</div>
+    <div id="ai-chat-log" style="flex:1;overflow:auto;font-size:14px;opacity:.85"></div>
+    <div style="display:flex;gap:8px">
+      <input id="ai-chat-input" placeholder="כתוב חופשי..." style="flex:1;padding:8px;background:#111827;color:#fff;border:1px solid #374151;border-radius:8px" />
+      <button id="ai-chat-send" style="padding:8px 12px;background:#2563eb;border:none;border-radius:8px;color:#fff">שלח</button>
+    </div>
+  </div>
+
+  <!-- הדשבורד מוזז מעט ימינה כדי לא להתנגש בצ’אט -->
+  <div id="app-main" style="margin-inline-start:360px"></div>
+
+  <!-- הקוד של App.jsx כפי שנתת (ES6) נטען דרך Babel -->
+  <script type="text/babel" data-type="module">
+    ${/* כאן נכניס את תוכן dashboard/app.jsx כפי שהוא (ראה סעיף 3) */""}
+  </script>
+
+  <script type="text/babel">
+    // Mount ה-React App שהוגדר ב-app.jsx
+    const root = ReactDOM.createRoot(document.getElementById('app-main'));
+    root.render(React.createElement(App));
+
+    // Placeholder ל-AI Chat (שלב B יחליף ל-/ai/chat)
+    document.getElementById('ai-chat-send').onclick = () => {
+      const inp = document.getElementById('ai-chat-input');
+      const log = document.getElementById('ai-chat-log');
+      const q = (inp.value||'').trim();
+      if(!q) return;
+      const p = document.createElement('div'); p.textContent = "אתה: " + q; log.appendChild(p);
+      const a = document.createElement('div'); a.textContent = "AI: (בשלב B אשיב עם הקשר חי)"; a.style.opacity=".7"; log.appendChild(a);
+      inp.value="";
+      log.scrollTop = log.scrollHeight;
+    };
+  </script>
+</body>
+</html>
