@@ -1,8 +1,7 @@
-# signals_engine.py  (בשורש הפרויקט /app)
+# /app/signals_engine.py
 from __future__ import annotations
 import os, sys, re, asyncio, logging, json, inspect
 from typing import Optional, Dict, Any, List
-
 import httpx
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -33,7 +32,6 @@ async def _tg_send(text: str) -> None:
     except Exception as e:
         log.warning({"event":"tg_send_failed","err":str(e)})
 
-# ---------- signal parser ----------
 _SIG_RX = re.compile(
     r"(?P<symbol>[A-Z0-9]{3,15})\s+"
     r"(?P<side>LONG|SHORT|BUY|SELL)\s+"
@@ -56,7 +54,7 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
     if side == "SELL": side = "SHORT"
     return {
         "symbol": (m.group("symbol") or "").upper(),
-        "side":   side,  # LONG / SHORT
+        "side":   side,
         "entry":  float(m.group("entry") or 0.0),
         "sl":     float(m.group("sl") or 0.0),
         "tps":    tps,
@@ -64,25 +62,13 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
         "qty":    float(m.group("qty") or 0.0),
     }
 
-# ---------- executor adapter ----------
 async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    תומך אוטומטית בחתימות נפוצות של execute_trade_live:
-      - async/def execute_trade_live(**kwargs)
-      - async/def execute_trade_live(symbol, side, entry, sl, tps, lev, qty)
-    (אצלך המימוש נמצא ב: utils/trade_executor.py)
-    """
     try:
         from utils.trade_executor import execute_trade_live
     except Exception as e:
         raise RuntimeError(f"trade_executor missing: {e}")
 
     fn = execute_trade_live
-    try:
-        sigspec = inspect.signature(fn)
-    except Exception:
-        sigspec = None
-
     params = {
         "symbol": sig["symbol"],
         "side": "BUY" if sig["side"] == "LONG" else "SELL",
@@ -104,7 +90,6 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
         else:
             return await asyncio.to_thread(fn, **{k: v for k, v in params.items() if v is not None})  # type: ignore
     except TypeError:
-        # חתימה מצומצמת → positional
         args = (params["symbol"], params["side"], params["entry"], params["sl"],
                 params["tp_targets"], params["leverage"], params.get("quantity") or 0.0)
         if is_coro:
@@ -133,11 +118,9 @@ async def handle_signal(sig: Dict[str, Any]):
             lev=sig.get("lev") or "–", qty=sig.get("qty") or "–",
         )
     )
-
     if mode == "dry":
         log.info({"event":"dry_run","sig":sig})
         return
-
     try:
         res = await _execute_via_trade_executor(sig)
         await _tg_send(f"✅ Executed {sig['symbol']} {sig['side']} | {json.dumps(res)[:400]}")
@@ -147,7 +130,6 @@ async def handle_signal(sig: Dict[str, Any]):
 
 async def main():
     await _start_user_stream_if_enabled()
-
     src = (os.getenv("WATCH_SOURCE") or "stdin").strip().lower()
     cmd = os.getenv("WATCH_CMD", "")
     await _tg_send(f"🚀 Signals engine started. Mode: <b>{_mode().upper()}</b> (source={src})")
