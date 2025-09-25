@@ -5,20 +5,16 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AlgoGPT Dashboard</title>
   <style>html,body{margin:0;background:#0b1220;color:#fff;font-family:Inter,Arial}</style>
-  <!-- הגדרות זמניות: ה-Gateway יחליף את הערכים האלו ב-template או תשאיר ידני -->
   <script>
-    window.API_BASE = ""; // שורש ה-Gateway עצמו (יחסי)
-    window.API_TOKEN = "{{API_BEARER_TOKEN_PLACEHOLDER}}";
+    // השרת המשני יחליף את המחרוזת __API_TOKEN__ ב-ENV בזמן הגשה
+    window.API_BASE = ""; 
+    window.API_TOKEN = "__API_TOKEN__";
   </script>
-  <!-- React + ReactDOM + Babel (dev) -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body>
-  <div id="root"></div>
-
-  <!-- AI Chat sidebar (placeholder) -->
   <div id="ai-chat" style="position:fixed;top:0;left:0;width:340px;height:100%;background:#0f172a;border-right:1px solid #1f2937;display:flex;flex-direction:column;z-index:50;padding:12px">
     <div style="font-weight:700;margin-bottom:8px">AI Chat</div>
     <div id="ai-chat-log" style="flex:1;overflow:auto;font-size:14px;opacity:.85"></div>
@@ -27,31 +23,125 @@
       <button id="ai-chat-send" style="padding:8px 12px;background:#2563eb;border:none;border-radius:8px;color:#fff">שלח</button>
     </div>
   </div>
-
-  <!-- הדשבורד מוזז מעט ימינה כדי לא להתנגש בצ’אט -->
   <div id="app-main" style="margin-inline-start:360px"></div>
 
-  <!-- הקוד של App.jsx כפי שנתת (ES6) נטען דרך Babel -->
-  <script type="text/babel" data-type="module">
-    ${/* כאן נכניס את תוכן dashboard/app.jsx כפי שהוא (ראה סעיף 3) */""}
-  </script>
-
+  <!-- הדבק כאן את תוכן dashboard/app.jsx כמות שהוא -->
   <script type="text/babel">
-    // Mount ה-React App שהוגדר ב-app.jsx
+    // --- BEGIN app.jsx ---
+    // dashboard/app.jsx
+    const {useEffect,useState} = React;
+
+    const API_BASE = (window.API_BASE || "").replace(/\/+$/,"") || "";
+
+    function authHeaders(){
+      const tok = window.API_TOKEN || "";
+      return {"X-API-Key":tok,"Authorization":"Bearer "+tok};
+    }
+    async function jget(path){
+      const r = await fetch(API_BASE+path,{headers:authHeaders()});
+      if(!r.ok){ if(r.status===401){ throw new Error("Unauthorized – בדוק את window.API_TOKEN / window.API_BASE");}
+        throw new Error(`HTTP ${r.status}`);}
+      return r.json();
+    }
+
+    function App(){
+      const [accounts,setAccounts]=useState([]);
+      const [accountId,setAccountId]=useState("");
+      const [activeGrids,setActiveGrids]=useState([]);
+      const [trades,setTrades]=useState([]);
+      const [pnl,setPnl]=useState(null);
+      const [err,setErr]=useState("");
+
+      useEffect(()=>{
+        jget("/ui/grid/accounts").then((data)=>{
+          if(data.ok){
+            const list=Array.isArray(data.accounts)?data.accounts:[];
+            setAccounts(list); if(list.length) setAccountId(list[0]);
+          } else setErr("Accounts API returned !ok");
+        }).catch(e=>setErr(String(e)));
+      },[]);
+
+      const loadData=()=>{
+        if(!accountId) return; setErr("");
+        jget(`/ui/grid/active?account_id=${encodeURIComponent(accountId)}`).then(d=>setActiveGrids(Array.isArray(d.active)?d.active:[])).catch(e=>setErr(String(e)));
+        jget(`/ui/grid/trades?account_id=${encodeURIComponent(accountId)}`).then(d=>setTrades(Array.isArray(d.trades)?d.trades:[])).catch(e=>setErr(String(e)));
+        jget(`/ui/grid/pnl?account_id=${encodeURIComponent(accountId)}`).then(d=>setPnl(d?.summary??null)).catch(e=>setErr(String(e)));
+      };
+
+      useEffect(()=>{ loadData(); },[accountId]);
+
+      return (
+        React.createElement("div",{className:"min-h-screen",style:{background:"#0b1220",color:"#fff",padding:"24px"}},
+          React.createElement("h1",{style:{fontSize:"22px",fontWeight:700,marginBottom:"12px"}},"AlgoGPT Grid Dashboard"),
+          err && React.createElement("div",{style:{marginBottom:"12px",background:"#7f1d1d",border:"1px solid #ef4444",borderRadius:"8px",padding:"8px",fontSize:"14px"}},err),
+          React.createElement("div",{style:{marginBottom:"20px"}},
+            React.createElement("label",{style:{marginInlineEnd:"8px"}},"בחר חשבון:"),
+            React.createElement("select",{value:accountId,onChange:e=>setAccountId(e.target.value),style:{background:"#111827",border:"1px solid #4b5563",padding:"8px",borderRadius:"8px"}},
+              accounts.map(acc=>React.createElement("option",{key:acc,value:acc},acc))
+            ),
+            React.createElement("button",{onClick:loadData,style:{marginInlineStart:"12px",background:"#2563eb",padding:"6px 12px",borderRadius:"8px",border:"none",color:"#fff"}},"רענן")
+          ),
+          React.createElement("div",{style:{marginBottom:"20px"}},
+            React.createElement("h2",{style:{fontSize:"18px",fontWeight:600,marginBottom:"8px"}},"גרידים פעילים"),
+            activeGrids.length===0? React.createElement("p",null,"אין גרידים פעילים."):
+            React.createElement("table",{style:{width:"100%",borderCollapse:"collapse",border:"1px solid #374151",fontSize:"14px"}},
+              React.createElement("thead",null,
+                React.createElement("tr",{style:{background:"#111827"}},
+                  React.createElement("th",{style:{padding:"8px",border:"1px solid #374151"}},"Symbol"),
+                  React.createElement("th",{style:{padding:"8px",border:"1px solid #374151"}},"Orders")
+                )
+              ),
+              React.createElement("tbody",null,
+                activeGrids.map((g,i)=>React.createElement("tr",{key:i,style:{background:"#0b1220"}},
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},g.symbol),
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},Array.isArray(g.orders)?g.orders.length:0)
+                ))
+              )
+            )
+          ),
+          React.createElement("div",{style:{marginBottom:"20px"}},
+            React.createElement("h2",{style:{fontSize:"18px",fontWeight:600,marginBottom:"8px"}},"טריידים"),
+            trades.length===0? React.createElement("p",null,"אין טריידים להצגה."):
+            React.createElement("table",{style:{width:"100%",borderCollapse:"collapse",border:"1px solid #374151",fontSize:"13px"}},
+              React.createElement("thead",null,
+                React.createElement("tr",{style:{background:"#111827"}},
+                  ["ID","Symbol","Side","Entry","SL","TP","PNL"].map(h=>React.createElement("th",{key:h,style:{padding:"8px",border:"1px solid #374151"}},h))
+                )
+              ),
+              React.createElement("tbody",null,
+                trades.map((t,i)=>React.createElement("tr",{key:i},
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},t.trade_id),
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},t.symbol),
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},t.side),
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},t.entry_price),
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},t.stop_price),
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},Array.isArray(t.tp_prices)?t.tp_prices.join(", "):""),
+                  React.createElement("td",{style:{padding:"8px",border:"1px solid #374151"}},t.realized_pnl)
+                ))
+              )
+            )
+          ),
+          React.createElement("div",null,
+            React.createElement("h2",{style:{fontSize:"18px",fontWeight:600,marginBottom:"8px"}},"סיכום PnL"),
+            !pnl? React.createElement("p",null,"אין נתונים."):
+            React.createElement("pre",{style:{background:"#111827",padding:"12px",borderRadius:"8px",overflow:"auto"}},JSON.stringify(pnl,null,2))
+          )
+        )
+      );
+    }
+
     const root = ReactDOM.createRoot(document.getElementById('app-main'));
     root.render(React.createElement(App));
-
-    // Placeholder ל-AI Chat (שלב B יחליף ל-/ai/chat)
-    document.getElementById('ai-chat-send').onclick = () => {
-      const inp = document.getElementById('ai-chat-input');
-      const log = document.getElementById('ai-chat-log');
-      const q = (inp.value||'').trim();
-      if(!q) return;
-      const p = document.createElement('div'); p.textContent = "אתה: " + q; log.appendChild(p);
-      const a = document.createElement('div'); a.textContent = "AI: (בשלב B אשיב עם הקשר חי)"; a.style.opacity=".7"; log.appendChild(a);
-      inp.value="";
-      log.scrollTop = log.scrollHeight;
+    document.getElementById('ai-chat-send').onclick=()=>{
+      const inp=document.getElementById('ai-chat-input');
+      const log=document.getElementById('ai-chat-log');
+      const q=(inp.value||"").trim(); if(!q) return;
+      const p=document.createElement('div'); p.textContent="אתה: "+q; log.appendChild(p);
+      const a=document.createElement('div'); a.textContent="AI: (בשלב B אחובר ל-/ai/chat)"; a.style.opacity=".7"; log.appendChild(a);
+      inp.value=""; log.scrollTop=log.scrollHeight;
     };
+    // --- END app.jsx ---
   </script>
 </body>
 </html>
+
