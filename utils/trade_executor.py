@@ -44,6 +44,7 @@ ESCALATE_SLIP_BPS     = float(os.getenv("ESCALATE_SLIPPAGE_BPS", "15"))
 PERCENT_PRICE_GUARD_BPS = float(os.getenv("PERCENT_PRICE_GUARD_BPS", "45"))
 SLIPPAGE_GUARD_BPS      = float(os.getenv("SLIPPAGE_GUARD_BPS", "35"))
 POST_FILL_SANITY_BPS    = float(os.getenv("POST_FILL_SANITY_BPS", "40"))
+ENFORCE_POST_FILL_SANITY = os.getenv("ENFORCE_POST_FILL_SANITY", "1").lower() in ("1","true","yes","on")
 
 # Gate/Quality
 QUALITY_DEFAULT       = float(os.getenv("QUALITY_DEFAULT", "6"))
@@ -532,6 +533,12 @@ def _cancel_old_closing_orders(symbol: str) -> int:
         tps = ("TAKE_PROFIT", "TAKE_PROFIT_MARKET")
         sls = ("STOP", "STOP_MARKET")
         pref = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
+
+        # אם הופעל דגל ביטול לפי prefix בלבד – אך אין prefix – נחסום ביטולים לחלוטין
+        if CANCEL_ONLY_PREFIXED_ORDERS and not pref:
+            log.warning("CANCEL_ONLY_PREFIXED_ORDERS=1 אך ללא prefix -> ביטול נחסם (0 orders).")
+            return 0
+
         only_pref = bool(CANCEL_ONLY_PREFIXED_ORDERS and pref)
         count = 0
         for o in orders:
@@ -880,6 +887,18 @@ async def execute_trade_live(
     sanity_ok = bool(entry_res.get("sanity_ok", True))
     sanity_bps = entry_res.get("sanity_bps")
 
+    # אכיפת sanity לאחר כניסה – נסגור מיידית אם חורג מהסף
+    if ENFORCE_POST_FILL_SANITY and not sanity_ok:
+        rb = _safe_close_position(sym, side, qty, position_side=position_side)
+        return {
+            "ok": False,
+            "reason": "post_fill_sanity_failed",
+            "sanity_bps": sanity_bps,
+            "rolled_back": True,
+            "rollback": rb,
+            "entry_result": entry_res,
+        }
+
     plan: Dict[str, Any] = {
         "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage,
         "base_price": float(base_price), "dry_run": False,
@@ -904,7 +923,11 @@ async def execute_trade_live(
             return futures_create_order(**args)
         except Exception as e:
             msg = str(e).lower()
-            if "reduceonly" in msg or "reduce only" in msg:
+            code = getattr(e, "code", None)
+            if (
+                "reduceonly" in msg or "reduce only" in msg or "-1106" in msg
+                or code == -1106
+            ):
                 a2 = dict(args)
                 a2.pop("reduceOnly", None)
                 return futures_create_order(**a2)
@@ -980,7 +1003,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
         return {"ok": True, "response": futures_create_order(**args)}
     except Exception as e:
         msg = str(e).lower()
-        if "reduceonly" in msg or "reduce only" in msg:
+        if "reduceonly" in msg or "reduce only" in msg or "-1106" in msg or getattr(e, "code", None) == -1106:
             args2 = dict(args); args2.pop("reduceOnly", None)
             try:
                 return {"ok": True, "response": futures_create_order(**args2)}
