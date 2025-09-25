@@ -6,14 +6,21 @@ from asyncio.subprocess import PIPE
 
 from utils.signal_parser import parse_text_signal
 from utils.mode_store import ExecMode
-from utils.config import cfg_for_symbol  # אם השתמשת בגרסה הפשוטה שלי, החלף לשלה
 from utils.trade_executor import execute_trade_live
 from telegram.commands import poll_bot_commands, send_message
+
+# אופציונלי: אם יש לך פונקציה שנותנת קונפיג פר-סימבול
+try:
+    from utils.config import cfg_for_symbol  # type: ignore
+except Exception:
+    def cfg_for_symbol(symbol: str) -> dict:
+        return {}
 
 log = logging.getLogger("algogpt.signals_engine")
 TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
 WATCH_SOURCE = os.getenv("WATCH_SOURCE", "stdin").lower()  # "stdin" | "process"
 WATCH_CMD = os.getenv("WATCH_CMD", "/app/bw notify --symbols BTC,ETH --compact --watch")
+USER_STREAM_ENABLE = str(os.getenv("USER_STREAM_ENABLE", "0")).lower() in ("1","true","yes","on")
 
 def _setup_logging() -> None:
     LOG_PATH = os.getenv("ALGOGPT_LOG_PATH", "/app/logs/algogpt.log")
@@ -104,10 +111,25 @@ async def _handle_line(line: str) -> None:
     if res.get("ok"):
         await _notify(sig, res, "armed")
 
+async def _maybe_start_user_stream():
+    if not USER_STREAM_ENABLE:
+        return
+    try:
+        # import מקומי כדי שלא יהיה תלות קשה אם מישהו לא רוצה סטרים
+        from app.order_stream import start_user_stream  # type: ignore
+        asyncio.create_task(start_user_stream())
+        log.info("User stream task spawned")
+    except Exception as e:
+        log.warning("User stream not started: %s", e)
+
 async def main() -> None:
     _setup_logging()
     log.info("Signals engine starting… mode=%s source=%s", ExecMode.get().upper(), WATCH_SOURCE)
-    asyncio.create_task(poll_bot_commands())  # polling לגיבוי
+    # פקודות טלגרם (פולינג) כרקע
+    asyncio.create_task(poll_bot_commands())
+    # user stream כ־hook לא חוסם
+    await _maybe_start_user_stream()
+
     if WATCH_SOURCE == "process":
         async for line in _run_process_and_stream(WATCH_CMD):
             if line: await _handle_line(line)
