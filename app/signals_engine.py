@@ -1,8 +1,6 @@
-# app/signals_engine.py
 from __future__ import annotations
 import os, sys, re, asyncio, logging, json, inspect
 from typing import Optional, Dict, Any, List
-
 import httpx
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -72,7 +70,7 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
       4) def   execute_trade_live(symbol, side, entry, sl, tps, lev, qty) -> dict
     """
     try:
-        from app.trade_executor import execute_trade_live  # אם אין—יעלה החרגה
+        from app.trade_executor import execute_trade_live
     except Exception as e:
         raise RuntimeError(f"trade_executor missing: {e}")
 
@@ -93,7 +91,6 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     is_coro = inspect.iscoroutinefunction(fn)
-
     use_single = False
     if sigspec:
         p = list(sigspec.parameters.values())
