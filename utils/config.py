@@ -5,7 +5,7 @@ import os
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import List, Set, Dict, Optional
+from typing import List, Set, Dict, Optional, Union, Any
 
 log = logging.getLogger("algogpt.config")
 
@@ -29,16 +29,17 @@ def _env_int(name: str, default: int) -> int:
     except Exception:
         return default
 
-def _split_csv(s: str | None) -> List[str]:
+def _split_csv(s: Optional[str]) -> List[str]:
     if not s:
         return []
     return [x.strip() for x in s.split(",") if x.strip()]
 
-def _load_json_env(name: str, fallback: Dict | str = "{}") -> Dict:
+def _load_json_env(name: str, fallback: Union[Dict[str, Any], str] = "{}") -> Dict[str, Any]:
     raw = os.getenv(name)
     src = raw if (raw and raw.strip()) else (fallback if isinstance(fallback, str) else json.dumps(fallback))
     try:
-        return json.loads(src)
+        obj = json.loads(src)
+        return obj if isinstance(obj, dict) else {}
     except Exception:
         return {}
 
