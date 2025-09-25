@@ -1,7 +1,7 @@
 # server/webhook.py
 from __future__ import annotations
-import os, hmac, hashlib, logging, httpx
-from typing import Any, Dict, Optional
+import os, hmac, hashlib, logging
+from typing import Optional
 from fastapi import FastAPI, Request, HTTPException
 
 from utils.mode_store import ExecMode
@@ -10,7 +10,6 @@ from telegram.commands import send_message
 
 log = logging.getLogger("algogpt.server.webhook")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
-API_BASE  = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 ADMIN_USER_ID = os.getenv("TELEGRAM_ADMIN_ID","").strip() or os.getenv("ADMIN_CHAT_ID","").strip()
 
@@ -23,18 +22,13 @@ def _authorized(uid: Optional[int]) -> bool:
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request):
-    # (אופציונלי) אימות חתימה משלך (אם תשלח X-Hub-Signature משלך)
     if WEBHOOK_SECRET:
         sig = req.headers.get("X-Tg-Sign","")
         body = await req.body()
         exp = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, exp):
             raise HTTPException(401, "bad signature")
-    else:
-        body = await req.body()
-
     data = await req.json()
-    # מסרים רגילים + פקודות
     msg = data.get("message") or data.get("edited_message")
     if msg:
         chat_id = (msg.get("chat") or {}).get("id")
@@ -53,8 +47,6 @@ async def telegram_webhook(req: Request):
             await send_message(chat_id, f"מצב נוכחי: <b>{ExecMode.get().upper()}</b>\nשנה באמצעות: /mode dry או /mode live", "HTML")
             return {"ok": True}
         return {"ok": True}
-
-    # כפתורי inline לאישור/ביטול טרייד
     cb = data.get("callback_query")
     if cb:
         chat_id = (cb.get("message") or {}).get("chat",{}).get("id")
@@ -72,5 +64,5 @@ async def telegram_webhook(req: Request):
                 ConfirmStore.reject(cid, str(from_id))
                 await send_message(chat_id, f"❌ בוטל · CID={cid}")
         return {"ok": True}
-
     return {"ok": True}
+
