@@ -1,7 +1,15 @@
-# main.py
-from fastapi import FastAPI
+# main.py (ops-approval-web)
+from __future__ import annotations
+import os
+from fastapi import FastAPI, Response
+from fastapi.staticfiles import StaticFiles
+
 from routes.ops_approve import router as ops_router
 from routes.telegram_ping import router as tg_router
+
+# ⬇️ חדש
+from routes.ui_grid import router as ui_grid_router
+from routes.streams import router as streams_router
 
 app = FastAPI(title="Ops Approval Webhook", version="0.1.0")
 
@@ -13,9 +21,23 @@ async def health():
 async def whoami():
     return {"ok": True, "service": "ops-approval-web", "version": "0.1.0"}
 
-# include only our routers
+# ⬇️ סטטיים + UI
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/ui", include_in_schema=False)
+def serve_ui() -> Response:
+    token = os.getenv("API_BEARER_TOKEN","")
+    path = os.path.join("static","ui","index.html")
+    with open(path, "r", encoding="utf-8") as f:
+        html = f.read()
+    html = html.replace("__API_TOKEN__", token)
+    return Response(content=html, media_type="text/html")
+
+# ⬇️ ראוטרים
 app.include_router(ops_router)
 app.include_router(tg_router)
+app.include_router(ui_grid_router)
+app.include_router(streams_router)
 
 
 
