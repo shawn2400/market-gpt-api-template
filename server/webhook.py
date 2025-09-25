@@ -1,100 +1,59 @@
-# /app/server/webhook.py
+# server/webhook.py
 from __future__ import annotations
-import os
-import logging
-from typing import Optional
+import os, logging
 from fastapi import FastAPI, Request
-import httpx
+from fastapi.responses import JSONResponse
 
-log = logging.getLogger("webhook")
-app = FastAPI(title="AlgoGPT Webhook")
+log = logging.getLogger("algogpt.webhook")
+app = FastAPI(title="AlgoGPT Minimal Webhook")
 
-# ── Mode resolution (בלי להוסיף ENV חדשים) ─────────────────────────────
-# סדר עדיפויות:
-# 1) ROUTES_ONLY = "live"|"dry" (שימוש כ-FORCE_MODE מבלי להוסיף משתנה חדש)
-# 2) DEFAULT_MODE = "live"|"dry" (אם תרצה בכל זאת להגדיר)
-# 3) EXECUTE_TRADES (1→live, אחרת dry) ← כבר קיים אצלך
-def _initial_mode() -> str:
+# ---- Mode resolution (NO new ENVs) ----
+# FORCE_MODE: use ROUTES_ONLY if it's "live" or "dry"; else fall back to EXECUTE_TRADES.
+def _resolve_mode() -> str:
     force = (os.getenv("ROUTES_ONLY") or "").strip().lower()
     if force in ("live", "dry"):
         return force
-    dflt = (os.getenv("DEFAULT_MODE") or "").strip().lower()
-    if dflt in ("live", "dry"):
-        return dflt
-    exec_trades = (os.getenv("EXECUTE_TRADES", "1")).strip().lower()
-    return "live" if exec_trades in ("1", "true", "yes", "on") else "dry"
+    exec_trades = (os.getenv("EXECUTE_TRADES", "0").strip().lower() in ("1", "true", "yes", "on"))
+    return "live" if exec_trades else "dry"
 
-_MODE = _initial_mode()
+_MODE = _resolve_mode()
 
-def get_mode() -> str:
-    return _MODE
-
-def set_mode(val: str) -> None:
-    global _MODE
-    _MODE = "live" if str(val).lower().strip() == "live" else "dry"
-
-# ── Telegram minimal helper ─────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-async def _tg_send(chat_id: int, text: str, parse: Optional[str] = "HTML") -> None:
-    if not TELEGRAM_BOT_TOKEN or not chat_id:
-        return
-    payload = {"chat_id": chat_id, "text": text}
-    if parse:
-        payload["parse_mode"] = parse
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(f"{TELEGRAM_API}/sendMessage", json=payload)
-    except Exception as e:
-        log.warning("telegram send failed: %s", e)
-
-# ── Routes ──────────────────────────────────────────────────────────────
 @app.get("/ping")
 async def ping():
-    return {"ok": True, "mode": get_mode()}
+    """No auth; quick health and current mode."""
+    global _MODE
+    # refresh on each call so you can flip ENV live/dry without restart
+    _MODE = _resolve_mode()
+    return JSONResponse({"ok": True, "mode": _MODE})
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request):
-    body = await req.json()
-    msg = body.get("message") or body.get("edited_message")
-    cb  = body.get("callback_query")
+    # keep it minimal; just acknowledge to avoid Telegram retries
+    try:
+        body = await req.json()
+        log.info({"event": "tg_update", "has_message": bool(body.get("message"))})
+    except Exception as e:
+        log.warning({"event": "tg_bad_update", "err": str(e)})
+    return JSONResponse({"ok": True})
 
-    # /mode command
-    if msg:
-        chat_id = (msg.get("chat") or {}).get("id")
-        text = (msg.get("text") or "").strip()
-        if text.startswith("/mode"):
-            _, _, arg = text.partition(" ")
-            set_mode(arg or "dry")
-            await _tg_send(chat_id, f"מצב עודכן: <b>{get_mode().upper()}</b>")
-            return {"ok": True}
-        if text in ("/mode", "/mode@bot"):
-            await _tg_send(chat_id, f"מצב נוכחי: <b>{get_mode().upper()}</b>\nשנה באמצעות: /mode dry או /mode live")
-            return {"ok": True}
-        return {"ok": True}
+@app.get("/mode")
+async def mode_get():
+    global _MODE
+    _MODE = _resolve_mode()
+    return JSONResponse({"ok": True, "mode": _MODE})
 
-    # Inline-approve/reject (תואם לפורמט מ-ConfirmStore)
-    if cb:
-        chat_id = (cb.get("message") or {}).get("chat", {}).get("id")
-        data_str = cb.get("data") or ""
-        try:
-            _, action, cid = data_str.split(":", 2)
-        except Exception:
-            return {"ok": True}
-        try:
-            from utils.trade_executor import ConfirmStore
-            approver = str((cb.get("from") or {}).get("id"))
-            if action == "APPROVE":
-                ConfirmStore.approve(cid, approver)
-                await _tg_send(chat_id, f"✅ אושר · CID=<code>{cid}</code>")
-            elif action == "REJECT":
-                ConfirmStore.reject(cid, approver)
-                await _tg_send(chat_id, f"❌ בוטל · CID=<code>{cid}</code>")
-        except Exception as e:
-            log.warning("confirm handler failed: %s", e)
-        return {"ok": True}
+@app.post("/mode/{new_mode}")
+async def mode_post(new_mode: str):
+    """Runtime override using existing ROUTES_ONLY (no new envs).
+       /mode/live or /mode/dry will just set the process-level cache.
+       Real source of truth remains ROUTES_ONLY/EXECUTE_TRADES.
+    """
+    global _MODE
+    nm = (new_mode or "").strip().lower()
+    if nm not in ("live", "dry"):
+        return JSONResponse({"ok": False, "error": "mode must be live|dry"}, status_code=400)
+    _MODE = nm
+    return JSONResponse({"ok": True, "mode": _MODE})
 
-    return {"ok": True}
 
 
