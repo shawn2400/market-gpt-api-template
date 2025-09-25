@@ -1,4 +1,4 @@
-# signals_engine.py  (שורש הפרויקט)
+# signals_engine.py  (בשורש הפרויקט /app)
 from __future__ import annotations
 import os, sys, re, asyncio, logging, json, inspect
 from typing import Optional, Dict, Any, List
@@ -9,33 +9,29 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("algogpt.signals_engine")
 
 TG_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-TG_CHAT  = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
+try:
+    TG_CHAT = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
+except Exception:
+    TG_CHAT = 0
 
 def _mode() -> str:
-    # עדיפות ידנית: ROUTES_ONLY=live/dry  -> אחרת EXECUTE_TRADES=1
     force = (os.getenv("ROUTES_ONLY") or "").strip().lower()
     if force in ("live", "dry"):
         return force
-    exec_trades = (os.getenv("EXECUTE_TRADES", "0").strip().lower() in ("1", "true", "yes", "on"))
+    exec_trades = (os.getenv("EXECUTE_TRADES", "0").strip().lower() in ("1","true","yes","on"))
     return "live" if exec_trades else "dry"
 
 async def _tg_send(text: str) -> None:
     if not TG_TOKEN or not TG_CHAT:
-        log.info({"event": "tg_skip", "reason": "no_token_or_chat"})
+        log.info({"event":"tg_skip","reason":"no_token_or_chat"})
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TG_CHAT,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    to = httpx.Timeout(10.0, connect=10.0)
+    payload = {"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
-        async with httpx.AsyncClient(timeout=to) as cli:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=10.0)) as cli:
             await cli.post(url, data=payload)
     except Exception as e:
-        log.warning({"event": "tg_send_failed", "err": str(e)})
+        log.warning({"event":"tg_send_failed","err":str(e)})
 
 # ---------- signal parser ----------
 _SIG_RX = re.compile(
@@ -56,7 +52,6 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
     tp_raw = (m.group("tp") or "").replace(" ", "")
     tps: List[float] = [float(x) for x in tp_raw.split(",") if x] if tp_raw else []
     side = (m.group("side") or "").upper()
-    # מנרמלים ל- LONG/SHORT פנימי
     if side == "BUY": side = "LONG"
     if side == "SELL": side = "SHORT"
     return {
@@ -72,10 +67,10 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
 # ---------- executor adapter ----------
 async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
     """
-    תומך בחתימות:
+    תומך אוטומטית בחתימות נפוצות של execute_trade_live:
       - async/def execute_trade_live(**kwargs)
       - async/def execute_trade_live(symbol, side, entry, sl, tps, lev, qty)
-    הייבוא אצלך מ- utils.trade_executor
+    (אצלך המימוש נמצא ב: utils/trade_executor.py)
     """
     try:
         from utils.trade_executor import execute_trade_live
@@ -88,40 +83,30 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         sigspec = None
 
-    # execute_trade_live שלך מקבל side בסגנון BUY/SELL (הוא גם מנרמל LONG/SHORT, אבל נשלח BUY/SELL)
-    side_buy_sell = "BUY" if sig["side"] == "LONG" else "SELL"
-
     params = {
         "symbol": sig["symbol"],
-        "side": side_buy_sell,
+        "side": "BUY" if sig["side"] == "LONG" else "SELL",
         "entry": sig["entry"] or None,
         "sl":    sig["sl"] or None,
-        "tp_targets": sig["tps"] or None,  # מתאים לשם הפרמטר אצלך
+        "tp_targets": sig["tps"] or None,
         "leverage": int(sig.get("lev") or 0),
         "quantity": float(sig.get("qty") or 0.0) or None,
         "dry_run": (_mode() == "dry"),
         "confirm_first": True,
-        "telegram_chat_id": int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0"),
+        "telegram_chat_id": TG_CHAT or None,
         "position_side": "LONG" if sig["side"] == "LONG" else "SHORT",
     }
 
     is_coro = inspect.iscoroutinefunction(fn)
-
-    # נעדיף **kwargs. אם ייזרק TypeError על חתימה מצומצמת – ננסה positional.
-    kwargs_clean = {k: v for k, v in params.items() if v is not None}
     try:
         if is_coro:
-            return await fn(**kwargs_clean)  # type: ignore
+            return await fn(**{k: v for k, v in params.items() if v is not None})  # type: ignore
         else:
-            return await asyncio.to_thread(fn, **kwargs_clean)  # type: ignore
+            return await asyncio.to_thread(fn, **{k: v for k, v in params.items() if v is not None})  # type: ignore
     except TypeError:
-        # ניסיון גיבוי לחתימה positional ישנה:
-        args = (
-            params["symbol"], side_buy_sell,
-            params.get("entry"), params.get("sl"),
-            params.get("tp_targets"), params.get("leverage"),
-            params.get("quantity") or 0.0,
-        )
+        # חתימה מצומצמת → positional
+        args = (params["symbol"], params["side"], params["entry"], params["sl"],
+                params["tp_targets"], params["leverage"], params.get("quantity") or 0.0)
         if is_coro:
             return await fn(*args)  # type: ignore
         return await asyncio.to_thread(fn, *args)  # type: ignore
@@ -142,14 +127,10 @@ async def handle_signal(sig: Dict[str, Any]):
     mode = _mode()
     await _tg_send(
         "📥 <b>Signal</b> [{mode}] {sym} {side}\nentry={entry} sl={sl} tp={tps} lev={lev} qty={qty}".format(
-            mode=mode,
-            sym=sig["symbol"],
-            side=sig["side"],
-            entry=sig.get("entry") or "–",
-            sl=sig.get("sl") or "–",
+            mode=mode, sym=sig["symbol"], side=sig["side"],
+            entry=sig.get("entry") or "–", sl=sig.get("sl") or "–",
             tps=",".join(map(str, sig.get("tps") or [])) or "–",
-            lev=sig.get("lev") or "–",
-            qty=sig.get("qty") or "–",
+            lev=sig.get("lev") or "–", qty=sig.get("qty") or "–",
         )
     )
 
@@ -207,6 +188,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
 
