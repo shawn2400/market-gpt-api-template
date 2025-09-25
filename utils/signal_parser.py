@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from typing import Optional, Dict, Any
 
+# דוגמאות נתמכות:
+# "BUY BTCUSDT @ 63985 qty=0.001 lev=10 tp=64200 sl=63500"
+# "SELL ETHUSDT @ 2530"
 SIG_RE = re.compile(
     r'(?P<side>BUY|SELL)\s+(?P<symbol>[A-Z0-9]+)\s*@\s*(?P<entry>\d+(?:\.\d+)?)'
     r'(?:.*?\bqty=(?P<qty>\d+(?:\.\d+)?))?'
@@ -13,6 +16,13 @@ SIG_RE = re.compile(
 )
 
 def parse_text_signal(line: str) -> Optional[Dict[str, Any]]:
+    """
+    קולט שורה טקסטואלית ומחזיר dict עם:
+    { side, symbol, entry, quantity?, leverage?, tp?, sl? }
+    אם אין התאמה – מחזיר None.
+    """
+    if not line:
+        return None
     m = SIG_RE.search(line)
     if not m:
         return None
@@ -27,3 +37,4 @@ def parse_text_signal(line: str) -> Optional[Dict[str, Any]]:
     if g.get("tp"):  out["tp"] = float(g["tp"])
     if g.get("sl"):  out["sl"] = float(g["sl"])
     return out
+
