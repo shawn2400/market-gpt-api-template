@@ -6,7 +6,7 @@ from asyncio.subprocess import PIPE
 
 from utils.signal_parser import parse_text_signal
 from utils.mode_store import ExecMode
-from utils.config import cfg_for_symbol
+from utils.config import cfg_for_symbol  # אם השתמשת בגרסה הפשוטה שלי, החלף לשלה
 from utils.trade_executor import execute_trade_live
 from telegram.commands import poll_bot_commands, send_message
 
@@ -41,9 +41,9 @@ async def _run_process_and_stream(cmd: str):
         except Exception: pass
 
 async def _read_stdin_lines():
-    loop = asyncio.get_event_loop()
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
+    loop = asyncio.get_event_loop()
     await loop.connect_read_pipe(lambda: protocol, sys.stdin)
     while True:
         line = await reader.readline()
@@ -70,7 +70,7 @@ async def _notify(signal: dict, result: dict, stage: str = "result") -> None:
         if stage == "armed":
             tp_n = len(result.get("tp_orders") or [])
             sl_n = len(result.get("sl_orders") or [])
-            await send_message(TELEGRAM_CHAT_ID, f"🛡️ Armed TP/SL: {sym} → TP={tp_n}, SL={sl_n}", None)
+            await send_message(TELEGRAM_CHAT_ID, f"🛡️ Armed TP/SL: {sym} → TP={tp_n}, SL={sl_n}")
             return
         if ok:
             txt = (f"✅ <b>{'DRY' if dry else 'LIVE'}</b> {side} <b>{sym}</b>@{ent} "
@@ -88,32 +88,18 @@ async def _handle_line(line: str) -> None:
     sig = parse_text_signal(line)
     if not sig:
         return
-
-    # Mode
     dry_run = (ExecMode.get() == "dry")
-
-    # per-symbol config
-    sym_cfg = cfg_for_symbol(sig["symbol"])
+    sym_cfg = cfg_for_symbol(sig["symbol"]) if 'cfg_for_symbol' in globals() else {}
     lev = int(sig.get("leverage") or sym_cfg.get("default_leverage") or os.getenv("MIN_LEVERAGE", 5))
-
     params = dict(
-        symbol=sig["symbol"],
-        side=sig["side"],
-        entry=sig.get("entry"),
-        quantity=sig.get("quantity"),
-        leverage=lev,
-        tp=sig.get("tp"),
-        sl=sig.get("sl"),
-        dry_run=dry_run,
-        confirm_first=True,
-        telegram_chat_id=TELEGRAM_CHAT_ID or None,
+        symbol=sig["symbol"], side=sig["side"], entry=sig.get("entry"),
+        quantity=sig.get("quantity"), leverage=lev, tp=sig.get("tp"), sl=sig.get("sl"),
+        dry_run=dry_run, confirm_first=True, telegram_chat_id=TELEGRAM_CHAT_ID or None,
     )
-
     try:
         res = await execute_trade_live(**params)
     except Exception as e:
         res = {"ok": False, "reason": f"exception: {e}"}
-
     await _notify(sig, res, "result")
     if res.get("ok"):
         await _notify(sig, res, "armed")
@@ -121,19 +107,18 @@ async def _handle_line(line: str) -> None:
 async def main() -> None:
     _setup_logging()
     log.info("Signals engine starting… mode=%s source=%s", ExecMode.get().upper(), WATCH_SOURCE)
-    asyncio.create_task(poll_bot_commands())  # אם נשארים גם עם polling לגיבוי
+    asyncio.create_task(poll_bot_commands())  # polling לגיבוי
     if WATCH_SOURCE == "process":
         async for line in _run_process_and_stream(WATCH_CMD):
-            if line:
-                await _handle_line(line)
+            if line: await _handle_line(line)
     else:
         async for line in _read_stdin_lines():
-            if line:
-                await _handle_line(line)
+            if line: await _handle_line(line)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
