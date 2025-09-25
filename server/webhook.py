@@ -1,4 +1,3 @@
-# server/webhook.py
 from __future__ import annotations
 import os, logging
 from fastapi import FastAPI, Request
@@ -10,11 +9,11 @@ log = logging.getLogger("algogpt.webhook")
 app = FastAPI(title="AlgoGPT Webhook")
 
 def _resolve_mode() -> str:
-    # FORCE_MODE: ROUTES_ONLY=live|dry (יש לך כבר את המשתנה הזה)
+    # FORCE_MODE דרך ENV קיים אצלך: ROUTES_ONLY=live|dry
     force = (os.getenv("ROUTES_ONLY") or "").strip().lower()
     if force in ("live", "dry"):
         return force
-    # אם לא מוגדר, נגזר מ-EXECUTE_TRADES
+    # אם אין, נגזר מ-EXECUTE_TRADES
     exec_trades = (os.getenv("EXECUTE_TRADES", "0").strip().lower() in ("1", "true", "yes", "on"))
     return "live" if exec_trades else "dry"
 
@@ -41,9 +40,9 @@ async def telegram_webhook(req: Request):
     return JSONResponse({"ok": True})
 
 if __name__ == "__main__":
-    # מאפשר הרצה ישירה מהקובץ (לעקוף import path)
+    # מאפשר הרצה ישירה מהקובץ (עוקף בעיות import של uvicorn server.webhook:app)
     import uvicorn
-    port = int(os.getenv("PORT", "11000"))  # תוכל לשנות ל-10000 אם פנוי
+    port = int(os.getenv("PORT", "11000"))  # אפשר לשנות ל-10000 אם פנוי
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
