@@ -1,4 +1,3 @@
-# /app/signals_engine.py
 from __future__ import annotations
 import os, sys, re, asyncio, logging, json, inspect
 from typing import Optional, Dict, Any, List
@@ -8,10 +7,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("algogpt.signals_engine")
 
 TG_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-try:
-    TG_CHAT = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
-except Exception:
-    TG_CHAT = 0
+TG_CHAT  = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
 
 def _mode() -> str:
     force = (os.getenv("ROUTES_ONLY") or "").strip().lower()
@@ -26,12 +22,14 @@ async def _tg_send(text: str) -> None:
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    to = httpx.Timeout(10.0, connect=10.0)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=10.0)) as cli:
+        async with httpx.AsyncClient(timeout=to) as cli:
             await cli.post(url, data=payload)
     except Exception as e:
         log.warning({"event":"tg_send_failed","err":str(e)})
 
+# ---------- signal parser ----------
 _SIG_RX = re.compile(
     r"(?P<symbol>[A-Z0-9]{3,15})\s+"
     r"(?P<side>LONG|SHORT|BUY|SELL)\s+"
@@ -54,21 +52,33 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
     if side == "SELL": side = "SHORT"
     return {
         "symbol": (m.group("symbol") or "").upper(),
-        "side":   side,
+        "side":   side,  # LONG / SHORT
         "entry":  float(m.group("entry") or 0.0),
         "sl":     float(m.group("sl") or 0.0),
         "tps":    tps,
         "lev":    float(m.group("lev") or 0.0),
         "qty":    float(m.group("qty") or 0.0),
     }
-
+# ---------- executor adapter ----------
 async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    תומך אוטומטית בחתימות נפוצות:
+      1) async def execute_trade_live(**kwargs)
+      2) def   execute_trade_live(**kwargs)
+      3) async/def execute_trade_live(symbol, side, entry, sl, tps, lev, qty)
+    """
+    # אצלך trade_executor נמצא תחת utils/, לכן הייבוא כך:
     try:
         from utils.trade_executor import execute_trade_live
     except Exception as e:
         raise RuntimeError(f"trade_executor missing: {e}")
 
     fn = execute_trade_live
+    try:
+        sigspec = inspect.signature(fn)
+    except Exception:
+        sigspec = None
+
     params = {
         "symbol": sig["symbol"],
         "side": "BUY" if sig["side"] == "LONG" else "SELL",
@@ -79,19 +89,21 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
         "quantity": float(sig.get("qty") or 0.0) or None,
         "dry_run": (_mode() == "dry"),
         "confirm_first": True,
-        "telegram_chat_id": TG_CHAT or None,
+        "telegram_chat_id": int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0"),
         "position_side": "LONG" if sig["side"] == "LONG" else "SHORT",
     }
 
     is_coro = inspect.iscoroutinefunction(fn)
+    # נעדיף תמיד קריאה עם מילות מפתח; הפונקציה שלך מקבלת **kwargs וזה תקין.
     try:
         if is_coro:
             return await fn(**{k: v for k, v in params.items() if v is not None})  # type: ignore
         else:
             return await asyncio.to_thread(fn, **{k: v for k, v in params.items() if v is not None})  # type: ignore
     except TypeError:
-        args = (params["symbol"], params["side"], params["entry"], params["sl"],
-                params["tp_targets"], params["leverage"], params.get("quantity") or 0.0)
+        # נפילה על חתימה מצומצמת → ננסה positional בסיסי
+        args = (params["symbol"], params["side"], params["entry"], params["sl"], params["tp_targets"],
+                params["leverage"], params.get("quantity") or 0.0)
         if is_coro:
             return await fn(*args)  # type: ignore
         return await asyncio.to_thread(fn, *args)  # type: ignore
@@ -107,20 +119,25 @@ async def _start_user_stream_if_enabled():
             log.info({"event":"user_stream_started"})
         except Exception as e:
             log.warning({"event":"user_stream_failed_to_start","err":str(e)})
-
 async def handle_signal(sig: Dict[str, Any]):
     mode = _mode()
     await _tg_send(
         "📥 <b>Signal</b> [{mode}] {sym} {side}\nentry={entry} sl={sl} tp={tps} lev={lev} qty={qty}".format(
-            mode=mode, sym=sig["symbol"], side=sig["side"],
-            entry=sig.get("entry") or "–", sl=sig.get("sl") or "–",
+            mode=mode,
+            sym=sig["symbol"],
+            side=sig["side"],
+            entry=sig.get("entry") or "–",
+            sl=sig.get("sl") or "–",
             tps=",".join(map(str, sig.get("tps") or [])) or "–",
-            lev=sig.get("lev") or "–", qty=sig.get("qty") or "–",
+            lev=sig.get("lev") or "–",
+            qty=sig.get("qty") or "–",
         )
     )
+
     if mode == "dry":
         log.info({"event":"dry_run","sig":sig})
         return
+
     try:
         res = await _execute_via_trade_executor(sig)
         await _tg_send(f"✅ Executed {sig['symbol']} {sig['side']} | {json.dumps(res)[:400]}")
@@ -130,6 +147,7 @@ async def handle_signal(sig: Dict[str, Any]):
 
 async def main():
     await _start_user_stream_if_enabled()
+
     src = (os.getenv("WATCH_SOURCE") or "stdin").strip().lower()
     cmd = os.getenv("WATCH_CMD", "")
     await _tg_send(f"🚀 Signals engine started. Mode: <b>{_mode().upper()}</b> (source={src})")
@@ -170,6 +188,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
 
