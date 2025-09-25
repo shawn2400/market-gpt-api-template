@@ -315,14 +315,21 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["gate_error"], "metrics": {}}
 
 # ─────────── Budget & Leverage helpers ───────────
-def _parse_pct_csv(s: str) -> List[float]:
-    out=[]
+def _parse_csv_floats(s: str) -> List[float]:
+    out: List[float] = []
     for x in (s or "").split(","):
-        x=x.strip()
-        if not x: continue
-        try: out.append(float(x))
-        except Exception: continue
+        x = x.strip()
+        if not x:
+            continue
+        try:
+            out.append(float(x))
+        except Exception:
+            continue
     return out
+
+def _parse_pct_csv(s: str) -> List[float]:
+    # שמרנו שתי פונקציות לשימוש קיים; זו פשוט עוטפת את הקוד המשותף
+    return _parse_csv_floats(s)
 
 def _balance_usdt() -> float:
     try:
@@ -510,7 +517,7 @@ async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, A
         f"qty={payload.get('qty')} lev={lev} budget≈{bud} USDT<br/>"
         f"Quality≈{q} | כניסה: HYBRID (Limit±{ENTRY_BAND_BPS}bps / Stop±{STOP_BAND_BPS}bps)"
     )
-    await send_confirm_request(chat_id, title, summary, cid)
+    _ = await send_confirm_request(chat_id, title, summary, cid)
     t0 = time.time()
     while time.time() - t0 < CONFIRM_TTL_SEC:
         rec = ConfirmStore.get(cid)
@@ -553,22 +560,13 @@ def _cancel_old_closing_orders(symbol: str) -> int:
         return 0
 
 # ─────────── Ladder builders ───────────
-def _parse_csv_floats(s: str) -> List[float]:
-    out=[]
-    for x in (s or "").split(","):
-        x=x.strip()
-        if not x: continue
-        try: out.append(float(x))
-        except Exception: continue
-    return out
-
 def _build_ladders(sym: str, side: str, qty: float,
                    tp_targets: Optional[List[float]], tp_splits: Optional[List[float]],
                    sl_targets: Optional[List[float]], sl_splits: Optional[List[float]]) -> Dict[str, Any]:
-    plan = {"tp_orders": [], "sl_orders": []}
+    plan: Dict[str, Any] = {"tp_orders": [], "sl_orders": []}
     tp_kind_market = (LADDER_TP_KIND == "TAKE_PROFIT_MARKET")
 
-    def _prep(kind: str, targets, splits, limit_sign):
+    def _prep(kind: str, targets, splits):
         if not targets: return
         L = len(targets); w = list(splits) if splits else []
         if not w or len(w) != L: w = [1.0 / L] * L
@@ -589,8 +587,8 @@ def _build_ladders(sym: str, side: str, qty: float,
             else:
                 plan["sl_orders"].append({"type": "STOP_MARKET","stopPrice": stop_p,"qty": qalloc})
 
-    if tp_targets: _prep("TP", tp_targets, tp_splits, +1 if side=="BUY" else -1)
-    if sl_targets: _prep("SL", sl_targets, sl_splits, -1 if side=="BUY" else +1)
+    if tp_targets: _prep("TP", tp_targets, tp_splits)
+    if sl_targets: _prep("SL", sl_targets, sl_splits)
     return plan
 
 def _normalize_position_side(ps: Optional[str]) -> str:
@@ -993,6 +991,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
