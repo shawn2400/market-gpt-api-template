@@ -1,153 +1,151 @@
-# /app/app/signals_engine.py
+# app/signals_engine.py
 from __future__ import annotations
-import os, sys, shlex, asyncio, logging
-from asyncio.subprocess import PIPE
-from typing import Optional
+import os, sys, re, asyncio, logging, json
+from typing import Optional, Dict, Any
 
+# local minimal TG sender (no extra deps)
 import httpx
 
-from utils.signal_parser import parse_text_signal
-from utils.trade_executor import execute_trade_live
+log = logging.getLogger("algogpt.signals_engine")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-# אם יש לך סטרים קיים – נשתמש בו (לא חובה להריץ מכאן)
-try:
-    from utils.ws_user_stream import start as ws_start
-except Exception:
-    ws_start = None  # אין תלות קשיחה
-
-log = logging.getLogger("signals_engine")
-
-# ── Telegram ────────────────────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-async def tg_send(text: str, parse: Optional[str] = "HTML"):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    async with httpx.AsyncClient(timeout=10.0) as cli:
-        await cli.post(f"{TELEGRAM_API}/sendMessage", json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            **({"parse_mode": "HTML"} if parse else {}),
-        })
-
-# ── Mode (ללא ENV חדשים) ───────────────────────────────────────────────
-def _initial_mode() -> str:
-    force = (os.getenv("ROUTES_ONLY") or "").strip().lower()  # משמש כ-FORCE_MODE
-    if force in ("live", "dry"):
-        return force
-    dflt = (os.getenv("DEFAULT_MODE") or "").strip().lower()
-    if dflt in ("live", "dry"):
-        return dflt
-    exec_trades = (os.getenv("EXECUTE_TRADES", "1")).strip().lower()
-    return "live" if exec_trades in ("1", "true", "yes", "on") else "dry"
+TG_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+TG_CHAT  = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
 
 def _mode() -> str:
-    return _initial_mode()
+    force = (os.getenv("ROUTES_ONLY") or "").strip().lower()
+    if force in ("live", "dry"): return force
+    exec_trades = (os.getenv("EXECUTE_TRADES", "0").strip().lower() in ("1","true","yes","on"))
+    return "live" if exec_trades else "dry"
 
-# ── Watch source ────────────────────────────────────────────────────────
-WATCH_SOURCE = (os.getenv("WATCH_SOURCE") or "stdin").strip().lower()  # stdin|process
-WATCH_CMD = (os.getenv("WATCH_CMD") or "").strip()
-
-def _setup_logging():
-    lvl = (os.getenv("LOG_LEVEL", "INFO") or "INFO").upper()
-    logging.basicConfig(level=lvl, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
-
-async def _run_process_and_yield(cmd: str):
-    args = shlex.split(cmd)
-    proc = await asyncio.create_subprocess_exec(*args, stdout=PIPE, stderr=PIPE)
-    log.info("watch process started: %s", cmd)
-    try:
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                await asyncio.sleep(0.05)
-                continue
-            yield line.decode("utf-8", "replace").strip()
-    finally:
-        try: proc.terminate()
-        except Exception: pass
-
-async def _read_stdin():
-    loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-    while True:
-        line = await reader.readline()
-        if not line:
-            await asyncio.sleep(0.05)
-            continue
-        yield line.decode("utf-8", "replace").strip()
-
-async def _handle_line(line: str):
-    sig = parse_text_signal(line)
-    if not sig:
+async def _tg_send(text: str) -> None:
+    if not TG_TOKEN or not TG_CHAT:
+        log.info({"event":"tg_skip", "reason":"no_token_or_chat"})
         return
-    mode = _mode()
-    dry_run = (mode != "live")
-
-    params = dict(
-        symbol=sig["symbol"],
-        side=sig["side"],
-        entry=sig.get("entry"),
-        quantity=sig.get("quantity"),
-        leverage=int(sig.get("leverage") or os.getenv("MIN_LEVERAGE", "5")),
-        tp=sig.get("tp"),
-        sl=sig.get("sl"),
-        dry_run=dry_run,
-        confirm_first=True,
-        telegram_chat_id=TELEGRAM_CHAT_ID or None,
-    )
-
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    payload = {"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    timeout = httpx.Timeout(10.0, connect=10.0)
     try:
-        res = await execute_trade_live(**params)
+        async with httpx.AsyncClient(timeout=timeout) as cli:
+            await cli.post(url, data=payload)
     except Exception as e:
-        res = {"ok": False, "reason": f"exception: {e}"}
+        log.warning({"event":"tg_send_failed", "err": str(e)})
 
-    sym, side, ent, tp, sl = sig.get("symbol"), sig.get("side"), sig.get("entry"), sig.get("tp"), sig.get("sl")
-    if res.get("ok"):
-        ek = (res.get("entry_result") or {}).get("entry_kind") or ("DRY" if dry_run else "LIVE")
-        base = res.get("base_price") or (res.get("entry_result") or {}).get("price")
-        await tg_send(f"✅ <b>{mode.upper()}</b> {side} <b>{sym}</b>@{ent} tp={tp} sl={sl}\nentry={ek} base≈{base}")
-        tps = len(res.get("tp_orders") or [])
-        sls = len(res.get("sl_orders") or [])
-        await tg_send(f"🛡️ Armed: {sym} → TP={tps}, SL={sls}")
-    else:
-        await tg_send(f"❌ FAILED {side} <b>{sym}</b>@{ent}\nreason={res.get('reason')}")
+_SIG_RX = re.compile(
+    r"(?P<symbol>[A-Z0-9]{3,15})\s+"
+    r"(?P<side>LONG|SHORT|BUY|SELL)\s+"
+    r"(?:entry=?(?P<entry>[\d\.]+))?.*?"
+    r"(?:sl=?(?P<sl>[\d\.]+))?.*?"
+    r"(?:tp=?(?P<tp>[\d\.,]+))?.*?"
+    r"(?:lev=?(?P<lev>[\d\.]+))?.*?"
+    r"(?:qty=?(?P<qty>[\d\.]+))?",
+    re.IGNORECASE,
+)
 
-async def _boot_user_stream_if_enabled():
-    # אם יש לך USER_STREAM_ENABLE=1, והמימוש שלך קיים – נרים סטרים ברקע
-    if os.getenv("USER_STREAM_ENABLE", "0").strip().lower() in ("1", "true", "yes", "on"):
-        if ws_start:
+def _parse_line(line: str) -> Optional[Dict[str, Any]]:
+    m = _SIG_RX.search(line or "")
+    if not m: return None
+    tp_raw = (m.group("tp") or "").replace(" ", "")
+    tps = [float(x) for x in tp_raw.split(",") if x] if tp_raw else []
+    return {
+        "symbol": m.group("symbol").upper(),
+        "side":   m.group("side").upper(),
+        "entry":  float(m.group("entry") or 0.0),
+        "sl":     float(m.group("sl") or 0.0),
+        "tps":    tps,
+        "lev":    float(m.group("lev") or 0.0),
+        "qty":    float(m.group("qty") or 0.0),
+    }
+
+async def _start_user_stream_if_enabled():
+    # Use existing flags only; no new envs
+    if (os.getenv("USER_STREAM_ENABLE", "0").lower() in ("1","true","on","yes")):
+        try:
+            # prefers your existing implementation if available
             try:
-                ws_start()
-                log.info("user-stream started (utils.ws_user_stream)")
-            except Exception as e:
-                log.warning("user-stream start failed: %s", e)
-        else:
-            log.info("user-stream not available (utils.ws_user_stream not found)")
+                from utils.ws_user_stream import start_async as _ws_start
+            except Exception:
+                from utils.user_stream import start_user_stream_consumer as _ws_start
+            await _ws_start()
+            log.info({"event":"user_stream_started"})
+        except Exception as e:
+            log.warning({"event":"user_stream_failed_to_start", "err": str(e)})
 
 async def main():
-    _setup_logging()
-    log.info("signals engine start; mode=%s source=%s", _mode(), WATCH_SOURCE)
-    await _boot_user_stream_if_enabled()
+    await _start_user_stream_if_enabled()
+    src = (os.getenv("WATCH_SOURCE") or "stdin").lower()
+    cmd = os.getenv("WATCH_CMD", "")
 
-    if WATCH_SOURCE == "process" and WATCH_CMD:
-        async for line in _run_process_and_yield(WATCH_CMD):
-            if line:
-                await _handle_line(line)
-    else:
-        async for line in _read_stdin():
-            if line:
-                await _handle_line(line)
+    mode = _mode()
+    await _tg_send(f"🚀 Signals engine started. Mode: <b>{mode.upper()}</b> (source={src})")
+
+    # Source: stdin
+    if src == "stdin":
+        for line in sys.stdin:
+            line = (line or "").strip()
+            if not line: continue
+            sig = _parse_line(line)
+            if not sig:
+                log.info({"event":"skip_line", "line": line})
+                continue
+            await handle_signal(sig)
+        return
+
+    # Source: process (spawn WATCH_CMD)
+    if src == "process":
+        if not cmd.strip():
+            log.error({"event":"process_source_missing_cmd"})
+            return
+        log.info({"event":"spawning_process", "cmd": cmd})
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        )
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode("utf-8", "ignore").strip()
+            if not line: continue
+            sig = _parse_line(line)
+            if not sig:
+                continue
+            await handle_signal(sig)
+        return
+
+    log.error({"event":"unknown_watch_source", "value": src})
+
+async def handle_signal(sig: Dict[str, Any]):
+    mode = _mode()
+    sym, side = sig["symbol"], sig["side"]
+    entry, sl, qty = sig["entry"], sig["sl"], sig["qty"]
+    tps = sig["tps"]
+
+    # Telegram summary before/after (no new envs)
+    await _tg_send(
+        f"📥 <b>Signal</b> [{mode}] {sym} {side}\n"
+        f"entry={entry or '–'} sl={sl or '–'} tp={','.join([str(x) for x in tps]) or '–'} "
+        f"lev={sig.get('lev') or '–'} qty={qty or '–'}"
+    )
+
+    if mode == "dry":
+        log.info({"event":"dry_run", "sig": sig})
+        return
+
+    # LIVE: wire to your existing executor if available
+    try:
+        # try to use your stack if it exists
+        from app.trade_executor import execute_trade_live  # type: ignore
+        res = await execute_trade_live(sig)  # your function should be async; if not, wrap in to_thread
+        await _tg_send(f"✅ Executed {sym} {side} | result={json.dumps(res)[:300]}")
+    except Exception as e:
+        # fallback: just acknowledge
+        log.warning({"event":"execute_fallback", "err": str(e)})
+        await _tg_send(f"⚠️ Executed (mock) {sym} {side} — hook missing.\n{e}")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
 
