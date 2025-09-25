@@ -8,35 +8,36 @@ from utils.mode_store import ExecMode
 from utils.trade_executor import ConfirmStore
 from telegram.commands import send_message
 
-log = logging.getLogger("algogpt.server.webhook")
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
+log = logging.getLogger("algogpt.webhook")
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
-ADMIN_USER_ID = os.getenv("TELEGRAM_ADMIN_ID","").strip() or os.getenv("ADMIN_CHAT_ID","").strip()
+ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID","").strip() or os.getenv("ADMIN_CHAT_ID","").strip()
 
 app = FastAPI(title="AlgoGPT Webhook")
 
 def _authorized(uid: Optional[int]) -> bool:
-    if not ADMIN_USER_ID:
+    if not ADMIN_ID:
         return True
-    return str(uid or "") == str(ADMIN_USER_ID)
+    return str(uid or "") == str(ADMIN_ID)
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request):
     if WEBHOOK_SECRET:
-        sig = req.headers.get("X-Tg-Sign","")
         body = await req.body()
+        sig = req.headers.get("X-Tg-Sign","")
         exp = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, exp):
             raise HTTPException(401, "bad signature")
     data = await req.json()
+
     msg = data.get("message") or data.get("edited_message")
     if msg:
         chat_id = (msg.get("chat") or {}).get("id")
-        text = msg.get("text") or ""
+        text    = msg.get("text") or ""
         from_id = (msg.get("from") or {}).get("id")
+
         if text.startswith("/mode"):
             if not _authorized(from_id):
-                await send_message(chat_id, "אין הרשאה לפקודות ניהול.")
+                await send_message(chat_id, "אין הרשאה.")
                 return {"ok": True}
             _, _, arg = text.partition(" ")
             new_mode = "live" if arg.lower().strip() == "live" else "dry"
@@ -46,7 +47,9 @@ async def telegram_webhook(req: Request):
         if text in ("/mode", "/mode@thisbot"):
             await send_message(chat_id, f"מצב נוכחי: <b>{ExecMode.get().upper()}</b>\nשנה באמצעות: /mode dry או /mode live", "HTML")
             return {"ok": True}
+
         return {"ok": True}
+
     cb = data.get("callback_query")
     if cb:
         chat_id = (cb.get("message") or {}).get("chat",{}).get("id")
@@ -64,5 +67,6 @@ async def telegram_webhook(req: Request):
                 ConfirmStore.reject(cid, str(from_id))
                 await send_message(chat_id, f"❌ בוטל · CID={cid}")
         return {"ok": True}
+
     return {"ok": True}
 
