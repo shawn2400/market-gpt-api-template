@@ -6,7 +6,7 @@ __all__ = ["dry_run_trade"]
 
 
 def _pct_change(new: float, ref: float) -> float:
-    """החזרת שינוי באחוזים בין new ל-ref (תמיד ערך מוחלט עבור SL, חתום עבור TP)."""
+    """החזרת שינוי באחוזים בין new ל-ref (חתום; משתמשים ב-abs היכן שצריך)."""
     if ref <= 0:
         return 0.0
     return (new / ref - 1.0) * 100.0
@@ -23,20 +23,7 @@ def dry_run_trade(
     market_type: str = "futures",
 ) -> Dict[str, Any]:
     """
-    DRY-RUN בלבד – לא מבצע הזמנת Binance בפועל.
-    מיועד להיות קל ומהיר כדי לשמור על 0 עומס.
-
-    פרמטרים:
-      symbol       - סימבול (למשל "BTCUSDT")
-      side         - "LONG"/"SHORT" (תומך גם "BUY"/"SELL" לנוחות)
-      entry        - מחיר כניסה משוער
-      sl / tp      - סטופ/טייק (אופציונליים; אם חסרים נייצר מינימום עדין)
-      leverage     - מינוף (int >= 1)
-      budget       - תקציב בדולרים לפתיחה (לא נדרש יתרה בפועל כי זה DRY)
-      market_type  - ברירת מחדל "futures" (למטרות תיוג בלבד)
-
-    מחזיר:
-      dict עם פרטי ה־DRY-RUN: כמות משוערת, SL/TP משוערים, אחוזים, יחס R:R ועוד.
+    DRY-RUN בלבד – לא מבצע הזמנת Binance בפועל. חישוב קל ומהיר.
     """
     if not isinstance(symbol, str) or not symbol:
         raise ValueError("symbol is required")
@@ -47,7 +34,6 @@ def dry_run_trade(
     if budget is None or budget <= 0:
         raise ValueError("budget must be > 0")
 
-    # Normalize side (קבלה גם BUY/SELL)
     side_up = str(side or "").upper().strip()
     if side_up in ("BUY", "LONG"):
         norm_side = "LONG"
@@ -56,8 +42,7 @@ def dry_run_trade(
     else:
         raise ValueError("side must be LONG/SHORT (or BUY/SELL)")
 
-    # אם אין SL/TP – גוזרים מינימום עדין כדי לא להעמיס חישובים
-    # ברירת מחדל שמרנית: SL 0.3% | TP 0.6% מהכניסה
+    # אם אין SL/TP – ברירת מחדל שמרנית: SL 0.3% | TP 0.6%
     min_sl_pct = 0.003  # 0.3%
     min_tp_pct = 0.006  # 0.6%
     if sl is None or tp is None:
@@ -68,31 +53,23 @@ def dry_run_trade(
             sl = sl or round(entry * (1 + min_sl_pct), 2)
             tp = tp or round(entry * (1 - min_tp_pct), 2)
 
-    # כמות משוערת (DRY): notional ≈ budget*leverage
     qty_est = round(budget * leverage / max(entry, 1e-9), 6)
     notional_usd = round(qty_est * entry, 2)
     exposure_usd = round(budget * leverage, 2)
 
-    # אחוזי SL/TP יחסית לכניסה
     if norm_side == "LONG":
         sl_pct = abs(_pct_change(float(sl), entry))
         tp_pct = _pct_change(float(tp), entry)  # חיובי צפוי
-    else:
-        # SHORT: מחיר נמוך יותר הוא רווח; גבוה הוא הפסד
-        sl_pct = abs(_pct_change(entry, float(sl)))   # כמה נגדנו עד ל-SL
-        tp_pct = abs(_pct_change(entry, float(tp)))   # כמה לטובתנו עד ל-TP
-
-    # יחס R:R בקירוב (TP% / SL%), אם תקין
-    rr = round(tp_pct / sl_pct, 3) if sl_pct > 0 else None
-
-    # רווח/הפסד משוער בדולרים (תיאורטי, ללא עמלות/סליפג')
-    # Δמחיר * כמות; ב-SHORT, שינוי שלילי במחיר הוא רווח → משתמשים בערכים מוחלטים
-    if norm_side == "LONG":
         tp_pnl = round((float(tp) - entry) * qty_est, 2)
         sl_pnl = round((float(sl) - entry) * qty_est, 2)  # שלילי צפוי
     else:
+        # SHORT
+        sl_pct = abs(_pct_change(entry, float(sl)))   # כמה נגדנו עד ל-SL
+        tp_pct = abs(_pct_change(entry, float(tp)))   # כמה לטובתנו עד ל-TP
         tp_pnl = round((entry - float(tp)) * qty_est, 2)
-        sl_pnl = round((entry - float(sl)) * qty_est, 2)  # שלילי צפוי (הפסד)
+        sl_pnl = round((entry - float(sl)) * qty_est, 2)  # שלילי צפוי
+
+    rr = round(tp_pct / sl_pct, 3) if sl_pct > 0 else None
 
     return {
         "ok": True,
@@ -101,7 +78,7 @@ def dry_run_trade(
         "side": norm_side,            # LONG / SHORT
         "market_type": market_type,
         "entry": float(entry),
-        "sl": float(sl),              # מחירים משוערים
+        "sl": float(sl),
         "tp": float(tp),
         "leverage": int(leverage),
         "budget_usd": float(budget),
@@ -120,6 +97,7 @@ def dry_run_trade(
             "החישוב תיאורטי, ללא עמלות/סליפג׳/מסי מימון.",
         ],
     }
+
 
 
 
