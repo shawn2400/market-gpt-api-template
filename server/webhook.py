@@ -1,72 +1,100 @@
-# server/webhook.py
+# /app/server/webhook.py
 from __future__ import annotations
-import os, hmac, hashlib, logging
+import os
+import logging
 from typing import Optional
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
+import httpx
 
-from utils.mode_store import ExecMode
-from utils.trade_executor import ConfirmStore
-from telegram.commands import send_message
-
-log = logging.getLogger("algogpt.webhook")
-WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
-ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID","").strip() or os.getenv("ADMIN_CHAT_ID","").strip()
-
+log = logging.getLogger("webhook")
 app = FastAPI(title="AlgoGPT Webhook")
 
-def _authorized(uid: Optional[int]) -> bool:
-    if not ADMIN_ID:
-        return True
-    return str(uid or "") == str(ADMIN_ID)
+# ── Mode resolution (בלי להוסיף ENV חדשים) ─────────────────────────────
+# סדר עדיפויות:
+# 1) ROUTES_ONLY = "live"|"dry" (שימוש כ-FORCE_MODE מבלי להוסיף משתנה חדש)
+# 2) DEFAULT_MODE = "live"|"dry" (אם תרצה בכל זאת להגדיר)
+# 3) EXECUTE_TRADES (1→live, אחרת dry) ← כבר קיים אצלך
+def _initial_mode() -> str:
+    force = (os.getenv("ROUTES_ONLY") or "").strip().lower()
+    if force in ("live", "dry"):
+        return force
+    dflt = (os.getenv("DEFAULT_MODE") or "").strip().lower()
+    if dflt in ("live", "dry"):
+        return dflt
+    exec_trades = (os.getenv("EXECUTE_TRADES", "1")).strip().lower()
+    return "live" if exec_trades in ("1", "true", "yes", "on") else "dry"
+
+_MODE = _initial_mode()
+
+def get_mode() -> str:
+    return _MODE
+
+def set_mode(val: str) -> None:
+    global _MODE
+    _MODE = "live" if str(val).lower().strip() == "live" else "dry"
+
+# ── Telegram minimal helper ─────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+async def _tg_send(chat_id: int, text: str, parse: Optional[str] = "HTML") -> None:
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        return
+    payload = {"chat_id": chat_id, "text": text}
+    if parse:
+        payload["parse_mode"] = parse
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{TELEGRAM_API}/sendMessage", json=payload)
+    except Exception as e:
+        log.warning("telegram send failed: %s", e)
+
+# ── Routes ──────────────────────────────────────────────────────────────
+@app.get("/ping")
+async def ping():
+    return {"ok": True, "mode": get_mode()}
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request):
-    if WEBHOOK_SECRET:
-        body = await req.body()
-        sig = req.headers.get("X-Tg-Sign","")
-        exp = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, exp):
-            raise HTTPException(401, "bad signature")
-    data = await req.json()
+    body = await req.json()
+    msg = body.get("message") or body.get("edited_message")
+    cb  = body.get("callback_query")
 
-    msg = data.get("message") or data.get("edited_message")
+    # /mode command
     if msg:
         chat_id = (msg.get("chat") or {}).get("id")
-        text    = msg.get("text") or ""
-        from_id = (msg.get("from") or {}).get("id")
-
+        text = (msg.get("text") or "").strip()
         if text.startswith("/mode"):
-            if not _authorized(from_id):
-                await send_message(chat_id, "אין הרשאה.")
-                return {"ok": True}
             _, _, arg = text.partition(" ")
-            new_mode = "live" if arg.lower().strip() == "live" else "dry"
-            ExecMode.set(new_mode)
-            await send_message(chat_id, f"מצב עודכן: <b>{new_mode.upper()}</b>", "HTML")
+            set_mode(arg or "dry")
+            await _tg_send(chat_id, f"מצב עודכן: <b>{get_mode().upper()}</b>")
             return {"ok": True}
-        if text in ("/mode", "/mode@thisbot"):
-            await send_message(chat_id, f"מצב נוכחי: <b>{ExecMode.get().upper()}</b>\nשנה באמצעות: /mode dry או /mode live", "HTML")
+        if text in ("/mode", "/mode@bot"):
+            await _tg_send(chat_id, f"מצב נוכחי: <b>{get_mode().upper()}</b>\nשנה באמצעות: /mode dry או /mode live")
             return {"ok": True}
-
         return {"ok": True}
 
-    cb = data.get("callback_query")
+    # Inline-approve/reject (תואם לפורמט מ-ConfirmStore)
     if cb:
-        chat_id = (cb.get("message") or {}).get("chat",{}).get("id")
-        from_id = (cb.get("from") or {}).get("id")
+        chat_id = (cb.get("message") or {}).get("chat", {}).get("id")
         data_str = cb.get("data") or ""
-        if data_str.startswith("CONFIRM:"):
+        try:
             _, action, cid = data_str.split(":", 2)
-            if not _authorized(from_id):
-                await send_message(chat_id, "אין הרשאה לאשר טרייד.")
-                return {"ok": True}
+        except Exception:
+            return {"ok": True}
+        try:
+            from utils.trade_executor import ConfirmStore
+            approver = str((cb.get("from") or {}).get("id"))
             if action == "APPROVE":
-                ConfirmStore.approve(cid, str(from_id))
-                await send_message(chat_id, f"✅ אושר · CID={cid}")
+                ConfirmStore.approve(cid, approver)
+                await _tg_send(chat_id, f"✅ אושר · CID=<code>{cid}</code>")
             elif action == "REJECT":
-                ConfirmStore.reject(cid, str(from_id))
-                await send_message(chat_id, f"❌ בוטל · CID={cid}")
+                ConfirmStore.reject(cid, approver)
+                await _tg_send(chat_id, f"❌ בוטל · CID=<code>{cid}</code>")
+        except Exception as e:
+            log.warning("confirm handler failed: %s", e)
         return {"ok": True}
 
     return {"ok": True}
+
 
