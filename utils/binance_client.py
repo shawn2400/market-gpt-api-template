@@ -27,7 +27,7 @@ if not API_KEY or not API_SECRET:
 
 HTTP_TIMEOUT = float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))
 WORKING_TYPE = os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE").upper()
-RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", "15000"))
+RECV_WINDOW = int(os.getenv("BINANCE_RECV_WINDOW", os.getenv("BINANCE_RECV_WINDOW_MS", "15000")))
 
 EXINFO_TTL = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "900"))
 ORD_BUCKET_WINDOW = int(os.getenv("ORDERS_BUCKET_WINDOW_SEC", "10"))
@@ -52,12 +52,12 @@ PRICE_CACHE_TTL_MS = int(os.getenv("PRICE_CACHE_TTL_MS", "250"))
 
 # ===== Account/Positions cache =====
 ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))
-ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "10"))
+ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "60"))
 
 # ===== Hedge/One-Way detection (runtime + override) =====
 HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
-HEDGE_MODE_TTL_SEC = int(os.getenv("HEDGE_MODE_TTL_SEC", "30"))  # חדש: TTL לקאש מצב hedge/one-way
-_HEDGE_MODE_CACHE: Dict[str, Any] = {"ts": 0.0, "val": None}     # {"ts": float, "val": bool|None}
+HEDGE_MODE_TTL_SEC = int(os.getenv("HEDGE_MODE_TTL_SEC", "30"))
+_HEDGE_MODE_CACHE: Dict[str, Any] = {"ts": 0.0, "val": None}  # {"ts": float, "val": bool|None}
 
 # ===== Order ID / Cancel policy (ENV) =====
 ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
@@ -71,7 +71,7 @@ LADDER_TP_DEFAULT_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25"
 LADDER_TP_MAX_LEVELS = int(os.getenv("LADDER_TP_MAX_LEVELS", "5"))
 TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
-LADDER_TP_PRICE_OFFSET_TICKS = int(os.getenv("LADDER_TP_PRICE_OFFSET_TICKS", "0"))  # חדש: אופסט למחיר LIMIT ב-TP
+LADDER_TP_PRICE_OFFSET_TICKS = int(os.getenv("LADDER_TP_PRICE_OFFSET_TICKS", "0"))  # אופסט למחיר LIMIT ב-TP
 
 # ===== Utils =====
 def _now() -> float: return time.time()
@@ -79,7 +79,11 @@ def _ms() -> int: return int(time.time() * 1000)
 
 # ===== Optional WS fallback =====
 try:
-    from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
+    from utils.ws_fallback import (
+        get_price as ws_get_price,
+        is_price_fresh as ws_is_fresh,
+        update_price as ws_update_price
+    )
 except Exception:
     ws_get_price = None  # type: ignore
     ws_is_fresh = None   # type: ignore
@@ -368,10 +372,10 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
                 filters["minQty"] = f.get("minQty")
                 filters["maxQty"] = f.get("maxQty")
                 filters["stepSize"] = f.get("stepSize")
-            elif t == "MARKET_Lot_SIZE" or t == "MARKET_LOT_SIZE":
+            elif t in ("MARKET_Lot_SIZE","MARKET_LOT_SIZE"):
                 filters["mMinQty"] = f.get("minQty")
                 filters["mMaxQty"] = f.get("maxQty")
-            elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+            elif t in ("MIN_NOTIONAL","NOTIONAL"):
                 filters["minNotional"] = f.get("notional") or f.get("minNotional")
             elif t == "PERCENT_PRICE":
                 filters["percentPrice"] = {
@@ -400,7 +404,7 @@ def _quantize_price(symbol: str, price: float) -> str:
     f = get_symbol_filters(symbol) or {}
     tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
     if tick <= 0: tick = float(DEFAULT_PRICE_TICK_STR)
-    steps = round(price / tick)  # שומר על התנהגות קיימת (nearest)
+    steps = round(price / tick)  # nearest
     adj = steps * tick
     decs = _decimals_from_step(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
     return f"{adj:.{decs}f}"
@@ -526,10 +530,12 @@ def futures_index_price(symbol: str) -> Optional[float]:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
 # ===== Open orders / history =====
+from typing import cast
+
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
-        if symbol: return client.futures_get_open_orders(symbol=symbol.upper()) or []
-        return client.futures_get_open_orders() or []
+        if symbol: return cast(List[Dict[str, Any]], client.futures_get_open_orders(symbol=symbol.upper()) or [])
+        return cast(List[Dict[str, Any]], client.futures_get_open_orders() or [])
     except Exception as e:
         logger.error("Failed to get open orders: %s", e); return []
 
@@ -538,7 +544,7 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
         return []
     limit = max(1, min(int(limit), 1000))
     try:
-        return client.futures_get_all_orders(symbol=symbol.upper(), limit=limit, **kwargs) or []
+        return cast(List[Dict[str, Any]], client.futures_get_all_orders(symbol=symbol.upper(), limit=limit, **kwargs) or [])
     except BinanceAPIException as e:
         logger.error("get_all_orders failed: %s", e); return []
     except Exception as e:
@@ -598,14 +604,14 @@ def _cancel_closing_orders(symbol: str, types: Iterable[str]) -> int:
 
 def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     try:
-        return client.futures_cancel_all_open_orders(symbol=symbol.upper())
+        return cast(Dict[str, Any], client.futures_cancel_all_open_orders(symbol=symbol.upper()))
     except Exception as e:
         logger.error("Failed to cancel orders for %s: %s", symbol, e)
         return {"ok": False, "error": str(e)}
 
 def futures_cancel_order(symbol: str, orderId: int | str) -> Dict[str, Any]:
     try:
-        return client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId)
+        return cast(Dict[str, Any], client.futures_cancel_order(symbol=symbol.upper(), orderId=orderId))
     except Exception as e:
         logger.error("Failed to cancel order %s/%s: %s", symbol, orderId, e)
         return {"ok": False, "error": str(e)}
@@ -636,7 +642,6 @@ def _idem_get(coid: str) -> Optional[Dict[str, Any]]:
 
 def _idem_put(coid: str, res: Dict[str, Any]) -> None:
     with _idem_lock:
-        # FIX: remove invalid reference to self._sanitize; store by the original coid key
         _idem_cache[coid] = (_now(), res)
         if len(_idem_cache) > 2048:
             dead = [k for k,(t,_) in _idem_cache.items() if (_now() - t) > IDEMP_TTL_SEC]
@@ -683,7 +688,7 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
             try:
                 r2 = client.futures_create_order(**k2)
                 if coid: _idem_put(coid, r2 if isinstance(r2, dict) else {"ok": True, "res": r2})
-                return r2
+                return cast(Dict[str, Any], r2)
             except Exception as e2:
                 return {"ok": False, "error": str(e2)}
         return None
@@ -695,7 +700,7 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
             res = client.futures_create_order(**kwargs)
             if coid:
                 _idem_put(coid, res if isinstance(res, dict) else {"ok": True, "res": res})
-            return res
+            return cast(Dict[str, Any], res)
         except BinanceAPIException as e:
             s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
             if "429" in s or "-1003" in s or status == 429 or code in (-1003,):
@@ -887,15 +892,15 @@ def place_tp_ladder(
             newClientOrderId=_sanitize_coid((client_order_id_prefix or ORDER_ID_PREFIX or "TP") + f"_TP{i}_{sym}")
         )
         if LADDER_TP_KIND == "TAKE_PROFIT":
-            # LIMIT TP: הוסף אופסט לפי פוזיציה (חדש, נשלט ע"י LADDER_TP_PRICE_OFFSET_TICKS)
+            # LIMIT TP: הוסף אופסט לפי פוזיציה (נשלט ע"י LADDER_TP_PRICE_OFFSET_TICKS)
             f = get_symbol_filters(sym) or {}
             tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
             offset_ticks = max(0, int(LADDER_TP_PRICE_OFFSET_TICKS))
             price_val = float(stop_q)
             if offset_ticks > 0:
-                if side == "SELL":  # סוגר LONG — עדיף מעט גבוה מ-stopPrice
+                if side == "SELL":  # סוגר LONG — מעט מעל ה-stopPrice
                     price_val = price_val + tick * offset_ticks
-                else:               # סוגר SHORT — עדיף מעט נמוך מ-stopPrice
+                else:               # סוגר SHORT — מעט מתחת ל-stopPrice
                     price_val = price_val - tick * offset_ticks
             kwargs["price"] = _quantize_price(sym, price_val)
             kwargs["timeInForce"] = "GTC"
@@ -966,7 +971,7 @@ def close_all_positions() -> Dict[str,Any]:
             try:
                 res = _safe_create_order(symbol=sym, side=side, type="MARKET",
                                          reduceOnly=True, quantity=_quantize_qty(sym, abs(amt)),
-                                         newClientOrderId=_coid("MKT", sym))
+                                         newClientOrderId=_coid("MKT", str(sym)))
                 out["closed"].append({"symbol":sym,"qty":abs(amt),"res":res})
             except Exception as e:
                 out["errors"].append({"symbol":sym,"err":str(e)})
@@ -993,7 +998,7 @@ def get_price(symbol: str) -> Optional[float]:
 
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     try:
-        return client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage))
+        return cast(Dict[str, Any], client.futures_change_leverage(symbol=symbol.upper(), leverage=int(leverage)))
     except Exception as e:
         logger.error("Failed to set leverage %s for %s: %s", leverage, symbol, e)
         return {"ok": False, "error": str(e)}
