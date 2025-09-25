@@ -1,4 +1,4 @@
-# utils/trade_executor.py
+# app/trade_executor.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, math, time, logging, asyncio, json, hashlib
@@ -328,7 +328,6 @@ def _parse_csv_floats(s: str) -> List[float]:
     return out
 
 def _parse_pct_csv(s: str) -> List[float]:
-    # שמרנו שתי פונקציות לשימוש קיים; זו פשוט עוטפת את הקוד המשותף
     return _parse_csv_floats(s)
 
 def _balance_usdt() -> float:
@@ -601,6 +600,12 @@ def _close_side_for(entry_side: str) -> str:
 def _pos_side_for_entry(side: str) -> str:
     return "LONG" if side.upper() == "BUY" else "SHORT"
 
+def _normalize_entry_side(side: str) -> str:
+    s = (side or "").upper().strip()
+    if s in ("BUY","LONG"):  return "BUY"
+    if s in ("SELL","SHORT"): return "SELL"
+    raise ValueError("side must be BUY/SELL or LONG/SHORT")
+
 # ─────────── Hybrid entry (LIMIT+STOP עם positionSide מותנה) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
                               ref_entry: Optional[float], position_side: str) -> Dict[str, Any]:
@@ -750,9 +755,7 @@ async def execute_trade_live(
     position_side: str = "BOTH", reduce_only: bool = False,
 ) -> Dict[str, Any]:
 
-    side = side.upper().strip()
-    if side not in {"BUY","SELL"}:
-        raise ValueError("side must be BUY/SELL")
+    side = _normalize_entry_side(side)  # 🟢 קולט גם LONG/SHORT וגם BUY/SELL
     sym = symbol.upper().strip()
     position_side = _normalize_position_side(position_side)
     position_side = _effective_position_side(position_side)  # התאמה אוטו׳ ל-Hedge/One-Way
