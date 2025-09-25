@@ -5,8 +5,8 @@ from typing import Optional, Dict, Any, List
 
 import httpx
 
-log = logging.getLogger("algogpt.signals_engine")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+log = logging.getLogger("algogpt.signals_engine")
 
 TG_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 TG_CHAT  = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
@@ -49,11 +49,11 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
         return None
     tp_raw = (m.group("tp") or "").replace(" ", "")
     tps: List[float] = [float(x) for x in tp_raw.split(",") if x] if tp_raw else []
-    side = m.group("side").upper()
+    side = (m.group("side") or "").upper()
     if side == "BUY": side = "LONG"
     if side == "SELL": side = "SHORT"
     return {
-        "symbol": m.group("symbol").upper(),
+        "symbol": (m.group("symbol") or "").upper(),
         "side":   side,
         "entry":  float(m.group("entry") or 0.0),
         "sl":     float(m.group("sl") or 0.0),
@@ -65,19 +65,18 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
 # ---------- executor adapter ----------
 async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
     """
-    מנסה אוטומטית 4 חתימות נפוצות:
+    תומך אוטומטית בחתימות נפוצות:
       1) async def execute_trade_live(sig: dict) -> dict
       2) def   execute_trade_live(sig: dict) -> dict
       3) async def execute_trade_live(symbol, side, entry, sl, tps, lev, qty) -> dict
       4) def   execute_trade_live(symbol, side, entry, sl, tps, lev, qty) -> dict
     """
     try:
-        from app.trade_executor import execute_trade_live  # type: ignore
+        from app.trade_executor import execute_trade_live  # אם אין—יעלה החרגה
     except Exception as e:
         raise RuntimeError(f"trade_executor missing: {e}")
 
     fn = execute_trade_live
-    sigspec = None
     try:
         sigspec = inspect.signature(fn)
     except Exception:
@@ -93,17 +92,14 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
         "qty": sig.get("qty") or 0.0,
     }
 
-    # coroutine?
     is_coro = inspect.iscoroutinefunction(fn)
 
-    # strategy A: single param dict
     use_single = False
     if sigspec:
         p = list(sigspec.parameters.values())
         if len(p) == 1:
             use_single = True
         else:
-            # אם יש אחד בשם "sig" או "signal"
             for x in p:
                 n = (x.name or "").lower()
                 if n in ("sig","signal","payload","data"):
@@ -124,7 +120,7 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError(f"trade_executor failed: {e}")
 
 async def _start_user_stream_if_enabled():
-    if (os.getenv("USER_STREAM_ENABLE","0").lower() in ("1","true","on","yes")):
+    if (os.getenv("USER_STREAM_ENABLE","0").strip().lower() in ("1","true","on","yes")):
         try:
             try:
                 from utils.ws_user_stream import start_async as _ws_start
@@ -154,7 +150,6 @@ async def handle_signal(sig: Dict[str, Any]):
         log.info({"event":"dry_run","sig":sig})
         return
 
-    # live → נסה להריץ דרך ה-executor שלך
     try:
         res = await _execute_via_trade_executor(sig)
         await _tg_send(f"✅ Executed {sig['symbol']} {sig['side']} | {json.dumps(res)[:400]}")
@@ -165,7 +160,7 @@ async def handle_signal(sig: Dict[str, Any]):
 async def main():
     await _start_user_stream_if_enabled()
 
-    src = (os.getenv("WATCH_SOURCE") or "stdin").lower()
+    src = (os.getenv("WATCH_SOURCE") or "stdin").strip().lower()
     cmd = os.getenv("WATCH_CMD", "")
     await _tg_send(f"🚀 Signals engine started. Mode: <b>{_mode().upper()}</b> (source={src})")
 
@@ -205,6 +200,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
 
