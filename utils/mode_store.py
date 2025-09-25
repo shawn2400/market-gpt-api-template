@@ -1,40 +1,19 @@
 # utils/mode_store.py
 from __future__ import annotations
-import os, time
-try:
-    import redis  # type: ignore
-except Exception:
-    redis = None
+import os
 
-REDIS_URL = os.getenv("REDIS_URL", "")
-KEY = "algogpt:exec_mode"   # "dry" | "live"
+# No new envs: use ROUTES_ONLY or EXECUTE_TRADES
+def current_mode() -> str:
+    force = (os.getenv("ROUTES_ONLY") or "").strip().lower()
+    if force in ("live", "dry"): return force
+    exec_trades = (os.getenv("EXECUTE_TRADES", "0").strip().lower() in ("1","true","yes","on"))
+    return "live" if exec_trades else "dry"
 
-class ExecMode:
-    _mem = {"value": os.getenv("DEFAULT_EXEC_MODE", "dry").lower() in ("live","1","true","on") and "live" or "dry",
-            "ts": time.time()}
-    _r = None
-    if redis and REDIS_URL:
-        try:
-            _r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        except Exception:
-            _r = None
+def is_live() -> bool:
+    return current_mode() == "live"
 
-    @classmethod
-    def get(cls) -> str:
-        if cls._r:
-            v = cls._r.get(KEY)
-            if v in ("dry","live"):
-                return v
-        return cls._mem["value"]
+def is_dry() -> bool:
+    return not is_live()
 
-    @classmethod
-    def set(cls, val: str) -> None:
-        val = "live" if str(val).lower().strip() == "live" else "dry"
-        cls._mem = {"value": val, "ts": time.time()}
-        if cls._r:
-            try:
-                cls._r.set(KEY, val, ex=86400)
-            except Exception:
-                pass
 
 
