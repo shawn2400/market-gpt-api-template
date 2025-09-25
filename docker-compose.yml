@@ -42,11 +42,11 @@ services:
       redis:
         condition: service_healthy
       algogpt:
-        condition: service_started
+        condition: service_healthy
     command: >
-      bash -lc "python -m manager"
+      bash -lc "python -m routes.manager"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS ${PRIMARY_PUBLIC_HOST:-http://localhost:10000}/status/all >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://algogpt:${PORT:-10000}/status/all >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -57,7 +57,9 @@ services:
     image: nginx:stable-alpine
     container_name: nginx
     restart: always
-    depends_on: [algogpt]
+    depends_on:
+      algogpt:
+        condition: service_healthy
     ports:
       - "80:80"
     volumes:
@@ -188,6 +190,7 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
+
 
 
 
