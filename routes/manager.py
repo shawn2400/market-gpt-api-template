@@ -1,6 +1,6 @@
 # routes/manager.py
 from __future__ import annotations
-import os, json, time, glob, hashlib, asyncio, logging
+import os, json, time, hashlib, asyncio, logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
@@ -10,7 +10,7 @@ logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
 
 # ---- Config / Paths ----
-BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))  # שינוי ברירת-מחדל: /app לדוקר
+BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))
 INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "10"))
@@ -37,6 +37,13 @@ except Exception as e:
             if not it: return {"ok": False, "error": "not_found"}
             return {"ok": True, "approved": approved, "ticket_id": ticket_id}
     ConfirmStore = _Dummy  # type: ignore
+
+# ---- Telemetry (גלובלי) ----
+TICK_COUNT: int = 0
+LAST_TICK_TS: int = 0
+LAST_CREATED: List[str] = []
+LAST_PENDING: int = 0
+LAST_ERROR: Optional[str] = None
 
 # ---- Models ----
 class UpdateTicketReq(BaseModel):
@@ -81,7 +88,6 @@ def _already_pending(tid: str) -> bool:
         return False
 
 def _create_ticket(obj: Dict[str, Any]) -> Optional[str]:
-    # דורש לפחות symbol+side
     if not obj.get("symbol") or not obj.get("side"):
         return None
     payload = {
@@ -110,15 +116,26 @@ def _create_ticket(obj: Dict[str, Any]) -> Optional[str]:
         return None
 
 async def _tick_once() -> Dict[str, Any]:
+    global TICK_COUNT, LAST_TICK_TS, LAST_CREATED, LAST_PENDING, LAST_ERROR
     created: List[str] = []
-    for obj in _load_ingests():
-        tid = _create_ticket(obj)
-        if tid: created.append(tid)
+    LAST_ERROR = None
     try:
-        pend = ConfirmStore.pending()
-    except Exception:
-        pend = []
-    return {"ok": True, "created": created, "pending_count": len(pend)}
+        for obj in _load_ingests():
+            tid = _create_ticket(obj)
+            if tid: created.append(tid)
+        try:
+            pend = ConfirmStore.pending()
+        except Exception:
+            pend = []
+        TICK_COUNT += 1
+        LAST_TICK_TS = int(time.time())
+        LAST_CREATED = created
+        LAST_PENDING = len(pend)
+        return {"ok": True, "created": created, "pending_count": len(pend)}
+    except Exception as e:
+        LAST_ERROR = str(e)
+        logger.error("tick error: %s", e)
+        return {"ok": False, "error": str(e), "created": created}
 
 # ---- Endpoints ----
 @router.post("/manage-once")
@@ -152,6 +169,20 @@ async def alerts_trades_update(req: UpdateTicketReq):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"decision failed: {e}")
 
+@router.get("/ops/manager/health")
+async def ops_manager_health():
+    return {
+        "ok": True,
+        "enabled": MANAGER_ENABLE,
+        "interval_sec": MANAGER_INTERVAL_SEC,
+        "ingest_dir": str(INGEST_DIR),
+        "last_tick_ts": LAST_TICK_TS,
+        "tick_count": TICK_COUNT,
+        "created_last": LAST_CREATED,
+        "pending_count": LAST_PENDING,
+        **({"errors_last": LAST_ERROR} if LAST_ERROR else {}),
+    }
+
 # ---- Background worker (optional) ----
 async def _manager_loop():
     logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s",
@@ -168,7 +199,7 @@ async def _startup():
     if MANAGER_ENABLE:
         asyncio.create_task(_manager_loop())
 
-# ---- Standalone runner (so we can: python -m routes.manager)
+# ---- Standalone runner ----
 def main() -> None:
     if not MANAGER_ENABLE:
         print("MANAGER_ENABLE=0 — exiting.")
@@ -180,5 +211,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
