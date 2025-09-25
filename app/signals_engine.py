@@ -61,10 +61,8 @@ def _parse_line(line: str) -> Optional[Dict[str, Any]]:
 # -------- executor adapter --------
 async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
     """
-    תומך בשתי מיקומים אפשריים של המוציא לפועל:
-    - utils.trade_executor.execute_trade_live
-    - app.trade_executor.execute_trade_live
-    ותומך גם בחתימה עם dict יחיד או פרמטרים מפורקים.
+    מחפש execute_trade_live גם ב-app.trade_executor וגם ב-utils.trade_executor,
+    ותומך או במילון יחיד או בפרמטרים מפורקים (sync/async).
     """
     fn = None
     err = None
@@ -80,7 +78,6 @@ async def _execute_via_trade_executor(sig: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e2:
             raise RuntimeError(f"trade_executor missing: app.trade_executor error={err}; utils.trade_executor error={e2}")
 
-    # נבנה פרמטרים לפי ה־ENV (LIVE/DRY)
     params = {
         "symbol": sig["symbol"],
         "side":   "BUY" if sig["side"] == "LONG" else "SELL",
@@ -204,6 +201,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
 
 
