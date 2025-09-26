@@ -1,12 +1,12 @@
 # routes/alerts.py
 from __future__ import annotations
-import os, json, logging
+import os, json, logging, binascii, hmac, hashlib
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
-# אימותים מאוחדים (HMAC + Bearer)
-from security.hmac_verify import verify_request_hmac, verify_bearer
+# Bearer (רשותי כש-HMAC כבוי)
+from security.hmac_verify import verify_bearer  # משמש רק כגיבוי כש-HMAC לא חובה
 
 # idem + rate limit נשארים כפי שהם אצלך
 from utils.idempotency import idem_for_request, DEFAULT_TTL_SEC
@@ -30,6 +30,78 @@ IDEM_TTL_SEC  = int(os.getenv("ALERTS_IDEMPOTENCY_TTL_SEC", str(DEFAULT_TTL_SEC)
 RL_LIMIT      = int(os.getenv("ALERTS_RL_LIMIT", "60"))
 RL_WINDOW     = int(os.getenv("ALERTS_RL_WINDOW", "60"))
 
+# ========= HMAC helpers (מקבלים כמה פורמטים נפוצים) =========
+def _get_secret_bytes() -> Optional[bytes]:
+    """
+    סדר עדיפויות: ALERTS_INGEST_HMAC_SECRET -> WEBHOOK_HMAC_SECRET -> OPS_SIGN_SECRET
+    אם ALERTS_INGEST_HMAC_KEY_IS_HEX=1 — נפרש HEX; אחרת ASCII bytes.
+    """
+    s = (
+        os.getenv("ALERTS_INGEST_HMAC_SECRET")
+        or os.getenv("WEBHOOK_HMAC_SECRET")
+        or os.getenv("OPS_SIGN_SECRET")
+    )
+    if not s:
+        return None
+    if os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX", "0") in ("1", "true", "yes", "on"):
+        try:
+            return binascii.unhexlify(s)
+        except Exception:
+            # אם HEX לא חוקי — ניפול ל־ASCII
+            return s.encode()
+    return s.encode()
+
+def _hmac_hex(k: bytes, msg: bytes) -> str:
+    return hmac.new(k, msg, hashlib.sha256).hexdigest()
+
+def _hmac_b64(k: bytes, msg: bytes) -> str:
+    import base64
+    return base64.b64encode(hmac.new(k, msg, hashlib.sha256).digest()).decode()
+
+async def verify_ingest_hmac(request: Request) -> None:
+    """
+    מאמת חתימה על RAW body במספר פורמטים:
+    1) X-Webhook-Hmac / X-Signature = HEX(sha256(key, RAW))
+    2) X-Webhook-Hmac / X-Signature = Base64(sha256(key, RAW))
+    3) X-Hub-Signature-256 = 'sha256=' + HEX(sha256(key, RAW))  (פורמט GitHub)
+    4) תמיכה אופציונלית ב-TS: msg = f"{ts}." + RAW
+    """
+    body = await request.body()
+    # כותרות נפוצות
+    got = request.headers.get("X-Webhook-Hmac", "") or request.headers.get("X-Signature", "")
+    hub = request.headers.get("X-Hub-Signature-256", "")  # "sha256=<hex>"
+    ts  = request.headers.get("X-Webhook-Ts", "")
+
+    key = _get_secret_bytes()
+    if not key:
+        raise HTTPException(status_code=500, detail="HMAC secret not configured")
+
+    # 1) RAW→HEX (ברירת המחדל כמו /_debug/hmac)
+    if got and got == _hmac_hex(key, body):
+        return
+
+    # 2) RAW→Base64
+    if got and got == _hmac_b64(key, body):
+        return
+
+    # 3) GitHub style: sha256=<hex>
+    if hub and hub.startswith("sha256=") and hub[7:] == _hmac_hex(key, body):
+        return
+
+    # 4) תמיכה ב־timestamp prefix: f"{ts}." + RAW
+    if ts:
+        msg = (ts + ".").encode() + body
+        if got and got == _hmac_hex(key, msg):
+            return
+        if hub and hub.startswith("sha256=") and hub[7:] == _hmac_hex(key, msg):
+            return
+        if got and got == _hmac_b64(key, msg):
+            return
+
+    # כישלון — לא לחשוף פרטים
+    raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+
+# ========= Schemas =========
 class IngestResponse(BaseModel):
     ok: bool = True
     accepted: bool = True
@@ -37,6 +109,7 @@ class IngestResponse(BaseModel):
     stored_url: Optional[str] = None
     reason: Optional[str] = None
 
+# ========= Handlers =========
 @router.post("/ingest", response_model=IngestResponse, summary="Ingest trading alerts (TradingView / custom)")
 async def ingest_alert(request: Request) -> IngestResponse:
     # ── Rate limit per IP ──
@@ -45,18 +118,17 @@ async def ingest_alert(request: Request) -> IngestResponse:
     if not allowed:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    # ── Auth ──
+    # ── Auth/HMAC ──
     if HMAC_REQUIRED:
-        ok, reason = await verify_request_hmac(request)
-        if not ok:
-            raise HTTPException(status_code=401, detail=f"HMAC verify failed: {reason}")
+        # קו אחיד: אימות לפי ה־RAW כמו הדיבאגר + תמיכה בפורמטים נוספים
+        await verify_ingest_hmac(request)
     else:
         # אם HMAC לא חובה – ננסה Bearer; אם גם הוא לא קיים, נאפשר (development) רק אם ALLOW_ALERTS_WITHOUT_AUTH=1
         if not verify_bearer(request):
             if os.getenv("ALLOW_ALERTS_WITHOUT_AUTH", "0").lower() not in ("1", "true", "yes", "on"):
                 raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # ── Body ──
+    # ── Body ── (ללא קנוניקליזציה! חותמים על RAW)
     raw = await request.body()
     try:
         payload = json.loads(raw.decode("utf-8") or "{}")
