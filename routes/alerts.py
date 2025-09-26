@@ -5,7 +5,10 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
-from utils.security import verify_request_hmac, verify_bearer
+# אימותים מאוחדים (HMAC + Bearer)
+from security.hmac_verify import verify_request_hmac, verify_bearer
+
+# idem + rate limit נשארים כפי שהם אצלך
 from utils.idempotency import idem_for_request, DEFAULT_TTL_SEC
 from utils.rate_limit import allow as rl_allow
 
@@ -48,7 +51,7 @@ async def ingest_alert(request: Request) -> IngestResponse:
         if not ok:
             raise HTTPException(status_code=401, detail=f"HMAC verify failed: {reason}")
     else:
-        # אם HMAC לא חובה – ננסה Bearer; אם גם הוא לא קיים, נאפשר (development)
+        # אם HMAC לא חובה – ננסה Bearer; אם גם הוא לא קיים, נאפשר (development) רק אם ALLOW_ALERTS_WITHOUT_AUTH=1
         if not verify_bearer(request):
             if os.getenv("ALLOW_ALERTS_WITHOUT_AUTH", "0").lower() not in ("1", "true", "yes", "on"):
                 raise HTTPException(status_code=401, detail="Unauthorized")
@@ -87,7 +90,12 @@ async def ingest_alert(request: Request) -> IngestResponse:
 # Ping קטן
 @router.get("/ping")
 async def ping_alerts() -> Dict[str, Any]:
-    return {"ok": True, "hmac_required": HMAC_REQUIRED, "rl": {"limit": RL_LIMIT, "window": RL_WINDOW}}
+    return {
+        "ok": True,
+        "hmac_required": HMAC_REQUIRED,
+        "rl": {"limit": RL_LIMIT, "window": RL_WINDOW},
+    }
+
 
 
 
