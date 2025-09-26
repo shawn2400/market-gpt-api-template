@@ -199,7 +199,11 @@ INSTANCE_ID = (
 
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
-    resp = await call_next(request)
+    try:
+        resp = await call_next(request)
+    except Exception:
+        logger.exception("middleware call_next failed for add_server_identity_header")
+        raise
     resp.headers["x-app-instance-id"] = INSTANCE_ID
     resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור לבדיקות קיימות
     return resp
@@ -208,16 +212,52 @@ async def add_server_identity_header(request: Request, call_next):
 @app.middleware("http")
 async def validate_token(request: Request, call_next):
     path = request.url.path
-    if request.method.upper() == "OPTIONS": return await call_next(request)
-    if path in EFFECTIVE_PUBLIC_PATHS: return await call_next(request)
+
+    # OPTIONS passthrough
+    if request.method.upper() == "OPTIONS":
+        try:
+            return await call_next(request)
+        except Exception:
+            logger.exception("middleware call_next failed for %s", path)
+            raise
+
+    # public exact paths
+    if path in EFFECTIVE_PUBLIC_PATHS:
+        try:
+            return await call_next(request)
+        except Exception:
+            logger.exception("middleware call_next failed for %s", path)
+            raise
+
+    # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
-        if path.startswith(pfx): return await call_next(request)
-    if allow_all(): return await call_next(request)
+        if path.startswith(pfx):
+            try:
+                return await call_next(request)
+            except Exception:
+                logger.exception("middleware call_next failed for %s", path)
+                raise
+
+    # allow-all (dev/maintenance)
+    if allow_all():
+        try:
+            return await call_next(request)
+        except Exception:
+            logger.exception("middleware call_next failed for %s", path)
+            raise
+
+    # token gate
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     token = extract_token(request, a_hdr, x_hdr)
-    if not token_matches(token): return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
-    return await call_next(request)
+    if not token_matches(token):
+        return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
+
+    try:
+        return await call_next(request)
+    except Exception:
+        logger.exception("middleware call_next failed for %s", path)
+        raise
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -453,6 +493,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
