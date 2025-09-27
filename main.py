@@ -135,7 +135,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN","").strip()
-_cao = os.getenv("CORS_ALLOW_ORIGINS", "*")
+_cao = os.getenv("CORS_ALLOW_ORIGINS", os.getenv("CORS_ALLOW_ORIGINS","*"))
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
@@ -162,7 +162,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    # alerts כציבורי – כדי ש-HMAC ייבדק בתוך ה-router
+    # alerts: ציבורי כדי שה־router יעשה אימות HMAC בעצמו
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
@@ -191,7 +191,7 @@ async def add_server_identity_header(request: Request, call_next):
         resp = await call_next(request)
     except Exception:
         logger.exception("middleware call_next failed for add_server_identity_header")
-        return JSONResponse(status_code=500, content={"detail":"internal error"})
+        raise
     resp.headers["x-app-instance-id"] = INSTANCE_ID
     resp.headers["rndr-id"] = INSTANCE_ID
     return resp
@@ -201,51 +201,36 @@ async def add_server_identity_header(request: Request, call_next):
 async def validate_token(request: Request, call_next):
     path = request.url.path
 
-    # OPTIONS passthrough
     if request.method.upper() == "OPTIONS":
-        try:
-            return await call_next(request)
+        try: return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path)
-            return JSONResponse(status_code=500, content={"detail":"internal error"})
+            logger.exception("middleware call_next failed for %s", path); raise
 
-    # public exact paths
     if path in EFFECTIVE_PUBLIC_PATHS:
-        try:
-            return await call_next(request)
+        try: return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path)
-            return JSONResponse(status_code=500, content={"detail":"internal error"})
+            logger.exception("middleware call_next failed for %s", path); raise
 
-    # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
         if path.startswith(pfx):
-            try:
-                return await call_next(request)
+            try: return await call_next(request)
             except Exception:
-                logger.exception("middleware call_next failed for %s", path)
-                return JSONResponse(status_code=500, content={"detail":"internal error"})
+                logger.exception("middleware call_next failed for %s", path); raise
 
-    # allow-all (dev/maintenance)
     if allow_all():
-        try:
-            return await call_next(request)
+        try: return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path)
-            return JSONResponse(status_code=500, content={"detail":"internal error"})
+            logger.exception("middleware call_next failed for %s", path); raise
 
-    # token gate
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     token = extract_token(request, a_hdr, x_hdr)
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
 
-    try:
-        return await call_next(request)
+    try: return await call_next(request)
     except Exception:
-        logger.exception("middleware call_next failed for %s", path)
-        return JSONResponse(status_code=500, content={"detail":"internal error"})
+        logger.exception("middleware call_next failed for %s", path); raise
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -414,7 +399,6 @@ async def ops_eod_now():
     await send_eod_report_now()
     return {"ok":True,"sent":True}
 
-# ---------- startup hooks ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -471,6 +455,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
