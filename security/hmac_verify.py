@@ -1,200 +1,131 @@
 # security/hmac_verify.py
 from __future__ import annotations
-import base64
-import binascii
-import hashlib
-import hmac
-import json
-import os
-from typing import Dict, Optional, Tuple
+import os, hmac, hashlib, binascii, time, logging
+from typing import Iterable, Optional, Tuple
+from fastapi import Request
 
-# כותרות אפשריות לחתימה
-HEADER_CANDIDATES = ("x-webhook-hmac", "x-hub-signature-256", "x-signature")
+log = logging.getLogger("algogpt.security")
 
-# סדר קדימויות ל-secrets מהסביבה
-SECRET_CANDIDATES = (
-    "ALERTS_INGEST_HMAC_SECRET",
-    "ALERTS_HMAC_SECRET",
-    "WEBHOOK_HMAC_SECRET",
-    "OPS_SIGN_SECRET",
-)
+# ──────────────────────────────────────────────────────────────────────────────
+# מקור הסוד: נעדיף את אותם שמות כמו בדיבאגר /alerts (_INGEST_) ואז תאימות
+# ──────────────────────────────────────────────────────────────────────────────
+def _get_secret_bytes(return_source: bool = False) -> Optional[Tuple[bytes, str, bool]] | Optional[bytes]:
+    src = "none"
+    s = os.getenv("ALERTS_INGEST_HMAC_SECRET")
+    if s:
+        src = "ALERTS_INGEST_HMAC_SECRET"
+    else:
+        s = os.getenv("WEBHOOK_HMAC_SECRET")
+        if s:
+            src = "WEBHOOK_HMAC_SECRET"
+        else:
+            s = os.getenv("OPS_SIGN_SECRET")
+            if s:
+                src = "OPS_SIGN_SECRET"
 
-def _pick_header_sig(headers_lower: Dict[str, str]) -> Tuple[Optional[str], str]:
-    """מאתר את החתימה מתוך אחת הכותרות הידועות. מחזיר (signature, header_name)."""
-    for h in HEADER_CANDIDATES:
-        if h in headers_lower:
-            raw = headers_lower[h]
-            # תמיכה ב-GitHub style: sha256=<hex>
-            if raw.startswith("sha256="):
-                raw = raw[7:]
-            return raw, h
-    return None, ""
+    if not s:
+        return (None if return_source else None)
 
-def _decode_sig(sig: str) -> Tuple[Optional[bytes], str]:
-    """מנסה לפענח את החתימה כ-hex, ואם נכשל — כ-base64."""
-    try:
-        return binascii.unhexlify(sig), "hex"
-    except Exception:
+    key_is_hex = os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX", "0").lower() in ("1","true","yes","on")
+    if key_is_hex:
         try:
-            return base64.b64decode(sig), "base64"
+            b = binascii.unhexlify(s)
         except Exception:
-            return None, "unknown"
+            b = s.encode(); key_is_hex = False
+    else:
+        b = s.encode()
 
-def _get_secret_bytes() -> Tuple[Optional[bytes], Dict[str, str]]:
-    """
-    בוחר secret ראשון שקיים לפי סדר קדימויות.
-    אם מוגדר <NAME>_KEY_IS_HEX=1 (או ALERTS_HMAC_KEY_IS_HEX/HMAC_KEY_IS_HEX) — יבצע unhex.
-    מחזיר (key_bytes, explain).
-    """
-    explain: Dict[str, str] = {}
-    chosen_val: Optional[str] = None
-    chosen_name: Optional[str] = None
+    if return_source:
+        return b, src, key_is_hex
+    return b
 
-    for name in SECRET_CANDIDATES:
-        val = os.getenv(name)
-        if val:
-            chosen_val = val
-            chosen_name = name
+def _hmac_hex(k: bytes, msg: bytes) -> str:
+    return hmac.new(k, msg, hashlib.sha256).hexdigest()
+
+def _normalize_sig_header(sig: str) -> str:
+    s = (sig or "").strip()
+    if "=" in s:
+        algo, val = s.split("=", 1)
+        if algo.lower() in ("sha256", "hmac-sha256"):
+            return val.strip()
+    return s
+
+# ──────────────────────────────────────────────────────────────────────────────
+# אימות HMAC לבקשה (תואם לדיבאגר: RAW body, אותם headers)
+# ──────────────────────────────────────────────────────────────────────────────
+async def verify_request_hmac(
+    request: Request,
+    *,
+    sig_header_names: Iterable[str] = ("X-Webhook-Hmac", "X-Signature", "X-AlgoGPT-Signature", "X-Hub-Signature-256"),
+    ts_header_names: Iterable[str] = ("X-Webhook-Ts", "X-Signature-Timestamp", "X-AlgoGPT-Timestamp"),
+    max_skew_sec: int = 180,
+) -> Tuple[bool, str]:
+    key = _get_secret_bytes()
+    if not key:
+        return (False, "missing_secret")
+
+    body = await request.body()
+
+    # חתימה מהכותרות
+    hdr_sig_raw = ""
+    for name in sig_header_names:
+        v = request.headers.get(name)
+        if v:
+            hdr_sig_raw = v
+            break
+    if not hdr_sig_raw:
+        return (False, "missing_signature_header")
+
+    hdr_sig = _normalize_sig_header(hdr_sig_raw)
+
+    # timestamp (אופציונלי)
+    ts_val: Optional[str] = None
+    for name in ts_header_names:
+        v = request.headers.get(name)
+        if v:
+            ts_val = v.strip()
             break
 
-    if not chosen_val or not chosen_name:
-        explain["error"] = "missing_secret"
-        explain["checked"] = ",".join(SECRET_CANDIDATES)
-        return None, explain
-
-    is_hex_flag = (
-        os.getenv(f"{chosen_name}_KEY_IS_HEX")
-        or os.getenv("ALERTS_HMAC_KEY_IS_HEX")
-        or os.getenv("HMAC_KEY_IS_HEX")
-        or "0"
-    ).strip().lower() in ("1", "true", "yes", "on")
-
-    try:
-        key_bytes = (
-            binascii.unhexlify(chosen_val) if is_hex_flag else chosen_val.encode("utf-8")
-        )
-    except binascii.Error as e:
-        explain["error"] = "bad_hex_secret"
-        explain["secret_name"] = chosen_name
-        explain["detail"] = str(e)
-        return None, explain
-
-    explain["secret_name"] = chosen_name
-    explain["key_is_hex"] = "1" if is_hex_flag else "0"
-    return key_bytes, explain
-
-def _canon_json(body: bytes) -> bytes:
-    """מייצר JSON קנוני: בלי רווחים, מפתחות ממויינים."""
-    obj = json.loads(body.decode("utf-8"))
-    canon = json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return canon
-
-def verify_request(headers: Dict[str, str], body: bytes) -> Tuple[bool, Dict[str, str]]:
-    """
-    מוודא חתימת HMAC באחד משלושה אופנים:
-      1) raw body
-      2) canon-json (אם Content-Type הוא application/json)
-      3) "<ts>.<body>" אם קיימת כותרת X-Webhook-Ts
-    תומך ב-hex/base64 ובכותרות שונות.
-    מחזיר (ok, explain_dict)
-    """
-    # ננרמל שמות כותרות ל-lower
-    h = {k.lower(): v for k, v in headers.items()}
-    explain: Dict[str, str] = {}
-
-    # שליפת מפתח
-    key, meta = _get_secret_bytes()
-    explain.update(meta)
-    if key is None:
-        return False, explain
-
-    # שליפת חתימה מהכותרות
-    sig_str, hdr = _pick_header_sig(h)
-    if not sig_str:
-        explain["error"] = "missing_signature_header"
-        explain["expected_headers"] = ",".join(HEADER_CANDIDATES)
-        return False, explain
-
-    sig_bytes, sig_fmt = _decode_sig(sig_str)
-    if not sig_bytes:
-        explain["error"] = "bad_signature_encoding"
-        explain["sig_fmt"] = sig_fmt
-        return False, explain
-
-    explain["header_used"] = hdr
-    explain["sig_fmt"] = sig_fmt
-
-    # 1) raw
-    digest_raw = hmac.new(key, body, hashlib.sha256).digest()
-    if hmac.compare_digest(digest_raw, sig_bytes):
-        explain["mode"] = "raw"
-        return True, explain
-
-    # 2) canon-json
-    if h.get("content-type", "").lower().startswith("application/json"):
+    # אם יש timestamp – בדוק סטייה
+    if ts_val:
         try:
-            c = _canon_json(body)
-            digest_canon = hmac.new(key, c, hashlib.sha256).digest()
-            if hmac.compare_digest(digest_canon, sig_bytes):
-                explain["mode"] = "canon-json"
-                return True, explain
-        except Exception as e:
-            explain["canon_err"] = str(e)
+            ts_float = float(ts_val)
+            skew = abs(time.time() - ts_float)
+            if skew > max_skew_sec:
+                return (False, f"timestamp_skew({int(skew)}s)")
+        except Exception:
+            return (False, "bad_timestamp")
 
-    # 3) ts.body
-    ts = h.get("x-webhook-ts")
-    if ts:
-        msg = (ts + ".").encode("utf-8") + body
-        digest_ts = hmac.new(key, msg, hashlib.sha256).digest()
-        if hmac.compare_digest(digest_ts, sig_bytes):
-            explain["mode"] = "ts.body"
-            explain["ts"] = ts
-            return True, explain
+    # בדיקות: RAW ואז RAW עם prefix ts.
+    exp = _hmac_hex(key, body)
+    if hmac.compare_digest(exp, hdr_sig):
+        return (True, "ok")
 
-    explain["error"] = "no_mode_matched"
-    return False, explain
+    if ts_val:
+        msg = (ts_val + ".").encode() + body
+        exp2 = _hmac_hex(key, msg)
+        if hmac.compare_digest(exp2, hdr_sig):
+            return (True, "ok")
 
-# ---------- פונקציות נוחות לשימוש ב-Routes ----------
+    return (False, "bad_signature")
 
-async def verify_request_hmac(request) -> Tuple[bool, str]:
-    """
-    API אסינכרוני לשימוש בראוטים:
-    קורא את ה-body (ללא שינוי), מריץ verify_request ומחזיר (ok, reason_str).
-    """
-    body = await request.body()
-    ok, info = verify_request(dict(request.headers), body)
-    if ok:
-        return True, info.get("mode", "ok")
-    # reason קומפקטי אך אינפורמטיבי
-    reason = (
-        f"{info.get('error','?')}"
-        f"; header={info.get('header_used','-')}"
-        f"; fmt={info.get('sig_fmt','-')}"
-        f"; secret={info.get('secret_name','-')}"
-        f"; key_is_hex={info.get('key_is_hex','-')}"
-    )
-    if "canon_err" in info:
-        reason += f"; canon_err={info['canon_err']}"
-    if "expected_headers" in info:
-        reason += f"; expected={info['expected_headers']}"
-    return False, reason
-
-def verify_bearer(request) -> bool:
-    """
-    אימות Bearer Token פשוט:
-    בודק Authorization: Bearer <token> מול אחד מהערכים: API_BEARER_TOKEN / API_TOKEN / PRIMARY_API_TOKEN.
-    """
-    auth = request.headers.get("Authorization") or request.headers.get("authorization")
-    if not auth or not auth.lower().startswith("bearer "):
+# ──────────────────────────────────────────────────────────────────────────────
+# Bearer fallback (כש-HMAC כבוי)
+# ──────────────────────────────────────────────────────────────────────────────
+_BEARER = os.getenv("ALERTS_BEARER", "").strip()
+def verify_bearer(request: Request, *, token: Optional[str] = None) -> bool:
+    tok = (token or _BEARER or "").strip()
+    if not tok:
         return False
-    token = auth[7:].strip()
+    auth = request.headers.get("Authorization", "") or request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return False
+    got = auth.split(" ", 1)[1].strip()
+    try:
+        return hmac.compare_digest(got, tok)
+    except Exception:
+        return False
 
-    expected = (
-        os.getenv("API_BEARER_TOKEN")
-        or os.getenv("API_TOKEN")
-        or os.getenv("PRIMARY_API_TOKEN")
-        or ""
-    ).strip()
+__all__ = ["verify_request_hmac", "verify_bearer"]
 
-    return bool(expected) and token == expected
 
