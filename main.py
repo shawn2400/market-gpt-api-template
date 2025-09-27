@@ -20,7 +20,7 @@ from utils.json_logger import setup_json_logging
 from utils.metrics_middleware import MetricsMiddleware
 from utils.response_limits import ResponseSizeLimiter
 
-# ---- Binance client (fallbacks) ----
+# ---- Binance client (עם פולבאקים) ----
 try:
     from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 except Exception:
@@ -29,7 +29,7 @@ except Exception:
     def get_price(symbol: str) -> Optional[float]: return None
     def futures_exchange_info_safe(force_refresh: bool = False): return None
 
-# ---- Telegram notifier (fallbacks) ----
+# ---- Telegram notifier (פולבאקים) ----
 try:
     from utils.telegram_notifier_core import ensure_ops_schedulers_started, send_ops_digest_now, send_eod_report_now
 except Exception:
@@ -79,7 +79,7 @@ except Exception:
         return {"tick_ewma_ms": None,"tick_p95_ms": None,"tick_p99_ms": None,"last_tick_age_sec": None,
                 "timeouts_burst": 0,"no_trade_streak": 0,"current_interval": int(os.getenv("SCAN_INTERVAL","60"))}
 
-# ---- Trade Manager (optional) ----
+# ---- Trade Manager (אופציונלי) ----
 TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
 TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20"))
 try:
@@ -96,7 +96,7 @@ def _coerce_log_level(val):
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL","INFO")))
 
-# base dirs
+# תיקיות בסיס
 for d in ("static","logs","data"):
     try: Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
@@ -104,8 +104,7 @@ for d in ("static","logs","data"):
 APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
-# ---------- 422 handler ----------
-from fastapi.exceptions import RequestValidationError
+# ---------- Validation error => 422 ----------
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
@@ -136,7 +135,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN","").strip()
-_cao = os.getenv("CORS_ALLOW_ORIGINS", os.getenv("CORS_ALLOW_ORIGINS","*"))
+_cao = os.getenv("CORS_ALLOW_ORIGINS", "*")
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
@@ -163,7 +162,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    # Alerts public (HMAC יאומת בתוך ה-router)
+    # alerts כציבורי – כדי ש-HMAC ייבדק בתוך ה-router
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
@@ -178,7 +177,7 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- stable instance id ----------
+# ---------- rndr-id ----------
 INSTANCE_ID = (
     os.getenv("RENDER_INSTANCE_ID")
     or os.getenv("INSTANCE_ID")
@@ -227,7 +226,7 @@ async def validate_token(request: Request, call_next):
                 logger.exception("middleware call_next failed for %s", path)
                 return JSONResponse(status_code=500, content={"detail":"internal error"})
 
-    # allow-all
+    # allow-all (dev/maintenance)
     if allow_all():
         try:
             return await call_next(request)
@@ -333,7 +332,6 @@ if not _route_exists("/status/all"):
             "binance_ping_ok": ping_ok
         }
 
-# auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -385,7 +383,6 @@ async def flush_kill_switch():
             logger.warning({"event":"flush_failed","err":str(e)})
     return {"ok":True,"flushed":done}
 
-# --- public debug auth endpoint ---
 try:
     from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
 except Exception:
@@ -442,7 +439,39 @@ async def _startup_preflight_warmup():
 @app.on_event("startup")
 async def _startup_webhook():
     if not BOT_TOKEN or not TELEGRAM_AUTO_WEBHOOK: return
-    public_host = os.getenv("PUBLIC_HOST","
+    public_host = os.getenv("PUBLIC_HOST","").strip()
+    if not public_host: return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(f"{API_BASE}/setWebhook",
+                json={"url":f"{public_host.rstrip('/')}/telegram/webhook",
+                      "secret_token":WEBHOOK_SECRET,"drop_pending_updates":True,"max_connections":40})
+    except Exception as e:
+        logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
+
+@app.on_event("startup")
+async def _startup_user_stream():
+    try:
+        if os.getenv("USER_STREAM_ENABLE","1").lower() in ("1","true","yes","on"):
+            from utils import ws_user_stream  # type: ignore
+            ws_user_stream.start(); logger.info({"event":"ws_user_stream_autostart"})
+    except Exception as e:
+        logger.warning({"event":"ws_user_stream_autostart_failed","error":str(e)})
+
+@app.on_event("startup")
+async def _ops_schedulers():
+    await ensure_ops_schedulers_started()
+
+@app.on_event("startup")
+async def _start_trade_manager_loop():
+    if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
+        asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC))
+        logger.info({"event":"trade_manager_loop_started","interval_sec":TRADE_MANAGER_INTERVAL_SEC})
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
