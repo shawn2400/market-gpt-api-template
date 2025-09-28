@@ -15,14 +15,14 @@ try:
 except Exception:
     aioredis = None  # type: ignore
 
-NS             = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL      = os.getenv("REDIS_URL", "")
-PUBLIC_HOST    = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
-HMAC_SECRET    = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
-ADMIN_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-BOT_TOKEN      = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
+NS                   = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL            = os.getenv("REDIS_URL", "")
+PUBLIC_HOST          = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
+HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
+BOT_TOKEN            = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+API_BEARER_TOKEN     = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
 ETA_SMART_ENABLE     = (os.getenv("ETA_SMART_ENABLE","0").lower() in ("1","true","yes","on"))
 ETA_VELOCITY_WINDOW  = int(os.getenv("ETA_VELOCITY_WINDOW","30"))  # דקות אחורה למדידת מהירות
 DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL","15m")
@@ -75,12 +75,14 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 # -------- Mode parsing ----------
+_MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
+
 def _parse_mode(note: Optional[str]) -> Optional[str]:
     """
     note יכול להכיל בתחילתו תג בסגנון [mode: MARKET] / [mode: HYBRID] / [mode: AUTO]
     """
     if not note: return None
-    m = re.search(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", str(note), flags=re.I)
+    m = _MODE_RX.search(str(note))
     if not m: return None
     return m.group(1).upper()
 
@@ -108,16 +110,20 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None, reje
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# -------- Execution backends ----------
+# -------- Execution backends --------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ביצוע פשוט – MARKET בלבד (פולבאק אם אין execute_trade_live)
+    """
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
 
+    # Fallback using python-binance (פשוט, ללא TP/SL)
     try:
-        from binance.client import Client
+        from binance.client import Client  # type: ignore
     except Exception as e:
         logger.error("binance import failed: %s", e)
         return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
@@ -152,6 +158,9 @@ def _bool_env(name: str, default: bool=False) -> bool:
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ביצוע 'חמוש' – HYBRID (Limit+Stop עם הסלמה למרקט) + TP/SL אם סופקו.
+    """
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -215,7 +224,8 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         logger.warning("velocity_calc_failed: %s", e)
         return None
 
-def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None, interval: str = DEFAULT_INTERVAL, window_min: int = ETA_VELOCITY_WINDOW) -> Dict[str, Optional[int]]:
+def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
+                interval: str = DEFAULT_INTERVAL, window_min: int = ETA_VELOCITY_WINDOW) -> Dict[str, Optional[int]]:
     vpm = _calc_velocity_per_min(symbol, interval, window_min)
     if not (price_now and vpm and vpm > 0):
         return {"eta_tp1_min": None, "eta_tp2_min": None, "eta_tp3_min": None}
@@ -278,6 +288,7 @@ async def create_ticket(
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
+    # Smart ETAs (אופציונלי)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         try:
@@ -304,6 +315,7 @@ async def create_ticket(
         "expiry_ts": payload.get("expiry_ts"),
     }
 
+    # Persist
     try:
         ConfirmStore.create(dict(req_body))
     except Exception:
@@ -319,6 +331,7 @@ async def create_ticket(
     approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve?ticket_id={tid}" if PUBLIC_HOST else ""
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?ticket_id={tid}"  if PUBLIC_HOST else ""
 
+    # Telegram message
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
@@ -473,7 +486,6 @@ async def approve_signed(request: Request):
     if not ok:
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
-
 
 
 
