@@ -39,7 +39,10 @@ async def _redis():
 try:
     from utils.trade_executor import ConfirmStore  # type: ignore
 except Exception:
-    from main import ConfirmStore  # type: ignore
+    try:
+        from app.trade_executor import ConfirmStore  # type: ignore
+    except Exception:
+        from main import ConfirmStore  # type: ignore
 
 # -------- Small utils ----------
 def _bool(v, default=False) -> bool:
@@ -145,7 +148,10 @@ TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        from utils.trade_executor import execute_trade_live  # type: ignore
+        try:
+            from utils.trade_executor import execute_trade_live  # type: ignore
+        except Exception:
+            from app.trade_executor import execute_trade_live  # type: ignore
     except Exception as e:
         logger.error("execute_trade_live missing: %s", e)
         return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
@@ -286,7 +292,7 @@ async def create_ticket(
             from utils.binance_client import get_price  # type: ignore
             price_now = get_price(symbol)
         except Exception:
-            pass
+            price_now = None
         etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
         for k,v in etas.items():
             payload.setdefault(k, v)
@@ -454,6 +460,7 @@ async def approve_signed(request: Request):
     if not ok:
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "internal_execute": exec_res}
+
 
 
 
