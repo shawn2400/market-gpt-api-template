@@ -1,15 +1,16 @@
 # routes/alerts.py
-import binascii, hashlib, hmac, os, json
+import binascii, hashlib, hmac, os, json, asyncio
 from typing import Optional, Dict, Any
-import httpx
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
+# ---------- HMAC helpers ----------
 def _get_secret_bytes() -> Optional[bytes]:
-    # קודם עדיפות למפתח הייעודי של alerts, ואז fallback ל-WEBHOOK_HMAC_SECRET
+    # עדיפות למפתח ייעודי של alerts; אחרת fallback ל-WEBHOOK_HMAC_SECRET
     secret = os.getenv("ALERTS_INGEST_HMAC_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET") or ""
     if not secret:
         return None
@@ -40,54 +41,43 @@ def _client_hexdigest_from_headers(request: Request) -> Optional[str]:
     hv = hv.strip().lower()
     return hv if len(hv) == 64 else None
 
-# -------- Telegram wiring --------
-TELEGRAM_ALERTS_ENABLE = os.getenv("TELEGRAM_ALERTS_ENABLE", "1").lower() in ("1", "true", "yes", "on")
-TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
-
-async def _tg_send(text: str) -> Dict[str, Any]:
-    if not (TELEGRAM_ALERTS_ENABLE and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-        return {"ok": False, "skipped": True, "reason": "telegram_not_configured"}
-    api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
+# ---------- Notifiers ----------
+async def _notify_telegram(text: str) -> bool:
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    chat_id = (os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID") or "").strip()
+    if not token or not chat_id:
+        return False
+    api = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             r = await cli.post(api, json=payload)
-        ok = (r.status_code == 200) and bool(r.json().get("ok"))
-        return {"ok": ok, "status": r.status_code, "resp": r.text[:300]}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+            return bool(r.status_code == 200 and r.json().get("ok"))
+    except Exception:
+        return False
 
-def _fmt_trade_msg(d: Dict[str, Any]) -> str:
-    sym = str(d.get("symbol", "?")).upper()
-    mkt = str(d.get("market", "?"))
-    side = str(d.get("side", "?")).upper()
-    score = d.get("score", "")
-    reason = d.get("reason", "")
-    need = d.get("require_approval", False)
+def _fmt_alert_msg(p: Dict[str, Any]) -> str:
+    # שדות אופייניים; מתחשב בחסרים
+    sym   = str(p.get("symbol", "")).upper()
+    mkt   = str(p.get("market", "futures"))
+    side  = str(p.get("side", "")).upper()
+    score = p.get("score")
+    reason= p.get("reason", "")
+    qty   = p.get("qty")
+    lev   = p.get("leverage")
+    need  = bool(p.get("require_approval"))
+    parts = [f"🟢 <b>Trade Alert</b>"]
+    if sym: parts.append(f"• Symbol: <b>{sym}</b>")
+    parts.append(f"• Market: {mkt}")
+    if side: parts.append(f"• Side: <b>{side}</b>")
+    if qty is not None: parts.append(f"• Qty: {qty}")
+    if lev is not None: parts.append(f"• Leverage: x{lev}")
+    if score is not None: parts.append(f"• Score: {score}")
+    if reason: parts.append(f"• Reason: {reason}")
+    parts.append(f"• Require approval: {'YES' if need else 'NO'}")
+    return "\n".join(parts)
 
-    extra = []
-    for k in ("entry", "sl", "tp", "rr", "qty", "leverage"):
-        if k in d and d[k] not in (None, ""):
-            extra.append(f"{k}={d[k]}")
-    extra_txt = ("\n" + "\n".join(extra)) if extra else ""
-    need_txt = "✅ אישור נדרש" if need else "✅ ללא צורך באישור"
-
-    return (
-        f"🚨 <b>התראת טרייד</b>\n"
-        f"Symbol: <b>{sym}</b>\n"
-        f"Market: {mkt}\n"
-        f"Side: <b>{side}</b>\n"
-        f"Score: {score}\n"
-        f"Reason: {reason}\n"
-        f"{need_txt}{extra_txt}"
-    )
-
+# ---------- Routes ----------
 @router.get("/ping")
 async def ping():
     return {"ok": True, "service": "alerts"}
@@ -100,6 +90,7 @@ async def debug_hmac_check(request: Request):
 
 @router.post("/ingest")
 async def ingest(request: Request):
+    # אימות HMAC על הגוף הגולמי בדיוק כמו שיגיע
     raw = await request.body()
     server_hex = _server_hexdigest(raw)
     if not server_hex:
@@ -109,18 +100,26 @@ async def ingest(request: Request):
     if not client_hex or client_hex != server_hex:
         return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature"})
 
-    # parse + notify Telegram
+    # פרסינג JSON
     try:
-        data = json.loads(raw.decode("utf-8"))
-        if not isinstance(data, dict):
-            data = {}
+        payload = json.loads(raw.decode("utf-8"))
+        assert isinstance(payload, dict)
     except Exception:
-        data = {}
+        return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_json"})
 
-    msg = _fmt_trade_msg(data)
-    tg = await _tg_send(msg)
+    # ולידציה בסיסית לשדות עיקריים
+    symbol = str(payload.get("symbol", "")).upper()
+    side   = str(payload.get("side", "")).upper()
+    if not symbol or side not in ("BUY", "SELL", "LONG", "SHORT"):
+        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid_fields"})
 
-    return {"ok": True, "accepted": True, "telegram": tg}
+    # נוטיפיקציה לטלגרם (אם מוגדר)
+    msg = _fmt_alert_msg(payload)
+    tg_ok = await _notify_telegram(msg)
+
+    # כאן אפשר לשרשר לוגיקה עסקית (אישור/פתיחה/שמירה) בעתיד
+    return {"ok": True, "accepted": True, "notified": {"telegram": tg_ok}}
+
 
 
 
