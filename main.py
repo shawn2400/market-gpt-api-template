@@ -117,6 +117,10 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
@@ -147,7 +151,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN","").strip()
-_cao = os.getenv("CORS_ALLOW_ORIGINS", "*")  # ← תיקון קטן
+_cao = os.getenv("CORS_ALLOW_ORIGINS", "*")
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
@@ -174,7 +178,6 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    # >>> מסלולי alerts פתוחים כדי לבצע אימות HMAC ברמת ה-router
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
@@ -189,7 +192,7 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- rndr-id יציב משלנו ----------
+# ---------- rndr-id יציב ----------
 INSTANCE_ID = (
     os.getenv("RENDER_INSTANCE_ID")
     or os.getenv("INSTANCE_ID")
@@ -205,7 +208,7 @@ async def add_server_identity_header(request: Request, call_next):
         logger.exception("middleware call_next failed for add_server_identity_header")
         return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_add_header_failed"})
     resp.headers["x-app-instance-id"] = INSTANCE_ID
-    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור
+    resp.headers["rndr-id"] = INSTANCE_ID
     return resp
 
 # ---------- Global auth middleware ----------
@@ -214,24 +217,19 @@ async def validate_token(request: Request, call_next):
     try:
         path = request.url.path
 
-        # OPTIONS passthrough
         if request.method.upper() == "OPTIONS":
             return await call_next(request)
 
-        # public exact paths
         if path in EFFECTIVE_PUBLIC_PATHS:
             return await call_next(request)
 
-        # public prefixes
         for pfx in EFFECTIVE_PUBLIC_PREFIXES:
             if path.startswith(pfx):
                 return await call_next(request)
 
-        # allow-all (dev/maintenance)
         if allow_all():
             return await call_next(request)
 
-        # token gate
         a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
         x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
         token = extract_token(request, a_hdr, x_hdr)
@@ -301,6 +299,22 @@ async def health(): return {"ok":True,"status":"ok","version":APP_VERSION}
 @app.get("/debug/health", include_in_schema=False)
 async def debug_health(): return {"ok":True,"status":"ok","env":os.getenv("ENV","prod"),"version":APP_VERSION}
 
+# NEW: /debug/env – כדי לאבחן ENV
+def _mask(v: str) -> str:
+    if not v: return ""
+    if len(v) <= 8: return "*" * len(v)
+    return v[:4] + "*" * (len(v)-8) + v[-4:]
+
+@app.get("/debug/env", include_in_schema=False)
+async def debug_env():
+    return {
+        "ok": True,
+        "INSTANCE_ID": os.getenv("INSTANCE_ID", ""),
+        "ALERTS_INGEST_HMAC_SECRET": _mask(os.getenv("ALERTS_INGEST_HMAC_SECRET","")),
+        "ALERTS_INGEST_HMAC_KEY_IS_HEX": os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX",""),
+        "WEBHOOK_HMAC_SECRET": _mask(os.getenv("WEBHOOK_HMAC_SECRET","")),
+    }
+
 @app.get("/status/ping")
 async def status_ping(): return {"ok":True,"ts_ms":int(time.time()*1000)}
 
@@ -354,7 +368,7 @@ async def price(symbol: str):
         p = None; ok = False; err = str(e)
     return {"ok":ok,"symbol":symbol.upper(),"price":float(p) if p is not None else None,"source":src,"ts":ts,"error":err}
 
-# readiness שאינה מפילה בעת BAN
+# readiness שלא מפילה בעת BAN
 @app.get("/readyz")
 async def readyz():
     details: Dict[str, Any] = {}; err: Optional[str] = None
@@ -476,6 +490,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
