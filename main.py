@@ -52,9 +52,7 @@ except Exception:
         from utils.auto_executor import ConfirmStore  # type: ignore
     except Exception:
         class ConfirmStore:  # type: ignore
-            """
-            Fallback in-memory confirm store compatible with routes.manager.
-            """
+            """Fallback in-memory confirm store compatible with routes.manager."""
             _P: Dict[str, Dict[str, Any]] = {}
 
             @classmethod
@@ -149,7 +147,7 @@ app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BY
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 UI_DOMAIN = os.getenv("UI_DOMAIN","").strip()
-_cao = os.getenv("CORS_ALLOW_ORIGINS", os.getenv("CORS_ALLOW_ORIGINS","*"))
+_cao = os.getenv("CORS_ALLOW_ORIGINS", "*")  # ← תיקון קטן
 CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
@@ -205,10 +203,9 @@ async def add_server_identity_header(request: Request, call_next):
         resp = await call_next(request)
     except Exception:
         logger.exception("middleware call_next failed for add_server_identity_header")
-        # במקום להשליך חריגה שמייצרת "No response returned" – נחזיר תשובת 500
         return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_add_header_failed"})
     resp.headers["x-app-instance-id"] = INSTANCE_ID
-    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור לבדיקות קיימות
+    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור
     return resp
 
 # ---------- Global auth middleware ----------
@@ -244,7 +241,6 @@ async def validate_token(request: Request, call_next):
         return await call_next(request)
 
     except Exception:
-        # במקום לבעוט חריגה שתיצור "No response returned", נחזיר 500 עם לוג
         logger.exception("validate_token: middleware call_next failed for %s", request.url.path)
         return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_validate_token_failed"})
 
@@ -268,7 +264,6 @@ if _routes_only:
     for module_path in _routes_only:
         _try_include(module_path)
 else:
-    # בסיסיים קודם (+ auto_trade)
     for _mod in (
         "routes.scan_top_volume",
         "routes.scan_now_alias",
@@ -280,7 +275,6 @@ else:
         "routes.auto_trade",
     ):
         _try_include(_mod)
-    # auto-discover
     for m in pkgutil.iter_modules(["routes"]):
         module_path = f"routes.{m.name}"
         _try_include(module_path)
@@ -482,6 +476,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
