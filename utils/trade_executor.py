@@ -57,12 +57,12 @@ MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 ENFORCE_APPROVAL_ALWAYS  = os.getenv("ENFORCE_APPROVAL_ALWAYS", "1").lower() in ("1","true","yes","on")
 REQUIRE_TP_AND_SL        = os.getenv("REQUIRE_TP_AND_SL", "1").lower() in ("1","true","yes","on")
 
-# Ladder config
-LADDER_TP_ENABLE          = os.getenv("LADDER_TP_ENABLE", "1") in ("1","true","yes","on")
+# Ladder config  (👉 הקפדנו על .lower())
+LADDER_TP_ENABLE          = os.getenv("LADDER_TP_ENABLE", "1").lower() in ("1","true","yes","on")
 LADDER_TP_KIND            = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
 LADDER_TP_DEFAULT_PCTS    = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 LADDER_TP_DEFAULT_SPLITS  = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
-LADDER_SL_ENABLE          = os.getenv("LADDER_SL_ENABLE", "1") in ("1","true","yes","on")
+LADDER_SL_ENABLE          = os.getenv("LADDER_SL_ENABLE", "1").lower() in ("1","true","yes","on")
 LADDER_SL_DEFAULT_PCTS    = os.getenv("LADDER_SL_DEFAULT_PCTS", "0.8").strip()
 
 # Dynamic SL / Trail
@@ -99,7 +99,7 @@ if 'DEFAULT_MIN_NOT' not in globals():
 if 'ORDER_ID_PREFIX' not in globals():
     ORDER_ID_PREFIX             = os.getenv("ORDER_ID_PREFIX", "").strip()
 if 'CANCEL_ONLY_PREFIXED_ORDERS' not in globals():
-    CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0") in ("1","true","yes","on")
+    CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
 if 'CANCEL_PREFIX_OVERRIDE' not in globals():
     CANCEL_PREFIX_OVERRIDE      = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
@@ -669,7 +669,7 @@ def _build_ladders(sym: str, side: str, qty: float,
                 plan["sl_orders"].append({"type": "STOP_MARKET","stopPrice": stop_p,"qty": qalloc})
 
     if tp_targets: _prep("TP", tp_targets, tp_splits)
-    if sl_targets: _prep("SL", sl_targets, sl_splits)
+    if sl_targets: _prep("SL", sl_targets)
     return plan
 
 def _normalize_position_side(ps: Optional[str]) -> str:
@@ -1092,6 +1092,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
