@@ -1,5 +1,5 @@
 # === Environment / secrets ===
-.env                # ← אל תכלול .env בבילד (Render יספק ENV)
+.env
 *.key
 *.pem
 
@@ -62,6 +62,7 @@ build/
 # === Node / frontend ===
 node_modules/
 *.map
+
 
 
 
