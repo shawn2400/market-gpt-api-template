@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, math, logging, threading
-from typing import Any, Dict, List, Optional, Iterable, Tuple
+from typing import Any, Dict, List, Optional, Iterable, Tuple, cast
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -21,7 +21,6 @@ except Exception as _e:
 # ===== ENV =====
 API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
-# אל תתרסק בזמן import — נזהיר בלבד, הלקוח יאותחל רק כשצריך.
 if not API_KEY or not API_SECRET:
     logger.warning("[binance_client] Missing API keys (BINANCE_API_KEY/SECRET). Client will stay lazy-uninitialized.")
 
@@ -42,7 +41,7 @@ DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
 # Percent-Guard
 PERCENT_GUARD_ENABLE = os.getenv("PERCENT_GUARD_ENABLE", "1").lower() in ("1","true","yes","on")
-PERCENT_GUARD_BPS = int(os.getenv("PERCENT_GUARD_BPS", "50"))  # ±0.50%
+PERCENT_GUARD_BPS = int(os.getenv("PERCENT_GUARD_BPS", "50"))
 
 # Idempotency
 IDEMP_TTL_SEC = int(os.getenv("IDEMP_TTL_SEC", "900"))
@@ -54,24 +53,24 @@ PRICE_CACHE_TTL_MS = int(os.getenv("PRICE_CACHE_TTL_MS", "250"))
 ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))
 ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "60"))
 
-# ===== Hedge/One-Way detection (runtime + override) =====
+# ===== Hedge/One-Way detection =====
 HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
 HEDGE_MODE_TTL_SEC = int(os.getenv("HEDGE_MODE_TTL_SEC", "30"))
-_HEDGE_MODE_CACHE: Dict[str, Any] = {"ts": 0.0, "val": None}  # {"ts": float, "val": bool|None}
+_HEDGE_MODE_CACHE: Dict[str, Any] = {"ts": 0.0, "val": None}
 
-# ===== Order ID / Cancel policy (ENV) =====
+# ===== Order ID / Cancel policy =====
 ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
 CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
-# ===== TP ladder params (ENV) =====
+# ===== TP ladder params =====
 LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1").lower() in ("1","true","yes","on")
 LADDER_TP_DEFAULT_PCTS = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 LADDER_TP_DEFAULT_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
 LADDER_TP_MAX_LEVELS = int(os.getenv("LADDER_TP_MAX_LEVELS", "5"))
 TP_LADDER_COOLDOWN_SEC = int(os.getenv("TP_LADDER_COOLDOWN_SEC", "60"))
 LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
-LADDER_TP_PRICE_OFFSET_TICKS = int(os.getenv("LADDER_TP_PRICE_OFFSET_TICKS", "0"))  # אופסט למחיר LIMIT ב-TP
+LADDER_TP_PRICE_OFFSET_TICKS = int(os.getenv("LADDER_TP_PRICE_OFFSET_TICKS", "0"))
 
 # ===== Utils =====
 def _now() -> float: return time.time()
@@ -101,17 +100,13 @@ _idem_lock = threading.RLock()
 
 _tp_ladder_last_at: Dict[str, float] = {}
 
-# ===== Lazy Binance Client (לא ליצור בזמן import) =====
+# ===== Lazy Binance Client =====
 _BINANCE_HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 _client_lock = threading.RLock()
 _CLIENT: Optional[Client] = None
-_client_ban_until: float = 0.0  # עד מתי להמתין לפני ניסיון יצירה שוב
+_client_ban_until: float = 0.0
 
 def _init_client() -> Optional[Client]:
-    """
-    יוצר Client של binance באופן בטוח, בלי להפיל את התהליך אם יש BAN/חוסר ספרייה/מפתחות.
-    python-binance נדרש; אם חסר — נשארים ב־stub.
-    """
     global _CLIENT, _client_ban_until
 
     if not _BINANCE_AVAILABLE:
@@ -169,22 +164,15 @@ def _get_client() -> Optional[Client]:
         return _init_client()
 
 class _ClientProxy:
-    """
-    פרוקסי נטען-בעצלנות: כל גישה תנסה לאתחל Client רק בעת הצורך.
-    אם לקוח לא זמין (אין ספרייה/מפתחות/ban) — נזרקת שגיאה רכה.
-    """
     def __getattr__(self, name: str):
         c = _get_client()
         if c is None:
             raise RuntimeError("Binance REST unavailable (library/keys missing or client not ready/banned)")
         return getattr(c, name)
 
-# החלפה: במקום ליצור Client בזמן import, נשתמש בפרוקסי
 client: Client | _ClientProxy = _ClientProxy()
 
-# תאימות לאחור — מודולים שציפו לפונקציה get_client()
 def get_client():
-    """תאימות: מחזיר Client אמיתי אם מאותחל, אחרת None (לא מנסה לאתחל בכוח)."""
     return _CLIENT
 
 # ===== COID helpers =====
@@ -217,7 +205,6 @@ def _coid(kind: str, symbol: str) -> str:
 
 # ===== Helpers (account / hedge detection) =====
 def _get_account_cached() -> Optional[Dict[str, Any]]:
-    """פנימי: לוקח account עם קאש קצר, עם backoff על BAN/429."""
     now = _now()
     if _account_cache["ban_until"] and now < _account_cache["ban_until"]:
         return _account_cache["data"]
@@ -242,17 +229,10 @@ def _get_account_cached() -> Optional[Dict[str, Any]]:
         return _account_cache["data"]
 
 def _is_hedge_mode_runtime() -> bool:
-    """
-    True אם החשבון במצב Hedge; אחרת False (One-Way). כיבוד override דרך HEDGE_MODE.
-    משופר: שימוש ב-Cache עם TTL כדי להפחית עומס קריאות לחשבון.
-    """
-    # Respect explicit override first
     if HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"):
         return True
     if HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):
         return False
-
-    # Cache check
     now = _now()
     try:
         ts = float(_HEDGE_MODE_CACHE.get("ts") or 0.0)
@@ -261,8 +241,6 @@ def _is_hedge_mode_runtime() -> bool:
             return bool(val)
     except Exception:
         pass
-
-    # Refresh from account
     try:
         acc = _get_account_cached() or {}
         dual = bool(acc.get("dualSidePosition"))
@@ -270,19 +248,14 @@ def _is_hedge_mode_runtime() -> bool:
         _HEDGE_MODE_CACHE["val"] = dual
         return dual
     except Exception:
-        # שמרני — נחזיר False (One-Way) במקרה כשל
         _HEDGE_MODE_CACHE["ts"] = now
         _HEDGE_MODE_CACHE["val"] = False
         return False
 
 def _effective_position_side_from_kwargs(kwargs: Dict[str, Any]) -> str:
-    """
-    מחזיר LONG/SHORT אם הועבר positionSide בחשבון Hedge. ב-One-Way או אם לא חוקי – מחזיר 'BOTH'.
-    בנוסף, אם One-Way ונשלח positionSide – נסיר אותו מה-kwargs (סניטציה).
-    """
     ps = str(kwargs.get("positionSide") or "").upper().strip()
     if not _is_hedge_mode_runtime():
-        kwargs.pop("positionSide", None)  # One-Way → לא לשלוח בכלל
+        kwargs.pop("positionSide", None)
         return "BOTH"
     if ps in ("LONG","SHORT"):
         return ps
@@ -404,7 +377,7 @@ def _quantize_price(symbol: str, price: float) -> str:
     f = get_symbol_filters(symbol) or {}
     tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
     if tick <= 0: tick = float(DEFAULT_PRICE_TICK_STR)
-    steps = round(price / tick)  # nearest
+    steps = round(price / tick)
     adj = steps * tick
     decs = _decimals_from_step(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
     return f"{adj:.{decs}f}"
@@ -438,7 +411,7 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
 # ===== Rate limiting buckets =====
 _bucket_reset_at = 0.0; _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
-_dyn_backoff_base = max(60, BACKOFF_BASE_MS)
+_dyn_backoff_base = max(BACKOFF_BASE_MS, BACKOFF_BASE_MS)  # keep as env
 _last_rl_hit = 0.0; _rl_window = 30.0; _rl_hits = 0
 
 def _rate_allow() -> bool:
@@ -529,9 +502,8 @@ def futures_index_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
-# ===== Open orders / history =====
-from typing import cast
 
+# ===== Open orders / history =====
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol: return cast(List[Dict[str, Any]], client.futures_get_open_orders(symbol=symbol.upper()) or [])
@@ -728,7 +700,6 @@ def _safe_create_order(**kwargs) -> Dict[str, Any]:
     return err
 
 def futures_create_order(**kwargs) -> Dict[str, Any]:
-    """עטיפה בטוחה ליצירת הזמנה — עם Idempotency, Percent-Guard, Backoff, WorkingType/recvWindow."""
     sym = str(kwargs.get("symbol", "UNK")).upper()
 
     if "price" in kwargs and kwargs["price"] is not None:
@@ -892,15 +863,14 @@ def place_tp_ladder(
             newClientOrderId=_sanitize_coid((client_order_id_prefix or ORDER_ID_PREFIX or "TP") + f"_TP{i}_{sym}")
         )
         if LADDER_TP_KIND == "TAKE_PROFIT":
-            # LIMIT TP: הוסף אופסט לפי פוזיציה (נשלט ע"י LADDER_TP_PRICE_OFFSET_TICKS)
             f = get_symbol_filters(sym) or {}
             tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
             offset_ticks = max(0, int(LADDER_TP_PRICE_OFFSET_TICKS))
             price_val = float(stop_q)
             if offset_ticks > 0:
-                if side == "SELL":  # סוגר LONG — מעט מעל ה-stopPrice
+                if side == "SELL":
                     price_val = price_val + tick * offset_ticks
-                else:               # סוגר SHORT — מעט מתחת ל-stopPrice
+                else:
                     price_val = price_val - tick * offset_ticks
             kwargs["price"] = _quantize_price(sym, price_val)
             kwargs["timeInForce"] = "GTC"
@@ -1090,10 +1060,6 @@ def list_perp_usdt_symbols() -> List[str]:
 
 # ===== Public export =====
 def get_futures_client(*_args, **_kwargs) -> Client | _ClientProxy:
-    """
-    תאימות מלאה לאחור: מתעלם מפרמטרים שנשלחים מקריאות ישנות (למשל account_id/cfg),
-    ומחזיר את הפרוקסי ה-Lazy. אם הלקוח כבר מאותחל, הפרוקסי יעביר לשכבה בפועל.
-    """
     return client
 
 __all__ = [
