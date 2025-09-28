@@ -525,7 +525,7 @@ class ConfirmStore:
     def decide(cls, ticket_id: str, approved: bool) -> None:
         key = f"ticket:{ticket_id}"
         rec = cls._load(key)
-        if not rec: 
+        if not rec:
             return
         rec["status"] = "approved" if approved else "rejected"
         # Short TTL after decision
@@ -1092,6 +1092,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
