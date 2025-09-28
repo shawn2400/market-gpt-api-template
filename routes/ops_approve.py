@@ -108,7 +108,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None, reje
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# -------- Execution backends --------
+# -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
@@ -473,9 +473,6 @@ async def approve_signed(request: Request):
     if not ok:
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
-
-
-
 
 
 
