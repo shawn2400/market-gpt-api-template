@@ -9,22 +9,25 @@ services:
       - "${PORT:-10000}:${PORT:-10000}"
     env_file:
       - .env
+    # מוודאים שגם אם .env חסר/מעודכן מאוחר, ה-HMAC קיים בזמן ריצה
+    environment:
+      ALERTS_INGEST_HMAC_SECRET: "51d4ad23aebf0ce08fc7d80fc265e02406a9075a7b5876cfe49296adc0c1821f"
+      ALERTS_INGEST_HMAC_KEY_IS_HEX: "1"
+      # מומלץ לא להגדיר WEBHOOK_HMAC_SECRET כדי למנוע בלבול
     depends_on:
       redis:
         condition: service_healthy
     labels:
       com.centurylinklabs.watchtower.enable: "true"
     command: >
-      bash -lc "
-        bash /app/prestart.sh 2>/dev/null || true &&
-        gunicorn main:app
-          --worker-class uvicorn.workers.UvicornWorker
-          --workers ${WEB_CONCURRENCY:-1}
-          --bind 0.0.0.0:${PORT:-10000}
-          --timeout ${GUNICORN_TIMEOUT:-120}
-          --graceful-timeout 30
-          --keep-alive 5
-      "
+      bash -lc "bash /app/prestart.sh 2>/dev/null || true &&
+      exec gunicorn main:app
+        --worker-class uvicorn.workers.UvicornWorker
+        --workers ${WEB_CONCURRENCY:-1}
+        --bind 0.0.0.0:${PORT:-10000}
+        --timeout ${GUNICORN_TIMEOUT:-120}
+        --graceful-timeout 30
+        --keep-alive 5"
     healthcheck:
       test: ["CMD-SHELL", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT:-10000}/health || exit 1"]
       interval: 30s
@@ -208,6 +211,7 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
+
 
 
 
