@@ -11,7 +11,7 @@ def _get_secret_bytes() -> Optional[bytes]:
     secret = os.getenv("ALERTS_INGEST_HMAC_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET") or ""
     if not secret:
         return None
-    if os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX","0") in ("1","true","yes","on"):
+    if os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX","0").lower() in ("1","true","yes","on"):
         try:
             return binascii.unhexlify(secret.strip())
         except Exception:
@@ -23,6 +23,15 @@ def _server_hexdigest(raw: bytes) -> Optional[str]:
     if not key:
         return None
     return hmac.new(key, raw, hashlib.sha256).hexdigest()
+
+def _is_hex64(s: str) -> bool:
+    if len(s) != 64:
+        return False
+    try:
+        int(s, 16)
+        return True
+    except ValueError:
+        return False
 
 def _client_hexdigest_from_headers(request: Request) -> Optional[str]:
     # תומך בשני הפורמטים:
@@ -36,7 +45,7 @@ def _client_hexdigest_from_headers(request: Request) -> Optional[str]:
     if not hv:
         return None
     hv = hv.strip().lower()
-    return hv if len(hv) == 64 else None
+    return hv if _is_hex64(hv) else None
 
 @router.get("/ping")
 async def ping():
@@ -56,12 +65,12 @@ async def ingest(request: Request):
         return JSONResponse(status_code=500, content={"ok": False, "error": "server_hmac_misconfigured"})
 
     client_hex = _client_hexdigest_from_headers(request)
-    if not client_hex or client_hex != server_hex:
-        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature",
-                                                      "calc": server_hex})
+    if not client_hex or not hmac.compare_digest(client_hex, server_hex):
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature", "calc": server_hex})
 
     # כאן תוכל לבצע parse ל-JSON ולעשות את שלך
     return {"ok": True, "accepted": True}
+
 
 
 
