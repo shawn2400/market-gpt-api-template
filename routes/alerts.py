@@ -213,8 +213,8 @@ def _mk_trade_from_payload(p: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         "market":   str(p.get("market","futures")).lower(),
         "side":     str(p.get("side","")).upper(),        # BUY/SELL
         "qty":      float(p.get("qty", 0) or p.get("quantity", 0)),
-        "leverage": int(p.get("leverage", p.get("lev", 0) or 0)),
-        "score":    float(p.get("score", 0)),
+        "leverage": int((p.get("leverage") or p.get("lev") or 0)),
+        "score":    float(p.get("score") or 0),
         "reason":   str(p.get("reason", "")),
         "require_approval": _bool(p.get("require_approval", True)),
         "created_ts": int(time.time()),
@@ -287,7 +287,6 @@ async def ingest(request: Request):
         await _store_trade(trade)
         # כאן אפשר לפתוח מיידית פקודה אמיתית (אם תרצה, חבר ל-executor שלך)
         # executed_result = await _execute_real_order(trade)
-        # אם לא מבצעים מיידית, פשוט נשאר "open" עד ש-manager יטפל.
 
     # נוטיפיקציית פתיחה לטלגרם (עם כפתורי אישור אם צריך)
     public_host = (os.getenv("PUBLIC_HOST","") or os.getenv("WEBHOOK_HOST","")).rstrip("/")
@@ -374,7 +373,6 @@ async def trades_update(request: Request):
         await _tg_send(_compose_final_report(trade))
 
     return {"ok": True, "trade": trade}
-
 
 
 
