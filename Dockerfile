@@ -43,6 +43,8 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
     procps psmisc \
+    # כלים לדיבאג HMAC (לא חובה):
+    openssl vim-common \
  && rm -rf /var/lib/apt/lists/*
 
 # ספריות שהותקנו בשכבת הבילד
@@ -80,6 +82,7 @@ CMD bash -lc "bash /app/prestart.sh 2>/dev/null || true && \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
