@@ -15,14 +15,16 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "true"
     command: >
-      bash -lc "bash /app/prestart.sh 2>/dev/null || true &&
-      gunicorn main:app
-      --worker-class uvicorn.workers.UvicornWorker
-      --workers ${WEB_CONCURRENCY:-1}
-      --bind 0.0.0.0:${PORT:-10000}
-      --timeout ${GUNICORN_TIMEOUT:-120}
-      --graceful-timeout 30
-      --keep-alive 5"
+      bash -lc "
+        bash /app/prestart.sh 2>/dev/null || true &&
+        gunicorn main:app
+          --worker-class uvicorn.workers.UvicornWorker
+          --workers ${WEB_CONCURRENCY:-1}
+          --bind 0.0.0.0:${PORT:-10000}
+          --timeout ${GUNICORN_TIMEOUT:-120}
+          --graceful-timeout 30
+          --keep-alive 5
+      "
     healthcheck:
       test: ["CMD-SHELL", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT:-10000}/health || exit 1"]
       interval: 30s
@@ -43,7 +45,8 @@ services:
     build: .
     container_name: algogpt_manager
     restart: always
-    env_file: [.env]
+    env_file:
+      - .env
     depends_on:
       redis:
         condition: service_healthy
@@ -205,6 +208,7 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
+
 
 
 
