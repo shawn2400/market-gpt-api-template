@@ -176,7 +176,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    # <<< חשוב: מסלולי alerts ציבוריים — האימות נעשה בתוך ה-router עצמו (HMAC)
+    # מסלולי alerts ציבוריים — אימות HMAC יתבצע בתוך ה-router
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
@@ -191,7 +191,7 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- rndr-id יציב משלנו ----------
+# ---------- rndr-id ----------
 INSTANCE_ID = (
     os.getenv("RENDER_INSTANCE_ID")
     or os.getenv("INSTANCE_ID")
@@ -205,8 +205,7 @@ async def add_server_identity_header(request: Request, call_next):
         resp = await call_next(request)
     except Exception:
         logger.exception("middleware call_next failed for add_server_identity_header")
-        # תמיד נחזיר תשובה כדי למנוע "No response returned"
-        return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
+        raise
     resp.headers["x-app-instance-id"] = INSTANCE_ID
     resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור
     return resp
@@ -222,7 +221,7 @@ async def validate_token(request: Request, call_next):
             return await call_next(request)
         except Exception:
             logger.exception("middleware call_next failed for %s", path)
-            return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
+            raise
 
     # public exact paths
     if path in EFFECTIVE_PUBLIC_PATHS:
@@ -230,7 +229,7 @@ async def validate_token(request: Request, call_next):
             return await call_next(request)
         except Exception:
             logger.exception("middleware call_next failed for %s", path)
-            return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
+            raise
 
     # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
@@ -239,7 +238,7 @@ async def validate_token(request: Request, call_next):
                 return await call_next(request)
             except Exception:
                 logger.exception("middleware call_next failed for %s", path)
-                return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
+                raise
 
     # allow-all (dev/maintenance)
     if allow_all():
@@ -247,7 +246,7 @@ async def validate_token(request: Request, call_next):
             return await call_next(request)
         except Exception:
             logger.exception("middleware call_next failed for %s", path)
-            return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
+            raise
 
     # token gate
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
@@ -260,7 +259,7 @@ async def validate_token(request: Request, call_next):
         return await call_next(request)
     except Exception:
         logger.exception("middleware call_next failed for %s", path)
-        return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
+        raise
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -291,6 +290,7 @@ else:
         "routes.ops_approve",
         "routes.trade",
         "routes.auto_trade",
+        "routes.alerts",        # נוודא טעינה מוקדמת
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -347,7 +347,6 @@ if not _route_exists("/status/all"):
             "binance_ping_ok": ping_ok
         }
 
-# auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -360,7 +359,6 @@ if not _route_exists("/status/auth"):
         toks = get_loaded_tokens(mask=True); public = get_public_paths()
         return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
 
-# public price
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"; ts = int(time.time()*1000); err = ""
@@ -431,6 +429,7 @@ async def ops_eod_now():
     await send_eod_report_now()
     return {"ok":True,"sent":True}
 
+# ---------- startup hooks ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -487,6 +486,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
