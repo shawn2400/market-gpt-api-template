@@ -413,6 +413,13 @@ class _Idem:
 
 # ─────────── Telegram confirm (memory/redis) ───────────
 class ConfirmStore:
+    """
+    Unified confirmation store:
+    - CID Flow (inline keyboard): uses keys: confirm:{cid}
+      record: {"status","payload","chat_id","created_at"}
+    - Ticket Flow (links /ops/approve?ticket_id=...): uses keys: ticket:{ticket_id}
+      record: {"status","req","ts"}
+    """
     _mem: Dict[str, Dict[str, Any]] = {}
     _r = None
     try:
@@ -421,56 +428,124 @@ class ConfirmStore:
     except Exception as e:
         log.warning("Redis unavailable: %s", e); _r = None
 
+    # ---------- CID-based flow ----------
     @classmethod
-    def create(cls, chat_id: int, payload: Dict[str, Any], ttl: int = CONFIRM_TTL_SEC) -> str:
+    def create(cls, chat_or_payload, payload: Optional[Dict[str, Any]] = None, ttl: int = CONFIRM_TTL_SEC) -> str:
+        """
+        Overloaded:
+        - create(chat_id: int, payload: dict, ttl=... ) -> cid  (CID flow)
+        - create(payload: dict_with_ticket_id) -> ticket_id      (Ticket flow shim; used by ops_approve.create_ticket)
+        """
+        # Ticket shim
+        if isinstance(chat_or_payload, dict) and "ticket_id" in chat_or_payload:
+            rec = {"ts": time.time(), "req": dict(chat_or_payload), "status": "pending"}
+            tid = str(chat_or_payload["ticket_id"])
+            if cls._r:
+                try:
+                    cls._r.setex(f"ticket:{tid}", max(60, Ttl := int(os.getenv("OPS_TICKET_TTL_SEC","1800"))), json.dumps(rec))
+                except Exception as e:
+                    log.warning("ConfirmStore(ticket).redis set failed: %s", e)
+            else:
+                cls._mem[f"ticket:{tid}"] = rec
+            return tid
+
+        # CID flow
+        chat_id = int(chat_or_payload)
         cid = f"cid_{int(time.time()*1000)}_{os.getpid()}_{abs(hash(os.urandom(8)))}"
-        rec = {"status": "pending", "payload": payload, "chat_id": chat_id, "created_at": time.time()}
+        rec = {"status": "pending", "payload": payload or {}, "chat_id": chat_id, "created_at": time.time()}
         if cls._r: cls._r.setex(f"confirm:{cid}", ttl, json.dumps(rec))
-        else: cls._mem[cid] = rec
+        else: cls._mem[f"confirm:{cid}"] = rec
         return cid
 
     @classmethod
-    def _load(cls, cid: str) -> Optional[Dict[str, Any]]:
+    def _load(cls, key: str) -> Optional[Dict[str, Any]]:
         if cls._r:
-            v = cls._r.get(f"confirm:{cid}")
+            v = cls._r.get(key)
             return json.loads(v) if v else None
-        return cls._mem.get(cid)
+        return cls._mem.get(key)
 
     @classmethod
     def get(cls, cid: str) -> Optional[Dict[str, Any]]:
-        rec = cls._load(cid)
+        rec = cls._load(f"confirm:{cid}")
         if not rec: return None
         if rec.get("status") == "pending" and time.time() - rec["created_at"] > CONFIRM_TTL_SEC:
             rec["status"] = "expired"
             if cls._r: cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
-            else: cls._mem[cid] = rec
+            else: cls._mem[f"confirm:{cid}"] = rec
         return rec
 
     @classmethod
-    def _save(cls, cid: str, rec: Dict[str, Any]) -> None:
+    def _save_cid(cls, cid: str, rec: Dict[str, Any]) -> None:
         if cls._r: cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
-        else: cls._mem[cid] = rec
+        else: cls._mem[f"confirm:{cid}"] = rec
 
     @classmethod
     def approve(cls, cid: str, approver: str = "") -> None:
         rec = cls.get(cid)
         if not rec: return
         rec["status"] = "approved"; rec["approver"] = int(approver) if str(approver).isdigit() else str(approver)
-        cls._save(cid, rec)
+        cls._save_cid(cid, rec)
 
     @classmethod
     def reject(cls, cid: str, approver: str = "") -> None:
         rec = cls.get(cid)
         if not rec: return
         rec["status"] = "rejected"; rec["approver"] = int(approver) if str(approver).isdigit() else str(approver)
-        cls._save(cid, rec)
+        cls._save_cid(cid, rec)
 
+    # ---------- Ticket-based flow (used by routes/ops_approve) ----------
+    @classmethod
+    def pending(cls) -> List[Dict[str, Any]]:
+        """Return pending ticket records as list of dicts (each includes ticket_id)."""
+        out: List[Dict[str, Any]] = []
+        prefix = "ticket:"
+        if cls._r:
+            try:
+                for k in cls._r.scan_iter(match=f"{prefix}*"):
+                    v = cls._r.get(k)
+                    if not v: continue
+                    rec = json.loads(v)
+                    if rec.get("status") == "pending":
+                        tid = k.split(":", 1)[1]
+                        rec = dict(rec)
+                        rec["ticket_id"] = tid
+                        out.append(rec)
+            except Exception as e:
+                log.warning("ConfirmStore.pending(redis) failed: %s", e)
+        else:
+            for k, rec in cls._mem.items():
+                if not k.startswith(prefix): continue
+                if rec.get("status") == "pending":
+                    tid = k.split(":", 1)[1]
+                    rr = dict(rec); rr["ticket_id"] = tid
+                    out.append(rr)
+        return out
+
+    @classmethod
+    def decide(cls, ticket_id: str, approved: bool) -> None:
+        key = f"ticket:{ticket_id}"
+        rec = cls._load(key)
+        if not rec: 
+            return
+        rec["status"] = "approved" if approved else "rejected"
+        # Short TTL after decision
+        if cls._r:
+            try:
+                cls._r.setex(key, 60, json.dumps(rec))
+            except Exception:
+                pass
+        else:
+            cls._mem[key] = rec
+
+    # ---------- Maintain ----------
     @classmethod
     def flush_all(cls) -> None:
         cls._mem.clear()
         if cls._r:
             try:
                 for k in cls._r.scan_iter(match="confirm:*"):
+                    cls._r.delete(k)
+                for k in cls._r.scan_iter(match="ticket:*"):
                     cls._r.delete(k)
             except Exception:
                 pass
@@ -1017,6 +1092,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
