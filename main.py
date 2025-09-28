@@ -20,7 +20,7 @@ from utils.json_logger import setup_json_logging
 from utils.metrics_middleware import MetricsMiddleware
 from utils.response_limits import ResponseSizeLimiter
 
-# ---- Binance client (עם פולבאקים) ----
+# ---- Binance client (fallbacks) ----
 try:
     from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 except Exception:
@@ -29,7 +29,7 @@ except Exception:
     def get_price(symbol: str) -> Optional[float]: return None
     def futures_exchange_info_safe(force_refresh: bool = False): return None
 
-# ---- Telegram notifier (פולבאקים) ----
+# ---- Telegram notifier (fallbacks) ----
 try:
     from utils.telegram_notifier_core import ensure_ops_schedulers_started, send_ops_digest_now, send_eod_report_now
 except Exception:
@@ -52,35 +52,20 @@ except Exception:
         from utils.auto_executor import ConfirmStore  # type: ignore
     except Exception:
         class ConfirmStore:  # type: ignore
-            """
-            Fallback in-memory confirm store compatible with routes.manager.
-            """
             _P: Dict[str, Dict[str, Any]] = {}
-
             @classmethod
-            def pending(cls) -> List[Dict[str, Any]]:
-                return list(cls._P.values())
-
+            def pending(cls) -> List[Dict[str, Any]]: return list(cls._P.values())
             @classmethod
             def create(cls, payload: Dict[str, Any]) -> str:
                 tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
-                payload["ticket_id"] = tid
-                cls._P[tid] = payload
-                return tid
-
+                payload["ticket_id"] = tid; cls._P[tid] = payload; return tid
             @classmethod
             def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
                 it = cls._P.pop(ticket_id, None)
-                if not it:
-                    return {"ok": False, "error": "not_found"}
-                it["approved"] = approved
-                it["decided_ts"] = int(time.time())
-                return {"ok": True, "approved": approved, "ticket_id": ticket_id}
-
+                if not it: return {"ok": False, "error": "not_found"}
+                it["approved"] = approved; it["decided_ts"] = int(time.time()); return {"ok": True, "approved": approved, "ticket_id": ticket_id}
             @classmethod
-            def flush_all(cls) -> None:
-                cls._P.clear()
-
+            def flush_all(cls) -> None: cls._P.clear()
             flush = reset = flush_all
 
 # ---- runtime counters (fallbacks) ----
@@ -93,7 +78,7 @@ except Exception:
         return {"tick_ewma_ms": None,"tick_p95_ms": None,"tick_p99_ms": None,"last_tick_age_sec": None,
                 "timeouts_burst": 0,"no_trade_streak": 0,"current_interval": int(os.getenv("SCAN_INTERVAL","60"))}
 
-# ---- Trade Manager (אופציונלי) ----
+# ---- Trade Manager (optional) ----
 TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
 TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20"))
 try:
@@ -110,7 +95,7 @@ def _coerce_log_level(val):
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL","INFO")))
 
-# תיקיות בסיס
+# base dirs
 for d in ("static","logs","data"):
     try: Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
@@ -119,14 +104,16 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
-from starlette.requests import Request as StarletteRequest  # just to be safe with typing
-from starlette.responses import Response as StarletteResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 # ---------- OpenAPI filtering ----------
+from fastapi.openapi.utils import get_openapi
 def custom_openapi():
     if getattr(app, "openapi_schema", None): return app.openapi_schema
     schema = get_openapi(title=app.title, version=APP_VERSION, description=app.description, routes=app.routes)
@@ -168,6 +155,7 @@ app.mount("/metrics", make_asgi_app())
 # ---------- Public paths ----------
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC","1").lower() in ("1","true","yes","on")
 PUBLIC_STATUS  = os.getenv("SECURITY_PUBLIC_STATUS","1").lower() in ("1","true","yes","on")
+
 def _split_multi(s: str) -> Iterable[str]:
     import re; return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
 
@@ -179,12 +167,14 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    # alerts כציבוריים כדי לאפשר חישוב HMAC בתוך ה-router
+    # alerts routes are PUBLIC so that HMAC is validated INSIDE the router only for /ingest
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
+
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
 CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES","")))
+
 if METRICS_PUBLIC: CFG_PUBLIC.add("/metrics")
 EFFECTIVE_PUBLIC_PATHS = set(DEFAULT_PUBLIC_PATHS) if PUBLIC_STATUS else set()
 EFFECTIVE_PUBLIC_PATHS |= CFG_PUBLIC
@@ -194,14 +184,8 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- rndr-id יציב משלנו ----------
-INSTANCE_ID = (
-    os.getenv("RENDER_INSTANCE_ID")
-    or os.getenv("INSTANCE_ID")
-    or os.getenv("HOSTNAME")
-    or "unknown"
-)
-
+# ---------- instance header ----------
+INSTANCE_ID = (os.getenv("RENDER_INSTANCE_ID") or os.getenv("INSTANCE_ID") or os.getenv("HOSTNAME") or "unknown")
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
     try:
@@ -210,7 +194,7 @@ async def add_server_identity_header(request: Request, call_next):
         logger.exception("middleware call_next failed for add_server_identity_header")
         raise
     resp.headers["x-app-instance-id"] = INSTANCE_ID
-    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור לבדיקות קיימות
+    resp.headers["rndr-id"] = INSTANCE_ID
     return resp
 
 # ---------- Global auth middleware ----------
@@ -220,36 +204,28 @@ async def validate_token(request: Request, call_next):
 
     # OPTIONS passthrough
     if request.method.upper() == "OPTIONS":
-        try:
-            return await call_next(request)
+        try: return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path)
-            raise
+            logger.exception("middleware call_next failed for %s", path); raise
 
-    # public exact paths
+    # public exacts
     if path in EFFECTIVE_PUBLIC_PATHS:
-        try:
-            return await call_next(request)
+        try: return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path)
-            raise
+            logger.exception("middleware call_next failed for %s", path); raise
 
     # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
         if path.startswith(pfx):
-            try:
-                return await call_next(request)
+            try: return await call_next(request)
             except Exception:
-                logger.exception("middleware call_next failed for %s", path)
-                raise
+                logger.exception("middleware call_next failed for %s", path); raise
 
-    # allow-all (dev/maintenance)
+    # allow-all
     if allow_all():
-        try:
-            return await call_next(request)
+        try: return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path)
-            raise
+            logger.exception("middleware call_next failed for %s", path); raise
 
     # token gate
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
@@ -258,11 +234,9 @@ async def validate_token(request: Request, call_next):
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
 
-    try:
-        return await call_next(request)
+    try: return await call_next(request)
     except Exception:
-        logger.exception("middleware call_next failed for %s", path)
-        raise
+        logger.exception("middleware call_next failed for %s", path); raise
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -279,27 +253,15 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 _routes_only = [m.strip() for m in os.getenv("ROUTES_ONLY","").split(",") if m.strip()]
-
 if _routes_only:
-    for module_path in _routes_only:
-        _try_include(module_path)
+    for module_path in _routes_only: _try_include(module_path)
 else:
-    # בסיסיים קודם (+ auto_trade)
     for _mod in (
-        "routes.scan_top_volume",
-        "routes.scan_now_alias",
-        "routes.ops_guard",
-        "routes.telegram_ping",
-        "routes.debug_hmac",
-        "routes.ops_approve",
-        "routes.trade",        # מסלול ה-trade הקיים
-        "routes.auto_trade",   # חדש: בחירת LONG/SHORT אוטומטית
-    ):
-        _try_include(_mod)
-    # auto-discover
+        "routes.scan_top_volume","routes.scan_now_alias","routes.ops_guard","routes.telegram_ping",
+        "routes.debug_hmac","routes.ops_approve","routes.trade","routes.auto_trade",
+    ): _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
-        module_path = f"routes.{m.name}"
-        _try_include(module_path)
+        module_path = f"routes.{m.name}"; _try_include(module_path)
         try:
             for r in app.router.routes:
                 try: _registered_paths.add(getattr(r, "path", None))
@@ -328,13 +290,14 @@ async def status_ping(): return {"ok":True,"ts_ms":int(time.time()*1000)}
 
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
-    async def status_ws(): st = ws_user_status(); return {"ok":True, **st}
+    async def status_ws(): 
+        st = ws_user_status(); return {"ok":True, **st}
 
 if not _route_exists("/status/executor"):
     @app.get("/status/executor")
-    async def status_executor(): st = exec_get_counters(); return {"ok":True, **st}
+    async def status_executor():
+        st = exec_get_counters(); return {"ok":True, **st}
 
-# /status/all
 if not _route_exists("/status/all"):
     @app.get("/status/all")
     async def status_all():
@@ -342,15 +305,9 @@ if not _route_exists("/status/all"):
         except Exception: ping_ok = False
         ws = ws_user_status(); ex = exec_get_counters()
         manager_enabled = os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
-        return {
-            "ok": True,
-            "version": APP_VERSION,
-            "instance": INSTANCE_ID,
-            "ws": ws,
-            "executor": ex,
-            "manager": {"enabled": manager_enabled},
-            "binance_ping_ok": ping_ok
-        }
+        return {"ok": True, "version": APP_VERSION, "instance": INSTANCE_ID,
+                "ws": ws, "executor": ex, "manager": {"enabled": manager_enabled},
+                "binance_ping_ok": ping_ok}
 
 # auth status/public paths (public)
 try:
@@ -376,7 +333,7 @@ async def price(symbol: str):
         p = None; ok = False; err = str(e)
     return {"ok":ok,"symbol":symbol.upper(),"price":float(p) if p is not None else None,"source":src,"ts":ts,"error":err}
 
-# readiness שאינה מפילה בעת BAN
+# readiness
 @app.get("/readyz")
 async def readyz():
     details: Dict[str, Any] = {}; err: Optional[str] = None
@@ -424,7 +381,6 @@ async def _debug_auth(request: Request):
             "extracted_token":t,"matches":bool(_token_matches(t)),
             "tokens_loaded":_get_loaded_tokens(mask=True)}
 
-# --- debug routes listing ---
 @app.get("/_debug/routes", include_in_schema=False)
 async def _debug_routes():
     paths = sorted({getattr(r, "path", None) for r in app.router.routes if getattr(r, "path", None)})
@@ -498,6 +454,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
