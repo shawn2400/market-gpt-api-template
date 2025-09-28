@@ -190,3 +190,4 @@ async def ui_proxy(payload: dict = Body(...)):
     except Exception as e:
         return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
 
+
