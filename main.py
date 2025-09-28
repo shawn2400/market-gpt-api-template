@@ -7,13 +7,14 @@ from fnmatch import fnmatch
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.openapi.utils import get_openapi
 from fastapi.exceptions import RequestValidationError
 from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
+from fastapi.staticfiles import StaticFiles  # NEW
 
 from utils.auth import extract_token, allow_all, token_matches
 from utils.json_logger import setup_json_logging
@@ -164,6 +165,9 @@ app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
+# 🆕 שרת סטטי ל-/static
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # ---------- Public paths ----------
 METRICS_PUBLIC = os.getenv("METRICS_PUBLIC","1").lower() in ("1","true","yes","on")
 PUBLIC_STATUS  = os.getenv("SECURITY_PUBLIC_STATUS","1").lower() in ("1","true","yes","on")
@@ -180,8 +184,9 @@ DEFAULT_PUBLIC_PATHS = {
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
     # 👇 חדשים לצרכי UI
-    "/ui/dashboard",         # routes/ui.py
-    "/ops/ui",               # routes/ops_ui.py (דף הכפתורים/תופס)
+    "/ui/dashboard",          # routes served here (static dashboard)
+    "/ops/ui",                # routes/ops_ui.py – HTML page
+    "/ops/ui/ticket",         # routes/ops_ui.py – POST proxy
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
@@ -437,6 +442,17 @@ async def ops_eod_now():
     await send_eod_report_now()
     return {"ok":True,"sent":True}
 
+# ---------- UI: /ui/dashboard ----------
+@app.get("/ui/dashboard", include_in_schema=False)
+async def ui_dashboard():
+    p = Path("static/dashboard/index.html")
+    if p.exists():
+        # יגיש את קובץ הדשבורד החדש
+        return FileResponse(str(p), media_type="text/html; charset=utf-8")
+    # נפילה חיננית אם אין קובץ
+    html = "<!doctype html><meta charset='utf-8'><body><h3 style='font-family:sans-serif'>Dashboard not found</h3><p>Put your file at <code>static/dashboard/index.html</code>.</p></body>"
+    return HTMLResponse(html)
+
 # ---------- startup hooks ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
@@ -494,6 +510,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
