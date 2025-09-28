@@ -1,13 +1,13 @@
 # routes/alerts.py
 import binascii, hashlib, hmac, os
 from typing import Optional
-
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 def _get_secret_bytes() -> Optional[bytes]:
+    # primary: ALERTS_INGEST_HMAC_SECRET; fallback: WEBHOOK_HMAC_SECRET
     secret = os.getenv("ALERTS_INGEST_HMAC_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET") or ""
     if not secret:
         return None
@@ -24,19 +24,10 @@ def _server_hexdigest(raw: bytes) -> Optional[str]:
         return None
     return hmac.new(key, raw, hashlib.sha256).hexdigest()
 
-def _is_hex64(s: str) -> bool:
-    if len(s) != 64:
-        return False
-    try:
-        int(s, 16)
-        return True
-    except ValueError:
-        return False
-
 def _client_hexdigest_from_headers(request: Request) -> Optional[str]:
-    # תומך בשני הפורמטים:
-    # X-Webhook-Hmac: <hex>
-    # X-Hub-Signature-256: sha256=<hex>
+    # Supports:
+    #   X-Webhook-Hmac: <hex>
+    #   X-Hub-Signature-256: sha256=<hex>
     hv = request.headers.get("x-webhook-hmac") or request.headers.get("X-Webhook-Hmac")
     if not hv:
         hv = request.headers.get("x-hub-signature-256") or request.headers.get("X-Hub-Signature-256")
@@ -45,31 +36,37 @@ def _client_hexdigest_from_headers(request: Request) -> Optional[str]:
     if not hv:
         return None
     hv = hv.strip().lower()
-    return hv if _is_hex64(hv) else None
+    return hv if len(hv) == 64 else None
 
 @router.get("/ping")
 async def ping():
+    # ALWAYS public, no HMAC here
     return {"ok": True, "service": "alerts"}
 
 @router.post("/_debug/alerts-hmac-check")
 async def debug_hmac_check(request: Request):
+    # ALWAYS public, no client HMAC required
     raw = await request.body()
     calc = _server_hexdigest(raw)
+    # Return 200 with calc or ok:false if misconfigured
     return {"ok": bool(calc), "server_hex": calc, "body_len": len(raw)}
 
 @router.post("/ingest")
 async def ingest(request: Request):
+    # HMAC-protected ingestion
     raw = await request.body()
     server_hex = _server_hexdigest(raw)
     if not server_hex:
         return JSONResponse(status_code=500, content={"ok": False, "error": "server_hmac_misconfigured"})
 
     client_hex = _client_hexdigest_from_headers(request)
-    if not client_hex or not hmac.compare_digest(client_hex, server_hex):
-        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature", "calc": server_hex})
+    if not client_hex or client_hex != server_hex:
+        # Return exactly this message so callers can key on it
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature"})
 
-    # כאן תוכל לבצע parse ל-JSON ולעשות את שלך
+    # Parse JSON / do work here as needed...
     return {"ok": True, "accepted": True}
+
 
 
 
