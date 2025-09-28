@@ -1,0 +1,56 @@
+{{ define "am.subject" -}}
+[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }}) — {{ .CommonLabels.service }}
+{{- end }}
+
+{{ define "am.title" -}}
+*{{ .CommonLabels.service | default "service" }}* · *{{ .CommonLabels.alertname }}* · *{{ .Status | toUpper }}*
+{{- end }}
+
+{{ define "am.body" -}}
+{{- $labels := .CommonLabels -}}
+{{- $ann := .CommonAnnotations -}}
+{{ if $ann.summary }}*Summary:* {{ $ann.summary }}{{ end }}
+{{ if $ann.description }}
+*Description:* {{ $ann.description }}
+{{ end }}
+
+*Severity:* {{ $labels.severity | default "n/a" }}
+{{ if $labels.instance }}*Instance:* `{{ $labels.instance }}`{{ end }}
+{{ if $labels.job }}*Job:* `{{ $labels.job }}`{{ end }}
+
+*Starts:* {{ .Alerts.Firing | first | default .Alerts | first | .StartsAt }}
+*Ends:*   {{ .Alerts.Resolved | first | .EndsAt }}
+
+*Labels:*
+{{ range $k, $v := $labels -}}
+- {{ $k }} = `{{ $v }}`
+{{ end }}
+
+{{ if .CommonAnnotations.runbook_url }}
+*Runbook:* {{ .CommonAnnotations.runbook_url }}
+{{ end }}
+{{- end }}
+
+{{ define "am.html" -}}
+<html><body>
+<h3>{{ template "am.subject" . }}</h3>
+<p><b>Status:</b> {{ .Status | toUpper }}<br/>
+<b>Alert:</b> {{ .CommonLabels.alertname }}<br/>
+<b>Severity:</b> {{ .CommonLabels.severity }}<br/>
+<b>Service:</b> {{ .CommonLabels.service }}</p>
+
+{{- if .CommonAnnotations.summary -}}
+<p><b>Summary:</b> {{ .CommonAnnotations.summary }}</p>
+{{- end -}}
+{{- if .CommonAnnotations.description -}}
+<p><b>Description:</b> {{ .CommonAnnotations.description }}</p>
+{{- end -}}
+
+<p><b>Labels:</b></p>
+<ul>
+{{- range $k, $v := .CommonLabels -}}
+<li><code>{{ $k }}</code> = <code>{{ $v }}</code></li>
+{{- end -}}
+</ul>
+</body></html>
+{{- end }}
