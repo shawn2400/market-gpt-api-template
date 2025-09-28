@@ -11,7 +11,7 @@ def _get_secret_bytes() -> Optional[bytes]:
     secret = os.getenv("ALERTS_INGEST_HMAC_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET") or ""
     if not secret:
         return None
-    if os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX","0").lower() in ("1","true","yes","on"):
+    if (os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX","0").lower() in ("1","true","yes","on")):
         try:
             return binascii.unhexlify(secret.strip())
         except Exception:
@@ -40,32 +40,28 @@ def _client_hexdigest_from_headers(request: Request) -> Optional[str]:
 
 @router.get("/ping")
 async def ping():
-    # ALWAYS public, no HMAC here
+    # ALWAYS public (no HMAC check)
     return {"ok": True, "service": "alerts"}
 
 @router.post("/_debug/alerts-hmac-check")
 async def debug_hmac_check(request: Request):
-    # ALWAYS public, no client HMAC required
+    # ALWAYS public, returns server calc only
     raw = await request.body()
     calc = _server_hexdigest(raw)
-    # Return 200 with calc or ok:false if misconfigured
     return {"ok": bool(calc), "server_hex": calc, "body_len": len(raw)}
 
 @router.post("/ingest")
 async def ingest(request: Request):
-    # HMAC-protected ingestion
     raw = await request.body()
     server_hex = _server_hexdigest(raw)
     if not server_hex:
         return JSONResponse(status_code=500, content={"ok": False, "error": "server_hmac_misconfigured"})
-
     client_hex = _client_hexdigest_from_headers(request)
     if not client_hex or client_hex != server_hex:
-        # Return exactly this message so callers can key on it
         return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature"})
-
-    # Parse JSON / do work here as needed...
+    # … parse/do work …
     return {"ok": True, "accepted": True}
+
 
 
 
