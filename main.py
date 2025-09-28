@@ -179,6 +179,9 @@ DEFAULT_PUBLIC_PATHS = {
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
+    # 👇 חדשים לצרכי UI
+    "/ui/dashboard",         # routes/ui.py
+    "/ops/ui",               # routes/ops_ui.py (דף הכפתורים/תופס)
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
@@ -271,6 +274,7 @@ else:
         "routes.ops_approve",
         "routes.trade",
         "routes.auto_trade",
+        "routes.ops_ui",          # 👈 חדש: דף UI ל-ops (טיקט מהיר/כפתורים)
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -490,6 +494,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
