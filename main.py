@@ -52,21 +52,35 @@ except Exception:
         from utils.auto_executor import ConfirmStore  # type: ignore
     except Exception:
         class ConfirmStore:  # type: ignore
+            """
+            Fallback in-memory confirm store compatible with routes.manager.
+            """
             _P: Dict[str, Dict[str, Any]] = {}
+
             @classmethod
-            def pending(cls) -> List[Dict[str, Any]]: return list(cls._P.values())
+            def pending(cls) -> List[Dict[str, Any]]:
+                return list(cls._P.values())
+
             @classmethod
             def create(cls, payload: Dict[str, Any]) -> str:
                 tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
-                payload["ticket_id"] = tid; cls._P[tid] = payload; return tid
+                payload["ticket_id"] = tid
+                cls._P[tid] = payload
+                return tid
+
             @classmethod
             def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
                 it = cls._P.pop(ticket_id, None)
-                if not it: return {"ok": False, "error": "not_found"}
-                it["approved"] = approved; it["decided_ts"] = int(time.time())
+                if not it:
+                    return {"ok": False, "error": "not_found"}
+                it["approved"] = approved
+                it["decided_ts"] = int(time.time())
                 return {"ok": True, "approved": approved, "ticket_id": ticket_id}
+
             @classmethod
-            def flush_all(cls) -> None: cls._P.clear()
+            def flush_all(cls) -> None:
+                cls._P.clear()
+
             flush = reset = flush_all
 
 # ---- runtime counters (fallbacks) ----
@@ -162,7 +176,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    # alerts: ציבורי כדי שה־router יעשה אימות HMAC בעצמו
+    # <<< חשוב: מסלולי alerts ציבוריים — האימות נעשה בתוך ה-router עצמו (HMAC)
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
@@ -177,7 +191,7 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- rndr-id ----------
+# ---------- rndr-id יציב משלנו ----------
 INSTANCE_ID = (
     os.getenv("RENDER_INSTANCE_ID")
     or os.getenv("INSTANCE_ID")
@@ -191,9 +205,10 @@ async def add_server_identity_header(request: Request, call_next):
         resp = await call_next(request)
     except Exception:
         logger.exception("middleware call_next failed for add_server_identity_header")
-        raise
+        # תמיד נחזיר תשובה כדי למנוע "No response returned"
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
     resp.headers["x-app-instance-id"] = INSTANCE_ID
-    resp.headers["rndr-id"] = INSTANCE_ID
+    resp.headers["rndr-id"] = INSTANCE_ID  # תאימות לאחור
     return resp
 
 # ---------- Global auth middleware ----------
@@ -201,36 +216,51 @@ async def add_server_identity_header(request: Request, call_next):
 async def validate_token(request: Request, call_next):
     path = request.url.path
 
+    # OPTIONS passthrough
     if request.method.upper() == "OPTIONS":
-        try: return await call_next(request)
+        try:
+            return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path); raise
+            logger.exception("middleware call_next failed for %s", path)
+            return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
 
+    # public exact paths
     if path in EFFECTIVE_PUBLIC_PATHS:
-        try: return await call_next(request)
+        try:
+            return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path); raise
+            logger.exception("middleware call_next failed for %s", path)
+            return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
 
+    # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
         if path.startswith(pfx):
-            try: return await call_next(request)
+            try:
+                return await call_next(request)
             except Exception:
-                logger.exception("middleware call_next failed for %s", path); raise
+                logger.exception("middleware call_next failed for %s", path)
+                return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
 
+    # allow-all (dev/maintenance)
     if allow_all():
-        try: return await call_next(request)
+        try:
+            return await call_next(request)
         except Exception:
-            logger.exception("middleware call_next failed for %s", path); raise
+            logger.exception("middleware call_next failed for %s", path)
+            return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
 
+    # token gate
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     token = extract_token(request, a_hdr, x_hdr)
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
 
-    try: return await call_next(request)
+    try:
+        return await call_next(request)
     except Exception:
-        logger.exception("middleware call_next failed for %s", path); raise
+        logger.exception("middleware call_next failed for %s", path)
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal"})
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -317,6 +347,7 @@ if not _route_exists("/status/all"):
             "binance_ping_ok": ping_ok
         }
 
+# auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -329,6 +360,7 @@ if not _route_exists("/status/auth"):
         toks = get_loaded_tokens(mask=True); public = get_public_paths()
         return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
 
+# public price
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"; ts = int(time.time()*1000); err = ""
@@ -455,6 +487,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
