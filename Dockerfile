@@ -28,6 +28,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONOPTIMIZE=1 \
     PORT=10000 \
     WEB_CONCURRENCY=1 \
     GUNICORN_TIMEOUT=120 \
@@ -43,11 +44,11 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
     procps psmisc \
-    # כלים לדיבאג HMAC (לא חובה):
+    # כלי דיבאג HMAC (xxd מגיע מ-vim-common):
     openssl vim-common \
  && rm -rf /var/lib/apt/lists/*
 
-# ספריות שהותקנו בשכבת הבילד
+# שכבת ההתקנות מה-builder
 COPY --from=builder /install /usr/local
 
 # משתמש לא-שורש
@@ -81,6 +82,8 @@ CMD bash -lc "bash /app/prestart.sh 2>/dev/null || true && \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
     --worker-class uvicorn.workers.UvicornWorker"
 
 
