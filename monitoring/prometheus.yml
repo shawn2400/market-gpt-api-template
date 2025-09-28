@@ -6,14 +6,27 @@ rule_files:
   - /etc/prometheus/alerts/*.yml
 
 scrape_configs:
+  # ───────── Prometheus self-scrape ─────────
   - job_name: "prometheus"
     static_configs:
       - targets: ["prometheus:9090"]
 
+  # ───────── cAdvisor ─────────
   - job_name: "cadvisor"
     static_configs:
       - targets: ["cadvisor:8080"]
 
+  # ───────── AlgoGPT app (Docker) – /metrics ─────────
+  # נגיש בתוך הרשת של docker-compose (service name: algogpt)
+  - job_name: "algogpt-app"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["algogpt:10000"]
+        labels:
+          service: "algogpt"
+          env: "local"
+
+  # ───────── בדיקת Health של ה-App דרך Blackbox ─────────
   - job_name: "algogpt-health"
     metrics_path: /probe
     params:
@@ -29,6 +42,7 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox:9115
 
+  # ───────── Render – /metrics (צריך טוקן בקובץ) ─────────
   - job_name: "algogpt-render"
     scheme: https
     metrics_path: /metrics
@@ -36,10 +50,13 @@ scrape_configs:
       - targets: ["algogpt-docker.onrender.com"]
         labels:
           site: "render"
+          service: "algogpt"
+          env: "prod"
     authorization:
       type: Bearer
       credentials_file: /etc/prometheus/secrets/render_metrics_token
 
+  # ───────── Render health via Blackbox ─────────
   - job_name: "algogpt-render-health"
     metrics_path: /probe
     params:
