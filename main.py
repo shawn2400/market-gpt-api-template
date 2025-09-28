@@ -105,15 +105,11 @@ app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - A
 
 # ---------- Validation error => 422 ----------
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 # ---------- OpenAPI filtering ----------
-from fastapi.openapi.utils import get_openapi
 def custom_openapi():
     if getattr(app, "openapi_schema", None): return app.openapi_schema
     schema = get_openapi(title=app.title, version=APP_VERSION, description=app.description, routes=app.routes)
@@ -121,6 +117,7 @@ def custom_openapi():
     hide_patterns = [p.strip() for p in os.getenv("OPENAPI_HIDE_PATTERNS","").split(",") if p.strip()]
     include_tags = {t.strip() for t in os.getenv("OPENAPI_INCLUDE_TAGS","").split(",") if t.strip()}
     new_paths: Dict[str, Any] = {}; count = 0
+    from fnmatch import fnmatch
     for path in sorted(schema.get("paths", {}).keys()):
         methods = schema["paths"][path]; new_methods = {}; path_hidden = any(fnmatch(path, pat) for pat in hide_patterns)
         for method, op in list(methods.items()):
@@ -167,15 +164,15 @@ DEFAULT_PUBLIC_PATHS = {
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    # alerts routes are PUBLIC so that HMAC is validated INSIDE the router only for /ingest
+    # alerts are public to allow HMAC inside the router
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
 CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES","")))
-
 if METRICS_PUBLIC: CFG_PUBLIC.add("/metrics")
+
 EFFECTIVE_PUBLIC_PATHS = set(DEFAULT_PUBLIC_PATHS) if PUBLIC_STATUS else set()
 EFFECTIVE_PUBLIC_PATHS |= CFG_PUBLIC
 EFFECTIVE_PUBLIC_PREFIXES = list(DEFAULT_PUBLIC_PREFIXES) if PUBLIC_STATUS else []
@@ -184,8 +181,14 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- instance header ----------
-INSTANCE_ID = (os.getenv("RENDER_INSTANCE_ID") or os.getenv("INSTANCE_ID") or os.getenv("HOSTNAME") or "unknown")
+# ---------- instance id header ----------
+INSTANCE_ID = (
+    os.getenv("RENDER_INSTANCE_ID")
+    or os.getenv("INSTANCE_ID")
+    or os.getenv("HOSTNAME")
+    or "unknown"
+)
+
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
     try:
@@ -202,41 +205,26 @@ async def add_server_identity_header(request: Request, call_next):
 async def validate_token(request: Request, call_next):
     path = request.url.path
 
-    # OPTIONS passthrough
     if request.method.upper() == "OPTIONS":
-        try: return await call_next(request)
-        except Exception:
-            logger.exception("middleware call_next failed for %s", path); raise
+        return await call_next(request)
 
-    # public exacts
     if path in EFFECTIVE_PUBLIC_PATHS:
-        try: return await call_next(request)
-        except Exception:
-            logger.exception("middleware call_next failed for %s", path); raise
+        return await call_next(request)
 
-    # public prefixes
     for pfx in EFFECTIVE_PUBLIC_PREFIXES:
         if path.startswith(pfx):
-            try: return await call_next(request)
-            except Exception:
-                logger.exception("middleware call_next failed for %s", path); raise
+            return await call_next(request)
 
-    # allow-all
     if allow_all():
-        try: return await call_next(request)
-        except Exception:
-            logger.exception("middleware call_next failed for %s", path); raise
+        return await call_next(request)
 
-    # token gate
     a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     token = extract_token(request, a_hdr, x_hdr)
     if not token_matches(token):
         return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
 
-    try: return await call_next(request)
-    except Exception:
-        logger.exception("middleware call_next failed for %s", path); raise
+    return await call_next(request)
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -253,15 +241,24 @@ def _try_include(module_path: str) -> bool:
 
 _registered_paths = set()
 _routes_only = [m.strip() for m in os.getenv("ROUTES_ONLY","").split(",") if m.strip()]
+
 if _routes_only:
     for module_path in _routes_only: _try_include(module_path)
 else:
     for _mod in (
-        "routes.scan_top_volume","routes.scan_now_alias","routes.ops_guard","routes.telegram_ping",
-        "routes.debug_hmac","routes.ops_approve","routes.trade","routes.auto_trade",
-    ): _try_include(_mod)
+        "routes.scan_top_volume",
+        "routes.scan_now_alias",
+        "routes.ops_guard",
+        "routes.telegram_ping",
+        "routes.debug_hmac",
+        "routes.ops_approve",
+        "routes.trade",
+        "routes.auto_trade",
+    ):
+        _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
-        module_path = f"routes.{m.name}"; _try_include(module_path)
+        module_path = f"routes.{m.name}"
+        _try_include(module_path)
         try:
             for r in app.router.routes:
                 try: _registered_paths.add(getattr(r, "path", None))
@@ -291,12 +288,18 @@ async def status_ping(): return {"ok":True,"ts_ms":int(time.time()*1000)}
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
     async def status_ws(): 
-        st = ws_user_status(); return {"ok":True, **st}
+        try: from utils.runtime_counters import ws_user_status as _ws
+        except Exception: 
+            def _ws(): return {"running": False}
+        st = _ws(); return {"ok":True, **st}
 
 if not _route_exists("/status/executor"):
     @app.get("/status/executor")
-    async def status_executor():
-        st = exec_get_counters(); return {"ok":True, **st}
+    async def status_executor(): 
+        try: from utils.runtime_counters import exec_get_counters as _ex
+        except Exception:
+            def _ex(): return {"tick_ewma_ms": None}
+        st = _ex(); return {"ok":True, **st}
 
 if not _route_exists("/status/all"):
     @app.get("/status/all")
@@ -305,11 +308,16 @@ if not _route_exists("/status/all"):
         except Exception: ping_ok = False
         ws = ws_user_status(); ex = exec_get_counters()
         manager_enabled = os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
-        return {"ok": True, "version": APP_VERSION, "instance": INSTANCE_ID,
-                "ws": ws, "executor": ex, "manager": {"enabled": manager_enabled},
-                "binance_ping_ok": ping_ok}
+        return {
+            "ok": True,
+            "version": APP_VERSION,
+            "instance": INSTANCE_ID,
+            "ws": ws,
+            "executor": ex,
+            "manager": {"enabled": manager_enabled},
+            "binance_ping_ok": ping_ok
+        }
 
-# auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -322,7 +330,6 @@ if not _route_exists("/status/auth"):
         toks = get_loaded_tokens(mask=True); public = get_public_paths()
         return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
 
-# public price
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"; ts = int(time.time()*1000); err = ""
@@ -333,7 +340,6 @@ async def price(symbol: str):
         p = None; ok = False; err = str(e)
     return {"ok":ok,"symbol":symbol.upper(),"price":float(p) if p is not None else None,"source":src,"ts":ts,"error":err}
 
-# readiness
 @app.get("/readyz")
 async def readyz():
     details: Dict[str, Any] = {}; err: Optional[str] = None
@@ -352,7 +358,6 @@ async def readyz():
         except Exception: details[f"price_{s}"] = None
     return {"ok":(err is None), "error":err, "details":details}
 
-# flush confirm-store
 @app.post("/flush")
 async def flush_kill_switch():
     done = False
@@ -364,7 +369,6 @@ async def flush_kill_switch():
             logger.warning({"event":"flush_failed","err":str(e)})
     return {"ok":True,"flushed":done}
 
-# --- public debug auth endpoint ---
 try:
     from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
 except Exception:
@@ -386,7 +390,6 @@ async def _debug_routes():
     paths = sorted({getattr(r, "path", None) for r in app.router.routes if getattr(r, "path", None)})
     return {"paths": paths}
 
-# --- ops digest/eod now (optional) ---
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
     await send_ops_digest_now(hours)
@@ -397,7 +400,6 @@ async def ops_eod_now():
     await send_eod_report_now()
     return {"ok":True,"sent":True}
 
-# ---------- startup hooks ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
