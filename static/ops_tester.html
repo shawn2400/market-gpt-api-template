@@ -1,36 +1,49 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>OPS Ticket Tester</title>
+<title>בדיקת OPS / טיקטים</title>
 <style>
-  body{font-family:system-ui,Arial;margin:2rem;max-width:720px}
+  body{font-family:system-ui,Arial;margin:2rem;max-width:720px;line-height:1.5}
   button{padding:.7rem 1.1rem;border:0;border-radius:10px;cursor:pointer;margin:.25rem}
-  .a{background:#111;color:#fff}.b{background:#eee}
+  .primary{background:#111;color:#fff}.secondary{background:#eee}
   input{padding:.5rem;border:1px solid #ddd;border-radius:8px;width:120px}
+  code{background:#f7f7f7;padding:.2rem .4rem;border-radius:6px}
 </style>
-<h2>OPS Ticket Tester</h2>
+<h2>בדיקת יצירת טיקטים</h2>
 <p>Endpoint: <code id="ep">https://algogpt-docker.onrender.com/ops/ticket</code></p>
+<p>Token: <code id="tok">Bearer TOKEN_HERE</code></p>
 <p>
-  Qty <input id="qty" value="0.002">
-  Lev <input id="lev" value="10">
-  <button class="a" onclick="mkSmoke()">Create SMOKE Ticket</button>
-  <button class="b" onclick="mkReal()">Create REAL Ticket (with TP/SL)</button>
+  כמות <input id="qty" value="0.002">
+  מינוף <input id="lev" value="10">
+</p>
+<p>
+  <button class="secondary" onclick="ping()">בדיקת Telegram Ping</button>
+  <button class="primary" onclick="mkSmoke()">צור טיקט SMOKE</button>
+  <button onclick="mkReal()">צור טיקט REAL</button>
 </p>
 <pre id="out"></pre>
 <script>
 const EP='https://algogpt-docker.onrender.com/ops/ticket';
-const out=x=>document.getElementById('out').textContent=JSON.stringify(x,null,2);
+const PING='https://algogpt-docker.onrender.com/telegram/ping';
+const TOKEN='Bearer TOKEN_HERE'; // החלף לטוקן שלך
+
+const out=x=>document.getElementById('out').textContent=
+  (typeof x==='string'?x:JSON.stringify(x,null,2));
+
+async function ping(){
+  const r=await fetch(PING);
+  out(await r.text());
+}
 
 async function mkSmoke(){
   const p={symbol:'BTCUSDT',side:'BUY',qty:+qty.value,leverage:+lev.value,score:8.1,note:'smoke-test'};
-  const r=await fetch(EP,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+  const r=await fetch(EP,{method:'POST',headers:{'Content-Type':'application/json','Authorization':TOKEN},body:JSON.stringify(p)});
   out(await r.json());
 }
 
 async function mkReal(){
-  const mark=await fetch('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT').then(r=>r.json()).then(j=>+j.markPrice||0);
-  const tp1=+(mark*1.018).toFixed(2), tp2=+(mark*1.032).toFixed(2), tp3=+(mark*1.055).toFixed(2), sl=+(mark*0.988).toFixed(2);
-  const p={ticket_id:'T_HTML_'+Date.now().toString(16).slice(-6),symbol:'BTCUSDT',side:'BUY',qty:+qty.value,leverage:+lev.value,score:8.6,tp1,tp2,tp3,sl,note:'real-small-test'};
-  const r=await fetch(EP,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+  const p={ticket_id:'T_HTML_'+Date.now().toString(16).slice(-6),symbol:'BTCUSDT',side:'BUY',qty:+qty.value,leverage:+lev.value,score:8.6,note:'real-small-test'};
+  const r=await fetch(EP,{method:'POST',headers:{'Content-Type':'application/json','Authorization':TOKEN},body:JSON.stringify(p)});
   out(await r.json());
 }
 </script>
+
