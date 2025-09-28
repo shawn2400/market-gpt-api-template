@@ -1,50 +1,73 @@
+# FILE: monitoring/alerts/algogpt-rules.yml
 groups:
+  # ───────────────── Recording rules (נרמול מדדי 5xx) ─────────────────
+  - name: algogpt-recording
+    interval: 30s
+    rules:
+      # קצב שגיאות 5xx בדקה
+      - record: algogpt:http_requests_5xx_rate1m
+        expr: |
+          sum(rate(starlette_requests_total{status=~"5.."}[1m]))
+          OR sum(rate(http_requests_total{status=~"5.."}[1m]))
+          OR sum(rate(algogpt_api_requests_total{status=~"5.."}[1m]))
+
+      # קצב שגיאות 5xx ב-5 דקות
+      - record: algogpt:http_requests_5xx_rate5m
+        expr: |
+          sum(rate(starlette_requests_total{status=~"5.."}[5m]))
+          OR sum(rate(http_requests_total{status=~"5.."}[5m]))
+          OR sum(rate(algogpt_api_requests_total{status=~"5.."}[5m]))
+
+  # ───────────────── Alerts ─────────────────
   - name: algogpt-core
     interval: 30s
     rules:
-      # ====== CPU ======
-      - alert: HighCPUUsage
-        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+      # ====== CPU (מדדי תהליך מהאפליקציה) ======
+      # שיעור שימוש CPU נמדד כ-seconds per second (כלומר כמה ליבות)
+      # worker יחיד ⇒ 0.85 ≈ 85% מליבה אחת
+      - alert: HighCPUUsageApp
+        expr: rate(process_cpu_seconds_total[5m]) > 0.85
         for: 2m
         labels:
           severity: warning
           service: algogpt
         annotations:
-          summary: "CPU גבוה בשרת"
-          description: "CPU חצה 85% במשך 2 דקות"
+          summary: "CPU גבוה באפליקציה"
+          description: "rate(process_cpu_seconds_total[5m]) מעל 0.85 (~85% מליבה) במשך 2 דקות"
 
-      - alert: CriticalCPUUsage
-        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 95
+      - alert: CriticalCPUUsageApp
+        expr: rate(process_cpu_seconds_total[1m]) > 0.95
         for: 1m
         labels:
           severity: critical
           service: algogpt
         annotations:
-          summary: "CPU קריטי"
-          description: "CPU חצה 95% במשך דקה"
+          summary: "CPU קריטי באפליקציה"
+          description: "rate(process_cpu_seconds_total[1m]) מעל 0.95 (~95% מליבה) במשך דקה"
 
-      # ====== Memory ======
-      - alert: HighMemoryUsage
-        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 80
+      # ====== Memory (Resident Set) ======
+      # עדיף להתאים את הספים לגבולות הקונטיינר שלך.
+      - alert: HighMemoryUsageApp
+        expr: process_resident_memory_bytes > 1.2e9   # ~1.2GB
         for: 3m
         labels:
           severity: warning
           service: algogpt
         annotations:
-          summary: "Memory גבוה"
-          description: "שימוש בזיכרון חצה 80% במשך 3 דקות"
+          summary: "Memory גבוה באפליקציה"
+          description: "process_resident_memory_bytes עבר 1.2GB במשך 3 דקות"
 
-      - alert: CriticalMemoryUsage
-        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+      - alert: CriticalMemoryUsageApp
+        expr: process_resident_memory_bytes > 1.4e9   # ~1.4GB
         for: 1m
         labels:
           severity: critical
           service: algogpt
         annotations:
-          summary: "Memory קריטי"
-          description: "שימוש בזיכרון חצה 90% במשך דקה"
+          summary: "Memory קריטי באפליקציה"
+          description: "process_resident_memory_bytes עבר 1.4GB במשך דקה"
 
-      # ====== Health ======
+      # ====== Health (Blackbox) ======
       - alert: ServiceDown
         expr: probe_success{job="algogpt-health"} == 0
         for: 1m
@@ -52,8 +75,8 @@ groups:
           severity: critical
           service: algogpt
         annotations:
-          summary: "שירות נפל"
-          description: "/health של AlgoGPT לא מגיב מתוך הרשת"
+          summary: "שירות נפל (פנימי)"
+          description: "/health של AlgoGPT לא מגיב מתוך רשת הדוקר"
 
       - alert: ExternalHealthDown
         expr: probe_success{job="algogpt-render-health"} == 0
@@ -62,12 +85,12 @@ groups:
           severity: critical
           service: algogpt
         annotations:
-          summary: "שירות לא נגיש ציבורית"
-          description: "/health של AlgoGPT לא מגיב מבחוץ (Render URL)"
+          summary: "שירות לא נגיש מבחוץ"
+          description: "/health ב־Render לא מגיב מבחוץ (URL ציבורי)"
 
-      # ====== API Errors ======
+      # ====== API Errors (5xx) ======
       - alert: High5xxRate
-        expr: sum(rate(algogpt_api_requests_total{status=~"5.."}[5m])) > 1
+        expr: algogpt:http_requests_5xx_rate5m > 1
         for: 2m
         labels:
           severity: warning
@@ -77,7 +100,7 @@ groups:
           description: "יותר מ־1 בקשות שגיאה בשנייה (ממוצע 5 דקות)"
 
       - alert: Critical5xxRate
-        expr: sum(rate(algogpt_api_requests_total{status=~"5.."}[1m])) > 5
+        expr: algogpt:http_requests_5xx_rate1m > 5
         for: 1m
         labels:
           severity: critical
@@ -86,7 +109,7 @@ groups:
           summary: "שגיאות 5xx קריטיות"
           description: "יותר מ־5 שגיאות בשנייה (ממוצע דקה)"
 
-      # ====== Trades ======
+      # ====== Trades / PnL (בהנחה שהמדדים קיימים) ======
       - alert: TradePnLNegative
         expr: algogpt_pnl_total_usdt < -50
         for: 5m
@@ -116,6 +139,7 @@ groups:
         annotations:
           summary: "פוזיציות תקועות"
           description: "יש פוזיציות פתוחות כבר 30 דקות בלי סגירה"
+
 
 
 
