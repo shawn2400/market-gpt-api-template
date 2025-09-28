@@ -6,89 +6,42 @@ services:
     env: docker
     region: frankfurt
     plan: pro
-    autoDeploy: false          # פריסה ידנית בלבד
-    autoscale: false           # ביטול Autoscaling
-    numInstances: 1            # רפליקה אחת בלבד
+    autoDeploy: false       # פריסה ידנית בלבד
+    autoscale: false        # ביטול Autoscaling
+    numInstances: 1         # רפליקה אחת
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /healthz
+    healthCheckPath: /health   # יש לנו /health; לא להשתמש ב-/healthz אם אין ראוט
     envVars:
       - key: WEB_CONCURRENCY
-        value: "1"
-      - key: HEALTHCHECK_PATH
-        value: "/healthz"
-    # <<< חשוב: Override לפקודת הריצה כדי לכפות worker יחיד
-    dockerCommand: >
-      uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
-
-  # ───────── Worker: ops-supervisor ─────────
-  - type: worker
-    name: ops-supervisor
-    env: python
-    region: frankfurt
-    plan: starter
-    pythonVersion: 3.11
-    buildCommand: pip install -r requirements-worker.txt
-    preDeployCommand: chmod +x ./ops/launch_with_env.sh || true
-    startCommand: bash -lc './ops/watchdog.sh & exec ./ops/launch_with_env.sh python -u -m utils.ops_supervisor'
-
-    envVars:
-      # ---- Policy / runtime ----
-      - key: OPS_POLICY_PATH
-        value: policies/ops_policy.yaml
-      - key: OPS_REQUIRE_ACTION_PARAM
-        value: "0"
-      - key: APPROVAL_AUTO_APPROVE_MAX_CRS
-        value: "6"
-      - key: APPROVAL_AUTO_APPROVE_SENSITIVE
-        value: "0"
-
-      # ---- כללי ----
-      - key: PYTHONUNBUFFERED
-        value: "1"
+        value: "1"             # וורקר יחיד (מונע תקלות race סביב middleware)
+      - key: GUNICORN_TIMEOUT
+        value: "120"
       - key: LOG_LEVEL
         value: INFO
-      - key: REDIS_NAMESPACE
-        value: ops-supervisor-web
-      - key: APPROVAL_PUBSUB_CHANNEL
-        value: ops:ticket:events
-      - key: PUBLIC_HOST
-        value: https://ops-approval-web.onrender.com
 
-      # ---- Watchdog / HA ----
-      - key: PRIMARY_PUBLIC_HOST
-        value: https://algogpt-docker.onrender.com
-      - key: WATCHDOG_INTERVAL_SEC
-        value: "60"
-      - key: WATCHDOG_DEBOUNCE
-        value: "2"
-      - key: WATCHDOG_LOGS
-        value: /opt/render/project/src/logs/app.log
-      - key: RENDER_DEPLOY_HOOK_URL
+      # ───── HMAC (להזין בלשונית Secrets ב-Render) ─────
+      - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
+      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
+        value: "1"
 
-      # ---- סודות (להזנה ב-Dashboard) ----
-      - key: REDIS_URL
-        sync: false
-      - key: WEBHOOK_HMAC_SECRET
-        sync: false
+      # ───── Binance/Telegram/OpenAI/Redis וכו' (אופציונלי) ─────
       - key: OPENAI_API_KEY
         sync: false
-      - key: API_BEARER_TOKEN
-        sync: false
-
-      # ---- טלגרם (אם רלוונטי) ----
-      - key: TELEGRAM_AUTO_WEBHOOK
-        value: "1"
-      - key: TELEGRAM_ADMIN_ONLY
-        value: "1"
-      - key: TELEGRAM_ADMIN_IDS
-        value: "449087907,123456789"
-      - key: TELEGRAM_CHAT_ID
-        value: "449087907"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+      - key: PUBLIC_HOST
+        value: https://algogpt-docker.onrender.com
+      - key: REDIS_URL
+        sync: false
+
+    # שימו לב: לא עושים dockerCommand כדי לא לעקוף את ה-CMD שב-Dockerfile (Gunicorn+UvicornWorker)
+    # אם ממש רוצים Uvicorn ישיר: בטלו את השורה מעל והוסיפו כאן dockerCommand:
+    # dockerCommand: >
+    #   uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+
 
 
 
