@@ -1,39 +1,41 @@
 # core/scheduler.py
 from __future__ import annotations
-import time, threading, json
-from utils.symbols import WATCHLIST
-from utils.datafeed import get_df  # תחזיר DF לפי tf/limit
-from core.signal_fuser import fuse_signals
-from utils.safety_controller import guarded_execute
-from utils.config import cfg
-from calibration.search import nightly_recalibrate
+import time, asyncio, threading
+import pandas as pd
+from utils.get_klines import get_klines_sync
+from core.signal_fuser import fuse_signals, enrich_with_funding
 
-def scan_loop():
-    while True:
-        for symbol in WATCHLIST:
-            for tf in ("5m","15m","1h"):
-                df = get_df(symbol, tf, limit=600)
-                out = fuse_signals(df, symbol=symbol, tf=tf)
-                if out.get("ok"):
-                    ctx = {
-                        "symbol": symbol, "tf": tf, "side": out["side"],
-                        "entry": out["entry"], "sl": out["sl"], "tp1": out["tp1"], "tp2": out["tp2"],
-                        "quality": out["quality"], "atr": out["indicators"].get("alpha",{}).get("series",{}).get("atr", [0])[-1] if out["indicators"].get("alpha") else 0,
-                        "reason": out["context"]["lead"]
-                    }
-                    try:
-                        guarded_execute(ctx)
-                    except Exception:
-                        pass  # כבר דווח בהתרעות
-        time.sleep(cfg.SCAN_INTERVAL)
+def _fetch_feeds(symbol: str, tf: str) -> dict:
+    """
+    כאן חבר את המקורות שלך:
+      • delta_per_bar  – אגרגציית aggTrades -> Δ לכל נר
+      • oi_df          – DataFrame עם עמודה 'oi'
+      • df_spot        – DataFrame עם עמודה 'price'
+      • df_mark        – DataFrame עם עמודה 'markPrice'
+      • best_bid/ask   – מחיר ספר עדכני
+      • mark/index     – sanity check
+    """
+    feeds = {"symbol": symbol}
+    # TODO: חבר פונקציות אמת שלך
+    feeds["delta_per_bar"] = None
+    feeds["oi_df"] = None
+    feeds["df_spot"] = None
+    feeds["df_mark"] = None
+    feeds["best_bid"] = None; feeds["best_ask"] = None
+    feeds["mark"] = None; feeds["index"] = None
+    return feeds
 
-def nightly_job():
-    while True:
-        # ירוץ פעם ב-24 שעות (אפשר CRON חיצוני אם תרצה)
-        nightly_recalibrate()
-        time.sleep(24*3600)
+def scan_once(symbol: str, tf: str = "15m"):
+    df = get_klines_sync(symbol, tf, 600, "futures")
+    feeds = _fetch_feeds(symbol, tf)
+    out = fuse_signals(df, symbol=symbol, tf=tf, feeds=feeds)
+    if out.get("ok"):
+        # obfuscate: בצע את הטרייד שלך כאן
+        # העשרה ב-funding (async) – אופציונלי
+        try:
+            loop = asyncio.get_event_loop()
+            out = loop.run_until_complete(enrich_with_funding(out, symbol=symbol, side=out["side"]))
+        except Exception:
+            pass
+    return out
 
-def start():
-    threading.Thread(target=scan_loop, daemon=True).start()
-    if cfg.CALIBRATION_NIGHTLY:
-        threading.Thread(target=nightly_job, daemon=True).start()
