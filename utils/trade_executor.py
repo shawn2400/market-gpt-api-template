@@ -4,8 +4,6 @@ from __future__ import annotations
 import os, time, logging, asyncio, json
 from typing import Optional, Dict, Any, List, Tuple
 
-import httpx
-
 from utils.binance_client import (
     get_price, futures_mark_price, set_leverage, futures_create_order,
     get_all_orders, futures_cancel_order,
@@ -55,6 +53,9 @@ from utils.trade_execution_core import (
     _Idem,
 )
 
+# ← NEW: import approvals-only API
+from utils.approvals import ConfirmStore, send_confirm_request, require_approval
+
 log = logging.getLogger("algogpt.trade_executor")
 
 # ─────────── Feature flags for trail (ENV override-able per ticket) ───────────
@@ -65,204 +66,6 @@ SL_TRAIL_ENABLE       = os.getenv("SL_TRAIL_ENABLE", "1").lower() in ("1","true"
 TRAIL_ENABLE_DEFAULT    = os.getenv("TRAIL_ENABLE", "0").lower() in ("1","true","yes","on")
 TRAIL_ATR_MULT_DEFAULT  = float(os.getenv("TRAIL_ATR_MULT", os.getenv("SL_ATR_MULT", "0.6")))
 TRAIL_FREEZE_ENABLE_DEF = os.getenv("TRAIL_FREEZE_ENABLE", "1").lower() in ("1","true","yes","on")
-
-# ─────────── Telegram confirm (memory/redis) ───────────
-# אחסון אישורים (בזיכרון/Redis) – אותו API כמו בגרסה הקודמת
-try:
-    import redis  # type: ignore
-    _redis_available = bool(os.getenv("REDIS_URL", "").strip())
-except Exception:
-    _redis_available = False
-
-class ConfirmStore:
-    """
-    Unified confirmation store:
-    - CID Flow (inline keyboard): keys: confirm:{cid}
-      record: {"status","payload","chat_id","created_at"}
-    - Ticket Flow (links /ops/approve?ticket_id=...): keys: ticket:{ticket_id}
-      record: {"status","req","ts"}
-    """
-    _mem: Dict[str, Dict[str, Any]] = {}
-    _r = None
-    try:
-        if _redis_available:
-            _r = redis.Redis.from_url(os.getenv("REDIS_URL", ""), decode_responses=True)  # type: ignore
-    except Exception as e:
-        log.warning("Redis unavailable: %s", e); _r = None
-
-    # ---------- CID-based flow ----------
-    @classmethod
-    def create(cls, chat_or_payload, payload: Optional[Dict[str, Any]] = None, ttl: int = CONFIRM_TTL_SEC) -> str:
-        """
-        Overloaded:
-        - create(chat_id: int, payload: dict, ttl=... ) -> cid  (CID flow)
-        - create(payload: dict_with_ticket_id) -> ticket_id      (Ticket flow shim; used by ops_approve.create_ticket)
-        """
-        # Ticket shim
-        if isinstance(chat_or_payload, dict) and "ticket_id" in chat_or_payload:
-            rec = {"ts": time.time(), "req": dict(chat_or_payload), "status": "pending"}
-            tid = str(chat_or_payload["ticket_id"])
-            if cls._r:
-                try:
-                    cls._r.setex(f"ticket:{tid}", max(60, int(os.getenv("OPS_TICKET_TTL_SEC","1800"))), json.dumps(rec))
-                except Exception as e:
-                    log.warning("ConfirmStore(ticket).redis set failed: %s", e)
-            else:
-                cls._mem[f"ticket:{tid}"] = rec
-            return tid
-
-        # CID flow
-        chat_id = int(chat_or_payload)
-        cid = f"cid_{int(time.time()*1000)}_{os.getpid()}_{abs(hash(os.urandom(8)))}"
-        rec = {"status": "pending", "payload": payload or {}, "chat_id": chat_id, "created_at": time.time()}
-        if cls._r: cls._r.setex(f"confirm:{cid}", ttl, json.dumps(rec))
-        else: cls._mem[f"confirm:{cid}"] = rec
-        return cid
-
-    @classmethod
-    def _load(cls, key: str) -> Optional[Dict[str, Any]]:
-        if cls._r:
-            v = cls._r.get(key)
-            return json.loads(v) if v else None
-        return cls._mem.get(key)
-
-    @classmethod
-    def get(cls, cid: str) -> Optional[Dict[str, Any]]:
-        rec = cls._load(f"confirm:{cid}")
-        if not rec: return None
-        if rec.get("status") == "pending" and time.time() - rec["created_at"] > CONFIRM_TTL_SEC:
-            rec["status"] = "expired"
-            if cls._r: cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
-            else: cls._mem[f"confirm:{cid}"] = rec
-        return rec
-
-    @classmethod
-    def _save_cid(cls, cid: str, rec: Dict[str, Any]) -> None:
-        if cls._r: cls._r.setex(f"confirm:{cid}", 60, json.dumps(rec))
-        else: cls._mem[f"confirm:{cid}"] = rec
-
-    @classmethod
-    def approve(cls, cid: str, approver: str = "") -> None:
-        rec = cls.get(cid)
-        if not rec: return
-        rec["status"] = "approved"; rec["approver"] = int(approver) if str(approver).isdigit() else str(approver)
-        cls._save_cid(cid, rec)
-
-    @classmethod
-    def reject(cls, cid: str, approver: str = "") -> None:
-        rec = cls.get(cid)
-        if not rec: return
-        rec["status"] = "rejected"; rec["approver"] = int(approver) if str(approver).isdigit() else str(approver)
-        cls._save_cid(cid, rec)
-
-    # ---------- Ticket-based flow (used by routes/ops_approve) ----------
-    @classmethod
-    def pending(cls) -> List[Dict[str, Any]]:
-        """Return pending ticket records as list of dicts (each includes ticket_id)."""
-        out: List[Dict[str, Any]] = []
-        prefix = "ticket:"
-        if cls._r:
-            try:
-                for k in cls._r.scan_iter(match=f"{prefix}*"):
-                    v = cls._r.get(k)
-                    if not v: continue
-                    rec = json.loads(v)
-                    if rec.get("status") == "pending":
-                        tid = k.split(":", 1)[1]
-                        rr = dict(rec); rr["ticket_id"] = tid
-                        out.append(rr)
-            except Exception as e:
-                log.warning("ConfirmStore.pending(redis) failed: %s", e)
-        else:
-            for k, rec in cls._mem.items():
-                if not k.startswith(prefix): continue
-                if rec.get("status") == "pending":
-                    tid = k.split(":", 1)[1]
-                    rr = dict(rec); rr["ticket_id"] = tid
-                    out.append(rr)
-        return out
-
-    @classmethod
-    def decide(cls, ticket_id: str, approved: bool) -> None:
-        key = f"ticket:{ticket_id}"
-        rec = cls._load(key)
-        if not rec:
-            return
-        rec["status"] = "approved" if approved else "rejected"
-        if cls._r:
-            try:
-                cls._r.setex(key, 60, json.dumps(rec))
-            except Exception:
-                pass
-        else:
-            cls._mem[key] = rec
-
-    # ---------- Maintain ----------
-    @classmethod
-    def flush_all(cls) -> None:
-        cls._mem.clear()
-        if cls._r:
-            try:
-                for k in cls._r.scan_iter(match="confirm:*"):
-                    cls._r.delete(k)
-                for k in cls._r.scan_iter(match="ticket:*"):
-                    cls._r.delete(k)
-            except Exception:
-                pass
-    flush = reset = flush_all
-
-
-async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid: str) -> Dict[str, Any]:
-    if not BOT_TOKEN:
-        return {"ok": False, "error": "BOT_TOKEN missing"}
-    kb = {"inline_keyboard": [[
-        {"text": "✅ אישור", "callback_data": f"CONFIRM:APPROVE:{cid}"},
-        {"text": "❌ ביטול", "callback_data": f"CONFIRM:REJECT:{cid}"}
-    ]]}
-    summary_plain = summary_html.replace("<br/>", "\n").replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "")
-    if TELEGRAM_PARSE_MODE:
-        text = f"<b>{title}</b>\n{summary_html}\n\n<b>CID:</b> <code>{cid}</code>"
-    else:
-        text = f"{title}\n{summary_plain}\n\nCID: {cid}"
-
-    payload: Dict[str, Any] = {
-        "chat_id": chat_id,
-        "text": text,
-        "disable_web_page_preview": True,
-        "reply_markup": kb,
-    }
-    if TELEGRAM_PARSE_MODE:
-        payload["parse_mode"] = TELEGRAM_PARSE_MODE
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.post(f"{API_BASE}/sendMessage", json=payload)
-            try:
-                return r.json()
-            except Exception:
-                return {"ok": r.status_code == 200, "status_code": r.status_code, "text": r.text[:200]}
-    except Exception as e:
-        log.exception("telegram send failed", extra={"err": str(e)})
-        return {"ok": False, "error": str(e)}
-
-
-async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
-    cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
-    title = "אישור טרייד"
-    q = payload.get("quality"); bud = payload.get("budget"); lev = payload.get("leverage")
-    summary = (
-        f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
-        f"qty={payload.get('qty')} lev={lev} budget≈{bud} USDT<br/>"
-        f"Quality≈{q} | כניסה: HYBRID (Limit±{ENTRY_BAND_BPS}bps / Stop±{STOP_BAND_BPS}bps)"
-    )
-    _ = await send_confirm_request(chat_id, title, summary, cid)
-    t0 = time.time()
-    while time.time() - t0 < CONFIRM_TTL_SEC:
-        rec = ConfirmStore.get(cid)
-        if rec and rec.get("status") in ("approved", "rejected", "expired"):
-            return {"cid": cid, "status": rec["status"]}
-        await asyncio.sleep(0.5)
-    return {"cid": cid, "status": "expired"}
-
 
 # ─────────── Hybrid entry (LIMIT+STOP עם positionSide מותנה) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
@@ -306,7 +109,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stp = futures_create_order(**stop_kwargs)
     stp_id = str(stp.get("orderId") or "")
 
-    def _is_filled(oid: str) -> Tuple[bool, Optional[float]]:
+    def _is_filled(oid: str):
         try:
             lst = get_all_orders(sym, limit=15) or []
             for o in lst:
@@ -384,10 +187,9 @@ async def execute_trade_live(
     trail_freeze: Optional[bool] = None,
 ) -> Dict[str, Any]:
 
-    side = _normalize_entry_side(side)  # 🟢 קולט גם LONG/SHORT וגם BUY/SELL
+    side = _normalize_entry_side(side)
     sym = symbol.upper().strip()
-    position_side = _normalize_position_side(position_side)
-    position_side = _effective_position_side(position_side)  # התאמה אוטו׳ ל-Hedge/One-Way
+    position_side = _effective_position_side(_normalize_position_side(position_side))
 
     base_price = get_price(sym) or futures_mark_price(sym)
     if not base_price or base_price <= 0:
@@ -443,13 +245,11 @@ async def execute_trade_live(
     if (tp is None and not tp_targets) or ((sl is None and not sl_targets) and not trail_enabled):
         tps, tps_splits, sls = _compute_tp_sl_targets(side, float(entry or base_price), kl)
         if tp is None and not tp_targets: tp_targets, tp_splits = tps, tps_splits
-        # sl_targets only when not using trail
         if (sl is None and not sl_targets) and (not trail_enabled): sl_targets = sls
 
     if REQUIRE_TP_AND_SL:
         if not (tp_targets or tp is not None):
             return {"ok": False, "reason": "tp_required"}
-        # אם trail פעיל – SL רגיל לא חובה
         if not trail_enabled and not (sl_targets or sl is not None):
             return {"ok": False, "reason": "sl_required"}
 
@@ -515,8 +315,7 @@ async def execute_trade_live(
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
 
     if must_approve and not (os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")):
-        chat_id = int(telegram_chat_id or
-        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
+        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)   # ← תוקן: הוסר הקטע השבור
         if not chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
         payload = {"symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage, "quality": score_for_budget, "budget": float(budget or 0.0)}
@@ -533,7 +332,7 @@ async def execute_trade_live(
     except Exception as e:
         log.warning("set_leverage failed: %s", e)
 
-    # כניסה היברידית (LIMIT+STOP עם הסלמה לשוק)
+    # כניסה היברידית
     entry_res = await _place_hybrid_entry(sym, side, qty, float(base_price), entry, position_side)
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
@@ -541,7 +340,6 @@ async def execute_trade_live(
     sanity_ok = bool(entry_res.get("sanity_ok", True))
     sanity_bps = entry_res.get("sanity_bps")
 
-    # אכיפת sanity: אם חרגנו > POST_FILL_SANITY_BPS — סגירה מיידית
     if ENFORCE_POST_FILL_SANITY and not sanity_ok:
         rb = _safe_close_position(sym, side, qty, position_side=position_side)
         return {
@@ -574,7 +372,7 @@ async def execute_trade_live(
 
     close_side = _close_side_for(side)
 
-    # בניית סולמות TP/SL (SL סטטי רק אם trail כבוי)
+    # בניית סולמות TP/SL
     ladders = _build_ladders(
         sym, side, qty,
         ([tp] if tp is not None else tp_targets), tp_splits,
@@ -584,15 +382,13 @@ async def execute_trade_live(
     plan["sl_orders"] = ladders["sl_orders"]
 
     def _place_with_retry(args: Dict[str, Any]) -> Dict[str, Any]:
-        """שליחת הזמנה עם ניסוי חוזר ללא reduceOnly במקרה של -1106."""
         try:
             return futures_create_order(**args)
         except Exception as e:
             msg = str(e).lower()
             code = getattr(e, "code", None)
             if ("reduceonly" in msg or "reduce only" in msg or "-1106" in msg or code == -1106):
-                a2 = dict(args)
-                a2.pop("reduceOnly", None)
+                a2 = dict(args); a2.pop("reduceOnly", None)
                 return futures_create_order(**a2)
             raise
 
@@ -610,9 +406,8 @@ async def execute_trade_live(
         )
         eff_ps = _effective_position_side(position_side)
         if eff_ps != "BOTH":
-            args["positionSide"] = eff_ps  # Hedge: LONG/SHORT
+            args["positionSide"] = eff_ps
 
-        # MARKET-trigger (STOP_MARKET/TAKE_PROFIT_MARKET)
         if "MARKET" in typ:
             args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
         else:
@@ -622,7 +417,6 @@ async def execute_trade_live(
 
         args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
 
-        # ⚠️ One-Way + MARKET trigger → לא לשלוח reduceOnly (ימנע -1106)
         is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
         if not (is_market_trigger and eff_ps == "BOTH"):
             args["reduceOnly"] = True
@@ -641,7 +435,6 @@ async def execute_trade_live(
         qty_str, _ = _q_qty(sym, qty)
 
         if trail_callback_pct is None:
-            # Fallback בטווח המותר של Binance
             trail_callback_pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, 0.5))
 
         args: Dict[str, Any] = dict(
@@ -653,7 +446,6 @@ async def execute_trade_live(
             quantity=qty_str,
         )
 
-        # הפעלה סביב ה-mark כדי להפעיל מיד trailing
         mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
         activation = _offset_bps(mark_now, (-STOP_BAND_BPS if side == "BUY" else +STOP_BAND_BPS), +1)
         args["activationPrice"] = _q_price(sym, float(activation))[0]
