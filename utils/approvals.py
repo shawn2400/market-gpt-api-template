@@ -26,18 +26,21 @@ def _as_int(s: Optional[str], default: int) -> int:
         return default
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Policy (ניתן לשליטה דרך .env)
+# Policy (ניתן לשליטה דרך ENV)
 # ──────────────────────────────────────────────────────────────────────────────
 APPROVAL_ENABLED = _as_bool(os.getenv("APPROVAL_ENABLED", "1"), True)
 APPROVAL_SUCCESS_MIN = _as_float(os.getenv("APPROVAL_SUCCESS_MIN", "60"), 60.0)
 APPROVAL_RR_MIN = _as_float(os.getenv("APPROVAL_RR_MIN", "1.30"), 1.30)
-MIN_TP_SL_DIFF_PCT = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT", "0.15"), 0.15)
+# שים לב: המערכת שלך משתמשת ב-3.0% כהפרדה מינימלית, אז נשמור ברירת מחדל זהה
+MIN_TP_SL_DIFF_PCT = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT", "3.0"), 3.0)
 APPROVAL_MAX_SL_PCT = _as_float(os.getenv("APPROVAL_MAX_SL_PCT", "3.0"), 3.0)
 MIN_NOTIONAL_USDT = _as_float(os.getenv("MIN_NOTIONAL_USDT", "5"), 5.0)
 APPROVAL_REQUIRE_FRESH_PRICE = _as_bool(os.getenv("APPROVAL_REQUIRE_FRESH_PRICE", "1"), True)
-PRICE_MAX_AGE_SEC = _as_int(os.getenv("PRICE_MAX_AGE_SEC", "10"), 10)
+PRICE_MAX_AGE_SEC = _as_int(os.getenv("PRICE_MAX_AGE_SEC", "15"), 15)
+
 WATCHLIST_CSV = os.getenv("WATCHLIST", "") or os.getenv("HEALTH_SYMBOLS", "")
 REQUIRE_IN_WATCHLIST = _as_bool(os.getenv("APPROVAL_REQUIRE_WATCHLIST", "1"), True)
+
 APPROVAL_DUP_COOLDOWN_SEC = _as_int(os.getenv("APPROVAL_DUP_COOLDOWN_SEC", "300"), 300)
 MAX_LEVERAGE = _as_int(os.getenv("MAX_LEVERAGE", "35"), 35)
 
@@ -70,9 +73,7 @@ def _key_for(tp: Dict[str, Any]) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
     try:
-        e = float(entry)
-        s = float(sl)
-        t = float(tp1)
+        e = float(entry); s = float(sl); t = float(tp1)
         sd = (side or "").upper()
         risk = abs(e - s)
         if risk <= 0:
@@ -98,12 +99,19 @@ def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
     if not APPROVAL_REQUIRE_FRESH_PRICE:
         return (True, None)
     try:
+        # שני פונקציות קיימות אצלך (ws_fallback / binance), ננסה ws_fallback תחילה:
         from utils.ws_fallback import is_price_fresh, get_price  # type: ignore
         ok = is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC)
         px = float(get_price(symbol) or 0.0)
         return (bool(ok), px if px > 0 else None)
     except Exception:
-        return (False, None)
+        try:
+            # נפילה ל-HTTP אם אין WS
+            from utils.binance_client import get_price as http_price  # type: ignore
+            px = float(http_price(symbol) or 0.0)
+            return (px > 0, px if px > 0 else None)
+        except Exception:
+            return (False, None)
 
 def _aligned(val: float, step: float, tol: float = 1e-10) -> bool:
     if step <= 0:
@@ -113,7 +121,7 @@ def _aligned(val: float, step: float, tol: float = 1e-10) -> bool:
 
 def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[str]:
     """
-    בדיקות tickSize/stepSize מתוך exchange_info.
+    בדיקות tickSize מתוך exchange_info (התאמת מחיר).
     """
     out: List[str] = []
     try:
@@ -124,7 +132,7 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
         tick = None
         for f in info.get("filters", []):
             if f.get("filterType") == "PRICE_FILTER":
-                tick = float(f.get("tickSize", "0.0")) or None
+                tick = float(f.get("tickSize", "0")) or None
         if tick:
             for name, val in [("entry", entry), ("sl", sl), ("tp1", tp1)]:
                 if not _aligned(float(val), float(tick)):
@@ -138,11 +146,7 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
 # ──────────────────────────────────────────────────────────────────────────────
 def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict[str, Any]:
     """
-    מבצע בדיקות איכות/מדיניות על הצעה (tp) טרם שליחה לביצוע.
-
-    mutate_state:
-      - True (ברירת מחדל): מבצע גם ניהול "כפילות אחרונה" (_recent).
-      - False: בודק הכל, כולל כפילות קיימת, אבל לא מעדכן/מנקה את המצב הגלובלי.
+    בדיקות איכות/מדיניות על הצעה טרם שליחה לביצוע.
     """
     out_errors: List[str] = []
     out_warns: List[str] = []
@@ -157,16 +161,11 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     sl = float(tp.get("sl") or 0.0)
     tp1 = float(tp.get("tp1") or 0.0)
 
-    if not symbol:
-        out_errors.append("missing_symbol")
-    if side not in ("BUY", "SELL", "LONG", "SHORT"):
-        out_errors.append("bad_side")
-    if entry <= 0:
-        out_errors.append("bad_entry")
-    if sl <= 0:
-        out_errors.append("bad_sl")
-    if tp1 <= 0:
-        out_errors.append("bad_tp1")
+    if not symbol: out_errors.append("missing_symbol")
+    if side not in ("BUY", "SELL", "LONG", "SHORT"): out_errors.append("bad_side")
+    if entry <= 0: out_errors.append("bad_entry")
+    if sl <= 0: out_errors.append("bad_sl")
+    if tp1 <= 0: out_errors.append("bad_tp1")
 
     if out_errors:
         return {"ok": False, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
