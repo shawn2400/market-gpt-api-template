@@ -37,7 +37,8 @@ def _tfs() -> List[str]:
 def _load_trades_log(path: str) -> List[Dict[str, Any]]:
     p = Path(path)
     if not p.exists():
-        raise FileNotFoundError(f"trades_log not found: {p}")
+        # במקום להפיל 500 – נחזיר רשימה ריקה
+        return []
     raw = json.loads(p.read_text(encoding="utf-8"))
     if isinstance(raw, list):
         return raw
@@ -45,7 +46,7 @@ def _load_trades_log(path: str) -> List[Dict[str, Any]]:
         for k in ("rows","data","items"):
             if isinstance(raw.get(k), list):
                 return raw[k]
-    raise ValueError("Unsupported trades_log format")
+    return []
 
 def _normalize_side(side: str) -> Optional[str]:
     s = (side or "").lower()
@@ -77,6 +78,13 @@ def _extract_ref_by_symbol_tf(rows: List[Dict[str, Any]],
     out: Dict[str, List[Dict[str, Any]]] = {}
     syms = {s.upper() for s in symbols}
     tfs_set = {t for t in tfs}
+    # אם rows ריק – נייצר מפתחות ריקים לכל הצמדים/TF כדי לבנות jobs
+    if not rows:
+        for s in syms:
+            for t in tfs_set:
+                out[f"{s}_{t}"] = []
+        return out
+
     for r in rows:
         sym = (r.get("symbol") or r.get("sym") or r.get("pair") or "").upper()
         tf  =  (r.get("tf") or r.get("timeframe") or r.get("interval") or "").lower()
@@ -93,7 +101,6 @@ def _write_json(path: str, obj: Any) -> None:
     p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # -------------------- Grid presets + Auto mode --------------------
-# מוד “אוטומטי” יהיה דיפולט: CALIB_GRID_MODE=auto (או plus/pro/lite)
 CALIB_GRID_MODE_DEFAULT = os.getenv("CALIB_GRID_MODE", "auto").strip().lower()
 
 GRID_LITE = {
@@ -148,7 +155,6 @@ GRID_PRO = {
 }
 
 def _pick_mode_auto(tf: str, ref_count: int) -> str:
-    # מעט דוגמאות => lite; בינוני => plus; גדול + TF גבוה => pro
     if ref_count < 8:   return "lite"
     if ref_count < 20:  return "plus"
     if tf in ("1h","2h","4h"): return "pro"
@@ -161,7 +167,7 @@ def _grid_for_mode(name: str, mode: str) -> dict:
     return base.get(name, {})
 
 # -------------------- Schemas (Pydantic-free) --------------------
-class BuildJobsRequest(Dict[str, Any]):  # FastAPI יקבל dict
+class BuildJobsRequest(Dict[str, Any]):
     pass
 
 class RunLiveRequestModel:
@@ -196,18 +202,18 @@ def calib_status():
 @router.post("/build-jobs")
 def build_jobs(req: Dict[str, Any] = Body(default={})):
     """
-    בונה config/calib_jobs.json אמיתי מתוך trades_log LIVE.
+    בונה config/calib_jobs.json מתוך לוג טריידים (אם אין – ממשיך עם ref ריק).
 
     Body (אופציונלי):
-      - trades_log_path: ברירת מחדל 'data/trades_log.json'
+      - trades_log_path (דיפולט: data/trades_log.json)
       - indicators: ['mc_b','alpha','qqe', ...] או "all"
-      - param_grids: {name: {param: [values...]}} (דריסה ידנית)
-      - tol_bars: ברירת מחדל 1
-      - limit: ברירת מחדל 800 (מספר נרות לטעינה לכיול)
-      - market: ברירת מחדל DEFAULT_MARKET
-      - grid_mode: 'auto' (דיפולט)/'lite'/'plus'/'pro'
-      - max_combos_per_job: דיפולט מה-ENV (CALIB_MAX_COMBOS_PER_JOB, 120)
-      - random_seed: דיפולט 1337
+      - param_grids: {name: {param: [values...]}}
+      - tol_bars: דיפולט 1
+      - limit: דיפולט 800
+      - market: דיפולט DEFAULT_MARKET
+      - grid_mode: 'auto'/'lite'/'plus'/'pro' (דיפולט: ENV)
+      - max_combos_per_job: דיפולט ENV (CALIB_MAX_COMBOS_PER_JOB=120)
+      - random_seed: דיפולט ENV (CALIB_RANDOM_SEED=1337)
       - time_budget_sec: רמז לזמן ריצה מקס' לכל job (אופציונלי)
     """
     trades_log_path = req.get("trades_log_path") or "data/trades_log.json"
@@ -218,33 +224,28 @@ def build_jobs(req: Dict[str, Any] = Body(default={})):
 
     max_combos_per_job = int(req.get("max_combos_per_job", int(os.getenv("CALIB_MAX_COMBOS_PER_JOB","120"))))
     random_seed = int(req.get("random_seed", int(os.getenv("CALIB_RANDOM_SEED","1337"))))
-    time_budget_sec = req.get("time_budget_sec")  # יכול להיות None
+    time_budget_sec = req.get("time_budget_sec")
 
-    # בחירת אינדיקטורים
     ALL_INDI = ["mc_b","mc_a","alpha","qqe","smc","invictus","squeeze","donchian","avwap","chandelier","vol_regime","cvd","oi","basis"]
     indicators_req = req.get("indicators")
     if not indicators_req:
-        indicators = ["mc_b","alpha","qqe","smc","invictus","chandelier","squeeze"]  # ברירת מחדל טובה
+        indicators = ["mc_b","alpha","qqe","smc","invictus","chandelier","squeeze"]
     elif indicators_req == "all":
         indicators = ALL_INDI
     else:
         indicators = [x for x in indicators_req if x in set(ALL_INDI)]
 
-    # טעינת רפרנסים
     rows = _load_trades_log(trades_log_path)
     ref_by_key = _extract_ref_by_symbol_tf(rows, _watchlist(), _tfs())
 
-    # פרמטרי דיפולט לגרידים (אפשר דריסה per-name)
     user_grids: Dict[str, Dict[str, List[Any]]] = (req.get("param_grids") or {})
 
-    # כתיבת קבצי ref_signals לכל צמד/TF
     ref_files: Dict[str, str] = {}
     for key, arr in ref_by_key.items():
         dst = f"data/ref_signals_{key.lower()}.json"
         _write_json(dst, arr)
         ref_files[key] = dst
 
-    # יצירת jobs list עם מצב גריד (auto לפי ref_count/TF אם צריך)
     jobs = []
     chosen_modes: Dict[str, str] = {}
     for key in sorted(ref_by_key.keys()):
@@ -257,12 +258,10 @@ def build_jobs(req: Dict[str, Any] = Body(default={})):
         chosen_modes[key] = mode
 
         for name in indicators:
-            # דריסה ידנית אם ניתנה; אחרת מה-Mode
             grid = user_grids.get(name)
             if grid is None:
                 grid = _grid_for_mode(name, mode)
 
-            # ref_signals ישירות – כדי לא לדרוש I/O נוסף בזמן ריצה
             try:
                 ref = json.loads(Path(ref_files[key]).read_text(encoding="utf-8"))
             except Exception:
@@ -277,7 +276,6 @@ def build_jobs(req: Dict[str, Any] = Body(default={})):
                 "tol_bars": tol_bars,
                 "limit": limit,
                 "market": market,
-                # עומס/דגימה/תקציב זמן
                 "max_combos": max_combos_per_job,
                 "random_seed": random_seed,
                 "time_budget_sec": time_budget_sec,
@@ -300,13 +298,7 @@ def build_jobs(req: Dict[str, Any] = Body(default={})):
 @router.post("/run-live")
 def run_live(req: Dict[str, Any] = Body(default={})):
     """
-    זרימה מלאה בלייב:
-      אם חסר calib_jobs.json — יבנה אותו מיידית מ-trades_log.json, ואז יריץ כיול.
-
-    Body (אופציונלי – כמו build-jobs):
-      trades_log_path / indicators / param_grids / tol_bars / limit / market / jobs_path
-      grid_mode / max_combos_per_job / random_seed / time_budget_sec
-      force_enable=true כדי לעקוף CALIB_ENABLE
+    אם חסר calib_jobs.json — יבנה אותו ואז יריץ כיול.
     """
     if not _calib_enabled(req.get("force_enable", False)):
         return {"ok": False, "error": "calibration_disabled", "hint": "Set CALIB_ENABLE=1 or use force_enable"}
@@ -324,5 +316,6 @@ def run_live(req: Dict[str, Any] = Body(default={})):
         return {"ok": True, "jobs": jobs_path, "results": results, "elapsed_sec": round(time.time()-t0,2)}
     except Exception as e:
         return {"ok": False, "error": "run_failed", "details": str(e), "jobs": jobs_path}
+
 
 
