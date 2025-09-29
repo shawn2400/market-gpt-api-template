@@ -2,52 +2,69 @@
 from __future__ import annotations
 from typing import Dict, Any, List
 from utils.indicators_registry import run_all
-from utils.gates import btc_gate_ok, squeeze_gate_ok, quality_ok, exposure_ok, symbol_cooldown_ok
-from utils.config import cfg
+from utils.config import get_settings as cfg
+from utils.quality import compute_quality
+from utils.book_gates import gate_mark_index_sanity, gate_spread_depth
+from utils.funding_bias import funding_bias as funding_async  # async (14)
 
-def fuse_signals(df, *, symbol:str, tf:str) -> Dict[str,Any]:
-    # הרצת כל האינדיקטורים
-    res = run_all(df, symbol=symbol, tf=tf)
+def fuse_signals(df, *, symbol: str, tf: str, feeds: dict) -> Dict[str, Any]:
+    """
+    feeds צפוי לכלול לפי זמינותך:
+      delta_per_bar, oi_df, df_spot, df_mark, best_bid, best_ask, bid_qty, ask_qty
+    """
+    # הרצת כל האינדיקים (ללא funding – async)
+    res = run_all(df, symbol=symbol, tf=tf, **feeds)
+
+    # דוגמאות Gates לפני טרייד:
+    sanity = gate_mark_index_sanity(mark=feeds.get("mark"), index=feeds.get("index"), max_gap_bps=20.0)
+    if not sanity["ok"]: return {"ok": False, "reason": sanity["code"], "indicators": res}
+
+    spread = gate_spread_depth(best_bid=feeds.get("best_bid"), best_ask=feeds.get("best_ask"),
+                               bid_qty=feeds.get("bid_qty"), ask_qty=feeds.get("ask_qty"),
+                               max_spread_bps=3.0, min_top_qty=0.0)
+    if not spread["ok"]: return {"ok": False, "reason": spread["code"], "indicators": res}
+
+    # איסוף אותות מובילים
     signals: List[Dict[str,Any]] = []
-    ctx = {}
-
-    # איחוד – דוגמה: MC-B/QQE/Alpha/SMC/Invictus
-    for key in ("mc_b","qqe","alpha","smc","invictus"):
+    for key in ("mc_b","qqe","alpha","smc","invictus","squeeze","donchian","cvd","oi","basis"):
         r = res.get(key) or {}
         for s in (r.get("signals") or []):
-            # Normalize
-            signals.append({
-                "name": key, "ts": s.get("ts"),
-                "side": s.get("side"), "strength": s.get("strength", 0),
-                "reason": s.get("reason", {})
-            })
-    # בוחרים אות מוביל (לפי strength/priority)
-    signals.sort(key=lambda x: x["strength"], reverse=True)
+            signals.append({"name":key, **s})
+    signals.sort(key=lambda x: x.get("strength",0), reverse=True)
     lead = signals[0] if signals else None
-
     if not lead:
-        return {"ok": False, "reason": "no_signal", "indicators": res}
+        return {"ok": False, "reason":"no_signal", "indicators": res}
 
     side = lead["side"]
-    # Gates (דוגמה; הוסף OI/Funding/Basis לפי זמינותך)
-    if cfg.BTC_GATE_ENABLE and not btc_gate_ok(side): return {"ok": False, "reason": "btc_gate", "indicators": res}
-    if cfg.SQUEEZE_GATE_ENABLE and not squeeze_gate_ok(symbol): return {"ok": False, "reason": "squeeze_gate", "indicators": res}
-    if not symbol_cooldown_ok(symbol): return {"ok": False, "reason": "symbol_cooldown", "indicators": res}
-    if not exposure_ok(symbol): return {"ok": False, "reason": "exposure_cap", "indicators": res}
-
-    # איכות: נבנה ציון משולב (אפשר להחליף בציון שלך)
-    quality = min(10.0, lead["strength"])
-    if not quality_ok(quality, cfg.MIN_QUALITY_SCORE):
-        return {"ok": False, "reason": "quality_low", "indicators": res}
-
-    # רמות – לדוגמה מ-Alpha/Chandelier/ATR
-    alpha = res.get("alpha", {})
-    atr = alpha.get("series", {}).get("atr")
     px = float(df["close"].iloc[-1])
-    atr_val = float(atr.iloc[-1]) if atr is not None else 0.0
-    sl = px - 1.5*atr_val if side=="long" else px + 1.5*atr_val
-    tp1= px + 1.8*atr_val if side=="long" else px - 1.8*atr_val
-    tp2= px + 3.2*atr_val if side=="long" else px - 3.2*atr_val
 
-    return {"ok": True, "side": side, "entry": px, "sl": sl, "tp1": tp1, "tp2": tp2,
-            "quality": quality, "context": {"lead": lead, "tf": tf}, "indicators": res}
+    # TP/SL ע"פ Alpha/ATR
+    alpha = res.get("alpha", {})
+    atr_val = float(alpha.get("series",{}).get("atr", pd.Series([0])).iloc[-1]) if alpha.get("series") else 0.0
+    sl_mult = 1.5; tp1_mult = 1.8; tp2_mult = 3.2
+    sl  = px - sl_mult*atr_val if side=="long" else px + sl_mult*atr_val
+    tp1 = px + tp1_mult*atr_val if side=="long" else px - tp1_mult*atr_val
+    tp2 = px + tp2_mult*atr_val if side=="long" else px - tp2_mult*atr_val
+
+    # איכות (עם עיגון/פקטורים — אופציונלי)
+    from utils.anchor import AnchorDecision
+    anchor = AnchorDecision(bias="BULLISH" if side=="long" else "BEARISH", score=72.0, mode_applied="composite")
+    q = compute_quality(symbol=symbol, side=side.upper(), entry=px, sl=sl, tp=tp1,
+                        leverage=10, budget=100, anchor=anchor, atr=atr_val, trades_log_path=None)
+
+    out = {"ok": True, "side": side, "entry": px, "sl": sl, "tp1": tp1, "tp2": tp2,
+           "quality": q["quality_score"], "success_pct": q["success_pct"],
+           "context": {"lead": lead, "tf": tf}, "indicators": res}
+
+    out["feeds_used"] = {k: True for k in ("delta_per_bar","oi_df","df_spot","df_mark") if feeds.get(k) is not None}
+
+    return out
+
+async def enrich_with_funding(out: Dict[str, Any], *, symbol: str, side: str) -> Dict[str, Any]:
+    try:
+        fb = await funding_async(symbol, side=side.upper())
+        out.setdefault("context",{})["funding"] = fb
+    except Exception as e:
+        out.setdefault("context",{})["funding_error"] = str(e)
+    return out
+
