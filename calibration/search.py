@@ -35,7 +35,7 @@ def _iter_param_combos(param_grid: dict) -> list[dict]:
 def _sample_combos(combos: list[dict], k: int, seed: int) -> list[dict]:
     # דגימה דטרמיניסטית (לשחזור) + ערבוב קל
     import random
-    if k <= 0 or k >= len(combos): 
+    if k <= 0 or k >= len(combos):
         return combos
     rnd = random.Random(int(seed))
     combos_sorted = sorted(combos, key=lambda c: hash(tuple(sorted(c.items()))))
@@ -111,7 +111,7 @@ def nightly_recalibrate_from_jobs(jobs_path: str) -> list[dict]:
             param_grid=job.get("param_grid", {}),
             ref_signals=ref, tol_bars=int(job.get("tol_bars", 1)),
             max_combos=int(job.get("max_combos", 0)) or None,
-            random_seed=int(job.get("random_seed", 1337)),
+            random_seed=int(job.get("random_seed", int(os.getenv("CALIB_RANDOM_SEED","1337")))),
             time_budget_sec=job.get("time_budget_sec"),
             ref_count_hint=len(ref),
         )
