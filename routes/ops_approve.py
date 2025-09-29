@@ -22,10 +22,16 @@ HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_
 ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
 BOT_TOKEN            = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 API_BEARER_TOKEN     = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
+TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 👈 הוסף ל-ENV אם חסר
 ETA_SMART_ENABLE     = (os.getenv("ETA_SMART_ENABLE","0").lower() in ("1","true","yes","on"))
-ETA_VELOCITY_WINDOW  = int(os.getenv("ETA_VELOCITY_WINDOW","30"))  # דקות אחורה למדידת מהירות
+ETA_VELOCITY_WINDOW  = int(os.getenv("ETA_VELOCITY_WINDOW","30"))
 DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL","15m")
+
+# פרסר דגלים (אופציונלי)
+try:
+    from routes.ops_flags import apply_note_flags  # type: ignore
+except Exception:
+    def apply_note_flags(note, ticket): return ticket
 
 def KEY_TICKET(tid: str) -> str:
     return f"{NS}:ticket:{tid}"
@@ -45,13 +51,6 @@ except Exception:
         from main import ConfirmStore  # type: ignore
 
 # -------- Small utils ----------
-def _bool(v, default=False) -> bool:
-    if isinstance(v, bool): return v
-    s = str(v).strip().lower()
-    if s in ("1","true","yes","on"): return True
-    if s in ("0","false","no","off"): return False
-    return bool(default)
-
 def _md_html(s: str) -> str:
     return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
@@ -71,20 +70,16 @@ def _expired(ts: float, ttl_sec: int = TICKET_TTL_SEC) -> bool:
         return True
 
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
+    import hmac, hashlib
     key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text)==64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 # -------- Mode parsing ----------
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
-
 def _parse_mode(note: Optional[str]) -> Optional[str]:
-    """
-    note יכול להכיל בתחילתו תג בסגנון [mode: MARKET] / [mode: HYBRID] / [mode: AUTO]
-    """
     if not note: return None
     m = _MODE_RX.search(str(note))
-    if not m: return None
-    return m.group(1).upper()
+    return m.group(1).upper() if m else None
 
 # -------- Telegram --------
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None, reject_url: Optional[str] = None) -> Dict[str, Any]:
@@ -110,18 +105,13 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None, reje
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# -------- Execution backends --------
+# -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    ביצוע פשוט – MARKET בלבד (פולבאק אם אין execute_trade_live)
-    """
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
-
-    # Fallback using python-binance (פשוט, ללא TP/SL)
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -158,9 +148,6 @@ def _bool_env(name: str, default: bool=False) -> bool:
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    ביצוע 'חמוש' – HYBRID (Limit+Stop עם הסלמה למרקט) + TP/SL אם סופקו.
-    """
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -194,12 +181,18 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             entry=None,
             tp_targets=tp_targets or None,
             sl_targets=sl_targets or None,
-            tp_splits=None,
+            tp_splits=ticket.get("tp_splits"),
             sl_splits=None,
             confirm_first=False,
             telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
             position_side=pos_side,
-            reduce_only=False,
+            reduce_only=bool(ticket.get("reduce_only", False)),
+            tp_kind=ticket.get("tp_kind"),   # מהדגלים
+            sl_kind=ticket.get("sl_kind"),
+            entry_kind=ticket.get("entry_kind"),
+            entry_offset=ticket.get("entry_offset"),
+            tp_offset=ticket.get("tp_offset"),
+            sl_offset=ticket.get("sl_offset"),
         )
         return res
     except Exception as e:
@@ -207,6 +200,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "armed_execute_failed", "detail": str(e)}
 
 # -------- Smart ETA (optional) --------
+import math
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
     try:
         from utils.get_klines import get_klines_sync  # type: ignore
@@ -240,14 +234,16 @@ def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp
     }
 
 # -------- Storage abstraction --------
-async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
+import json as _json
+async def _load_ticket(tid: str):
     if aioredis and REDIS_URL:
         try:
             r = await _redis()
-            raw = await r.get(KEY_TICKET(tid))
+            raw = await r.get(f"{NS}:ticket:{tid}")
             if raw:
-                rec = json.loads(raw)
-                if not _expired(rec.get("ts", 0)):
+                rec = _json.loads(raw)
+                from time import time as _now
+                if (_now() - float(rec.get("ts", 0))) <= TICKET_TTL_SEC:
                     return rec.get("req") or rec, "redis"
         except Exception as e:
             logger.warning("redis_load_failed: %s", e)
@@ -262,7 +258,7 @@ async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
 async def _delete_ticket(tid: str, source: str) -> None:
     if source == "redis" and aioredis and REDIS_URL:
         try:
-            r = await _redis(); await r.delete(KEY_TICKET(tid)); return
+            r = await _redis(); await r.delete(f"{NS}:ticket:{tid}"); return
         except Exception as e:
             logger.warning("redis_delete_failed: %s", e)
     try:
@@ -271,9 +267,10 @@ async def _delete_ticket(tid: str, source: str) -> None:
         pass
 
 # -------------------- API --------------------
+from fastapi import Body
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram")
 async def create_ticket(
-    payload: Dict[str, Any] = Body(..., description="symbol, side, qty, leverage, optional: score/ETAs/TP/SL/probs/note/position_side/budget/expiry_ts"),
+    payload: Dict[str, Any] = Body(..., description="symbol, side, qty, leverage, optional: TP/SL/ETAs/probs/note/position_side/budget/expiry_ts"),
 ):
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
@@ -284,11 +281,12 @@ async def create_ticket(
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
 
     if not (symbol and side and qty > 0 and lev > 0):
+        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="Missing/invalid fields (symbol/side/qty/leverage)")
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    # Smart ETAs (אופציונלי)
+    # Smart ETAs
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         try:
@@ -300,7 +298,8 @@ async def create_ticket(
         for k,v in etas.items():
             payload.setdefault(k, v)
 
-    req_body = {
+    # Build req body
+    req_body: Dict[str, Any] = {
         "ticket_id": tid, "symbol": symbol, "side": side, "qty": qty,
         "leverage": lev, "position_side": position_side, "budget": budget, "note": note,
         "score": payload.get("score"),
@@ -315,6 +314,9 @@ async def create_ticket(
         "expiry_ts": payload.get("expiry_ts"),
     }
 
+    # 👇 העשרה מתוך הדגלים ב-note (לא חובה)
+    req_body = apply_note_flags(note, req_body)
+
     # Persist
     try:
         ConfirmStore.create(dict(req_body))
@@ -324,14 +326,15 @@ async def create_ticket(
         try:
             r = await _redis()
             rec = {"ts": time.time(), "req": req_body, "note": note}
-            await r.setex(KEY_TICKET(tid), TICKET_TTL_SEC, json.dumps(rec, separators=(",", ":")))
+            import json as _json
+            await r.setex(f"{NS}:ticket:{tid}", TICKET_TTL_SEC, _json.dumps(rec, separators=(",", ":")))
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
 
     approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve?ticket_id={tid}" if PUBLIC_HOST else ""
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?ticket_id={tid}"  if PUBLIC_HOST else ""
 
-    # Telegram message
+    # Telegram
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
@@ -354,6 +357,18 @@ async def create_ticket(
     mode = _parse_mode(note)
     if mode:
         lines.append(f"• Mode: <code>{mode}</code>")
+    # אם דגלים עיקריים קיימים – נציג בקצרה
+    if req_body.get("tp_kind"):
+        lines.append(f"• TP Kind: <code>{req_body['tp_kind']}</code>")
+    if req_body.get("tp_splits"):
+        lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
+    if req_body.get("sl_kind"):
+        lines.append(f"• SL Kind: <code>{req_body['sl_kind']}</code>")
+    if req_body.get("entry_kind"):
+        lines.append(f"• Entry: <code>{req_body['entry_kind']}</code>")
+    if req_body.get("reduce_only"):
+        lines.append(f"• Reduce Only: <code>True</code>")
+
     if req_body.get("prob_overall_pct") is not None:
         lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
     if req_body.get("expiry_ts") is not None:
@@ -375,14 +390,10 @@ async def create_ticket(
     }
 
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
-    """
-    מחזיר 'MARKET' או 'HYBRID' או 'AUTO' בהתאם לתג ב-note.
-    אם אין תג, נופל חזרה ל-ENV (TP_LADDER_ON_APPROVE) כ'ברירת מחדל'.
-    """
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
-    return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
+    return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
 
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
@@ -396,7 +407,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     elif flow == "HYBRID":
         exec_res = await _execute_trade_armed(ticket)
     else:  # AUTO
-        # אם יש TP/SL בטיקט – HYBRID; אחרת MARKET
         if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")):
             exec_res = await _execute_trade_armed(ticket)
         else:
@@ -415,12 +425,13 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
                 "— — —\nבוצע והועבר לניהול."
             )
         else:
+            import json as _json
             txt = (
                 f"⚠️ <b>Approve Failed</b>\n"
                 f"• Ticket: <code>{_md_html(ticket_id)}</code>\n"
                 f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n"
                 f"• Flow: <code>{flow}</code>\n"
-                f"— — —\nשגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
+                f"— — —\nשגיאה: <code>{_md_html(_json.dumps(exec_res, ensure_ascii=False))}</code>"
             )
         await _send_telegram_html(txt)
     except Exception:
@@ -460,15 +471,19 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade)")
 async def approve_signed(request: Request):
     if not HMAC_SECRET:
+        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail="HMAC secret not set")
     raw = await request.body()
     got = request.headers.get("X-Signature", "") or ""
     want = _sign_hex(HMAC_SECRET, raw)
-    if not hmac.compare_digest(got, want):
+    import hmac as _h
+    if not _h.compare_digest(got, want):
+        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="Bad signature")
     try:
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
+        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     flow = _decide_flow_by_mode(payload)
@@ -476,7 +491,7 @@ async def approve_signed(request: Request):
         exec_res = await _execute_trade(payload)
     elif flow == "HYBRID":
         exec_res = await _execute_trade_armed(payload)
-    else:  # AUTO
+    else:
         if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")):
             exec_res = await _execute_trade_armed(payload)
         else:
@@ -484,10 +499,9 @@ async def approve_signed(request: Request):
 
     ok = bool(exec_res.get("ok"))
     if not ok:
+        from fastapi import HTTPException
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
-
-
 
 
 
