@@ -21,7 +21,7 @@ from utils.json_logger import setup_json_logging
 from utils.metrics_middleware import MetricsMiddleware
 from utils.response_limits import ResponseSizeLimiter
 
-# ---- Binance client (עם פולבאקים) ----
+# ---- Binance client (fallbacks) ----
 try:
     from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
 except Exception:
@@ -30,7 +30,7 @@ except Exception:
     def get_price(symbol: str) -> Optional[float]: return None
     def futures_exchange_info_safe(force_refresh: bool = False): return None
 
-# ---- Telegram notifier (פולבאקים) ----
+# ---- Telegram notifier (fallbacks) ----
 try:
     from utils.telegram_notifier_core import ensure_ops_schedulers_started, send_ops_digest_now, send_eod_report_now
 except Exception:
@@ -53,20 +53,16 @@ except Exception:
         from utils.auto_executor import ConfirmStore  # type: ignore
     except Exception:
         class ConfirmStore:  # type: ignore
-            """Fallback in-memory confirm store compatible with routes.manager."""
             _P: Dict[str, Dict[str, Any]] = {}
-
             @classmethod
             def pending(cls) -> List[Dict[str, Any]]:
                 return list(cls._P.values())
-
             @classmethod
             def create(cls, payload: Dict[str, Any]) -> str:
                 tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
                 payload["ticket_id"] = tid
                 cls._P[tid] = payload
                 return tid
-
             @classmethod
             def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
                 it = cls._P.pop(ticket_id, None)
@@ -75,11 +71,9 @@ except Exception:
                 it["approved"] = approved
                 it["decided_ts"] = int(time.time())
                 return {"ok": True, "approved": approved, "ticket_id": ticket_id}
-
             @classmethod
             def flush_all(cls) -> None:
                 cls._P.clear()
-
             flush = reset = flush_all
 
 # ---- runtime counters (fallbacks) ----
@@ -92,7 +86,7 @@ except Exception:
         return {"tick_ewma_ms": None,"tick_p95_ms": None,"tick_p99_ms": None,"last_tick_age_sec": None,
                 "timeouts_burst": 0,"no_trade_streak": 0,"current_interval": int(os.getenv("SCAN_INTERVAL","60"))}
 
-# ---- Trade Manager (אופציונלי) ----
+# ---- Trade Manager (optional) ----
 TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
 TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20"))
 try:
@@ -109,7 +103,7 @@ def _coerce_log_level(val):
 logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL","INFO")))
 
-# תיקיות בסיס
+# base dirs
 for d in ("static","logs","data"):
     try: Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
@@ -118,6 +112,8 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
+from fastapi.exceptions import RequestValidationError
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
@@ -161,7 +157,7 @@ app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
-# סטטי /static
+# static
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ---------- Public paths ----------
@@ -179,10 +175,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/ops/approve", "/ops/approve/signed", "/ops/reject",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
-    # 👇 חדשים לצרכי UI
-    "/ui/dashboard",
-    "/ops/ui",
-    "/ops/ui/ticket",
+    "/ui/dashboard", "/ops/ui", "/ops/ui/ticket",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
@@ -220,28 +213,21 @@ async def add_server_identity_header(request: Request, call_next):
 async def validate_token(request: Request, call_next):
     try:
         path = request.url.path
-
         if request.method.upper() == "OPTIONS":
             return await call_next(request)
-
         if path in EFFECTIVE_PUBLIC_PATHS:
             return await call_next(request)
-
         for pfx in EFFECTIVE_PUBLIC_PREFIXES:
             if path.startswith(pfx):
                 return await call_next(request)
-
         if allow_all():
             return await call_next(request)
-
         a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
         x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
         token = extract_token(request, a_hdr, x_hdr)
         if not token_matches(token):
             return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
-
         return await call_next(request)
-
     except Exception:
         logger.exception("validate_token: middleware call_next failed for %s", request.url.path)
         return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_validate_token_failed"})
@@ -276,8 +262,9 @@ else:
         "routes.trade",
         "routes.auto_trade",
         "routes.ops_ui",
-        "routes.ops_flags",       # 👈 חדש
-        "routes.position_ops",    # 👈 חדש
+        "routes.ops_flags",
+        "routes.position_ops",
+        "routes.calibration",   # 👈 הוספה מפורשת
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -309,7 +296,6 @@ async def health():
 async def debug_health():
     return {"ok":True,"status":"ok","env":os.getenv("ENV","prod"),"version":APP_VERSION}
 
-# NEW: /debug/env
 def _mask(v: str) -> str:
     if not v: return ""
     if len(v) <= 8: return "*" * len(v)
@@ -339,7 +325,6 @@ if not _route_exists("/status/executor"):
     async def status_executor():
         st = exec_get_counters(); return {"ok":True, **st}
 
-# /status/all
 if not _route_exists("/status/all"):
     @app.get("/status/all")
     async def status_all():
@@ -357,7 +342,6 @@ if not _route_exists("/status/all"):
             "binance_ping_ok": ping_ok
         }
 
-# auth status/public paths (public)
 try:
     from utils.auth import get_loaded_tokens, get_public_paths
 except Exception:
@@ -370,7 +354,6 @@ if not _route_exists("/status/auth"):
         toks = get_loaded_tokens(mask=True); public = get_public_paths()
         return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
 
-# public price
 @app.get("/price/{symbol}")
 async def price(symbol: str):
     src = "binance_fapi"; ts = int(time.time()*1000); err = ""
@@ -381,7 +364,6 @@ async def price(symbol: str):
         p = None; ok = False; err = str(e)
     return {"ok":ok,"symbol":symbol.upper(),"price":float(p) if p is not None else None,"source":src,"ts":ts,"error":err}
 
-# readiness
 @app.get("/readyz")
 async def readyz():
     details: Dict[str, Any] = {}; err: Optional[str] = None
@@ -400,7 +382,6 @@ async def readyz():
         except Exception: details[f"price_{s}"] = None
     return {"ok":(err is None), "error":err, "details":details}
 
-# flush confirm-store
 @app.post("/flush")
 async def flush_kill_switch():
     done = False
@@ -412,7 +393,6 @@ async def flush_kill_switch():
             logger.warning({"event":"flush_failed","err":str(e)})
     return {"ok":True,"flushed":done}
 
-# --- debug auth ---
 try:
     from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
 except Exception:
@@ -429,13 +409,11 @@ async def _debug_auth(request: Request):
             "extracted_token":t,"matches":bool(_token_matches(t)),
             "tokens_loaded":_get_loaded_tokens(mask=True)}
 
-# --- debug routes listing ---
 @app.get("/_debug/routes", include_in_schema=False)
 async def _debug_routes():
     paths = sorted({getattr(r, "path", None) for r in app.router.routes if getattr(r, "path", None)})
     return {"paths": paths}
 
-# --- ops digest/eod now (optional) ---
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
     await send_ops_digest_now(hours)
@@ -446,7 +424,6 @@ async def ops_eod_now():
     await send_eod_report_now()
     return {"ok":True,"sent":True}
 
-# ---------- UI: /ui/dashboard ----------
 @app.get("/ui/dashboard", include_in_schema=False)
 async def ui_dashboard():
     p = Path("static/dashboard/index.html")
@@ -455,7 +432,6 @@ async def ui_dashboard():
     html = "<!doctype html><meta charset='utf-8'><body><h3 style='font-family:sans-serif'>Dashboard not found</h3><p>Put your file at <code>static/dashboard/index.html</code>.</p></body>"
     return HTMLResponse(html)
 
-# ---------- startup hooks ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -512,6 +488,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
