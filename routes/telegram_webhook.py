@@ -6,29 +6,23 @@ from fastapi import APIRouter, Request, HTTPException, Header
 import httpx
 
 logger = logging.getLogger("algogpt.telegram.webhook")
-
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
-# ─────────── Env / Auth ───────────
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 ADMIN_ONLY = str(os.getenv("TELEGRAM_ADMIN_ONLY", "1")).lower() in ("1","true","yes","on")
 ADMIN_IDS = {s.strip() for s in (os.getenv("TELEGRAM_ADMIN_IDS","") or "").split(",") if s.strip()}
 
-# קיבוע parse mode: רק HTML נתמך (הטקסטים משתמשים ב-<b> וכו')
 _raw_pm = os.getenv("TELEGRAM_PARSE_MODE", "").strip().upper()
-PM_ENV: Optional[str] = "HTML" if _raw_pm == "HTML" else None  # None => לא שולחים parse_mode
+PM_ENV: Optional[str] = "HTML" if _raw_pm == "HTML" else None
 
 def _allowed_user(uid: int) -> bool:
     if not ADMIN_ONLY:
         return True
     return str(uid) in ADMIN_IDS
 
-# ─────────── Small helpers ───────────
 _TAG_RE = re.compile(r"<[^>]+>")
-
 def _to_plain(text: str) -> str:
-    # המרה עדינה לטקסט “נקי” אם אין parse_mode
     return _TAG_RE.sub("", text).replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
@@ -41,15 +35,14 @@ async def _reply(chat_id: int, text: str, *, html: bool = True) -> None:
         "text": text if use_html else (_to_plain(text) if html else text),
         "disable_web_page_preview": True,
     }
-    if use_html:
-        payload["parse_mode"] = "HTML"
+    if use_html: payload["parse_mode"] = "HTML"
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
             await cli.post(url, json=payload)
     except Exception as e:
         logger.warning(f"[tg] sendMessage failed: {e}")
 
-# ─────────── Status Providers (fallback-safe) ───────────
+# Fallback-safe status helpers (unchanged from your version)
 try:
     from utils.runtime_counters import ws_get_counters as _ws_get_counters
 except Exception:
@@ -60,37 +53,34 @@ try:
     from utils.runtime_counters import exec_get_counters as _exec_get_counters
 except Exception:
     def _exec_get_counters() -> Dict[str, Any]:
-        return {
-            "tick_ewma_ms": 0.0, "tick_p95_ms": None, "tick_p99_ms": None,
-            "last_tick_age_sec": None, "timeouts_burst": 0,
-            "no_trade_streak": 0, "current_interval": 0,
-        }
+        return {"tick_ewma_ms": 0.0, "tick_p95_ms": None, "tick_p99_ms": None,
+                "last_tick_age_sec": None, "timeouts_burst": 0,
+                "no_trade_streak": 0, "current_interval": 0}
 
 try:
     from utils.telegram_notifier import set_explain_enabled, get_explain_enabled
 except Exception:
-    def set_explain_enabled(v: bool) -> None:  # type: ignore
-        pass
-    def get_explain_enabled() -> bool:  # type: ignore
-        return False
+    def set_explain_enabled(v: bool) -> None: ...
+    def get_explain_enabled() -> bool: return False
 
 try:
     from utils.binance_client import get_open_positions as _get_open_positions
 except Exception:
-    def _get_open_positions() -> List[Dict[str, Any]]:
-        return []
+    def _get_open_positions() -> List[Dict[str, Any]]: return []
 
-# ─────────── ConfirmStore & Callback Idempotency ───────────
+# ConfirmStore (now with approve/reject/run)
 try:
-    from utils.trade_executor import ConfirmStore
+    from utils.approvals import ConfirmStore  # <<— NOTE: import from approvals
 except Exception:
     class ConfirmStore:  # type: ignore
         @staticmethod
         def get(_cid: str) -> Optional[Dict[str, Any]]: return None
         @staticmethod
-        def approve(_cid: str, approver: Optional[str] = None) -> None: ...
+        def approve(_cid: str, approver: Optional[str] = None) -> Dict[str, Any]: return {"ok":False}
         @staticmethod
-        def reject(_cid: str, approver: Optional[str] = None) -> None: ...
+        def reject(_cid: str, approver: Optional[str] = None) -> Dict[str, Any]: return {"ok":False}
+        @staticmethod
+        async def run(_cid: str) -> Dict[str, Any]: return {"ok":False,"error":"trade executor missing"}
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 try:
@@ -117,8 +107,7 @@ def _cbq_seen(cbq_id: str, ttl: int = 30) -> bool:
     return False
 
 async def _tg_answer_callback(token: str, cbq_id: str, text: str) -> None:
-    if not (token and cbq_id):
-        return
+    if not (token and cbq_id): return
     url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
@@ -127,20 +116,14 @@ async def _tg_answer_callback(token: str, cbq_id: str, text: str) -> None:
         logger.warning(f"[tg] answerCallbackQuery failed: {e}")
 
 async def _tg_disable_kb(token: str, chat_id: int, message_id: int) -> None:
-    if not (token and chat_id and message_id):
-        return
+    if not (token and chat_id and message_id): return
     url = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
     try:
         async with httpx.AsyncClient(timeout=6.0) as cli:
-            await cli.post(url, json={
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "reply_markup": {"inline_keyboard": []}
-            })
+            await cli.post(url, json={"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}})
     except Exception as e:
         logger.warning(f"[tg] editMessageReplyMarkup failed: {e}")
 
-# ─────────── UI Strings ───────────
 HELP_TEXT_HTML = (
     "🤖 <b>AlgoGPT Bot</b> — Help / עזרה\n\n"
     "• /help — עזרה\n"
@@ -153,8 +136,7 @@ HELP_TEXT_HTML = (
 HELP_TEXT_PLAIN = _to_plain(HELP_TEXT_HTML)
 
 def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
-    if not rows:
-        return "אין פוזיציות פתוחות."
+    if not rows: return "אין פוזיציות פתוחות."
     lines = []
     for p in rows[:15]:
         try:
@@ -163,22 +145,16 @@ def _fmt_positions(rows: List[Dict[str, Any]]) -> str:
             entry = float(p.get("entryPrice") or 0.0)
             side = "LONG" if amt > 0 else "SHORT"
             lines.append(f"• <b>{sym}</b> {side} qty={abs(amt):.4f} @ {entry:.4f}")
-        except Exception:
-            continue
+        except Exception: continue
     extra = len(rows) - len(lines)
-    if extra > 0:
-        lines.append(f"… ועוד {extra} פריטים")
-    txt = "\n".join(lines)
-    return txt if PM_ENV == "HTML" else _to_plain(txt)
+    if extra > 0: lines.append(f"… ועוד {extra} פריטים")
+    return "\n".join(lines) if PM_ENV == "HTML" else _to_plain("\n".join(lines))
 
 def _fmt_status() -> str:
-    ws = _ws_get_counters()
-    ex = _exec_get_counters()
+    ws = _ws_get_counters(); ex = _exec_get_counters()
     def _n(v):
-        try:
-            return f"{float(v):.2f}"
-        except Exception:
-            return str(v)
+        try: return f"{float(v):.2f}"
+        except Exception: return str(v)
     ws_state = "OK" if int(ws.get("ws_up") or 0) == 1 and (ws.get("last_event_age_sec") or 0) <= int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC","10")) else "WARN"
     ex_state = "OK"
     age = ex.get("last_tick_age_sec")
@@ -192,48 +168,33 @@ def _fmt_status() -> str:
         f"WS: up={ws.get('ws_up')} ttl={ws.get('last_event_age_sec')}s ewma={_n(ws.get('ewma_latency_ms'))}ms rc={ws.get('reconnects')}",
         f"EXE: age={ex.get('last_tick_age_sec')}s ewma={_n(ex.get('tick_ewma_ms'))} p95={_n(ex.get('tick_p95_ms'))} tb={ex.get('timeouts_burst')} itv={ex.get('current_interval')}",
     ]
-    txt = "\n".join(lines)
-    return txt if PM_ENV == "HTML" else _to_plain(txt)
+    return "\n".join(lines) if PM_ENV == "HTML" else _to_plain("\n".join(lines))
 
-# ─────────── Simple ping (לא מאובטח, לא דורש TOKEN) ───────────
 @router.get("/ping")
 async def ping() -> Dict[str, Any]:
     return {"ok": True, "ts": int(time.time())}
 
-# ─────────── Webhook Endpoint (Telegram) ───────────
 @router.post("/webhook")
-async def webhook(
-    req: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
-):
-    # פשוט מפנה לאותו מעבד של /commands
+async def webhook(req: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     return await commands(req, x_telegram_bot_api_secret_token)
 
-# ─────────── Commands Endpoint (messages + callbacks) ───────────
 @router.post("/commands")
-async def commands(
-    req: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
-):
+async def commands(req: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     if not TG_TOKEN:
         raise HTTPException(status_code=400, detail="Missing TELEGRAM_BOT_TOKEN")
-
-    # הגנת Secret (תואם /webhook)
     if WEBHOOK_SECRET and (not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token.strip() != WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Invalid telegram secret")
-
     try:
         update = await req.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Bad payload")
 
-    # --- callback_query: אישור/ביטול טרייד ---
+    # ---- callback_query: approval flow ----
     cbq = update.get("callback_query")
     if cbq:
         cbq_id = cbq.get("id") or ""
         if _cbq_seen(cbq_id):
             return {"ok": True}
-
         from_user = cbq.get("from") or {}
         uid = int(from_user.get("id") or 0)
         msg = cbq.get("message") or {}
@@ -247,7 +208,6 @@ async def commands(
             return {"ok": True}
 
         if not chat_id or not message_id:
-            # עונים כדי להעלים את הספינר גם אם אין לנו הודעה לעריכה
             await _tg_answer_callback(TG_TOKEN, cbq_id, "עודכן")
             return {"ok": True}
 
@@ -260,7 +220,7 @@ async def commands(
             await _tg_answer_callback(TG_TOKEN, cbq_id, "לא נתמך")
             return {"ok": True}
 
-        rec = ConfirmStore.get(cid) if hasattr(ConfirmStore, "get") else None
+        rec = ConfirmStore.get(cid)
         if not rec or rec.get("status") != "pending":
             await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
             await _tg_answer_callback(TG_TOKEN, cbq_id, "פג תוקף/כבר טופל")
@@ -268,9 +228,10 @@ async def commands(
 
         if action == "APPROVE":
             ConfirmStore.approve(cid, approver=str(uid))
+            run_res = await ConfirmStore.run(cid)  # ← מריץ את ההרצה בפועל!
             await _tg_answer_callback(TG_TOKEN, cbq_id, "אושר ✅")
             await _tg_disable_kb(TG_TOKEN, chat_id, message_id)
-            return {"ok": True}
+            return {"ok": True, "run": run_res}
 
         if action == "REJECT":
             ConfirmStore.reject(cid, approver=str(uid))
@@ -281,7 +242,7 @@ async def commands(
         await _tg_answer_callback(TG_TOKEN, cbq_id, "פעולה לא מזוהה")
         return {"ok": True}
 
-    # --- text messages (/help, /status, ...) ---
+    # ---- text commands ----
     msg = update.get("message") or {}
     chat = msg.get("chat") or {}
     chat_id = chat.get("id")
@@ -303,50 +264,37 @@ async def commands(
     cmd = parts[0].lower()
 
     if cmd == "/ping":
-        await _reply(chat_id, f"pong ✅ {int(time.time())}", html=False)
-        return {"ok": True}
+        await _reply(chat_id, f"pong ✅ {int(time.time())}", html=False); return {"ok": True}
 
     if cmd == "/status":
-        await _reply(chat_id, _fmt_status(), html=bool(PM_ENV == "HTML"))
-        return {"ok": True}
+        await _reply(chat_id, _fmt_status(), html=bool(PM_ENV == "HTML")); return {"ok": True}
 
     if cmd == "/positions":
         rows = _get_open_positions() or []
-        await _reply(chat_id, _fmt_positions(rows), html=bool(PM_ENV == "HTML"))
-        return {"ok": True}
+        await _reply(chat_id, _fmt_positions(rows), html=bool(PM_ENV == "HTML")); return {"ok": True}
 
     if cmd == "/explain_on":
-        set_explain_enabled(True)
-        await _reply(chat_id, "🟢 Explain-Trade: ON", html=False)
-        return {"ok": True}
+        set_explain_enabled(True); await _reply(chat_id, "🟢 Explain-Trade: ON", html=False); return {"ok": True}
 
     if cmd == "/explain_off":
-        set_explain_enabled(False)
-        await _reply(chat_id, "⚪️ Explain-Trade: OFF", html=False)
-        return {"ok": True}
+        set_explain_enabled(False); await _reply(chat_id, "⚪️ Explain-Trade: OFF", html=False); return {"ok": True}
 
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.", html=False)
     return {"ok": True}
 
-# ─────────── REST status (WS/Executor) ───────────
 def _num_or_none(v: Any) -> Optional[float]:
-    try:
-        return float(v)
-    except Exception:
-        return None
+    try: return float(v)
+    except Exception: return None
 
 @router.get("/status")
 async def telegram_status() -> Dict[str, Any]:
-    ws = _ws_get_counters()
-    ex = _exec_get_counters()
-
+    ws = _ws_get_counters(); ex = _exec_get_counters()
     ttl_alert = int(os.getenv("STATUS_PRICE_TTL_ALERT_SEC", "10"))
     exec_stale = int(os.getenv("EXEC_TICK_STALE_WARN_SEC", "30"))
     timeouts_burst_alert = int(os.getenv("EXEC_TIMEOUT_BURST_ALERT", "3"))
 
     ws_state = "OK" if int(ws.get("ws_up") or 0) == 1 and (ws.get("last_event_age_sec") or 0) <= ttl_alert else "WARN"
     ex_state = "OK"
-    age = ws.get("last_event_age_sec")
     ex_age = ex.get("last_tick_age_sec")
     if isinstance(ex_age, (int, float)) and ex_age is not None and ex_age > exec_stale:
         ex_state = "WARN"
@@ -354,7 +302,6 @@ async def telegram_status() -> Dict[str, Any]:
         ex_state = "WARN"
 
     combined = "PAUSE" if ws_state == "WARN" and (ws.get("last_event_age_sec") or 0) > ttl_alert * 3 else ("WARN" if ("WARN" in (ws_state, ex_state)) else "OK")
-
     return {
         "ok": True,
         "state": combined,
