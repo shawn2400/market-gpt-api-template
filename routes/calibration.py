@@ -1,4 +1,4 @@
-# routes/calibration.py  (LIVE)
+# routes/calibration.py  (LIVE, fixed)
 from __future__ import annotations
 import os, json, time
 from pathlib import Path
@@ -37,7 +37,6 @@ def _tfs() -> List[str]:
 def _load_trades_log(path: str) -> List[Dict[str, Any]]:
     p = Path(path)
     if not p.exists():
-        # במקום להפיל 500 – נחזיר רשימה ריקה
         return []
     raw = json.loads(p.read_text(encoding="utf-8"))
     if isinstance(raw, list):
@@ -78,13 +77,11 @@ def _extract_ref_by_symbol_tf(rows: List[Dict[str, Any]],
     out: Dict[str, List[Dict[str, Any]]] = {}
     syms = {s.upper() for s in symbols}
     tfs_set = {t for t in tfs}
-    # אם rows ריק – נייצר מפתחות ריקים לכל הצמדים/TF כדי לבנות jobs
     if not rows:
         for s in syms:
             for t in tfs_set:
                 out[f"{s}_{t}"] = []
         return out
-
     for r in rows:
         sym = (r.get("symbol") or r.get("sym") or r.get("pair") or "").upper()
         tf  =  (r.get("tf") or r.get("timeframe") or r.get("interval") or "").lower()
@@ -92,7 +89,7 @@ def _extract_ref_by_symbol_tf(rows: List[Dict[str, Any]],
             ts = _iso_ts(r.get("ts") or r.get("close_time") or r.get("time"))
             side = _normalize_side(r.get("side") or r.get("action") or r.get("dir"))
             if ts and side in ("long","short"):
-                key = f"{sym}_{tf}"]
+                key = f"{sym}_{tf}"
                 out.setdefault(key, []).append({"ts": ts, "side": side})
     return out
 
@@ -167,7 +164,7 @@ def _grid_for_mode(name: str, mode: str) -> dict:
     return base.get(name, {})
 
 # -------------------- Schemas (Pydantic-free) --------------------
-class BuildJobsRequest(Dict[str, Any]):
+class BuildJobsRequest(Dict[str, Any]):  # FastAPI יקבל dict
     pass
 
 class RunLiveRequestModel:
@@ -201,21 +198,6 @@ def calib_status():
 
 @router.post("/build-jobs")
 def build_jobs(req: Dict[str, Any] = Body(default={})):
-    """
-    בונה config/calib_jobs.json מתוך לוג טריידים (אם אין – ממשיך עם ref ריק).
-
-    Body (אופציונלי):
-      - trades_log_path (דיפולט: data/trades_log.json)
-      - indicators: ['mc_b','alpha','qqe', ...] או "all"
-      - param_grids: {name: {param: [values...]}}
-      - tol_bars: דיפולט 1
-      - limit: דיפולט 800
-      - market: דיפולט DEFAULT_MARKET
-      - grid_mode: 'auto'/'lite'/'plus'/'pro' (דיפולט: ENV)
-      - max_combos_per_job: דיפולט ENV (CALIB_MAX_COMBOS_PER_JOB=120)
-      - random_seed: דיפולט ENV (CALIB_RANDOM_SEED=1337)
-      - time_budget_sec: רמז לזמן ריצה מקס' לכל job (אופציונלי)
-    """
     trades_log_path = req.get("trades_log_path") or "data/trades_log.json"
     grid_mode_req = (req.get("grid_mode") or CALIB_GRID_MODE_DEFAULT or "auto").strip().lower()
     tol_bars = int(req.get("tol_bars", 1))
@@ -297,9 +279,6 @@ def build_jobs(req: Dict[str, Any] = Body(default={})):
 
 @router.post("/run-live")
 def run_live(req: Dict[str, Any] = Body(default={})):
-    """
-    אם חסר calib_jobs.json — יבנה אותו ואז יריץ כיול.
-    """
     if not _calib_enabled(req.get("force_enable", False)):
         return {"ok": False, "error": "calibration_disabled", "hint": "Set CALIB_ENABLE=1 or use force_enable"}
 
