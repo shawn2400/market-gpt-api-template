@@ -516,6 +516,249 @@ async def execute_trade_live(
 
     if must_approve and not (os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")):
         chat_id = int(telegram_chat_id or
+        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
+        if not chat_id:
+            return {"ok": False, "reason": "telegram_chat_id_required"}
+        payload = {"symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage, "quality": score_for_budget, "budget": float(budget or 0.0)}
+        approval = await require_approval(chat_id, payload)
+        if approval.get("status") != "approved":
+            return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
+
+    # ביטול TP/SL ישנים לפני חימוש חדשים
+    _cancel_old_closing_orders(sym)
+
+    # עדכון מינוף (לא מפיל את הזרימה אם נכשל)
+    try:
+        set_leverage(sym, int(dyn_leverage))
+    except Exception as e:
+        log.warning("set_leverage failed: %s", e)
+
+    # כניסה היברידית (LIMIT+STOP עם הסלמה לשוק)
+    entry_res = await _place_hybrid_entry(sym, side, qty, float(base_price), entry, position_side)
+    if not entry_res or (entry_res.get("ok") is False):
+        return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
+
+    sanity_ok = bool(entry_res.get("sanity_ok", True))
+    sanity_bps = entry_res.get("sanity_bps")
+
+    # אכיפת sanity: אם חרגנו > POST_FILL_SANITY_BPS — סגירה מיידית
+    if ENFORCE_POST_FILL_SANITY and not sanity_ok:
+        rb = _safe_close_position(sym, side, qty, position_side=position_side)
+        return {
+            "ok": False,
+            "reason": "post_fill_sanity_failed",
+            "sanity_bps": sanity_bps,
+            "rolled_back": True,
+            "rollback": rb,
+            "entry_result": entry_res,
+        }
+
+    plan: Dict[str, Any] = {
+        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage,
+        "base_price": float(base_price), "dry_run": False,
+        "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
+        "gate": gate, "risk": risk, "entry_result": entry_res,
+        "tp_orders": [], "sl_orders": [],
+        "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
+        "position_side": position_side, "reduce_only": reduce_only,
+        "budget_used": float(budget or 0.0), "quality": score_for_budget,
+        "adx": adx_for_lev,
+        "trail": {
+            "enabled": trail_enabled,
+            "atr_mult": trail_mult,
+            "freeze": trail_freeze_enabled,
+            "callback_rate_pct": trail_callback_pct,
+            "binance_limits_pct": [TRAIL_CALLBACK_MIN_PCT, TRAIL_CALLBACK_MAX_PCT],
+        },
+    }
+
+    close_side = _close_side_for(side)
+
+    # בניית סולמות TP/SL (SL סטטי רק אם trail כבוי)
+    ladders = _build_ladders(
+        sym, side, qty,
+        ([tp] if tp is not None else tp_targets), tp_splits,
+        (None if trail_enabled else ([sl] if sl is not None else sl_targets)), sl_splits
+    )
+    plan["tp_orders"] = ladders["tp_orders"]
+    plan["sl_orders"] = ladders["sl_orders"]
+
+    def _place_with_retry(args: Dict[str, Any]) -> Dict[str, Any]:
+        """שליחת הזמנה עם ניסוי חוזר ללא reduceOnly במקרה של -1106."""
+        try:
+            return futures_create_order(**args)
+        except Exception as e:
+            msg = str(e).lower()
+            code = getattr(e, "code", None)
+            if ("reduceonly" in msg or "reduce only" in msg or "-1106" in msg or code == -1106):
+                a2 = dict(args)
+                a2.pop("reduceOnly", None)
+                return futures_create_order(**a2)
+            raise
+
+    tp_success = False
+    sl_success = False
+
+    # ---- חימוש TP ----
+    for o in plan["tp_orders"]:
+        typ = str(o.get("type")).upper()
+        args: Dict[str, Any] = dict(
+            symbol=sym,
+            side=close_side,
+            type=typ,
+            workingType="MARK_PRICE",
+        )
+        eff_ps = _effective_position_side(position_side)
+        if eff_ps != "BOTH":
+            args["positionSide"] = eff_ps  # Hedge: LONG/SHORT
+
+        # MARKET-trigger (STOP_MARKET/TAKE_PROFIT_MARKET)
+        if "MARKET" in typ:
+            args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+        else:
+            args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+            args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+            args["timeInForce"] = "GTC"
+
+        args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
+
+        # ⚠️ One-Way + MARKET trigger → לא לשלוח reduceOnly (ימנע -1106)
+        is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
+        if not (is_market_trigger and eff_ps == "BOTH"):
+            args["reduceOnly"] = True
+
+        try:
+            resp = _place_with_retry(args)
+            o["response"] = resp
+            if typ.startswith("TAKE_PROFIT"):
+                tp_success = tp_success or bool(resp.get("orderId"))
+        except Exception as e:
+            o["response"] = {"ok": False, "error": str(e)}
+
+    # ---- חימוש SL (trailing או סטטי) ----
+    if trail_enabled:
+        eff_ps = _effective_position_side(position_side)
+        qty_str, _ = _q_qty(sym, qty)
+
+        if trail_callback_pct is None:
+            # Fallback בטווח המותר של Binance
+            trail_callback_pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, 0.5))
+
+        args: Dict[str, Any] = dict(
+            symbol=sym,
+            side=close_side,
+            type="TRAILING_STOP_MARKET",
+            callbackRate=f"{float(trail_callback_pct):.2f}",
+            workingType="MARK_PRICE",
+            quantity=qty_str,
+        )
+
+        # הפעלה סביב ה-mark כדי להפעיל מיד trailing
+        mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
+        activation = _offset_bps(mark_now, (-STOP_BAND_BPS if side == "BUY" else +STOP_BAND_BPS), +1)
+        args["activationPrice"] = _q_price(sym, float(activation))[0]
+
+        if eff_ps != "BOTH":
+            args["positionSide"] = eff_ps
+            args["reduceOnly"] = True
+
+        try:
+            resp = _place_with_retry(args)
+            plan["sl_orders"].append({
+                "type": "TRAILING_STOP_MARKET",
+                "callbackRate": float(trail_callback_pct),
+                "activationPrice": args["activationPrice"],
+                "qty": float(qty),
+                "response": resp,
+            })
+            sl_success = sl_success or bool(resp.get("orderId"))
+        except Exception as e:
+            plan["sl_orders"].append({
+                "type": "TRAILING_STOP_MARKET",
+                "callbackRate": float(trail_callback_pct),
+                "activationPrice": args.get("activationPrice"),
+                "qty": float(qty),
+                "response": {"ok": False, "error": str(e)},
+            })
+    else:
+        for o in plan["sl_orders"]:
+            typ = str(o.get("type")).upper()
+            args: Dict[str, Any] = dict(
+                symbol=sym,
+                side=close_side,
+                type=typ,
+                workingType="MARK_PRICE",
+            )
+            eff_ps = _effective_position_side(position_side)
+            if eff_ps != "BOTH":
+                args["positionSide"] = eff_ps
+
+            if "MARKET" in typ:
+                args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+            else:
+                args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+                args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+                args["timeInForce"] = "GTC"
+
+            args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
+
+            is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
+            if not (is_market_trigger and eff_ps == "BOTH"):
+                args["reduceOnly"] = True
+
+            try:
+                resp = _place_with_retry(args)
+                o["response"] = resp
+                if typ.startswith("STOP"):
+                    sl_success = sl_success or bool(resp.get("orderId"))
+            except Exception as e:
+                o["response"] = {"ok": False, "error": str(e)}
+
+    if REQUIRE_TP_AND_SL and not (tp_success and (sl_success or trail_enabled)):
+        rb = _safe_close_position(sym, side, qty, position_side=position_side)
+        plan.update({
+            "ok": False,
+            "reason": "tp_sl_arming_failed",
+            "rolled_back": True,
+            "rollback": rb,
+        })
+        return plan
+
+    return plan
+
+
+# ─────────── Rollback helper ───────────
+def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "BOTH") -> Dict[str, Any]:
+    eff_ps = _effective_position_side(_normalize_position_side(position_side))
+    close_side = _close_side_for(side)
+    args = dict(
+        symbol=sym,
+        side=close_side,
+        type="MARKET",
+        quantity=_q_qty(sym, qty)[0],
+    )
+    if eff_ps != "BOTH":
+        args["positionSide"] = eff_ps
+        args["reduceOnly"] = True  # Hedge תקין
+    try:
+        return {"ok": True, "response": futures_create_order(**args)}
+    except Exception as e:
+        msg = str(e).lower()
+        if "reduceonly" in msg or "reduce only" in msg or "-1106" in msg or getattr(e, "code", None) == -1106:
+            args2 = dict(args); args2.pop("reduceOnly", None)
+            try:
+                return {"ok": True, "response": futures_create_order(**args2)}
+            except Exception as e2:
+                return {"ok": False, "error": str(e2)}
+        return {"ok": False, "error": str(e)}
+
+
+__all__ = [
+    "execute_trade_live",
+    "ConfirmStore",
+    "send_confirm_request",
+    "require_approval",
+]
 
 
 
