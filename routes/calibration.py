@@ -92,7 +92,7 @@ def _extract_ref_by_symbol_tf(rows: List[Dict[str, Any]],
             ts = _iso_ts(r.get("ts") or r.get("close_time") or r.get("time"))
             side = _normalize_side(r.get("side") or r.get("action") or r.get("dir"))
             if ts and side in ("long","short"):
-                key = f"{sym}_{tf}"
+                key = f"{sym}_{tf}"]
                 out.setdefault(key, []).append({"ts": ts, "side": side})
     return out
 
@@ -316,6 +316,7 @@ def run_live(req: Dict[str, Any] = Body(default={})):
         return {"ok": True, "jobs": jobs_path, "results": results, "elapsed_sec": round(time.time()-t0,2)}
     except Exception as e:
         return {"ok": False, "error": "run_failed", "details": str(e), "jobs": jobs_path}
+
 
 
 
