@@ -1,6 +1,6 @@
 # utils/indicators_registry.py
 from __future__ import annotations
-import importlib, json
+import importlib, json, os
 from pathlib import Path
 from typing import Dict, Any
 
@@ -18,11 +18,13 @@ REGISTRY = {
     "vol_regime": "utils.indicators_extras:vol_regime",
     "cvd":        "utils.orderflow_cvd:cvd",
     "oi":         "utils.oi_features:oi_impulse_div",
-    "funding":    "utils.funding_bias:funding_bias",      # async
+    "funding":    "utils.funding_bias:funding_bias",  # async
     "basis":      "utils.basis:perp_spot_basis",
 }
 
-PARAMS_DIR = Path("params/optimized"); PARAMS_DIR.mkdir(parents=True, exist_ok=True)
+# מכבד ENV (ברירת מחדל כמו קודם)
+PARAMS_DIR = Path(os.getenv("PARAMS_DIR", "params/optimized"))
+PARAMS_DIR.mkdir(parents=True, exist_ok=True)
 
 def _load_callable(path: str):
     mod, fn = path.split(":")
@@ -37,20 +39,20 @@ def load_params(symbol: str, tf: str, name: str) -> Dict[str, Any] | None:
 def run_indicator(name: str, df, *, symbol: str, tf: str, **feeds) -> Dict[str, Any]:
     call = _load_callable(REGISTRY[name])
     params = load_params(symbol, tf, name)
-    # funding הוא async – אל תקרא כאן (טפל בו ב-fuser/scheduler)
     if name == "funding":
         raise RuntimeError("funding is async; call separately")
     return call.compute(df, tf=tf, params=params or {}, **feeds)
 
-def run_all(df, *, symbol: str, tf: str, subset: list[str] | None = None, **feeds) -> Dict[str, Dict[str,Any]]:
+def run_all(df, *, symbol: str, tf: str, subset: list[str] | None = None, **feeds) -> Dict[str, Dict[str, Any]]:
     names = subset or list(REGISTRY.keys())
-    out = {}
+    out: Dict[str, Dict[str, Any]] = {}
     for n in names:
-        if n == "funding":  # דלג – לטפל בנפרד
+        if n == "funding":
             continue
         try:
             out[n] = run_indicator(n, df, symbol=symbol, tf=tf, **feeds)
         except Exception as e:
             out[n] = {"error": str(e)}
     return out
+
 
