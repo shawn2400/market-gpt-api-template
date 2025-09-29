@@ -5,8 +5,7 @@ import time, secrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator
-from pydantic.fields import FieldValidationInfo
+from pydantic import BaseModel, Field, field_validator, FieldValidationInfo  # v2 import
 import httpx
 
 from utils.auth import require_api_key
@@ -232,6 +231,7 @@ TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
