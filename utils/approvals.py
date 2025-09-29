@@ -1,9 +1,12 @@
 # utils/approvals.py
 from __future__ import annotations
-import os, time, hashlib, json, asyncio, inspect
-from typing import Dict, Any, List, Optional, Tuple, Callable
 
-# ----------------- helpers -----------------
+import os, time, hashlib, json, asyncio, logging
+from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
+
+log = logging.getLogger("algogpt.approvals")
+
+# -------- helpers ----------
 def _as_bool(s: Optional[str], default: bool = False) -> bool:
     return str(s).strip().lower() in {"1","true","yes","on"} if s is not None else default
 def _as_float(s: Optional[str], default: float) -> float:
@@ -13,7 +16,7 @@ def _as_int(s: Optional[str], default: int) -> int:
     try: return int(str(s).strip())
     except Exception: return default
 
-# ----------------- env -----------------
+# -------- env / policy ----------
 APPROVAL_ENABLED = _as_bool(os.getenv("APPROVAL_ENABLED","1"), True)
 APPROVAL_SUCCESS_MIN = _as_float(os.getenv("APPROVAL_SUCCESS_MIN","60"), 60.0)
 APPROVAL_RR_MIN = _as_float(os.getenv("APPROVAL_RR_MIN","1.30"), 1.30)
@@ -27,13 +30,10 @@ REQUIRE_IN_WATCHLIST = _as_bool(os.getenv("APPROVAL_REQUIRE_WATCHLIST","1"), Tru
 APPROVAL_DUP_COOLDOWN_SEC = _as_int(os.getenv("APPROVAL_DUP_COOLDOWN_SEC","300"), 300)
 MAX_LEVERAGE = _as_int(os.getenv("MAX_LEVERAGE","35"), 35)
 
-# auto-approve knobs (משמש גם ל-require_approval)
-TELEGRAM_AUTO_APPROVE = _as_bool(os.getenv("TELEGRAM_AUTO_APPROVE","0"), False)
-AUTO_APPROVE_BUDGET_MAX_USD = os.getenv("AUTO_APPROVE_BUDGET_MAX_USD")
-AUTO_APPROVE_NIGHT = _as_bool(os.getenv("AUTO_APPROVE_NIGHT","0"), False)
-NIGHT_HOURS = os.getenv("NIGHT_HOURS","00-06")
+TICKET_TTL_SEC = _as_int(os.getenv("CONFIRM_TTL_SEC","180"), 180)
+AUTO_DECIDE_EXPIRED = _as_bool(os.getenv("APPROVAL_AUTO_REJECT_EXPIRED","1"), True)
 
-# ----------------- preflight -----------------
+# -------- recent map for preflight dup ----------
 _recent: Dict[str, float] = {}
 
 def _purge_recent(now: float) -> None:
@@ -45,10 +45,10 @@ def _key_for(tp: Dict[str, Any]) -> str:
     base = {
         "symbol": str(tp.get("symbol","")).upper(),
         "side": str(tp.get("side","")).upper(),
-        "entry": round(float(tp.get("entry",0.0) or 0.0), 8),
-        "sl":    round(float(tp.get("sl",0.0) or 0.0), 8),
+        "entry": round(float(tp.get("entry", tp.get("price",0.0)) or 0.0), 8),
+        "sl":    round(float(tp.get("sl", tp.get("sl_price",0.0)) or 0.0), 8),
         "tp1":   round(float(tp.get("tp1",0.0) or 0.0), 8),
-        "lev":   int(tp.get("leverage") or 0),
+        "lev":   int(tp.get("leverage") or tp.get("lev") or 0),
         "interval": str(tp.get("interval","") or ""),
     }
     raw = json.dumps(base, sort_keys=True, separators=(",",":")).encode("utf-8")
@@ -78,11 +78,13 @@ def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
     try:
         from utils.ws_fallback import is_price_fresh, get_price  # type: ignore
         ok = is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC)
-        px = float(get_price(symbol) or 0.0); return (bool(ok), px if px > 0 else None)
+        px = float(get_price(symbol) or 0.0)
+        return (bool(ok), px if px > 0 else None)
     except Exception:
         try:
             from utils.binance_client import get_price as http_price  # type: ignore
-            px = float(http_price(symbol) or 0.0); return (px > 0, px if px > 0 else None)
+            px = float(http_price(symbol) or 0.0)
+            return (px > 0, px if px > 0 else None)
         except Exception:
             return (False, None)
 
@@ -115,9 +117,9 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
 
     symbol = str(tp.get("symbol","")).upper()
     side = str(tp.get("side","")).upper()
-    entry = float(tp.get("entry") or 0.0)
-    sl    = float(tp.get("sl") or 0.0)
-    tp1   = float(tp.get("tp1") or 0.0)
+    entry = float(tp.get("entry", tp.get("price", 0.0)) or 0.0)
+    sl    = float(tp.get("sl", tp.get("sl_price", 0.0)) or 0.0)
+    tp1   = float(tp.get("tp1", 0.0) or 0.0)
 
     if not symbol: out_errors.append("missing_symbol")
     if side not in ("BUY","SELL","LONG","SHORT"): out_errors.append("bad_side")
@@ -150,12 +152,12 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
         except Exception:
             out_warns.append("success_pct_not_numeric")
 
-    lev = int(tp.get("leverage") or 0)
+    lev = int(tp.get("leverage") or tp.get("lev") or 0)
     if lev <= 0: out_warns.append("missing_leverage")
     elif lev > MAX_LEVERAGE: out_errors.append(f"leverage_above_cap(x{lev}>x{MAX_LEVERAGE})")
     metrics["leverage"] = lev
 
-    budget = tp.get("budget")
+    budget = tp.get("budget") or tp.get("budget_usd")
     if budget is not None and lev > 0:
         try:
             notional = float(budget) * float(lev); metrics["notional_est"] = notional
@@ -179,179 +181,148 @@ def can_auto_forward(tp: Dict[str, Any]) -> bool:
     res = preflight_proposal(tp, mutate_state=False)
     return bool(res.get("ok", False))
 
-# ----------------- ConfirmStore -----------------
-_Handler = Callable[[], Any]  # may be sync function, async function, or return a coroutine
+# ========================= ConfirmStore =========================
+# שומר כרטיסי אישור + handler לביצוע בפועל
+Handler = Callable[[], Awaitable[Dict[str, Any]]]
 
 class ConfirmStore:
-    """
-    חנות קטנה לאישורים:
-      - create_with_id(id, plan)
-      - set_handler(id, handler)
-      - has(id) / get(id)
-      - decide(id, approved)
-      - run(id)  -> מפעיל handler אם אושר
-    """
-    _P: Dict[str, Dict[str, Any]] = {}
+    _P: Dict[str, Dict[str, Any]] = {}         # idem -> record
+    _RUN: Dict[str, Handler] = {}              # idem -> async handler
+    _L = asyncio.Lock()
 
     @classmethod
     def pending(cls) -> List[Dict[str, Any]]:
-        return list(cls._P.values())
+        return [dict(v) for v in cls._P.values() if v.get("status") == "pending"]
 
     @classmethod
-    def has(cls, ticket_id: str) -> bool:
-        return ticket_id in cls._P
+    def create(cls, payload: Dict[str, Any], handler: Optional[Handler] = None) -> str:
+        """
+        payload MUST include: symbol, side, leverage/budget/qty (לוגית), ttl_sec (optional)
+        returns idem (ticket id)
+        """
+        idem = str(payload.get("ticket_id") or payload.get("idem") or f"{int(time.time()*1000)}_{hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]}")
+        rec = dict(payload)
+        rec["idem"] = idem
+        rec["ticket_id"] = idem
+        rec["status"] = "pending"
+        rec["created_ts"] = int(time.time())
+        rec["ttl_sec"] = int(payload.get("ttl_sec") or TICKET_TTL_SEC)
+        cls._P[idem] = rec
+        if handler:
+            cls._RUN[idem] = handler
+        return idem
 
     @classmethod
-    def get(cls, ticket_id: str) -> Optional[Dict[str, Any]]:
-        return cls._P.get(ticket_id)
+    def get(cls, idem: str) -> Optional[Dict[str, Any]]:
+        return dict(cls._P.get(idem) or {}) if idem in cls._P else None
 
     @classmethod
-    def create(cls, payload: Dict[str, Any]) -> str:
-        tid = str(payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}")
-        payload = dict(payload); payload["ticket_id"] = tid
-        payload.setdefault("created_ts", int(time.time()))
-        cls._P[tid] = payload
-        return tid
+    def approve(cls, idem: str, approver: Optional[str] = None) -> Dict[str, Any]:
+        it = cls._P.get(idem)
+        if not it:
+            return {"ok": False, "error": "not_found"}
+        if it.get("status") != "pending":
+            return {"ok": False, "error": "not_pending"}
+        it["status"] = "approved"
+        it["approved_ts"] = int(time.time())
+        if approver: it["approved_by"] = str(approver)
+        return {"ok": True, "idem": idem}
 
     @classmethod
-    def create_with_id(cls, ticket_id: str, plan: Dict[str, Any]) -> str:
-        plan = dict(plan)
-        plan["ticket_id"] = ticket_id
-        plan.setdefault("created_ts", int(time.time()))
-        cls._P[ticket_id] = plan
-        return ticket_id
+    def reject(cls, idem: str, approver: Optional[str] = None) -> Dict[str, Any]:
+        it = cls._P.get(idem)
+        if not it:
+            return {"ok": False, "error": "not_found"}
+        if it.get("status") != "pending":
+            return {"ok": False, "error": "not_pending"}
+        it["status"] = "rejected"
+        it["rejected_ts"] = int(time.time())
+        if approver: it["rejected_by"] = str(approver)
+        # אין צורך לשמור handler לאחר דחייה
+        cls._RUN.pop(idem, None)
+        return {"ok": True, "idem": idem}
 
     @classmethod
-    def set_handler(cls, ticket_id: str, handler: _Handler) -> None:
-        it = cls._P.setdefault(ticket_id, {"ticket_id": ticket_id, "created_ts": int(time.time())})
-        it["handler"] = handler
-        it.setdefault("approved", None)
-        it.setdefault("started", False)
+    async def run(cls, idem: str) -> Dict[str, Any]:
+        """
+        מריץ את ה-handler אם הסטטוס 'approved'. מחזיר תוצאה/שגיאה.
+        """
+        it = cls._P.get(idem)
+        if not it:
+            return {"ok": False, "error": "not_found"}
+        if it.get("status") != "approved":
+            return {"ok": False, "error": "not_approved"}
+        h = cls._RUN.pop(idem, None)
+        if not h:
+            return {"ok": False, "error": "trade executor missing"}
+        try:
+            async with cls._L:
+                res = await h()
+        except Exception as e:
+            log.exception("ConfirmStore.run failed")
+            return {"ok": False, "error": str(e)}
+        it["status"] = "executed"
+        it["executed_ts"] = int(time.time())
+        it["result"] = res
+        return {"ok": True, "result": res}
 
     @classmethod
     def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
-        it = cls._P.setdefault(ticket_id, {"ticket_id": ticket_id, "created_ts": int(time.time())})
-        it["approved"] = bool(approved)
-        it["decided_ts"] = int(time.time())
-        return {"ok": True, "approved": bool(approved), "ticket_id": ticket_id}
-
-    @classmethod
-    async def run(cls, ticket_id: str) -> Dict[str, Any]:
-        it = cls._P.get(ticket_id)
-        if not it:
-            return {"ok": False, "error": "not_found"}
-        if not it.get("approved", False):
-            return {"ok": False, "error": "not_approved"}
-        if it.get("started"):
-            return {"ok": True, "already_started": True}
-
-        h = it.get("handler")
-        if not h or not callable(h):
-            return {"ok": False, "error": "handler_missing"}
-
-        it["started"] = True
-        try:
-            # אפשרות 1: פונקציה א-סינכרונית
-            if inspect.iscoroutinefunction(h):
-                asyncio.create_task(h())
-                return {"ok": True, "started": True, "mode": "async_func"}
-            # אפשרות 2: פונקציה שמחזירה קורוטינה
-            res = h()
-            if inspect.iscoroutine(res):
-                asyncio.create_task(res)  # fire-and-forget
-                return {"ok": True, "started": True, "mode": "coroutine_returned"}
-            # אפשרות 3: פונקציה סינכרונית רגילה
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, h)
-            return {"ok": True, "started": True, "mode": "threadpool"}
-        except Exception as e:
-            it["started"] = False
-            return {"ok": False, "error": str(e)}
+        return cls.approve(ticket_id) if approved else cls.reject(ticket_id)
 
     @classmethod
     def flush_all(cls) -> None:
-        cls._P.clear()
+        cls._P.clear(); cls._RUN.clear()
 
-# ----------------- Telegram integration -----------------
+    # aliases
+    flush = reset = flush_all
+
+# ========================= Notifier bridge =========================
 async def send_confirm_request(ticket_id: str, plan: Dict[str, Any]) -> None:
     """
-    Best-effort: ינסה להשתמש ב־utils.telegram_notifier אם קיים.
+    Back-compat shim: שולח הודעת אישור לטלגרם.
     """
     try:
         from utils.telegram_notifier import send_trade_approval  # type: ignore
+        await send_trade_approval(ticket_id, plan)
     except Exception:
-        return
-    try:
-        await send_trade_approval(ticket_id, plan)  # type: ignore
-    except Exception:
-        return
+        pass
 
-# ----------------- Simple require_approval -----------------
-def _parse_ranges(spec: str) -> list[tuple[int,int]]:
-    out: list[tuple[int,int]] = []
-    for part in (spec or "").split(","):
-        part = part.strip()
-        if not part: continue
-        if "-" in part:
-            a,b = part.split("-",1)
-            try: out.append((int(a), int(b)))
-            except Exception: pass
-        else:
-            try: h = int(part); out.append((h,h))
-            except Exception: pass
-    return out
-
-def _in_ranges(hour: int, ranges: list[tuple[int,int]]) -> bool:
-    return any(a <= hour <= b for a,b in ranges)
-
-async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+# ========================= Approval orchestrator =========================
+async def require_approval(chat_id: int, plan: Dict[str, Any], handler: Optional[Handler] = None) -> Dict[str, Any]:
     """
-    מימוש מינימלי תואם חתימה:
-    - אוטו־אישור לפי env (TELEGRAM_AUTO_APPROVE / AUTO_APPROVE_BUDGET_MAX_USD / AUTO_APPROVE_NIGHT)
-    - אחרת: יוצר כרטיס ב-ConfirmStore ושולח התראה לטלגרם, ומחזיר status=pending
+    יוצר כרטיס אישור ומחזיר:
+      - {"status":"approved"} אם auto-approve מופעל ומותר
+      - {"status":"pending","idem":...,"ttl_sec":...} אם מחכה לאישור ידני
+      - {"status":"rejected", ...} אם נדחה אוטומטית/פג תוקף
+    אם handler סופק — יירשם, והרצה תתבצע ע"י ConfirmStore.run(idem) לאחר אישור.
     """
-    if not APPROVAL_ENABLED:
-        return {"status": "approved", "reason": "approvals_disabled"}
+    ttl = int(plan.get("ttl_sec") or TICKET_TTL_SEC)
+    idem = ConfirmStore.create({**plan, "ttl_sec": ttl, "ticket_id": plan.get("idem") or None}, handler=handler)
 
-    if TELEGRAM_AUTO_APPROVE:
-        return {"status": "approved", "reason": "env_auto_approve"}
+    # attach idem to plan for links
+    plan = dict(plan); plan["idem"] = idem; plan["ttl_sec"] = ttl
 
+    # auto-approve policy
+    auto = False
     try:
-        thr = float(AUTO_APPROVE_BUDGET_MAX_USD) if AUTO_APPROVE_BUDGET_MAX_USD else None
+        from utils.telegram_notifier_core import should_auto_approve_trade  # type: ignore
+        auto = bool(should_auto_approve_trade(plan))
     except Exception:
-        thr = None
+        auto = False
+
+    if auto:
+        ConfirmStore.approve(idem, approver="auto")
+        return {"status": "approved", "idem": idem, "ttl_sec": ttl}
+
+    # send telegram approval with inline keyboard
     try:
-        budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
-    except Exception:
-        budget = 0.0
+        from utils.telegram_notifier import send_trade_approval  # type: ignore
+        await send_trade_approval(idem, plan, chat_id=chat_id if chat_id else None)
+    except Exception as e:
+        log.warning("send_trade_approval failed: %s", e)
 
-    if thr is not None and budget <= thr:
-        return {"status": "approved", "reason": f"budget_le_{thr}"}
-
-    if AUTO_APPROVE_NIGHT:
-        ranges = _parse_ranges(NIGHT_HOURS or "00-06")
-        h = time.localtime().tm_hour
-        if _in_ranges(h, ranges):
-            return {"status": "approved", "reason": f"night_hours_{NIGHT_HOURS}"}
-
-    # אחרת: pending — נפתח כרטיס ונשלח בקשה
-    idem = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
-    plan = {
-        "symbol": payload.get("symbol"),
-        "side": payload.get("side"),
-        "leverage": payload.get("leverage"),
-        "quantity": payload.get("qty") or payload.get("quantity"),
-        "budget_usd": float(payload.get("budget") or payload.get("budget_usd") or 0.0),
-        "why": "require_approval",
-    }
-    ConfirmStore.create_with_id(str(idem), plan)
-    await send_confirm_request(str(idem), plan)
-    return {"status": "pending", "idem": str(idem)}
-
-__all__ = [
-    "preflight_proposal","can_auto_forward",
-    "ConfirmStore","send_confirm_request","require_approval"
-]
+    return {"status": "pending", "idem": idem, "ttl_sec": ttl}
 
 
 
