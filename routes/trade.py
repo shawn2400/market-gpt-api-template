@@ -5,7 +5,8 @@ import time, secrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator, FieldValidationInfo  # v2 import
+from pydantic import BaseModel, Field, field_validator
+from pydantic.fields import FieldValidationInfo
 import httpx
 
 from utils.auth import require_api_key
@@ -33,9 +34,25 @@ try:
 except Exception:
     execute_trade_live = None  # type: ignore
 
+# === Approvals unified store & sender ===
+try:
+    from utils.approvals import ConfirmStore, send_confirm_request  # type: ignore
+except Exception:
+    class ConfirmStore:  # type: ignore
+        @classmethod
+        def create_with_id(cls, *_args, **_kwargs): ...
+        @classmethod
+        def set_handler(cls, *_args, **_kwargs): ...
+        @classmethod
+        def has(cls, *_args, **_kwargs): return False
+        @classmethod
+        def decide(cls, *_args, **_kwargs): return {"ok": False, "error": "approvals_missing"}
+    async def send_confirm_request(*_args, **_kwargs):  # type: ignore
+        return None
+
 router = APIRouter(tags=["trade"])
 
-# זיכרון בקשות בהמתנה לאישור ידני
+# זיכרון בקשות בהמתנה לאישור ידני (תאימות לאחור)
 _PENDING: Dict[str, Dict[str, Any]] = {}
 _PENDING_TTL = 60 * 5  # 5 דקות
 
@@ -46,15 +63,14 @@ def _make_idem(x: Optional[str]) -> str:
 class TradeReq(BaseModel):
     symbol: str
     side: str
-    quantity: float = Field(gt=0)           # קלט חיצוני: quantity
+    quantity: float = Field(gt=0)
     leverage: int = Field(ge=1, le=125)
-    budget_usd: float = Field(gt=0)         # קלט חיצוני: budget_usd
+    budget_usd: float = Field(gt=0)
     position_side: Optional[str] = "BOTH"
     note: Optional[str] = None
     dry_run: bool = False
     confirm_first: bool = False
 
-    # יעדי TP/SL – אופציונלי; המערכת תדע לייצר באופן דינמי אם מופעל ENV של ladder
     tp: Optional[float] = None
     sl: Optional[float] = None
     tp_targets: Optional[List[float]] = None
@@ -73,11 +89,7 @@ class TradeReq(BaseModel):
     @field_validator("position_side")
     @classmethod
     def _ps_ok(cls, v: Optional[str], info: FieldValidationInfo) -> Optional[str]:
-        """
-        במצב Hedge, אם מתקבל BOTH – נמפה אוטומטית לפי side:
-        BUY -> LONG, SELL -> SHORT. אחרת נשאיר כפי שנשלח.
-        """
-        side = (info.data.get("side") or "").upper()  # BUY/SELL אחרי הוולידטור הקודם
+        side = (info.data.get("side") or "").upper()
         hedge = os.getenv("BINANCE_FORCE_HEDGE_MODE", "true").lower() in ("1", "true", "yes", "on")
 
         if v is None:
@@ -109,12 +121,6 @@ def _summary(req: TradeReq) -> str:
 
 # ---------- Internal execution adapter ----------
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
-    """
-    מתאם קריאה ל-execute_trade_live עם מפתחות שהוא מכיר:
-      - budget     (ממופה מ-budget_usd)
-      - quantity   (זהה)
-      - מעבירים גם dry_run, confirm_first, tp/sl/tp_targets/... אם נשלחו.
-    """
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
 
@@ -127,7 +133,6 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         quantity=req.quantity,
         position_side=req.position_side or "BOTH",
         confirm_first=req.confirm_first,
-        # אופציונלי – רק אם נשלח יועבר
         tp=req.tp,
         sl=req.sl,
         tp_targets=req.tp_targets,
@@ -152,18 +157,18 @@ async def trade_execute(
 ) -> Dict[str, Any]:
     idem = _make_idem(x_idem)
 
-    # חישוב אוטו־אישור (אם קיימים חוקים)
+    # Auto-approve heuristic (optional)
     try:
-        auto, reason = should_auto_approve(req.model_dump())
+        auto, reason = should_auto_approve({"budget_usd": req.budget_usd})
     except Exception:
         auto, reason = (False, "rules_missing")
 
     need_approval = bool(req.confirm_first and not req.dry_run and not auto)
 
     if need_approval:
-        # נשמור בקשה + TTL
+        # נרשום את הבקשה גם באחסון הישן (תאימות לטלגרם קיים) וגם ב-ConfirmStore
         _PENDING[idem] = {"ts": time.time(), "req": req.model_dump()}
-        # plan מינימלי עבור הודעת אישור
+
         plan = {
             "symbol": req.symbol,
             "side": req.side,
@@ -176,16 +181,43 @@ async def trade_execute(
             "order_type": "MARKET",
             "why": "trade_execute_api_confirm_first",
         }
+
+        # === החלק החשוב: להצמיד handler ל-idem ===
+        # החזרת coroutine מותרת: ConfirmStore.decide יזהה ויריץ (create_task)
+        def _runner():
+            # נעשה import כאן כדי להחזיק את האובייקט הנכון של req
+            import anyio
+            # מריץ את ה-executor הא-סינכרוני מתוך thread
+            return anyio.from_thread.run(_execute_and_audit, req)  # returns coroutine-ish to be awaited
+
         try:
-            await send_approval(idem, plan)
+            # נרשום את ה־plan ב־ConfirmStore עם אותו idem
+            ConfirmStore.create_with_id(idem, plan)
+            ConfirmStore.set_handler(idem, _runner)
         except Exception:
+            # אם ConfirmStore לא זמין, נמשיך רק עם המנגנון הישן
             pass
+
+        # שליחת בקשת אישור לטלגרם (עדיף דרך approvals; אם נכשל – דרך הנotif הישן)
+        sent = False
+        try:
+            await send_confirm_request(idem, plan)
+            sent = True
+        except Exception:
+            sent = False
+        if not sent:
+            try:
+                await send_approval(idem, plan)  # fallback
+            except Exception:
+                pass
+
         return {
             "ok": False,
             "error": "pending_approval",
             "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL},
         }
 
+    # אין צורך באישור (או אוטו-אישור)
     try:
         res = await _execute_and_audit(req)
         if auto and not req.dry_run:
@@ -204,9 +236,20 @@ async def trade_execute(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# נקודות קצה ציבוריות (לינקים בהודעות טלגרם)
 @router.get("/trade/approve", include_in_schema=False)
 async def trade_approve(id: str) -> Dict[str, Any]:
+    """
+    קודם ננסה ConfirmStore (החדש). אם אין פריט — ניפול לאחסון הישן.
+    """
+    # ניסיון לאשר דרך ConfirmStore (ומריץ handler אם קיים)
+    try:
+        if ConfirmStore.has(id):
+            res = ConfirmStore.decide(id, approved=True)
+            return {"ok": True, "result": res}
+    except Exception:
+        pass
+
+    # תאימות לאחור
     item = _PENDING.pop(id, None)
     if not item:
         return {"ok": False, "error": "not_found_or_expired"}
@@ -219,6 +262,19 @@ async def trade_approve(id: str) -> Dict[str, Any]:
 
 @router.get("/trade/reject", include_in_schema=False)
 async def trade_reject(id: str) -> Dict[str, Any]:
+    # קודם דרך ConfirmStore
+    try:
+        if ConfirmStore.has(id):
+            res = ConfirmStore.decide(id, approved=False)
+            try:
+                await send_audit(f"REJECTED · idem={id}")
+            except Exception:
+                pass
+            return {"ok": True, "rejected": True, "result": res}
+    except Exception:
+        pass
+
+    # תאימות לאחור
     _PENDING.pop(id, None)
     try:
         await send_audit(f"REJECTED · idem={id}")
@@ -226,11 +282,12 @@ async def trade_reject(id: str) -> Dict[str, Any]:
         pass
     return {"ok": True, "rejected": True}
 
-# תאימות לאחראי־אישורים הישן (ops_approval)
+# תאימות לזרם ישן
 TradeRequest = TradeReq  # alias
 def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
     import anyio
     return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
+
 
 
 
