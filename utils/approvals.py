@@ -136,7 +136,14 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
-def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
+def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict[str, Any]:
+    """
+    מבצע בדיקות איכות/מדיניות על הצעה (tp) טרם שליחה לביצוע.
+
+    mutate_state:
+      - True (ברירת מחדל): מבצע גם ניהול "כפילות אחרונה" (_recent).
+      - False: בודק הכל, כולל כפילות קיימת, אבל לא מעדכן/מנקה את המצב הגלובלי.
+    """
     out_errors: List[str] = []
     out_warns: List[str] = []
     metrics: Dict[str, Any] = {}
@@ -218,21 +225,25 @@ def preflight_proposal(tp: Dict[str, Any]) -> Dict[str, Any]:
 
     out_errors.extend(_precision_checks(symbol, entry, sl, tp1))
 
+    # כפילות: בדיקה תמיד; עדכון/ניקוי רק אם mutate_state=True
     now = time.time()
-    _purge_recent(now)
     key = _key_for(tp)
     last = _recent.get(key)
     if last and (now - last < APPROVAL_DUP_COOLDOWN_SEC):
         out_errors.append("duplicate_recent")
-    else:
-        _recent[key] = now
+    if mutate_state:
+        _purge_recent(now)
+        if not last or (now - last >= APPROVAL_DUP_COOLDOWN_SEC):
+            _recent[key] = now
 
     ok = (len(out_errors) == 0)
     return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
 def can_auto_forward(tp: Dict[str, Any]) -> bool:
-    res = preflight_proposal(tp)
+    # בדיקת כשירות מבלי “לסמן” את ההצעה כמבוצעת לאחרונה
+    res = preflight_proposal(tp, mutate_state=False)
     return bool(res.get("ok", False))
+
 
 
 
