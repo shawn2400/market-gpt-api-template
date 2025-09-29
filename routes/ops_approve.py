@@ -1,7 +1,7 @@
 # routes/ops_approve.py
 from __future__ import annotations
 import os, json, time, hmac, hashlib, secrets, logging, math, re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
 import httpx
@@ -22,7 +22,7 @@ HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_
 ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
 BOT_TOKEN            = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 API_BEARER_TOKEN     = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 👈 הוסף ל-ENV אם חסר
+TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 👈 ודא ש-ENV קיים
 ETA_SMART_ENABLE     = (os.getenv("ETA_SMART_ENABLE","0").lower() in ("1","true","yes","on"))
 ETA_VELOCITY_WINDOW  = int(os.getenv("ETA_VELOCITY_WINDOW","30"))
 DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL","15m")
@@ -70,7 +70,6 @@ def _expired(ts: float, ttl_sec: int = TICKET_TTL_SEC) -> bool:
         return True
 
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
-    import hmac, hashlib
     key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text)==64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
@@ -107,11 +106,13 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None, reje
 
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    # ניסיון ראשון: אקזקיוטור פנימי אם קיים
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
+    # נפילה ל-Binance SDK אם אין אקזקיוטור
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -148,6 +149,7 @@ def _bool_env(name: str, default: bool=False) -> bool:
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    # אקזקיוטור החכם (TP/SL/Ladder/Reduce-Only וכו')
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -200,7 +202,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "armed_execute_failed", "detail": str(e)}
 
 # -------- Smart ETA (optional) --------
-import math
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
     try:
         from utils.get_klines import get_klines_sync  # type: ignore
@@ -267,7 +268,6 @@ async def _delete_ticket(tid: str, source: str) -> None:
         pass
 
 # -------------------- API --------------------
-from fastapi import Body
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram")
 async def create_ticket(
     payload: Dict[str, Any] = Body(..., description="symbol, side, qty, leverage, optional: TP/SL/ETAs/probs/note/position_side/budget/expiry_ts"),
@@ -281,7 +281,6 @@ async def create_ticket(
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
 
     if not (symbol and side and qty > 0 and lev > 0):
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="Missing/invalid fields (symbol/side/qty/leverage)")
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
@@ -317,6 +316,26 @@ async def create_ticket(
     # 👇 העשרה מתוך הדגלים ב-note (לא חובה)
     req_body = apply_note_flags(note, req_body)
 
+    # 👇 אכיפה רכה של RR_MIN אם קיים בדגלים או ENV (מסמן במקום לחסום קשיח)
+    try:
+        rr_min_flag = float(req_body.get("rr_min") or 0.0)
+        rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
+        rr_min_eff  = max(rr_min_flag, rr_env_lo)
+        if rr_min_eff > 0 and req_body.get("sl"):
+            from utils.binance_client import get_price  # type: ignore
+            current = float(get_price(symbol) or 0)
+            tp1 = float(req_body.get("tp1") or 0)
+            sl  = float(req_body.get("sl") or 0)
+            rr  = None
+            if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
+                reward = abs(tp1 - current); risk = abs(current - sl); rr = (reward / risk) if risk > 0 else None
+            elif side == "SELL" and current > 0 and tp1 > 0 and sl > 0:
+                reward = abs(current - tp1); risk = abs(sl - current); rr = (reward / risk) if risk > 0 else None
+            if rr is not None and rr < rr_min_eff:
+                req_body["blocked_by_rr_min"] = True
+    except Exception:
+        pass
+
     # Persist
     try:
         ConfirmStore.create(dict(req_body))
@@ -326,8 +345,7 @@ async def create_ticket(
         try:
             r = await _redis()
             rec = {"ts": time.time(), "req": req_body, "note": note}
-            import json as _json
-            await r.setex(f"{NS}:ticket:{tid}", TICKET_TTL_SEC, _json.dumps(rec, separators=(",", ":")))
+            await r.setex(f"{NS}:ticket:{tid}", TICKET_TTL_SEC, json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
 
@@ -368,6 +386,8 @@ async def create_ticket(
         lines.append(f"• Entry: <code>{req_body['entry_kind']}</code>")
     if req_body.get("reduce_only"):
         lines.append(f"• Reduce Only: <code>True</code>")
+    if req_body.get("blocked_by_rr_min"):
+        lines.append("• RR Check: <code>Below RR_MIN (manual review)</code>")
 
     if req_body.get("prob_overall_pct") is not None:
         lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
@@ -425,13 +445,12 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
                 "— — —\nבוצע והועבר לניהול."
             )
         else:
-            import json as _json
             txt = (
                 f"⚠️ <b>Approve Failed</b>\n"
                 f"• Ticket: <code>{_md_html(ticket_id)}</code>\n"
                 f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n"
                 f"• Flow: <code>{flow}</code>\n"
-                f"— — —\nשגיאה: <code>{_md_html(_json.dumps(exec_res, ensure_ascii=False))}</code>"
+                f"— — —\nשגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
             )
         await _send_telegram_html(txt)
     except Exception:
@@ -471,19 +490,15 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade)")
 async def approve_signed(request: Request):
     if not HMAC_SECRET:
-        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail="HMAC secret not set")
     raw = await request.body()
     got = request.headers.get("X-Signature", "") or ""
     want = _sign_hex(HMAC_SECRET, raw)
-    import hmac as _h
-    if not _h.compare_digest(got, want):
-        from fastapi import HTTPException
+    if not hmac.compare_digest(got, want):
         raise HTTPException(status_code=401, detail="Bad signature")
     try:
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     flow = _decide_flow_by_mode(payload)
@@ -499,7 +514,6 @@ async def approve_signed(request: Request):
 
     ok = bool(exec_res.get("ok"))
     if not ok:
-        from fastapi import HTTPException
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 
