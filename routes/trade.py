@@ -1,7 +1,6 @@
 # routes/trade.py
 from __future__ import annotations
-import os
-import time, secrets
+import os, time, secrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -28,38 +27,17 @@ except Exception:
     def should_auto_approve(payload: Dict[str, Any]):  # type: ignore
         return (False, "rules_missing")
 
-# === Trade executor (חי) ===
-try:
-    from utils.trade_executor import execute_trade_live  # type: ignore
-except Exception:
-    execute_trade_live = None  # type: ignore
-
 # === Approvals unified store & sender ===
-try:
-    from utils.approvals import ConfirmStore, send_confirm_request  # type: ignore
-except Exception:
-    class ConfirmStore:  # type: ignore
-        @classmethod
-        def create_with_id(cls, *_args, **_kwargs): ...
-        @classmethod
-        def set_handler(cls, *_args, **_kwargs): ...
-        @classmethod
-        def has(cls, *_args, **_kwargs): return False
-        @classmethod
-        def decide(cls, *_args, **_kwargs): return {"ok": False, "error": "approvals_missing"}
-    async def send_confirm_request(*_args, **_kwargs):  # type: ignore
-        return None
+from utils.approvals import ConfirmStore, send_confirm_request  # type: ignore
 
 router = APIRouter(tags=["trade"])
 
-# זיכרון בקשות בהמתנה לאישור ידני (תאימות לאחור)
 _PENDING: Dict[str, Dict[str, Any]] = {}
 _PENDING_TTL = 60 * 5  # 5 דקות
 
 def _make_idem(x: Optional[str]) -> str:
     return x or f"{int(time.time()*1000)}_{secrets.token_hex(6)}"
 
-# ---------- Public API Schema ----------
 class TradeReq(BaseModel):
     symbol: str
     side: str
@@ -82,9 +60,9 @@ class TradeReq(BaseModel):
     @classmethod
     def _side_ok(cls, v: str) -> str:
         vu = v.upper()
-        if vu not in ("BUY", "SELL", "LONG", "SHORT"):
+        if vu not in ("BUY","SELL","LONG","SHORT"):
             raise ValueError("side must be BUY/SELL/LONG/SHORT")
-        return "BUY" if vu in ("BUY", "LONG") else "SELL"
+        return "BUY" if vu in ("BUY","LONG") else "SELL"
 
     @field_validator("position_side")
     @classmethod
@@ -114,13 +92,18 @@ def _422(detail: Any) -> HTTPException:
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
 
 def _summary(req: TradeReq) -> str:
-    return (
-        f"{req.side.upper()} {req.symbol.upper()} "
-        f"qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
-    )
+    return f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
 
-# ---------- Internal execution adapter ----------
+# --- lazy import of executor (מונע כשלים בזמן טעינת ראוטים) ---
+def _get_executor():
+    try:
+        from utils.trade_executor import execute_trade_live  # type: ignore
+        return execute_trade_live
+    except Exception:
+        return None
+
 async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
+    execute_trade_live = _get_executor()
     if execute_trade_live is None:
         raise RuntimeError("trade executor missing")
 
@@ -147,7 +130,6 @@ async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
         pass
     return res
 
-# ---------- Endpoints ----------
 @router.post("/trade/execute")
 async def trade_execute(
     req: TradeReq,
@@ -157,7 +139,6 @@ async def trade_execute(
 ) -> Dict[str, Any]:
     idem = _make_idem(x_idem)
 
-    # Auto-approve heuristic (optional)
     try:
         auto, reason = should_auto_approve({"budget_usd": req.budget_usd})
     except Exception:
@@ -166,7 +147,6 @@ async def trade_execute(
     need_approval = bool(req.confirm_first and not req.dry_run and not auto)
 
     if need_approval:
-        # נרשום את הבקשה גם באחסון הישן (תאימות לטלגרם קיים) וגם ב-ConfirmStore
         _PENDING[idem] = {"ts": time.time(), "req": req.model_dump()}
 
         plan = {
@@ -182,27 +162,20 @@ async def trade_execute(
             "why": "trade_execute_api_confirm_first",
         }
 
-        # === החלק החשוב: להצמיד handler ל-idem ===
-        # החזרת coroutine מותרת: ConfirmStore.decide יזהה ויריץ (create_task)
+        # להצמיד handler לאישור
         def _runner():
-            # נעשה import כאן כדי להחזיק את האובייקט הנכון של req
             import anyio
-            # מריץ את ה-executor הא-סינכרוני מתוך thread
-            return anyio.from_thread.run(_execute_and_audit, req)  # returns coroutine-ish to be awaited
+            return anyio.from_thread.run(_execute_and_audit, req)
 
         try:
-            # נרשום את ה־plan ב־ConfirmStore עם אותו idem
             ConfirmStore.create_with_id(idem, plan)
             ConfirmStore.set_handler(idem, _runner)
         except Exception:
-            # אם ConfirmStore לא זמין, נמשיך רק עם המנגנון הישן
             pass
 
-        # שליחת בקשת אישור לטלגרם (עדיף דרך approvals; אם נכשל – דרך הנotif הישן)
         sent = False
         try:
-            await send_confirm_request(idem, plan)
-            sent = True
+            await send_confirm_request(idem, plan); sent = True
         except Exception:
             sent = False
         if not sent:
@@ -211,13 +184,9 @@ async def trade_execute(
             except Exception:
                 pass
 
-        return {
-            "ok": False,
-            "error": "pending_approval",
-            "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL},
-        }
+        return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL}}
 
-    # אין צורך באישור (או אוטו-אישור)
+    # ללא אישור – ריצה מידית
     try:
         res = await _execute_and_audit(req)
         if auto and not req.dry_run:
@@ -229,23 +198,18 @@ async def trade_execute(
     except ValueError as ve:
         raise _422([{"type": "value_error", "loc": ["body"], "msg": str(ve)}])
     except httpx.HTTPStatusError as he:
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text},
-        )
+        raise HTTPException(status_code=502, detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/trade/approve", include_in_schema=False)
 async def trade_approve(id: str) -> Dict[str, Any]:
-    """
-    קודם ננסה ConfirmStore (החדש). אם אין פריט — ניפול לאחסון הישן.
-    """
-    # ניסיון לאשר דרך ConfirmStore (ומריץ handler אם קיים)
+    # ניסיון דרך ConfirmStore
     try:
         if ConfirmStore.has(id):
-            res = ConfirmStore.decide(id, approved=True)
-            return {"ok": True, "result": res}
+            _ = ConfirmStore.decide(id, approved=True)
+            started = await ConfirmStore.run(id)
+            return {"ok": True, "result": {"confirm": _, "run": started}}
     except Exception:
         pass
 
@@ -262,19 +226,17 @@ async def trade_approve(id: str) -> Dict[str, Any]:
 
 @router.get("/trade/reject", include_in_schema=False)
 async def trade_reject(id: str) -> Dict[str, Any]:
-    # קודם דרך ConfirmStore
     try:
         if ConfirmStore.has(id):
-            res = ConfirmStore.decide(id, approved=False)
+            _ = ConfirmStore.decide(id, approved=False)
             try:
                 await send_audit(f"REJECTED · idem={id}")
             except Exception:
                 pass
-            return {"ok": True, "rejected": True, "result": res}
+            return {"ok": True, "rejected": True, "result": _}
     except Exception:
         pass
 
-    # תאימות לאחור
     _PENDING.pop(id, None)
     try:
         await send_audit(f"REJECTED · idem={id}")
@@ -282,11 +244,6 @@ async def trade_reject(id: str) -> Dict[str, Any]:
         pass
     return {"ok": True, "rejected": True}
 
-# תאימות לזרם ישן
-TradeRequest = TradeReq  # alias
-def execute_real_trade(req: TradeRequest, preview: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    import anyio
-    return anyio.from_thread.run(_execute_and_audit, req)  # type: ignore
 
 
 
