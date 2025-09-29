@@ -651,7 +651,7 @@ def _cancel_old_closing_orders(symbol: str) -> int:
 # ─────────── Ladder builders ───────────
 def _build_ladders(sym: str, side: str, qty: float,
                    tp_targets: Optional[List[float]], tp_splits: Optional[List[float]],
-                   sl_targets: Optional[List[float]], sl_splits: Optional[List[float]]) -> Dict[str, Any]:
+                   sl_targets: Optional[List[float]], sl_splits: Optional[List[float]]) -> Dict[str, Any]]:
     plan: Dict[str, Any] = {"tp_orders": [], "sl_orders": []}
     tp_kind_market = (LADDER_TP_KIND == "TAKE_PROFIT_MARKET")
 
@@ -838,12 +838,18 @@ def _compute_trailing_callback_pct(anchor_price: float, atr: Optional[float], mu
     """
     Estimate Binance trailing callbackRate (%) from ATR*mult distance.
     callbackRate ~= distance/price * 100
+    Logs when clamped to Binance-safe range.
     """
     if not (atr and anchor_price > 0 and mult > 0):
         return None
-    pct = (atr * mult) / anchor_price * 100.0
-    pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, pct))
-    return pct
+    raw_pct = (atr * mult) / anchor_price * 100.0
+    clamped = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, raw_pct))
+    if abs(clamped - raw_pct) > 1e-9:
+        log.info(
+            "trail.callbackRate clamped: raw=%.4f%% -> used=%.4f%% (limits %.2f–%.2f%%)",
+            raw_pct, clamped, TRAIL_CALLBACK_MIN_PCT, TRAIL_CALLBACK_MAX_PCT
+        )
+    return clamped
 
 async def execute_trade_live(
     symbol: str, side: str, *,
@@ -932,7 +938,6 @@ async def execute_trade_live(
     # Trailing calc (only for plan/dry-run; arming is after entry)
     trail_callback_pct: Optional[float] = None
     if trail_enabled:
-        # אם יש ATR – נחשב callbackRate ≈ ATR*mult/price (באחוזים) בגבולות Binance
         if kl:
             try:
                 atr_now = _atr_from_klines(kl, 14)
@@ -1058,10 +1063,7 @@ async def execute_trade_live(
         except Exception as e:
             msg = str(e).lower()
             code = getattr(e, "code", None)
-            if (
-                "reduceonly" in msg or "reduce only" in msg or "-1106" in msg
-                or code == -1106
-            ):
+            if ("reduceonly" in msg or "reduce only" in msg or "-1106" in msg or code == -1106):
                 a2 = dict(args)
                 a2.pop("reduceOnly", None)
                 return futures_create_order(**a2)
@@ -1083,7 +1085,7 @@ async def execute_trade_live(
         if eff_ps != "BOTH":
             args["positionSide"] = eff_ps  # Hedge: LONG/SHORT
 
-        # MARKET-trigger (STOP_MARKET/TAKE_PROFIT_MARKET) – לא שולחים TIF/price
+        # MARKET-trigger (STOP_MARKET/TAKE_PROFIT_MARKET)
         if "MARKET" in typ:
             args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
         else:
@@ -1093,7 +1095,7 @@ async def execute_trade_live(
 
         args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
 
-        # ⚠️ One-Way + MARKET trigger → אל תשלח reduceOnly (ימנע -1106)
+        # ⚠️ One-Way + MARKET trigger → לא לשלוח reduceOnly (ימנע -1106)
         is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
         if not (is_market_trigger and eff_ps == "BOTH"):
             args["reduceOnly"] = True
@@ -1108,12 +1110,11 @@ async def execute_trade_live(
 
     # ---- Arm SL (trailing or static) ----
     if trail_enabled:
-        # TRAILING_STOP_MARKET requires: side=close_side, type, callbackRate, activationPrice (optional)
         eff_ps = _effective_position_side(position_side)
         qty_str, _ = _q_qty(sym, qty)
 
         if trail_callback_pct is None:
-            # Fallback: small default within Binance limits (e.g., 0.5%)
+            # Fallback בתוך מגבלות Binance
             trail_callback_pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, 0.5))
 
         args: Dict[str, Any] = dict(
@@ -1125,18 +1126,13 @@ async def execute_trade_live(
             quantity=qty_str,
         )
 
-        # Activate immediately around current mark to start trailing
+        # הפעלה מיידית סביב ה-mark כדי להתחיל לטרייל
         mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
-        # For BUY entry (LONG), activation slightly below; for SELL (SHORT), slightly above
-        if side == "BUY":
-            activation = _offset_bps(mark_now, -STOP_BAND_BPS, +1)
-        else:
-            activation = _offset_bps(mark_now, +STOP_BAND_BPS, +1)
+        activation = _offset_bps(mark_now, (-STOP_BAND_BPS if side == "BUY" else +STOP_BAND_BPS), +1)
         args["activationPrice"] = _q_price(sym, float(activation))[0]
 
         if eff_ps != "BOTH":
             args["positionSide"] = eff_ps
-            # reduceOnly not applicable to TRAILING_STOP_MARKET in Hedge? If sent and fails, retry logic below
             args["reduceOnly"] = True
 
         try:
@@ -1158,7 +1154,6 @@ async def execute_trade_live(
                 "response": {"ok": False, "error": str(e)},
             })
     else:
-        # Static SL(s) already in ladders
         for o in plan["sl_orders"]:
             typ = str(o.get("type")).upper()
             args: Dict[str, Any] = dict(
@@ -1169,7 +1164,7 @@ async def execute_trade_live(
             )
             eff_ps = _effective_position_side(position_side)
             if eff_ps != "BOTH":
-                args["positionSide"] = eff_ps  # Hedge: LONG/SHORT
+                args["positionSide"] = eff_ps
 
             if "MARKET" in typ:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
@@ -1180,7 +1175,6 @@ async def execute_trade_live(
 
             args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
 
-            # ⚠️ One-Way + MARKET trigger → אל תשלח reduceOnly (ימנע -1106)
             is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
             if not (is_market_trigger and eff_ps == "BOTH"):
                 args["reduceOnly"] = True
@@ -1236,6 +1230,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
