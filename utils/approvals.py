@@ -117,9 +117,6 @@ def _aligned(val: float, step: float, tol: float = 1e-10) -> bool:
     return abs(k * step - val) <= max(tol, step * 1e-8)
 
 def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[str]:
-    """
-    בדיקות tickSize מתוך exchange_info (התאמת מחיר).
-    """
     out: List[str] = []
     try:
         from utils.binance_client import get_symbol_info
@@ -142,9 +139,6 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
 def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict[str, Any]:
-    """
-    בדיקות איכות/מדיניות על הצעה טרם שליחה לביצוע.
-    """
     out_errors: List[str] = []
     out_warns: List[str] = []
     metrics: Dict[str, Any] = {}
@@ -221,7 +215,6 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
 
     out_errors.extend(_precision_checks(symbol, entry, sl, tp1))
 
-    # כפילות: בדיקה תמיד; עדכון/ניקוי רק אם mutate_state=True
     now = time.time()
     key = _key_for(tp)
     last = _recent.get(key)
@@ -236,7 +229,6 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
 def can_auto_forward(tp: Dict[str, Any]) -> bool:
-    # בדיקת כשירות מבלי “לסמן” את ההצעה כמבוצעת לאחרונה
     res = preflight_proposal(tp, mutate_state=False)
     return bool(res.get("ok", False))
 
@@ -270,11 +262,32 @@ class ConfirmStore:
     def flush_all(cls) -> None:
         cls._P.clear()
 
+# ──────────────────────────────────────────────────────────────────────────────
+# send_confirm_request – עטיפה ל־manager (שליחת בקשת אישור לטלגרם)
+# ──────────────────────────────────────────────────────────────────────────────
+async def send_confirm_request(ticket_id: str, plan: Dict[str, Any]) -> None:
+    """
+    שליחת בקשת אישור לטלגרם. ה־manager קורא לפונקציה הזו.
+    אם מודול ה־telegram_notifier לא קיים – לא נכשלים (no-op).
+    """
+    try:
+        from utils.telegram_notifier import send_trade_approval  # type: ignore
+    except Exception:
+        # אין מודול – שקט
+        return
+    try:
+        await send_trade_approval(ticket_id, plan)  # type: ignore
+    except Exception:
+        # לא מפילים את ה־manager על כשל רשת/טלגרם
+        return
+
 __all__ = [
     "preflight_proposal",
     "can_auto_forward",
     "ConfirmStore",
+    "send_confirm_request",
 ]
+
 
 
 
