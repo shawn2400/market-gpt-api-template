@@ -1,4 +1,4 @@
-# app/trade_executor.py
+# utils/trade_executor.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, math, time, logging, asyncio, json, hashlib
@@ -57,7 +57,7 @@ MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 ENFORCE_APPROVAL_ALWAYS  = os.getenv("ENFORCE_APPROVAL_ALWAYS", "1").lower() in ("1","true","yes","on")
 REQUIRE_TP_AND_SL        = os.getenv("REQUIRE_TP_AND_SL", "1").lower() in ("1","true","yes","on")
 
-# Ladder config  (👉 הקפדנו על .lower())
+# Ladder config
 LADDER_TP_ENABLE          = os.getenv("LADDER_TP_ENABLE", "1").lower() in ("1","true","yes","on")
 LADDER_TP_KIND            = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
 LADDER_TP_DEFAULT_PCTS    = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
@@ -69,6 +69,14 @@ LADDER_SL_DEFAULT_PCTS    = os.getenv("LADDER_SL_DEFAULT_PCTS", "0.8").strip()
 SL_DYNAMIC_ENABLE     = os.getenv("SL_DYNAMIC_ENABLE", "1").lower() in ("1","true","yes","on")
 SL_ATR_MULT           = float(os.getenv("SL_ATR_MULT", "0.6"))
 SL_TRAIL_ENABLE       = os.getenv("SL_TRAIL_ENABLE", "1").lower() in ("1","true","yes","on")
+
+# 🆕 Trail flags from ENV (override-able per ticket)
+TRAIL_ENABLE_DEFAULT      = os.getenv("TRAIL_ENABLE", "0").lower() in ("1","true","yes","on")
+TRAIL_ATR_MULT_DEFAULT    = float(os.getenv("TRAIL_ATR_MULT", os.getenv("SL_ATR_MULT", "0.6")))
+TRAIL_FREEZE_ENABLE_DEF   = os.getenv("TRAIL_FREEZE_ENABLE", "1").lower() in ("1","true","yes","on")
+# Binance constraints for trailing callbackRate (percent)
+TRAIL_CALLBACK_MIN_PCT    = float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))
+TRAIL_CALLBACK_MAX_PCT    = float(os.getenv("TRAIL_CALLBACK_MAX_PCT", "4.9"))
 
 # Dynamic Budget & Leverage
 BUDGET_DYNAMIC_ENABLE     = os.getenv("BUDGET_DYNAMIC_ENABLE", "1").lower() in ("1","true","yes","on")
@@ -606,7 +614,7 @@ def _cancel_old_closing_orders(symbol: str) -> int:
     try:
         orders = get_all_orders(symbol, limit=50) or []
         tps = ("TAKE_PROFIT", "TAKE_PROFIT_MARKET")
-        sls = ("STOP", "STOP_MARKET")
+        sls = ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET")
         pref = (CANCEL_PREFIX_OVERRIDE or ORDER_ID_PREFIX or "").strip()
 
         # אם הופעל דגל ביטול לפי prefix בלבד – אך אין prefix – נחסום ביטולים לחלוטין
@@ -647,7 +655,7 @@ def _build_ladders(sym: str, side: str, qty: float,
     plan: Dict[str, Any] = {"tp_orders": [], "sl_orders": []}
     tp_kind_market = (LADDER_TP_KIND == "TAKE_PROFIT_MARKET")
 
-    def _prep(kind: str, targets, splits):
+    def _prep(kind: str, targets, splits=None):
         if not targets: return
         L = len(targets); w = list(splits) if splits else []
         if not w or len(w) != L: w = [1.0 / L] * L
@@ -826,6 +834,17 @@ def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[floa
 
     return tp_targets, tp_splits, sl_targets
 
+def _compute_trailing_callback_pct(anchor_price: float, atr: Optional[float], mult: float) -> Optional[float]:
+    """
+    Estimate Binance trailing callbackRate (%) from ATR*mult distance.
+    callbackRate ~= distance/price * 100
+    """
+    if not (atr and anchor_price > 0 and mult > 0):
+        return None
+    pct = (atr * mult) / anchor_price * 100.0
+    pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, pct))
+    return pct
+
 async def execute_trade_live(
     symbol: str, side: str, *,
     budget: Optional[float] = None, leverage: int = 5, dry_run: bool = True,
@@ -835,6 +854,10 @@ async def execute_trade_live(
     sl_targets: Optional[List[float]] = None, sl_splits: Optional[List[float]] = None,
     confirm_first: bool = True, telegram_chat_id: Optional[int] = None,
     position_side: str = "BOTH", reduce_only: bool = False,
+    # 🆕 trail controls (can be set by routes.ops_flags)
+    trail: Optional[bool] = None,
+    trail_atr_mult: Optional[float] = None,
+    trail_freeze: Optional[bool] = None,
 ) -> Dict[str, Any]:
 
     side = _normalize_entry_side(side)  # 🟢 קולט גם LONG/SHORT וגם BUY/SELL
@@ -845,6 +868,11 @@ async def execute_trade_live(
     base_price = get_price(sym) or futures_mark_price(sym)
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
+
+    # Resolve trail flags (ticket > ENV)
+    trail_enabled = bool(TRAIL_ENABLE_DEFAULT if trail is None else trail)
+    trail_mult    = float(TRAIL_ATR_MULT_DEFAULT if (trail_atr_mult is None) else trail_atr_mult)
+    trail_freeze_enabled = bool(TRAIL_FREEZE_ENABLE_DEF if (trail_freeze is None) else trail_freeze)
 
     ref_for_guard = float(entry or base_price)
     mk = float(get_price(sym) or futures_mark_price(sym) or base_price)
@@ -887,16 +915,32 @@ async def execute_trade_live(
     if not _Idem.check_and_set(idem_payload, ttl=IDEMPOTENCY_TTL_SEC):
         return {"ok": False, "reason": "idem_conflict", "ttl_sec": IDEMPOTENCY_TTL_SEC}
 
-    if (tp is None and not tp_targets) or (sl is None and not sl_targets):
+    # Compute TP/SL defaults when needed (pre-trail)
+    if (tp is None and not tp_targets) or ((sl is None and not sl_targets) and not trail_enabled):
         tps, tps_splits, sls = _compute_tp_sl_targets(side, float(entry or base_price), kl)
         if tp is None and not tp_targets: tp_targets, tp_splits = tps, tps_splits
-        if sl is None and not sl_targets: sl_targets = sls
+        # sl_targets only when not using trail
+        if (sl is None and not sl_targets) and (not trail_enabled): sl_targets = sls
 
     if REQUIRE_TP_AND_SL:
         if not (tp_targets or tp is not None):
             return {"ok": False, "reason": "tp_required"}
-        if not (sl_targets or sl is not None):
+        # אם trail פעיל – SL רגיל לא חובה
+        if not trail_enabled and not (sl_targets or sl is not None):
             return {"ok": False, "reason": "sl_required"}
+
+    # Trailing calc (only for plan/dry-run; arming is after entry)
+    trail_callback_pct: Optional[float] = None
+    if trail_enabled:
+        # אם יש ATR – נחשב callbackRate ≈ ATR*mult/price (באחוזים) בגבולות Binance
+        if kl:
+            try:
+                atr_now = _atr_from_klines(kl, 14)
+            except Exception:
+                atr_now = None
+        else:
+            atr_now = None
+        trail_callback_pct = _compute_trailing_callback_pct(float(base_price), atr_now, float(trail_mult))
 
     if dry_run:
         plan: Dict[str, Any] = {
@@ -908,11 +952,18 @@ async def execute_trade_live(
             "position_side": position_side, "reduce_only": reduce_only,
             "budget_used": float(budget or 0.0), "quality": score_for_budget,
             "adx": adx_for_lev,
+            "trail": {
+                "enabled": trail_enabled,
+                "atr_mult": trail_mult,
+                "freeze": trail_freeze_enabled,
+                "callback_rate_pct": trail_callback_pct,
+                "binance_limits_pct": [TRAIL_CALLBACK_MIN_PCT, TRAIL_CALLBACK_MAX_PCT],
+            },
         }
         if qty is not None:
             ladders = _build_ladders(sym, side, qty,
                                      ([tp] if tp is not None else tp_targets), tp_splits,
-                                     ([sl] if sl is not None else sl_targets), sl_splits)
+                                     (None if trail_enabled else ([sl] if sl is not None else sl_targets)), sl_splits)
             plan.update({"qty": qty, **ladders})
             plan["entry_simulation"] = {
                 "limit_around": _offset_bps(entry or base_price, (-ENTRY_BAND_BPS if side=="BUY" else +ENTRY_BAND_BPS), +1),
@@ -984,12 +1035,20 @@ async def execute_trade_live(
         "position_side": position_side, "reduce_only": reduce_only,
         "budget_used": float(budget or 0.0), "quality": score_for_budget,
         "adx": adx_for_lev,
+        "trail": {
+            "enabled": trail_enabled,
+            "atr_mult": trail_mult,
+            "freeze": trail_freeze_enabled,
+            "callback_rate_pct": trail_callback_pct,
+            "binance_limits_pct": [TRAIL_CALLBACK_MIN_PCT, TRAIL_CALLBACK_MAX_PCT],
+        },
     }
 
     close_side = _close_side_for(side)
+    # Build TP ladder always; SL ladder only when not using trail.
     ladders = _build_ladders(sym, side, qty,
                              ([tp] if tp is not None else tp_targets), tp_splits,
-                             ([sl] if sl is not None else sl_targets), sl_splits)
+                             (None if trail_enabled else ([sl] if sl is not None else sl_targets)), sl_splits)
     plan["tp_orders"] = ladders["tp_orders"]; plan["sl_orders"] = ladders["sl_orders"]
 
     def _place_with_retry(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1010,8 +1069,97 @@ async def execute_trade_live(
 
     tp_success = False
     sl_success = False
-    for arr in (plan["tp_orders"], plan["sl_orders"]):
-        for o in arr:
+
+    # ---- Arm TP ladders ----
+    for o in plan["tp_orders"]:
+        typ = str(o.get("type")).upper()
+        args: Dict[str, Any] = dict(
+            symbol=sym,
+            side=close_side,
+            type=typ,
+            workingType="MARK_PRICE",
+        )
+        eff_ps = _effective_position_side(position_side)
+        if eff_ps != "BOTH":
+            args["positionSide"] = eff_ps  # Hedge: LONG/SHORT
+
+        # MARKET-trigger (STOP_MARKET/TAKE_PROFIT_MARKET) – לא שולחים TIF/price
+        if "MARKET" in typ:
+            args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+        else:
+            args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+            args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+            args["timeInForce"] = "GTC"
+
+        args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
+
+        # ⚠️ One-Way + MARKET trigger → אל תשלח reduceOnly (ימנע -1106)
+        is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
+        if not (is_market_trigger and eff_ps == "BOTH"):
+            args["reduceOnly"] = True
+
+        try:
+            resp = _place_with_retry(args)
+            o["response"] = resp
+            if typ.startswith("TAKE_PROFIT"):
+                tp_success = tp_success or bool(resp.get("orderId"))
+        except Exception as e:
+            o["response"] = {"ok": False, "error": str(e)}
+
+    # ---- Arm SL (trailing or static) ----
+    if trail_enabled:
+        # TRAILING_STOP_MARKET requires: side=close_side, type, callbackRate, activationPrice (optional)
+        eff_ps = _effective_position_side(position_side)
+        qty_str, _ = _q_qty(sym, qty)
+
+        if trail_callback_pct is None:
+            # Fallback: small default within Binance limits (e.g., 0.5%)
+            trail_callback_pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, 0.5))
+
+        args: Dict[str, Any] = dict(
+            symbol=sym,
+            side=close_side,
+            type="TRAILING_STOP_MARKET",
+            callbackRate=f"{float(trail_callback_pct):.2f}",
+            workingType="MARK_PRICE",
+            quantity=qty_str,
+        )
+
+        # Activate immediately around current mark to start trailing
+        mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
+        # For BUY entry (LONG), activation slightly below; for SELL (SHORT), slightly above
+        if side == "BUY":
+            activation = _offset_bps(mark_now, -STOP_BAND_BPS, +1)
+        else:
+            activation = _offset_bps(mark_now, +STOP_BAND_BPS, +1)
+        args["activationPrice"] = _q_price(sym, float(activation))[0]
+
+        if eff_ps != "BOTH":
+            args["positionSide"] = eff_ps
+            # reduceOnly not applicable to TRAILING_STOP_MARKET in Hedge? If sent and fails, retry logic below
+            args["reduceOnly"] = True
+
+        try:
+            resp = _place_with_retry(args)
+            plan["sl_orders"].append({
+                "type": "TRAILING_STOP_MARKET",
+                "callbackRate": float(trail_callback_pct),
+                "activationPrice": args["activationPrice"],
+                "qty": float(qty),
+                "response": resp,
+            })
+            sl_success = sl_success or bool(resp.get("orderId"))
+        except Exception as e:
+            plan["sl_orders"].append({
+                "type": "TRAILING_STOP_MARKET",
+                "callbackRate": float(trail_callback_pct),
+                "activationPrice": args.get("activationPrice"),
+                "qty": float(qty),
+                "response": {"ok": False, "error": str(e)},
+            })
+    else:
+        # Static SL(s) already in ladders
+        for o in plan["sl_orders"]:
             typ = str(o.get("type")).upper()
             args: Dict[str, Any] = dict(
                 symbol=sym,
@@ -1019,12 +1167,10 @@ async def execute_trade_live(
                 type=typ,
                 workingType="MARK_PRICE",
             )
-
             eff_ps = _effective_position_side(position_side)
             if eff_ps != "BOTH":
                 args["positionSide"] = eff_ps  # Hedge: LONG/SHORT
 
-            # MARKET-trigger (STOP_MARKET/TAKE_PROFIT_MARKET) – לא שולחים TIF/price
             if "MARKET" in typ:
                 args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
             else:
@@ -1042,14 +1188,12 @@ async def execute_trade_live(
             try:
                 resp = _place_with_retry(args)
                 o["response"] = resp
-                if typ.startswith("TAKE_PROFIT"):
-                    tp_success = tp_success or bool(resp.get("orderId"))
                 if typ.startswith("STOP"):
                     sl_success = sl_success or bool(resp.get("orderId"))
             except Exception as e:
                 o["response"] = {"ok": False, "error": str(e)}
 
-    if REQUIRE_TP_AND_SL and not (tp_success and sl_success):
+    if REQUIRE_TP_AND_SL and not (tp_success and (sl_success or trail_enabled)):
         rb = _safe_close_position(sym, side, qty, position_side=position_side)
         plan.update({
             "ok": False,
@@ -1092,6 +1236,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
