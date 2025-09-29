@@ -1,8 +1,8 @@
 # utils/trade_executor.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, time, logging, asyncio, json
-from typing import Optional, Dict, Any, List, Tuple
+import os, time, logging, asyncio
+from typing import Optional, Dict, Any, List
 
 from utils.binance_client import (
     get_price, futures_mark_price, set_leverage, futures_create_order,
@@ -53,8 +53,8 @@ from utils.trade_execution_core import (
     _Idem,
 )
 
-# ← NEW: import approvals-only API
-from utils.approvals import ConfirmStore, send_confirm_request, require_approval
+# ← מוסיף את ממשק האישור (סטאבים ב-approvals אם אין מודול מלא)
+from utils.approvals import ConfirmStore, send_confirm_request, require_approval  # type: ignore
 
 log = logging.getLogger("algogpt.trade_executor")
 
@@ -315,7 +315,7 @@ async def execute_trade_live(
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
 
     if must_approve and not (os.getenv("APPROVE_BEFORE_GATE", "0").lower() in ("1","true","yes","on")):
-        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)   # ← תוקן: הוסר הקטע השבור
+        chat_id = int(telegram_chat_id or TELEGRAM_CHAT_ID or 0)
         if not chat_id:
             return {"ok": False, "reason": "telegram_chat_id_required"}
         payload = {"symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage, "quality": score_for_budget, "budget": float(budget or 0.0)}
@@ -333,7 +333,7 @@ async def execute_trade_live(
         log.warning("set_leverage failed: %s", e)
 
     # כניסה היברידית
-    entry_res = await _place_hybrid_entry(sym, side, qty, float(base_price), entry, position_side)
+    entry_res = await _place_hybrid_entry(sym, side, float(qty), float(base_price), entry, position_side)
     if not entry_res or (entry_res.get("ok") is False):
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
@@ -341,7 +341,7 @@ async def execute_trade_live(
     sanity_bps = entry_res.get("sanity_bps")
 
     if ENFORCE_POST_FILL_SANITY and not sanity_ok:
-        rb = _safe_close_position(sym, side, qty, position_side=position_side)
+        rb = _safe_close_position(sym, side, float(qty), position_side=position_side)
         return {
             "ok": False,
             "reason": "post_fill_sanity_failed",
@@ -352,7 +352,7 @@ async def execute_trade_live(
         }
 
     plan: Dict[str, Any] = {
-        "ok": True, "symbol": sym, "side": side, "qty": qty, "leverage": dyn_leverage,
+        "ok": True, "symbol": sym, "side": side, "qty": float(qty), "leverage": int(dyn_leverage),
         "base_price": float(base_price), "dry_run": False,
         "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
         "gate": gate, "risk": risk, "entry_result": entry_res,
@@ -374,7 +374,7 @@ async def execute_trade_live(
 
     # בניית סולמות TP/SL
     ladders = _build_ladders(
-        sym, side, qty,
+        sym, side, float(qty),
         ([tp] if tp is not None else tp_targets), tp_splits,
         (None if trail_enabled else ([sl] if sl is not None else sl_targets)), sl_splits
     )
@@ -432,7 +432,7 @@ async def execute_trade_live(
     # ---- חימוש SL (trailing או סטטי) ----
     if trail_enabled:
         eff_ps = _effective_position_side(position_side)
-        qty_str, _ = _q_qty(sym, qty)
+        qty_str, _ = _q_qty(sym, float(qty))
 
         if trail_callback_pct is None:
             trail_callback_pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, 0.5))
@@ -507,7 +507,7 @@ async def execute_trade_live(
                 o["response"] = {"ok": False, "error": str(e)}
 
     if REQUIRE_TP_AND_SL and not (tp_success and (sl_success or trail_enabled)):
-        rb = _safe_close_position(sym, side, qty, position_side=position_side)
+        rb = _safe_close_position(sym, side, float(qty), position_side=position_side)
         plan.update({
             "ok": False,
             "reason": "tp_sl_arming_failed",
@@ -527,7 +527,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
         symbol=sym,
         side=close_side,
         type="MARKET",
-        quantity=_q_qty(sym, qty)[0],
+        quantity=_q_qty(sym, float(qty))[0],
     )
     if eff_ps != "BOTH":
         args["positionSide"] = eff_ps
