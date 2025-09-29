@@ -1,9 +1,10 @@
 # utils/approvals.py
 from __future__ import annotations
 
-import os, time, hashlib, json
-from typing import Dict, Any, List, Optional, Tuple
+import os, time, hashlib, json, threading, asyncio
+from typing import Dict, Any, List, Optional, Tuple, Callable
 
+# ────────────────────────────── helpers ──────────────────────────────
 def _as_bool(s: Optional[str], default: bool = False) -> bool:
     return str(s).strip().lower() in {"1","true","yes","on"} if s is not None else default
 def _as_float(s: Optional[str], default: float) -> float:
@@ -13,6 +14,7 @@ def _as_int(s: Optional[str], default: int) -> int:
     try: return int(str(s).strip())
     except Exception: return default
 
+# ────────────────────────────── config ──────────────────────────────
 APPROVAL_ENABLED = _as_bool(os.getenv("APPROVAL_ENABLED","1"), True)
 APPROVAL_SUCCESS_MIN = _as_float(os.getenv("APPROVAL_SUCCESS_MIN","60"), 60.0)
 APPROVAL_RR_MIN = _as_float(os.getenv("APPROVAL_RR_MIN","1.30"), 1.30)
@@ -25,7 +27,16 @@ WATCHLIST_CSV = os.getenv("WATCHLIST","") or os.getenv("HEALTH_SYMBOLS","")
 REQUIRE_IN_WATCHLIST = _as_bool(os.getenv("APPROVAL_REQUIRE_WATCHLIST","1"), True)
 APPROVAL_DUP_COOLDOWN_SEC = _as_int(os.getenv("APPROVAL_DUP_COOLDOWN_SEC","300"), 300)
 MAX_LEVERAGE = _as_int(os.getenv("MAX_LEVERAGE","35"), 35)
+CONFIRM_TTL_SEC = _as_int(os.getenv("CONFIRM_TTL_SEC","180"), 180)
 
+# אופציונלית: Auto-Approve לפי כללים
+try:
+    from utils.approval_rules import should_auto_approve  # type: ignore
+except Exception:
+    def should_auto_approve(req: Dict[str, Any]) -> Tuple[bool, str]:  # type: ignore
+        return (False, "")
+
+# ────────────────────────────── recent dedup ──────────────────────────────
 _recent: Dict[str, float] = {}
 
 def _purge_recent(now: float) -> None:
@@ -49,7 +60,7 @@ def _key_for(tp: Dict[str, Any]) -> str:
 def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
     try:
         e = float(entry); s = float(sl); t = float(tp1); sd = (side or "").upper()
-        risk = abs(e - s); 
+        risk = abs(e - s)
         if risk <= 0: return None
         reward = (t - e) if sd in ("BUY","LONG") else (e - t)
         return float(reward / risk) if reward > 0 else None
@@ -93,7 +104,10 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
         tick = None
         for f in info.get("filters", []):
             if f.get("filterType") == "PRICE_FILTER":
-                tick = float(f.get("tickSize","0")) or None
+                try:
+                    tick = float(f.get("tickSize","0")) or None
+                except Exception:
+                    tick = None
         if tick:
             for name, val in [("entry", entry), ("sl", sl), ("tp1", tp1)]:
                 if not _aligned(float(val), float(tick)):
@@ -102,6 +116,7 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
         pass
     return out
 
+# ────────────────────────────── preflight ──────────────────────────────
 def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict[str, Any]:
     out_errors: List[str] = []; out_warns: List[str] = []; metrics: Dict[str, Any] = {}
     if not APPROVAL_ENABLED:
@@ -173,24 +188,82 @@ def can_auto_forward(tp: Dict[str, Any]) -> bool:
     res = preflight_proposal(tp, mutate_state=False)
     return bool(res.get("ok", False))
 
+# ────────────────────────────── ConfirmStore ──────────────────────────────
+# מאחסן בקשות ממתינות לפי ticket_id/idem, אופציונלית עם handler להרצה בעת אישור
 class ConfirmStore:
+    _LOCK = threading.Lock()
     _P: Dict[str, Dict[str, Any]] = {}
+    _RUN: Dict[str, Callable[[], Any]] = {}
+
     @classmethod
-    def pending(cls) -> List[Dict[str, Any]]: return list(cls._P.values())
+    def pending(cls) -> List[Dict[str, Any]]:
+        with cls._LOCK:
+            return [dict(v) for v in cls._P.values()]
+
     @classmethod
     def create(cls, payload: Dict[str, Any]) -> str:
         tid = str(payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}")
-        payload["ticket_id"] = tid; cls._P[tid] = dict(payload); return tid
+        payload["ticket_id"] = tid
+        with cls._LOCK:
+            cls._P[tid] = dict(payload)
+        return tid
+
+    @classmethod
+    def create_with_id(cls, ticket_id: str, payload: Dict[str, Any]) -> str:
+        payload = dict(payload); payload["ticket_id"] = str(ticket_id)
+        with cls._LOCK:
+            cls._P[str(ticket_id)] = payload
+        return str(ticket_id)
+
+    @classmethod
+    def set_handler(cls, ticket_id: str, runner: Callable[[], Any]) -> None:
+        with cls._LOCK:
+            cls._RUN[str(ticket_id)] = runner
+
+    @classmethod
+    def has(cls, ticket_id: str) -> bool:
+        with cls._LOCK:
+            return str(ticket_id) in cls._P
+
     @classmethod
     def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
-        it = cls._P.pop(ticket_id, None)
-        if not it: return {"ok": False, "error": "not_found"}
-        it["approved"] = approved; it["decided_ts"] = int(time.time())
+        with cls._LOCK:
+            it = cls._P.pop(str(ticket_id), None)
+            runner = cls._RUN.pop(str(ticket_id), None)
+        if not it:
+            return {"ok": False, "error": "not_found"}
+        it["approved"] = approved
+        it["decided_ts"] = int(time.time())
+        # אם יש runner והוחלט approve — נריץ (סינכרוני/א-סינכרוני)
+        if approved and runner:
+            try:
+                res = runner()
+                if asyncio.iscoroutine(res):
+                    # אם א-סינכרוני — נפעיל ברקע fire-and-forget
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(res)  # type: ignore
+                    except RuntimeError:
+                        asyncio.run(res)  # fallback אם אין loop
+                it["executed"] = True
+            except Exception as e:
+                it["executed"] = False
+                it["execute_error"] = str(e)
         return {"ok": True, "approved": approved, "ticket_id": ticket_id}
-    @classmethod
-    def flush_all(cls) -> None: cls._P.clear()
 
+    @classmethod
+    def flush_all(cls) -> None:
+        with cls._LOCK:
+            cls._P.clear()
+            cls._RUN.clear()
+
+# ────────────────────────────── Telegram helpers ──────────────────────────────
 async def send_confirm_request(ticket_id: str, plan: Dict[str, Any]) -> None:
+    """
+    שולח בקשת אישור לטלגרם אם יש notifier. אם אין — שקט.
+    plan יכול לכלול:
+      symbol, side, qty, leverage, budget, quality, ttl_sec, chat_id, וכו'
+    """
     try:
         from utils.telegram_notifier import send_trade_approval  # type: ignore
     except Exception:
@@ -200,7 +273,53 @@ async def send_confirm_request(ticket_id: str, plan: Dict[str, Any]) -> None:
     except Exception:
         return
 
-__all__ = ["preflight_proposal","can_auto_forward","ConfirmStore","send_confirm_request"]
+# ────────────────────────────── require_approval API ──────────────────────────────
+async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    API אחיד לשלב האישור:
+    - אם כללי Auto-Approve מחליטים 'כן' => מחזיר approved מיידית.
+    - אחרת: יוצר ticket_id (idem), שומר ב-ConfirmStore, שולח בקשה לטלגרם, ומחזיר pending.
+    payload צפוי לכלול: symbol/side/qty/leverage/budget/quality וכו'.
+    """
+    # 1) בדיקת Auto-Approve (אם קיים מודול כללים)
+    try:
+        ok_auto, reason = should_auto_approve({
+            "budget_usd": payload.get("budget") or payload.get("budget_usd") or 0.0,
+        })
+    except Exception:
+        ok_auto, reason = (False, "")
+    if ok_auto:
+        return {"status": "approved", "reason": reason or "env_auto_approve"}
+
+    # 2) יצירת כרטיס (ticket/idem)
+    ttl = int(payload.get("ttl_sec") or CONFIRM_TTL_SEC or 180)
+    ticket_id = str(payload.get("ticket_id") or f"{int(time.time()*1000)}_{hashlib.sha256(json.dumps(payload, sort_keys=True).encode('utf-8')).hexdigest()[:12]}")
+    plan = dict(payload)
+    plan.update({
+        "chat_id": int(chat_id),
+        "ticket_id": ticket_id,
+        "ttl_sec": ttl,
+        "requested_ts": int(time.time()),
+    })
+    ConfirmStore.create_with_id(ticket_id, plan)
+
+    # 3) שליחת בקשת אישור לטלגרם (best-effort)
+    try:
+        await send_confirm_request(ticket_id, plan)
+    except Exception:
+        pass
+
+    return {"status": "pending", "ticket_id": ticket_id, "ttl_sec": ttl}
+
+# ────────────────────────────── exports ──────────────────────────────
+__all__ = [
+    "preflight_proposal",
+    "can_auto_forward",
+    "ConfirmStore",
+    "send_confirm_request",
+    "require_approval",
+]
+
 
 
 
