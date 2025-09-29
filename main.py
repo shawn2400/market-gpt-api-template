@@ -14,7 +14,7 @@ from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-from fastapi.staticfiles import StaticFiles  # NEW
+from fastapi.staticfiles import StaticFiles
 
 from utils.auth import extract_token, allow_all, token_matches
 from utils.json_logger import setup_json_logging
@@ -118,10 +118,6 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
-from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
@@ -165,7 +161,7 @@ app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
-# 🆕 שרת סטטי ל-/static
+# סטטי /static
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ---------- Public paths ----------
@@ -184,9 +180,9 @@ DEFAULT_PUBLIC_PATHS = {
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
     # 👇 חדשים לצרכי UI
-    "/ui/dashboard",          # routes served here (static dashboard)
-    "/ops/ui",                # routes/ops_ui.py – HTML page
-    "/ops/ui/ticket",         # routes/ops_ui.py – POST proxy
+    "/ui/dashboard",
+    "/ops/ui",
+    "/ops/ui/ticket",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
@@ -200,7 +196,7 @@ EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
 logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
              "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
 
-# ---------- rndr-id יציב ----------
+# ---------- rndr-id ----------
 INSTANCE_ID = (
     os.getenv("RENDER_INSTANCE_ID")
     or os.getenv("INSTANCE_ID")
@@ -279,7 +275,9 @@ else:
         "routes.ops_approve",
         "routes.trade",
         "routes.auto_trade",
-        "routes.ops_ui",          # 👈 חדש: דף UI ל-ops (טיקט מהיר/כפתורים)
+        "routes.ops_ui",
+        "routes.ops_flags",       # 👈 חדש
+        "routes.position_ops",    # 👈 חדש
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -300,15 +298,18 @@ def _route_exists(path: str) -> bool:
 
 # ---------- base routes ----------
 @app.get("/")
-async def root(): return {"ok":True,"status":"ok","service":"app_full","title":"AlgoGPT API","version":APP_VERSION}
+async def root():
+    return {"ok":True,"status":"ok","service":"app_full","title":"AlgoGPT API","version":APP_VERSION}
 
 @app.get("/health")
-async def health(): return {"ok":True,"status":"ok","version":APP_VERSION}
+async def health():
+    return {"ok":True,"status":"ok","version":APP_VERSION}
 
 @app.get("/debug/health", include_in_schema=False)
-async def debug_health(): return {"ok":True,"status":"ok","env":os.getenv("ENV","prod"),"version":APP_VERSION}
+async def debug_health():
+    return {"ok":True,"status":"ok","env":os.getenv("ENV","prod"),"version":APP_VERSION}
 
-# NEW: /debug/env – כדי לאבחן ENV
+# NEW: /debug/env
 def _mask(v: str) -> str:
     if not v: return ""
     if len(v) <= 8: return "*" * len(v)
@@ -325,15 +326,18 @@ async def debug_env():
     }
 
 @app.get("/status/ping")
-async def status_ping(): return {"ok":True,"ts_ms":int(time.time()*1000)}
+async def status_ping():
+    return {"ok":True,"ts_ms":int(time.time()*1000)}
 
 if not _route_exists("/status/ws"):
     @app.get("/status/ws")
-    async def status_ws(): st = ws_user_status(); return {"ok":True, **st}
+    async def status_ws():
+        st = ws_user_status(); return {"ok":True, **st}
 
 if not _route_exists("/status/executor"):
     @app.get("/status/executor")
-    async def status_executor(): st = exec_get_counters(); return {"ok":True, **st}
+    async def status_executor():
+        st = exec_get_counters(); return {"ok":True, **st}
 
 # /status/all
 if not _route_exists("/status/all"):
@@ -377,7 +381,7 @@ async def price(symbol: str):
         p = None; ok = False; err = str(e)
     return {"ok":ok,"symbol":symbol.upper(),"price":float(p) if p is not None else None,"source":src,"ts":ts,"error":err}
 
-# readiness שלא מפילה בעת BAN
+# readiness
 @app.get("/readyz")
 async def readyz():
     details: Dict[str, Any] = {}; err: Optional[str] = None
@@ -408,7 +412,7 @@ async def flush_kill_switch():
             logger.warning({"event":"flush_failed","err":str(e)})
     return {"ok":True,"flushed":done}
 
-# --- public debug auth endpoint ---
+# --- debug auth ---
 try:
     from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
 except Exception:
@@ -447,9 +451,7 @@ async def ops_eod_now():
 async def ui_dashboard():
     p = Path("static/dashboard/index.html")
     if p.exists():
-        # יגיש את קובץ הדשבורד החדש
         return FileResponse(str(p), media_type="text/html; charset=utf-8")
-    # נפילה חיננית אם אין קובץ
     html = "<!doctype html><meta charset='utf-8'><body><h3 style='font-family:sans-serif'>Dashboard not found</h3><p>Put your file at <code>static/dashboard/index.html</code>.</p></body>"
     return HTMLResponse(html)
 
