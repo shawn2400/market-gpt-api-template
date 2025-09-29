@@ -31,7 +31,6 @@ def _as_int(s: Optional[str], default: int) -> int:
 APPROVAL_ENABLED = _as_bool(os.getenv("APPROVAL_ENABLED", "1"), True)
 APPROVAL_SUCCESS_MIN = _as_float(os.getenv("APPROVAL_SUCCESS_MIN", "60"), 60.0)
 APPROVAL_RR_MIN = _as_float(os.getenv("APPROVAL_RR_MIN", "1.30"), 1.30)
-# שים לב: המערכת שלך משתמשת ב-3.0% כהפרדה מינימלית, אז נשמור ברירת מחדל זהה
 MIN_TP_SL_DIFF_PCT = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT", "3.0"), 3.0)
 APPROVAL_MAX_SL_PCT = _as_float(os.getenv("APPROVAL_MAX_SL_PCT", "3.0"), 3.0)
 MIN_NOTIONAL_USDT = _as_float(os.getenv("MIN_NOTIONAL_USDT", "5"), 5.0)
@@ -99,14 +98,12 @@ def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
     if not APPROVAL_REQUIRE_FRESH_PRICE:
         return (True, None)
     try:
-        # שני פונקציות קיימות אצלך (ws_fallback / binance), ננסה ws_fallback תחילה:
         from utils.ws_fallback import is_price_fresh, get_price  # type: ignore
         ok = is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC)
         px = float(get_price(symbol) or 0.0)
         return (bool(ok), px if px > 0 else None)
     except Exception:
         try:
-            # נפילה ל-HTTP אם אין WS
             from utils.binance_client import get_price as http_price  # type: ignore
             px = float(http_price(symbol) or 0.0)
             return (px > 0, px if px > 0 else None)
@@ -242,6 +239,42 @@ def can_auto_forward(tp: Dict[str, Any]) -> bool:
     # בדיקת כשירות מבלי “לסמן” את ההצעה כמבוצעת לאחרונה
     res = preflight_proposal(tp, mutate_state=False)
     return bool(res.get("ok", False))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Minimal in-memory ConfirmStore for manager compatibility
+# ──────────────────────────────────────────────────────────────────────────────
+class ConfirmStore:
+    _P: Dict[str, Dict[str, Any]] = {}
+
+    @classmethod
+    def pending(cls) -> List[Dict[str, Any]]:
+        return list(cls._P.values())
+
+    @classmethod
+    def create(cls, payload: Dict[str, Any]) -> str:
+        tid = str(payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}")
+        payload["ticket_id"] = tid
+        cls._P[tid] = dict(payload)
+        return tid
+
+    @classmethod
+    def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
+        it = cls._P.pop(ticket_id, None)
+        if not it:
+            return {"ok": False, "error": "not_found"}
+        it["approved"] = approved
+        it["decided_ts"] = int(time.time())
+        return {"ok": True, "approved": approved, "ticket_id": ticket_id}
+
+    @classmethod
+    def flush_all(cls) -> None:
+        cls._P.clear()
+
+__all__ = [
+    "preflight_proposal",
+    "can_auto_forward",
+    "ConfirmStore",
+]
 
 
 
