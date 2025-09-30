@@ -16,6 +16,10 @@ def redis_enabled() -> bool:
     return bool(aioredis and REDIS_URL)
 
 async def get_redis():
+    """
+    מחזיר client אסינכרוני עם timeouts קצרים ו-healthcheck.
+    במקרה של כשל – מחזיר None ולא מפיל את היישום.
+    """
     if not redis_enabled():
         return None
     try:
@@ -30,3 +34,4 @@ async def get_redis():
     except Exception as e:
         log.warning({"event":"redis.client_init_failed","error":str(e)})
         return None
+
