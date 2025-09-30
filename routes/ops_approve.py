@@ -1,6 +1,6 @@
 # routes/ops_approve.py
 from __future__ import annotations
-import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect
+import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect, traceback
 from contextlib import suppress
 from typing import Any, Dict, Optional, List, Callable
 from fastapi import APIRouter, HTTPException, Body, Query, Request
@@ -18,12 +18,9 @@ try:
         record_approval_rejected,
     )
 except Exception:
-    def record_approval_created():
-        pass
-    def record_approval_approved():
-        pass
-    def record_approval_rejected():
-        pass
+    def record_approval_created(): pass
+    def record_approval_approved(): pass
+    def record_approval_rejected(): pass
 
 # -------- Optional Redis ----------
 try:
@@ -46,13 +43,11 @@ DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL","15m")
 def _bool_env(name: str, default: bool=False) -> bool:
     return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
 
-TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
-
-# --- behavior flags (fail-open on non-critical signals) ---
-# אם חישוב velocity נכשל – לא חוסמים אישור, רק אזהרה (ברירת המחדל: מותר לאשר)
+TP_LADDER_ON_APPROVE       = _bool_env("TP_LADDER_ON_APPROVE", False)
 APPROVAL_FAIL_OPEN_ON_VELOCITY = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
-# רמת לוג לחישובי velocity (INFO/WARNING)
-VELOCITY_LOG_LEVEL = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
+VELOCITY_LOG_LEVEL         = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
+DEBUG_APPROVE_HTML         = _bool_env("DEBUG_APPROVE_HTML", False)
+APPROVE_FALLBACK_TO_MARKET = _bool_env("APPROVE_FALLBACK_TO_MARKET", False)
 
 # -------- ConfirmStore fallback ----------
 try:
@@ -160,10 +155,8 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
-        try:
+        with suppress(Exception):
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        except Exception as e:
-            logger.warning("futures_change_leverage failed: %s", e)
 
         base_kwargs: Dict[str, Any] = {
             "symbol": symbol,
@@ -185,10 +178,8 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             if not _is_code_4061(e1):
                 raise
             try:
-                if "positionSide" in attempt_order:
-                    retry_kwargs = dict(base_kwargs)
-                else:
-                    retry_kwargs = dict(base_kwargs)
+                retry_kwargs = dict(base_kwargs)
+                if "positionSide" not in attempt_order:
                     retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
@@ -248,7 +239,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return res
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
-        return {"ok": False, "error": "armed_execute_failed", "detail": str(e)}
+        return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
 # -------- Smart ETA (optional) --------
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
@@ -261,7 +252,6 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         closes: List[float]
         try:
             if 'DataFrame' in str(type(kl)):
-                # לעולם לא בודקים truthiness של DF. קוראים לפי עמודות/אינדקס.
                 cols = getattr(kl, 'columns', [])
                 if hasattr(kl, 'columns') and ('close' in cols):
                     closes = [float(x) for x in kl['close'].tolist()]
@@ -279,7 +269,6 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         per_min = avg_per_candle / m
         return per_min if per_min > 0 else None
     except Exception as e:
-        # לא חוסמים אישור—רק לוג. רמה ניתנת לקונפיגורציה.
         if VELOCITY_LOG_LEVEL == "INFO":
             logger.info("velocity_calc_failed: %s", e)
         else:
@@ -289,18 +278,13 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
 def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
                 interval: str = DEFAULT_INTERVAL, window_min: int = ETA_VELOCITY_WINDOW) -> Dict[str, Optional[int]]:
     vpm = _calc_velocity_per_min(symbol, interval, window_min)
-    # אם אין נתון מספיק – מחזירים None ולא חוסמים זרימה
     if not (price_now and isinstance(vpm, (int, float)) and vpm > 0):
         return {"eta_tp1_min": None, "eta_tp2_min": None, "eta_tp3_min": None}
     def _eta(tgt):
         if tgt is None: return None
         dist = abs(float(tgt) - float(price_now))
         return int(math.ceil(dist / vpm)) if vpm > 0 else None
-    return {
-        "eta_tp1_min": _eta(tp1),
-        "eta_tp2_min": _eta(tp2),
-        "eta_tp3_min": _eta(tp3),
-    }
+    return {"eta_tp1_min": _eta(tp1), "eta_tp2_min": _eta(tp2), "eta_tp3_min": _eta(tp3)}
 
 # -------- Storage abstraction --------
 import json as _json
@@ -334,16 +318,14 @@ async def _delete_ticket(tid: str, source: str) -> None:
                 return
         except Exception as e:
             logger.warning("redis_delete_failed: %s", e)
-    try:
+    with suppress(Exception):
         ConfirmStore.decide(tid, approved=False)
-    except Exception:
-        pass
 
 # -------------------- API --------------------
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
     payload: Dict[str, Any] = Body(...),
-    request: Request = None,  # Request injected
+    request: Request = None,
 ):
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
@@ -385,7 +367,7 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
-    try:
+    with suppress(Exception):
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
         rr_min_eff  = max(rr_min_flag, rr_env_lo)
@@ -400,13 +382,9 @@ async def create_ticket(
                 reward = abs(current - tp1); risk = abs(sl - current); rr = (reward / risk) if risk > 0 else None
             if rr is not None and rr < rr_min_eff:
                 req_body["blocked_by_rr_min"] = True
-    except Exception:
-        pass
 
-    try:
+    with suppress(Exception):
         ConfirmStore.create(dict(req_body))
-    except Exception:
-        pass
     record_approval_created()
 
     if aioredis and REDIS_URL:
@@ -468,16 +446,29 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
     flow = _decide_flow_by_mode(ticket)
 
-    # לעולם לא ניתן לכישלון איתות “רך” לעצור אישור: מנקים דגלים לא-קריטיים
+    # נטרול דגלים “רכים”
     with suppress(Exception):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
+    # ביצוע
     exec_res = await (_execute_trade(ticket) if flow=="MARKET"
                       else _execute_trade_armed(ticket) if flow=="HYBRID"
                       else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket)))
     ok = bool(exec_res.get("ok"))
 
+    # אם נכשל וצריך – נפילה ל-MARKET (אופציונלי)
+    if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
+        logger.warning("approve_retry_market_after_hybrid_fail: %s", exec_res)
+        retry_res = await _execute_trade(ticket)
+        ok = bool(retry_res.get("ok"))
+        exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
+
+    # לוג שקוף
+    if not ok:
+        logger.warning("approve_failed: ticket=%s flow=%s detail=%s", ticket_id, flow, json.dumps(exec_res, ensure_ascii=False))
+
+    # פידבק טלגרם
     try:
         sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
         msg = (
@@ -492,21 +483,20 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     except Exception:
         pass
 
-    try:
+    with suppress(Exception):
         ConfirmStore.decide(ticket_id, approved=ok)
-    except Exception:
-        pass
 
-    try:
-        if ok:
-            record_approval_approved()
-        else:
-            record_approval_rejected()
-    except Exception:
-        pass
+    with suppress(Exception):
+        (record_approval_approved if ok else record_approval_rejected)()
 
     await _delete_ticket(ticket_id, source)
-    return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
+
+    # עמוד אישור – עם פירוט שגיאה אם DEBUG_APPROVE_HTML=1
+    if ok:
+        return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.")
+    if DEBUG_APPROVE_HTML:
+        return _html("⚠️ שגיאה בביצוע — " + _md_html(json.dumps(exec_res, ensure_ascii=False)))
+    return _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
 @router.get("/ops/approve-link", summary="Approve legacy link (?id=...)")
 async def approve_link(id: str = Query(..., description="ticket_id")):
@@ -516,22 +506,14 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
 async def reject(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
     await _delete_ticket(ticket_id, source)
-    try:
+    with suppress(Exception):
         await _send_telegram_html(
             f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken."
         )
-    except Exception:
-        pass
-    try:
+    with suppress(Exception):
         ConfirmStore.decide(ticket_id, approved=False)
-    except Exception:
-        pass
-
-    try:
+    with suppress(Exception):
         record_approval_rejected()
-    except Exception:
-        pass
-
     return _html("❌ נדחה. לא בוצעה פעולה.")
 
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade) – signature required")
@@ -553,13 +535,16 @@ async def approve_signed(request: Request):
                       else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(payload)))
     ok = bool(exec_res.get("ok"))
     if not ok:
-        raise HTTPException(status_code=502, detail={"execute_error": exec_res})
-
-    try:
+        logger.warning("approve_signed_failed: %s", json.dumps(exec_res, ensure_ascii=False))
+        if flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
+            retry = await _execute_trade(payload)
+            if not retry.get("ok"):
+                raise HTTPException(status_code=502, detail={"execute_error": exec_res, "fallback_market": retry})
+            exec_res = {"primary": exec_res, "fallback_market": retry}
+        else:
+            raise HTTPException(status_code=502, detail={"execute_error": exec_res})
+    with suppress(Exception):
         record_approval_approved()
-    except Exception:
-        pass
-
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 
 @router.get("/ops/digest/expired", summary="Send Telegram digest for expired approval tickets in last N hours")
@@ -570,7 +555,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         r = await _redis()
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
-        key = f"{NS}:expired_log」
+        key = f"{NS}:expired_log"
         now = time.time()
         since = now - (hours * 3600)
         items = await r.lrange(key, 0, 2000)
