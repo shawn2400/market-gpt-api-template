@@ -26,10 +26,11 @@ def _lbl_side(side: Optional[str]) -> str:
 
 def _lbl_flow(flow: Optional[str]) -> str:
     s = (flow or "").strip().upper()
+    # שמרנו על סט קטן, כולל APPROVAL/IMMEDIATE לשימושי ניטור כלליים
     return s if s in ("MARKET", "HYBRID", "APPROVAL", "IMMEDIATE") else "NA"
 
 # ---------- Prometheus metrics ----------
-# approvals
+# approvals (כבר קיימים)
 APPROVALS_CREATED     = Counter("approvals_created_total",  "Total approval tickets created")
 APPROVALS_APPROVED    = Counter("approvals_approved_total", "Total approvals approved")
 APPROVALS_REJECTED    = Counter("approvals_rejected_total", "Total approvals rejected")
@@ -50,6 +51,13 @@ APPROVALS_GC_LAST_EXPIRED  = Gauge("approvals_gc_last_expired",  "Last approvals
 TRADE_EXEC_REQUESTS = Counter("trade_execute_requests_total", "Trade execute requests", ["flow"])
 TRADE_EXEC_OK       = Counter("trade_execute_ok_total",       "Successful trade executes", ["flow"])
 TRADE_EXEC_FAIL     = Counter("trade_execute_fail_total",     "Failed trade executes", ["flow"])
+
+# NEW: /trade/approve vs /trade/reject events (low-card action label)
+TRADE_APPROVAL_EVENTS = Counter(
+    "trade_approval_events_total",
+    "Calls to /trade/approve and /trade/reject grouped by action",
+    ["action"]  # approve / reject
+)
 
 # ---------- Public helpers (imported by other modules) ----------
 # Approvals
@@ -76,14 +84,13 @@ def record_gc_last_run(now_ts: Optional[float] = None, expired_count: Optional[i
 # Trades (new, as requested)
 def record_trade_requested(flow: Optional[str] = None) -> None:
     """
-    Count an inbound trade request. `flow` should be 'MARKET'/'HYBRID' for direct exec,
-    or 'APPROVAL'/'IMMEDIATE' for higher-level routing. Anything else -> 'NA'.
+    Count an inbound trade request. flow: 'MARKET'/'HYBRID'/'APPROVAL'/'IMMEDIATE' or None.
     """
     TRADE_EXEC_REQUESTS.labels(_lbl_flow(flow)).inc()
 
 def record_trade_executed(flow: Optional[str] = None, ok: bool = True, engine: Optional[str] = None) -> None:
     """
-    Count a trade execution outcome. `engine` is accepted but intentionally ignored to keep labels low-cardinality.
+    Count a trade execution outcome. `engine` intentionally ignored to keep labels low-cardinality.
     """
     lbl = _lbl_flow(flow)
     if ok:
@@ -92,16 +99,18 @@ def record_trade_executed(flow: Optional[str] = None, ok: bool = True, engine: O
         TRADE_EXEC_FAIL.labels(lbl).inc()
 
 def record_trade_approved(flow: Optional[str] = None) -> None:
-    """
-    Alias to approvals-approved; provided for symmetry with trade flow wiring.
-    """
+    # לשמירה על סימטריה — סופרים גם באישורים
     record_approval_approved()
 
 def record_trade_rejected(flow: Optional[str] = None) -> None:
-    """
-    Alias to approvals-rejected; provided for symmetry with trade flow wiring.
-    """
     record_approval_rejected()
+
+# NEW: explicit approve/reject endpoint counters
+def record_trade_approve_endpoint() -> None:
+    TRADE_APPROVAL_EVENTS.labels("approve").inc()
+
+def record_trade_reject_endpoint() -> None:
+    TRADE_APPROVAL_EVENTS.labels("reject").inc()
 
 # ---------- Backward-compat (old names) ----------
 def record_trade_request(flow: Optional[str]) -> None:
@@ -114,10 +123,10 @@ def record_trade_fail(flow: Optional[str]) -> None:
     record_trade_executed(flow=flow, ok=False)
 
 # ---------- JSON snapshot ----------
-def _scrape_snapshot(prefix: Optional[str] = None) -> Dict[str, Any]:
+def _scrape_snapshot(prefix: Optional[str] = None, include_meta: bool = True) -> Dict[str, Any]:
     """
     Returns a simple JSON of current counters/gauges (optionally filtered by name prefix).
-    Not a replacement for Prometheus scrape; meant for dashboards / quick debug.
+    Adds _meta.allowlist_symbols when include_meta=True.
     """
     out: Dict[str, Any] = {}
     try:
@@ -125,12 +134,10 @@ def _scrape_snapshot(prefix: Optional[str] = None) -> Dict[str, Any]:
             name = metric.name
             if prefix and not name.startswith(prefix):
                 continue
-            # Sum samples into a compact dict; preserve labels when present
             series: List[Dict[str, Any]] = []
             for sample in metric.samples:
                 # sample: (name, labels, value, timestamp, exemplar)
                 s_name, s_labels, s_value, *_ = sample
-                # keep only the exact-metric rows (skip _created/_count/_sum artifacts except ours)
                 if not s_name.startswith(name):
                     continue
                 row = {"value": s_value}
@@ -138,13 +145,23 @@ def _scrape_snapshot(prefix: Optional[str] = None) -> Dict[str, Any]:
                     row["labels"] = s_labels
                 series.append(row)
             out[name] = series
+        if include_meta:
+            out["_meta"] = {
+                "allowlist_symbols": sorted(list(_ALLOWS)),
+                "other_bucket": _OTHER,
+                "flows": ["MARKET", "HYBRID", "APPROVAL", "IMMEDIATE", "NA"],
+                "sides": ["BUY", "SELL", "NA"],
+            }
     except Exception as e:
         out = {"error": f"scrape_failed: {e}"}
     return out
 
-@router.get("/metrics-json", summary="JSON metrics snapshot (optionally filter by ?prefix=)")
-async def metrics_json(prefix: Optional[str] = Query(default=None, description="filter metrics by name prefix")):
-    return _scrape_snapshot(prefix=prefix)
+@router.get("/metrics-json", summary="JSON metrics snapshot (optionally filter by ?prefix= and toggle meta via ?meta=0/1)")
+async def metrics_json(
+    prefix: Optional[str] = Query(default=None, description="filter metrics by name prefix"),
+    meta: Optional[int] = Query(default=1, ge=0, le=1, description="include _meta block (default 1)"),
+):
+    return _scrape_snapshot(prefix=prefix, include_meta=bool(meta))
 
 @router.get("/metrics/health", summary="Basic metrics health")
 async def metrics_health():
@@ -163,18 +180,33 @@ async def metrics_health():
             "ok_total":       _sum_metric("trade_execute_ok_total"),
             "fail_total":     _sum_metric("trade_execute_fail_total"),
         },
+        "trade_approval_endpoints": {
+            "approve_calls": _sum_metric("trade_approval_events_total", label_filter=("action","approve")),
+            "reject_calls":  _sum_metric("trade_approval_events_total", label_filter=("action","reject")),
+        },
+        "_meta": {
+            "allowlist_symbols": sorted(list(_ALLOWS)),
+        }
     }
 
 # ---------- tiny helpers to read current values ----------
-def _sum_metric(name: str) -> float:
+def _sum_metric(name: str, label_filter: Optional[tuple[str,str]] = None) -> float:
+    """
+    Sum metric samples by name; optionally filter by one label k=v (kept simple to avoid cardinality issues).
+    """
     total = 0.0
     try:
         for m in REGISTRY.collect():
             if m.name != name:
                 continue
             for s in m.samples:
-                if s.name == name:
-                    total += float(s.value)
+                if s.name != name:
+                    continue
+                if label_filter:
+                    k, v = label_filter
+                    if not s.labels or s.labels.get(k) != v:
+                        continue
+                total += float(s.value)
     except Exception:
         pass
     return total
@@ -184,7 +216,6 @@ def _last_gauge(name: str) -> Optional[float]:
         for m in REGISTRY.collect():
             if m.name != name:
                 continue
-            # take the last gauge sample
             vals = [float(s.value) for s in m.samples if s.name == name]
             if vals:
                 return vals[-1]
