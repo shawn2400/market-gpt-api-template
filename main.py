@@ -59,8 +59,11 @@ except Exception:
                 return list(cls._P.values())
             @classmethod
             def create(cls, payload: Dict[str, Any]) -> str:
-                tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
+                import time as _t
+                tid = payload.get("ticket_id") or f"TKT-{int(_t.time()*1000)}"
                 payload["ticket_id"] = tid
+                payload.setdefault("created_ts", int(_t.time()))
+                payload.setdefault("ttl_sec", int(os.getenv("OPS_TICKET_TTL_SEC", "1800")))
                 cls._P[tid] = payload
                 return tid
             @classmethod
@@ -93,6 +96,14 @@ try:
     from utils.trade_manager import manage_open_trades_loop  # type: ignore
 except Exception:
     manage_open_trades_loop = None  # type: ignore
+
+# ---- Approvals GC (optional) ----
+APPROVALS_GC_ENABLE = os.getenv("APPROVALS_GC_ENABLE","1").lower() in ("1","true","yes","on")
+APPROVALS_GC_INTERVAL_SEC = int(os.getenv("APPROVALS_GC_INTERVAL_SEC","30"))
+try:
+    from utils.approvals_gc import start_approvals_gc  # type: ignore
+except Exception:
+    start_approvals_gc = None  # type: ignore
 
 def _coerce_log_level(val):
     import logging as _l
@@ -479,6 +490,86 @@ async def _startup_user_stream():
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
+# ---- start approvals GC (auto-reject expired) ----
+@app.on_event("startup")
+async def _start_approvals_gc():
+    if not APPROVALS_GC_ENABLE:
+        return
+    try:
+        if callable(start_approvals_gc):
+            # Prefer user-provided implementation
+            asyncio.create_task(start_approvals_gc(interval=APPROVALS_GC_INTERVAL_SEC))
+            logger.info({"event":"approvals_gc_started","impl":"utils.approvals_gc","interval_sec":APPROVALS_GC_INTERVAL_SEC})
+            return
+    except Exception as e:
+        logger.warning({"event":"approvals_gc_import_failed","error":str(e)})
+
+    # Fallback lightweight GC (Redis + ConfirmStore)
+    async def _gc_loop():
+        import json, re, time as _t
+        NS = os.getenv("REDIS_NAMESPACE","ops-supervisor-web").strip() or "ops-supervisor-web"
+        REDIS_URL = os.getenv("REDIS_URL","").strip()
+        TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC","1800") or "1800")
+        # lazy import
+        try:
+            import redis.asyncio as aioredis  # type: ignore
+        except Exception:
+            aioredis = None  # type: ignore
+
+        async def _redis():
+            if not (aioredis and REDIS_URL):
+                return None
+            return aioredis.from_url(REDIS_URL, decode_responses=True)
+
+        while True:
+            try:
+                now = _t.time()
+                # Redis keys
+                try:
+                    r = await _redis()
+                    if r:
+                        pattern = f"{NS}:ticket:*"
+                        # SCAN to avoid blocking
+                        cur = "0"
+                        while True:
+                            cur, keys = await r.scan(cur, match=pattern, count=200)
+                            for k in keys:
+                                raw = await r.get(k)
+                                if not raw:
+                                    continue
+                                try:
+                                    rec = json.loads(raw)
+                                    ts = float(rec.get("ts") or rec.get("created_ts") or 0)
+                                except Exception:
+                                    ts = 0
+                                if ts and (now - ts) > TICKET_TTL_SEC:
+                                    await r.delete(k)
+                            if cur == "0":
+                                break
+                except Exception:
+                    pass
+
+                # ConfirmStore fallback memory
+                try:
+                    pend = list(ConfirmStore.pending() or [])
+                    for it in pend:
+                        ts = float(it.get("created_ts") or it.get("ts") or 0)
+                        ttl = int(it.get("ttl_sec") or os.getenv("OPS_TICKET_TTL_SEC","1800") or "1800")
+                        if ts and (now - ts) > ttl:
+                            try:
+                                ConfirmStore.decide(str(it.get("ticket_id")), approved=False)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.warning({"event":"approvals_gc_loop_error","error":str(e)})
+            await asyncio.sleep(APPROVALS_GC_INTERVAL_SEC)
+
+    asyncio.create_task(_gc_loop())
+    logger.info({"event":"approvals_gc_started","impl":"fallback","interval_sec":APPROVALS_GC_INTERVAL_SEC})
+
 @app.on_event("startup")
 async def _start_trade_manager_loop():
     if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
@@ -488,6 +579,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
