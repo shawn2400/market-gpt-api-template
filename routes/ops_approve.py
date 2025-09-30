@@ -369,12 +369,13 @@ async def create_ticket(
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    if ETA_SMART_ENABLE && (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
+    # תיקון תחביר: and במקום &&
+    if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
             price_now = _get_last_price(symbol)
         etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
-        for k,v in etas.items():
+        for k, v in etas.items():
             payload.setdefault(k, v)
 
     try:
@@ -636,6 +637,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
