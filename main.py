@@ -484,10 +484,17 @@ async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
 # --- Approvals GC (auto-reject expired) ---
+# תומך גם ב-start_approvals_gc(interval=...) וגם ב-start_gc_task()
 try:
-    from utils.approvals_gc import start_approvals_gc  # type: ignore
+    from utils.approvals_gc import start_approvals_gc as _start_gc  # type: ignore
+    _gc_needs_interval = True
 except Exception:
-    start_approvals_gc = None  # type: ignore
+    try:
+        from utils.approvals_gc import start_gc_task as _start_gc  # type: ignore
+        _gc_needs_interval = False
+    except Exception:
+        _start_gc = None  # type: ignore
+        _gc_needs_interval = False
 
 APPROVAL_GC_ENABLE = os.getenv("APPROVAL_GC_ENABLE","1").lower() in ("1","true","yes","on")
 APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SEC","15"))
@@ -495,8 +502,11 @@ APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SEC","15"))
 @app.on_event("startup")
 async def _startup_approvals_gc():
     try:
-        if APPROVAL_GC_ENABLE and start_approvals_gc:
-            start_approvals_gc(interval=APPROVAL_GC_INTERVAL_SEC)
+        if APPROVAL_GC_ENABLE and _start_gc:
+            if _gc_needs_interval:
+                _start_gc(interval=APPROVAL_GC_INTERVAL_SEC)
+            else:
+                _start_gc()
             logging.getLogger("algogpt.approvals.gc").info({"event":"gc.start_ok","interval":APPROVAL_GC_INTERVAL_SEC})
     except Exception as e:
         logging.getLogger("algogpt.approvals.gc").warning({"event":"gc.start_failed","err":str(e)})
@@ -510,6 +520,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
