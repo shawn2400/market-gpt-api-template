@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, logging, asyncio
+from contextlib import suppress
 from typing import Optional, Dict, Any, List
 
 from utils.binance_client import (
@@ -56,6 +57,10 @@ from utils.trade_execution_core import (
 # ← מוסיף את ממשק האישור (סטאבים ב-approvals אם אין מודול מלא)
 from utils.approvals import ConfirmStore, send_confirm_request, require_approval  # type: ignore
 
+# ← אופציונלי: ביצוע ישיר ל-Futures בשביל יישור מצב חשבון (Hedge/One-way)
+with suppress(Exception):
+    from utils.binance_futures_exec import BinanceFuturesExec  # type: ignore
+
 log = logging.getLogger("algogpt.trade_executor")
 
 # ─────────── Feature flags for trail (ENV override-able per ticket) ───────────
@@ -66,6 +71,26 @@ SL_TRAIL_ENABLE       = os.getenv("SL_TRAIL_ENABLE", "1").lower() in ("1","true"
 TRAIL_ENABLE_DEFAULT    = os.getenv("TRAIL_ENABLE", "0").lower() in ("1","true","yes","on")
 TRAIL_ATR_MULT_DEFAULT  = float(os.getenv("TRAIL_ATR_MULT", os.getenv("SL_ATR_MULT", "0.6")))
 TRAIL_FREEZE_ENABLE_DEF = os.getenv("TRAIL_FREEZE_ENABLE", "1").lower() in ("1","true","yes","on")
+
+# ─────────── Align position mode helper (fix -4061) ───────────
+def _ensure_runtime_position_mode() -> None:
+    """
+    מיישר את מצב החשבון (Hedge/One-Way) מול Binance לפי POSITION_MODE_OVERRIDE אם הוגדר.
+    רץ באופן שקט; כישלון לא מפיל את הזרימה.
+    """
+    mode = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
+    if not mode:
+        return
+    try:
+        # אם המודול קיים — נשתמש בו כדי לקרוא ל-/positionSide/dual
+        if 'BinanceFuturesExec' in globals():
+            execu = BinanceFuturesExec()
+            if mode in ("hedge","dual","dual_side","dual_side_position","dualposition"):
+                execu.set_position_side_dual(True)   # Hedge
+            elif mode in ("oneway","one_way","single","single_side","oneside"):
+                execu.set_position_side_dual(False)  # One-way
+    except Exception as e:
+        log.warning("align_position_mode_failed: %s", e)
 
 # ─────────── Hybrid entry (LIMIT+STOP עם positionSide מותנה) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
@@ -325,6 +350,10 @@ async def execute_trade_live(
 
     # ביטול TP/SL ישנים לפני חימוש חדשים
     _cancel_old_closing_orders(sym)
+
+    # ← מיישר מצב חשבון (Hedge/One-way) לפני שינוי מינוף/הזמנה – פותר שגיאות -4061
+    with suppress(Exception):
+        _ensure_runtime_position_mode()
 
     # עדכון מינוף (לא מפיל את הזרימה אם נכשל)
     try:
