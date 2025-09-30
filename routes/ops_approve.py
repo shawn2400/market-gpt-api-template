@@ -1,6 +1,6 @@
 # routes/ops_approve.py
 from __future__ import annotations
-import os, json, time, hmac, hashlib, secrets, logging, math, re
+import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect
 from typing import Any, Dict, Optional, Tuple, List
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
@@ -16,7 +16,7 @@ except Exception:
     aioredis = None  # type: ignore
 
 NS                   = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL            = os.getenv("REDIS_URL", "")
+REDIS_URL            = os.getenv("REDIS_URL", "").strip()
 PUBLIC_HOST          = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
 HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
@@ -91,100 +91,95 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+# -------- Position-side helpers ----------
+def _bool_env(name: str, default: bool=False) -> bool:
+    return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
+
+def _hedge_enabled() -> bool:
+    # מנסה לגזור ממצב מערכת
+    override = (os.getenv("POSITION_MODE_OVERRIDE","").strip().lower())
+    if override in ("hedge","dual"):  # dual-side position mode
+        return True
+    if override in ("oneway","one_way","one-way","single"):
+        return False
+    return _bool_env("BINANCE_FORCE_HEDGE_MODE", True)
+
+def _resolve_position_side(side: str, ticket_pos_side: Optional[str]) -> str:
+    side_u = (side or "").upper()
+    tp = (ticket_pos_side or "").upper() if ticket_pos_side else None
+    hedge = _hedge_enabled()
+    if hedge:
+        if tp in ("LONG","SHORT"):
+            return tp
+        return "LONG" if side_u == "BUY" else "SHORT"
+    # one-way
+    return "BOTH"
+
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    MARKET (פשוט): נסה דרך trade_executor אם קיים; אחרת Binance SDK.
+    מסלול MARKET ישיר מול Binance (fallback אם אין trade_executor.place_futures_market).
+    מוודא העברת positionSide נכונה במצב Hedge כדי למנוע -4061.
     """
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
+
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
         logger.error("binance import failed: %s", e)
         return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
+
     try:
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
         if not api_key or not api_sec:
             return {"ok": False, "error": "binance_keys_missing"}
+
         client = Client(api_key, api_sec)
+
         symbol   = str(ticket.get("symbol","")).upper()
         side     = str(ticket.get("side","")).upper()
-        qty      = float(ticket.get("qty", 0))
-        leverage = int(ticket.get("leverage", 1))
-        pos_side = str(ticket.get("position_side") or "BOTH").upper()
-        if not(symbol and side and qty > 0 and leverage > 0):
+        qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
+        leverage = int(ticket.get("leverage") or 0)
+        pos_side = _resolve_position_side(side, ticket.get("position_side"))
+        reduce_only = bool(ticket.get("reduce_only", False))
+
+        if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
+
+        # ננסה לקבע מינוף (לא קריטי אם נכשל)
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
             logger.warning("futures_change_leverage failed: %s", e)
-        kwargs = {
-            "symbol": symbol, "side": side, "type": "MARKET", "quantity": qty,
-            "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}"
-        }
-        # אם Hedge – נמפה positionSide
-        if pos_side in ("LONG","SHORT"): kwargs["positionSide"] = pos_side
-        order = client.futures_create_order(**kwargs)
+
+        # הזמנה ישירה (MARKET) עם positionSide כדי למנוע -4061
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="MARKET",
+            quantity=qty,
+            positionSide=pos_side,   # <— חשוב במצב Hedge
+            reduceOnly=reduce_only,
+            newClientOrderId=f"ALG_{symbol}_{side}_{int(time.time())}"
+        )
         return {"ok": True, "exchange": "binance_futures", "order": order}
     except Exception as e:
         logger.error("futures_create_order failed: %s", e)
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
-def _bool_env(name: str, default: bool=False) -> bool:
-    return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
-
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
-
-# --- ניקוי פרמטרים לא נתמכים לאקזקיוטור ---
-ALLOWED_EXEC_KW = {
-    "symbol","side","quantity","qty","leverage",
-    "tp","sl","tp_targets","tp_splits","sl_targets","sl_splits",
-    "position_side","confirm_first","budget","dry_run","ticket_id","note"
-}
-def _clean_exec_kwargs(d: dict) -> dict:
-    if not isinstance(d, dict): return {}
-    out = {k:v for k,v in d.items() if k in ALLOWED_EXEC_KW and v is not None}
-    # normalize qty -> quantity (האקזקיוטור שלנו משתמש quantity)
-    if "quantity" not in out and "qty" in out:
-        out["quantity"] = out.pop("qty")
-    # side/position_side נרמול
-    side = (out.get("side") or "").upper().strip()
-    if side in ("BUY","SELL"): out["side"] = side
-    ps = out.get("position_side")
-    if isinstance(ps,str):
-        psu = ps.upper().strip()
-        if psu in ("LONG","SHORT","BOTH"): out["position_side"]=psu
-        else: out.pop("position_side",None)
-    return out
-
-def _ensure_position_side(payload: dict) -> dict:
-    """
-    אם במצב Hedge ולא נמסר position_side – נמפה אוטומטית לפי side.
-    """
-    d = dict(payload or {})
-    ps = d.get("position_side")
-    if isinstance(ps,str) and ps.upper() in ("LONG","SHORT","BOTH"):
-        d["position_side"]=ps.upper()
-        return d
-    mode = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
-    if mode == "hedge":
-        side = (d.get("side") or "").upper()
-        if side == "BUY":
-            d["position_side"]="LONG"
-        elif side == "SELL":
-            d["position_side"]="SHORT"
-    return d
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    HYBRID/AUTO: קריאה לאקזקיוטור המלא execute_trade_live
-    (ללא פרמטרים לא נתמכים, כדי למנוע TypeError כגון 'tp_kind').
+    מסלול HYBRID/AUTO — מפעיל execute_trade_live, אבל קודם מסנן לפי הסיגנאטורה בפועל,
+    כדי שלא ייזרק TypeError על פרמטרים כמו tp_kind/sl_kind כשלא קיימים בגרסה שלך.
     """
+    # טען פונקציה
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -194,41 +189,71 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("execute_trade_live missing: %s", e)
         return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
 
+    # פרמטרים מהטיקט
     symbol   = str(ticket.get("symbol","")).upper()
     side     = str(ticket.get("side","")).upper()
     qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or 0)
+    pos_side = _resolve_position_side(side, ticket.get("position_side"))
 
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
-    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0] or ticket.get("tp_targets")
-    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else (ticket.get("sl_targets") or None)
+    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
+    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
 
     if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
 
-    exec_kwargs = {
-        "symbol": symbol,
-        "side": side,
-        "budget": ticket.get("budget"),
-        "leverage": leverage,
-        "dry_run": False,
-        "quantity": qty,
-        "position_side": str(ticket.get("position_side") or "BOTH").upper(),
-        "confirm_first": False,
-        "tp": ticket.get("tp"),
-        "sl": ticket.get("sl"),
-        "tp_targets": tp_targets or None,
-        "tp_splits": ticket.get("tp_splits"),
-        "sl_targets": sl_targets or None,
-        "sl_splits": ticket.get("sl_splits"),
-        "ticket_id": ticket.get("ticket_id"),
-        "note": ticket.get("note"),
-    }
-    exec_kwargs = _ensure_position_side(exec_kwargs)
-    exec_kwargs = _clean_exec_kwargs(exec_kwargs)
+    # בנה kwargs "מלאים"
+    raw_kwargs: Dict[str, Any] = dict(
+        symbol=symbol,
+        side=side,
+        budget=ticket.get("budget"),
+        leverage=leverage,
+        dry_run=False,
+        quantity=qty,
+        entry=None,
+        tp_targets=tp_targets or None,
+        sl_targets=sl_targets or None,
+        tp_splits=ticket.get("tp_splits"),
+        sl_splits=None,
+        confirm_first=False,
+        telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
+        position_side=pos_side,
+        reduce_only=bool(ticket.get("reduce_only", False)),
+        # פרמטרים "עשירים" — יעופו אם לא קיימים בסיגנאטורה:
+        tp_kind=ticket.get("tp_kind"),
+        sl_kind=ticket.get("sl_kind"),
+        entry_kind=ticket.get("entry_kind"),
+        entry_offset=ticket.get("entry_offset"),
+        tp_offset=ticket.get("tp_offset"),
+        sl_offset=ticket.get("sl_offset"),
+    )
+
+    # סינון לפי חתימת הפונקציה (מפתח: שם פרמטר; ערך: לא None)
+    try:
+        sig = inspect.signature(execute_trade_live)
+        allowed = set(sig.parameters.keys())
+        kwargs = {k: v for k, v in raw_kwargs.items() if k in allowed and v is not None}
+    except Exception:
+        # אם נכשל — נלך על סט בטוח בלי המתקדמים
+        kwargs = {
+            "symbol": symbol,
+            "side": side,
+            "budget": ticket.get("budget"),
+            "leverage": leverage,
+            "dry_run": False,
+            "quantity": qty,
+            "tp_targets": tp_targets or None,
+            "sl_targets": sl_targets or None,
+            "tp_splits": ticket.get("tp_splits"),
+            "confirm_first": False,
+            "position_side": pos_side,
+            "reduce_only": bool(ticket.get("reduce_only", False)),
+            "telegram_chat_id": int(os.getenv("TELEGRAM_CHAT_ID") or 0),
+        }
 
     try:
-        res = await execute_trade_live(**exec_kwargs)
+        res = await execute_trade_live(**kwargs)
         return res
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
@@ -401,7 +426,10 @@ async def create_ticket(
     if req_body.get("sl") is not None: lines.append(f"• SL: <code>{req_body['sl']}</code>")
     mode = _parse_mode(note)
     if mode: lines.append(f"• Mode: <code>{mode}</code>")
+    if req_body.get("tp_kind"):   lines.append(f"• TP Kind: <code>{req_body['tp_kind']}</code>")
     if req_body.get("tp_splits"): lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
+    if req_body.get("sl_kind"):   lines.append(f"• SL Kind: <code>{req_body['sl_kind']}</code>")
+    if req_body.get("entry_kind"):lines.append(f"• Entry: <code>{req_body['entry_kind']}</code>")
     if req_body.get("reduce_only"):lines.append(f"• Reduce Only: <code>True</code>")
     if req_body.get("blocked_by_rr_min"): lines.append("• RR Check: <code>Below RR_MIN (manual review)</code>")
     if req_body.get("prob_overall_pct") is not None: lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
@@ -491,10 +519,6 @@ async def approve_signed(request: Request):
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-
-    # הוספת position_side אוטומטית אם Hedge ולא נמסר
-    payload = _ensure_position_side(payload)
-
     flow = _decide_flow_by_mode(payload)
     exec_res = await (_execute_trade(payload) if flow=="MARKET"
                       else _execute_trade_armed(payload) if flow=="HYBRID"
@@ -520,7 +544,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         key = f"{NS}:expired_log"
         now = time.time()
         since = now - (hours * 3600)
-        # נשלוף עד 2000 אחרונים ונסנן בצד לקוח
         items = await r.lrange(key, 0, 2000)
         events: List[Dict[str, Any]] = []
         for it in items:
@@ -536,13 +559,11 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
             await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
             return {"ok": True, "sent": True, "count": 0}
 
-        # אגרגציה לפי סימול וצד
         from collections import Counter
         by_sym = Counter((str(e.get("symbol","")).upper(), str(e.get("side","")).upper()) for e in events)
         lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
         for (sym, side), cnt in by_sym.most_common(20):
             lines.append(f"• {sym} {side}: <code>{cnt}</code>")
-        # 3–5 אחרונים
         lines.append("— — —")
         lines.append("<b>Last events</b>:")
         for e in events[:5]:
@@ -556,6 +577,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
