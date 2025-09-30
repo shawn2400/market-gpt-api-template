@@ -1,7 +1,7 @@
 # routes/ops_approve.py
 from __future__ import annotations
 import os, json, time, hmac, hashlib, secrets, logging, math, re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, List
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
 import httpx
@@ -22,24 +22,10 @@ HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_
 ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
 BOT_TOKEN            = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 API_BEARER_TOKEN     = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))  # 👈 ודא ש-ENV קיים
+TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
 ETA_SMART_ENABLE     = (os.getenv("ETA_SMART_ENABLE","0").lower() in ("1","true","yes","on"))
 ETA_VELOCITY_WINDOW  = int(os.getenv("ETA_VELOCITY_WINDOW","30"))
 DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL","15m")
-
-# פרסר דגלים (אופציונלי)
-try:
-    from routes.ops_flags import apply_note_flags  # type: ignore
-except Exception:
-    def apply_note_flags(note, ticket): return ticket
-
-def KEY_TICKET(tid: str) -> str:
-    return f"{NS}:ticket:{tid}"
-
-async def _redis():
-    if not (aioredis and REDIS_URL):
-        raise RuntimeError("redis_unavailable")
-    return aioredis.from_url(REDIS_URL, decode_responses=True)
 
 # -------- ConfirmStore fallback ----------
 try:
@@ -50,7 +36,7 @@ except Exception:
     except Exception:
         from main import ConfirmStore  # type: ignore
 
-# -------- Small utils ----------
+# -------- Helpers ----------
 def _md_html(s: str) -> str:
     return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
@@ -63,15 +49,14 @@ def _html(msg: str) -> HTMLResponse:
         "</body>"
     )
 
-def _expired(ts: float, ttl_sec: int = TICKET_TTL_SEC) -> bool:
-    try:
-        return (time.time() - float(ts)) > ttl_sec
-    except Exception:
-        return True
-
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text)==64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+async def _redis():
+    if not (aioredis and REDIS_URL):
+        return None
+    return aioredis.from_url(REDIS_URL, decode_responses=True)
 
 # -------- Mode parsing ----------
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
@@ -81,18 +66,20 @@ def _parse_mode(note: Optional[str]) -> Optional[str]:
     return m.group(1).upper() if m else None
 
 # -------- Telegram --------
-async def _send_telegram_html(text: str, approve_url: Optional[str] = None, reject_url: Optional[str] = None) -> Dict[str, Any]:
+async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
+                              reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
     if not BOT_TOKEN or not ADMIN_CHAT_ID:
         return {"ok": False, "skipped": True}
     payload: Dict[str, Any] = {
         "chat_id": int(ADMIN_CHAT_ID) if str(ADMIN_CHAT_ID).isdigit() else ADMIN_CHAT_ID,
         "text": text, "parse_mode": "HTML", "disable_web_page_preview": True,
     }
-    if approve_url or reject_url:
-        payload["reply_markup"] = {"inline_keyboard":[[
-            {"text":"✅ Approve","url":approve_url or PUBLIC_HOST or "https://example.com"},
-            {"text":"❌ Reject","url":reject_url or PUBLIC_HOST or "https://example.com"},
-        ]]}
+    if approve_url or reject_url or preview_url:
+        row: List[Dict[str, Any]] = []
+        if preview_url: row.append({"text":"👁 Preview","url":preview_url})
+        if approve_url: row.append({"text":"✅ Approve","url":approve_url})
+        if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
+        payload["reply_markup"] = {"inline_keyboard":[row]}
     try:
         async with httpx.AsyncClient(timeout=12.0) as cli:
             r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
@@ -106,13 +93,11 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None, reje
 
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    # ניסיון ראשון: אקזקיוטור פנימי אם קיים
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
-    # נפילה ל-Binance SDK אם אין אקזקיוטור
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -149,7 +134,6 @@ def _bool_env(name: str, default: bool=False) -> bool:
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    # אקזקיוטור החכם (TP/SL/Ladder/Reduce-Only וכו')
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -189,7 +173,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
             position_side=pos_side,
             reduce_only=bool(ticket.get("reduce_only", False)),
-            tp_kind=ticket.get("tp_kind"),   # מהדגלים
+            tp_kind=ticket.get("tp_kind"),
             sl_kind=ticket.get("sl_kind"),
             entry_kind=ticket.get("entry_kind"),
             entry_offset=ticket.get("entry_offset"),
@@ -268,10 +252,12 @@ async def _delete_ticket(tid: str, source: str) -> None:
         pass
 
 # -------------------- API --------------------
-@router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram")
+# ── יצירת כרטיס + שליחת טלגרם עם PREVIEW/APPROVE/REJECT ──
+@router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
     payload: Dict[str, Any] = Body(..., description="symbol, side, qty, leverage, optional: TP/SL/ETAs/probs/note/position_side/budget/expiry_ts"),
 ):
+    # ---- parse ----
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
     qty    = float(payload.get("qty") or payload.get("quantity") or 0)
@@ -279,13 +265,11 @@ async def create_ticket(
     note   = payload.get("note") or ""
     position_side = (payload.get("position_side") or "BOTH").upper()
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
-
     if not (symbol and side and qty > 0 and lev > 0):
         raise HTTPException(status_code=422, detail="Missing/invalid fields (symbol/side/qty/leverage)")
 
+    # ---- enrich ----
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
-
-    # Smart ETAs
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         try:
@@ -297,26 +281,24 @@ async def create_ticket(
         for k,v in etas.items():
             payload.setdefault(k, v)
 
-    # Build req body
+    # ﬠגול
+    try:
+        from routes.ops_flags import apply_note_flags  # type: ignore
+    except Exception:
+        def apply_note_flags(note, ticket): return ticket
     req_body: Dict[str, Any] = {
         "ticket_id": tid, "symbol": symbol, "side": side, "qty": qty,
         "leverage": lev, "position_side": position_side, "budget": budget, "note": note,
-        "score": payload.get("score"),
-        "eta_open_min": payload.get("eta_open_min"),
+        "score": payload.get("score"), "eta_open_min": payload.get("eta_open_min"),
         "tp1": payload.get("tp1"), "tp2": payload.get("tp2"), "tp3": payload.get("tp3"),
         "eta_tp1_min": payload.get("eta_tp1_min"), "eta_tp2_min": payload.get("eta_tp2_min"), "eta_tp3_min": payload.get("eta_tp3_min"),
-        "sl": payload.get("sl"),
-        "prob_overall_pct": payload.get("prob_overall_pct"),
-        "prob_tp1_pct": payload.get("prob_tp1_pct"),
-        "prob_tp2_pct": payload.get("prob_tp2_pct"),
-        "prob_tp3_pct": payload.get("prob_tp3_pct"),
+        "sl": payload.get("sl"), "prob_overall_pct": payload.get("prob_overall_pct"),
+        "prob_tp1_pct": payload.get("prob_tp1_pct"), "prob_tp2_pct": payload.get("prob_tp2_pct"), "prob_tp3_pct": payload.get("prob_tp3_pct"),
         "expiry_ts": payload.get("expiry_ts"),
     }
-
-    # 👇 העשרה מתוך הדגלים ב-note (לא חובה)
     req_body = apply_note_flags(note, req_body)
 
-    # 👇 אכיפה רכה של RR_MIN אם קיים בדגלים או ENV (מסמן במקום לחסום קשיח)
+    # RR_MIN soft flag
     try:
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -324,8 +306,7 @@ async def create_ticket(
         if rr_min_eff > 0 and req_body.get("sl"):
             from utils.binance_client import get_price  # type: ignore
             current = float(get_price(symbol) or 0)
-            tp1 = float(req_body.get("tp1") or 0)
-            sl  = float(req_body.get("sl") or 0)
+            tp1 = float(req_body.get("tp1") or 0); sl = float(req_body.get("sl") or 0)
             rr  = None
             if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
                 reward = abs(tp1 - current); risk = abs(current - sl); rr = (reward / risk) if risk > 0 else None
@@ -336,7 +317,7 @@ async def create_ticket(
     except Exception:
         pass
 
-    # Persist
+    # ---- persist ----
     try:
         ConfirmStore.create(dict(req_body))
     except Exception:
@@ -349,63 +330,45 @@ async def create_ticket(
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
 
+    # ---- URLs ----
     approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve?ticket_id={tid}" if PUBLIC_HOST else ""
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?ticket_id={tid}"  if PUBLIC_HOST else ""
+    preview_url = f"{PUBLIC_HOST.rstrip('/')}/ops/ui/ticket?ticket_id={tid}" if PUBLIC_HOST else ""
 
-    # Telegram
+    # ---- Telegram (with Preview) ----
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
     lines.append(f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{qty}</code> lev=<code>{lev}</code>")
-    if req_body.get("score") is not None:
-        lines.append(f"• Score: <code>{req_body['score']}</code>")
-    if req_body.get("eta_open_min") is not None:
-        lines.append(f"• ETA Open: <code>{req_body['eta_open_min']}m</code>")
+    if req_body.get("score") is not None:       lines.append(f"• Score: <code>{req_body['score']}</code>")
+    if req_body.get("eta_open_min") is not None:lines.append(f"• ETA Open: <code>{req_body['eta_open_min']}m</code>")
     for i in (1,2,3):
-        tpv = req_body.get(f"tp{i}")
-        etv = req_body.get(f"eta_tp{i}_min")
-        prv = req_body.get(f"prob_tp{i}_pct")
+        tpv = req_body.get(f"tp{i}"); etv = req_body.get(f"eta_tp{i}_min"); prv = req_body.get(f"prob_tp{i}_pct")
         if tpv is not None:
             row = f"• TP{i}: <code>{tpv}</code>"
             if etv is not None: row += f"  ETA:<code>{etv}m</code>"
             if prv is not None: row += f"  P(s):<code>{prv}%</code>"
             lines.append(row)
-    if req_body.get("sl") is not None:
-        lines.append(f"• SL: <code>{req_body['sl']}</code>")
+    if req_body.get("sl") is not None: lines.append(f"• SL: <code>{req_body['sl']}</code>")
     mode = _parse_mode(note)
-    if mode:
-        lines.append(f"• Mode: <code>{mode}</code>")
-    # אם דגלים עיקריים קיימים – נציג בקצרה
-    if req_body.get("tp_kind"):
-        lines.append(f"• TP Kind: <code>{req_body['tp_kind']}</code>")
-    if req_body.get("tp_splits"):
-        lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
-    if req_body.get("sl_kind"):
-        lines.append(f"• SL Kind: <code>{req_body['sl_kind']}</code>")
-    if req_body.get("entry_kind"):
-        lines.append(f"• Entry: <code>{req_body['entry_kind']}</code>")
-    if req_body.get("reduce_only"):
-        lines.append(f"• Reduce Only: <code>True</code>")
-    if req_body.get("blocked_by_rr_min"):
-        lines.append("• RR Check: <code>Below RR_MIN (manual review)</code>")
-
-    if req_body.get("prob_overall_pct") is not None:
-        lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
-    if req_body.get("expiry_ts") is not None:
-        lines.append(f"• Expires: <code>{req_body['expiry_ts']}</code>")
-    if note:
-        lines.append(f"• Note: {_md_html(note)}")
+    if mode: lines.append(f"• Mode: <code>{mode}</code>")
+    if req_body.get("tp_kind"):   lines.append(f"• TP Kind: <code>{req_body['tp_kind']}</code>")
+    if req_body.get("tp_splits"): lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
+    if req_body.get("sl_kind"):   lines.append(f"• SL Kind: <code>{req_body['sl_kind']}</code>")
+    if req_body.get("entry_kind"):lines.append(f"• Entry: <code>{req_body['entry_kind']}</code>")
+    if req_body.get("reduce_only"):lines.append(f"• Reduce Only: <code>True</code>")
+    if req_body.get("blocked_by_rr_min"): lines.append("• RR Check: <code>Below RR_MIN (manual review)</code>")
+    if req_body.get("prob_overall_pct") is not None: lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
+    if req_body.get("expiry_ts") is not None:        lines.append(f"• Expires: <code>{req_body['expiry_ts']}</code>")
+    if note: lines.append(f"• Note: {_md_html(note)}")
     lines.append("— — —")
     lines.append("בחר:")
-
     pretty = "\n".join(lines)
-    tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None)
+    tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None, preview_url=preview_url or None)
 
     return {
-        "ok": True,
-        "ticket_id": tid,
-        "approve_url": approve_url,
-        "reject_url": reject_url,
+        "ok": True, "ticket_id": tid,
+        "approve_url": approve_url, "reject_url": reject_url, "preview_url": preview_url,
         "telegram_result": tg_resp
     }
 
@@ -415,44 +378,29 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
         return mode
     return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
 
+# ── אישור/דחייה (UI פתוח) ──
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
-
     flow = _decide_flow_by_mode(ticket)
-    if flow == "MARKET":
-        exec_res = await _execute_trade(ticket)
-    elif flow == "HYBRID":
-        exec_res = await _execute_trade_armed(ticket)
-    else:  # AUTO
-        if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")):
-            exec_res = await _execute_trade_armed(ticket)
-        else:
-            exec_res = await _execute_trade(ticket)
-
+    exec_res = await (_execute_trade(ticket) if flow=="MARKET"
+                      else _execute_trade_armed(ticket) if flow=="HYBRID"
+                      else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket)))
     ok = bool(exec_res.get("ok"))
 
     try:
         sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
-        if ok:
-            txt = (
-                f"✅ <b>Approved</b>\n"
-                f"• Ticket: <code>{_md_html(ticket_id)}</code>\n"
-                f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n"
-                f"• Flow: <code>{flow}</code>\n"
-                "— — —\nבוצע והועבר לניהול."
-            )
-        else:
-            txt = (
-                f"⚠️ <b>Approve Failed</b>\n"
-                f"• Ticket: <code>{_md_html(ticket_id)}</code>\n"
-                f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n"
-                f"• Flow: <code>{flow}</code>\n"
-                f"— — —\nשגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
-            )
-        await _send_telegram_html(txt)
+        msg = (
+            f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
+            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
+            if ok else
+            f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
+            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\n"
+            f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
+        )
+        await _send_telegram_html(msg)
     except Exception:
         pass
 
@@ -461,11 +409,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     except Exception:
         pass
     await _delete_ticket(ticket_id, source)
-
-    if ok:
-        return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.")
-    else:
-        return _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
+    return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
 @router.get("/ops/approve-link", summary="Approve legacy link (?id=...)")
 async def approve_link(id: str = Query(..., description="ticket_id")):
@@ -487,7 +431,8 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
         pass
     return _html("❌ נדחה. לא בוצעה פעולה.")
 
-@router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade)")
+# ── Signed-only (לסביבה פתוחה; חתימה חובה) ──
+@router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade) – signature required")
 async def approve_signed(request: Request):
     if not HMAC_SECRET:
         raise HTTPException(status_code=500, detail="HMAC secret not set")
@@ -500,23 +445,67 @@ async def approve_signed(request: Request):
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-
     flow = _decide_flow_by_mode(payload)
-    if flow == "MARKET":
-        exec_res = await _execute_trade(payload)
-    elif flow == "HYBRID":
-        exec_res = await _execute_trade_armed(payload)
-    else:
-        if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")):
-            exec_res = await _execute_trade_armed(payload)
-        else:
-            exec_res = await _execute_trade(payload)
-
+    exec_res = await (_execute_trade(payload) if flow=="MARKET"
+                      else _execute_trade_armed(payload) if flow=="HYBRID"
+                      else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(payload)))
     ok = bool(exec_res.get("ok"))
     if not ok:
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 
+# ── Digest לכרטיסים שפגו (N שעות אחרונות) ──
+@router.get("/ops/digest/expired", summary="Send Telegram digest for expired approval tickets in last N hours")
+async def digest_expired(hours: int = Query(6, ge=1, le=48)):
+    """
+    אוסף אירועים מה־Redis (אם קיים) שנרשמו ע״י ה-GC ושולח סיכום לטלגרם.
+    דורש שה-GC ירשום ליסט NS:expired_log (ראו utils/approvals_gc.py).
+    """
+    if not (aioredis and REDIS_URL and BOT_TOKEN and ADMIN_CHAT_ID):
+        return {"ok": False, "error": "digest_dependencies_missing"}
+    try:
+        r = await _redis()
+        if not r:
+            return {"ok": False, "error": "redis_unavailable"}
+        key = f"{NS}:expired_log"
+        now = time.time()
+        since = now - (hours * 3600)
+        # נשלוף עד 2000 אחרונים ונסנן בצד לקוח
+        items = await r.lrange(key, 0, 2000)
+        events: List[Dict[str, Any]] = []
+        for it in items:
+            try:
+                obj = json.loads(it)
+                if float(obj.get("ts", 0)) >= since:
+                    events.append(obj)
+            except Exception:
+                continue
+        events.sort(key=lambda x: x.get("ts", 0), reverse=True)
+        total = len(events)
+        if total == 0:
+            await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
+            return {"ok": True, "sent": True, "count": 0}
+
+        # אגרגציה לפי סימול וצד
+        from collections import Counter
+        by_sym = Counter((str(e.get("symbol","")).upper(), str(e.get("side","")).upper()) for e in events)
+        lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
+        for (sym, side), cnt in by_sym.most_common(20):
+            lines.append(f"• {sym} {side}: <code>{cnt}</code>")
+        # 3–5 אחרונים
+        lines.append("— — —")
+        lines.append("<b>Last events</b>:")
+        for e in events[:5]:
+            t = int(e.get("ts", now))
+            idem = e.get("idem","")
+            sym  = str(e.get("symbol","")).upper()
+            side = str(e.get("side","")).upper()
+            lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side} · <code>{idem}</code>")
+        await _send_telegram_html("\n".join(lines))
+        return {"ok": True, "sent": True, "count": total}
+    except Exception as e:
+        logger.warning("digest_expired_failed: %s", e)
+        return {"ok": False, "error": str(e)}
 
 
 
