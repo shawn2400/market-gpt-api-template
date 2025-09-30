@@ -9,6 +9,29 @@ from pydantic import BaseModel, field_validator
 logger = logging.getLogger("algogpt.trade")
 router = APIRouter(tags=["trade"])
 
+# --------- Metrics (optional, safe no-op) ----------
+def _metrics_noop(*args, **kwargs):  # no-op if recorder missing
+    return None
+
+try:
+    # צפה לממשק גנרי: record_counter(name, labels:dict, value:int) / record_gauge(name, value:float, labels:dict)
+    from utils.metrics_recorder import record_counter, record_gauge  # type: ignore
+except Exception:
+    record_counter = _metrics_noop  # type: ignore
+    record_gauge = _metrics_noop    # type: ignore
+
+def _short_reason(s: str) -> str:
+    s = (s or "").lower()
+    if "4061" in s or "position side" in s: return "4061"
+    if "bad_ticket_params" in s or "bad params" in s: return "bad_params"
+    if "binance_keys_missing" in s: return "no_keys"
+    if "binance_client_unavailable" in s: return "no_client"
+    if "armed_execute_failed" in s: return "armed_failed"
+    if "execute_trade_live_missing" in s: return "armed_missing"
+    if "order_failed" in s: return "order_failed"
+    if "open_ops_ticket_failed" in s: return "ticket_open_fail"
+    return "other"
+
 # --------- ConfirmStore (fallbacks) ----------
 try:
     from utils.trade_executor import ConfirmStore  # type: ignore
@@ -72,17 +95,26 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
     # fast-path: אם יש מתאם פנימי אצלך
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
-        return await place_futures_market(ticket)
-    except Exception:
+        res = await place_futures_market(ticket)
+        record_counter("trade_executed_total", {"flow":"MARKET","side":str(ticket.get("side","")).upper(),"outcome":"ok" if res.get("ok") else "fail"}, 1)
+        if res.get("ok"):
+            record_gauge("trade_last_exec_ts", float(time.time()), {"flow":"MARKET"})
+        else:
+            record_counter("trade_execute_fail_total", {"flow":"MARKET","side":str(ticket.get("side","")).upper(),"reason":_short_reason(str(res))}, 1)
+        return res
+    except Exception as e:
+        # נמשיך ל-Binance ישיר
         pass
 
     if Client is None:
+        record_counter("trade_execute_fail_total", {"flow":"MARKET","side":str(ticket.get("side","")).upper(),"reason":"no_client"}, 1)
         return {"ok": False, "error": "binance_client_unavailable"}
 
     try:
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
         if not (api_key and api_sec):
+            record_counter("trade_execute_fail_total", {"flow":"MARKET","side":str(ticket.get("side","")).upper(),"reason":"no_keys"}, 1)
             return {"ok": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
 
@@ -91,6 +123,7 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
         qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
         leverage = int(ticket.get("leverage") or 0)
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+            record_counter("trade_execute_fail_total", {"flow":"MARKET","side":side or "","reason":"bad_params"}, 1)
             return {"ok": False, "error": "bad_ticket_params"}
 
         # לא חובה שיצליח — לא מפיל הזמנה
@@ -107,9 +140,6 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"{os.getenv('ORDER_ID_PREFIX','ALG_MAIN')}_{symbol}_{side}_{int(time.time())}",
         }
 
-        # ניסיון 1:
-        # אם המשתמש סיפק position_side/positionSide — נשלח אותו,
-        # אחרת ננסה בלי (One-way safe). על 4061 נבצע ניסיון נגדי.
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_kwargs = dict(base_kwargs)
         if pos_side_supplied:
@@ -117,27 +147,31 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             order = client.futures_create_order(**attempt_kwargs)
+            record_counter("trade_executed_total", {"flow":"MARKET","side":side,"outcome":"ok"}, 1)
+            record_gauge("trade_last_exec_ts", float(time.time()), {"flow":"MARKET"})
             return {"ok": True, "exchange": "binance_futures", "order": order}
         except Exception as e1:
             if not _is_code_4061(e1):
-                # שגיאה אחרת
-                raise
+                record_counter("trade_execute_fail_total", {"flow":"MARKET","side":side,"reason":_short_reason(str(e1))}, 1)
+                return {"ok": False, "error": "order_failed", "detail": str(e1)}
 
             # ריטריי על 4061:
             try:
                 if "positionSide" in attempt_kwargs:
-                    # ניסינו עם posSide => נסיר וננסה שוב
-                    retry_kwargs = dict(base_kwargs)
+                    retry_kwargs = dict(base_kwargs)  # הסרה
                 else:
-                    # ניסינו בלי => נוסיף LONG/SHORT לפי SIDE
                     retry_kwargs = dict(base_kwargs)
                     retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
                 order = client.futures_create_order(**retry_kwargs)
+                record_counter("trade_executed_total", {"flow":"MARKET","side":side,"outcome":"ok"}, 1)
+                record_gauge("trade_last_exec_ts", float(time.time()), {"flow":"MARKET"})
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
             except Exception as e2:
+                record_counter("trade_execute_fail_total", {"flow":"MARKET","side":side,"reason":"4061"}, 1)
                 return {"ok": False, "error": "order_failed", "detail": str(e2), "first_error": str(e1)}
 
     except Exception as e:
+        record_counter("trade_execute_fail_total", {"flow":"MARKET","side":str(ticket.get("side","")).upper(),"reason":_short_reason(str(e))}, 1)
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
 async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -150,6 +184,7 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             from app.trade_executor import execute_trade_live  # type: ignore
     except Exception as e:
+        record_counter("trade_execute_fail_total", {"flow":"HYBRID","side":str(ticket.get("side","")).upper(),"reason":"armed_missing"}, 1)
         return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
 
     symbol = str(ticket.get("symbol","")).upper()
@@ -163,6 +198,7 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
 
     if not (symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+        record_counter("trade_execute_fail_total", {"flow":"HYBRID","side":side or "","reason":"bad_params"}, 1)
         return {"ok": False, "error": "bad_ticket_params"}
 
     base_kwargs: Dict[str, Any] = dict(
@@ -186,8 +222,14 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         res = await execute_trade_live(**clean)
+        record_counter("trade_executed_total", {"flow":"HYBRID","side":side,"outcome":"ok" if res.get("ok") else "fail"}, 1)
+        if res.get("ok"):
+            record_gauge("trade_last_exec_ts", float(time.time()), {"flow":"HYBRID"})
+        else:
+            record_counter("trade_execute_fail_total", {"flow":"HYBRID","side":side,"reason":_short_reason(str(res))}, 1)
         return res
     except Exception as e:
+        record_counter("trade_execute_fail_total", {"flow":"HYBRID","side":side,"reason":"armed_failed"}, 1)
         return {"ok": False, "error": "armed_execute_failed", "detail": str(e)}
 
 def _choose_flow(req: "TradeRequest") -> str:
@@ -264,6 +306,10 @@ async def trade_execute(
     force_approve = os.getenv("REQUIRE_TELEGRAM_APPROVAL","0").lower() in ("1","true","yes","on")
     need_approval = bool(req.confirm_first or force_approve)
 
+    # רישום בקשה
+    flow = _choose_flow(req)
+    record_counter("trade_requests_total", {"flow":flow, "side":req.side, "source":"approval" if need_approval else "api"}, 1)
+
     # אישור-טלגרם: פותחים טיקט דרך /ops/ticket (שולח הודעה עם כפתורים)
     if need_approval:
         try:
@@ -291,12 +337,10 @@ async def trade_execute(
                 headers["X-API-Key"] = api_key.strip()
             async with httpx.AsyncClient(timeout=12.0) as cli:
                 r = await cli.post(f"{base.rstrip('/')}/ops/ticket", json=payload, headers=headers)
-            try:
-                data = r.json()
-            except Exception:
-                raise RuntimeError(f"/ops/ticket bad response: {r.status_code} {r.text[:200]}")
+            data = r.json()
             if not data.get("ok"):
                 raise RuntimeError(f"ops.ticket failed: {data}")
+            record_counter("trade_approvals_total", {"flow":flow,"side":req.side}, 1)
             return {
                 "ok": False,
                 "error": "pending_approval",
@@ -311,10 +355,10 @@ async def trade_execute(
             }
         except Exception as e:
             logger.error("open_ops_ticket_failed: %s", e)
+            record_counter("trade_execute_fail_total", {"flow":flow,"side":req.side,"reason":"ticket_open_fail"}, 1)
             raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
 
     # ביצוע מיידי
-    flow = _choose_flow(req)
     ticket_exec = dict(
         symbol=req.symbol,
         side=req.side,
@@ -332,6 +376,12 @@ async def trade_execute(
     else:
         res = await _execute_trade_hybrid(ticket_exec)
 
+    record_counter("trade_executed_total", {"flow":flow,"side":req.side,"outcome":"ok" if res.get("ok") else "fail"}, 1)
+    if res.get("ok"):
+        record_gauge("trade_last_exec_ts", float(time.time()), {"flow":flow})
+    else:
+        record_counter("trade_execute_fail_total", {"flow":flow,"side":req.side,"reason":_short_reason(str(res))}, 1)
+
     return {"ok": bool(res.get("ok")), "flow": flow, "result": res}
 
 @router.get("/trade/approve")
@@ -343,7 +393,6 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
             if str(t.get("idem") or t.get("ticket_id")) == str(id):
                 it = t; break
     except Exception:
-        # חלק מהגרסאות מספקות get()
         try:
             it = ConfirmStore.get(id)  # type: ignore
         except Exception:
@@ -361,6 +410,12 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
     except Exception:
         pass
 
+    record_counter("trade_executed_total", {"flow":flow,"side":str(it.get("side","")).upper(),"outcome":"ok" if ok else "fail"}, 1)
+    if ok:
+        record_gauge("trade_last_exec_ts", float(time.time()), {"flow":flow})
+    else:
+        record_counter("trade_execute_fail_total", {"flow":flow,"side":str(it.get("side","")).upper(),"reason":_short_reason(str(res))}, 1)
+
     return {"ok": ok, "flow": flow, "result": res}
 
 @router.get("/trade/reject")
@@ -369,6 +424,7 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
         ConfirmStore.decide(str(id), approved=False)
     except Exception:
         pass
+    record_counter("trade_rejections_total", {"flow":"unknown","side":"unknown"}, 1)
     return {"ok": True, "rejected": True, "id": id}
 
 
