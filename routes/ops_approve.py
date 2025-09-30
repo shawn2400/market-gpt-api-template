@@ -9,6 +9,21 @@ import httpx
 logger = logging.getLogger("algogpt.ops_approve")
 router = APIRouter(tags=["ops-approval"])
 
+# --- (optional) metrics wiring ---
+try:
+    from routes.metrics import (
+        record_approval_created,
+        record_approval_approved,
+        record_approval_rejected,
+    )
+except Exception:
+    def record_approval_created():  # no-op if metrics route not loaded
+        pass
+    def record_approval_approved():
+        pass
+    def record_approval_rejected():
+        pass
+
 # -------- Optional Redis ----------
 try:
     import redis.asyncio as aioredis  # type: ignore
@@ -61,6 +76,7 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
+    # אפשר להוסיף socket/connect timeout דרך querystring אם צריך
     return aioredis.from_url(REDIS_URL, decode_responses=True)
 
 # -------- Mode parsing ----------
@@ -98,6 +114,9 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
 
 # -------- utils: dynamic kwargs filter --------
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    מסנן דינמית לפי הסיגנאטורה כדי לא לשלוח execute_trade_live פרמטרים שלא קיימים (tp_kind/sl_kind/offsets וכו').
+    """
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
@@ -113,8 +132,9 @@ def _is_code_4061(err: Exception | str) -> bool:
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    הזמנת MARKET ישירה מול Binance, עם ריטריי חכם על ‎-4061.
+    MARKET ישירה מול Binance, עם ריטריי חכם על ‎-4061.
     """
+    # Fast-path: אם יש לך מתאם פנימי
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -141,6 +161,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
+        # לא קריטי אם נכשל
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
@@ -154,7 +175,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # ניסיון 1: אם המשתמש סיפק position_side מפורש — נשתמש בו; אחרת נשלח בלי (One-way בטוח)
+        # ניסיון 1: אם המשתמש סיפק position_side מפורש — נשתמש בו; אחרת נשלח בלי
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
         if pos_side_supplied:
@@ -167,10 +188,10 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             if not _is_code_4061(e1):
                 raise
 
-            # ריטריי על ‎-4061: אם ניסינו בלי posSide — ננסה עם LONG/SHORT; אם ניסינו עם — ננסה בלי
+            # ‎-4061 => נסה מהצד ההפוך: אם היה positionSide – נסיר; אם לא היה – נוסיף LONG/SHORT
             try:
                 if "positionSide" in attempt_order:
-                    retry_kwargs = dict(base_kwargs)  # הסרה
+                    retry_kwargs = dict(base_kwargs)
                 else:
                     retry_kwargs = dict(base_kwargs)
                     retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -239,12 +260,31 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
 # -------- Smart ETA (optional) --------
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
+    """
+    מחזיר ממוצע תנועה לדקה. תומך גם בהחזרה של list וגם pandas.DataFrame.
+    """
     try:
         from utils.get_klines import get_klines_sync  # type: ignore
         m = {"1m":1, "3m":3, "5m":5, "15m":15, "30m":30, "1h":60}.get(interval, 15)
         n = max(10, math.ceil(window_min / m) + 5)
         kl = get_klines_sync(symbol, interval=interval, limit=n) or []
-        closes = [float(x[4]) for x in kl if len(x) >= 5]
+        # normalized closes
+        closes: List[float]
+        try:
+            # אם זה DataFrame
+            import pandas as pd  # type: ignore
+            if isinstance(kl, pd.DataFrame):
+                if "close" in kl.columns:
+                    closes = [float(x) for x in kl["close"].tolist()]
+                else:
+                    # נסה טור 4 (סינטקס binance clásico)
+                    closes = [float(x) for x in kl.iloc[:, 4].tolist()]
+            else:
+                # list של קנדלים [ts,o,h,l,c,...]
+                closes = [float(x[4]) for x in kl if len(x) >= 5]
+        except Exception:
+            closes = [float(x[4]) for x in kl if isinstance(x, (list, tuple)) and len(x) >= 5]
+
         if len(closes) < 2:
             return None
         deltas = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
@@ -335,6 +375,7 @@ async def create_ticket(
         for k,v in etas.items():
             payload.setdefault(k, v)
 
+    # flags מהערה (אם קיים מודול)
     try:
         from routes.ops_flags import apply_note_flags  # type: ignore
     except Exception:
@@ -352,7 +393,7 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
-    # RR_MIN soft check (best-effort)
+    # RR_MIN soft check
     try:
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -371,10 +412,13 @@ async def create_ticket(
     except Exception:
         pass
 
+    # persist + metrics
     try:
         ConfirmStore.create(dict(req_body))
     except Exception:
         pass
+    record_approval_created()
+
     if aioredis and REDIS_URL:
         try:
             r = await _redis()
@@ -455,6 +499,16 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         ConfirmStore.decide(ticket_id, approved=ok)
     except Exception:
         pass
+
+    # metrics
+    try:
+        if ok:
+            record_approval_approved()
+        else:
+            record_approval_rejected()
+    except Exception:
+        pass
+
     await _delete_ticket(ticket_id, source)
     return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
@@ -476,6 +530,12 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
         ConfirmStore.decide(ticket_id, approved=False)
     except Exception:
         pass
+
+    try:
+        record_approval_rejected()
+    except Exception:
+        pass
+
     return _html("❌ נדחה. לא בוצעה פעולה.")
 
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade) – signature required")
@@ -498,6 +558,12 @@ async def approve_signed(request: Request):
     ok = bool(exec_res.get("ok"))
     if not ok:
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
+
+    try:
+        record_approval_approved()
+    except Exception:
+        pass
+
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 
 @router.get("/ops/digest/expired", summary="Send Telegram digest for expired approval tickets in last N hours")
@@ -544,6 +610,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
