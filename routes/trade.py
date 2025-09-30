@@ -80,6 +80,7 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
         return {k: v for k, v in kwargs.items() if k not in bad}
 
 async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    # fast-path דרך מתאם פנימי אם זמין
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -130,6 +131,7 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             if not _is_code_4061(e1):
                 logger.error("futures_create_order failed: %s", e1)
                 return {"ok": False, "error": "order_failed", "detail": str(e1)}
+            # ‎-4061: נסה בלי/עם הצד ההפוך
             try:
                 if "positionSide" in attempt_order:
                     retry_kwargs = dict(base_kwargs)
@@ -346,9 +348,10 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
         ok = False
     # approval-plane metric
     record_trade_approval("reject", ok)
-    # גם נסמן כ-fail בהקשר ביצוע (לא התרחש ביצוע)
+    # נסמן כ-fail בהקשר ביצוע (לא התרחש ביצוע)
     record_trade_fail("HYBRID")
     return {"ok": True, "rejected": True, "id": id}
+
 
 
 
