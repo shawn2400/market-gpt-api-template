@@ -2,7 +2,7 @@
 from __future__ import annotations
 import logging
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from utils.auth import require_api_key
 
 logger = logging.getLogger("algogpt.routes.trade_approvals")
@@ -25,12 +25,12 @@ except Exception:
 @router.get("/approve")
 async def trade_approve(id: str = Query(..., min_length=8, max_length=64)) -> Dict[str, Any]:
     rec = ConfirmStore.get(id)
-    if not rec:  # כבר לא קיים/פג
+    if not rec:
         return {"ok": False, "error": "not_found_or_expired"}
     a = ConfirmStore.approve(id, approver="http")
     if not a.get("ok"):
         return {"ok": False, "error": a.get("error","not_approved")}
-    run_res = await ConfirmStore.run(id)  # ← מריץ בפועל
+    run_res = await ConfirmStore.run(id)
     return {"ok": bool(run_res.get("ok")), "result": run_res.get("result"), "error": run_res.get("error")}
 
 @router.get("/reject")
@@ -47,3 +47,4 @@ async def trade_ticket(id: str = Query(..., min_length=8, max_length=64)) -> Dic
     if not rec:
         return {"ok": False, "error": "not_found_or_expired"}
     return {"ok": True, "ticket": rec}
+
