@@ -26,7 +26,7 @@ def _lbl_side(side: Optional[str]) -> str:
 
 def _lbl_flow(flow: Optional[str]) -> str:
     s = (flow or "").strip().upper()
-    return s if s in ("MARKET", "HYBRID") else "NA"
+    return s if s in ("MARKET", "HYBRID", "APPROVAL", "IMMEDIATE") else "NA"
 
 # ---------- Prometheus metrics ----------
 # approvals
@@ -46,12 +46,13 @@ APPROVALS_EXPIRED_BY_SYMBOL = Counter(
 APPROVALS_GC_LAST_RUN_TS   = Gauge("approvals_gc_last_run_ts",   "Last approvals-GC run UNIX ts")
 APPROVALS_GC_LAST_EXPIRED  = Gauge("approvals_gc_last_expired",  "Last approvals-GC expired count")
 
-# trade execution
+# trade execution (flow label kept low-card: MARKET/HYBRID/APPROVAL/IMMEDIATE/NA)
 TRADE_EXEC_REQUESTS = Counter("trade_execute_requests_total", "Trade execute requests", ["flow"])
 TRADE_EXEC_OK       = Counter("trade_execute_ok_total",       "Successful trade executes", ["flow"])
 TRADE_EXEC_FAIL     = Counter("trade_execute_fail_total",     "Failed trade executes", ["flow"])
 
-# ---------- Public helpers (can be imported from other modules) ----------
+# ---------- Public helpers (imported by other modules) ----------
+# Approvals
 def record_approval_created() -> None:
     APPROVALS_CREATED.inc()
 
@@ -65,21 +66,52 @@ def record_approval_expired(symbol: Optional[str], side: Optional[str]) -> None:
     APPROVALS_EXPIRED.inc()
     APPROVALS_EXPIRED_BY_SYMBOL.labels(_lbl_symbol(symbol), _lbl_side(side)).inc()
 
-def record_trade_request(flow: Optional[str]) -> None:
-    TRADE_EXEC_REQUESTS.labels(_lbl_flow(flow)).inc()
-
-def record_trade_ok(flow: Optional[str]) -> None:
-    TRADE_EXEC_OK.labels(_lbl_flow(flow)).inc()
-
-def record_trade_fail(flow: Optional[str]) -> None:
-    TRADE_EXEC_FAIL.labels(_lbl_flow(flow)).inc()
-
 def record_gc_last_run(now_ts: Optional[float] = None, expired_count: Optional[int] = None) -> None:
     if now_ts is None:
         now_ts = time.time()
     APPROVALS_GC_LAST_RUN_TS.set(float(now_ts))
     if expired_count is not None:
         APPROVALS_GC_LAST_EXPIRED.set(float(expired_count))
+
+# Trades (new, as requested)
+def record_trade_requested(flow: Optional[str] = None) -> None:
+    """
+    Count an inbound trade request. `flow` should be 'MARKET'/'HYBRID' for direct exec,
+    or 'APPROVAL'/'IMMEDIATE' for higher-level routing. Anything else -> 'NA'.
+    """
+    TRADE_EXEC_REQUESTS.labels(_lbl_flow(flow)).inc()
+
+def record_trade_executed(flow: Optional[str] = None, ok: bool = True, engine: Optional[str] = None) -> None:
+    """
+    Count a trade execution outcome. `engine` is accepted but intentionally ignored to keep labels low-cardinality.
+    """
+    lbl = _lbl_flow(flow)
+    if ok:
+        TRADE_EXEC_OK.labels(lbl).inc()
+    else:
+        TRADE_EXEC_FAIL.labels(lbl).inc()
+
+def record_trade_approved(flow: Optional[str] = None) -> None:
+    """
+    Alias to approvals-approved; provided for symmetry with trade flow wiring.
+    """
+    record_approval_approved()
+
+def record_trade_rejected(flow: Optional[str] = None) -> None:
+    """
+    Alias to approvals-rejected; provided for symmetry with trade flow wiring.
+    """
+    record_approval_rejected()
+
+# ---------- Backward-compat (old names) ----------
+def record_trade_request(flow: Optional[str]) -> None:
+    record_trade_requested(flow)
+
+def record_trade_ok(flow: Optional[str]) -> None:
+    record_trade_executed(flow=flow, ok=True)
+
+def record_trade_fail(flow: Optional[str]) -> None:
+    record_trade_executed(flow=flow, ok=False)
 
 # ---------- JSON snapshot ----------
 def _scrape_snapshot(prefix: Optional[str] = None) -> Dict[str, Any]:
