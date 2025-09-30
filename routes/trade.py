@@ -4,7 +4,19 @@ import os, time, logging, inspect
 from typing import Any, Dict, Optional, List, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Request, Body, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
+
+# --- Pydantic v1/v2 compatibility for validators ---
+try:
+    # Pydantic v2
+    from pydantic import field_validator as _field_validator  # type: ignore
+    def FIELD_VALIDATOR(*fields, **kwargs):
+        return _field_validator(*fields, **kwargs)
+except Exception:
+    # Pydantic v1
+    from pydantic import validator as _validator  # type: ignore
+    def FIELD_VALIDATOR(*fields, **kwargs):
+        return _validator(*fields, **kwargs)
 
 logger = logging.getLogger("algogpt.trade")
 router = APIRouter(tags=["trade"])
@@ -215,27 +227,27 @@ class TradeRequest(BaseModel):
     position_side: Optional[str] = None
     reduce_only: Optional[bool] = False
 
-    @field_validator("symbol")
+    @FIELD_VALIDATOR("symbol")
     @classmethod
     def _sym_upper(cls, v: str) -> str:
         v = (v or "").strip().upper()
         if not v: raise ValueError("symbol required")
         return v
 
-    @field_validator("side")
+    @FIELD_VALIDATOR("side")
     @classmethod
     def _side_upper(cls, v: str) -> str:
         v = (v or "").strip().upper()
         if v not in ("BUY", "SELL"): raise ValueError("side must be BUY/SELL")
         return v
 
-    @field_validator("quantity")
+    @FIELD_VALIDATOR("quantity")
     @classmethod
     def _qty_pos(cls, v: float) -> float:
         if v is None or float(v) <= 0: raise ValueError("quantity must be > 0")
         return float(v)
 
-    @field_validator("leverage")
+    @FIELD_VALIDATOR("leverage")
     @classmethod
     def _lev_pos(cls, v: int) -> int:
         iv = int(v or 0)
@@ -245,7 +257,7 @@ class TradeRequest(BaseModel):
 @router.post("/trade/execute")
 async def trade_execute(
     req: TradeRequest = Body(...),
-    request: Request,  # ← תיקון: לא Optional, בלי ברירת מחדל
+    request: Request,  # not Optional
     x_idempotency_key: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ):
     flow = _choose_flow(req)
@@ -258,7 +270,7 @@ async def trade_execute(
         try:
             import httpx
             public_host = os.getenv("PUBLIC_HOST","").strip()
-            base = public_host if public_host else (str(request.base_url).rstrip("/") if request else "http://127.0.0.1:10000")
+            base = public_host if public_host else str(request.base_url).rstrip("/")
             payload = {
                 "symbol": req.symbol, "side": req.side, "qty": req.quantity, "leverage": req.leverage,
                 "tp1": req.tp1, "tp2": req.tp2, "tp3": req.tp3, "sl": req.sl,
@@ -333,6 +345,7 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
     except Exception:
         pass
 
+    # metrics
     record_trade_approval("approve", ok)
     (record_trade_ok if ok else record_trade_fail)(flow)
 
@@ -345,9 +358,12 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
         ok = True
     except Exception:
         ok = False
+    # approval-plane metric
     record_trade_approval("reject", ok)
+    # נסמן כ-fail בהקשר ביצוע (לא התרחש ביצוע)
     record_trade_fail("HYBRID")
     return {"ok": True, "rejected": True, "id": id}
+
 
 
 
