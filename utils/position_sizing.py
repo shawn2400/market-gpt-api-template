@@ -1,6 +1,7 @@
 # app/utils/position_sizing.py
 import os, math, json
 from typing import Optional, Dict
+from contextlib import suppress
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -20,26 +21,30 @@ def _leverage_cap(symbol: str, req_leverage: int) -> int:
     """
     max_lev = _env_int("MAX_LEVERAGE", 20)
 
-    # קאפ פר-סימבול מה-ENV אם קיים
+    # קאפ פר-סימבול מה-ENV אם קיים (עם הקשחה לגרשיים חיצוניים בטעות)
     sym_cap = None
     caps_raw = os.getenv("LEVERAGE_SYMBOL_CAPS", "")
     if caps_raw:
-        try:
+        caps = None
+        with suppress(Exception):
             caps = json.loads(caps_raw)
-            sym_cap = int(caps.get(symbol, max_lev))
-        except Exception:
-            sym_cap = None
+        if caps is None:
+            with suppress(Exception):
+                caps = json.loads(caps_raw.strip("'\""))
+        if isinstance(caps, dict):
+            with suppress(Exception):
+                sym_cap = int(caps.get(symbol, max_lev))
 
     # מפת ADX אופציונלית – אם קיימת ולא משולבת במקום אחר, נשמור כמקסימום עליון “רך”
     adx_cap = None
     adx_map_raw = os.getenv("LEV_ADX_MAP_JSON", "")
     if adx_map_raw:
-        try:
+        adx_map = None
+        with suppress(Exception):
             adx_map = json.loads(adx_map_raw)
-            if adx_map:
+        if isinstance(adx_map, dict) and adx_map:
+            with suppress(Exception):
                 adx_cap = max(int(v) for v in adx_map.values())
-        except Exception:
-            adx_cap = None
 
     caps_to_apply = [req_leverage or 0, max_lev]
     if sym_cap: caps_to_apply.append(sym_cap)
@@ -55,11 +60,26 @@ def _symbol_filters_from_env() -> Dict[str, float]:
     qty_step = _env_float("DEFAULT_QTY_STEP", 0.001)
     price_tick = _env_float("DEFAULT_PRICE_TICK", 0.01)
     min_notional = _env_float("MIN_NOTIONAL_USDT", 5.0)
-    return {
-        "qty_step": qty_step,
-        "price_tick": price_tick,
-        "min_notional": min_notional,
-    }
+    return {"qty_step": qty_step, "price_tick": price_tick, "min_notional": min_notional}
+
+def _symbol_filters(symbol: str) -> Dict[str, float]:
+    """
+    מנסה למשוך פילטרים אמיתיים מהבורסה (קאש פנימי אם קיים), אחרת נופל ל-ENV.
+    מצופה שפונקציה דומה תחזיר dict עם מפתחות כמו stepSize/tickSize/minNotional.
+    """
+    # נסה utils.exchange_info.get_symbol_filters(symbol)
+    with suppress(Exception):
+        from utils.exchange_info import get_symbol_filters  # type: ignore
+        f = get_symbol_filters(symbol)  # יכול להיות dict או None
+        if f:
+            # נסה שמות מפתחות נפוצים; אם חסר—נפול ל-ENV לערך הספציפי
+            return {
+                "qty_step": float(f.get("stepSize") or f.get("qty_step") or _env_float("DEFAULT_QTY_STEP", 0.001)),
+                "price_tick": float(f.get("tickSize") or f.get("price_tick") or _env_float("DEFAULT_PRICE_TICK", 0.01)),
+                "min_notional": float(f.get("minNotional") or f.get("min_notional") or _env_float("MIN_NOTIONAL_USDT", 5.0)),
+            }
+    # אם אין מודול/קאש — פולבאק
+    return _symbol_filters_from_env()
 
 def _step_down(x: float, step: float) -> float:
     if step <= 0:
@@ -90,7 +110,7 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
         return None
 
     raw_qty = (effective * lev) / symbol_price
-    f = _symbol_filters_from_env()
+    f = _symbol_filters(symbol)
     stepped = _step_down(raw_qty, f["qty_step"])
 
     # ודא notional מינימלי
@@ -117,4 +137,5 @@ def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
             ticket["qty"] = q_calc
 
     return ticket
+
 
