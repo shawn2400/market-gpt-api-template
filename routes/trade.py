@@ -4,8 +4,7 @@ import os, time, secrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator
-from pydantic.fields import FieldValidationInfo
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 import httpx
 
 from utils.auth import require_api_key
@@ -66,8 +65,8 @@ class TradeReq(BaseModel):
 
     @field_validator("position_side")
     @classmethod
-    def _ps_ok(cls, v: Optional[str], info: FieldValidationInfo) -> Optional[str]:
-        side = (info.data.get("side") or "").upper()
+    def _ps_ok(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
+        side = ((info.data or {}).get("side") or "").upper()
         hedge = os.getenv("BINANCE_FORCE_HEDGE_MODE", "true").lower() in ("1", "true", "yes", "on")
 
         if v is None:
