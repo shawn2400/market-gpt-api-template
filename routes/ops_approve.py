@@ -74,7 +74,6 @@ def _get_last_price(symbol: str) -> Optional[float]:
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
         if p: return float(p)
-    # נסיון אחרון דרך Client (סינכרוני)
     with suppress(Exception):
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -370,7 +369,7 @@ async def create_ticket(
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
+    if ETA_SMART_ENABLE && (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
             price_now = _get_last_price(symbol)
@@ -431,7 +430,6 @@ async def create_ticket(
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
-    # מציגים qty/lev כפי שהתקבלו (ייתכן 0 ➜ AUTO באישור)
     lines.append(f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{qty}</code> lev=<code>{lev}</code>")
     if req_body.get("score") is not None:       lines.append(f"• Score: <code>{req_body['score']}</code>")
     if req_body.get("eta_open_min") is not None:lines.append(f"• ETA Open: <code>{req_body['eta_open_min']}m</code>")
@@ -468,10 +466,6 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
 
 def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
-    """
-    מביא מחיר עדכני ומחשב qty/leverage סופית (אם צריך) לפני ביצוע.
-    מחזיר ticket מעודכן, או None אם אין מחיר/כשל.
-    """
     symbol = (ticket.get("symbol") or "").upper()
     price = _get_last_price(symbol)
     if not price or float(price) <= 0:
@@ -486,12 +480,11 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
     flow = _decide_flow_by_mode(ticket)
 
-    # נטרול דגלים “רכים”
     with suppress(Exception):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    # 🔸 חישוב AUTO_QTY (אם צריך) לפני ביצוע
+    # 🔸 AUTO_QTY לפני ביצוע
     t2 = _apply_auto_qty_on_ticket(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -499,24 +492,20 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     if float(ticket.get("qty") or 0) <= 0 or int(ticket.get("leverage") or 0) <= 0:
         return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי (בדוק ENV AUTO_QTY_*).")
 
-    # ביצוע
     exec_res = await (_execute_trade(ticket) if flow=="MARKET"
                       else _execute_trade_armed(ticket) if flow=="HYBRID"
                       else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket)))
     ok = bool(exec_res.get("ok"))
 
-    # אם נכשל וצריך – נפילה ל-MARKET (אופציונלי)
     if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
         logger.warning("approve_retry_market_after_hybrid_fail: %s", exec_res)
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
 
-    # לוג שקוף
     if not ok:
         logger.warning("approve_failed: ticket=%s flow=%s detail=%s", ticket_id, flow, json.dumps(exec_res, ensure_ascii=False))
 
-    # פידבק טלגרם
     try:
         sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
         msg = (
@@ -539,7 +528,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
 
     await _delete_ticket(ticket_id, source)
 
-    # עמוד אישור – עם פירוט שגיאה אם DEBUG_APPROVE_HTML=1
     if ok:
         return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.")
     if DEBUG_APPROVE_HTML:
@@ -648,6 +636,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
