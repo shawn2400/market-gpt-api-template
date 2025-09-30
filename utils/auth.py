@@ -195,9 +195,13 @@ async def validate_token(request: Request, call_next):
         # בדיקת טוקן מהכותרות
         tok = request.headers.get("X-API-Key") or _extract_bearer_from_auth_header(request.headers.get("Authorization"))
         if not token_matches(tok):
-            return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+            # ⚠️ תיקון: יש להרים חריגה, לא להחזיר אובייקט HTTPException
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
         return await call_next(request)
+    except HTTPException:
+        # אם כבר הרמנו HTTPException – תן לה לבעבע
+        raise
     except Exception as e:
         logger.error("validate_token: middleware call_next failed for %s: %s", request.url.path, e)
         # לעולם לא להפיל מסלולים – ננסה להעביר הלאה בכל מקרה
