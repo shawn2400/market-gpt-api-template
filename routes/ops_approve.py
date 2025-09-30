@@ -76,7 +76,6 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
-    # אפשר להוסיף socket/connect timeout דרך querystring אם צריך
     return aioredis.from_url(REDIS_URL, decode_responses=True)
 
 # -------- Mode parsing ----------
@@ -114,9 +113,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
 
 # -------- utils: dynamic kwargs filter --------
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    מסנן דינמית לפי הסיגנאטורה כדי לא לשלוח execute_trade_live פרמטרים שלא קיימים (tp_kind/sl_kind/offsets וכו').
-    """
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
@@ -134,7 +130,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
     MARKET ישירה מול Binance, עם ריטריי חכם על ‎-4061.
     """
-    # Fast-path: אם יש לך מתאם פנימי
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -161,7 +156,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
-        # לא קריטי אם נכשל
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
@@ -175,7 +169,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # ניסיון 1: אם המשתמש סיפק position_side מפורש — נשתמש בו; אחרת נשלח בלי
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
         if pos_side_supplied:
@@ -187,8 +180,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
-
-            # ‎-4061 => נסה מהצד ההפוך: אם היה positionSide – נסיר; אם לא היה – נוסיף LONG/SHORT
             try:
                 if "positionSide" in attempt_order:
                     retry_kwargs = dict(base_kwargs)
@@ -268,19 +259,16 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         m = {"1m":1, "3m":3, "5m":5, "15m":15, "30m":30, "1h":60}.get(interval, 15)
         n = max(10, math.ceil(window_min / m) + 5)
         kl = get_klines_sync(symbol, interval=interval, limit=n) or []
-        # normalized closes
         closes: List[float]
         try:
-            # אם זה DataFrame
             import pandas as pd  # type: ignore
-            if isinstance(kl, pd.DataFrame):
-                if "close" in kl.columns:
-                    closes = [float(x) for x in kl["close"].tolist()]
+            if 'DataFrame' in str(type(kl)):
+                # לא להכביד על תלות—בדיקה טקסטואלית
+                if hasattr(kl, 'columns') and ('close' in getattr(kl, 'columns', [])):
+                    closes = [float(x) for x in kl['close'].tolist()]
                 else:
-                    # נסה טור 4 (סינטקס binance clásico)
                     closes = [float(x) for x in kl.iloc[:, 4].tolist()]
             else:
-                # list של קנדלים [ts,o,h,l,c,...]
                 closes = [float(x[4]) for x in kl if len(x) >= 5]
         except Exception:
             closes = [float(x[4]) for x in kl if isinstance(x, (list, tuple)) and len(x) >= 5]
@@ -351,6 +339,7 @@ async def _delete_ticket(tid: str, source: str) -> None:
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
     payload: Dict[str, Any] = Body(...),
+    request: Request | None = None,
 ):
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
@@ -428,9 +417,11 @@ async def create_ticket(
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
 
-    approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve?ticket_id={tid}" if PUBLIC_HOST else ""
-    reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?ticket_id={tid}"  if PUBLIC_HOST else ""
-    preview_url = f"{PUBLIC_HOST.rstrip('/')}/ops/ui/ticket?ticket_id={tid}" if PUBLIC_HOST else ""
+    # URLs: PUBLIC_HOST אם יש, אחרת request.base_url
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    approve_url = f"{base}/ops/approve?ticket_id={tid}" if base else ""
+    reject_url  = f"{base}/ops/reject?ticket_id={tid}"  if base else ""
+    preview_url = f"{base}/ops/ui/ticket?ticket_id={tid}" if base else ""
 
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
@@ -500,7 +491,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     except Exception:
         pass
 
-    # metrics
     try:
         if ok:
             record_approval_approved()
