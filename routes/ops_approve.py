@@ -1,6 +1,7 @@
 # routes/ops_approve.py
 from __future__ import annotations
 import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect
+from contextlib import suppress
 from typing import Any, Dict, Optional, List, Callable
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
@@ -46,6 +47,12 @@ def _bool_env(name: str, default: bool=False) -> bool:
     return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
 
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
+
+# --- behavior flags (fail-open on non-critical signals) ---
+# אם חישוב velocity נכשל – לא חוסמים אישור, רק אזהרה (ברירת המחדל: מותר לאשר)
+APPROVAL_FAIL_OPEN_ON_VELOCITY = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
+# רמת לוג לחישובי velocity (INFO/WARNING)
+VELOCITY_LOG_LEVEL = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
 
 # -------- ConfirmStore fallback ----------
 try:
@@ -254,7 +261,9 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         closes: List[float]
         try:
             if 'DataFrame' in str(type(kl)):
-                if hasattr(kl, 'columns') and ('close' in getattr(kl, 'columns', [])):
+                # לעולם לא בודקים truthiness של DF. קוראים לפי עמודות/אינדקס.
+                cols = getattr(kl, 'columns', [])
+                if hasattr(kl, 'columns') and ('close' in cols):
                     closes = [float(x) for x in kl['close'].tolist()]
                 else:
                     closes = [float(x) for x in kl.iloc[:, 4].tolist()]
@@ -270,13 +279,18 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         per_min = avg_per_candle / m
         return per_min if per_min > 0 else None
     except Exception as e:
-        logger.warning("velocity_calc_failed: %s", e)
+        # לא חוסמים אישור—רק לוג. רמה ניתנת לקונפיגורציה.
+        if VELOCITY_LOG_LEVEL == "INFO":
+            logger.info("velocity_calc_failed: %s", e)
+        else:
+            logger.warning("velocity_calc_failed: %s", e)
         return None
 
 def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
                 interval: str = DEFAULT_INTERVAL, window_min: int = ETA_VELOCITY_WINDOW) -> Dict[str, Optional[int]]:
     vpm = _calc_velocity_per_min(symbol, interval, window_min)
-    if not (price_now and vpm and vpm > 0):
+    # אם אין נתון מספיק – מחזירים None ולא חוסמים זרימה
+    if not (price_now and isinstance(vpm, (int, float)) and vpm > 0):
         return {"eta_tp1_min": None, "eta_tp2_min": None, "eta_tp3_min": None}
     def _eta(tgt):
         if tgt is None: return None
@@ -329,7 +343,7 @@ async def _delete_ticket(tid: str, source: str) -> None:
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
     payload: Dict[str, Any] = Body(...),
-    request: Request = None,  # <-- FIX: Request injected, not Optional
+    request: Request = None,  # Request injected
 ):
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
@@ -453,6 +467,12 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
     flow = _decide_flow_by_mode(ticket)
+
+    # לעולם לא ניתן לכישלון איתות “רך” לעצור אישור: מנקים דגלים לא-קריטיים
+    with suppress(Exception):
+        for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
+            ticket.pop(k, None)
+
     exec_res = await (_execute_trade(ticket) if flow=="MARKET"
                       else _execute_trade_armed(ticket) if flow=="HYBRID"
                       else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket)))
@@ -550,7 +570,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         r = await _redis()
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
-        key = f"{NS}:expired_log"
+        key = f"{NS}:expired_log」
         now = time.time()
         since = now - (hours * 3600)
         items = await r.lrange(key, 0, 2000)
@@ -586,8 +606,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
-
-
 
 
 
