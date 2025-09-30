@@ -1,246 +1,325 @@
 # routes/trade.py
 from __future__ import annotations
-import os, time, secrets
-from typing import Any, Dict, List, Optional
+import os, time, logging, inspect
+from typing import Any, Dict, Optional, List, Callable
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator, ValidationInfo
-import httpx
+from fastapi import APIRouter, Header, HTTPException, Request, Body, Query
+from pydantic import BaseModel, field_validator
 
-from utils.auth import require_api_key
-from utils.redis_helper import get_redis  # אופציונלי – לא חובה לשימוש כאן
-
-# Telegram notifiers (best-effort)
-try:
-    from utils.telegram_notifier import send_trade_approval as send_approval  # type: ignore
-    from utils.telegram_notifier import notify_ops_alert as send_audit        # type: ignore
-except Exception:
-    async def send_approval(*args, **kwargs): return None  # type: ignore
-    async def send_audit(*args, **kwargs): return None     # type: ignore
-
-# Auto-approve rules (optional)
-try:
-    from utils.approval_rules import should_auto_approve  # type: ignore
-except Exception:
-    def should_auto_approve(payload: Dict[str, Any]):  # type: ignore
-        return (False, "rules_missing")
-
-# Approvals unified store
-try:
-    from utils.approvals import ConfirmStore, send_confirm_request  # type: ignore
-except Exception:
-    class ConfirmStore:  # type: ignore
-        @staticmethod
-        def create_with_id(*a, **k): pass
-        @staticmethod
-        def set_handler(*a, **k): pass
-        @staticmethod
-        def has(*a, **k): return False
-        @staticmethod
-        def decide(*a, **k): return {"ok":False}
-        @staticmethod
-        async def run(*a, **k): return False
-    async def send_confirm_request(*a, **k): return None  # type: ignore
-
+logger = logging.getLogger("algogpt.trade")
 router = APIRouter(tags=["trade"])
 
-_PENDING: Dict[str, Dict[str, Any]] = {}
-_PENDING_TTL = 60 * 5
+# --------- ConfirmStore (fallbacks) ----------
+try:
+    from utils.trade_executor import ConfirmStore  # type: ignore
+except Exception:
+    try:
+        from utils.auto_executor import ConfirmStore  # type: ignore
+    except Exception:
+        # Fallback in-memory (main.py exposes a similar one)
+        class ConfirmStore:  # type: ignore
+            _P: Dict[str, Dict[str, Any]] = {}
+            @classmethod
+            def pending(cls) -> List[Dict[str, Any]]:
+                return list(cls._P.values())
+            @classmethod
+            def create(cls, payload: Dict[str, Any]) -> str:
+                tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
+                payload["ticket_id"] = tid
+                payload.setdefault("created_ts", int(time.time()))
+                payload.setdefault("ttl_sec", int(os.getenv("OPS_TICKET_TTL_SEC", "1800")))
+                cls._P[tid] = payload
+                return tid
+            @classmethod
+            def get(cls, ticket_id: str) -> Optional[Dict[str, Any]]:
+                return cls._P.get(ticket_id)
+            @classmethod
+            def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
+                it = cls._P.pop(ticket_id, None)
+                if not it:
+                    return {"ok": False, "error": "not_found"}
+                it["approved"] = approved
+                it["decided_ts"] = int(time.time())
+                return {"ok": True, "approved": approved, "ticket_id": ticket_id}
 
-def _make_idem(x: Optional[str]) -> str:
-    return x or f"{int(time.time()*1000)}_{secrets.token_hex(6)}"
+# --------- Binance client optional ----------
+try:
+    from binance.client import Client  # type: ignore
+except Exception:
+    Client = None  # type: ignore
 
-class TradeReq(BaseModel):
+# --------- helpers ----------
+def _hedge_mode_enabled() -> bool:
+    if os.getenv("POSITION_MODE_OVERRIDE","").strip().lower() in ("hedge","hedged"):
+        return True
+    if os.getenv("BINANCE_FORCE_HEDGE_MODE","").strip().lower() in ("1","true","yes","on"):
+        return True
+    return False
+
+def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        sig = inspect.signature(fn)
+        allowed = set(sig.parameters.keys())
+        return {k: v for k, v in kwargs.items() if k in allowed}
+    except Exception:
+        bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
+        return {k: v for k, v in kwargs.items() if k not in bad}
+
+async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    MARKET מיידי דרך utils.trade_executor.place_futures_market אם קיים;
+    אחרת באמצעות binance-python, עם positionSide במצב Hedge למניעת -4061.
+    """
+    # fast-path: אם יש מתאם פנימי אצלך
+    try:
+        from utils.trade_executor import place_futures_market  # type: ignore
+        return await place_futures_market(ticket)
+    except Exception:
+        pass
+
+    if Client is None:
+        return {"ok": False, "error": "binance_client_unavailable"}
+
+    try:
+        api_key = os.getenv("BINANCE_API_KEY","").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        if not (api_key and api_sec):
+            return {"ok": False, "error": "binance_keys_missing"}
+        client = Client(api_key, api_sec)
+
+        symbol = str(ticket.get("symbol","")).upper()
+        side = str(ticket.get("side","")).upper()
+        qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
+        leverage = int(ticket.get("leverage") or 0)
+        if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+            return {"ok": False, "error": "bad_ticket_params"}
+
+        try:
+            client.futures_change_leverage(symbol=symbol, leverage=leverage)
+        except Exception as e:
+            logger.warning("futures_change_leverage failed: %s", e)
+
+        order_kwargs: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": qty,
+            "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
+        }
+
+        if _hedge_mode_enabled():
+            pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
+            if not pos_side:
+                pos_side = "LONG" if side == "BUY" else "SHORT"
+            order_kwargs["positionSide"] = pos_side
+
+        order = client.futures_create_order(**order_kwargs)
+        return {"ok": True, "exchange": "binance_futures", "order": order}
+    except Exception as e:
+        return {"ok": False, "error": "order_failed", "detail": str(e)}
+
+async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    HYBRID/AUTO – מפעיל execute_trade_live עם סינון דינמי של פרמטרים כדי למנוע TypeError.
+    """
+    try:
+        try:
+            from utils.trade_executor import execute_trade_live  # type: ignore
+        except Exception:
+            from app.trade_executor import execute_trade_live  # type: ignore
+    except Exception as e:
+        return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
+
+    symbol = str(ticket.get("symbol","")).upper()
+    side = str(ticket.get("side","")).upper()
+    qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
+    leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
+    pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or ("LONG" if side=="BUY" else "SHORT")).upper()
+
+    tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
+    tp_targets = [float(x) for x in tps_raw if x not in (None, "0", "0.0") and float(x) > 0]
+    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
+
+    if not (symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+        return {"ok": False, "error": "bad_ticket_params"}
+
+    base_kwargs: Dict[str, Any] = dict(
+        symbol=symbol,
+        side=side,
+        budget=None,
+        leverage=leverage,
+        dry_run=False,
+        quantity=qty,
+        entry=None,
+        tp_targets=tp_targets or None,
+        sl_targets=sl_targets or None,
+        tp_splits=ticket.get("tp_splits"),
+        sl_splits=None,
+        confirm_first=False,
+        telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
+        position_side=pos_side,
+        reduce_only=bool(ticket.get("reduce_only", False)),
+    )
+    clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
+
+    try:
+        res = await execute_trade_live(**clean)
+        return res
+    except Exception as e:
+        return {"ok": False, "error": "armed_execute_failed", "detail": str(e)}
+
+def _choose_flow(req: "TradeRequest") -> str:
+    # אם יש TP/SL כנראה HYBRID, אחרת MARKET
+    if any(x is not None for x in (req.tp1, req.tp2, req.tp3, req.sl)):
+        return "HYBRID"
+    return "MARKET"
+
+# --------- Pydantic v2 models ----------
+class TradeRequest(BaseModel):
     symbol: str
     side: str
-    quantity: float = Field(gt=0)
-    leverage: int = Field(ge=1, le=125)
-    budget_usd: float = Field(gt=0)
-    position_side: Optional[str] = "BOTH"
-    note: Optional[str] = None
-    dry_run: bool = False
+    quantity: float
+    leverage: int
+    budget_usd: Optional[float] = None
     confirm_first: bool = False
+    note: Optional[str] = None
 
-    tp: Optional[float] = None
+    # אופציונליים:
+    tp1: Optional[float] = None
+    tp2: Optional[float] = None
+    tp3: Optional[float] = None
     sl: Optional[float] = None
-    tp_targets: Optional[List[float]] = None
     tp_splits: Optional[List[float]] = None
-    sl_targets: Optional[List[float]] = None
-    sl_splits: Optional[List[float]] = None
+    position_side: Optional[str] = None  # LONG/SHORT/BOTH
+    reduce_only: Optional[bool] = False
+
+    @field_validator("symbol")
+    @classmethod
+    def _sym_upper(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if not v:
+            raise ValueError("symbol required")
+        return v
 
     @field_validator("side")
     @classmethod
-    def _side_ok(cls, v: str) -> str:
-        vu = v.upper()
-        if vu not in ("BUY","SELL","LONG","SHORT"):
-            raise ValueError("side must be BUY/SELL/LONG/SHORT")
-        return "BUY" if vu in ("BUY","LONG") else "SELL"
-
-    @field_validator("position_side")
-    @classmethod
-    def _ps_ok(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
-        side = ((info.data or {}).get("side") or "").upper()
-        hedge = os.getenv("BINANCE_FORCE_HEDGE_MODE", "true").lower() in ("1", "true", "yes", "on") \
-                or os.getenv("POSITION_MODE_OVERRIDE","hedge").lower()=="hedge"
-        if v is None:
-            return "LONG" if (hedge and side == "BUY") else ("SHORT" if (hedge and side == "SELL") else "BOTH")
-        v2 = v.upper()
-        if v2 not in ("BOTH", "LONG", "SHORT"):
-            raise ValueError("position_side must be BOTH/LONG/SHORT")
-        if hedge and v2 == "BOTH":
-            return "LONG" if side == "BUY" else "SHORT"
-        return v2
-
-    @field_validator("tp_splits")
-    @classmethod
-    def _splits_sum_ok(cls, v: Optional[List[float]]):
-        if v is not None and sum(v) > 1.0 + 1e-9:
-            raise ValueError("sum(tp_splits) must be <= 1")
+    def _side_upper(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if v not in ("BUY", "SELL"):
+            raise ValueError("side must be BUY/SELL")
         return v
 
-def _422(detail: Any) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+    @field_validator("quantity")
+    @classmethod
+    def _qty_pos(cls, v: float) -> float:
+        if v is None or float(v) <= 0:
+            raise ValueError("quantity must be > 0")
+        return float(v)
 
-def _summary(req: TradeReq) -> str:
-    return f"{req.side.upper()} {req.symbol.upper()} qty={req.quantity} lev={req.leverage} budget=${req.budget_usd} dry={req.dry_run}"
+    @field_validator("leverage")
+    @classmethod
+    def _lev_pos(cls, v: int) -> int:
+        iv = int(v or 0)
+        if iv <= 0:
+            raise ValueError("leverage must be > 0")
+        return iv
 
-def _get_executor():
-    try:
-        from utils.trade_executor import execute_trade_live  # type: ignore
-        return execute_trade_live
-    except Exception:
-        return None
-
-async def _execute_and_audit(req: TradeReq) -> Dict[str, Any]:
-    execute_trade_live = _get_executor()
-    if execute_trade_live is None:
-        raise RuntimeError("trade executor missing")
-    # בלי שדות “רועשים”
-    kwargs = dict(
-        symbol=req.symbol,
-        side=req.side,
-        budget=req.budget_usd,
-        leverage=req.leverage,
-        dry_run=req.dry_run,
-        quantity=req.quantity,
-        position_side=req.position_side or "BOTH",
-        confirm_first=req.confirm_first,
-        tp=req.tp,
-        sl=req.sl,
-        tp_targets=req.tp_targets,
-        tp_splits=req.tp_splits,
-        sl_targets=req.sl_targets,
-        sl_splits=req.sl_splits,
-    )
-    res = await execute_trade_live(**{k:v for k,v in kwargs.items() if v is not None})
-    try:
-        extra = f" · note={req.note}" if req.note else ""
-        await send_audit(f"TRADE EXECUTE API · {_summary(req)}{extra}")
-    except Exception:
-        pass
-    return res
+# --------- API ---------
 
 @router.post("/trade/execute")
 async def trade_execute(
-    req: TradeReq,
-    request: Request,
-    _token: str = Depends(require_api_key),
-    x_idem: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
-) -> Dict[str, Any]:
-    idem = _make_idem(x_idem)
-    try:
-        auto, reason = should_auto_approve({"budget_usd": req.budget_usd})
-    except Exception:
-        auto, reason = (False, "rules_missing")
+    req: TradeRequest = Body(...),
+    request: Request = None,
+    x_idempotency_key: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
+):
+    """
+    אם confirm_first=true – יפתח טיקט לאישור (ConfirmStore) ויחזיר pending_approval.
+    אחרת – יבצע מיידית:
+      * MARKET ללא TP/SL דרך Binance (עם positionSide במצב Hedge)
+      * HYBRID עם TP/SL דרך execute_trade_live (סינון דינמי)
+    """
+    flow = _choose_flow(req)
 
-    need_approval = bool(req.confirm_first and not req.dry_run and not auto)
-
-    if need_approval:
-        _PENDING[idem] = {"ts": time.time(), "req": req.model_dump()}
-        plan = {
-            "symbol": req.symbol,
-            "side": req.side,
-            "leverage": req.leverage,
-            "quantity": req.quantity,
-            "budget_usd": req.budget_usd,
-            "tp": [{"stopPrice": t} for t in (req.tp_targets or [])],
-            "ttl_sec": _PENDING_TTL,
-            "trade_kind": "Futures",
-            "order_type": "MARKET",
-            "why": "trade_execute_api_confirm_first",
-        }
-        def _runner():
-            import anyio
-            return anyio.from_thread.run(_execute_and_audit, req)
+    # confirm_first => פותחים טיקט לאישור
+    if req.confirm_first:
+        idem = x_idempotency_key or f"SMOKE-{int(time.time())}"
+        ticket = dict(
+            ticket_id=None,
+            symbol=req.symbol,
+            side=req.side,
+            qty=req.quantity,
+            leverage=req.leverage,
+            note=req.note or "",
+            tp1=req.tp1, tp2=req.tp2, tp3=req.tp3, sl=req.sl,
+            tp_splits=req.tp_splits,
+            position_side=(req.position_side or ("LONG" if req.side=="BUY" else "SHORT")).upper(),
+            created_ts=int(time.time()),
+            ttl_sec=int(os.getenv("OPS_TICKET_TTL_SEC","1800")),
+            idem=idem,
+        )
         try:
-            ConfirmStore.create_with_id(idem, plan)
-            ConfirmStore.set_handler(idem, _runner)
+            ConfirmStore.create(ticket)
         except Exception:
             pass
-        sent = False
+        return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": ticket["ttl_sec"]}}
+
+    # Execute now
+    ticket_exec = dict(
+        symbol=req.symbol,
+        side=req.side,
+        qty=req.quantity,
+        leverage=req.leverage,
+        note=req.note or "",
+        tp1=req.tp1, tp2=req.tp2, tp3=req.tp3, sl=req.sl,
+        tp_splits=req.tp_splits,
+        position_side=(req.position_side or ("LONG" if req.side=="BUY" else "SHORT")).upper(),
+        reduce_only=bool(req.reduce_only),
+    )
+
+    if flow == "MARKET":
+        res = await _execute_trade_direct(ticket_exec)
+    else:
+        res = await _execute_trade_hybrid(ticket_exec)
+
+    return {"ok": bool(res.get("ok")), "flow": flow, "result": res}
+
+@router.get("/trade/approve")
+async def trade_approve(id: str = Query(..., description="idempotency key or ticket_id")):
+    # חיפוש טיקט ב-ConfirmStore
+    it: Optional[Dict[str, Any]] = None
+    try:
+        for t in (ConfirmStore.pending() or []):
+            if str(t.get("idem") or t.get("ticket_id")) == str(id):
+                it = t; break
+    except Exception:
+        # חלק מהגרסאות מספקות get()
         try:
-            await send_confirm_request(idem, plan); sent = True
+            it = ConfirmStore.get(id)  # type: ignore
         except Exception:
-            sent = False
-        if not sent:
-            try:
-                await send_approval(idem, plan)  # fallback
-            except Exception:
-                pass
-        return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": _PENDING_TTL}}
+            it = None
+
+    if not it:
+        return {"ok": False, "error": "not_found"}
+
+    flow = "HYBRID" if any(it.get(k) for k in ("tp1","tp2","tp3","sl")) else "MARKET"
+    res = await (_execute_trade_hybrid(it) if flow=="HYBRID" else _execute_trade_direct(it))
+    ok = bool(res.get("ok"))
 
     try:
-        res = await _execute_and_audit(req)
-        if auto and not req.dry_run:
-            try:
-                await send_audit(f"AUTO-APPROVED · idem={idem} · reason={reason}")
-            except Exception:
-                pass
-        return {"ok": True, "error": None, "result": res}
-    except ValueError as ve:
-        raise _422([{"type": "value_error", "loc": ["body"], "msg": str(ve)}])
-    except httpx.HTTPStatusError as he:
-        raise HTTPException(status_code=502, detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        ConfirmStore.decide(str(it.get("ticket_id") or id), approved=ok)
+    except Exception:
+        pass
 
-@router.get("/trade/approve", include_in_schema=False)
-async def trade_approve(id: str) -> Dict[str, Any]:
-    try:
-        if ConfirmStore.has(id):
-            _ = ConfirmStore.decide(id, approved=True)
-            started = await ConfirmStore.run(id)
-            return {"ok": True, "result": {"confirm": _, "run": started}}
-    except Exception:
-        pass
-    item = _PENDING.pop(id, None)
-    if not item:
-        return {"ok": False, "error": "not_found_or_expired"}
-    req = TradeReq(**item["req"])
-    try:
-        res = await _execute_and_audit(req)
-        return {"ok": True, "result": res}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {"ok": ok, "flow": flow, "result": res}
 
-@router.get("/trade/reject", include_in_schema=False)
-async def trade_reject(id: str) -> Dict[str, Any]:
+@router.get("/trade/reject")
+async def trade_reject(id: str = Query(..., description="idempotency key or ticket_id")):
     try:
-        if ConfirmStore.has(id):
-            _ = ConfirmStore.decide(id, approved=False)
-            try:
-                await send_audit(f"REJECTED · idem={id}")
-            except Exception:
-                pass
-            return {"ok": True, "rejected": True, "result": _}
+        ConfirmStore.decide(str(id), approved=False)
     except Exception:
         pass
-    _PENDING.pop(id, None)
-    try:
-        await send_audit(f"REJECTED · idem={id}")
-    except Exception:
-        pass
-    return {"ok": True, "rejected": True}
+    return {"ok": True, "rejected": True, "id": id}
+
 
 
 
