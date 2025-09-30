@@ -123,7 +123,6 @@ def start_gc_task(loop: Optional[asyncio.AbstractEventLoop] = None) -> asyncio.T
     lp = loop or asyncio.get_event_loop()
     return lp.create_task(approvals_gc_loop())
 
-# alias תואם main ישן/חדש
 def start_approvals_gc(interval: Optional[int] = None):
     try:
         loop = asyncio.get_event_loop()
@@ -131,6 +130,7 @@ def start_approvals_gc(interval: Optional[int] = None):
         loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
     loop.create_task(approvals_gc_loop(interval=interval))
     return True
+
 
 
 
