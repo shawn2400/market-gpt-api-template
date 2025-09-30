@@ -59,9 +59,9 @@ class TradeReq(BaseModel):
     @classmethod
     def _side_ok(cls, v: str) -> str:
         vu = v.upper()
-        if vu not in ("BUY", "SELL", "LONG", "SHORT"):
+        if vu not in ("BUY","SELL","LONG","SHORT"):
             raise ValueError("side must be BUY/SELL/LONG/SHORT")
-        return "BUY" if vu in ("BUY", "LONG") else "SELL"
+        return "BUY" if vu in ("BUY","LONG") else "SELL"
 
     @field_validator("position_side")
     @classmethod
@@ -70,7 +70,6 @@ class TradeReq(BaseModel):
         hedge = os.getenv("BINANCE_FORCE_HEDGE_MODE", "true").lower() in ("1", "true", "yes", "on")
 
         if v is None:
-            # אם Hedge, נכפה LONG/SHORT בהתאם ל־side; אחרת BOTH
             return "LONG" if (hedge and side == "BUY") else ("SHORT" if (hedge and side == "SELL") else "BOTH")
 
         v2 = v.upper()
@@ -78,7 +77,6 @@ class TradeReq(BaseModel):
             raise ValueError("position_side must be BOTH/LONG/SHORT")
 
         if hedge and v2 == "BOTH":
-            # במצב Hedge אי אפשר BOTH — נתאים אוטומטית
             return "LONG" if side == "BUY" else "SHORT"
         return v2
 
@@ -244,6 +242,7 @@ async def trade_reject(id: str) -> Dict[str, Any]:
     except Exception:
         pass
     return {"ok": True, "rejected": True}
+
 
 
 
