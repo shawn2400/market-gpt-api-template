@@ -16,7 +16,7 @@ except Exception:
     aioredis = None  # type: ignore
 
 NS                   = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL            = os.getenv("REDIS_URL", "").strip()
+REDIS_URL            = os.getenv("REDIS_URL", "")
 PUBLIC_HOST          = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
 HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
@@ -91,80 +91,72 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# -------- Position-side helpers ----------
-def _bool_env(name: str, default: bool=False) -> bool:
-    return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
-
-def _hedge_enabled() -> bool:
-    # מנסה לגזור ממצב מערכת
-    override = (os.getenv("POSITION_MODE_OVERRIDE","").strip().lower())
-    if override in ("hedge","dual"):  # dual-side position mode
-        return True
-    if override in ("oneway","one_way","one-way","single"):
-        return False
-    return _bool_env("BINANCE_FORCE_HEDGE_MODE", True)
-
-def _resolve_position_side(side: str, ticket_pos_side: Optional[str]) -> str:
-    side_u = (side or "").upper()
-    tp = (ticket_pos_side or "").upper() if ticket_pos_side else None
-    hedge = _hedge_enabled()
-    if hedge:
-        if tp in ("LONG","SHORT"):
-            return tp
-        return "LONG" if side_u == "BUY" else "SHORT"
-    # one-way
-    return "BOTH"
-
 # -------- Execution backends ----------
+def _norm_position_side(side: str, position_side: Optional[str]) -> str:
+    """
+    Normalize positionSide for Binance Futures when hedge mode is used:
+    BUY -> LONG, SELL -> SHORT; otherwise BOTH (one-way).
+    """
+    ps = (position_side or "").upper().strip()
+    if ps in ("LONG","SHORT","BOTH"):  # honor explicit
+        return ps
+    s = (side or "").upper().strip()
+    return "LONG" if s == "BUY" else ("SHORT" if s == "SELL" else "BOTH")
+
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    מסלול MARKET ישיר מול Binance (fallback אם אין trade_executor.place_futures_market).
-    מוודא העברת positionSide נכונה במצב Hedge כדי למנוע -4061.
+    Simple MARKET entry path (no ladder/arming) using either local helper or direct Binance client.
+    Ensures positionSide is set to avoid -4061 on hedge accounts.
     """
+    # Try project-level helper first
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
-        return await place_futures_market(ticket)
+        # attempt with position_side if supported
+        try:
+            sig = inspect.signature(place_futures_market)  # type: ignore
+            kwargs = dict(ticket)
+            if "position_side" in sig.parameters and "position_side" not in kwargs:
+                kwargs["position_side"] = _norm_position_side(ticket.get("side",""), ticket.get("position_side"))
+            return await place_futures_market(**{k:v for k,v in kwargs.items() if k in sig.parameters})
+        except Exception:
+            # fallback to legacy call style
+            return await place_futures_market(ticket)  # type: ignore
     except Exception:
         pass
 
+    # Direct Binance fallback
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
         logger.error("binance import failed: %s", e)
         return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
-
     try:
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
         if not api_key or not api_sec:
             return {"ok": False, "error": "binance_keys_missing"}
-
         client = Client(api_key, api_sec)
 
         symbol   = str(ticket.get("symbol","")).upper()
         side     = str(ticket.get("side","")).upper()
         qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
-        leverage = int(ticket.get("leverage") or 0)
-        pos_side = _resolve_position_side(side, ticket.get("position_side"))
-        reduce_only = bool(ticket.get("reduce_only", False))
-
+        leverage = int(ticket.get("leverage") or 1)
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
-        # ננסה לקבע מינוף (לא קריטי אם נכשל)
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
             logger.warning("futures_change_leverage failed: %s", e)
 
-        # הזמנה ישירה (MARKET) עם positionSide כדי למנוע -4061
+        # positionSide to prevent -4061 when hedge mode is on
+        position_side = _norm_position_side(side, ticket.get("position_side"))
         order = client.futures_create_order(
             symbol=symbol,
             side=side,
             type="MARKET",
             quantity=qty,
-            positionSide=pos_side,   # <— חשוב במצב Hedge
-            reduceOnly=reduce_only,
+            positionSide=position_side,
             newClientOrderId=f"ALG_{symbol}_{side}_{int(time.time())}"
         )
         return {"ok": True, "exchange": "binance_futures", "order": order}
@@ -172,14 +164,17 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("futures_create_order failed: %s", e)
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
+def _bool_env(name: str, default: bool=False) -> bool:
+    return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
+
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    מסלול HYBRID/AUTO — מפעיל execute_trade_live, אבל קודם מסנן לפי הסיגנאטורה בפועל,
-    כדי שלא ייזרק TypeError על פרמטרים כמו tp_kind/sl_kind כשלא קיימים בגרסה שלך.
+    Arming path -> execute_trade_live with dynamic signature filtering
+    so extra args like tp_kind/sl_kind/*_offset/*_kind won't break.
     """
-    # טען פונקציה
+    # lazy import
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -189,38 +184,46 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("execute_trade_live missing: %s", e)
         return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
 
-    # פרמטרים מהטיקט
+    # base normalized fields
     symbol   = str(ticket.get("symbol","")).upper()
     side     = str(ticket.get("side","")).upper()
     qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or 0)
-    pos_side = _resolve_position_side(side, ticket.get("position_side"))
-
-    tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
-    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
-    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
+    pos_side = _norm_position_side(side, ticket.get("position_side"))
 
     if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
 
-    # בנה kwargs "מלאים"
-    raw_kwargs: Dict[str, Any] = dict(
+    # targets/splits normalization
+    tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
+    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
+    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
+
+    tp_splits = ticket.get("tp_splits")
+    if isinstance(tp_splits, str):
+        try:
+            tp_splits = [float(x) for x in tp_splits.split(",") if str(x).strip()]
+        except Exception:
+            tp_splits = None
+
+    # build kwargs (superset), then filter by signature
+    sup_kwargs: Dict[str, Any] = dict(
         symbol=symbol,
         side=side,
-        budget=ticket.get("budget"),
+        budget=None,
         leverage=leverage,
         dry_run=False,
         quantity=qty,
         entry=None,
         tp_targets=tp_targets or None,
         sl_targets=sl_targets or None,
-        tp_splits=ticket.get("tp_splits"),
+        tp_splits=tp_splits,
         sl_splits=None,
         confirm_first=False,
         telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
         position_side=pos_side,
         reduce_only=bool(ticket.get("reduce_only", False)),
-        # פרמטרים "עשירים" — יעופו אם לא קיימים בסיגנאטורה:
+        # “potentially extra” args that may or may not be supported:
         tp_kind=ticket.get("tp_kind"),
         sl_kind=ticket.get("sl_kind"),
         entry_kind=ticket.get("entry_kind"),
@@ -229,31 +232,11 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         sl_offset=ticket.get("sl_offset"),
     )
 
-    # סינון לפי חתימת הפונקציה (מפתח: שם פרמטר; ערך: לא None)
     try:
         sig = inspect.signature(execute_trade_live)
         allowed = set(sig.parameters.keys())
-        kwargs = {k: v for k, v in raw_kwargs.items() if k in allowed and v is not None}
-    except Exception:
-        # אם נכשל — נלך על סט בטוח בלי המתקדמים
-        kwargs = {
-            "symbol": symbol,
-            "side": side,
-            "budget": ticket.get("budget"),
-            "leverage": leverage,
-            "dry_run": False,
-            "quantity": qty,
-            "tp_targets": tp_targets or None,
-            "sl_targets": sl_targets or None,
-            "tp_splits": ticket.get("tp_splits"),
-            "confirm_first": False,
-            "position_side": pos_side,
-            "reduce_only": bool(ticket.get("reduce_only", False)),
-            "telegram_chat_id": int(os.getenv("TELEGRAM_CHAT_ID") or 0),
-        }
-
-    try:
-        res = await execute_trade_live(**kwargs)
+        filtered = {k: v for k, v in sup_kwargs.items() if (k in allowed and v is not None)}
+        res = await execute_trade_live(**filtered)  # type: ignore
         return res
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
@@ -326,12 +309,11 @@ async def _delete_ticket(tid: str, source: str) -> None:
         pass
 
 # -------------------- API --------------------
-# ── יצירת כרטיס + שליחת טלגרם עם PREVIEW/APPROVE/REJECT ──
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
     payload: Dict[str, Any] = Body(..., description="symbol, side, qty, leverage, optional: TP/SL/ETAs/probs/note/position_side/budget/expiry_ts"),
 ):
-    # ---- parse ----
+    # parse
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
     qty    = float(payload.get("qty") or payload.get("quantity") or 0)
@@ -342,7 +324,7 @@ async def create_ticket(
     if not (symbol and side and qty > 0 and lev > 0):
         raise HTTPException(status_code=422, detail="Missing/invalid fields (symbol/side/qty/leverage)")
 
-    # ---- enrich ----
+    # enrich
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
@@ -355,7 +337,7 @@ async def create_ticket(
         for k,v in etas.items():
             payload.setdefault(k, v)
 
-    # ﬠגול
+    # flags via note
     try:
         from routes.ops_flags import apply_note_flags  # type: ignore
     except Exception:
@@ -369,10 +351,19 @@ async def create_ticket(
         "sl": payload.get("sl"), "prob_overall_pct": payload.get("prob_overall_pct"),
         "prob_tp1_pct": payload.get("prob_tp1_pct"), "prob_tp2_pct": payload.get("prob_tp2_pct"), "prob_tp3_pct": payload.get("prob_tp3_pct"),
         "expiry_ts": payload.get("expiry_ts"),
+        # allow advanced flags to flow to executor; will be filtered later if unsupported
+        "tp_kind": payload.get("tp_kind"),
+        "sl_kind": payload.get("sl_kind"),
+        "entry_kind": payload.get("entry_kind"),
+        "entry_offset": payload.get("entry_offset"),
+        "tp_offset": payload.get("tp_offset"),
+        "sl_offset": payload.get("sl_offset"),
+        "reduce_only": payload.get("reduce_only"),
+        "tp_splits": payload.get("tp_splits"),
     }
     req_body = apply_note_flags(note, req_body)
 
-    # RR_MIN soft flag
+    # RR_MIN soft check
     try:
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -391,7 +382,7 @@ async def create_ticket(
     except Exception:
         pass
 
-    # ---- persist ----
+    # persist
     try:
         ConfirmStore.create(dict(req_body))
     except Exception:
@@ -404,12 +395,12 @@ async def create_ticket(
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
 
-    # ---- URLs ----
+    # URLs
     approve_url = f"{PUBLIC_HOST.rstrip('/')}/ops/approve?ticket_id={tid}" if PUBLIC_HOST else ""
     reject_url  = f"{PUBLIC_HOST.rstrip('/')}/ops/reject?ticket_id={tid}"  if PUBLIC_HOST else ""
     preview_url = f"{PUBLIC_HOST.rstrip('/')}/ops/ui/ticket?ticket_id={tid}" if PUBLIC_HOST else ""
 
-    # ---- Telegram (with Preview) ----
+    # Telegram
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
@@ -426,10 +417,7 @@ async def create_ticket(
     if req_body.get("sl") is not None: lines.append(f"• SL: <code>{req_body['sl']}</code>")
     mode = _parse_mode(note)
     if mode: lines.append(f"• Mode: <code>{mode}</code>")
-    if req_body.get("tp_kind"):   lines.append(f"• TP Kind: <code>{req_body['tp_kind']}</code>")
     if req_body.get("tp_splits"): lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
-    if req_body.get("sl_kind"):   lines.append(f"• SL Kind: <code>{req_body['sl_kind']}</code>")
-    if req_body.get("entry_kind"):lines.append(f"• Entry: <code>{req_body['entry_kind']}</code>")
     if req_body.get("reduce_only"):lines.append(f"• Reduce Only: <code>True</code>")
     if req_body.get("blocked_by_rr_min"): lines.append("• RR Check: <code>Below RR_MIN (manual review)</code>")
     if req_body.get("prob_overall_pct") is not None: lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
@@ -452,7 +440,6 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
         return mode
     return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
 
-# ── אישור/דחייה (UI פתוח) ──
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
@@ -505,7 +492,6 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
         pass
     return _html("❌ נדחה. לא בוצעה פעולה.")
 
-# ── Signed-only (לסביבה פתוחה; חתימה חובה) ──
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade) – signature required")
 async def approve_signed(request: Request):
     if not HMAC_SECRET:
@@ -528,13 +514,8 @@ async def approve_signed(request: Request):
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 
-# ── Digest לכרטיסים שפגו (N שעות אחרונות) ──
 @router.get("/ops/digest/expired", summary="Send Telegram digest for expired approval tickets in last N hours")
 async def digest_expired(hours: int = Query(6, ge=1, le=48)):
-    """
-    אוסף אירועים מה־Redis (אם קיים) שנרשמו ע״י ה-GC ושולח סיכום לטלגרם.
-    דורש שה-GC ירשום ליסט NS:expired_log (ראו utils/approvals_gc.py).
-    """
     if not (aioredis and REDIS_URL and BOT_TOKEN and ADMIN_CHAT_ID):
         return {"ok": False, "error": "digest_dependencies_missing"}
     try:
@@ -577,6 +558,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
