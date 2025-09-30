@@ -11,16 +11,32 @@ GC_BATCH_MAX = int(os.getenv("APPROVAL_GC_BATCH_MAX","50"))
 NS = os.getenv("REDIS_NAMESPACE","ops-supervisor-web").strip() or "ops-supervisor-web"
 REDIS_URL = os.getenv("REDIS_URL","").strip()
 
-# Prometheus
+# ---- metrics tracker (internal JSON)
+try:
+    from utils.metrics import metrics_tracker
+except Exception:
+    metrics_tracker = None  # type: ignore
+
+# ---- Prometheus
 try:
     from prometheus_client import Counter, Gauge
     approvals_expired_total = Counter("approvals_expired_total", "Total approvals auto-rejected by GC")
     approvals_gc_last_run_ts = Gauge("approvals_gc_last_run_ts", "Unix ts of last GC run")
     approvals_gc_last_expired = Gauge("approvals_gc_last_expired", "Number of approvals expired on last GC iteration")
+    # labels (opt-in, low-cardinality!)
+    LABELS_ENABLE = os.getenv("APPROVALS_LABELS_ENABLE","0").lower() in ("1","true","yes","on")
+    APPROVALS_LABELS_SYMBOLS = {s.strip().upper() for s in (os.getenv("APPROVALS_LABELS_SYMBOLS","") or "").split(",") if s.strip()}
+    if not APPROVALS_LABELS_SYMBOLS:
+        APPROVALS_LABELS_SYMBOLS = {s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()}
+    approvals_expired_by_symbol = Counter("approvals_expired_by_symbol",
+                                          "Expired approvals by (symbol,side) – gated",
+                                          ["symbol","side"]) if LABELS_ENABLE else None
 except Exception:
     approvals_expired_total = approvals_gc_last_run_ts = approvals_gc_last_expired = None  # type: ignore
+    approvals_expired_by_symbol = None  # type: ignore
+    LABELS_ENABLE = False
 
-# Optional Redis
+# ---- Optional Redis
 try:
     import redis.asyncio as aioredis  # type: ignore
 except Exception:
@@ -31,7 +47,7 @@ async def _redis():
         return None
     return aioredis.from_url(REDIS_URL, decode_responses=True)
 
-# ConfirmStore
+# ---- ConfirmStore
 try:
     from utils.approvals import ConfirmStore  # type: ignore
 except Exception:
@@ -41,7 +57,7 @@ except Exception:
         @staticmethod
         def reject(_idem: str, approver: Optional[str] = None) -> Dict[str, Any]: return {"ok":False}
 
-# notifier (best-effort)
+# ---- notifier (best-effort)
 async def _notify_expired(idem: str, rec: Dict[str, Any]) -> None:
     try:
         from utils.telegram_notifier import notify_ops_alert  # type: ignore
@@ -51,7 +67,7 @@ async def _notify_expired(idem: str, rec: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-# log for digest (Redis list)
+# ---- log for digest (Redis list)
 async def _log_expired_event(idem: str, rec: Dict[str, Any]) -> None:
     try:
         r = await _redis()
@@ -90,13 +106,38 @@ async def _gc_once() -> int:
             await _notify_expired(idem, rec)
             await _log_expired_event(idem, rec)
             cnt += 1
+
+            # ---- metrics (internal JSON)
+            if metrics_tracker:
+                metrics_tracker.inc_counter("approvals_expired_total", 1.0)
+                sym = (rec.get("symbol") or "").upper()
+                side = (rec.get("side") or "").upper()
+                # נעשה גם מונה עם labels פנימיים (לא Prometheus)
+                metrics_tracker.inc_counter("approvals_expired_labelled", 1.0, labels={"symbol": sym, "side": side})
+
+            # ---- Prometheus labelled (gated & safe)
+            if approvals_expired_by_symbol:
+                sym = (rec.get("symbol") or "").upper()
+                side = (rec.get("side") or "").upper()
+                if (not APPROVALS_LABELS_SYMBOLS) or (sym in APPROVALS_LABELS_SYMBOLS):
+                    approvals_expired_by_symbol.labels(symbol=sym, side=side).inc()
+
         except Exception as e:
             logger.warning({"event":"approval_gc.reject_failed","idem":idem,"err":str(e)})
 
     try:
-        if approvals_expired_total and cnt: approvals_expired_total.inc(cnt)
-        if approvals_gc_last_run_ts: approvals_gc_last_run_ts.set(time.time())
-        if approvals_gc_last_expired is not None: approvals_gc_last_expired.set(cnt)
+        # Prometheus gauges/counter
+        if approvals_expired_total and cnt:
+            approvals_expired_total.inc(cnt)
+        if approvals_gc_last_run_ts:
+            approvals_gc_last_run_ts.set(time.time())
+        if approvals_gc_last_expired is not None:
+            approvals_gc_last_expired.set(cnt)
+
+        # Internal gauges
+        if metrics_tracker:
+            metrics_tracker.set_gauge("approvals_gc_last_run_ts", time.time())
+            metrics_tracker.set_gauge("approvals_gc_last_expired", float(cnt))
     except Exception:
         pass
 
@@ -130,6 +171,7 @@ def start_approvals_gc(interval: Optional[int] = None):
         loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
     loop.create_task(approvals_gc_loop(interval=interval))
     return True
+
 
 
 
