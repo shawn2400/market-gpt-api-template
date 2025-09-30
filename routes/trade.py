@@ -49,12 +49,9 @@ except Exception:
     Client = None  # type: ignore
 
 # --------- helpers ----------
-def _hedge_mode_enabled() -> bool:
-    if os.getenv("POSITION_MODE_OVERRIDE","").strip().lower() in ("hedge","hedged"):
-        return True
-    if os.getenv("BINANCE_FORCE_HEDGE_MODE","").strip().lower() in ("1","true","yes","on"):
-        return True
-    return False
+def _is_code_4061(err: Exception | str) -> bool:
+    s = str(err)
+    return "code=-4061" in s or "position side does not match" in s.lower()
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -68,8 +65,9 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
 
 async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    MARKET מיידי דרך utils.trade_executor.place_futures_market אם קיים;
-    אחרת באמצעות binance-python, עם positionSide במצב Hedge למניעת -4061.
+    MARKET מיידי.
+    קודם מנסה מתאם פנימי utils.trade_executor.place_futures_market;
+    אם לא קיים/נכשל — Binance ישיר עם ריטריי חכם ל-4061.
     """
     # fast-path: אם יש מתאם פנימי אצלך
     try:
@@ -101,23 +99,44 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("futures_change_leverage failed: %s", e)
 
-        order_kwargs: Dict[str, Any] = {
+        base_kwargs: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "type": "MARKET",
             "quantity": qty,
-            "newClientOrderId": f"{os.getenv('ORDER_ID_PREFIX','ALG')}_{symbol}_{side}_{int(time.time())}",
+            "newClientOrderId": f"{os.getenv('ORDER_ID_PREFIX','ALG_MAIN')}_{symbol}_{side}_{int(time.time())}",
         }
 
-        # מניעת -4061: במצב Hedge נשלח positionSide חד-משמעי; ב-One-way לא שולחים בכלל
-        if _hedge_mode_enabled():
-            pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
-            if not pos_side:
-                pos_side = "LONG" if side == "BUY" else "SHORT"
-            order_kwargs["positionSide"] = pos_side
+        # ניסיון 1:
+        # אם המשתמש סיפק position_side/positionSide — נשלח אותו,
+        # אחרת ננסה בלי (One-way safe). על 4061 נבצע ניסיון נגדי.
+        pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
+        attempt_kwargs = dict(base_kwargs)
+        if pos_side_supplied:
+            attempt_kwargs["positionSide"] = pos_side_supplied
 
-        order = client.futures_create_order(**order_kwargs)
-        return {"ok": True, "exchange": "binance_futures", "order": order}
+        try:
+            order = client.futures_create_order(**attempt_kwargs)
+            return {"ok": True, "exchange": "binance_futures", "order": order}
+        except Exception as e1:
+            if not _is_code_4061(e1):
+                # שגיאה אחרת
+                raise
+
+            # ריטריי על 4061:
+            try:
+                if "positionSide" in attempt_kwargs:
+                    # ניסינו עם posSide => נסיר וננסה שוב
+                    retry_kwargs = dict(base_kwargs)
+                else:
+                    # ניסינו בלי => נוסיף LONG/SHORT לפי SIDE
+                    retry_kwargs = dict(base_kwargs)
+                    retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
+                order = client.futures_create_order(**retry_kwargs)
+                return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
+            except Exception as e2:
+                return {"ok": False, "error": "order_failed", "detail": str(e2), "first_error": str(e1)}
+
     except Exception as e:
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
@@ -239,7 +258,7 @@ async def trade_execute(
     אם confirm_first=true או REQUIRE_TELEGRAM_APPROVAL=1 – נפתח טיקט דרך /ops/ticket (שולח טלגרם),
     ומחזירים pending_approval עם קישורי Approve/Reject/Preview.
     אחרת – ביצוע מיידי:
-      * MARKET ללא TP/SL דרך Binance (עם positionSide במצב Hedge)
+      * MARKET ללא TP/SL דרך Binance (עם ריטריי 4061)
       * HYBRID עם TP/SL דרך execute_trade_live (סינון דינמי)
     """
     force_approve = os.getenv("REQUIRE_TELEGRAM_APPROVAL","0").lower() in ("1","true","yes","on")
@@ -250,7 +269,6 @@ async def trade_execute(
         try:
             import httpx
             public_host = os.getenv("PUBLIC_HOST","").strip()
-            # בסיס לכתובת: PUBLIC_HOST אם הוגדר, אחרת מהבקשה
             base = public_host if public_host else (str(request.base_url).rstrip("/") if request else "http://127.0.0.1:10000")
             payload = {
                 "symbol": req.symbol,
@@ -352,6 +370,7 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
     except Exception:
         pass
     return {"ok": True, "rejected": True, "id": id}
+
 
 
 
