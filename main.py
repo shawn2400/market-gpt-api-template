@@ -211,29 +211,58 @@ async def add_server_identity_header(request: Request, call_next):
     resp.headers["rndr-id"] = INSTANCE_ID
     return resp
 
-# ---------- Global auth middleware ----------
-@app.middleware("http")
-async def validate_token(request: Request, call_next):
-    try:
-        path = request.url.path
-        if request.method.upper() == "OPTIONS":
-            return await call_next(request)
-        if path in EFFECTIVE_PUBLIC_PATHS:
-            return await call_next(request)
-        for pfx in EFFECTIVE_PUBLIC_PREFIXES:
-            if path.startswith(pfx):
+# ---------- Secure global auth middleware (replaces old validate_token) ----------
+class SecureAuthMiddleware(BaseHTTPMiddleware):
+    """
+    יציב: מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL,
+    תומך X-API-Key/Authorization/?token, לא מקריס את השרת.
+    """
+    def __init__(self, app, *, public_paths: set[str], public_prefixes: list[str]):
+        super().__init__(app)
+        self.public_paths = set(public_paths)
+        self.public_prefixes = list(public_prefixes)
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            path = request.url.path
+
+            # 1) OPTIONS: לא מבצע אימות
+            if request.method.upper() == "OPTIONS":
                 return await call_next(request)
-        if allow_all():
+
+            # 2) נתיבים/קידומות ציבוריים
+            if path in self.public_paths:
+                return await call_next(request)
+            for pfx in self.public_prefixes:
+                if path.startswith(pfx):
+                    return await call_next(request)
+
+            # 3) ALLOW_ALL
+            if allow_all():
+                return await call_next(request)
+
+            # 4) שליפת טוקן (X-API-Key / Authorization / ?token=)
+            a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+            x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+            tok = extract_token(request, a_hdr, x_hdr)
+
+            # 5) בדיקה
+            if not token_matches(tok):
+                return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+
+            # 6) המשך
             return await call_next(request)
-        a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
-        x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-        token = extract_token(request, a_hdr, x_hdr)
-        if not token_matches(token):
-            return JSONResponse(status_code=401, content={"detail":"Invalid API key"})
-        return await call_next(request)
-    except Exception:
-        logger.exception("validate_token: middleware call_next failed for %s", request.url.path)
-        return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_validate_token_failed"})
+
+        except Exception:
+            logging.getLogger("algogpt").exception("SecureAuthMiddleware: call_next failed for %s", request.url.path)
+            return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_auth_failed"})
+
+# הרשמת המידלוור החדש (במקום validate_token הישן)
+app.add_middleware(
+    SecureAuthMiddleware,
+    public_paths=EFFECTIVE_PUBLIC_PATHS,
+    public_prefixes=EFFECTIVE_PUBLIC_PREFIXES,
+)
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -536,8 +565,6 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
-
 
 
 
