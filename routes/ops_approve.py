@@ -61,8 +61,14 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
-    # timeouts קצרים יותר כדי למנוע תקיעות
-    return aioredis.from_url(REDIS_URL, decode_responses=True)
+    # timeouts קצרים + health-check כדי לצמצם "Timeout reading from socket"
+    return aioredis.from_url(
+        REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT","1.5")),
+        socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT","1.5")),
+        health_check_interval=int(os.getenv("REDIS_HEALTHCHECK_INTERVAL","30")),
+    )
 
 # -------- Mode parsing ----------
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
@@ -113,7 +119,7 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
 
 # -------- Execution backends ----------
 def _hedge_mode_enabled() -> bool:
-    # מקור אמת: env, לא קוראים כל פעם מהאקסצ׳יינג׳
+    # מקור אמת: env, לא קריאת exinfo בכל פעם
     if os.getenv("POSITION_MODE_OVERRIDE","").strip().lower() in ("hedge","hedged"):
         return True
     if os.getenv("BINANCE_FORCE_HEDGE_MODE","").strip().lower() in ("1","true","yes","on"):
@@ -124,7 +130,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
     MARKET מיידי, ישיר מול Binance. מטפל ב-positionSide כדי למנוע -4061.
     """
-    # נסיון ראשון – יש לך מבצע מותאם?
+    # אם יש לך פונקציה ייעודית — העדף
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -151,7 +157,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
-        # ננסה להגדיר ממנוף, לא קריטי אם נכשל
+        # ננסה להגדיר מינוף (לא קריטי אם ייכשל)
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
@@ -165,7 +171,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # מניעת -4061: במצב Hedge נשלח positionSide חד-משמעי; באחד-ערוצי (One-way) לא שולחים בכלל
+        # מניעת -4061: אם Hedge mode — חובה לציין positionSide מפורש
         if _hedge_mode_enabled():
             pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
             if not pos_side:
@@ -222,8 +228,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
         position_side=pos_side,
         reduce_only=bool(ticket.get("reduce_only", False)),
-        # הפרמטרים הבעייתיים *לא* נכללים כאן כברירת מחדל
-        # tp_kind/sl_kind/entry_kind/*_offset וכו' – לא שולחים כדי למנוע TypeError
+        # לא שולחים בכוונה: tp_kind, sl_kind, entry_kind, *_offset
     )
 
     # סינון דינמי לפי סיגנאטורה
@@ -545,8 +550,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
-
-
 
 
 
