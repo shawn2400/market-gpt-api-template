@@ -62,6 +62,7 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
         allowed = set(sig.parameters.keys())
         return {k: v for k, v in kwargs.items() if k in allowed}
     except Exception:
+        # ניקוי ידני של ארגומנטים בעייתיים בגרסאות שונות
         bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
 
@@ -94,6 +95,7 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
+        # לא חובה שיצליח — לא מפיל הזמנה
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
@@ -104,9 +106,10 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "side": side,
             "type": "MARKET",
             "quantity": qty,
-            "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
+            "newClientOrderId": f"{os.getenv('ORDER_ID_PREFIX','ALG')}_{symbol}_{side}_{int(time.time())}",
         }
 
+        # מניעת -4061: במצב Hedge נשלח positionSide חד-משמעי; ב-One-way לא שולחים בכלל
         if _hedge_mode_enabled():
             pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
             if not pos_side:
@@ -233,37 +236,67 @@ async def trade_execute(
     x_idempotency_key: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ):
     """
-    אם confirm_first=true – יפתח טיקט לאישור (ConfirmStore) ויחזיר pending_approval.
-    אחרת – יבצע מיידית:
+    אם confirm_first=true או REQUIRE_TELEGRAM_APPROVAL=1 – נפתח טיקט דרך /ops/ticket (שולח טלגרם),
+    ומחזירים pending_approval עם קישורי Approve/Reject/Preview.
+    אחרת – ביצוע מיידי:
       * MARKET ללא TP/SL דרך Binance (עם positionSide במצב Hedge)
       * HYBRID עם TP/SL דרך execute_trade_live (סינון דינמי)
     """
-    flow = _choose_flow(req)
+    force_approve = os.getenv("REQUIRE_TELEGRAM_APPROVAL","0").lower() in ("1","true","yes","on")
+    need_approval = bool(req.confirm_first or force_approve)
 
-    # confirm_first => פותחים טיקט לאישור
-    if req.confirm_first:
-        idem = x_idempotency_key or f"SMOKE-{int(time.time())}"
-        ticket = dict(
-            ticket_id=None,
-            symbol=req.symbol,
-            side=req.side,
-            qty=req.quantity,
-            leverage=req.leverage,
-            note=req.note or "",
-            tp1=req.tp1, tp2=req.tp2, tp3=req.tp3, sl=req.sl,
-            tp_splits=req.tp_splits,
-            position_side=(req.position_side or ("LONG" if req.side=="BUY" else "SHORT")).upper(),
-            created_ts=int(time.time()),
-            ttl_sec=int(os.getenv("OPS_TICKET_TTL_SEC","1800")),
-            idem=idem,
-        )
+    # אישור-טלגרם: פותחים טיקט דרך /ops/ticket (שולח הודעה עם כפתורים)
+    if need_approval:
         try:
-            ConfirmStore.create(ticket)
-        except Exception:
-            pass
-        return {"ok": False, "error": "pending_approval", "result": {"reason": "pending", "idem": idem, "ttl_sec": ticket["ttl_sec"]}}
+            import httpx
+            public_host = os.getenv("PUBLIC_HOST","").strip()
+            # בסיס לכתובת: PUBLIC_HOST אם הוגדר, אחרת מהבקשה
+            base = public_host if public_host else (str(request.base_url).rstrip("/") if request else "http://127.0.0.1:10000")
+            payload = {
+                "symbol": req.symbol,
+                "side": req.side,
+                "qty": req.quantity,
+                "leverage": req.leverage,
+                "tp1": req.tp1, "tp2": req.tp2, "tp3": req.tp3, "sl": req.sl,
+                "tp_splits": req.tp_splits,
+                "position_side": (req.position_side or ("LONG" if req.side=="BUY" else "SHORT")).upper(),
+                "note": req.note or "",
+            }
+            headers: Dict[str,str] = {}
+            api_key = (
+                os.getenv("API_TOKEN")
+                or os.getenv("PRIMARY_API_TOKEN")
+                or os.getenv("API_BEARER_TOKEN")
+                or os.getenv("ALGOGPT_API_TOKEN")
+            )
+            if api_key:
+                headers["X-API-Key"] = api_key.strip()
+            async with httpx.AsyncClient(timeout=12.0) as cli:
+                r = await cli.post(f"{base.rstrip('/')}/ops/ticket", json=payload, headers=headers)
+            try:
+                data = r.json()
+            except Exception:
+                raise RuntimeError(f"/ops/ticket bad response: {r.status_code} {r.text[:200]}")
+            if not data.get("ok"):
+                raise RuntimeError(f"ops.ticket failed: {data}")
+            return {
+                "ok": False,
+                "error": "pending_approval",
+                "result": {
+                    "reason": "pending",
+                    "ticket_id": data.get("ticket_id"),
+                    "approve_url": data.get("approve_url"),
+                    "reject_url": data.get("reject_url"),
+                    "preview_url": data.get("preview_url"),
+                    "ttl_sec": int(os.getenv("OPS_TICKET_TTL_SEC","1800")),
+                },
+            }
+        except Exception as e:
+            logger.error("open_ops_ticket_failed: %s", e)
+            raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
 
-    # Execute now
+    # ביצוע מיידי
+    flow = _choose_flow(req)
     ticket_exec = dict(
         symbol=req.symbol,
         side=req.side,
@@ -285,7 +318,7 @@ async def trade_execute(
 
 @router.get("/trade/approve")
 async def trade_approve(id: str = Query(..., description="idempotency key or ticket_id")):
-    # חיפוש טיקט ב-ConfirmStore
+    # חיפוש טיקט ב-ConfirmStore (תמיכה לאחור)
     it: Optional[Dict[str, Any]] = None
     try:
         for t in (ConfirmStore.pending() or []):
