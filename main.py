@@ -97,14 +97,6 @@ try:
 except Exception:
     manage_open_trades_loop = None  # type: ignore
 
-# ---- Approvals GC (optional) ----
-APPROVALS_GC_ENABLE = os.getenv("APPROVALS_GC_ENABLE","1").lower() in ("1","true","yes","on")
-APPROVALS_GC_INTERVAL_SEC = int(os.getenv("APPROVALS_GC_INTERVAL_SEC","30"))
-try:
-    from utils.approvals_gc import start_approvals_gc  # type: ignore
-except Exception:
-    start_approvals_gc = None  # type: ignore
-
 def _coerce_log_level(val):
     import logging as _l
     if isinstance(val,int) or (isinstance(val,str) and str(val).isdigit()): return int(val)
@@ -183,7 +175,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/provider/cryptopanic/webhook",
     "/status/ping", "/status/ws", "/status/executor", "/status/all", "/status/auth",
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
-    "/ops/approve", "/ops/approve/signed", "/ops/reject",
+    "/ops/approve", "/ops/approve/signed", "/ops/reject", "/ops/digest/expired",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
     "/ui/dashboard", "/ops/ui", "/ops/ui/ticket",
@@ -271,11 +263,12 @@ else:
         "routes.debug_hmac",
         "routes.ops_approve",
         "routes.trade",
+        "routes.trade_approvals",  # 👈 חדש
         "routes.auto_trade",
         "routes.ops_ui",
         "routes.ops_flags",
         "routes.position_ops",
-        "routes.calibration",   # 👈 הוספה מפורשת
+        "routes.calibration",
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -490,85 +483,23 @@ async def _startup_user_stream():
 async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
-# ---- start approvals GC (auto-reject expired) ----
+# --- Approvals GC (auto-reject expired) ---
+try:
+    from utils.approvals_gc import start_approvals_gc  # type: ignore
+except Exception:
+    start_approvals_gc = None  # type: ignore
+
+APPROVAL_GC_ENABLE = os.getenv("APPROVAL_GC_ENABLE","1").lower() in ("1","true","yes","on")
+APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SEC","15"))
+
 @app.on_event("startup")
-async def _start_approvals_gc():
-    if not APPROVALS_GC_ENABLE:
-        return
+async def _startup_approvals_gc():
     try:
-        if callable(start_approvals_gc):
-            # Prefer user-provided implementation
-            asyncio.create_task(start_approvals_gc(interval=APPROVALS_GC_INTERVAL_SEC))
-            logger.info({"event":"approvals_gc_started","impl":"utils.approvals_gc","interval_sec":APPROVALS_GC_INTERVAL_SEC})
-            return
+        if APPROVAL_GC_ENABLE and start_approvals_gc:
+            start_approvals_gc(interval=APPROVAL_GC_INTERVAL_SEC)
+            logging.getLogger("algogpt.approvals.gc").info({"event":"gc.start_ok","interval":APPROVAL_GC_INTERVAL_SEC})
     except Exception as e:
-        logger.warning({"event":"approvals_gc_import_failed","error":str(e)})
-
-    # Fallback lightweight GC (Redis + ConfirmStore)
-    async def _gc_loop():
-        import json, re, time as _t
-        NS = os.getenv("REDIS_NAMESPACE","ops-supervisor-web").strip() or "ops-supervisor-web"
-        REDIS_URL = os.getenv("REDIS_URL","").strip()
-        TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC","1800") or "1800")
-        # lazy import
-        try:
-            import redis.asyncio as aioredis  # type: ignore
-        except Exception:
-            aioredis = None  # type: ignore
-
-        async def _redis():
-            if not (aioredis and REDIS_URL):
-                return None
-            return aioredis.from_url(REDIS_URL, decode_responses=True)
-
-        while True:
-            try:
-                now = _t.time()
-                # Redis keys
-                try:
-                    r = await _redis()
-                    if r:
-                        pattern = f"{NS}:ticket:*"
-                        # SCAN to avoid blocking
-                        cur = "0"
-                        while True:
-                            cur, keys = await r.scan(cur, match=pattern, count=200)
-                            for k in keys:
-                                raw = await r.get(k)
-                                if not raw:
-                                    continue
-                                try:
-                                    rec = json.loads(raw)
-                                    ts = float(rec.get("ts") or rec.get("created_ts") or 0)
-                                except Exception:
-                                    ts = 0
-                                if ts and (now - ts) > TICKET_TTL_SEC:
-                                    await r.delete(k)
-                            if cur == "0":
-                                break
-                except Exception:
-                    pass
-
-                # ConfirmStore fallback memory
-                try:
-                    pend = list(ConfirmStore.pending() or [])
-                    for it in pend:
-                        ts = float(it.get("created_ts") or it.get("ts") or 0)
-                        ttl = int(it.get("ttl_sec") or os.getenv("OPS_TICKET_TTL_SEC","1800") or "1800")
-                        if ts and (now - ts) > ttl:
-                            try:
-                                ConfirmStore.decide(str(it.get("ticket_id")), approved=False)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-
-            except Exception as e:
-                logger.warning({"event":"approvals_gc_loop_error","error":str(e)})
-            await asyncio.sleep(APPROVALS_GC_INTERVAL_SEC)
-
-    asyncio.create_task(_gc_loop())
-    logger.info({"event":"approvals_gc_started","impl":"fallback","interval_sec":APPROVALS_GC_INTERVAL_SEC})
+        logging.getLogger("algogpt.approvals.gc").warning({"event":"gc.start_failed","err":str(e)})
 
 @app.on_event("startup")
 async def _start_trade_manager_loop():
@@ -579,6 +510,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
