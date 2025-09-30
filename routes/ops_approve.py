@@ -47,7 +47,8 @@ TP_LADDER_ON_APPROVE       = _bool_env("TP_LADDER_ON_APPROVE", False)
 APPROVAL_FAIL_OPEN_ON_VELOCITY = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
 VELOCITY_LOG_LEVEL         = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
 DEBUG_APPROVE_HTML         = _bool_env("DEBUG_APPROVE_HTML", False)
-APPROVE_FALLBACK_TO_MARKET = _bool_env("APPROVE_FALLBACK_TO_MARKET", False)
+# FALLBACK נשלט ע"י PROPOSE_BLOCK_ON_FAIL הקיים אצלך (היפוך לוגי: 0 ➜ fallback ON, 1 ➜ fallback OFF)
+APPROVE_FALLBACK_TO_MARKET = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
 
 # -------- ConfirmStore fallback ----------
 try:
@@ -346,7 +347,7 @@ async def create_ticket(
             price_now = get_price(symbol)
         except Exception:
             price_now = None
-        etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
+        etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2") or payload.get("tp3"))
         for k,v in etas.items():
             payload.setdefault(k, v)
 
