@@ -222,7 +222,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             if not _is_code_4061(e1):
                 raise
             # --- RETRY חכם על -4061 ---
-            # 1) נסה בלי positionSide בכלל (במיוחד אם שלחנו אחד קודם)
+            # 1) נסה בלי positionSide בכלל
             try:
                 retry_kwargs = dict(base_kwargs)
                 order = client.futures_create_order(**retry_kwargs)
@@ -263,7 +263,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
 
-    # נרמל position_side ל-LONG/SHORT בלבד; אם "BOTH" או ריק — לא נכפה
+    # נרמל position_side ל-LONG/SHORT בלבד; אם "BOTH" או ריק — נגזור לפי side
     raw_ps  = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
     pos_side = raw_ps if raw_ps in ("LONG","SHORT") else ("LONG" if side=="BUY" else "SHORT")
 
@@ -674,7 +674,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
-
 
 
 
