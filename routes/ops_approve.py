@@ -1,7 +1,7 @@
 # routes/ops_approve.py
 from __future__ import annotations
 import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect
-from typing import Any, Dict, Optional, Tuple, List, Callable
+from typing import Any, Dict, Optional, List, Callable
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
 import httpx
@@ -76,7 +76,14 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
-    return aioredis.from_url(REDIS_URL, decode_responses=True)
+    # timeouts קצרים + retry_on_timeout כדי לרכך נפילות איטיות של Redis בענן
+    return aioredis.from_url(
+        REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=2.5,
+        socket_timeout=2.5,
+        retry_on_timeout=True,
+    )
 
 # -------- Mode parsing ----------
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
@@ -130,6 +137,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
     MARKET ישירה מול Binance, עם ריטריי חכם על ‎-4061.
     """
+    # fast-path: אם יש מתאם פנימי אצלך
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -156,6 +164,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
+        # לא חובה שיצליח — לא מפיל הזמנה
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
@@ -169,6 +178,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
+        # ניסיון 1: אם המשתמש סיפק position_side מפורש — נשתמש בו; אחרת נשלח בלי (One-way בטוח)
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
         if pos_side_supplied:
@@ -179,10 +189,12 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": True, "exchange": "binance_futures", "order": order}
         except Exception as e1:
             if not _is_code_4061(e1):
-                raise
+                logger.error("futures_create_order failed (no 4061): %s", e1)
+                return {"ok": False, "error": "order_failed", "detail": str(e1)}
+            # 4061 => נסה הפוך
             try:
                 if "positionSide" in attempt_order:
-                    retry_kwargs = dict(base_kwargs)
+                    retry_kwargs = dict(base_kwargs)  # הסרה -> One-way
                 else:
                     retry_kwargs = dict(base_kwargs)
                     retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -190,7 +202,12 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
             except Exception as e2:
                 logger.error("futures_create_order after 4061 retry failed: %s", e2)
-                return {"ok": False, "error": "order_failed", "detail": str(e2), "first_error": str(e1)}
+                return {
+                    "ok": False,
+                    "error": "order_failed_4061_retry",
+                    "first_error": str(e1),
+                    "detail": str(e2),
+                }
 
     except Exception as e:
         logger.error("futures_create_order failed: %s", e)
@@ -200,6 +217,10 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
     HYBRID/AUTO — execute_trade_live עם סינון דינמי (אין tp_kind/sl_kind וכו').
     """
+    # ניקוי שדות “בעייתיים” אם הגיעו דרך flags/notes
+    for bad in ("tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"):
+        ticket.pop(bad, None)
+
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -258,12 +279,14 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         from utils.get_klines import get_klines_sync  # type: ignore
         m = {"1m":1, "3m":3, "5m":5, "15m":15, "30m":30, "1h":60}.get(interval, 15)
         n = max(10, math.ceil(window_min / m) + 5)
-        kl = get_klines_sync(symbol, interval=interval, limit=n) or []
+        kl = get_klines_sync(symbol, interval=interval, limit=n)
+        if kl is None:
+            kl = []
+
         closes: List[float]
         try:
-            import pandas as pd  # type: ignore
+            # תמיכה ב־DataFrame בלי לדרוש pandas כאן בקובץ
             if 'DataFrame' in str(type(kl)):
-                # לא להכביד על תלות—בדיקה טקסטואלית
                 if hasattr(kl, 'columns') and ('close' in getattr(kl, 'columns', [])):
                     closes = [float(x) for x in kl['close'].tolist()]
                 else:
@@ -591,15 +614,15 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         lines.append("<b>Last events</b>:")
         for e in events[:5]:
             t = int(e.get("ts", now))
-            idem = e.get("idem","")
             sym  = str(e.get("symbol","")).upper()
             side = str(e.get("side","")).upper()
-            lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side} · <code>{idem}</code>")
+            lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side}")
         await _send_telegram_html("\n".join(lines))
         return {"ok": True, "sent": True, "count": total}
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
