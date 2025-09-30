@@ -64,32 +64,54 @@ class BinanceFuturesExec:
         return self.post("/fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": leverage})
 
     def set_position_side_dual(self, dual_side: bool = False) -> Any:
-        # dualSidePosition=false => BOTH (one-way)
+        """
+        dualSidePosition=true  => Hedge (Dual Side)
+        dualSidePosition=false => One-way (BOTH)
+        """
         return self.post("/fapi/v1/positionSide/dual", {"dualSidePosition": "true" if dual_side else "false"})
 
-    def order_market(self, symbol: str, side: str, quantity: float) -> Any:
-        return self.post("/fapi/v1/order", {
+    def order_market(self, symbol: str, side: str, quantity: float,
+                     position_side: str = "BOTH", reduce_only: bool = False) -> Any:
+        """
+        הזמנת MARKET. 'positionSide' יישלח רק אם LONG/SHORT כדי להימנע מהתנגשויות במצב One-way.
+        """
+        payload: Dict[str, Any] = {
             "symbol": symbol.upper(),
             "side": side.upper(),
             "type": "MARKET",
-            "quantity": f"{quantity:.6f}",
+            "quantity": f"{float(quantity):.6f}",
             "newOrderRespType": "RESULT",
-            "positionSide": "BOTH",
-        })
+        }
+        ps = (position_side or "").upper()
+        if ps in ("LONG", "SHORT"):
+            payload["positionSide"] = ps
+        if reduce_only:
+            payload["reduceOnly"] = "true"
+        return self.post("/fapi/v1/order", payload)
 
     def order_tp_or_sl_market(self, symbol: str, side: str, stop_price: float, quantity: float,
-                              kind: str = "TAKE_PROFIT_MARKET") -> Any:
+                              kind: str = "TAKE_PROFIT_MARKET",
+                              position_side: str = "BOTH",
+                              reduce_only: bool = True) -> Any:
+        """
+        kind ∈ {"TAKE_PROFIT_MARKET","STOP_MARKET"}
+        הצד 'side' הוא צד הסגירה (הפוך לכניסה). שולחים positionSide רק אם LONG/SHORT.
+        """
         assert kind in ("TAKE_PROFIT_MARKET", "STOP_MARKET")
-        return self.post("/fapi/v1/order", {
+        payload: Dict[str, Any] = {
             "symbol": symbol.upper(),
-            "side": side.upper(),          # הפוכה לכניסה (reduce)
+            "side": side.upper(),
             "type": kind,
             "stopPrice": f"{float(stop_price):.8f}",
-            "closePosition": "false",
-            "reduceOnly": "true",
-            "quantity": f"{quantity:.6f}",
             "workingType": "MARK_PRICE",
             "timeInForce": "GTC",
-            "positionSide": "BOTH",
+            "quantity": f"{float(quantity):.6f}",
             "newOrderRespType": "RESULT",
-        })
+        }
+        if reduce_only:
+            payload["reduceOnly"] = "true"
+        ps = (position_side or "").upper()
+        if ps in ("LONG", "SHORT"):
+            payload["positionSide"] = ps
+        return self.post("/fapi/v1/order", payload)
+
