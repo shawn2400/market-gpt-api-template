@@ -269,6 +269,7 @@ else:
         "routes.ops_flags",
         "routes.position_ops",
         "routes.calibration",
+        "routes.ops_digest",       # 👈 חדש: digest ידני
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -511,6 +512,21 @@ async def _startup_approvals_gc():
     except Exception as e:
         logging.getLogger("algogpt.approvals.gc").warning({"event":"gc.start_failed","err":str(e)})
 
+# --- Expired-digest Job (auto) ---
+try:
+    from utils.approvals_digest_job import start_expired_digest_job  # type: ignore
+except Exception:
+    start_expired_digest_job = None  # type: ignore
+
+@app.on_event("startup")
+async def _startup_expired_digest_job():
+    try:
+        if start_expired_digest_job:
+            start_expired_digest_job()
+            logging.getLogger("algogpt.approvals.digest_job").info({"event":"digest_job.start_ok"})
+    except Exception as e:
+        logging.getLogger("algogpt.approvals.digest_job").warning({"event":"digest_job.start_failed","err":str(e)})
+
 @app.on_event("startup")
 async def _start_trade_manager_loop():
     if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
@@ -520,6 +536,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
