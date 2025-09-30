@@ -155,6 +155,18 @@ def _is_code_4061(err: Exception | str) -> bool:
     s = str(err)
     return "code=-4061" in s or "position side does not match" in s.lower()
 
+# -------- Position mode alignment ----------
+def _align_position_mode(client) -> None:
+    """
+    מיושר את מצב החשבון (Hedge/One-Way) לפי POSITION_MODE_OVERRIDE אם סופק.
+    """
+    mode_override = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
+    with suppress(Exception):
+        if mode_override in ("hedge","dual","dual_side","dual_side_position","dualposition"):
+            client.futures_change_position_mode(dualSidePosition="true")
+        elif mode_override in ("oneway","one_way","single","single_side","oneside"):
+            client.futures_change_position_mode(dualSidePosition="false")
+
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -176,6 +188,9 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
 
+        # יישור מצב חשבון לפי ENV (אם מוגדר)
+        _align_position_mode(client)
+
         symbol   = str(ticket.get("symbol","")).upper()
         side     = str(ticket.get("side","")).upper()
         qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
@@ -194,9 +209,10 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
+        # אל תשלח positionSide אם הוא "BOTH" או לא חוקי
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
-        if pos_side_supplied:
+        if pos_side_supplied in ("LONG","SHORT"):
             attempt_order["positionSide"] = pos_side_supplied
 
         try:
@@ -205,15 +221,28 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
+            # --- RETRY חכם על -4061 ---
+            # 1) נסה בלי positionSide בכלל (במיוחד אם שלחנו אחד קודם)
             try:
                 retry_kwargs = dict(base_kwargs)
-                if "positionSide" not in attempt_order:
-                    retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
                 order = client.futures_create_order(**retry_kwargs)
-                return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
+                return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
-                logger.error("futures_create_order after 4061 retry failed: %s", e2)
-                return {"ok": False, "error": "order_failed", "detail": str(e2), "first_error": str(e1)}
+                # 2) נסה עם גזירה: LONG/SHORT לפי side
+                try:
+                    retry2_kwargs = dict(base_kwargs)
+                    retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
+                    order = client.futures_create_order(**retry2_kwargs)
+                    return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "derived_positionSide"}
+                except Exception as e3:
+                    logger.error("futures_create_order retries failed: first=%s, no_ps=%s, derived=%s", e1, e2, e3)
+                    return {
+                        "ok": False,
+                        "error": "order_failed",
+                        "detail": str(e3),
+                        "first_error": str(e1),
+                        "second_error": str(e2),
+                    }
 
     except Exception as e:
         logger.error("futures_create_order failed: %s", e)
@@ -233,7 +262,10 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     side     = str(ticket.get("side","")).upper()
     qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
-    pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or ("LONG" if side=="BUY" else "SHORT")).upper()
+
+    # נרמל position_side ל-LONG/SHORT בלבד; אם "BOTH" או ריק — לא נכפה
+    raw_ps  = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
+    pos_side = raw_ps if raw_ps in ("LONG","SHORT") else ("LONG" if side=="BUY" else "SHORT")
 
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
     tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
@@ -472,6 +504,11 @@ def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     if not price or float(price) <= 0:
         return None
     new_ticket = ensure_final_qty(dict(ticket), float(price))
+    # ניקוי/נרמול position_side: אל תעביר "BOTH" הלאה
+    ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
+    if ps == "BOTH":
+        new_ticket.pop("positionSide", None)
+        new_ticket["position_side"] = ""
     return new_ticket
 
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
