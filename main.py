@@ -173,12 +173,14 @@ DEFAULT_PUBLIC_PATHS = {
     "/provider/cryptopanic/webhook",
     "/status/ping", "/status/ws", "/status/executor", "/status/all", "/status/auth",
     "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
-    "/ops/approve", "/ops/approve/signed", "/ops/reject", "/ops/digest/expired",
+    "/ops/approve", "/ops/approve-link", "/ops/approve/signed", "/ops/reject", "/ops/digest/expired",
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
     "/ui/dashboard", "/ops/ui", "/ops/ui/ticket",
-    # הוספה כדי למנוע חסימה על לינקי אישור מסלולי trade:
+    # כדי למנוע חסימה על לינקי אישור מסלולי trade:
     "/trade/approve", "/trade/reject",
+    # חשיפת מטריקות JSON/labels/health לציבור אם נדרש:
+    "/metrics-json", "/metrics/labels", "/metrics/health",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
@@ -564,10 +566,6 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
-
-
-
 
 
 
