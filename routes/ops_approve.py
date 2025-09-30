@@ -61,14 +61,7 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
-    # timeouts קצרים + health-check כדי לצמצם "Timeout reading from socket"
-    return aioredis.from_url(
-        REDIS_URL,
-        decode_responses=True,
-        socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT","1.5")),
-        socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT","1.5")),
-        health_check_interval=int(os.getenv("REDIS_HEALTHCHECK_INTERVAL","30")),
-    )
+    return aioredis.from_url(REDIS_URL, decode_responses=True)
 
 # -------- Mode parsing ----------
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
@@ -105,44 +98,35 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
 
 # -------- utils: dynamic kwargs filter --------
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    מסנן דינמית לפי הסיגנאטורה כדי לא לשלוח execute_trade_live פרמטרים שלא קיימים (tp_kind/sl_kind/offsets וכו').
-    """
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
         return {k: v for k, v in kwargs.items() if k in allowed}
     except Exception:
-        # אם נכשל — ניקוי ידני מאגרומנטים הבעייתיים הידועים
         bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
 
-# -------- Execution backends ----------
-def _hedge_mode_enabled() -> bool:
-    # מקור אמת: env, לא קריאת exinfo בכל פעם
-    if os.getenv("POSITION_MODE_OVERRIDE","").strip().lower() in ("hedge","hedged"):
-        return True
-    if os.getenv("BINANCE_FORCE_HEDGE_MODE","").strip().lower() in ("1","true","yes","on"):
-        return True
-    return False
+def _is_code_4061(err: Exception | str) -> bool:
+    s = str(err)
+    return "code=-4061" in s or "position side does not match" in s.lower()
 
+# -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    MARKET מיידי, ישיר מול Binance. מטפל ב-positionSide כדי למנוע -4061.
+    הזמנת MARKET ישירה מול Binance, עם ריטריי חכם על ‎-4061.
     """
-    # אם יש לך פונקציה ייעודית — העדף
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
 
-    # Fallback: Binance client ישיר
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
         logger.error("binance import failed: %s", e)
         return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
+
     try:
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
@@ -152,18 +136,17 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
         symbol   = str(ticket.get("symbol","")).upper()
         side     = str(ticket.get("side","")).upper()
-        qty      = float(ticket.get("qty", 0) or ticket.get("quantity", 0) or 0)
-        leverage = int(ticket.get("leverage", 1))
+        qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
+        leverage = int(ticket.get("leverage") or 1)
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
-        # ננסה להגדיר מינוף (לא קריטי אם ייכשל)
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
             logger.warning("futures_change_leverage failed: %s", e)
 
-        order_kwargs: Dict[str, Any] = {
+        base_kwargs: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "type": "MARKET",
@@ -171,24 +154,40 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # מניעת -4061: אם Hedge mode — חובה לציין positionSide מפורש
-        if _hedge_mode_enabled():
-            pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
-            if not pos_side:
-                pos_side = "LONG" if side == "BUY" else "SHORT"
-            order_kwargs["positionSide"] = pos_side  # Binance expects "LONG"/"SHORT"
+        # ניסיון 1: אם המשתמש סיפק position_side מפורש — נשתמש בו; אחרת נשלח בלי (One-way בטוח)
+        pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
+        attempt_order = dict(base_kwargs)
+        if pos_side_supplied:
+            attempt_order["positionSide"] = pos_side_supplied
 
-        order = client.futures_create_order(**order_kwargs)
-        return {"ok": True, "exchange": "binance_futures", "order": order}
+        try:
+            order = client.futures_create_order(**attempt_order)
+            return {"ok": True, "exchange": "binance_futures", "order": order}
+        except Exception as e1:
+            if not _is_code_4061(e1):
+                raise
+
+            # ריטריי על ‎-4061: אם ניסינו בלי posSide — ננסה עם LONG/SHORT; אם ניסינו עם — ננסה בלי
+            try:
+                if "positionSide" in attempt_order:
+                    retry_kwargs = dict(base_kwargs)  # הסרה
+                else:
+                    retry_kwargs = dict(base_kwargs)
+                    retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
+                order = client.futures_create_order(**retry_kwargs)
+                return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
+            except Exception as e2:
+                logger.error("futures_create_order after 4061 retry failed: %s", e2)
+                return {"ok": False, "error": "order_failed", "detail": str(e2), "first_error": str(e1)}
+
     except Exception as e:
         logger.error("futures_create_order failed: %s", e)
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    HYBRID/AUTO — מפעיל execute_trade_live עם סינון דינמי של פרמטרים.
+    HYBRID/AUTO — execute_trade_live עם סינון דינמי (אין tp_kind/sl_kind וכו').
     """
-    # לייבא את הפונקציה
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -198,7 +197,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("execute_trade_live missing: %s", e)
         return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
 
-    # בניית פרמטרים "נקיים"
     symbol   = str(ticket.get("symbol","")).upper()
     side     = str(ticket.get("side","")).upper()
     qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
@@ -228,10 +226,8 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
         position_side=pos_side,
         reduce_only=bool(ticket.get("reduce_only", False)),
-        # לא שולחים בכוונה: tp_kind, sl_kind, entry_kind, *_offset
     )
 
-    # סינון דינמי לפי סיגנאטורה
     clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
 
     try:
@@ -314,7 +310,7 @@ async def _delete_ticket(tid: str, source: str) -> None:
 # -------------------- API --------------------
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
-    payload: Dict[str, Any] = Body(..., description="symbol, side, qty, leverage, optional: TP/SL/ETAs/probs/note/position_side/budget/expiry_ts"),
+    payload: Dict[str, Any] = Body(...),
 ):
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
@@ -339,7 +335,6 @@ async def create_ticket(
         for k,v in etas.items():
             payload.setdefault(k, v)
 
-    # flags מהערה (אם קיים מודול)
     try:
         from routes.ops_flags import apply_note_flags  # type: ignore
     except Exception:
@@ -357,7 +352,7 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
-    # RR_MIN soft check
+    # RR_MIN soft check (best-effort)
     try:
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -376,7 +371,6 @@ async def create_ticket(
     except Exception:
         pass
 
-    # persist
     try:
         ConfirmStore.create(dict(req_body))
     except Exception:
