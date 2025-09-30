@@ -17,7 +17,7 @@ try:
         record_approval_rejected,
     )
 except Exception:
-    def record_approval_created():  # no-op אם מודול metrics לא טעון
+    def record_approval_created():
         pass
     def record_approval_approved():
         pass
@@ -76,7 +76,6 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
-    # אם תרצה: ניתן להוסיף פרמטרי timeout ב-REDIS_URL (querystring)
     return aioredis.from_url(REDIS_URL, decode_responses=True)
 
 # -------- Mode parsing ----------
@@ -114,9 +113,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
 
 # -------- utils: dynamic kwargs filter --------
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    מסנן דינמית לפי הסיגנאטורה כדי לא לשלוח execute_trade_live פרמטרים שלא קיימים (tp_kind/sl_kind/offsets וכו').
-    """
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
@@ -131,10 +127,6 @@ def _is_code_4061(err: Exception | str) -> bool:
 
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    MARKET ישירה מול Binance, עם ריטריי חכם על ‎-4061.
-    """
-    # Fast-path: אם יש לך מתאם פנימי
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -161,7 +153,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
-        # לא קריטי אם נכשל
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
@@ -175,7 +166,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # ניסיון 1: אם המשתמש סיפק position_side — נשתמש בו; אחרת נשלח בלי (ב-One-way זה בסדר)
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
         if pos_side_supplied:
@@ -187,11 +177,9 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
-
-            # ‎-4061 => נסה הפוך: אם היה positionSide – נסיר; אם לא היה – נוסיף LONG/SHORT
             try:
                 if "positionSide" in attempt_order:
-                    retry_kwargs = dict(base_kwargs)  # בלי positionSide
+                    retry_kwargs = dict(base_kwargs)
                 else:
                     retry_kwargs = dict(base_kwargs)
                     retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -206,9 +194,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    HYBRID/AUTO — execute_trade_live עם סינון דינמי (אין tp_kind/sl_kind וכו').
-    """
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -260,19 +245,14 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
 # -------- Smart ETA (optional) --------
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
-    """
-    מחזיר ממוצע תנועה לדקה. תומך גם בהחזרה של list וגם pandas.DataFrame.
-    """
     try:
         from utils.get_klines import get_klines_sync  # type: ignore
         m = {"1m":1, "3m":3, "5m":5, "15m":15, "30m":30, "1h":60}.get(interval, 15)
         n = max(10, math.ceil(window_min / m) + 5)
         kl = get_klines_sync(symbol, interval=interval, limit=n) or []
 
-        # normalize closes
         closes: List[float]
         try:
-            # הימנעות מתלות קשה ב-pandas: בדיקה טקסטואלית
             if 'DataFrame' in str(type(kl)):
                 if hasattr(kl, 'columns') and ('close' in getattr(kl, 'columns', [])):
                     closes = [float(x) for x in kl['close'].tolist()]
@@ -349,7 +329,7 @@ async def _delete_ticket(tid: str, source: str) -> None:
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
     payload: Dict[str, Any] = Body(...),
-    request: Request | None = None,
+    request: Request = None,  # <-- FIX: Request injected, not Optional
 ):
     symbol = (payload.get("symbol") or "").upper().strip()
     side   = (payload.get("side") or "").upper().strip()
@@ -374,7 +354,6 @@ async def create_ticket(
         for k,v in etas.items():
             payload.setdefault(k, v)
 
-    # flags מהערה (אם קיים מודול)
     try:
         from routes.ops_flags import apply_note_flags  # type: ignore
     except Exception:
@@ -392,7 +371,6 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
-    # RR_MIN soft check
     try:
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -411,7 +389,6 @@ async def create_ticket(
     except Exception:
         pass
 
-    # persist + metrics
     try:
         ConfirmStore.create(dict(req_body))
     except Exception:
@@ -427,13 +404,11 @@ async def create_ticket(
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
 
-    # URLs: PUBLIC_HOST אם יש, אחרת request.base_url
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     approve_url = f"{base}/ops/approve?ticket_id={tid}" if base else ""
     reject_url  = f"{base}/ops/reject?ticket_id={tid}"  if base else ""
     preview_url = f"{base}/ops/ui/ticket?ticket_id={tid}" if base else ""
 
-    # Telegram message
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
@@ -502,7 +477,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     except Exception:
         pass
 
-    # metrics
     try:
         if ok:
             record_approval_approved()
