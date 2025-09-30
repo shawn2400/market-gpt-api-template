@@ -245,7 +245,7 @@ class TradeRequest(BaseModel):
 @router.post("/trade/execute")
 async def trade_execute(
     req: TradeRequest = Body(...),
-    request: Request | None = None,
+    request: Request,  # ← תיקון: לא Optional, בלי ברירת מחדל
     x_idempotency_key: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ):
     flow = _choose_flow(req)
@@ -333,7 +333,6 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
     except Exception:
         pass
 
-    # metrics
     record_trade_approval("approve", ok)
     (record_trade_ok if ok else record_trade_fail)(flow)
 
@@ -346,9 +345,7 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
         ok = True
     except Exception:
         ok = False
-    # approval-plane metric
     record_trade_approval("reject", ok)
-    # נסמן כ-fail בהקשר ביצוע (לא התרחש ביצוע)
     record_trade_fail("HYBRID")
     return {"ok": True, "rejected": True, "id": id}
 
