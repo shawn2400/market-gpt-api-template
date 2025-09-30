@@ -1,7 +1,7 @@
 # routes/ops_approve.py
 from __future__ import annotations
 import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect
-from typing import Any, Dict, Optional, Tuple, List, Callable
+from typing import Any, Dict, Optional, List, Callable
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
 import httpx
@@ -17,7 +17,7 @@ try:
         record_approval_rejected,
     )
 except Exception:
-    def record_approval_created():  # no-op if metrics route not loaded
+    def record_approval_created():  # no-op אם מודול metrics לא טעון
         pass
     def record_approval_approved():
         pass
@@ -76,7 +76,7 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
-    # אפשר להוסיף socket/connect timeout דרך querystring אם צריך
+    # אם תרצה: ניתן להוסיף פרמטרי timeout ב-REDIS_URL (querystring)
     return aioredis.from_url(REDIS_URL, decode_responses=True)
 
 # -------- Mode parsing ----------
@@ -175,7 +175,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # ניסיון 1: אם המשתמש סיפק position_side מפורש — נשתמש בו; אחרת נשלח בלי
+        # ניסיון 1: אם המשתמש סיפק position_side — נשתמש בו; אחרת נשלח בלי (ב-One-way זה בסדר)
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
         if pos_side_supplied:
@@ -186,11 +186,12 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": True, "exchange": "binance_futures", "order": order}
         except Exception as e1:
             if not _is_code_4061(e1):
-                return {"ok": False, "error": "order_failed", "detail": str(e1)}
-            # ‎-4061 => נסה מהצד ההפוך: אם היה positionSide – נסיר; אם לא היה – נוסיף LONG/SHORT
+                raise
+
+            # ‎-4061 => נסה הפוך: אם היה positionSide – נסיר; אם לא היה – נוסיף LONG/SHORT
             try:
                 if "positionSide" in attempt_order:
-                    retry_kwargs = dict(base_kwargs)
+                    retry_kwargs = dict(base_kwargs)  # בלי positionSide
                 else:
                     retry_kwargs = dict(base_kwargs)
                     retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -267,10 +268,11 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         m = {"1m":1, "3m":3, "5m":5, "15m":15, "30m":30, "1h":60}.get(interval, 15)
         n = max(10, math.ceil(window_min / m) + 5)
         kl = get_klines_sync(symbol, interval=interval, limit=n) or []
-        # normalized closes
+
+        # normalize closes
         closes: List[float]
         try:
-            # שימוש זהיר ב-DataFrame ללא אמת לוגית עליו
+            # הימנעות מ"תלות קשה": בדיקה טקסטואלית אם זה DF
             if 'DataFrame' in str(type(kl)):
                 if hasattr(kl, 'columns') and ('close' in getattr(kl, 'columns', [])):
                     closes = [float(x) for x in kl['close'].tolist()]
@@ -431,6 +433,7 @@ async def create_ticket(
     reject_url  = f"{base}/ops/reject?ticket_id={tid}"  if base else ""
     preview_url = f"{base}/ops/ui/ticket?ticket_id={tid}" if base else ""
 
+    # Telegram message
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
@@ -609,6 +612,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
