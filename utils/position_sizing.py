@@ -117,3 +117,4 @@ def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
             ticket["qty"] = q_calc
 
     return ticket
+
