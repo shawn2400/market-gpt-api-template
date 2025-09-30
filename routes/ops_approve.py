@@ -93,6 +93,9 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
 
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    MARKET (פשוט): נסה דרך trade_executor אם קיים; אחרת Binance SDK.
+    """
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -113,16 +116,20 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         side     = str(ticket.get("side","")).upper()
         qty      = float(ticket.get("qty", 0))
         leverage = int(ticket.get("leverage", 1))
+        pos_side = str(ticket.get("position_side") or "BOTH").upper()
         if not(symbol and side and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
             logger.warning("futures_change_leverage failed: %s", e)
-        order = client.futures_create_order(
-            symbol=symbol, side=side, type="MARKET", quantity=qty,
-            newClientOrderId=f"ALG_{symbol}_{side}_{int(time.time())}"
-        )
+        kwargs = {
+            "symbol": symbol, "side": side, "type": "MARKET", "quantity": qty,
+            "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}"
+        }
+        # אם Hedge – נמפה positionSide
+        if pos_side in ("LONG","SHORT"): kwargs["positionSide"] = pos_side
+        order = client.futures_create_order(**kwargs)
         return {"ok": True, "exchange": "binance_futures", "order": order}
     except Exception as e:
         logger.error("futures_create_order failed: %s", e)
@@ -133,7 +140,51 @@ def _bool_env(name: str, default: bool=False) -> bool:
 
 TP_LADDER_ON_APPROVE = _bool_env("TP_LADDER_ON_APPROVE", False)
 
+# --- ניקוי פרמטרים לא נתמכים לאקזקיוטור ---
+ALLOWED_EXEC_KW = {
+    "symbol","side","quantity","qty","leverage",
+    "tp","sl","tp_targets","tp_splits","sl_targets","sl_splits",
+    "position_side","confirm_first","budget","dry_run","ticket_id","note"
+}
+def _clean_exec_kwargs(d: dict) -> dict:
+    if not isinstance(d, dict): return {}
+    out = {k:v for k,v in d.items() if k in ALLOWED_EXEC_KW and v is not None}
+    # normalize qty -> quantity (האקזקיוטור שלנו משתמש quantity)
+    if "quantity" not in out and "qty" in out:
+        out["quantity"] = out.pop("qty")
+    # side/position_side נרמול
+    side = (out.get("side") or "").upper().strip()
+    if side in ("BUY","SELL"): out["side"] = side
+    ps = out.get("position_side")
+    if isinstance(ps,str):
+        psu = ps.upper().strip()
+        if psu in ("LONG","SHORT","BOTH"): out["position_side"]=psu
+        else: out.pop("position_side",None)
+    return out
+
+def _ensure_position_side(payload: dict) -> dict:
+    """
+    אם במצב Hedge ולא נמסר position_side – נמפה אוטומטית לפי side.
+    """
+    d = dict(payload or {})
+    ps = d.get("position_side")
+    if isinstance(ps,str) and ps.upper() in ("LONG","SHORT","BOTH"):
+        d["position_side"]=ps.upper()
+        return d
+    mode = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
+    if mode == "hedge":
+        side = (d.get("side") or "").upper()
+        if side == "BUY":
+            d["position_side"]="LONG"
+        elif side == "SELL":
+            d["position_side"]="SHORT"
+    return d
+
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    HYBRID/AUTO: קריאה לאקזקיוטור המלא execute_trade_live
+    (ללא פרמטרים לא נתמכים, כדי למנוע TypeError כגון 'tp_kind').
+    """
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -145,41 +196,39 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     symbol   = str(ticket.get("symbol","")).upper()
     side     = str(ticket.get("side","")).upper()
-    qty      = float(ticket.get("qty") or 0)
+    qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or 0)
-    pos_side = str(ticket.get("position_side") or "BOTH").upper()
 
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
-    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
-    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
+    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0] or ticket.get("tp_targets")
+    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else (ticket.get("sl_targets") or None)
 
     if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
 
+    exec_kwargs = {
+        "symbol": symbol,
+        "side": side,
+        "budget": ticket.get("budget"),
+        "leverage": leverage,
+        "dry_run": False,
+        "quantity": qty,
+        "position_side": str(ticket.get("position_side") or "BOTH").upper(),
+        "confirm_first": False,
+        "tp": ticket.get("tp"),
+        "sl": ticket.get("sl"),
+        "tp_targets": tp_targets or None,
+        "tp_splits": ticket.get("tp_splits"),
+        "sl_targets": sl_targets or None,
+        "sl_splits": ticket.get("sl_splits"),
+        "ticket_id": ticket.get("ticket_id"),
+        "note": ticket.get("note"),
+    }
+    exec_kwargs = _ensure_position_side(exec_kwargs)
+    exec_kwargs = _clean_exec_kwargs(exec_kwargs)
+
     try:
-        res = await execute_trade_live(
-            symbol=symbol,
-            side=side,
-            budget=None,
-            leverage=leverage,
-            dry_run=False,
-            quantity=qty,
-            entry=None,
-            tp_targets=tp_targets or None,
-            sl_targets=sl_targets or None,
-            tp_splits=ticket.get("tp_splits"),
-            sl_splits=None,
-            confirm_first=False,
-            telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
-            position_side=pos_side,
-            reduce_only=bool(ticket.get("reduce_only", False)),
-            tp_kind=ticket.get("tp_kind"),
-            sl_kind=ticket.get("sl_kind"),
-            entry_kind=ticket.get("entry_kind"),
-            entry_offset=ticket.get("entry_offset"),
-            tp_offset=ticket.get("tp_offset"),
-            sl_offset=ticket.get("sl_offset"),
-        )
+        res = await execute_trade_live(**exec_kwargs)
         return res
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
@@ -352,10 +401,7 @@ async def create_ticket(
     if req_body.get("sl") is not None: lines.append(f"• SL: <code>{req_body['sl']}</code>")
     mode = _parse_mode(note)
     if mode: lines.append(f"• Mode: <code>{mode}</code>")
-    if req_body.get("tp_kind"):   lines.append(f"• TP Kind: <code>{req_body['tp_kind']}</code>")
     if req_body.get("tp_splits"): lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
-    if req_body.get("sl_kind"):   lines.append(f"• SL Kind: <code>{req_body['sl_kind']}</code>")
-    if req_body.get("entry_kind"):lines.append(f"• Entry: <code>{req_body['entry_kind']}</code>")
     if req_body.get("reduce_only"):lines.append(f"• Reduce Only: <code>True</code>")
     if req_body.get("blocked_by_rr_min"): lines.append("• RR Check: <code>Below RR_MIN (manual review)</code>")
     if req_body.get("prob_overall_pct") is not None: lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
@@ -445,6 +491,10 @@ async def approve_signed(request: Request):
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # הוספת position_side אוטומטית אם Hedge ולא נמסר
+    payload = _ensure_position_side(payload)
+
     flow = _decide_flow_by_mode(payload)
     exec_res = await (_execute_trade(payload) if flow=="MARKET"
                       else _execute_trade_armed(payload) if flow=="HYBRID"
@@ -506,6 +556,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
