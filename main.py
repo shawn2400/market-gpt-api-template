@@ -9,12 +9,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.openapi.utils import get_openapi
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-from fastapi.staticfiles import StaticFiles
 
 from utils.auth import extract_token, allow_all, token_matches
 from utils.json_logger import setup_json_logging
@@ -115,8 +115,6 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
 # ---------- Validation error => 422 ----------
-from fastapi.exceptions import RequestValidationError
-from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
@@ -179,6 +177,8 @@ DEFAULT_PUBLIC_PATHS = {
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
     "/ui/dashboard", "/ops/ui", "/ops/ui/ticket",
+    # הוספה כדי למנוע חסימה על לינקי אישור מסלולי trade:
+    "/trade/approve", "/trade/reject",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
 CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
@@ -211,7 +211,7 @@ async def add_server_identity_header(request: Request, call_next):
     resp.headers["rndr-id"] = INSTANCE_ID
     return resp
 
-# ---------- Secure global auth middleware (replaces old validate_token) ----------
+# ---------- Secure global auth middleware ----------
 class SecureAuthMiddleware(BaseHTTPMiddleware):
     """
     יציב: מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL,
@@ -241,7 +241,7 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
             if allow_all():
                 return await call_next(request)
 
-            # 4) שליפת טוקן (X-API-Key / Authorization / ?token=)
+            # 4) שליפת טוקן (X-API-Key / Authorization / ?token/?apikey)
             a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
             x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
             tok = extract_token(request, a_hdr, x_hdr)
@@ -257,7 +257,7 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
             logging.getLogger("algogpt").exception("SecureAuthMiddleware: call_next failed for %s", request.url.path)
             return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_auth_failed"})
 
-# הרשמת המידלוור החדש (במקום validate_token הישן)
+# הרשמת המידלוור החדש
 app.add_middleware(
     SecureAuthMiddleware,
     public_paths=EFFECTIVE_PUBLIC_PATHS,
@@ -292,13 +292,13 @@ else:
         "routes.debug_hmac",
         "routes.ops_approve",
         "routes.trade",
-        "routes.trade_approvals",  # 👈 חדש
-        "routes.auto_trade",
+        "routes.trade_approvals",  # 👈 חדש (אם קיים)
+        "routes.auto_trade",        # 👈 אופציונלי
         "routes.ops_ui",
         "routes.ops_flags",
         "routes.position_ops",
         "routes.calibration",
-        "routes.ops_digest",       # 👈 חדש: digest ידני
+        "routes.ops_digest",        # 👈 חדש: digest ידני (אם קיים)
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -514,7 +514,6 @@ async def _ops_schedulers():
     await ensure_ops_schedulers_started()
 
 # --- Approvals GC (auto-reject expired) ---
-# תומך גם ב-start_approvals_gc(interval=...) וגם ב-start_gc_task()
 try:
     from utils.approvals_gc import start_approvals_gc as _start_gc  # type: ignore
     _gc_needs_interval = True
@@ -565,8 +564,6 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
-
 
 
 
