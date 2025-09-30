@@ -143,6 +143,23 @@ async def metrics_health():
         },
     }
 
+# ---------- labels/allowlist export ----------
+@router.get("/metrics/labels", summary="Current low-cardinality label sets (allowlist + OTHER)")
+async def metrics_labels():
+    """
+    חשיפה דינמית ל־UI:
+      - watchlist: רשימת סימבולים שמוגדרים ב-WATCHLIST (לאותם counters עם low-cardinality)
+      - other: התווית שמשתמשים בה עבור כל סימבול שלא ב-allowlist
+      - env_watchlist: המחרוזת הגולמית מ-WATCHLIST (לניטור תצורה)
+    """
+    return {
+        "ok": True,
+        "watchlist": sorted(list(_ALLOWS)),
+        "other": _OTHER,
+        "env_watchlist": os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT"),
+        "ts": int(time.time()),
+    }
+
 # ---------- tiny helpers ----------
 def _sum_metric(name: str) -> float:
     total = 0.0
@@ -168,6 +185,7 @@ def _last_gauge(name: str) -> Optional[float]:
     except Exception:
         pass
     return None
+
 
 
 
