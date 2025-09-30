@@ -47,7 +47,7 @@ TP_LADDER_ON_APPROVE       = _bool_env("TP_LADDER_ON_APPROVE", False)
 APPROVAL_FAIL_OPEN_ON_VELOCITY = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
 VELOCITY_LOG_LEVEL         = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
 DEBUG_APPROVE_HTML         = _bool_env("DEBUG_APPROVE_HTML", False)
-# FALLBACK נשלט ע"י PROPOSE_BLOCK_ON_FAIL הקיים אצלך (היפוך לוגי: 0 ➜ fallback ON, 1 ➜ fallback OFF)
+# FALLBACK נשלט ע"י PROPOSE_BLOCK_ON_FAIL (0 ➜ fallback ON, 1 ➜ fallback OFF)
 APPROVE_FALLBACK_TO_MARKET = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
 
 # -------- ConfirmStore fallback ----------
@@ -58,6 +58,34 @@ except Exception:
         from app.trade_executor import ConfirmStore  # type: ignore
     except Exception:
         from main import ConfirmStore  # type: ignore
+
+# -------- Position sizing (AUTO_QTY) ----------
+try:
+    from app.utils.position_sizing import ensure_final_qty  # type: ignore
+except Exception:
+    from utils.position_sizing import ensure_final_qty  # type: ignore
+
+# -------- Prices ----------
+def _get_last_price(symbol: str) -> Optional[float]:
+    """
+    מנסה להביא מחיר מסינקים קיימים; נופל חזרה ל-binance client אם צריך.
+    """
+    with suppress(Exception):
+        from utils.binance_client import get_price  # type: ignore
+        p = get_price(symbol)
+        if p: return float(p)
+    # נסיון אחרון דרך Client (סינכרוני)
+    with suppress(Exception):
+        from binance.client import Client  # type: ignore
+        api_key = os.getenv("BINANCE_API_KEY","").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        if not api_key or not api_sec:
+            return None
+        cli = Client(api_key, api_sec)
+        info = cli.futures_symbol_ticker(symbol=symbol)
+        if info and "price" in info:
+            return float(info["price"])
+    return None
 
 # -------- Helpers ----------
 def _md_html(s: str) -> str:
@@ -335,19 +363,18 @@ async def create_ticket(
     note   = payload.get("note") or ""
     position_side = (payload.get("position_side") or payload.get("positionSide") or "BOTH").upper()
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
-    if not (symbol and side and qty > 0 and lev > 0):
-        raise HTTPException(status_code=422, detail="Missing/invalid fields (symbol/side/qty/leverage)")
+
+    # 🔸 מקל על ולידציה – מאפשר qty/lev = 0 כדי לאפשר AUTO_QTY בשלב האישור.
+    if not (symbol and side):
+        raise HTTPException(status_code=422, detail="Missing fields (symbol/side). qty/leverage may be auto at approve.")
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
-        try:
-            from utils.binance_client import get_price  # type: ignore
-            price_now = get_price(symbol)
-        except Exception:
-            price_now = None
-        etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2") or payload.get("tp3"))
+        with suppress(Exception):
+            price_now = _get_last_price(symbol)
+        etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
         for k,v in etas.items():
             payload.setdefault(k, v)
 
@@ -373,8 +400,7 @@ async def create_ticket(
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
         rr_min_eff  = max(rr_min_flag, rr_env_lo)
         if rr_min_eff > 0 and req_body.get("sl"):
-            from utils.binance_client import get_price  # type: ignore
-            current = float(get_price(symbol) or 0)
+            current = float(_get_last_price(symbol) or 0)
             tp1 = float(req_body.get("tp1") or 0); sl = float(req_body.get("sl") or 0)
             rr  = None
             if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
@@ -405,6 +431,7 @@ async def create_ticket(
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
+    # מציגים qty/lev כפי שהתקבלו (ייתכן 0 ➜ AUTO באישור)
     lines.append(f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{qty}</code> lev=<code>{lev}</code>")
     if req_body.get("score") is not None:       lines.append(f"• Score: <code>{req_body['score']}</code>")
     if req_body.get("eta_open_min") is not None:lines.append(f"• ETA Open: <code>{req_body['eta_open_min']}m</code>")
@@ -440,6 +467,18 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
         return mode
     return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
 
+def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
+    """
+    מביא מחיר עדכני ומחשב qty/leverage סופית (אם צריך) לפני ביצוע.
+    מחזיר ticket מעודכן, או None אם אין מחיר/כשל.
+    """
+    symbol = (ticket.get("symbol") or "").upper()
+    price = _get_last_price(symbol)
+    if not price or float(price) <= 0:
+        return None
+    new_ticket = ensure_final_qty(dict(ticket), float(price))
+    return new_ticket
+
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
@@ -451,6 +490,14 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     with suppress(Exception):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
+
+    # 🔸 חישוב AUTO_QTY (אם צריך) לפני ביצוע
+    t2 = _apply_auto_qty_on_ticket(ticket)
+    if t2 is None:
+        return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
+    ticket = t2
+    if float(ticket.get("qty") or 0) <= 0 or int(ticket.get("leverage") or 0) <= 0:
+        return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי (בדוק ENV AUTO_QTY_*).")
 
     # ביצוע
     exec_res = await (_execute_trade(ticket) if flow=="MARKET"
@@ -530,6 +577,15 @@ async def approve_signed(request: Request):
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # 🔸 AUTO_QTY גם בערוץ ה-signed
+    t2 = _apply_auto_qty_on_ticket(payload)
+    if t2 is None:
+        raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
+    payload = t2
+    if float(payload.get("qty") or 0) <= 0 or int(payload.get("leverage") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="AUTO_QTY: qty/leverage missing after auto sizing")
+
     flow = _decide_flow_by_mode(payload)
     exec_res = await (_execute_trade(payload) if flow=="MARKET"
                       else _execute_trade_armed(payload) if flow=="HYBRID"
