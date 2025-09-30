@@ -9,19 +9,25 @@ from pydantic import BaseModel, field_validator
 logger = logging.getLogger("algogpt.trade")
 router = APIRouter(tags=["trade"])
 
-# ---------- metrics (low-cardinality labels) ----------
+# --------- Metrics wiring (low-card labels) ----------
+# תמיכה גם בשמות הישנים וגם בחדשים: requested/approved/rejected/executed
 try:
     from routes.metrics import (
-        record_trade_requested,
-        record_trade_approved,
-        record_trade_rejected,
-        record_trade_executed,
+        record_trade_request as _metric_req,
+        record_trade_ok as _metric_ok,
+        record_trade_fail as _metric_fail,
     )
+    def record_trade_requested(flow: Optional[str]) -> None: _metric_req(flow)
+    def record_trade_executed(flow: Optional[str]) -> None: _metric_ok(flow)
+    # דוחה/נכשל: משתמשים ב-counter של fail
+    def record_trade_rejected(flow: Optional[str]) -> None: _metric_fail(flow)
+    # "approved" – נסמן ב-counter של ok עם flow="APPROVAL"
+    def record_trade_approved(flow: Optional[str]) -> None: _metric_ok(flow)
 except Exception:
-    def record_trade_requested(**kwargs): pass
-    def record_trade_approved(**kwargs): pass
-    def record_trade_rejected(**kwargs): pass
-    def record_trade_executed(**kwargs): pass
+    def record_trade_requested(flow: Optional[str]) -> None: ...
+    def record_trade_executed(flow: Optional[str]) -> None: ...
+    def record_trade_rejected(flow: Optional[str]) -> None: ...
+    def record_trade_approved(flow: Optional[str]) -> None: ...
 
 # --------- ConfirmStore (fallbacks) ----------
 try:
@@ -71,7 +77,6 @@ def _hedge_mode_enabled() -> bool:
     return False
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """מסנן דינמית פרמטרים כדי למנוע TypeError בין גרסאות שונות של execute_trade_live."""
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
@@ -87,15 +92,13 @@ def _is_code_4061(err: Exception | str) -> bool:
 
 async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
-    MARKET מיידי:
-      1) ניסיון דרך utils.trade_executor.place_futures_market אם קיים
-      2) אחרת binance-python עם מניעת/ריטריי על -4061 (positionSide)
+    MARKET מיידי דרך utils.trade_executor.place_futures_market אם קיים;
+    אחרת באמצעות binance-python, עם positionSide במצב Hedge + ריטריי חכם על -4061.
     """
     # fast-path: אם יש מתאם פנימי אצלך
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
-        res = await place_futures_market(ticket)
-        return res
+        return await place_futures_market(ticket)
     except Exception:
         pass
 
@@ -130,32 +133,32 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"{os.getenv('ORDER_ID_PREFIX','ALG')}_{symbol}_{side}_{int(time.time())}",
         }
 
-        # ניסיון 1:
-        # במצב Hedge: אם סופק position_side — נשתמש בו; אם לא — נכניס LONG/SHORT.
-        # במצב One-way: נשלח בלי positionSide.
+        # במצב Hedge נשלח positionSide; ב-One-way לא נשלח, כדי להימנע מהתנגשות
+        pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_kwargs = dict(base_kwargs)
         if _hedge_mode_enabled():
-            pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
-            if not pos_side:
-                pos_side = "LONG" if side == "BUY" else "SHORT"
-            attempt_kwargs["positionSide"] = pos_side
+            if not pos_side_supplied:
+                pos_side_supplied = "LONG" if side == "BUY" else "SHORT"
+            attempt_kwargs["positionSide"] = pos_side_supplied
 
         try:
             order = client.futures_create_order(**attempt_kwargs)
             return {"ok": True, "exchange": "binance_futures", "order": order}
         except Exception as e1:
-            # ריטריי חכם על -4061: החלפת/הסרת positionSide בהתאם לניסיון הראשון
             if not _is_code_4061(e1):
-                return {"ok": False, "error": "order_failed", "detail": str(e1)}
+                raise
 
+            # ריטריי על ‎-4061:
+            # אם שלחנו positionSide — ננסה להסיר; אם לא שלחנו — נוסיף LONG/SHORT
             try:
-                retry_kwargs = dict(base_kwargs)
-                if "positionSide" not in attempt_kwargs:
+                if "positionSide" in attempt_kwargs:
+                    retry_kwargs = dict(base_kwargs)  # נסה בלי
+                else:
+                    retry_kwargs = dict(base_kwargs)
                     retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
             except Exception as e2:
-                logger.error("futures_create_order after 4061 retry failed: %s", e2)
                 return {"ok": False, "error": "order_failed", "detail": str(e2), "first_error": str(e1)}
 
     except Exception as e:
@@ -279,14 +282,14 @@ async def trade_execute(
     אם confirm_first=true או REQUIRE_TELEGRAM_APPROVAL=1 – נפתח טיקט דרך /ops/ticket (שולח טלגרם),
     ומחזירים pending_approval עם קישורי Approve/Reject/Preview.
     אחרת – ביצוע מיידי:
-      * MARKET ללא TP/SL דרך Binance (עם טיפול ב-4061)
+      * MARKET ללא TP/SL דרך Binance (עם positionSide במצב Hedge + ריטריי -4061)
       * HYBRID עם TP/SL דרך execute_trade_live (סינון דינמי)
     """
     force_approve = os.getenv("REQUIRE_TELEGRAM_APPROVAL","0").lower() in ("1","true","yes","on")
     need_approval = bool(req.confirm_first or force_approve)
 
-    # metrics: request received
-    record_trade_requested(flow="approval" if need_approval else "immediate")
+    flow = _choose_flow(req)
+    record_trade_requested(flow)
 
     # אישור-טלגרם: פותחים טיקט דרך /ops/ticket (שולח הודעה עם כפתורים)
     if need_approval:
@@ -322,7 +325,7 @@ async def trade_execute(
                 raise RuntimeError(f"/ops/ticket bad response: {r.status_code} {r.text[:200]}")
             if not data.get("ok"):
                 raise RuntimeError(f"ops.ticket failed: {data}")
-            # metrics: "approved" לא בזמן זה; רק כשמגיעים ל-/trade/approve. כאן רק ביקשנו.
+            # כאן אין "approved" עדיין — רק בקשה
             return {
                 "ok": False,
                 "error": "pending_approval",
@@ -337,10 +340,10 @@ async def trade_execute(
             }
         except Exception as e:
             logger.error("open_ops_ticket_failed: %s", e)
+            record_trade_rejected("APPROVAL")  # בקשה שנכשלה להיפתח
             raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
 
     # ביצוע מיידי
-    flow = _choose_flow(req)
     ticket_exec = dict(
         symbol=req.symbol,
         side=req.side,
@@ -358,8 +361,10 @@ async def trade_execute(
     else:
         res = await _execute_trade_hybrid(ticket_exec)
 
-    # metrics: executed
-    record_trade_executed(flow=flow, ok=bool(res.get("ok")), engine="binance_futures" if res.get("ok") else "error")
+    if bool(res.get("ok")):
+        record_trade_executed(flow)
+    else:
+        record_trade_rejected(flow)
 
     return {"ok": bool(res.get("ok")), "flow": flow, "result": res}
 
@@ -379,12 +384,12 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
             it = None
 
     if not it:
+        record_trade_rejected("APPROVAL")
         return {"ok": False, "error": "not_found"}
 
     flow = "HYBRID" if any(it.get(k) for k in ("tp1","tp2","tp3","sl")) else "MARKET"
-
-    # metrics: approved (decision), לפני ביצוע בפועל
-    record_trade_approved(flow=flow)
+    # בוצע אישור
+    record_trade_approved("APPROVAL")
 
     res = await (_execute_trade_hybrid(it) if flow=="HYBRID" else _execute_trade_direct(it))
     ok = bool(res.get("ok"))
@@ -394,8 +399,10 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
     except Exception:
         pass
 
-    # metrics: executed outcome
-    record_trade_executed(flow=flow, ok=ok, engine="binance_futures" if ok else "error")
+    if ok:
+        record_trade_executed("APPROVAL")
+    else:
+        record_trade_rejected("APPROVAL")
 
     return {"ok": ok, "flow": flow, "result": res}
 
@@ -405,8 +412,7 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
         ConfirmStore.decide(str(id), approved=False)
     except Exception:
         pass
-    # metrics: rejected
-    record_trade_rejected(flow="approval")
+    record_trade_rejected("APPROVAL")
     return {"ok": True, "rejected": True, "id": id}
 
 
