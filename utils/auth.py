@@ -4,7 +4,7 @@ import os
 import logging
 from typing import List, Optional, Dict, Any
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request, status
 
 logger = logging.getLogger("algogpt.auth")
 
@@ -30,9 +30,9 @@ _ALLOW_ALL: bool = False
 def _extend_with_api_tokens(toks: List[str]) -> List[str]:
     """
     אוספים טוקנים מכל מגוון השמות ההיסטוריים כדי לא לשבור תאימות,
-    אך בפועל ממליצים על API_TOKEN יחיד.
+    אך בפועל מומלץ להישאר עם API_TOKEN יחיד.
     """
-    # multi-value envs (מופרדים בפסיקים/רווחים/שבירת שורה)
+    # multi-value envs (מופרדים בפסיקים/רווחים/שורה)
     for k in ("AUTH_TOKENS", "API_TOKENS", "ALGOGPT_API_TOKENS", "ALGOGPT_TOKENS"):
         v = os.getenv(k, "")
         if v.strip():
@@ -117,7 +117,7 @@ def _extract_bearer_from_auth_header(h: Optional[str]) -> Optional[str]:
         return parts[0].strip()
     return None
 
-def extract_token(request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
+def extract_token(request: Request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
     """
     פונקציית עזר לשימוש ידני ברואטרים (אם צריך):
     1) X-API-Key
@@ -155,13 +155,13 @@ def require_bearer_token(
     """
     tok = X_API_Key or _extract_bearer_from_auth_header(Authorization)
     if not token_matches(tok):
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return tok
 
 # שם תאימות – רוב ה־routes משתמשים בו
 require_api_key = require_bearer_token
 
-# ---------- public paths for /status/auth (לא חובה) ----------
+# ---------- public paths helpers ----------
 def _split_env(s: str) -> List[str]:
     return [x for x in _split_multi(s)]
 
@@ -169,6 +169,43 @@ def get_public_paths() -> Dict[str, Any]:
     paths = set(_split_env(os.getenv("SECURITY_PUBLIC_PATHS", "")))
     prefixes = set(_split_env(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
     return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
+
+# ---------- middleware (רך, עם החרגות ל-/ /health וכו') ----------
+def _is_public(path: str) -> bool:
+    cfg = get_public_paths()
+    paths = set(cfg["paths"])
+    prefixes = tuple(cfg["prefixes"])
+    # תמיד מוחרגים:
+    always = {"/", "/health", "/readyz", "/status/ping", "/debug/health",
+              "/metrics", "/metrics-json", "/openapi.json", "/docs", "/redoc"}
+    if path in always or path in paths:
+        return True
+    return any(path.startswith(p) for p in prefixes)
+
+async def validate_token(request: Request, call_next):
+    try:
+        path = request.url.path
+        if _is_public(path):
+            return await call_next(request)
+
+        # אם אין טוקנים בכלל במערכת – לא חוסמים
+        if not _TOKENS and not _ALLOW_ALL:
+            return await call_next(request)
+
+        # בדיקת טוקן מהכותרות
+        tok = request.headers.get("X-API-Key") or _extract_bearer_from_auth_header(request.headers.get("Authorization"))
+        if not token_matches(tok):
+            return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+        return await call_next(request)
+    except Exception as e:
+        logger.error("validate_token: middleware call_next failed for %s: %s", request.url.path, e)
+        # לעולם לא להפיל מסלולים – ננסה להעביר הלאה בכל מקרה
+        try:
+            return await call_next(request)
+        except Exception:
+            raise HTTPException(status_code=500, detail="middleware_error")
+
 
 
 
