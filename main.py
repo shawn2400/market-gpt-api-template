@@ -531,7 +531,42 @@ APPROVAL_GC_ENABLE = os.getenv("APPROVAL_GC_ENABLE","1").lower() in ("1","true",
 APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SEC","15"))
 
 @app.on_event("startup")
-async def _startup_approvals_gc
+async def _startup_approvals_gc():
+    try:
+        if APPROVAL_GC_ENABLE and _start_gc:
+            if _gc_needs_interval:
+                _start_gc(interval=APPROVAL_GC_INTERVAL_SEC)
+            else:
+                _start_gc()
+            logging.getLogger("algogpt.approvals.gc").info({"event":"gc.start_ok","interval":APPROVAL_GC_INTERVAL_SEC})
+    except Exception as e:
+        logging.getLogger("algogpt.approvals.gc").warning({"event":"gc.start_failed","err":str(e)})
+
+# --- Expired-digest Job (auto) ---
+try:
+    from utils.approvals_digest_job import start_expired_digest_job  # type: ignore
+except Exception:
+    start_expired_digest_job = None  # type: ignore
+
+@app.on_event("startup")
+async def _startup_expired_digest_job():
+    try:
+        if start_expired_digest_job:
+            start_expired_digest_job()
+            logging.getLogger("algogpt.approvals.digest_job").info({"event":"digest_job.start_ok"})
+    except Exception as e:
+        logging.getLogger("algogpt.approvals.digest_job").warning({"event":"digest_job.start_failed","err":str(e)})
+
+@app.on_event("startup")
+async def _start_trade_manager_loop():
+    if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
+        asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC))
+        logger.info({"event":"trade_manager_loop_started","interval_sec":TRADE_MANAGER_INTERVAL_SEC})
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
