@@ -272,7 +272,7 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         # normalize closes
         closes: List[float]
         try:
-            # הימנעות מ"תלות קשה": בדיקה טקסטואלית אם זה DF
+            # הימנעות מתלות קשה ב-pandas: בדיקה טקסטואלית
             if 'DataFrame' in str(type(kl)):
                 if hasattr(kl, 'columns') and ('close' in getattr(kl, 'columns', [])):
                     closes = [float(x) for x in kl['close'].tolist()]
@@ -612,6 +612,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
