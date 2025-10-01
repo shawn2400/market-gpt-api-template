@@ -10,7 +10,6 @@ services:
     env_file:
       - .env
     environment:
-      # חובה להיות זמינים בזמן ריצה (גם אם .env לא נטען)
       ALERTS_INGEST_HMAC_SECRET: "${ALERTS_INGEST_HMAC_SECRET:-}"
       ALERTS_INGEST_HMAC_KEY_IS_HEX: "${ALERTS_INGEST_HMAC_KEY_IS_HEX:-1}"
     depends_on:
@@ -210,8 +209,6 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
-
-
 
 
 
