@@ -1,18 +1,17 @@
-# FILE: render.yaml
 services:
   - type: web
     name: algogpt-docker
     env: docker
     region: frankfurt
     plan: pro
-    autoDeploy: false          # פריסה ידנית
+    autoDeploy: false
     autoscale: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
 
     envVars:
-      # ==== Core / Gunicorn ====
+      # ===== Core / Gunicorn =====
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
@@ -21,8 +20,10 @@ services:
         value: INFO
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
+      - key: PORT
+        value: "10000"
 
-      # ==== מזהי אדמין/טלגרם (קשיחים) ====
+      # ===== Admin / Telegram =====
       - key: ADMIN_CHAT_ID
         value: "449087907"
       - key: TELEGRAM_ADMIN_IDS
@@ -36,7 +37,7 @@ services:
       - key: TELEGRAM_PARSE_MODE
         value: HTML
 
-      # ==== Scanner caps & rate-limit (זה המקור היחיד – לא לשים ב-.env/דשבורד) ====
+      # ===== Scanner caps & Rate Limit (מקור יחיד!) =====
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
@@ -52,7 +53,7 @@ services:
       - key: SCAN_INTERVAL
         value: "60"
 
-      # ==== Approvals ====
+      # ===== Approvals / Trading =====
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
       - key: APPROVAL_ENABLED
@@ -62,13 +63,13 @@ services:
       - key: REQUIRE_TELEGRAM_APPROVAL
         value: "1"
 
-      # ==== Net / Public paths (תואם קוד) ====
+      # ===== Public routes (תואם לקוד) =====
       - key: SECURITY_PUBLIC_PATHS
         value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ui/dashboard,/health
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
-      # ==== הזרקת סודות דרך דשבורד Render (sync:false) ====
+      # ===== Secrets דרך הדשבורד (sync:false) =====
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
       - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
