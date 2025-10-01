@@ -1,31 +1,30 @@
 # FILE: render.yaml
 services:
-  # ───────── Web ראשי ─────────
   - type: web
     name: algogpt-docker
     env: docker
     region: frankfurt
     plan: pro
-    autoDeploy: false       # פריסה ידנית בלבד
-    autoscale: false        # ביטול Autoscaling
-    numInstances: 1         # רפליקה אחת
+    autoDeploy: false
+    autoscale: false
+    numInstances: 1
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health   # יש לנו /health; לא להשתמש ב-/healthz אם אין ראוט
+    healthCheckPath: /health
     envVars:
       - key: WEB_CONCURRENCY
-        value: "1"             # וורקר יחיד (מונע תקלות race סביב middleware)
+        value: "1"
       - key: GUNICORN_TIMEOUT
         value: "120"
       - key: LOG_LEVEL
-        value: INFO
+        value: "INFO"
 
-      # ───── HMAC (להזין בלשונית Secrets ב-Render) ─────
+      # HMAC/Secrets (נשארים ב-Secrets של Render)
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
       - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
         value: "1"
 
-      # ───── Binance/Telegram/OpenAI/Redis וכו' (אופציונלי) ─────
+      # Binance/Telegram/OpenAI/Redis/Host
       - key: OPENAI_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
@@ -37,10 +36,22 @@ services:
       - key: REDIS_URL
         sync: false
 
-    # שימו לב: לא עושים dockerCommand כדי לא לעקוף את ה-CMD שב-Dockerfile (Gunicorn+UvicornWorker)
-    # אם ממש רוצים Uvicorn ישיר: בטלו את השורה מעל והוסיפו כאן dockerCommand:
-    # dockerCommand: >
-    #   uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+      # ─── הוספות חשובות לסריקות ───
+      - key: SCAN_MAX_SYMBOLS
+        value: "120"
+      - key: SCAN_MAX_LIMIT
+        value: "0"
+      - key: SCAN_CONCURRENCY
+        value: "4"
+      - key: SCAN_RL_LIMIT
+        value: "120"
+      - key: SCAN_RL_WINDOW
+        value: "60"
+
+      # השארת מצב Approval לכל הסימבולים
+      - key: APPROVAL_REQUIRE_WATCHLIST
+        value: "0"
+
 
 
 
