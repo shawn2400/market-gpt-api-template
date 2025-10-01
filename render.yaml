@@ -1,46 +1,42 @@
+# FILE: render.yaml
 services:
   - type: web
     name: algogpt-docker
     env: docker
     region: frankfurt
     plan: pro
-    autoDeploy: false
+    autoDeploy: false          # פריסה ידנית
     autoscale: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
+
     envVars:
+      # ==== Core / Gunicorn ====
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
         value: "120"
       - key: LOG_LEVEL
         value: INFO
-
-      # Secrets להזנה בדשבורד
-      - key: ALERTS_INGEST_HMAC_SECRET
-        sync: false
-      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
-        value: "1"
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        sync: false
-      - key: API_BEARER_TOKEN
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
-
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # Scanner caps & RL
+      # ==== מזהי אדמין/טלגרם (קשיחים) ====
+      - key: ADMIN_CHAT_ID
+        value: "449087907"
+      - key: TELEGRAM_ADMIN_IDS
+        value: "449087907"
+      - key: TELEGRAM_ADMIN_ONLY
+        value: "1"
+      - key: TELEGRAM_CHAT_ID
+        value: "449087907"
+      - key: TELEGRAM_AUTO_WEBHOOK
+        value: "1"
+      - key: TELEGRAM_PARSE_MODE
+        value: HTML
+
+      # ==== Scanner caps & rate-limit (זה המקור היחיד – לא לשים ב-.env/דשבורד) ====
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
@@ -53,10 +49,49 @@ services:
         value: "4"
       - key: TOP_SYMBOLS
         value: "100"
+      - key: SCAN_INTERVAL
+        value: "60"
 
-      # Approvals
+      # ==== Approvals ====
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
+      - key: APPROVAL_ENABLED
+        value: "1"
+      - key: EXECUTE_TRADES
+        value: "1"
+      - key: REQUIRE_TELEGRAM_APPROVAL
+        value: "1"
+
+      # ==== Net / Public paths (תואם קוד) ====
+      - key: SECURITY_PUBLIC_PATHS
+        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ui/dashboard,/health
+      - key: SECURITY_PUBLIC_PREFIXES
+        value: /public,/price,/static,/risk
+
+      # ==== הזרקת סודות דרך דשבורד Render (sync:false) ====
+      - key: ALERTS_INGEST_HMAC_SECRET
+        sync: false
+      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
+        value: "1"
+
+      - key: OPENAI_API_KEY
+        sync: false
+
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+
+      - key: API_BEARER_TOKEN
+        sync: false
+
+      - key: REDIS_URL
+        sync: false
+
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
 
 
 
