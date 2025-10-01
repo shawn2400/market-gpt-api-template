@@ -10,17 +10,18 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
-      # Runtime basics
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
         value: "120"
       - key: LOG_LEVEL
-        value: INFO
-      - key: PUBLIC_HOST
-        value: https://algogpt-docker.onrender.com
+        value: "INFO"
 
-      # ===== Secrets להזין בדשבורד (לא ב-git) =====
+      # Secrets להזנה דרך הדשבורד
+      - key: ALERTS_INGEST_HMAC_SECRET
+        sync: false
+      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
+        value: "1"
       - key: OPENAI_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
@@ -35,14 +36,11 @@ services:
         sync: false
       - key: BINANCE_API_SECRET
         sync: false
-      - key: ALERTS_INGEST_HMAC_SECRET
-        sync: false
 
-      # קבוע: מפתח HMAC הוא HEX
-      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
-        value: "1"
+      - key: PUBLIC_HOST
+        value: "https://algogpt-docker.onrender.com"
 
-      # ===== Scanner caps & rate-limit =====
+      # Scanner caps & RL (נשמרים כאן בלבד, לא ב-.env)
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
@@ -56,9 +54,10 @@ services:
       - key: TOP_SYMBOLS
         value: "100"
 
-      # ===== Approvals policy =====
+      # Approvals
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
+
 
 
 
