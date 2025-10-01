@@ -1,4 +1,3 @@
-# render.yaml
 services:
   - type: web
     name: algogpt-docker
@@ -9,27 +8,24 @@ services:
     autoscale: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /readyz
+    healthCheckPath: /health
+
     envVars:
       # --- Runtime ---
+      - key: PORT
+        value: "10000"
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
         value: "120"
       - key: LOG_LEVEL
-        value: INFO
+        value: "INFO"
+
+      # --- Base URL ---
+      - key: PUBLIC_HOST
+        value: https://algogpt-docker.onrender.com
 
       # --- Secrets (להזין בדשבורד) ---
-      - key: ALERTS_INGEST_HMAC_SECRET
-        sync: false
-      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
-        value: "1"
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        sync: false
       - key: API_BEARER_TOKEN
         sync: false
       - key: REDIS_URL
@@ -38,29 +34,48 @@ services:
         sync: false
       - key: BINANCE_API_SECRET
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: ALERTS_INGEST_HMAC_SECRET
+        sync: false
+      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
+        value: "1"
 
-      # --- Base URL ---
-      - key: PUBLIC_HOST
-        value: https://algogpt-docker.onrender.com
+      # --- Public/Readonly ---
+      - key: ENABLE_READONLY_HTTP
+        value: "1"
+      - key: READONLY_ENDPOINTS
+        value: "summary,prices_top,news_cache,health"
 
       # --- Scanner caps & RL (רנדר-בלבד) ---
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
         value: "0"
-      - key: SCAN_RL_LIMIT
-        value: "120"
-      - key: SCAN_RL_WINDOW
-        value: "60"
       - key: SCAN_CONCURRENCY
         value: "4"
       - key: TOP_SYMBOLS
         value: "100"
+      - key: SCAN_RL_LIMIT
+        value: "120"
+      - key: SCAN_RL_WINDOW
+        value: "60"
 
-      # --- Approvals ---
+      # --- Rate Limit flags (כדי להכריח אכיפה) ---
+      - key: RATE_LIMIT_ENABLE
+        value: "1"
+      - key: RL_FAIL_OPEN
+        value: "0"         # אם Redis נופל → אל תפתח (חסום)
+      - key: RATE_LIMIT_BACKEND
+        value: "redis"     # לוודא שימוש ברדיס
+
+      # --- Approvals (כמו שביקשת) ---
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
-
 
 
 
