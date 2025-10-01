@@ -45,6 +45,13 @@ except Exception:
     class InternalAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next): return await call_next(request)
 
+# ---- RateLimitMiddleware (חדש) ----
+try:
+    from app.rate_limit_mw import RateLimitMiddleware  # <<< הוספנו
+except Exception:
+    class RateLimitMiddleware(BaseHTTPMiddleware):     # fallback no-op
+        async def dispatch(self, request: Request, call_next): return await call_next(request)
+
 # ---- ConfirmStore (fallback) ----
 try:
     from utils.trade_executor import ConfirmStore
@@ -155,6 +162,10 @@ app.add_middleware(CORSMiddleware,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE)
 
 app.add_middleware(InternalAuthMiddleware)
+
+# ה-RateLimit לפני המטריקות כדי שגם 429 יימדדו נכון במטריקות השרת
+app.add_middleware(RateLimitMiddleware)  # <<< הוספנו
+
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
 
@@ -339,12 +350,18 @@ def _mask(v: str) -> str:
 
 @app.get("/debug/env", include_in_schema=False)
 async def debug_env():
+    # הרחבתי כדי לכלול משתני RL
     return {
         "ok": True,
         "INSTANCE_ID": os.getenv("INSTANCE_ID", ""),
         "ALERTS_INGEST_HMAC_SECRET": _mask(os.getenv("ALERTS_INGEST_HMAC_SECRET","")),
         "ALERTS_INGEST_HMAC_KEY_IS_HEX": os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX",""),
         "WEBHOOK_HMAC_SECRET": _mask(os.getenv("WEBHOOK_HMAC_SECRET","")),
+        "RATE_LIMIT_ENABLE": os.getenv("RATE_LIMIT_ENABLE",""),
+        "RATE_LIMIT_BACKEND": os.getenv("RATE_LIMIT_BACKEND",""),
+        "RL_FAIL_OPEN": os.getenv("RL_FAIL_OPEN",""),
+        "SCAN_RL_LIMIT": os.getenv("SCAN_RL_LIMIT",""),
+        "SCAN_RL_WINDOW": os.getenv("SCAN_RL_WINDOW",""),
     }
 
 @app.get("/status/ping")
@@ -566,6 +583,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
