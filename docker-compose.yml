@@ -9,11 +9,21 @@ services:
       - "${PORT:-10000}:${PORT:-10000}"
     env_file:
       - .env
-    # מוודאים שגם אם .env חסר/מעודכן מאוחר, ה-HMAC קיים בזמן ריצה
     environment:
+      # חובה בזמן ריצה (כבר היה)
       ALERTS_INGEST_HMAC_SECRET: "51d4ad23aebf0ce08fc7d80fc265e02406a9075a7b5876cfe49296adc0c1821f"
       ALERTS_INGEST_HMAC_KEY_IS_HEX: "1"
-      # מומלץ לא להגדיר WEBHOOK_HMAC_SECRET כדי למנוע בלבול
+
+      # ─── הוספות חשובות לסריקות ───
+      SCAN_MAX_SYMBOLS: "120"   # cap פנימי ל-/scan/multi
+      SCAN_MAX_LIMIT: "0"       # 0 = אין gate פנימי limit
+      SCAN_CONCURRENCY: "4"     # כמו אצלך כרגע; תוכל להעלות ל-6 אם השרת עומד בזה
+      SCAN_RL_LIMIT: "120"      # rate limit ל-/scan/multi
+      SCAN_RL_WINDOW: "60"      # חלון בשניות ל-rate limit
+
+      # השארת מצב שמאפשר approval לכל הסימבולים (לא רק watchlist)
+      APPROVAL_REQUIRE_WATCHLIST: "0"
+
     depends_on:
       redis:
         condition: service_healthy
@@ -59,9 +69,6 @@ services:
       bash -lc "python -m routes.manager"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://algogpt:${PORT:-10000}/status/all >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
     volumes:
       - algodata:/app/data
 
@@ -211,9 +218,6 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
-
-
-
 
 
 
