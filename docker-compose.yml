@@ -7,11 +7,55 @@ services:
     restart: always
     ports:
       - "${PORT:-10000}:${PORT:-10000}"
+    # אם יש לך .env לפרטים כלליים (לא SCAN_*), אפשר להשאיר:
     env_file:
       - .env
     environment:
+      # ==== סכמות/קאפ/קצב (מקור יחיד – אל תשכפל ל-.env) ====
+      SCAN_MAX_SYMBOLS: "${SCAN_MAX_SYMBOLS:-120}"
+      SCAN_MAX_LIMIT:    "${SCAN_MAX_LIMIT:-0}"
+      SCAN_RL_LIMIT:     "${SCAN_RL_LIMIT:-120}"
+      SCAN_RL_WINDOW:    "${SCAN_RL_WINDOW:-60}"
+      SCAN_CONCURRENCY:  "${SCAN_CONCURRENCY:-4}"
+      TOP_SYMBOLS:       "${TOP_SYMBOLS:-100}"
+      SCAN_INTERVAL:     "${SCAN_INTERVAL:-60}"
+
+      # ==== לוגיקה / אישורים ====
+      APPROVAL_REQUIRE_WATCHLIST: "${APPROVAL_REQUIRE_WATCHLIST:-0}"
+      APPROVAL_ENABLED: "${APPROVAL_ENABLED:-1}"
+      EXECUTE_TRADES: "${EXECUTE_TRADES:-1}"
+      REQUIRE_TELEGRAM_APPROVAL: "${REQUIRE_TELEGRAM_APPROVAL:-1}"
+
+      # ==== Admin / Telegram ====
+      ADMIN_CHAT_ID: "${ADMIN_CHAT_ID:-449087907}"
+      TELEGRAM_ADMIN_IDS: "${TELEGRAM_ADMIN_IDS:-449087907}"
+      TELEGRAM_ADMIN_ONLY: "${TELEGRAM_ADMIN_ONLY:-1}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-449087907}"
+      TELEGRAM_AUTO_WEBHOOK: "${TELEGRAM_AUTO_WEBHOOK:-1}"
+      TELEGRAM_PARSE_MODE: "${TELEGRAM_PARSE_MODE:-HTML}"
+
+      # ==== Core ====
+      PUBLIC_HOST: "${PUBLIC_HOST:-http://localhost:${PORT:-10000}}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      WEB_CONCURRENCY: "${WEB_CONCURRENCY:-1}"
+      GUNICORN_TIMEOUT: "${GUNICORN_TIMEOUT:-120}"
+      PORT: "${PORT:-10000}"
+
+      # ==== Public routes ====
+      SECURITY_PUBLIC_PATHS: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ui/dashboard,/health"
+      SECURITY_PUBLIC_PREFIXES: "/public,/price,/static,/risk"
+
+      # ==== Secrets (מה-.env או מה-Environment של השרת) ====
       ALERTS_INGEST_HMAC_SECRET: "${ALERTS_INGEST_HMAC_SECRET:-}"
       ALERTS_INGEST_HMAC_KEY_IS_HEX: "${ALERTS_INGEST_HMAC_KEY_IS_HEX:-1}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_WEBHOOK_SECRET: "${TELEGRAM_WEBHOOK_SECRET:-}"
+      API_BEARER_TOKEN: "${API_BEARER_TOKEN:-}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+      BINANCE_API_KEY: "${BINANCE_API_KEY:-}"
+      BINANCE_API_SECRET: "${BINANCE_API_SECRET:-}"
+
     depends_on:
       redis:
         condition: service_healthy
@@ -48,6 +92,15 @@ services:
     restart: always
     env_file:
       - .env
+    environment:
+      # אם רוצים לוודא שהמנהל רואה את אותם caps:
+      SCAN_MAX_SYMBOLS: "${SCAN_MAX_SYMBOLS:-120}"
+      SCAN_RL_LIMIT: "${SCAN_RL_LIMIT:-120}"
+      SCAN_RL_WINDOW: "${SCAN_RL_WINDOW:-60}"
+      SCAN_CONCURRENCY: "${SCAN_CONCURRENCY:-4}"
+      TOP_SYMBOLS: "${TOP_SYMBOLS:-100}"
+      SCAN_INTERVAL: "${SCAN_INTERVAL:-60}"
+      API_BEARER_TOKEN: "${API_BEARER_TOKEN:-}"
     depends_on:
       redis:
         condition: service_healthy
@@ -209,6 +262,7 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
+
 
 
 
