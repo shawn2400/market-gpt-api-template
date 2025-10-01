@@ -10,20 +10,8 @@ services:
     env_file:
       - .env
     environment:
-      # אפשר להשאיר ריק, נמשך מה-ENV/compose:
       ALERTS_INGEST_HMAC_SECRET: "${ALERTS_INGEST_HMAC_SECRET:-}"
       ALERTS_INGEST_HMAC_KEY_IS_HEX: "${ALERTS_INGEST_HMAC_KEY_IS_HEX:-1}"
-
-      # === Scanner caps & RL (מקומי בלבד) ===
-      SCAN_MAX_SYMBOLS: "${SCAN_MAX_SYMBOLS:-120}"
-      SCAN_MAX_LIMIT: "${SCAN_MAX_LIMIT:-0}"
-      SCAN_RL_LIMIT: "${SCAN_RL_LIMIT:-120}"
-      SCAN_RL_WINDOW: "${SCAN_RL_WINDOW:-60}"
-      SCAN_CONCURRENCY: "${SCAN_CONCURRENCY:-4}"
-      TOP_SYMBOLS: "${TOP_SYMBOLS:-100}"
-
-      # Approvals
-      APPROVAL_REQUIRE_WATCHLIST: "${APPROVAL_REQUIRE_WATCHLIST:-0}"
     depends_on:
       redis:
         condition: service_healthy
@@ -221,6 +209,7 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
+
 
 
 
