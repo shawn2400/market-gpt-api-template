@@ -1,3 +1,4 @@
+# render.yaml
 services:
   - type: web
     name: algogpt-docker
@@ -8,7 +9,7 @@ services:
     autoscale: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health
+    healthCheckPath: /readyz
     envVars:
       # --- Runtime ---
       - key: WEB_CONCURRENCY
@@ -18,7 +19,7 @@ services:
       - key: LOG_LEVEL
         value: INFO
 
-      # --- Secrets (מוזנים בדשבורד) ---
+      # --- Secrets (להזין בדשבורד) ---
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
       - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
@@ -59,6 +60,7 @@ services:
       # --- Approvals ---
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
+
 
 
 
