@@ -1,4 +1,3 @@
-# docker-compose.yml
 version: "3.9"
 
 services:
@@ -13,6 +12,14 @@ services:
     environment:
       ALERTS_INGEST_HMAC_SECRET: "${ALERTS_INGEST_HMAC_SECRET:-}"
       ALERTS_INGEST_HMAC_KEY_IS_HEX: "${ALERTS_INGEST_HMAC_KEY_IS_HEX:-1}"
+
+      # --- RL flags + ערכי ברירת מחדל מקומיים ---
+      RATE_LIMIT_ENABLE: "${RATE_LIMIT_ENABLE:-1}"
+      RL_FAIL_OPEN: "${RL_FAIL_OPEN:-0}"
+      RATE_LIMIT_BACKEND: "${RATE_LIMIT_BACKEND:-redis}"
+      SCAN_RL_LIMIT: "${SCAN_RL_LIMIT:-120}"
+      SCAN_RL_WINDOW: "${SCAN_RL_WINDOW:-60}"
+
     depends_on:
       redis:
         condition: service_healthy
@@ -211,6 +218,7 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
+
 
 
 
