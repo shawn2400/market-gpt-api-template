@@ -18,7 +18,7 @@ services:
       - key: LOG_LEVEL
         value: INFO
 
-      # ---- Secrets (הזן ב-Render → Secrets) ----
+      # ---- Secrets: להזין ב-Render → Secrets ----
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
       - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
@@ -60,7 +60,6 @@ services:
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
 
-    # אין צורך ב-dockerCommand – משתמשים ב-CMD מה-Dockerfile
 
 
 
