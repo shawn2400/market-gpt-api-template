@@ -1,4 +1,3 @@
-# FILE: render.yaml
 services:
   - type: web
     name: algogpt-docker
@@ -18,7 +17,7 @@ services:
       - key: LOG_LEVEL
         value: INFO
 
-      # ---- Secrets: להזין ב-Render → Secrets ----
+      # Secrets להזנה בדשבורד
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
       - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
@@ -38,11 +37,10 @@ services:
       - key: BINANCE_API_SECRET
         sync: false
 
-      # ---- Public host ----
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # ---- Scanner caps & RL ----
+      # Scanner caps & RL
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
@@ -56,10 +54,9 @@ services:
       - key: TOP_SYMBOLS
         value: "100"
 
-      # ---- Trading approvals ----
+      # Approvals
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
-
 
 
 
