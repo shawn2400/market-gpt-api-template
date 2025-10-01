@@ -16,41 +16,51 @@ services:
       - key: GUNICORN_TIMEOUT
         value: "120"
       - key: LOG_LEVEL
-        value: "INFO"
+        value: INFO
 
-      # HMAC/Secrets (נשארים ב-Secrets של Render)
+      # ---- Secrets (הזן ב-Render → Secrets) ----
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
       - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
         value: "1"
-
-      # Binance/Telegram/OpenAI/Redis/Host
       - key: OPENAI_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
-      - key: PUBLIC_HOST
-        value: https://algogpt-docker.onrender.com
+      - key: API_BEARER_TOKEN
+        sync: false
       - key: REDIS_URL
         sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
 
-      # ─── הוספות חשובות לסריקות ───
+      # ---- Public host ----
+      - key: PUBLIC_HOST
+        value: https://algogpt-docker.onrender.com
+
+      # ---- Scanner caps & RL ----
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
         value: "0"
-      - key: SCAN_CONCURRENCY
-        value: "4"
       - key: SCAN_RL_LIMIT
         value: "120"
       - key: SCAN_RL_WINDOW
         value: "60"
+      - key: SCAN_CONCURRENCY
+        value: "4"
+      - key: TOP_SYMBOLS
+        value: "100"
 
-      # השארת מצב Approval לכל הסימבולים
+      # ---- Trading approvals ----
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
+
+    # אין צורך ב-dockerCommand – משתמשים ב-CMD מה-Dockerfile
 
 
 
