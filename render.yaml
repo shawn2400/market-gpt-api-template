@@ -9,9 +9,8 @@ services:
     numInstances: 1
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
-
     envVars:
-      # ===== Core / Gunicorn =====
+      # Runtime basics
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
@@ -20,24 +19,30 @@ services:
         value: INFO
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
-      - key: PORT
-        value: "10000"
 
-      # ===== Admin / Telegram =====
-      - key: ADMIN_CHAT_ID
-        value: "449087907"
-      - key: TELEGRAM_ADMIN_IDS
-        value: "449087907"
-      - key: TELEGRAM_ADMIN_ONLY
-        value: "1"
-      - key: TELEGRAM_CHAT_ID
-        value: "449087907"
-      - key: TELEGRAM_AUTO_WEBHOOK
-        value: "1"
-      - key: TELEGRAM_PARSE_MODE
-        value: HTML
+      # ===== Secrets להזין בדשבורד (לא ב-git) =====
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: API_BEARER_TOKEN
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: ALERTS_INGEST_HMAC_SECRET
+        sync: false
 
-      # ===== Scanner caps & Rate Limit (מקור יחיד!) =====
+      # קבוע: מפתח HMAC הוא HEX
+      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
+        value: "1"
+
+      # ===== Scanner caps & rate-limit =====
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
@@ -50,49 +55,10 @@ services:
         value: "4"
       - key: TOP_SYMBOLS
         value: "100"
-      - key: SCAN_INTERVAL
-        value: "60"
 
-      # ===== Approvals / Trading =====
+      # ===== Approvals policy =====
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
-      - key: APPROVAL_ENABLED
-        value: "1"
-      - key: EXECUTE_TRADES
-        value: "1"
-      - key: REQUIRE_TELEGRAM_APPROVAL
-        value: "1"
-
-      # ===== Public routes (תואם לקוד) =====
-      - key: SECURITY_PUBLIC_PATHS
-        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ui/dashboard,/health
-      - key: SECURITY_PUBLIC_PREFIXES
-        value: /public,/price,/static,/risk
-
-      # ===== Secrets דרך הדשבורד (sync:false) =====
-      - key: ALERTS_INGEST_HMAC_SECRET
-        sync: false
-      - key: ALERTS_INGEST_HMAC_KEY_IS_HEX
-        value: "1"
-
-      - key: OPENAI_API_KEY
-        sync: false
-
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        sync: false
-
-      - key: API_BEARER_TOKEN
-        sync: false
-
-      - key: REDIS_URL
-        sync: false
-
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
 
 
 
