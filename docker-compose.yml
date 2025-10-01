@@ -7,11 +7,10 @@ services:
     restart: always
     ports:
       - "${PORT:-10000}:${PORT:-10000}"
-    # אם יש לך .env לפרטים כלליים (לא SCAN_*), אפשר להשאיר:
     env_file:
       - .env
     environment:
-      # ==== סכמות/קאפ/קצב (מקור יחיד – אל תשכפל ל-.env) ====
+      # ==== Scanner caps & RL (מקור יחיד – לא לשכפל ל-.env) ====
       SCAN_MAX_SYMBOLS: "${SCAN_MAX_SYMBOLS:-120}"
       SCAN_MAX_LIMIT:    "${SCAN_MAX_LIMIT:-0}"
       SCAN_RL_LIMIT:     "${SCAN_RL_LIMIT:-120}"
@@ -45,7 +44,7 @@ services:
       SECURITY_PUBLIC_PATHS: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ui/dashboard,/health"
       SECURITY_PUBLIC_PREFIXES: "/public,/price,/static,/risk"
 
-      # ==== Secrets (מה-.env או מה-Environment של השרת) ====
+      # ==== Secrets (מ-.env/Environment) ====
       ALERTS_INGEST_HMAC_SECRET: "${ALERTS_INGEST_HMAC_SECRET:-}"
       ALERTS_INGEST_HMAC_KEY_IS_HEX: "${ALERTS_INGEST_HMAC_KEY_IS_HEX:-1}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
@@ -72,9 +71,6 @@ services:
         --keep-alive 5"
     healthcheck:
       test: ["CMD-SHELL", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT:-10000}/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
     volumes:
       - algodata:/app/data
     deploy:
@@ -93,7 +89,6 @@ services:
     env_file:
       - .env
     environment:
-      # אם רוצים לוודא שהמנהל רואה את אותם caps:
       SCAN_MAX_SYMBOLS: "${SCAN_MAX_SYMBOLS:-120}"
       SCAN_RL_LIMIT: "${SCAN_RL_LIMIT:-120}"
       SCAN_RL_WINDOW: "${SCAN_RL_WINDOW:-60}"
@@ -110,9 +105,6 @@ services:
       bash -lc "python -m routes.manager"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://algogpt:${PORT:-10000}/status/all >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
     volumes:
       - algodata:/app/data
 
@@ -130,9 +122,6 @@ services:
       - ./static:/app/static:ro
     healthcheck:
       test: ["CMD-SHELL", "nginx -t || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -144,9 +133,6 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
 
   watchtower:
     image: containrrr/watchtower:latest
