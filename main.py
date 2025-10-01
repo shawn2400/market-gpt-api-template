@@ -215,13 +215,13 @@ INSTANCE_ID = (
 
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
+    # לא מחזירים 500 מהמיידלוור הזה; אם יש שגיאה, תבוא מהנתיב המקורי
+    resp = await call_next(request)
     try:
-        resp = await call_next(request)
+        resp.headers["x-app-instance-id"] = INSTANCE_ID
+        resp.headers["rndr-id"] = INSTANCE_ID
     except Exception:
-        logger.exception("middleware call_next failed for add_server_identity_header")
-        return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_add_header_failed"})
-    resp.headers["x-app-instance-id"] = INSTANCE_ID
-    resp.headers["rndr-id"] = INSTANCE_ID
+        pass
     return resp
 
 # ---------- Secure global auth middleware ----------
@@ -236,39 +236,34 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
         self.public_prefixes = list(public_prefixes)
 
     async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # 1) OPTIONS: לא מבצע אימות
+        if request.method.upper() == "OPTIONS":
+            return await call_next(request)
+
+        # 2) נתיבים/קידומות ציבוריים
+        if path in self.public_paths or any(path.startswith(p) for p in self.public_prefixes):
+            return await call_next(request)
+
+        # 3) ALLOW_ALL
+        if allow_all():
+            return await call_next(request)
+
+        # 4) שליפת טוקן (X-API-Key / Authorization / ?token/?apikey)
         try:
-            path = request.url.path
-
-            # 1) OPTIONS: לא מבצע אימות
-            if request.method.upper() == "OPTIONS":
-                return await call_next(request)
-
-            # 2) נתיבים/קידומות ציבוריים
-            if path in self.public_paths:
-                return await call_next(request)
-            for pfx in self.public_prefixes:
-                if path.startswith(pfx):
-                    return await call_next(request)
-
-            # 3) ALLOW_ALL
-            if allow_all():
-                return await call_next(request)
-
-            # 4) שליפת טוקן (X-API-Key / Authorization / ?token/?apikey)
             a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
             x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
             tok = extract_token(request, a_hdr, x_hdr)
-
             # 5) בדיקה
             if not token_matches(tok):
                 return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
-
-            # 6) המשך
-            return await call_next(request)
-
         except Exception:
-            logging.getLogger("algogpt").exception("SecureAuthMiddleware: call_next failed for %s", request.url.path)
+            logging.getLogger("algogpt").exception("SecureAuthMiddleware: auth logic failed")
             return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_auth_failed"})
+
+        # 6) המשך – חשוב: לא לעטוף את call_next
+        return await call_next(request)
 
 # הרשמת המידלוור החדש
 app.add_middleware(
@@ -583,6 +578,7 @@ async def _start_trade_manager_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
