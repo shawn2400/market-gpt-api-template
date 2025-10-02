@@ -13,3 +13,7 @@ execution:
     default: 10
     caps:
       BTCUSDT: 15
+risk:
+  min_rr: 1.5
+  min_tp_sl_diff_pct: 3.0
+  sl_max_pct: 3.0
