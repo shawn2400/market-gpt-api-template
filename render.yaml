@@ -49,9 +49,43 @@ services:
       - key: ENABLE_READONLY_HTTP
         value: "1"
       - key: READONLY_ENDPOINTS
-        value: "summary,prices_top,news_cache,health"
+        value: summary,prices_top,news_cache,health
 
-      # --- Scanner caps & RL (רנדר-בלבד) ---
+      # --- Market / Exchange defaults ---
+      - key: DEFAULT_MARKET
+        value: futures
+      - key: POSITION_MODE_OVERRIDE
+        value: oneway
+      - key: BINANCE_MARGIN_TYPE_DEFAULT
+        value: ISOLATED
+      - key: BINANCE_WORKING_TYPE
+        value: MARK_PRICE
+      - key: BINANCE_FUTURES_HTTP_BASE
+        value: https://fapi.binance.com
+      - key: BINANCE_FUTURES_WS_BASE
+        value: wss://fstream.binance.com
+      - key: BINANCE_SPOT_HTTP_BASE
+        value: https://api.binance.com
+      - key: BINANCE_TESTNET
+        value: "false"
+
+      # --- Scanner: מקור, יקום, אינטרוולים ---
+      - key: SCAN_SOURCE
+        value: binance-futures
+      - key: UNIVERSE_MODE
+        value: exchange
+      - key: SCAN_INTERVALS
+        value: 1m,5m,15m
+
+      # --- Allowlist / Watchlist ---
+      - key: ALLOWLIST_MODE          # off = סורק את כל הבורסה (במגבלות TOP/SCAN_MAX_SYMBOLS)
+        value: off
+      - key: SYMBOLS_ALLOWLIST_PATH  # נדרש רק אם ALLOWLIST_MODE=only/include
+        value: config/symbols_allowlist.json
+      - key: WATCHLIST               # נשאר לשימוש אופציונלי, לא חוסם את הסורק
+        value: BTCUSDT,ETHUSDT,SOLUSDT
+
+      # --- Scanner caps & RL (Render) ---
       - key: SCAN_MAX_SYMBOLS
         value: "120"
       - key: SCAN_MAX_LIMIT
@@ -65,17 +99,129 @@ services:
       - key: SCAN_RL_WINDOW
         value: "60"
 
-      # --- Rate Limit flags (כדי להכריח אכיפה) ---
+      # --- Rate Limit backend (לוודא Redis פעיל) ---
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
-        value: "0"         # אם Redis נופל → אל תפתח (חסום)
-      - key: RATE_LIMIT_BACKEND
-        value: "redis"     # לוודא שימוש ברדיס
-
-      # --- Approvals (כמו שביקשת) ---
-      - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
+      - key: RATE_LIMIT_BACKEND
+        value: redis
+
+      # --- Approvals / Routing בטלגרם ---
+      - key: APPROVAL_ENABLED
+        value: "1"
+      - key: REQUIRE_TELEGRAM_APPROVAL
+        value: "1"
+      - key: APPROVAL_REQUIRE_WATCHLIST  # ביטלת כדי לאפשר סריקה חופשית
+        value: "0"
+      - key: AUTO_OPEN_ON_APPROVE
+        value: "1"
+      - key: ADMIN_CHAT_ID
+        value: "449087907"
+      - key: TELEGRAM_CHAT_ID
+        value: "449087907"
+      - key: TELEGRAM_ADMIN_IDS
+        value: "449087907"
+      - key: TELEGRAM_AUTO_WEBHOOK
+        value: "1"
+      - key: TELEGRAM_PARSE_MODE
+        value: HTML
+
+      # --- Trade & Orders (TPSL/Trailing/Manager) ---
+      - key: EXECUTE_TRADES
+        value: "1"
+      - key: ALLOW_MARKET_ENTRY
+        value: "1"
+      - key: AUTO_QTY_ENABLE
+        value: "1"
+      - key: AUTO_QTY_BUDGET_USDT
+        value: "30"
+      - key: NATIVE_TPSL_ENABLE
+        value: "1"
+      - key: ORDERS_USE_OCO
+        value: "1"
+      - key: MANAGER_WRITES_ORDERS
+        value: "1"
+      - key: TRAIL_ENABLE
+        value: "1"
+      - key: TRAIL_ATR_MULT
+        value: "1.5"
+      - key: TP_LADDER_ON_APPROVE
+        value: "1"
+      - key: LADDER_TP_ENABLE
+        value: "1"
+      - key: LADDER_TP_DEFAULT_PCTS
+        value: 1.8,3.2,5.5
+      - key: LADDER_TP_DEFAULT_SPLITS
+        value: 0.4,0.35,0.25
+      - key: LADDER_SL_ENABLE
+        value: "1"
+      - key: LADDER_SL_DEFAULT_PCTS
+        value: "1.2"
+      - key: TP_BE_ONLY_AFTER_TP1
+        value: "1"
+      - key: STREAM_TP_BE
+        value: "1"
+
+      # --- Notifications / Reports ---
+      - key: NOTIFY_OPEN
+        value: "true"
+      - key: NOTIFY_APPROVED
+        value: "true"
+      - key: NOTIFY_FILLED
+        value: "true"
+      - key: NOTIFY_TP_HIT
+        value: "true"
+      - key: NOTIFY_SL_HIT
+        value: "true"
+      - key: NOTIFY_TRAIL_MOVE
+        value: "true"
+      - key: NOTIFY_BREAKEVEN
+        value: "true"
+      - key: NOTIFY_PARTIAL_CLOSE
+        value: "true"
+      - key: NOTIFY_FINAL_REPORT
+        value: "true"
+      - key: FINAL_REPORT_TELEGRAM
+        value: "true"
+      - key: PNL_TRACKING
+        value: "true"
+      - key: METRICS_ENABLE
+        value: "true"
+
+      # --- Manager / Scheduler ---
+      - key: MANAGER_ENABLE
+        value: "1"
+      - key: MANAGER_INTERVAL_SEC
+        value: "10"
+      - key: TRADE_MANAGER_ENABLE
+        value: "1"
+      - key: TRADE_MANAGER_INTERVAL_SEC
+        value: "20"
+      - key: AI_SCHED_ENABLE
+        value: "1"
+      - key: AI_SCHED_INTERVAL_SEC
+        value: "300"
+
+      # --- Gates & Quality (ערכי ברירת מחדל טובים) ---
+      - key: FEAT_QUALITY_ENFORCE
+        value: "1"
+      - key: MIN_QUALITY_SCORE
+        value: "5"
+      - key: APPROVAL_RR_MIN
+        value: "1.25"
+      - key: MIN_TP_SL_DIFF_PCT
+        value: "3.0"
+      - key: SUCCESS_WARN_PCT
+        value: "60"
+
+      # --- Misc (רלוונטיים לדשבורד/אבחון) ---
+      - key: ENABLE_AI_ROUTES
+        value: "1"
+      - key: OPENAPI_INCLUDE_TAGS
+        value: Status,PublicFeed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops
+      - key: OPENAPI_PUBLIC_MAX_OPS
+        value: "30"
 
 
 
