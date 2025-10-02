@@ -1,19 +1,55 @@
 execution:
+  market: futures
+  position_mode: oneway
   use_reduce_only: true
   tif: GTC
   post_only: false
+
+  # TP/SL וניהול סוגריים
+  oco: true                # ORDERS_USE_OCO=1
+  native_tpsl: true        # NATIVE_TPSL_ENABLE=1
   brackets:
-    mode: native
-    place_on_approve: true
+    mode: native           # place native TP/SL at the exchange
+    place_on_approve: true # בשילוב AUTO_OPEN_ON_APPROVE=1
     replace_on_trail: true
+
   sl:
     kind: STOP_MARKET
     working_type: MARK_PRICE
+
   leverage:
     default: 10
     caps:
       BTCUSDT: 15
+
 risk:
   min_rr: 1.5
   min_tp_sl_diff_pct: 3.0
   sl_max_pct: 3.0
+  min_quality_score: 5
+
+notifications:
+  on_open: true
+  on_approved: true
+  on_filled: true
+  on_tp_hit: true
+  on_sl_hit: true
+  on_trail_move: true
+  on_breakeven: true
+  on_partial_close: true
+  final_report: true
+
+manager:
+  enable: true
+  interval_sec: 10
+  trail_enable: true
+  trail_atr_mult: 1.5
+  tp_ladder_on_approve: true
+  tp_ladder:
+    targets_pct: [1.8, 3.2, 5.5]
+    splits: [0.40, 0.35, 0.25]
+
+quality_gates:
+  approval_rr_min: 1.25     # מסונכרן עם APPROVAL_RR_MIN
+  min_tp_sl_diff_pct: 3.0   # מסונכרן עם MIN_TP_SL_DIFF_PCT
+
