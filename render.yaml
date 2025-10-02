@@ -25,7 +25,7 @@ services:
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # --- Secrets (נשארים ב-Dashboard בלבד) ---
+      # --- Secrets (נשארים בדשבורד בלבד) ---
       - key: API_BEARER_TOKEN
         sync: false
       - key: REDIS_URL
@@ -75,7 +75,7 @@ services:
       - key: UNIVERSE_MODE
         value: exchange
       - key: SCAN_INTERVALS
-        value: 1m,5m,15m
+        value: 5m,15m,1h,4h
 
       # --- Allowlist / Watchlist ---
       - key: ALLOWLIST_MODE
@@ -84,6 +84,10 @@ services:
         value: config/symbols_allowlist.json
       - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT
+
+      # --- Indicator context (לא סריקה תכופה) ---
+      - key: INDICATOR_INTERVALS
+        value: 15m,1h,4h,1d
 
       # --- Scanner caps & RL (Render) ---
       - key: SCAN_MAX_SYMBOLS
@@ -215,7 +219,7 @@ services:
       - key: SUCCESS_WARN_PCT
         value: "60"
 
-      # --- Alerts (public URLs) ---
+      # --- Alerts (public URLs, לא סודות) ---
       - key: ALERTS_ACTIVE_URL
         value: https://algogpt-docker.onrender.com/alerts/trades/active
       - key: ALERTS_ANALYSIS_URL
