@@ -1,0 +1,28 @@
+[
+  {
+    "id": "scan_futures_all_15m",
+    "source": "binance-futures",
+    "interval": "15m",
+    "rules_file": "config/scan_rules.json",
+    "symbols": "ALL_USDS_M",
+    "min_volume_usdt": 500000,
+    "limit": 200,
+    "notify": true,
+    "auto_ticket": true,
+    "confirm_first": true,
+    "ttl_sec": 900
+  },
+  {
+    "id": "scan_futures_all_5m",
+    "source": "binance-futures",
+    "interval": "5m",
+    "rules_file": "config/scan_rules.json",
+    "symbols": "ALL_USDS_M",
+    "min_volume_usdt": 500000,
+    "limit": 200,
+    "notify": true,
+    "auto_ticket": true,
+    "confirm_first": true,
+    "ttl_sec": 900
+  }
+]
