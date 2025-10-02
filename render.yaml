@@ -25,7 +25,7 @@ services:
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # --- Secrets (להזין בדשבורד) ---
+      # --- Secrets (נשארים ב-Dashboard בלבד) ---
       - key: API_BEARER_TOKEN
         sync: false
       - key: REDIS_URL
@@ -69,7 +69,7 @@ services:
       - key: BINANCE_TESTNET
         value: "false"
 
-      # --- Scanner: מקור, יקום, אינטרוולים ---
+      # --- Scanner / Universe ---
       - key: SCAN_SOURCE
         value: binance-futures
       - key: UNIVERSE_MODE
@@ -78,11 +78,11 @@ services:
         value: 1m,5m,15m
 
       # --- Allowlist / Watchlist ---
-      - key: ALLOWLIST_MODE          # off = סורק את כל הבורסה (במגבלות TOP/SCAN_MAX_SYMBOLS)
+      - key: ALLOWLIST_MODE
         value: off
-      - key: SYMBOLS_ALLOWLIST_PATH  # נדרש רק אם ALLOWLIST_MODE=only/include
+      - key: SYMBOLS_ALLOWLIST_PATH
         value: config/symbols_allowlist.json
-      - key: WATCHLIST               # נשאר לשימוש אופציונלי, לא חוסם את הסורק
+      - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT
 
       # --- Scanner caps & RL (Render) ---
@@ -99,7 +99,7 @@ services:
       - key: SCAN_RL_WINDOW
         value: "60"
 
-      # --- Rate Limit backend (לוודא Redis פעיל) ---
+      # --- Rate Limit backend ---
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
@@ -107,12 +107,12 @@ services:
       - key: RATE_LIMIT_BACKEND
         value: redis
 
-      # --- Approvals / Routing בטלגרם ---
+      # --- Approvals / Telegram routing ---
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
         value: "1"
-      - key: APPROVAL_REQUIRE_WATCHLIST  # ביטלת כדי לאפשר סריקה חופשית
+      - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
       - key: AUTO_OPEN_ON_APPROVE
         value: "1"
@@ -203,7 +203,7 @@ services:
       - key: AI_SCHED_INTERVAL_SEC
         value: "300"
 
-      # --- Gates & Quality (ערכי ברירת מחדל טובים) ---
+      # --- Gates & Quality ---
       - key: FEAT_QUALITY_ENFORCE
         value: "1"
       - key: MIN_QUALITY_SCORE
@@ -215,13 +215,16 @@ services:
       - key: SUCCESS_WARN_PCT
         value: "60"
 
-      # --- Misc (רלוונטיים לדשבורד/אבחון) ---
-      - key: ENABLE_AI_ROUTES
-        value: "1"
-      - key: OPENAPI_INCLUDE_TAGS
-        value: Status,PublicFeed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops
-      - key: OPENAPI_PUBLIC_MAX_OPS
-        value: "30"
+      # --- Alerts (public URLs) ---
+      - key: ALERTS_ACTIVE_URL
+        value: https://algogpt-docker.onrender.com/alerts/trades/active
+      - key: ALERTS_ANALYSIS_URL
+        value: https://algogpt-docker.onrender.com/alerts/analysis
+      - key: ALERTS_INGEST_URL
+        value: https://algogpt-docker.onrender.com/alerts/ingest
+      - key: ALERTS_UPDATE_URL
+        value: https://algogpt-docker.onrender.com/alerts/trades/update
+
 
 
 
