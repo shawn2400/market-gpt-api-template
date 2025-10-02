@@ -1,49 +1,57 @@
 {
+  "version": 1,
   "filters": {
     "exclude_symbols_like": ["*BUSD*", "*DOWN*", "*UP*", "*PERP*"],
     "min_rr": 1.5,
     "min_atr_pct": 0.6,
     "min_volatility_pct": 1.0,
-    "min_volume_usdt": 500000
+    "min_volume_usdt": 500000,
+    "min_notional_usdt": 5
   },
   "signals": [
     {
       "name": "momentum_breakout_15m",
       "tf": "15m",
       "when": [
-        {"ind": "rsi", "op": ">", "val": 58},
-        {"ind": "ema_cross", "params": {"fast": 9, "slow": 21}, "op": "cross_up"},
-        {"ind": "atr_pct", "op": ">=", "val": 0.6}
+        { "ind": "rsi", "op": ">", "val": 58, "params": { "length": 14 } },
+        { "ind": "ema_cross", "op": "cross_up", "params": { "fast": 9, "slow": 21 } },
+        { "ind": "atr_pct", "op": ">=", "val": 0.6, "params": { "length": 14 } }
       ],
       "side": "BUY",
       "leverage": 10,
       "tp_scheme": "ladder_default",
-      "sl_scheme": "atr_stop"
+      "sl_scheme": "atr_stop",
+      "debounce_sec": 60,
+      "cooldown_sec": 300
     },
     {
       "name": "pullback_long_5m",
       "tf": "5m",
       "when": [
-        {"ind": "ema_trend", "params": {"fast": 21, "slow": 50}, "op": "up"},
-        {"ind": "rsi", "op": "between", "min": 42, "max": 65}
+        { "ind": "ema_trend", "op": "up", "params": { "fast": 21, "slow": 50 } },
+        { "ind": "rsi", "op": "between", "min": 42, "max": 65, "params": { "length": 14 } }
       ],
       "side": "BUY",
       "leverage": 10,
       "tp_scheme": "ladder_default",
-      "sl_scheme": "atr_stop"
+      "sl_scheme": "atr_stop",
+      "debounce_sec": 45,
+      "cooldown_sec": 240
     },
     {
       "name": "momentum_short_15m",
       "tf": "15m",
       "when": [
-        {"ind": "rsi", "op": "<", "val": 42},
-        {"ind": "ema_cross", "params": {"fast": 9, "slow": 21}, "op": "cross_down"},
-        {"ind": "atr_pct", "op": ">=", "val": 0.6}
+        { "ind": "rsi", "op": "<", "val": 42, "params": { "length": 14 } },
+        { "ind": "ema_cross", "op": "cross_down", "params": { "fast": 9, "slow": 21 } },
+        { "ind": "atr_pct", "op": ">=", "val": 0.6, "params": { "length": 14 } }
       ],
       "side": "SELL",
       "leverage": 10,
       "tp_scheme": "ladder_default",
-      "sl_scheme": "atr_stop"
+      "sl_scheme": "atr_stop",
+      "debounce_sec": 60,
+      "cooldown_sec": 300
     }
   ],
   "schemes": {
