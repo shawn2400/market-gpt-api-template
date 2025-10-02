@@ -1,21 +1,49 @@
 {
   "filters": {
-    "exclude_perps": ["*BUSD*", "*DOWN*", "*UP*"],
+    "exclude_symbols_like": ["*BUSD*", "*DOWN*", "*UP*", "*PERP*"],
     "min_rr": 1.5,
     "min_atr_pct": 0.6,
-    "min_volatility_pct": 1.0
+    "min_volatility_pct": 1.0,
+    "min_volume_usdt": 500000
   },
   "signals": [
     {
-      "name": "momentum_breakout",
+      "name": "momentum_breakout_15m",
+      "tf": "15m",
       "when": [
-        {"ind": "rsi", "tf": "15m", "op": ">", "val": 58},
-        {"ind": "ema_fast_vs_slow", "tf": "15m", "op": "cross_up", "params": {"fast": 9, "slow": 21}}
+        {"ind": "rsi", "op": ">", "val": 58},
+        {"ind": "ema_cross", "params": {"fast": 9, "slow": 21}, "op": "cross_up"},
+        {"ind": "atr_pct", "op": ">=", "val": 0.6}
       ],
       "side": "BUY",
+      "leverage": 10,
       "tp_scheme": "ladder_default",
-      "sl_scheme": "atr_stop",
-      "leverage": 10
+      "sl_scheme": "atr_stop"
+    },
+    {
+      "name": "pullback_long_5m",
+      "tf": "5m",
+      "when": [
+        {"ind": "ema_trend", "params": {"fast": 21, "slow": 50}, "op": "up"},
+        {"ind": "rsi", "op": "between", "min": 42, "max": 65}
+      ],
+      "side": "BUY",
+      "leverage": 10,
+      "tp_scheme": "ladder_default",
+      "sl_scheme": "atr_stop"
+    },
+    {
+      "name": "momentum_short_15m",
+      "tf": "15m",
+      "when": [
+        {"ind": "rsi", "op": "<", "val": 42},
+        {"ind": "ema_cross", "params": {"fast": 9, "slow": 21}, "op": "cross_down"},
+        {"ind": "atr_pct", "op": ">=", "val": 0.6}
+      ],
+      "side": "SELL",
+      "leverage": 10,
+      "tp_scheme": "ladder_default",
+      "sl_scheme": "atr_stop"
     }
   ],
   "schemes": {
@@ -31,3 +59,4 @@
     }
   }
 }
+
