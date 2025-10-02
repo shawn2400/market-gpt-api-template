@@ -1,0 +1,9 @@
+{
+  "futures": {
+    "margin_type_default": "ISOLATED",
+    "position_mode": "oneway",
+    "working_type": "MARK_PRICE",
+    "price_protect": false,
+    "recv_window": 45000
+  }
+}
