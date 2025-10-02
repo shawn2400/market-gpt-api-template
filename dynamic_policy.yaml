@@ -1,13 +1,13 @@
 breakeven:
   enable: true
   only_after_tp1: true
-  offset_bps: 8      # מתאים ל- TP_BE_OFFSET_BPS=8
+  offset_bps: 8
   guard_every_sec: 30
-  arm_pct: 1.6       # BE_ARM_PCT=1.6
+  arm_pct: 1.6
 
 trailing:
   enable: true
-  atr_mult: 1.5      # TRAIL_ATR_MULT=1.5
+  atr_mult: 1.5
   callback_min_pct: 0.1
   callback_max_pct: 4.9
   freeze_on_pullback: true
@@ -15,10 +15,11 @@ trailing:
 ladder:
   tp:
     enable: true
-    splits: [0.40, 0.35, 0.25]   # LADDER_TP_DEFAULT_SPLITS
-    targets_pct: [1.8, 3.2, 5.5] # LADDER_TP_DEFAULT_PCTS
+    splits: [0.40, 0.35, 0.25]
+    targets_pct: [1.8, 3.2, 5.5]
     place_native: true
   sl:
     enable: true
     atr_mult: 1.2
     place_native: true
+
