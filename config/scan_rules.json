@@ -1,0 +1,33 @@
+{
+  "filters": {
+    "exclude_perps": ["*BUSD*", "*DOWN*", "*UP*"],
+    "min_rr": 1.5,
+    "min_atr_pct": 0.6,
+    "min_volatility_pct": 1.0
+  },
+  "signals": [
+    {
+      "name": "momentum_breakout",
+      "when": [
+        {"ind": "rsi", "tf": "15m", "op": ">", "val": 58},
+        {"ind": "ema_fast_vs_slow", "tf": "15m", "op": "cross_up", "params": {"fast": 9, "slow": 21}}
+      ],
+      "side": "BUY",
+      "tp_scheme": "ladder_default",
+      "sl_scheme": "atr_stop",
+      "leverage": 10
+    }
+  ],
+  "schemes": {
+    "ladder_default": {
+      "splits": [0.40, 0.35, 0.25],
+      "targets_pct": [1.8, 3.2, 5.5],
+      "native": true
+    },
+    "atr_stop": {
+      "type": "atr",
+      "mult": 1.2,
+      "native": true
+    }
+  }
+}
