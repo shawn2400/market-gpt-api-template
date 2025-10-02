@@ -24,5 +24,19 @@
     "auto_ticket": true,
     "confirm_first": true,
     "ttl_sec": 900
+  },
+  {
+    "id": "scan_futures_all_1m_hot",
+    "source": "binance-futures",
+    "interval": "1m",
+    "rules_file": "config/scan_rules.json",
+    "symbols": "ALL_USDS_M",
+    "min_volume_usdt": 800000,
+    "limit": 120,
+    "notify": true,
+    "auto_ticket": true,
+    "confirm_first": true,
+    "ttl_sec": 600
   }
 ]
+
