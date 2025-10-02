@@ -1,0 +1,15 @@
+execution:
+  use_reduce_only: true
+  tif: GTC
+  post_only: false
+  brackets:
+    mode: native
+    place_on_approve: true
+    replace_on_trail: true
+  sl:
+    kind: STOP_MARKET
+    working_type: MARK_PRICE
+  leverage:
+    default: 10
+    caps:
+      BTCUSDT: 15
