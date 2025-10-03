@@ -7,7 +7,7 @@ from fnmatch import fnmatch
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, PlainTextResponse
 from fastapi.openapi.utils import get_openapi
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
@@ -38,18 +38,18 @@ except Exception:
     async def send_ops_digest_now(hours: Optional[int] = None) -> None: return None
     async def send_eod_report_now() -> None: return None
 
-# ---- InternalAuthMiddleware (fallback) ----
+# ---- InternalAuthMiddleware (optional) ----
 try:
     from app.middlewares import InternalAuthMiddleware
 except Exception:
     class InternalAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next): return await call_next(request)
 
-# ---- RateLimitMiddleware (חדש) ----
+# ---- RateLimitMiddleware (optional) ----
 try:
-    from app.rate_limit_mw import RateLimitMiddleware  # <<< הוספנו
+    from app.rate_limit_mw import RateLimitMiddleware
 except Exception:
-    class RateLimitMiddleware(BaseHTTPMiddleware):     # fallback no-op
+    class RateLimitMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next): return await call_next(request)
 
 # ---- ConfirmStore (fallback) ----
@@ -121,6 +121,19 @@ for d in ("static","logs","data"):
 APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
+# ---------- Safety net: always return a Response ----------
+@app.middleware("http")
+async def _ensure_response_mw(request: Request, call_next):
+    try:
+        resp = await call_next(request)
+        if resp is None:
+            logging.getLogger("algogpt").error("call_next returned None for %s", request.url.path)
+            return PlainTextResponse("Internal server error (no response)", status_code=500)
+        return resp
+    except Exception as exc:
+        logging.getLogger("algogpt").exception("Unhandled exception in middleware")
+        return JSONResponse({"detail": "internal_error", "message": str(exc)}, status_code=500)
+
 # ---------- Validation error => 422 ----------
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
@@ -161,10 +174,12 @@ app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE)
 
-app.add_middleware(InternalAuthMiddleware)
+# InternalAuthMiddleware כבוי כברירת מחדל — הדלקה רק אם באמת צריך
+if os.getenv("INTERNAL_AUTH_ENABLE","0").lower() in ("1","true","on"):
+    app.add_middleware(InternalAuthMiddleware)
 
-# ה-RateLimit לפני המטריקות כדי שגם 429 יימדדו נכון במטריקות השרת
-app.add_middleware(RateLimitMiddleware)  # <<< הוספנו
+# Rate limit (אם קיים)
+app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(MetricsMiddleware)
 app.mount("/metrics", make_asgi_app())
@@ -188,9 +203,7 @@ DEFAULT_PUBLIC_PATHS = {
     "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
     "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
     "/ui/dashboard", "/ops/ui", "/ops/ui/ticket",
-    # כדי למנוע חסימה על לינקי אישור מסלולי trade:
     "/trade/approve", "/trade/reject",
-    # חשיפת מטריקות JSON/labels/health לציבור אם נדרש:
     "/metrics-json", "/metrics/labels", "/metrics/health",
 }
 DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
@@ -215,7 +228,6 @@ INSTANCE_ID = (
 
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
-    # לא מחזירים 500 מהמיידלוור הזה; אם יש שגיאה, תבוא מהנתיב המקורי
     resp = await call_next(request)
     try:
         resp.headers["x-app-instance-id"] = INSTANCE_ID
@@ -227,8 +239,8 @@ async def add_server_identity_header(request: Request, call_next):
 # ---------- Secure global auth middleware ----------
 class SecureAuthMiddleware(BaseHTTPMiddleware):
     """
-    יציב: מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL,
-    תומך X-API-Key/Authorization/?token, לא מקריס את השרת.
+    מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL,
+    תומך X-API-Key/Authorization/?token, ולא מפיל את השרת.
     """
     def __init__(self, app, *, public_paths: set[str], public_prefixes: list[str]):
         super().__init__(app)
@@ -238,7 +250,7 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # 1) OPTIONS: לא מבצע אימות
+        # 1) OPTIONS: מעבר חופשי
         if request.method.upper() == "OPTIONS":
             return await call_next(request)
 
@@ -255,14 +267,13 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
             a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
             x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
             tok = extract_token(request, a_hdr, x_hdr)
-            # 5) בדיקה
             if not token_matches(tok):
                 return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
         except Exception:
             logging.getLogger("algogpt").exception("SecureAuthMiddleware: auth logic failed")
             return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_auth_failed"})
 
-        # 6) המשך – חשוב: לא לעטוף את call_next
+        # 5) המשך
         return await call_next(request)
 
 # הרשמת המידלוור החדש
@@ -300,13 +311,13 @@ else:
         "routes.debug_hmac",
         "routes.ops_approve",
         "routes.trade",
-        "routes.trade_approvals",  # 👈 חדש (אם קיים)
-        "routes.auto_trade",        # 👈 אופציונלי
+        "routes.trade_approvals",
+        "routes.auto_trade",
         "routes.ops_ui",
         "routes.ops_flags",
         "routes.position_ops",
         "routes.calibration",
-        "routes.ops_digest",        # 👈 חדש: digest ידני (אם קיים)
+        "routes.ops_digest",
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
@@ -345,7 +356,6 @@ def _mask(v: str) -> str:
 
 @app.get("/debug/env", include_in_schema=False)
 async def debug_env():
-    # הרחבתי כדי לכלול משתני RL
     return {
         "ok": True,
         "INSTANCE_ID": os.getenv("INSTANCE_ID", ""),
@@ -560,11 +570,20 @@ try:
 except Exception:
     start_expired_digest_job = None  # type: ignore
 
+_bg_tasks: Dict[str, asyncio.Task] = {}
+
 @app.on_event("startup")
 async def _startup_expired_digest_job():
     try:
         if start_expired_digest_job:
-            start_expired_digest_job()
+            maybe = start_expired_digest_job()  # may return Task/None/Coroutine
+            task = None
+            if asyncio.iscoroutine(maybe):
+                task = asyncio.create_task(maybe, name="expired_digest_job")
+            elif isinstance(maybe, asyncio.Task):
+                task = maybe
+            if task:
+                _bg_tasks["expired_digest_job"] = task
             logging.getLogger("algogpt.approvals.digest_job").info({"event":"digest_job.start_ok"})
     except Exception as e:
         logging.getLogger("algogpt.approvals.digest_job").warning({"event":"digest_job.start_failed","err":str(e)})
@@ -572,14 +591,30 @@ async def _startup_expired_digest_job():
 @app.on_event("startup")
 async def _start_trade_manager_loop():
     if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
-        asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC))
+        t = asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC), name="trade_manager")
+        _bg_tasks["trade_manager"] = t
         logger.info({"event":"trade_manager_loop_started","interval_sec":TRADE_MANAGER_INTERVAL_SEC})
 
+@app.on_event("shutdown")
+async def _graceful_shutdown():
+    # cancel all background tasks and wait
+    for name, t in list(_bg_tasks.items()):
+        if t and not t.done():
+            try: t.cancel()
+            except Exception: pass
+    for name, t in list(_bg_tasks.items()):
+        if not t: continue
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logging.getLogger("algogpt").exception("background task %s crashed on shutdown", name)
+
+# ---------- run ----------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
-
 
 
 
