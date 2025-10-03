@@ -67,13 +67,14 @@ def _build_kwargs_from_url(url: str) -> dict:
         socket_timeout=SOCKET_TIMEOUT,
         client_name=CLIENT_NAME,
         max_connections=POOL_MAX_CONNECTIONS,
+        socket_keepalive=True,
     )
     if url.startswith("rediss://"):
         if SSL_NO_VERIFY:
             # למקרי בדיקה / סביבות ללא תעודה—לא מומלץ בפרודקשן
             kw.update(ssl=True, ssl_cert_reqs=None)
         else:
-            # תעודות תקינות (ברירת מחדל)
+            # תעודות תקינות (ברירת מחדל ב-Render)
             kw.update(ssl=True)
     return kw
 
