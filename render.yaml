@@ -77,6 +77,10 @@ services:
       - key: SCAN_INTERVALS
         value: 5m,15m,1h,4h
 
+      # --- Indicator context (לא סריקה תכופה) ---
+      - key: INDICATOR_INTERVALS
+        value: 15m,1h,4h,1d
+
       # --- Allowlist / Watchlist ---
       - key: ALLOWLIST_MODE
         value: off
@@ -84,10 +88,6 @@ services:
         value: config/symbols_allowlist.json
       - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT
-
-      # --- Indicator context (לא סריקה תכופה) ---
-      - key: INDICATOR_INTERVALS
-        value: 15m,1h,4h,1d
 
       # --- Scanner caps & RL (Render) ---
       - key: SCAN_MAX_SYMBOLS
@@ -228,6 +228,23 @@ services:
         value: https://algogpt-docker.onrender.com/alerts/ingest
       - key: ALERTS_UPDATE_URL
         value: https://algogpt-docker.onrender.com/alerts/trades/update
+
+      # --- Digest Job (חדשים) ---
+      - key: OPS_DIGEST_ENABLE
+        value: "1"
+      - key: OPS_DIGEST_INTERVAL_HOURS
+        value: "3"
+      - key: OPS_DIGEST_BACKOFF_ON_ERROR_SEC
+        value: "15"
+      - key: OPS_DIGEST_RUN_IMMEDIATE
+        value: "0"
+      - key: OPS_DIGEST_LOOKBACK_HOURS
+        value: "3"
+
+      # --- OpenAPI (כדי לראות ops-digest ב-/docs אם רוצים) ---
+      - key: OPENAPI_INCLUDE_TAGS
+        value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
+
 
 
 
