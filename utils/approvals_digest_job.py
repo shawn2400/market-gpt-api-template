@@ -1,17 +1,16 @@
 # utils/approvals_digest_job.py
 from __future__ import annotations
-
 """
 Expired-Approvals Digest Job
 
 - מריץ באופן תקופתי שליחת דוח דייג'סט לאישורים שפג תוקפם.
 - יציב, אדמפוטנטי, ונסגר נקי ב־shutdown (אין "Task was destroyed but it is pending!").
-- תומך בתצורה דרך משתני סביבה:
+- תצורה דרך משתני סביבה (עם ברירות מחדל סבירות):
     * OPS_DIGEST_ENABLE=1|0                 (ברירת מחדל: 1)
-    * OPS_DIGEST_INTERVAL_HOURS=int/float   (ברירת מחדל: 3)
-    * OPS_DIGEST_BACKOFF_ON_ERROR_SEC=int   (ברירת מחדל: 15)
-    * OPS_DIGEST_RUN_IMMEDIATE=1|0          (ברירת מחדל: 0) — אם 1, מריץ דוח מיד עם ה-start ואז נכנס למחזוריות.
-    * OPS_DIGEST_LOOKBACK_HOURS=int/float   (ברירת מחדל: הערך של OPS_DIGEST_INTERVAL_HOURS)
+    * OPS_DIGEST_INTERVAL_HOURS=float       (ברירת מחדל: 3)
+    * OPS_DIGEST_BACKOFF_ON_ERROR_SEC=float (ברירת מחדל: 15)
+    * OPS_DIGEST_RUN_IMMEDIATE=1|0          (ברירת מחדל: 0) — להריץ מיד בהפעלה
+    * OPS_DIGEST_LOOKBACK_HOURS=float       (ברירת מחדל: =OPS_DIGEST_INTERVAL_HOURS)
 """
 
 import os
@@ -37,9 +36,8 @@ except Exception:
         )
         await asyncio.sleep(0)  # שמירה על ממשק אסינכרוני
 
-
 # --- תצורה מהסביבה ---
-def _as_bool(v: str, default: bool = False) -> bool:
+def _as_bool(v: Optional[str], default: bool = False) -> bool:
     if v is None:
         return default
     return str(v).strip().lower() in ("1", "true", "yes", "on")
@@ -151,8 +149,6 @@ def start_expired_digest_job() -> Optional[asyncio.Task]:
     """
     מפעיל את משימת הדייג'סט אם OPS_DIGEST_ENABLE=1.
     אדמפוטנטי: אם המשימה כבר רצה — מחזיר את הקיימת.
-
-    החזרה: האובייקט Task (אם הופעלה) או None אם לא הופעלה.
     """
     global _task, _stop_event
 
@@ -200,16 +196,12 @@ async def stop_expired_digest_job() -> bool:
 
 
 def is_running() -> bool:
-    """
-    האם משימת הדייג'סט פעילה?
-    """
+    """האם משימת הדייג'סט פעילה?"""
     return bool(_task and not _task.done())
 
 
 def get_task() -> Optional[asyncio.Task]:
-    """
-    קבלת ה-Task (אם קיים).
-    """
+    """קבלת ה-Task (אם קיים)."""
     return _task
 
 
