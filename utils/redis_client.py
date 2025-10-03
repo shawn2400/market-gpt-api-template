@@ -1,6 +1,6 @@
 # utils/redis_client.py
 from __future__ import annotations
-import os, logging, urllib.parse
+import os, logging, urllib.parse, time
 from typing import Optional
 
 logger = logging.getLogger("algogpt.redis")
@@ -9,12 +9,20 @@ logger = logging.getLogger("algogpt.redis")
 # Env / defaults
 # -------------------------------------------------------------------------
 REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
-CONNECT_TIMEOUT = float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0"))   # קצר כדי לא לחסום את האפליקציה
-SOCKET_TIMEOUT  = float(os.getenv("REDIS_SOCKET_TIMEOUT",  "2.0"))
+
+# שמרתי טיימאאוטים טיפה נדיבים כדי למנוע false timeouts בענן
+CONNECT_TIMEOUT = float(os.getenv("REDIS_CONNECT_TIMEOUT", "5.0"))
+SOCKET_TIMEOUT  = float(os.getenv("REDIS_SOCKET_TIMEOUT",  "5.0"))
+
 CLIENT_NAME     = os.getenv("REDIS_CLIENT_NAME", "algogpt")
 SSL_NO_VERIFY   = str(os.getenv("REDIS_SSL_NO_VERIFY", "0")).lower() in {"1","true","on","yes"}
 
-# שמות מודולים: redis/valkey. שני ה-clients זהים API-wise. ננסה redis תחילה ואז valkey.
+# pool / retries בסיסיים (לא חובה, אבל עוזר בעננים)
+POOL_MAX_CONNECTIONS = int(os.getenv("REDIS_POOL_MAX_CONNECTIONS", "30"))  # free render מוגבל ~50
+RETRY_PINGS = int(os.getenv("REDIS_PING_RETRIES", "2"))
+RETRY_BACKOFF_SEC = float(os.getenv("REDIS_PING_RETRY_BACKOFF_SEC", "0.3"))
+
+# ננסה ראשית redis, ואם לא קיים—valkey (API כמעט זהה)
 _redis_mod = None  # type: ignore
 
 def _import_client():
@@ -49,20 +57,38 @@ def _mask_url(u: str) -> str:
 redis_client: Optional["object"] = None  # type: ignore
 
 def _build_kwargs_from_url(url: str) -> dict:
-    # Redis.from_url יקבל את רוב הפרטים מה-URL עצמו.
-    # כאן רק ערכי ברירת מחדל/מוספים כלליים.
+    """
+    Redis.from_url יקבל את רוב ההגדרות מה-URL (כולל rediss://).
+    כאן מוסיפים ברירות מחדל ו-toggles.
+    """
     kw = dict(
         decode_responses=True,
         socket_connect_timeout=CONNECT_TIMEOUT,
         socket_timeout=SOCKET_TIMEOUT,
         client_name=CLIENT_NAME,
+        max_connections=POOL_MAX_CONNECTIONS,
     )
     if url.startswith("rediss://"):
-        # בדרך כלל יש תעודה תקינה (Render), אז אין צורך לגעת.
-        # אבל אם תרצה לבטל אימות תעודה (לא מומלץ) – REDIS_SSL_NO_VERIFY=1
         if SSL_NO_VERIFY:
+            # למקרי בדיקה / סביבות ללא תעודה—לא מומלץ בפרודקשן
             kw.update(ssl=True, ssl_cert_reqs=None)
+        else:
+            # תעודות תקינות (ברירת מחדל)
+            kw.update(ssl=True)
     return kw
+
+def _ping_with_retries(cli) -> None:
+    last_err = None
+    for i in range(RETRY_PINGS + 1):
+        try:
+            cli.ping()  # type: ignore
+            return
+        except Exception as e:
+            last_err = e
+            if i < RETRY_PINGS:
+                time.sleep(RETRY_BACKOFF_SEC)
+    if last_err:
+        raise last_err
 
 if REDIS_URL:
     _import_client()
@@ -74,7 +100,7 @@ if REDIS_URL:
             kwargs = _build_kwargs_from_url(REDIS_URL)
             redis_client = _redis_mod.Redis.from_url(REDIS_URL, **kwargs)  # type: ignore
             try:
-                redis_client.ping()  # type: ignore
+                _ping_with_retries(redis_client)
                 logger.info({"event": "redis.connected", "url": _mask_url(REDIS_URL)})
             except Exception as e:
                 logger.warning({"event": "redis.ping_failed", "error": str(e)})
