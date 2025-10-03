@@ -43,7 +43,7 @@ services:
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
 
-      # --- Redis client fine-tuning (מומלץ) ---
+      # --- Redis client fine-tuning ---
       - key: REDIS_CONNECT_TIMEOUT
         value: "5.0"
       - key: REDIS_SOCKET_TIMEOUT
@@ -54,6 +54,10 @@ services:
         value: "2"
       - key: REDIS_PING_RETRY_BACKOFF_SEC
         value: "0.3"
+      - key: REDIS_CLIENT_NAME
+        value: algogpt
+      - key: REDIS_SSL_NO_VERIFY
+        value: "0"
 
       # --- Public/Readonly ---
       - key: ENABLE_READONLY_HTTP
@@ -68,6 +72,8 @@ services:
         value: "0"
       - key: RATE_LIMIT_BACKEND
         value: redis
+      - key: USE_REDIS_IDEM
+        value: "1"
 
       # --- Market / Exchange defaults ---
       - key: DEFAULT_MARKET
@@ -109,13 +115,13 @@ services:
 
       # --- Scanner caps & RL (Render) ---
       - key: SCAN_MAX_SYMBOLS
-        value: "120"
+        value: "150"
       - key: SCAN_MAX_LIMIT
         value: "0"
       - key: SCAN_CONCURRENCY
         value: "4"
       - key: TOP_SYMBOLS
-        value: "100"
+        value: "150"
       - key: SCAN_RL_LIMIT
         value: "120"
       - key: SCAN_RL_WINDOW
@@ -217,17 +223,25 @@ services:
       - key: AI_SCHED_INTERVAL_SEC
         value: "300"
 
-      # --- Gates & Quality ---
+      # --- Gates & Quality (מותאם ל-4–8 טריידים/יום) ---
       - key: FEAT_QUALITY_ENFORCE
         value: "1"
       - key: MIN_QUALITY_SCORE
-        value: "5"
+        value: "4"
       - key: APPROVAL_RR_MIN
-        value: "1.25"
+        value: "1.15"
       - key: MIN_TP_SL_DIFF_PCT
-        value: "3.0"
+        value: "2.0"
       - key: SUCCESS_WARN_PCT
         value: "60"
+      - key: FEAT_TF_ALIGN
+        value: "1"
+      - key: FEAT_DEBOUNCE_LIMIT
+        value: "1"
+      - key: DYN_ENTRY_MAX_BPS
+        value: "90"
+      - key: ENTRY_BAND_BPS
+        value: "6"
 
       # --- Alerts (public URLs) ---
       - key: ALERTS_ACTIVE_URL
@@ -251,9 +265,10 @@ services:
       - key: OPS_DIGEST_LOOKBACK_HOURS
         value: "3"
 
-      # --- OpenAPI include (ללא זבל מיותר) ---
+      # --- OpenAPI include (בלי זבל) ---
       - key: OPENAPI_INCLUDE_TAGS
         value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
+
 
 
 
