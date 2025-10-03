@@ -114,6 +114,7 @@ logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL","INFO")))
 
 # base dirs
+from pathlib import Path
 for d in ("static","logs","data"):
     try: Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
@@ -135,11 +136,17 @@ async def _ensure_response_mw(request: Request, call_next):
         return JSONResponse({"detail": "internal_error", "message": str(exc)}, status_code=500)
 
 # ---------- Validation error => 422 ----------
+from fastapi.exceptions import RequestValidationError
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
+
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 # ---------- OpenAPI filtering ----------
+from fastapi.openapi.utils import get_openapi
+from fnmatch import fnmatch
+
 def custom_openapi():
     if getattr(app, "openapi_schema", None): return app.openapi_schema
     schema = get_openapi(title=app.title, version=APP_VERSION, description=app.description, routes=app.routes)
@@ -161,6 +168,12 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # ---------- Middlewares ----------
+from starlette.middleware.gzip import GZipMiddleware
+from utils.response_limits import ResponseSizeLimiter
+from utils.metrics_middleware import MetricsMiddleware
+from prometheus_client import make_asgi_app
+from fastapi.staticfiles import StaticFiles
+
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES","5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -170,6 +183,7 @@ CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
 
+from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE)
@@ -226,9 +240,17 @@ INSTANCE_ID = (
     or "unknown"
 )
 
+# ←←← תיקון קריטי: המידלוור הזה תמיד מחזיר Response גם אם call_next נכשל
 @app.middleware("http")
 async def add_server_identity_header(request: Request, call_next):
-    resp = await call_next(request)
+    try:
+        resp = await call_next(request)
+        if resp is None:
+            return PlainTextResponse("Internal server error (no response)", status_code=500)
+    except Exception as e:
+        logging.getLogger("algogpt").exception("add_server_identity_header: call_next failed")
+        return JSONResponse({"detail": "internal_error", "where": "server_id_mw", "message": str(e)}, status_code=500)
+
     try:
         resp.headers["x-app-instance-id"] = INSTANCE_ID
         resp.headers["rndr-id"] = INSTANCE_ID
@@ -239,8 +261,8 @@ async def add_server_identity_header(request: Request, call_next):
 # ---------- Secure global auth middleware ----------
 class SecureAuthMiddleware(BaseHTTPMiddleware):
     """
-    מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL,
-    תומך X-API-Key/Authorization/?token, ולא מפיל את השרת.
+    מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL, תומך X-API-Key/Authorization/?token,
+    ולא מפיל את השרת.
     """
     def __init__(self, app, *, public_paths: set[str], public_prefixes: list[str]):
         super().__init__(app)
@@ -276,7 +298,7 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
         # 5) המשך
         return await call_next(request)
 
-# הרשמת המידלוור החדש
+# הרשמת המידלוור
 app.add_middleware(
     SecureAuthMiddleware,
     public_paths=EFFECTIVE_PUBLIC_PATHS,
@@ -615,6 +637,7 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
