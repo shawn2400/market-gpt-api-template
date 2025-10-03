@@ -174,7 +174,7 @@ app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE)
 
-# InternalAuthMiddleware כבוי כברירת מחדל — הדלקה רק אם באמת צריך
+# InternalAuthMiddleware כבוי כברירת מחדל — הדלקה רק אם צריך
 if os.getenv("INTERNAL_AUTH_ENABLE","0").lower() in ("1","true","on"):
     app.add_middleware(InternalAuthMiddleware)
 
@@ -615,6 +615,7 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
