@@ -114,7 +114,6 @@ logger = setup_json_logging()
 logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL","INFO")))
 
 # base dirs
-from pathlib import Path
 for d in ("static","logs","data"):
     try: Path(d).mkdir(parents=True, exist_ok=True)
     except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
@@ -122,31 +121,12 @@ for d in ("static","logs","data"):
 APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
 app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
 
-# ---------- Safety net: always return a Response ----------
-@app.middleware("http")
-async def _ensure_response_mw(request: Request, call_next):
-    try:
-        resp = await call_next(request)
-        if resp is None:
-            logging.getLogger("algogpt").error("call_next returned None for %s", request.url.path)
-            return PlainTextResponse("Internal server error (no response)", status_code=500)
-        return resp
-    except Exception as exc:
-        logging.getLogger("algogpt").exception("Unhandled exception in middleware")
-        return JSONResponse({"detail": "internal_error", "message": str(exc)}, status_code=500)
-
 # ---------- Validation error => 422 ----------
-from fastapi.exceptions import RequestValidationError
-from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 # ---------- OpenAPI filtering ----------
-from fastapi.openapi.utils import get_openapi
-from fnmatch import fnmatch
-
 def custom_openapi():
     if getattr(app, "openapi_schema", None): return app.openapi_schema
     schema = get_openapi(title=app.title, version=APP_VERSION, description=app.description, routes=app.routes)
@@ -167,13 +147,7 @@ def custom_openapi():
     schema["paths"] = new_paths; app.openapi_schema = schema; return app.openapi_schema
 app.openapi = custom_openapi
 
-# ---------- Middlewares ----------
-from starlette.middleware.gzip import GZipMiddleware
-from utils.response_limits import ResponseSizeLimiter
-from utils.metrics_middleware import MetricsMiddleware
-from prometheus_client import make_asgi_app
-from fastapi.staticfiles import StaticFiles
-
+# ---------- Middlewares (class-based) ----------
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES","5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -183,7 +157,6 @@ CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
 CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
 CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
 
-from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(CORSMiddleware,
     allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE)
@@ -240,25 +213,7 @@ INSTANCE_ID = (
     or "unknown"
 )
 
-# ←←← תיקון קריטי: המידלוור הזה תמיד מחזיר Response גם אם call_next נכשל
-@app.middleware("http")
-async def add_server_identity_header(request: Request, call_next):
-    try:
-        resp = await call_next(request)
-        if resp is None:
-            return PlainTextResponse("Internal server error (no response)", status_code=500)
-    except Exception as e:
-        logging.getLogger("algogpt").exception("add_server_identity_header: call_next failed")
-        return JSONResponse({"detail": "internal_error", "where": "server_id_mw", "message": str(e)}, status_code=500)
-
-    try:
-        resp.headers["x-app-instance-id"] = INSTANCE_ID
-        resp.headers["rndr-id"] = INSTANCE_ID
-    except Exception:
-        pass
-    return resp
-
-# ---------- Secure global auth middleware ----------
+# ---------- Secure global auth middleware (class-based) ----------
 class SecureAuthMiddleware(BaseHTTPMiddleware):
     """
     מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL, תומך X-API-Key/Authorization/?token,
@@ -298,12 +253,35 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
         # 5) המשך
         return await call_next(request)
 
-# הרשמת המידלוור
+# הרשמת המידלוור המאמת
 app.add_middleware(
     SecureAuthMiddleware,
     public_paths=EFFECTIVE_PUBLIC_PATHS,
     public_prefixes=EFFECTIVE_PUBLIC_PREFIXES,
 )
+
+# ---------- ONE safe middleware: always returns a Response + adds headers ----------
+@app.middleware("http")
+async def _final_safety_and_headers(request: Request, call_next):
+    """
+    שכבה חיצונית סופית:
+    - תמיד מחזירה Response (גם אם call_next זרק / החזיר None)
+    - מוסיפה כותרות זיהוי מבלי להפיל את הבקשה
+    """
+    try:
+        resp = await call_next(request)
+        if resp is None:
+            resp = PlainTextResponse("Internal server error (no response)", status_code=500)
+    except Exception as exc:
+        logging.getLogger("algogpt").exception("final_mw: call_next failed")
+        resp = JSONResponse({"detail": "internal_error", "where": "final_mw", "message": str(exc)}, status_code=500)
+
+    try:
+        resp.headers["x-app-instance-id"] = INSTANCE_ID
+        resp.headers["rndr-id"] = INSTANCE_ID
+    except Exception:
+        pass
+    return resp
 
 # ---------- include routers ----------
 def _try_include(module_path: str) -> bool:
@@ -498,7 +476,7 @@ async def _debug_routes():
 async def ops_digest_now(hours: Optional[int] = None):
     """
     תואם לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
-    עוצר את TypeError שנראה בלוגים.
+    מונע TypeError גם בגרסאות ישנות.
     """
     ok, err = True, None
     try:
@@ -598,7 +576,7 @@ except Exception:
         _gc_needs_interval = False
 
 APPROVAL_GC_ENABLE = os.getenv("APPROVAL_GC_ENABLE","1").lower() in ("1","true","yes","on")
-APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SE"C,"15"))
+APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SEC","15"))
 
 @app.on_event("startup")
 async def _startup_approvals_gc():
@@ -663,6 +641,7 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
