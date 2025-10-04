@@ -147,7 +147,7 @@ def custom_openapi():
     schema["paths"] = new_paths; app.openapi_schema = schema; return app.openapi_schema
 app.openapi = custom_openapi
 
-# ---------- Middlewares (class-based) ----------
+# ---------- Class middlewares ----------
 app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES","5242880")))
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -213,7 +213,7 @@ INSTANCE_ID = (
     or "unknown"
 )
 
-# ---------- Secure global auth middleware (class-based) ----------
+# ---------- Secure global auth middleware ----------
 class SecureAuthMiddleware(BaseHTTPMiddleware):
     """
     מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL, תומך X-API-Key/Authorization/?token,
@@ -227,19 +227,13 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # 1) OPTIONS: מעבר חופשי
         if request.method.upper() == "OPTIONS":
             return await call_next(request)
-
-        # 2) נתיבים/קידומות ציבוריים
         if path in self.public_paths or any(path.startswith(p) for p in self.public_prefixes):
             return await call_next(request)
-
-        # 3) ALLOW_ALL
         if allow_all():
             return await call_next(request)
 
-        # 4) שליפת טוקן (X-API-Key / Authorization / ?token/?apikey)
         try:
             a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
             x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
@@ -250,7 +244,6 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
             logging.getLogger("algogpt").exception("SecureAuthMiddleware: auth logic failed")
             return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_auth_failed"})
 
-        # 5) המשך
         return await call_next(request)
 
 # הרשמת המידלוור המאמת
@@ -283,7 +276,44 @@ async def _final_safety_and_headers(request: Request, call_next):
         pass
     return resp
 
-# ---------- include routers ----------
+# ---------- core routes defined BEFORE including routers (so we take precedence) ----------
+@app.get("/ops/digest/now", include_in_schema=False)
+async def ops_digest_now(hours: Optional[int] = None):
+    """
+    תואם לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
+    מונע TypeError גם בגרסאות ישנות.
+    """
+    ok, err = True, None
+    try:
+        import inspect
+        params = {}
+        try:
+            sig = inspect.signature(send_ops_digest_now)  # type: ignore
+            if "hours" in sig.parameters:
+                params["hours"] = hours
+        except Exception:
+            params = {}
+        if params:
+            await send_ops_digest_now(**params)  # type: ignore
+        else:
+            await send_ops_digest_now()  # type: ignore
+    except TypeError:
+        try:
+            await send_ops_digest_now()  # type: ignore
+        except Exception as e:
+            ok, err = False, str(e)
+    except Exception as e:
+        ok, err = False, str(e)
+
+    effective_hours = hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))
+    return {"ok": ok, "sent": ok, "hours": effective_hours, "error": err}
+
+@app.get("/ops/eod/now", include_in_schema=False)
+async def ops_eod_now():
+    await send_eod_report_now()
+    return {"ok":True,"sent":True}
+
+# ---------- include routers (AFTER our core overrides) ----------
 def _try_include(module_path: str) -> bool:
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -362,11 +392,11 @@ async def debug_env():
         "ALERTS_INGEST_HMAC_SECRET": _mask(os.getenv("ALERTS_INGEST_HMAC_SECRET","")),
         "ALERTS_INGEST_HMAC_KEY_IS_HEX": os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX",""),
         "WEBHOOK_HMAC_SECRET": _mask(os.getenv("WEBHOOK_HMAC_SECRET","")),
-        "RATE_LIMIT_ENABLE": os.getenv("RATE_LIMIT_ENABLE",""),
-        "RATE_LIMIT_BACKEND": os.getenv("RATE_LIMIT_BACKEND",""),
-        "RL_FAIL_OPEN": os.getenv("RL_FAIL_OPEN",""),
-        "SCAN_RL_LIMIT": os.getenv("SCAN_RL_LIMIT",""),
-        "SCAN_RL_WINDOW": os.getenv("SCAN_RL_WINDOW",""),
+        "RATE_LIMIT_ENABLE": os.getenv("RATE_LIMIT_ENABLE","")),
+        "RATE_LIMIT_BACKEND": os.getenv("RATE_LIMIT_BACKEND","")),
+        "RL_FAIL_OPEN": os.getenv("RL_FAIL_OPEN","")),
+        "SCAN_RL_LIMIT": os.getenv("SCAN_RL_LIMIT","")),
+        "SCAN_RL_WINDOW": os.getenv("SCAN_RL_WINDOW","")),
     }
 
 @app.get("/status/ping")
@@ -472,50 +502,7 @@ async def _debug_routes():
     paths = sorted({getattr(r, "path", None) for r in app.router.routes if getattr(r, "path", None)})
     return {"paths": paths}
 
-@app.get("/ops/digest/now", include_in_schema=False)
-async def ops_digest_now(hours: Optional[int] = None):
-    """
-    תואם לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
-    מונע TypeError גם בגרסאות ישנות.
-    """
-    ok, err = True, None
-    try:
-        import inspect
-        params = {}
-        try:
-            sig = inspect.signature(send_ops_digest_now)  # type: ignore
-            if "hours" in sig.parameters:
-                params["hours"] = hours
-        except Exception:
-            params = {}
-        if params:
-            await send_ops_digest_now(**params)  # type: ignore
-        else:
-            await send_ops_digest_now()  # type: ignore
-    except TypeError:
-        try:
-            await send_ops_digest_now()  # type: ignore
-        except Exception as e:
-            ok, err = False, str(e)
-    except Exception as e:
-        ok, err = False, str(e)
-
-    effective_hours = hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))
-    return {"ok": ok, "sent": ok, "hours": effective_hours, "error": err}
-
-@app.get("/ops/eod/now", include_in_schema=False)
-async def ops_eod_now():
-    await send_eod_report_now()
-    return {"ok":True,"sent":True}
-
-@app.get("/ui/dashboard", include_in_schema=False)
-async def ui_dashboard():
-    p = Path("static/dashboard/index.html")
-    if p.exists():
-        return FileResponse(str(p), media_type="text/html; charset=utf-8")
-    html = "<!doctype html><meta charset='utf-8'><body><h3 style='font-family:sans-serif'>Dashboard not found</h3><p>Put your file at <code>static/dashboard/index.html</code>.</p></body>"
-    return HTMLResponse(html)
-
+# ---------- startup/shutdown ----------
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
@@ -623,7 +610,6 @@ async def _start_trade_manager_loop():
 
 @app.on_event("shutdown")
 async def _graceful_shutdown():
-    # cancel all background tasks and wait
     for name, t in list(_bg_tasks.items()):
         if t and not t.done():
             try: t.cancel()
@@ -641,10 +627,6 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
-
-
-
 
 
 
