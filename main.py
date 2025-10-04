@@ -215,10 +215,6 @@ INSTANCE_ID = (
 
 # ---------- Secure global auth middleware ----------
 class SecureAuthMiddleware(BaseHTTPMiddleware):
-    """
-    מכבד public paths/prefixes, ALLOW_ALL/AUTH_ALLOW_ALL, תומך X-API-Key/Authorization/?token,
-    ולא מפיל את השרת.
-    """
     def __init__(self, app, *, public_paths: set[str], public_prefixes: list[str]):
         super().__init__(app)
         self.public_paths = set(public_paths)
@@ -226,14 +222,12 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-
         if request.method.upper() == "OPTIONS":
             return await call_next(request)
         if path in self.public_paths or any(path.startswith(p) for p in self.public_prefixes):
             return await call_next(request)
         if allow_all():
             return await call_next(request)
-
         try:
             a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
             x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
@@ -243,10 +237,8 @@ class SecureAuthMiddleware(BaseHTTPMiddleware):
         except Exception:
             logging.getLogger("algogpt").exception("SecureAuthMiddleware: auth logic failed")
             return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_auth_failed"})
-
         return await call_next(request)
 
-# הרשמת המידלוור המאמת
 app.add_middleware(
     SecureAuthMiddleware,
     public_paths=EFFECTIVE_PUBLIC_PATHS,
@@ -256,11 +248,6 @@ app.add_middleware(
 # ---------- ONE safe middleware: always returns a Response + adds headers ----------
 @app.middleware("http")
 async def _final_safety_and_headers(request: Request, call_next):
-    """
-    שכבה חיצונית סופית:
-    - תמיד מחזירה Response (גם אם call_next זרק / החזיר None)
-    - מוסיפה כותרות זיהוי מבלי להפיל את הבקשה
-    """
     try:
         resp = await call_next(request)
         if resp is None:
@@ -268,7 +255,6 @@ async def _final_safety_and_headers(request: Request, call_next):
     except Exception as exc:
         logging.getLogger("algogpt").exception("final_mw: call_next failed")
         resp = JSONResponse({"detail": "internal_error", "where": "final_mw", "message": str(exc)}, status_code=500)
-
     try:
         resp.headers["x-app-instance-id"] = INSTANCE_ID
         resp.headers["rndr-id"] = INSTANCE_ID
@@ -276,12 +262,11 @@ async def _final_safety_and_headers(request: Request, call_next):
         pass
     return resp
 
-# ---------- core routes defined BEFORE including routers (so we take precedence) ----------
+# ---------- our safe digest/eod routes (registered BEFORE routers) ----------
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
     """
-    תואם לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
-    מונע TypeError גם בגרסאות ישנות.
+    תואם-לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
     """
     ok, err = True, None
     try:
@@ -304,7 +289,6 @@ async def ops_digest_now(hours: Optional[int] = None):
             ok, err = False, str(e)
     except Exception as e:
         ok, err = False, str(e)
-
     effective_hours = hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))
     return {"ok": ok, "sent": ok, "hours": effective_hours, "error": err}
 
@@ -313,7 +297,7 @@ async def ops_eod_now():
     await send_eod_report_now()
     return {"ok":True,"sent":True}
 
-# ---------- include routers (AFTER our core overrides) ----------
+# ---------- include routers (WITHOUT routes.ops_digest to avoid conflicts) ----------
 def _try_include(module_path: str) -> bool:
     try:
         mod = __import__(module_path, fromlist=["router"])
@@ -331,6 +315,8 @@ _routes_only = [m.strip() for m in os.getenv("ROUTES_ONLY","").split(",") if m.s
 
 if _routes_only:
     for module_path in _routes_only:
+        if module_path == "routes.ops_digest":
+            continue
         _try_include(module_path)
 else:
     for _mod in (
@@ -347,11 +333,13 @@ else:
         "routes.ops_flags",
         "routes.position_ops",
         "routes.calibration",
-        "routes.ops_digest",
+        # "routes.ops_digest",  # ← בכוונה לא לכלול כדי למנוע התנגשות עם /ops/digest/now
     ):
         _try_include(_mod)
     for m in pkgutil.iter_modules(["routes"]):
         module_path = f"routes.{m.name}"
+        if module_path == "routes.ops_digest":
+            continue
         _try_include(module_path)
         try:
             for r in app.router.routes:
@@ -392,11 +380,11 @@ async def debug_env():
         "ALERTS_INGEST_HMAC_SECRET": _mask(os.getenv("ALERTS_INGEST_HMAC_SECRET","")),
         "ALERTS_INGEST_HMAC_KEY_IS_HEX": os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX",""),
         "WEBHOOK_HMAC_SECRET": _mask(os.getenv("WEBHOOK_HMAC_SECRET","")),
-        "RATE_LIMIT_ENABLE": os.getenv("RATE_LIMIT_ENABLE","")),
-        "RATE_LIMIT_BACKEND": os.getenv("RATE_LIMIT_BACKEND","")),
-        "RL_FAIL_OPEN": os.getenv("RL_FAIL_OPEN","")),
-        "SCAN_RL_LIMIT": os.getenv("SCAN_RL_LIMIT","")),
-        "SCAN_RL_WINDOW": os.getenv("SCAN_RL_WINDOW","")),
+        "RATE_LIMIT_ENABLE": os.getenv("RATE_LIMIT_ENABLE",""),
+        "RATE_LIMIT_BACKEND": os.getenv("RATE_LIMIT_BACKEND",""),
+        "RL_FAIL_OPEN": os.getenv("RL_FAIL_OPEN",""),
+        "SCAN_RL_LIMIT": os.getenv("SCAN_RL_LIMIT",""),
+        "SCAN_RL_WINDOW": os.getenv("SCAN_RL_WINDOW",""),
     }
 
 @app.get("/status/ping")
@@ -627,7 +615,6 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
 
 
 
