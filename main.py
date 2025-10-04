@@ -598,7 +598,7 @@ except Exception:
         _gc_needs_interval = False
 
 APPROVAL_GC_ENABLE = os.getenv("APPROVAL_GC_ENABLE","1").lower() in ("1","true","yes","on")
-APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SEC","15"))
+APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SE"C,"15"))
 
 @app.on_event("startup")
 async def _startup_approvals_gc():
@@ -663,7 +663,6 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
 
 
 
