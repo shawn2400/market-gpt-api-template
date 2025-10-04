@@ -7,7 +7,14 @@ import os, json, httpx
 router = APIRouter(tags=["ops-ui"])
 
 API_BASE = (os.getenv("PUBLIC_HOST", "") or "").rstrip("/")
-API_KEY  = os.getenv("API_KEY") or os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or ""
+API_KEY  = (
+    os.getenv("API_KEY")
+    or os.getenv("API_BEARER_TOKEN")
+    or os.getenv("API_TOKEN")
+    or ""
+)
+
+DEFAULT_QTY_STEP = os.getenv("DEFAULT_QTY_STEP", "0.001")
 
 HTML_PAGE = """<!doctype html>
 <meta charset="utf-8">
@@ -33,6 +40,8 @@ HTML_PAGE = """<!doctype html>
   button.alt{background:#6b6ee0}
   .out{white-space:pre-wrap;background:#0a1028;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px;margin-top:14px}
   small.hint{color:var(--muted)}
+  small.hint.warn{color:#ff7b63;font-weight:700}
+  .inline-btn{margin-top:6px; display:inline-block; padding:6px 10px; border-radius:10px; background:#24305a; color:#cfe1ff; cursor:pointer; font-size:12px}
 </style>
 <body>
   <div class="wrap">
@@ -59,6 +68,7 @@ HTML_PAGE = """<!doctype html>
       <div>
         <label>Qty</label>
         <input id="qty" type="number" step="0.0001" placeholder="e.g. 0.01">
+        <div id="use_suggested_qty" class="inline-btn" style="display:none" title="הדבק כמות מוצעת">Use suggested qty</div>
       </div>
       <div>
         <label>Leverage</label>
@@ -78,6 +88,7 @@ HTML_PAGE = """<!doctype html>
       <div>
         <label>Budget (optional)</label>
         <input id="budget" type="number" step="0.01" placeholder="0 = ignore">
+        <small id="budget_hint" class="hint"></small>
       </div>
     </div>
   </fieldset>
@@ -123,6 +134,181 @@ HTML_PAGE = """<!doctype html>
   </div></div>
 
 <script>
+/* ===== Globals & cache ===== */
+let LAST_PRICE = null;
+const STEP_CACHE = {}; // { SYMBOL: step }
+window.DEFAULT_QTY_STEP = Number('%DEFAULT_QTY_STEP%') || 0.001;
+
+/* ===== API helpers ===== */
+function apiHeaders(){
+  return { ...(window.API_KEY ? {'x-api-key': window.API_KEY} : {}) };
+}
+async function fetchJSON(url){
+  const r = await fetch(url, { headers: apiHeaders() });
+  return r.ok ? r.json() : null;
+}
+
+/* ----- Live price ----- */
+async function fetchPrice(symbol){
+  const base = (window.API_BASE || '').replace(/\/$/,'');
+  if(!base || !symbol) return null;
+  try{
+    const data = await fetchJSON(base + '/price/' + encodeURIComponent(symbol.toUpperCase()));
+    if(data && data.ok && data.price!=null){
+      LAST_PRICE = Number(data.price);
+      return LAST_PRICE;
+    }
+  }catch(e){}
+  return null;
+}
+
+/* ----- Per-symbol step detection ----- */
+function parseStepFromExchangeInfo(symbol, exInfo){
+  // Supports Binance-like schema: { symbols:[{symbol:'BTCUSDT', filters:[{filterType:'LOT_SIZE', stepSize:'0.001'}]}] }
+  try{
+    if(!exInfo) return null;
+    if (Array.isArray(exInfo.symbols)) {
+      const s = exInfo.symbols.find(x => (x.symbol||'').toUpperCase() === symbol.toUpperCase());
+      const f = s && Array.isArray(s.filters) ? s.filters.find(ff => (ff.filterType||'')==='LOT_SIZE') : null;
+      const step = f && (f.stepSize || f.step_size);
+      return step ? Number(step) : null;
+    }
+    // Some APIs return direct object per symbol
+    const s = exInfo[symbol] || exInfo[symbol.toUpperCase()];
+    if (s && (s.stepSize || s.step_size)) return Number(s.stepSize || s.step_size);
+  }catch(e){}
+  return null;
+}
+
+function parseStepFromList(symbol, list){
+  // Supports [{symbol:'BTCUSDT', step:0.001}] OR [{symbol:'BTCUSDT', lotStep:'0.001'}] etc.
+  try{
+    if(!Array.isArray(list)) return null;
+    const row = list.find(x => (x.symbol||'').toUpperCase() === symbol.toUpperCase());
+    if(!row) return null;
+    const cand = row.step || row.qty_step || row.lotStep || row.stepSize || row.step_size;
+    return cand ? Number(cand) : null;
+  }catch(e){}
+  return null;
+}
+
+async function fetchQtyStep(symbol){
+  const base = (window.API_BASE || '').replace(/\/$/,'');
+  if(!base || !symbol) return window.DEFAULT_QTY_STEP;
+
+  const sym = symbol.toUpperCase();
+  if (STEP_CACHE[sym]) return STEP_CACHE[sym];
+
+  let step = null;
+
+  // Try 1: /market/info/{symbol}
+  try{
+    const data1 = await fetchJSON(base + '/market/info/' + encodeURIComponent(sym));
+    if (data1) {
+      // Accept shapes: {stepSize:'0.001'} or {filters:{LOT_SIZE:{stepSize:'0.001'}}}
+      if (data1.stepSize || data1.step_size) step = Number(data1.stepSize || data1.step_size);
+      else if (data1.filters && data1.filters.LOT_SIZE && (data1.filters.LOT_SIZE.stepSize||data1.filters.LOT_SIZE.step_size)) {
+        step = Number(data1.filters.LOT_SIZE.stepSize || data1.filters.LOT_SIZE.step_size);
+      } else {
+        step = parseStepFromExchangeInfo(sym, data1);
+      }
+    }
+  }catch(e){}
+
+  // Try 2: /market/symbols  (list)
+  if (step==null){
+    try{
+      const list = await fetchJSON(base + '/market/symbols');
+      step = parseStepFromList(sym, list);
+    }catch(e){}
+  }
+
+  // Try 3: /market/exchangeInfo (binance-like)
+  if (step==null){
+    try{
+      const exInfo = await fetchJSON(base + '/market/exchangeInfo');
+      step = parseStepFromExchangeInfo(sym, exInfo);
+    }catch(e){}
+  }
+
+  if (step==null || !(step>0)) step = window.DEFAULT_QTY_STEP;
+  STEP_CACHE[sym] = step;
+  return step;
+}
+
+/* ===== Utils ===== */
+function roundQty(qty, step){
+  step = Number(step)||0.001;
+  return Math.floor(qty/step)*step; // round down to step
+}
+function show(obj){
+  const out = document.getElementById('out');
+  out.hidden = false;
+  out.textContent = JSON.stringify(obj, null, 2);
+}
+
+/* ===== Live hints (min budget + suggested qty) ===== */
+async function updateBudgetHint(){
+  const sym = document.getElementById('symbol').value.trim().toUpperCase();
+  const lev = Number(document.getElementById('lev').value||0);
+  const bud = Number(document.getElementById('budget').value||0);
+  const hintEl = document.getElementById('budget_hint');
+  const suggBtn = document.getElementById('use_suggested_qty');
+  hintEl.classList.remove('warn');
+  suggBtn.style.display = 'none';
+  suggBtn.onclick = null;
+
+  if(!sym || lev<=0){ hintEl.textContent=''; return; }
+
+  const [price, step] = await Promise.all([
+    (LAST_PRICE==null ? fetchPrice(sym) : Promise.resolve(LAST_PRICE)),
+    fetchQtyStep(sym),
+  ]);
+
+  if(!price || !step){ hintEl.textContent=''; return; }
+
+  const minNotional = price * step;
+  const minBudget   = minNotional / lev;
+  const suggested   = (bud>0) ? roundQty((bud*lev)/price, step) : 0;
+
+  const parts = [
+    `Price≈ ${price.toFixed(2)} | step=${step}`,
+    `Min budget≈ ${minBudget.toFixed(2)} USDT`,
+    (bud>0 ? `Suggested qty≈ ${suggested}` : '')
+  ].filter(Boolean);
+  hintEl.textContent = parts.join(' · ');
+
+  if(bud>0 && suggested>0){
+    suggBtn.style.display = 'inline-block';
+    suggBtn.onclick = ()=>{
+      document.getElementById('qty').value = suggested;
+    };
+  }
+  if(bud>0 && bud < minBudget){
+    hintEl.classList.add('warn');
+  }
+}
+
+/* ===== Auto-fill qty if needed (uses per-symbol step) ===== */
+async function autoFillQtyIfNeeded(payload){
+  if((!payload.qty || payload.qty<=0) && payload.budget>0 && payload.leverage>0){
+    const step = await fetchQtyStep(payload.symbol);
+    const price = LAST_PRICE ?? await fetchPrice(payload.symbol);
+    if(price){
+      const raw = (payload.budget * payload.leverage) / price;
+      payload.qty = roundQty(raw, step);
+    }
+  }
+}
+
+/* ===== Submit ===== */
+['symbol','lev','budget'].forEach(id=>{
+  const el = document.getElementById(id);
+  el.addEventListener('input', ()=>updateBudgetHint());
+  el.addEventListener('change', ()=>updateBudgetHint());
+});
+window.addEventListener('load', ()=>updateBudgetHint());
+
 async function send(mode){
   const el = id => document.getElementById(id);
   const payload = {
@@ -139,31 +325,33 @@ async function send(mode){
     note: `[mode: ${mode}] ` + (el('note').value||'')
   };
 
-  if(!payload.symbol || !payload.side || !(payload.qty>0) || !(payload.leverage>0)){
-    show({ok:false, error:"Missing required fields (symbol/side/qty/leverage)."});
+  await autoFillQtyIfNeeded(payload);
+
+  if(!payload.symbol || !payload.side || !(payload.leverage>0)){
+    show({ok:false, error:"Missing required fields (symbol/side/leverage)."});
+    return;
+  }
+  if(!(payload.qty>0) && !(payload.budget>0)){
+    show({ok:false, error:"Provide qty or budget (or let auto-qty compute)."});
     return;
   }
 
   try{
     const base = (window.API_BASE || '%API_BASE%').replace(/\\/$/,'');
-    const url  = base ? (base + '/ops/ticket') : '/ops/ui/ticket'; // ברירת מחדל דרך פרוקסי
+    const url  = base ? (base + '/ops/ticket') : '/ops/ui/ticket';
     const headers = {
       'content-type': 'application/json',
       ...(window.API_KEY ? {'x-api-key': window.API_KEY} : {})
     };
     const res  = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
     const data = await res.json();
-    if(data && data.approve_url){ data.quick = `Approve: ${data.approve_url}\\nReject : ${data.reject_url}`; }
+    if(data && data.approve_url){
+      data.quick = `Approve: ${data.approve_url}\\nReject : ${data.reject_url}`;
+    }
     show(data);
   }catch(e){
     show({ok:false, error:String(e)});
   }
-}
-
-function show(obj){
-  const out = document.getElementById('out');
-  out.hidden = false;
-  out.textContent = JSON.stringify(obj, null, 2);
 }
 
 window.API_BASE = '%API_BASE%';
@@ -173,29 +361,35 @@ window.API_KEY  = '%API_KEY%';
 
 @router.get("/ops/ui", response_class=HTMLResponse, summary="Simple HTML page to create approval tickets")
 async def ops_ui():
-    html = HTML_PAGE.replace("%API_BASE%", API_BASE or "").replace("%API_KEY%", API_KEY or "")
-    return HTMLResponse(html)
+  html = (
+      HTML_PAGE
+      .replace("%API_BASE%", API_BASE or "")
+      .replace("%API_KEY%",  API_KEY  or "")
+      .replace("%DEFAULT_QTY_STEP%", str(DEFAULT_QTY_STEP))
+  )
+  return HTMLResponse(html)
 
 @router.post("/ops/ui/ticket")
 async def ui_proxy(payload: dict = Body(...)):
-    """
-    פרוקסי צד-שרת: אם יש API_BASE נקרא לשירות הראשי.
-    אחרת נייבא את יוצר הטיקט המקומי (routes.ops_approve.create_ticket).
-    תמיד שולחים x-api-key אם מוגדר.
-    """
-    base = API_BASE or ""
-    try:
-        if base:
-            url = base.rstrip("/") + "/ops/ticket"
-            headers = {"Content-Type":"application/json"}
-            if API_KEY:
-                headers["x-api-key"] = API_KEY
-            async with httpx.AsyncClient(timeout=12.0) as cli:
-                r = await cli.post(url, headers=headers, content=json.dumps(payload))
-                return JSONResponse(status_code=r.status_code, content=r.json())
-        else:
-            from .ops_approve import create_ticket  # type: ignore
-            return await create_ticket(payload)
-    except Exception as e:
-        return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
+  """
+  פרוקסי צד-שרת: אם יש API_BASE נקרא לשירות הראשי.
+  אחרת נייבא את יוצר הטיקט המקומי (routes.ops_approve.create_ticket).
+  תמיד שולחים x-api-key אם מוגדר.
+  """
+  base = API_BASE or ""
+  try:
+    if base:
+      url = base.rstrip("/") + "/ops/ticket"
+      headers = {"Content-Type": "application/json"}
+      if API_KEY:
+        headers["x-api-key"] = API_KEY
+      async with httpx.AsyncClient(timeout=12.0) as cli:
+        r = await cli.post(url, headers=headers, content=json.dumps(payload))
+        return JSONResponse(status_code=r.status_code, content=r.json())
+    else:
+      from .ops_approve import create_ticket  # type: ignore
+      return await create_ticket(payload)
+  except Exception as e:
+    return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
+
 
