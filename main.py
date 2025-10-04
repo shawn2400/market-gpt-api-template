@@ -496,8 +496,34 @@ async def _debug_routes():
 
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
-    await send_ops_digest_now(hours)
-    return {"ok":True,"sent":True,"hours": hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))}
+    """
+    תואם לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
+    עוצר את TypeError שנראה בלוגים.
+    """
+    ok, err = True, None
+    try:
+        import inspect
+        params = {}
+        try:
+            sig = inspect.signature(send_ops_digest_now)  # type: ignore
+            if "hours" in sig.parameters:
+                params["hours"] = hours
+        except Exception:
+            params = {}
+        if params:
+            await send_ops_digest_now(**params)  # type: ignore
+        else:
+            await send_ops_digest_now()  # type: ignore
+    except TypeError:
+        try:
+            await send_ops_digest_now()  # type: ignore
+        except Exception as e:
+            ok, err = False, str(e)
+    except Exception as e:
+        ok, err = False, str(e)
+
+    effective_hours = hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))
+    return {"ok": ok, "sent": ok, "hours": effective_hours, "error": err}
 
 @app.get("/ops/eod/now", include_in_schema=False)
 async def ops_eod_now():
