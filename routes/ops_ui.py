@@ -8,26 +8,35 @@ import httpx
 
 router = APIRouter(tags=["ops-ui"])
 
-API_BASE = os.getenv("PUBLIC_HOST", "").rstrip("/")
-API_TOKEN = os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or ""
+API_BASE = (os.getenv("PUBLIC_HOST", "") or "").rstrip("/")
+API_TOKEN = (
+    os.getenv("API_KEY")
+    or os.getenv("API_BEARER_TOKEN")
+    or os.getenv("API_TOKEN")
+    or os.getenv("PRIMARY_API_TOKEN")
+    or ""
+)
 
 HTML_PAGE = """<!doctype html>
 <meta charset="utf-8">
 <title>Ops Ticket UI</title>
 <style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:780px;margin:32px auto;padding:0 16px;line-height:1.4}
-  h1{font-size:20px;margin:0 0 16px}
-  fieldset{border:1px solid #ddd;padding:16px;border-radius:10px;margin:0 0 16px}
-  label{display:block;margin:8px 0 4px;font-weight:600}
-  input,select{width:100%;padding:8px 10px;border:1px solid #ccc;border-radius:8px;font:inherit}
+  :root{color-scheme:light dark}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:920px;margin:32px auto;padding:0 16px;line-height:1.45}
+  h1{font-size:22px;margin:0 0 16px}
+  fieldset{border:1px solid #ddd;padding:16px;border-radius:12px;margin:0 0 16px;background:#fafafa}
+  label{display:block;margin:8px 0 6px;font-weight:600}
+  input,select{width:100%;padding:9px 11px;border:1px solid #c9c9c9;border-radius:10px;font:inherit;background:#fff}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-  button{padding:10px 14px;border:0;border-radius:10px;background:#222;color:#fff;cursor:pointer}
+  .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  button{padding:10px 14px;border:0;border-radius:12px;background:#222;color:#fff;cursor:pointer}
   button.variant{background:#0a7}
   button.warn{background:#08c}
   button.alt{background:#666}
-  .out{white-space:pre-wrap;background:#f7f7f7;border:1px solid #eee;border-radius:8px;padding:12px;margin-top:14px}
+  .out{white-space:pre-wrap;background:#f6f7f9;border:1px solid #e6e6e6;border-radius:10px;padding:12px;margin-top:14px;font-size:13px}
   small.hint{color:#666}
+  .kvs{display:grid;grid-template-columns:160px 1fr;gap:8px;margin:10px 0 0}
+  .kvs div{font-size:12px;color:#555}
 </style>
 <body>
   <h1>Ops • Create Ticket</h1>
@@ -104,6 +113,11 @@ HTML_PAGE = """<!doctype html>
     <label>Note (free text)</label>
     <input id="note" placeholder="will be prefixed with [mode: ...] automatically">
     <small class="hint">המערכת תוסיף בתחילת ההערה שלך תג כמו [mode: MARKET] / [mode: HYBRID] / [mode: AUTO]</small>
+
+    <div class="kvs">
+      <div>API Base:</div><div id="kv_base"></div>
+      <div>Token present:</div><div id="kv_tok"></div>
+    </div>
   </fieldset>
 
   <div class="btns">
@@ -137,19 +151,27 @@ async function send(mode){
   }
 
   try{
-    const base = (window.API_BASE || '%API_BASE%').replace(/\\/$/,'');
+    const base = (window.API_BASE || '').replace(/\\/$/,'');
     const url  = base ? (base + '/ops/ticket') : '/ops/ticket';
+    const headers = {'content-type':'application/json'};
+    if(window.API_TOKEN){
+      headers['Authorization'] = 'Bearer ' + window.API_TOKEN;
+      headers['x-api-key'] = window.API_TOKEN; // כולל גם X-API-Key לבטוח
+    }
     const res  = await fetch(url, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(window.API_TOKEN ? {'Authorization': 'Bearer '+ window.API_TOKEN} : {})
-      },
+      headers,
       body: JSON.stringify(payload)
     });
-    const data = await res.json();
+    let data;
+    try{ data = await res.json(); }catch(e){ data = {ok:false,status:res.status,error:'Non-JSON response'}; }
     if(data && data.approve_url){
       data.quick = `Approve: ${data.approve_url}\\nReject : ${data.reject_url}`;
+    }
+    if(!res.ok){
+      data = data || {};
+      data.ok = false;
+      data.http_status = res.status;
     }
     show(data);
   }catch(e){
@@ -165,6 +187,9 @@ function show(obj){
 
 window.API_BASE = '%API_BASE%';
 window.API_TOKEN = '%API_TOKEN%';
+
+document.getElementById('kv_base').textContent = window.API_BASE || '(relative)';
+document.getElementById('kv_tok').textContent = window.API_TOKEN ? 'yes' : 'no';
 </script>
 """
 
@@ -175,18 +200,34 @@ async def ops_ui():
 
 @router.post("/ops/ui/ticket")
 async def ui_proxy(payload: dict = Body(...)):
+    """
+    נתיב שירות פנימי: אם יש PUBLIC_HOST – נשלח לשם עם הטוקן מהשרת.
+    אם אין – נקרא לפונקציה הפנימית של יצירת טיקט (לולאה מקומית).
+    """
     base = API_BASE or ""
     url = (base.rstrip("/") + "/ops/ticket") if base else "/ops/ticket"
+
+    # מצב לולאה מקומית
     if not base:
-        from .ops_approve import create_ticket  # type: ignore
-        return await create_ticket(payload)
+        try:
+            from .ops_approve import create_ticket  # type: ignore
+            return await create_ticket(payload)
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"ok": False, "error": "local_create_failed", "detail": str(e)})
+
+    # פרוקסי עם טוקן
     try:
         headers = {"Content-Type":"application/json"}
         if API_TOKEN:
             headers["Authorization"] = f"Bearer {API_TOKEN}"
-        async with httpx.AsyncClient(timeout=12.0) as cli:
+            headers["X-API-Key"] = API_TOKEN
+        async with httpx.AsyncClient(timeout=15.0) as cli:
             r = await cli.post(url, headers=headers, content=json.dumps(payload))
-            return JSONResponse(status_code=r.status_code, content=r.json())
+            ctype = r.headers.get("content-type","")
+            if "application/json" in ctype.lower():
+                return JSONResponse(status_code=r.status_code, content=r.json())
+            else:
+                return JSONResponse(status_code=r.status_code, content={"ok":False,"error":"upstream_non_json","body":r.text})
     except Exception as e:
         return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
 
