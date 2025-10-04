@@ -12,14 +12,107 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
-from utils.auth import extract_token, allow_all, token_matches
-from utils.json_logger import setup_json_logging
-from utils.metrics_middleware import MetricsMiddleware
-from utils.response_limits import ResponseSizeLimiter
+# ---------- Prometheus (אופציונלי) ----------
+try:
+    from prometheus_client import make_asgi_app
+    _prom_app = make_asgi_app()
+except Exception:
+    def make_asgi_app():
+        async def _dummy_app(scope, receive, send):
+            # אפליקציה ריקה במקום /metrics אם prometheus_client לא מותקן
+            if scope["type"] == "http":
+                await send({
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+                })
+                await send({"type": "http.response.body", "body": b""})
+        return _dummy_app
+    _prom_app = make_asgi_app()
+
+# ---------- utils.* (פולבאקים בטוחים) ----------
+# auth
+try:
+    from utils.auth import extract_token, allow_all, token_matches, get_loaded_tokens, get_public_paths
+except Exception:
+    def extract_token(request: Request, a_hdr: Optional[str], x_hdr: Optional[str]) -> Optional[str]:
+        # מנסה לקחת מה-Header Authorization או X-API-Key או מה-query ?api_key=
+        tok = None
+        if a_hdr and a_hdr.lower().startswith("bearer "):
+            tok = a_hdr.split(" ", 1)[1].strip()
+        if not tok and x_hdr:
+            tok = x_hdr.strip()
+        if not tok:
+            tok = request.query_params.get("api_key")
+        return tok
+
+    def allow_all() -> bool:
+        # ברירת מחדל: אם לא טעונים טוקנים, נאפשר הכול (אפשר לשנות ל-False כדי לחסום)
+        return True
+
+    def token_matches(tok: Optional[str]) -> bool:
+        # אם תרצה לאכוף API KEY, שים משתנה סביבה API_KEY=...
+        expected = os.getenv("API_KEY", "").strip()
+        if not expected:
+            return True  # אין מפתח נדרש
+        return (tok or "") == expected
+
+    def get_loaded_tokens(mask: bool = True):
+        val = os.getenv("API_KEY","")
+        if not val:
+            return []
+        return [val[:2] + "***" + val[-2:] if mask else val]
+
+    def get_public_paths():
+        return {"paths":[], "prefixes":[]}
+
+# json logger
+try:
+    from utils.json_logger import setup_json_logging
+except Exception:
+    def setup_json_logging():
+        # לוגר בסיסי אם אין מודול json_logger
+        logger = logging.getLogger("algogpt")
+        handler = logging.StreamHandler()
+        fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+        handler.setFormatter(fmt)
+        logger.handlers[:] = [handler]
+        logger.propagate = False
+        return logger
+
+# metrics middleware
+try:
+    from utils.metrics_middleware import MetricsMiddleware
+except Exception:
+    class MetricsMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            return await call_next(request)
+
+# response size limiter
+try:
+    from utils.response_limits import ResponseSizeLimiter
+except Exception:
+    class ResponseSizeLimiter(BaseHTTPMiddleware):
+        def __init__(self, app, max_bytes: int = 5_242_880):
+            super().__init__(app)
+            self.max_bytes = max_bytes
+        async def dispatch(self, request: Request, call_next):
+            resp = await call_next(request)
+            # אם התוכן גדול מדי – נחתוך/נחזיר שגיאה רכה
+            try:
+                body = b""
+                async for chunk in resp.body_iterator:
+                    body += chunk
+                    if len(body) > self.max_bytes:
+                        return PlainTextResponse(
+                            "Response too large", status_code=413
+                        )
+                return PlainTextResponse(body.decode("utf-8", errors="ignore"), status_code=getattr(resp, "status_code", 200), headers=getattr(resp, "headers", None))
+            except Exception:
+                return resp
 
 # ---- Binance client (fallbacks) ----
 try:
@@ -169,7 +262,7 @@ if os.getenv("INTERNAL_AUTH_ENABLE","0").lower() in ("1","true","on"):
 app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(MetricsMiddleware)
-app.mount("/metrics", make_asgi_app())
+app.mount("/metrics", _prom_app)
 
 # static
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -344,16 +437,20 @@ else:
         # "routes.ops_digest",  # ← בכוונה לא לכלול כדי למנוע התנגשות עם /ops/digest/now
     ):
         _try_include(_mod)
-    for m in pkgutil.iter_modules(["routes"]):
-        module_path = f"routes.{m.name}"
-        if module_path == "routes.ops_digest":
-            continue
-        _try_include(module_path)
+    # אם אין תיקיית routes – הקריאה הזו לא תכשיל את האפליקציה
+    try:
+        for m in pkgutil.iter_modules(["routes"]):
+            module_path = f"routes.{m.name}"
+            if module_path == "routes.ops_digest":
+                continue
+            _try_include(module_path)
         try:
             for r in app.router.routes:
                 try: _registered_paths.add(getattr(r, "path", None))
                 except Exception: pass
         except Exception: pass
+    except Exception:
+        pass
 
 def _route_exists(path: str) -> bool:
     try:
@@ -426,17 +523,10 @@ if not _route_exists("/status/all"):
             "binance_ping_ok": ping_ok
         }
 
-try:
-    from utils.auth import get_loaded_tokens, get_public_paths
-except Exception:
-    def get_loaded_tokens(mask: bool = True): return []
-    def get_public_paths(): return {"paths":[], "prefixes":[]}
-
-if not _route_exists("/status/auth"):
-    @app.get("/status/auth")
-    async def status_auth():
-        toks = get_loaded_tokens(mask=True); public = get_public_paths()
-        return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
+@app.get("/status/auth")
+async def status_auth():
+    toks = get_loaded_tokens(mask=True); public = get_public_paths()
+    return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
 
 @app.get("/price/{symbol}")
 async def price(symbol: str):
@@ -477,21 +567,14 @@ async def flush_kill_switch():
             logger.warning({"event":"flush_failed","err":str(e)})
     return {"ok":True,"flushed":done}
 
-try:
-    from utils.auth import extract_token as _extract_token, token_matches as _token_matches, get_loaded_tokens as _get_loaded_tokens
-except Exception:
-    def _get_loaded_tokens(mask: bool = True): return []
-    def _extract_token(req, a, b): return None
-    def _token_matches(tok): return False
-
 @app.get("/_debug/auth", include_in_schema=False)
 async def _debug_auth(request: Request):
     a = request.headers.get("authorization") or request.headers.get("Authorization")
     x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    t = _extract_token(request, a, x)
+    t = extract_token(request, a, x)
     return {"ok":True,"auth_header":a,"x_api_key":x,"query":dict(request.query_params),
-            "extracted_token":t,"matches":bool(_token_matches(t)),
-            "tokens_loaded":_get_loaded_tokens(mask=True)}
+            "extracted_token":t,"matches":bool(token_matches(t)),
+            "tokens_loaded":get_loaded_tokens(mask=True)}
 
 @app.get("/_debug/routes", include_in_schema=False)
 async def _debug_routes():
@@ -507,8 +590,8 @@ TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK","1").lower() in ("1","
 @app.on_event("startup")
 async def _startup_preflight_warmup():
     try:
-        from utils.auth import get_loaded_tokens
-        logger.info({"event":"auth.tokens_loaded","tokens":get_loaded_tokens(mask=True)})
+        from utils.auth import get_loaded_tokens as _glt
+        logger.info({"event":"auth.tokens_loaded","tokens":_glt(mask=True)})
     except Exception: pass
     try: _ = futures_exchange_info_safe(force_refresh=True)
     except Exception as e: logger.warning({"event":"warmup.exinfo_failed","error":str(e)})
@@ -623,8 +706,6 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
-
 
 
 
