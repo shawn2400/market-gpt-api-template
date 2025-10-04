@@ -101,7 +101,6 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             f"נמצאו רק ציונים נמוכים יותר (למשל ~{low}-{max(low, min_score - 0.5):.1f}).\n"
             "_בעזרת השם נעשה ונצליח_ 🙏"
         )
-        # _tg_send_text תומך ב-HTML; פה שולחים טקסט רגיל – זה בסדר.
         try:
             cid = int(chat_id)
         except Exception:
@@ -182,9 +181,42 @@ async def scan_top_volume(
     }
 
 
-@router.get("/now", summary="Alias to /scan/top-volume")
-async def scan_now(**kwargs):
-    return await scan_top_volume(**kwargs)
+@router.get("/now", summary="Alias to /scan/top-volume (safe params)")
+async def scan_now(
+    market: str = Query("futures"),
+    quote: str = Query("USDT"),
+    limit: int = Query(10, ge=1, le=100),
+    timeframe: str = Query("15m"),
+    kline_limit: int = Query(200, ge=60, le=1000),
+    min_score: float = Query(7.0),
+    require_side: bool = Query(True),
+    notify: Optional[str] = Query(None),
+    chat_id: Optional[str] = Query(None),
+    rich: bool = Query(True),
+    ttl_sec: int = Query(900, ge=60, le=86400),
+    rearm_score: float = Query(6.0),
+    dedupe_window_sec: int = Query(300, ge=0, le=3600),
+    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "5"))),
+    stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
+    symbol: Optional[str] = Query(None),  # תואם לאחור; כרגע לא בשימוש
+):
+    return await scan_top_volume(
+        market=market,
+        quote=quote,
+        limit=limit,
+        timeframe=timeframe,
+        kline_limit=kline_limit,
+        min_score=min_score,
+        require_side=require_side,
+        notify=notify,
+        chat_id=chat_id,
+        rich=rich,
+        ttl_sec=ttl_sec,
+        rearm_score=rearm_score,
+        dedupe_window_sec=dedupe_window_sec,
+        leverage=leverage,
+        stake_usdt=stake_usdt,
+    )
 
 
 # -------- החלף למחשב האיתותים האמיתי שלך --------
@@ -210,6 +242,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
       }
     """
     return []
+
 
 
 
