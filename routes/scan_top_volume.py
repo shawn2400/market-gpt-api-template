@@ -36,7 +36,7 @@ except Exception:
 try:
     from utils.get_klines import get_klines_sync  # warmup קיים ב-startup
 except Exception:
-    get_klines_sync = None
+    get_klines_sync = None  # type: ignore
 
 try:
     from utils.binance_client import get_price
@@ -50,7 +50,7 @@ router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(requi
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
 
-# ‫התרות המותרות (להמשך הרחבה בעתיד אם תרצה ערוצים נוספים)‬
+# ערוצי התראה מותרים (להרחבה עתידית)
 _ALLOWED_NOTIFY = {"telegram", None}
 
 
@@ -123,7 +123,6 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             low = 4.0
 
         age_min = int((now - _LAST_GOOD_TS) // 60)
-        # הערה: אם ה־Telegram parse mode אצלך הוא HTML, כוכביות לא יבצעו bold — זה בסדר, זה טקסט פשוט.
         txt = (
             'בס"ד\n'
             f"ℹ️ Heartbeat: לא נמצאו טריידים ≥ {min_score} מזה ~{age_min} ד׳.\n"
@@ -218,7 +217,6 @@ async def scan_top_volume(
                         "leverage": leverage,
                         "ttl_sec": ttl_sec,
                         "why": s.get("note") or (s.get("details", {}) or {}).get("trend") or "—",
-                        # שדות עתידיים (אם ה-notifier שלך תומך בהם):
                         "rich": bool(rich),
                     }
                     idem = f"{(plan['symbol'] or '?')}-{plan['timeframe']}-{int(time.time())}"
@@ -226,7 +224,6 @@ async def scan_top_volume(
                         await send_trade_approval(idem, plan, chat_id=cid)
                         notified += 1
                     except Exception as ne:
-                        # לא עוצרים בגלל איתות אחד שנכשל; ממשיכים
                         LOG.warning({"event": "notify.send_failed", "symbol": plan.get("symbol"), "error": str(ne)})
             except Exception as loop_e:
                 LOG.warning({"event": "notify.loop_failed", "error": str(loop_e)})
@@ -287,29 +284,112 @@ async def scan_now(
     )
 
 
-# -------- החלף למחשב האיתותים האמיתי שלך --------
+# -------- מחשב איתותים: ניסיון אמיתי + fallback דמו --------
 async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     """
-    דמו: תחזיר רשימה ריקה. חבר פה את מחשב האיתותים האמיתי שלך.
-    על כל איתות נדרש:
-      {
-        'symbol': 'ETHUSDT',
-        'timeframe': '15m',
-        'side': 'BUY'/'SELL' או None,
-        'score': float,
-        'note': str,
-        'details': {
-            'trend': 'UP/DOWN/SIDE',
-            'rsi': float,
-            'adx': float,
-            'ema21': float,
-            'ema50': float,
-            'close': float,
-            'atr': float (אופציונלי)
-        }
-      }
+    מנסה להביא נתונים אמיתיים (klines + price) ולחשב RSI/EMA + side/score.
+    אם אין דאטה/כשל — מחזיר 1-3 איתותי דמו כדי לאפשר בדיקה/טסט של התראות.
+    הפונקציה לא זורקת חריגות החוצה.
     """
-    return []
+    import statistics, time as _t
+    out: List[Dict[str, Any]] = []
+
+    def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
+        if len(closes) < period + 1:
+            return None
+        gains, losses = [], []
+        for i in range(1, period + 1):
+            ch = closes[-i] - closes[-i-1]
+            gains.append(max(ch, 0.0))
+            losses.append(abs(min(ch, 0.0)))
+        avg_gain = statistics.fmean(gains) if any(gains) else 0.0
+        avg_loss = statistics.fmean(losses) if any(losses) else 0.0
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + rs))
+
+    try:
+        wl = os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
+        wl = [s.strip().upper() for s in wl if s.strip()]
+        wl = wl[:max(5, min(limit, 20))]
+
+        tf = timeframe or "15m"
+        k = max(60, min(kline_limit, 500))
+
+        have_any_real = False
+        for sym in wl:
+            try:
+                if get_klines_sync is None:
+                    raise RuntimeError("klines unavailable")
+                df = get_klines_sync(sym, interval=tf, limit=k)
+                # תמיכה גם ב־DataFrame וגם ברשימה גולמית
+                if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
+                    closes = [float(x) for x in df["close"]]
+                elif isinstance(df, list):
+                    closes = [float(row[4]) for row in df]
+                else:
+                    raise RuntimeError("unknown klines format")
+
+                if len(closes) < 20:
+                    continue
+                rsi = _rsi(closes, 14)
+                ema21 = statistics.fmean(closes[-21:]) if len(closes) >= 21 else statistics.fmean(closes)
+                ema50 = statistics.fmean(closes[-50:]) if len(closes) >= 50 else statistics.fmean(closes[-21:])
+                close = float(closes[-1])
+
+                side: Optional[str] = None
+                score = 0.0
+                trend = "SIDE"
+                if rsi is not None:
+                    if rsi <= 32:
+                        side = "BUY"; score += (32 - rsi) / 2.0  # עד ~16 נק׳
+                    elif rsi >= 68:
+                        side = "SELL"; score += (rsi - 68) / 2.0
+                if ema21 and ema50:
+                    if ema21 > ema50:
+                        trend = "UP";  score += 2.5
+                    elif ema21 < ema50:
+                        trend = "DOWN"; score += 2.5
+
+                score = round(max(0.0, min(score, 10.0)), 2)
+                note = f"rsi={rsi:.1f} trend={trend}" if rsi is not None else f"trend={trend}"
+                out.append({
+                    "symbol": sym,
+                    "timeframe": tf,
+                    "side": side,
+                    "score": score,
+                    "note": note,
+                    "details": {"trend": trend, "rsi": rsi, "ema21": ema21, "ema50": ema50, "close": close},
+                })
+                have_any_real = True
+            except Exception as e:
+                LOG.debug({"event": "klines.symbol_failed", "symbol": sym, "error": str(e)})
+                continue
+
+        if out:
+            return out
+
+        # fallback דמו — כדי לאפשר בדיקה של התראות גם בלי דאטה
+        now = int(_t.time())
+        base = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+        for i, sym in enumerate(base[:max(1, min(3, limit))]):
+            phase = (now // 60 + i) % 10
+            side = "BUY" if phase < 5 else "SELL"
+            score = 7.6 if i == 0 else 6.2 + (i * 0.6)
+            price = float(get_price(sym) or 0.0)
+            out.append({
+                "symbol": sym,
+                "timeframe": tf,
+                "side": side,
+                "score": round(score, 2),
+                "note": "demo-fallback",
+                "details": {"trend": "UP" if side == "BUY" else "DOWN", "rsi": 50.0, "ema21": price, "ema50": price, "close": price},
+            })
+        return out
+    except Exception as e:
+        LOG.warning({"event": "compute_signals.crashed", "error": str(e)})
+        return []
 
 
 
