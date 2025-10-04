@@ -8,7 +8,6 @@ from typing import Optional, Dict, Any, List, Tuple
 
 from fastapi import APIRouter, Query, Depends
 
-# --- logger ---
 LOG = logging.getLogger("algogpt.scan")
 
 # --- auth (fallback בטוח) ---
@@ -18,35 +17,35 @@ except Exception:
     def require_bearer_token():
         return None
 
-# --- notifier: נשתמש בשליחת אישור טרייד העשירה שכבר ב-telegram_notifier ---
+# --- notifier: שליחת "אישור טרייד" עשירה לטלגרם ---
 try:
-    from utils.telegram_notifier import send_trade_approval
+    from utils.telegram_notifier import send_trade_approval  # type: ignore
 except Exception:
     async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
         return None
 
-# לשליחת טקסט פשוט (ל-Heartbeat)
+# --- טקסט פשוט (Heartbeat/בדיקות) ---
 try:
-    from utils.telegram_notifier_core import _tg_send as _tg_send_text
+    from utils.telegram_notifier_core import _tg_send as _tg_send_text  # type: ignore
 except Exception:
     async def _tg_send_text(text: str, chat_id: Optional[int] = None) -> None:
         return None
 
-# נתוני שוק BTC (אופציונלי, לא חובה פה כי send_trade_approval כבר מוסיף הקשר)
+# --- דאטה שוק (klines/price) ---
 try:
-    from utils.get_klines import get_klines_sync  # warmup קיים ב-startup
+    from utils.get_klines import get_klines_sync  # type: ignore
 except Exception:
     get_klines_sync = None  # type: ignore
 
 try:
-    from utils.binance_client import get_price
+    from utils.binance_client import get_price  # type: ignore
 except Exception:
     def get_price(symbol: str) -> float:  # type: ignore
         return 0.0
 
 router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
 
-# --- זיכרון קטן למניעת ספאם (arm/disarm) ---
+# --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
 
@@ -64,7 +63,6 @@ def _passes(sig: Dict[str, Any], min_score: float, require_side: bool) -> bool:
 
 
 def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, dedupe_window_sec: int) -> bool:
-    # key על בסיס סמל+טייםפריים כדי למנוע ספאם לכל צמד
     symbol = str(sig.get("symbol") or "").upper() or "?"
     timeframe = str(sig.get("timeframe") or "").lower() or "?"
     key = (symbol, timeframe)
@@ -159,21 +157,20 @@ async def scan_top_volume(
     ttl_sec: int = Query(900, ge=60, le=86400),
     rearm_score: float = Query(6.0),
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
-    # פרמטרים כלכליים (ברירת מחדל מה-ENV):
+    # כלכלה:
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "5"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
     """
-    סורק, מסנן לפי min_score ו-side, ושולח הודעת אישור עשירה בטלגרם (עם TTL בטקסט),
-    רק על מה שעבר את הסינון. בנוסף Heartbeat אם אין תוצאות לאורך זמן.
-    תמיד מחזיר JSON “כשל בטוח” (לא ייזרוק חריגה כלפי חוץ).
+    סורק, מסנן לפי min_score/side, שולח אישור טרייד עשיר לטלגרם עם TTL בטקסט,
+    + Heartbeat כשאין תוצאות הרבה זמן. תמיד מחזיר JSON (גם בשגיאות פנימיות).
     """
-    # אימות ערוץ התראה (לא חוסם; רק מתעד)
+    # אימות ערוץ התראה
     if notify not in _ALLOWED_NOTIFY:
         LOG.warning({"event": "notify.unsupported", "notify": notify})
-        notify = None  # כבה בשקט
+        notify = None
 
-    # חישוב האיתותים — לעולם לא זורק החוצה
+    # חישוב איתותים (לא מפיל החוצה)
     err: Optional[str] = None
     signals_raw: List[Dict[str, Any]] = []
     try:
@@ -184,8 +181,7 @@ async def scan_top_volume(
         err = f"compute_signals_failed: {e}"
         LOG.warning({"event": "scan.compute_failed", "error": str(e)})
 
-    # מסנן תוצאות
-    filtered: List[Dict[str, Any]] = []
+    # סינון
     try:
         filtered = [s for s in (signals_raw or []) if isinstance(s, dict) and _passes(s, min_score, require_side)]
     except Exception as e:
@@ -193,7 +189,13 @@ async def scan_top_volume(
         LOG.warning({"event": "scan.filter_failed", "error": str(e)})
         filtered = []
 
-    # התראות — לא עוצרות את ה-API אם נכשל
+    LOG.info({
+        "event": "scan.result",
+        "requested": {"limit": limit, "tf": timeframe, "k": kline_limit, "min_score": min_score, "require_side": require_side},
+        "counts": {"total": len(signals_raw or []), "returned": len(filtered)},
+    })
+
+    # התראות — best-effort
     notified = 0
     if notify == "telegram" and chat_id and filtered:
         try:
@@ -228,7 +230,7 @@ async def scan_top_volume(
             except Exception as loop_e:
                 LOG.warning({"event": "notify.loop_failed", "error": str(loop_e)})
 
-    # Heartbeat אם צריך — לא מפיל את הבקשה
+    # Heartbeat
     try:
         await _heartbeat_if_needed(chat_id, notify, min_score, found_filtered=bool(filtered))
     except Exception as hb_e:
@@ -262,9 +264,8 @@ async def scan_now(
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "5"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
-    symbol: Optional[str] = Query(None),  # תאימות לאחור; לא בשימוש בפונקציה
+    symbol: Optional[str] = Query(None),  # תאימות לאחור; לא בשימוש
 ):
-    # לא מעבירים "symbol" פנימה (כדי למנוע kw unexpected) — נשמרת תאימות לאחור.
     return await scan_top_volume(
         market=market,
         quote=quote,
@@ -287,9 +288,9 @@ async def scan_now(
 # -------- מחשב איתותים: ניסיון אמיתי + fallback דמו --------
 async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     """
-    מנסה להביא נתונים אמיתיים (klines + price) ולחשב RSI/EMA + side/score.
-    אם אין דאטה/כשל — מחזיר 1-3 איתותי דמו כדי לאפשר בדיקה/טסט של התראות.
-    הפונקציה לא זורקת חריגות החוצה.
+    מנסה להביא klines אמיתיים ולחשב RSI/EMA + side/score.
+    אם אין דאטה/כשל — מחזיר 1–3 איתותי דמו כדי לאפשר בדיקות/התראות.
+    לא זורק חריגות החוצה.
     """
     import statistics, time as _t
     out: List[Dict[str, Any]] = []
@@ -323,17 +324,19 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 if get_klines_sync is None:
                     raise RuntimeError("klines unavailable")
                 df = get_klines_sync(sym, interval=tf, limit=k)
-                # תמיכה גם ב־DataFrame וגם ברשימה גולמית
+
                 if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
                     closes = [float(x) for x in df["close"]]
-                elif isinstance(df, list):
+                elif isinstance(df, list) and len(df) > 0:
+                    # list of candlesticks (open, high, low, close...) – Binance style
                     closes = [float(row[4]) for row in df]
                 else:
                     raise RuntimeError("unknown klines format")
 
                 if len(closes) < 20:
                     continue
-                rsi = _rsi(closes, 14)
+
+                rsi_val = _rsi(closes, 14)
                 ema21 = statistics.fmean(closes[-21:]) if len(closes) >= 21 else statistics.fmean(closes)
                 ema50 = statistics.fmean(closes[-50:]) if len(closes) >= 50 else statistics.fmean(closes[-21:])
                 close = float(closes[-1])
@@ -341,11 +344,11 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 side: Optional[str] = None
                 score = 0.0
                 trend = "SIDE"
-                if rsi is not None:
-                    if rsi <= 32:
-                        side = "BUY"; score += (32 - rsi) / 2.0  # עד ~16 נק׳
-                    elif rsi >= 68:
-                        side = "SELL"; score += (rsi - 68) / 2.0
+                if rsi_val is not None:
+                    if rsi_val <= 32:
+                        side = "BUY"; score += (32 - rsi_val) / 2.0
+                    elif rsi_val >= 68:
+                        side = "SELL"; score += (rsi_val - 68) / 2.0
                 if ema21 and ema50:
                     if ema21 > ema50:
                         trend = "UP";  score += 2.5
@@ -353,14 +356,14 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                         trend = "DOWN"; score += 2.5
 
                 score = round(max(0.0, min(score, 10.0)), 2)
-                note = f"rsi={rsi:.1f} trend={trend}" if rsi is not None else f"trend={trend}"
+                note = f"rsi={rsi_val:.1f} trend={trend}" if rsi_val is not None else f"trend={trend}"
                 out.append({
                     "symbol": sym,
                     "timeframe": tf,
                     "side": side,
                     "score": score,
                     "note": note,
-                    "details": {"trend": trend, "rsi": rsi, "ema21": ema21, "ema50": ema50, "close": close},
+                    "details": {"trend": trend, "rsi": rsi_val, "ema21": ema21, "ema50": ema50, "close": close},
                 })
                 have_any_real = True
             except Exception as e:
@@ -370,7 +373,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         if out:
             return out
 
-        # fallback דמו — כדי לאפשר בדיקה של התראות גם בלי דאטה
+        # --- fallback דמו: יייצר 1–3 איתותים כדי לבדוק Notify/TTL/Heartbeat ---
         now = int(_t.time())
         base = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
         for i, sym in enumerate(base[:max(1, min(3, limit))]):
