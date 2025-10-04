@@ -253,7 +253,15 @@ async def _final_safety_and_headers(request: Request, call_next):
         if resp is None:
             resp = PlainTextResponse("Internal server error (no response)", status_code=500)
     except Exception as exc:
-        logging.getLogger("algogpt").exception("final_mw: call_next failed")
+        logging.getLogger("algogpt").exception(
+            "final_mw: call_next failed",
+            extra={
+                "path": str(getattr(request.url, "path", "")),
+                "method": request.method,
+                "client": getattr(getattr(request, "client", None), "host", None),
+                "x_req_id": request.headers.get("x-request-id"),
+            },
+        )
         resp = JSONResponse({"detail": "internal_error", "where": "final_mw", "message": str(exc)}, status_code=500)
     try:
         resp.headers["x-app-instance-id"] = INSTANCE_ID
@@ -615,7 +623,6 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
-
 
 
 
