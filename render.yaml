@@ -5,7 +5,6 @@ services:
     region: frankfurt
     plan: pro
     autoDeploy: false
-    autoscale: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
@@ -25,9 +24,13 @@ services:
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # --- Secrets (להגדיר בדשבורד) ---
+      # --- Auth (פשוט: או תשתמש ב-API_KEY או תשנה בקוד) ---
+      - key: API_KEY
+        sync: false
       - key: API_BEARER_TOKEN
         sync: false
+
+      # --- Redis / Secrets (לקנפג בדשבורד) ---
       - key: REDIS_URL
         sync: false
       - key: BINANCE_API_KEY
@@ -59,7 +62,7 @@ services:
       - key: REDIS_SSL_NO_VERIFY
         value: "0"
 
-      # --- Public/Readonly ---
+      # --- Public/Readonly (לא חובה, רק אם יש לך ראוטים כאלה) ---
       - key: ENABLE_READONLY_HTTP
         value: "1"
       - key: READONLY_ENDPOINTS
@@ -147,7 +150,7 @@ services:
       - key: TELEGRAM_PARSE_MODE
         value: HTML
 
-      # --- Trade & Orders ---
+      # --- Trade & Orders (רק אם יש לך לוגיקת טריידים בפועל)---
       - key: EXECUTE_TRADES
         value: "1"
       - key: ALLOW_MARKET_ENTRY
@@ -223,36 +226,6 @@ services:
       - key: AI_SCHED_INTERVAL_SEC
         value: "300"
 
-      # --- Gates & Quality (מותאם ל-4–8 טריידים/יום) ---
-      - key: FEAT_QUALITY_ENFORCE
-        value: "1"
-      - key: MIN_QUALITY_SCORE
-        value: "4"
-      - key: APPROVAL_RR_MIN
-        value: "1.15"
-      - key: MIN_TP_SL_DIFF_PCT
-        value: "2.0"
-      - key: SUCCESS_WARN_PCT
-        value: "60"
-      - key: FEAT_TF_ALIGN
-        value: "1"
-      - key: FEAT_DEBOUNCE_LIMIT
-        value: "1"
-      - key: DYN_ENTRY_MAX_BPS
-        value: "90"
-      - key: ENTRY_BAND_BPS
-        value: "6"
-
-      # --- Alerts (public URLs) ---
-      - key: ALERTS_ACTIVE_URL
-        value: https://algogpt-docker.onrender.com/alerts/trades/active
-      - key: ALERTS_ANALYSIS_URL
-        value: https://algogpt-docker.onrender.com/alerts/analysis
-      - key: ALERTS_INGEST_URL
-        value: https://algogpt-docker.onrender.com/alerts/ingest
-      - key: ALERTS_UPDATE_URL
-        value: https://algogpt-docker.onrender.com/alerts/trades/update
-
       # --- Digest Job ---
       - key: OPS_DIGEST_ENABLE
         value: "1"
@@ -265,7 +238,7 @@ services:
       - key: OPS_DIGEST_LOOKBACK_HOURS
         value: "3"
 
-      # --- OpenAPI include (בלי זבל) ---
+      # --- OpenAPI include (רשות) ---
       - key: OPENAPI_INCLUDE_TAGS
         value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
 
