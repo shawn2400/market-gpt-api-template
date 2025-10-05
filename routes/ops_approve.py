@@ -1,8 +1,10 @@
 # routes/ops_approve.py
 from __future__ import annotations
+
 import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect, traceback
 from contextlib import suppress
 from typing import Any, Dict, Optional, List, Callable
+
 from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
 import httpx
@@ -17,10 +19,10 @@ try:
         record_approval_approved,
         record_approval_rejected,
     )
-except Exception:
-    def record_approval_created(): pass
-    def record_approval_approved(): pass
-    def record_approval_rejected(): pass
+except Exception:  # no metrics installed
+    def record_approval_created(): ...
+    def record_approval_approved(): ...
+    def record_approval_rejected(): ...
 
 # -------- Optional Redis ----------
 try:
@@ -56,6 +58,7 @@ except Exception:
     try:
         from app.trade_executor import ConfirmStore  # type: ignore
     except Exception:
+        # fallback to definition from main.py if present
         from main import ConfirmStore  # type: ignore
 
 # -------- Position sizing (AUTO_QTY) ----------
@@ -69,7 +72,8 @@ def _get_last_price(symbol: str) -> Optional[float]:
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
-        if p: return float(p)
+        if p:
+            return float(p)
     with suppress(Exception):
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -107,7 +111,8 @@ async def _redis():
 # -------- Mode parsing ----------
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
-    if not note: return None
+    if not note:
+        return None
     m = _MODE_RX.search(str(note))
     return m.group(1).upper() if m else None
 
@@ -162,12 +167,14 @@ def _align_position_mode(client) -> None:
 
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    # Prefer project executor if present
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
 
+    # Fallback: direct Binance REST
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -212,11 +219,13 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
+            # retry #1: without positionSide
             try:
                 retry_kwargs = dict(base_kwargs)
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
+                # retry #2: derived LONG/SHORT from side
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -328,13 +337,15 @@ def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp
     if not (price_now and isinstance(vpm, (int, float)) and vpm > 0):
         return {"eta_tp1_min": None, "eta_tp2_min": None, "eta_tp3_min": None}
     def _eta(tgt):
-        if tgt is None: return None
+        if tgt is None:
+            return None
         dist = abs(float(tgt) - float(price_now))
         return int(math.ceil(dist / vpm)) if vpm > 0 else None
     return {"eta_tp1_min": _eta(tp1), "eta_tp2_min": _eta(tp2), "eta_tp3_min": _eta(tp3)}
 
 # -------- Storage abstraction --------
 import json as _json
+
 async def _load_ticket(tid: str):
     if aioredis and REDIS_URL:
         try:
@@ -387,6 +398,7 @@ async def create_ticket(
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
+    # Smart ETA (optional)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
@@ -395,6 +407,7 @@ async def create_ticket(
         for k, v in etas.items():
             payload.setdefault(k, v)
 
+    # Flags by note (optional)
     try:
         from routes.ops_flags import apply_note_flags  # type: ignore
     except Exception:
@@ -412,13 +425,15 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
+    # Optional RR-min check
     with suppress(Exception):
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
         rr_min_eff  = max(rr_min_flag, rr_env_lo)
         if rr_min_eff > 0 and req_body.get("sl"):
             current = float(_get_last_price(symbol) or 0)
-            tp1 = float(req_body.get("tp1") or 0); sl = float(req_body.get("sl") or 0)
+            tp1 = float(req_body.get("tp1") or 0)
+            sl  = float(req_body.get("sl") or 0)
             rr  = None
             if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
                 reward = abs(tp1 - current); risk = abs(current - sl); rr = (reward / risk) if risk > 0 else None
@@ -481,7 +496,7 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
-    return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
+    return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
 
 def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     symbol = (ticket.get("symbol") or "").upper()
@@ -513,9 +528,11 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     if float(ticket.get("qty") or 0) <= 0 or int(ticket.get("leverage") or 0) <= 0:
         return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי (בדוק ENV AUTO_QTY_*).")
 
-    exec_res = await (_execute_trade(ticket) if flow=="MARKET"
-                      else _execute_trade_armed(ticket) if flow=="HYBRID"
-                      else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket)))
+    exec_res = await (
+        _execute_trade(ticket) if flow == "MARKET"
+        else _execute_trade_armed(ticket) if flow == "HYBRID"
+        else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket))
+    )
     ok = bool(exec_res.get("ok"))
 
     if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
@@ -595,9 +612,11 @@ async def approve_signed(request: Request):
         raise HTTPException(status_code=400, detail="AUTO_QTY: qty/leverage missing after auto sizing")
 
     flow = _decide_flow_by_mode(payload)
-    exec_res = await (_execute_trade(payload) if flow=="MARKET"
-                      else _execute_trade_armed(payload) if flow=="HYBRID"
-                      else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(payload)))
+    exec_res = await (
+        _execute_trade(payload) if flow == "MARKET"
+        else _execute_trade_armed(payload) if flow == "HYBRID"
+        else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(payload))
+    )
     ok = bool(exec_res.get("ok"))
     if not ok:
         logger.warning("approve_signed_failed: %s", json.dumps(exec_res, ensure_ascii=False))
@@ -666,6 +685,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
