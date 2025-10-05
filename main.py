@@ -427,7 +427,6 @@ async def _load_ticket(tid: str):
                 raw = await r.get(f"{NS}:ticket:{tid}")
                 if raw:
                     rec = _json.loads(raw)
-                    from time asctime as _  # noop to avoid flake8 (harmless)
                     from time import time as _now
                     if (_now() - float(rec.get("ts", 0))) <= TICKET_TTL_SEC:
                         return rec.get("req") or rec, "redis"
@@ -710,9 +709,9 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        # ✅ תיקון מלא: מפתח תקין + איסוף גם מהמפתח ההיסטורי השגוי (לשמירת תאימות).
+        # מפתח תקין + תאימות למפתח היסטורי שגוי
         key_good = f"{NS}:expired_log"
-        key_bad  = key_good + "}"  # היסטורי שגוי – עדיין נאסוף ממנו אם קיים
+        key_bad  = key_good + "}"
 
         items: List[str] = []
         with suppress(Exception):
@@ -802,6 +801,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
