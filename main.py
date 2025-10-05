@@ -13,7 +13,7 @@ import logging
 import traceback
 import inspect
 from contextlib import suppress
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable, Tuple
 from collections import Counter
 
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
@@ -199,8 +199,13 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
     if not BOT_TOKEN or not ADMIN_CHAT_ID:
         return {"ok": False, "skipped": True}
+    try:
+        chat_id: Any = int(ADMIN_CHAT_ID) if str(ADMIN_CHAT_ID).isdigit() else ADMIN_CHAT_ID
+    except Exception:
+        chat_id = ADMIN_CHAT_ID
+
     payload: Dict[str, Any] = {
-        "chat_id": int(ADMIN_CHAT_ID) if str(ADMIN_CHAT_ID).isdigit() else ADMIN_CHAT_ID,
+        "chat_id": chat_id,
         "text": text, "parse_mode": "HTML", "disable_web_page_preview": True,
     }
     if approve_url or reject_url or preview_url:
@@ -417,7 +422,7 @@ def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp
 # Storage abstraction (redis + ConfirmStore)
 import json as _json
 
-async def _load_ticket(tid: str):
+async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if aioredis and REDIS_URL:
         try:
             r = await _redis()
@@ -427,13 +432,13 @@ async def _load_ticket(tid: str):
                     rec = _json.loads(raw)
                     from time import time as _now
                     if (_now() - float(rec.get("ts", 0))) <= TICKET_TTL_SEC:
-                        return rec.get("req") or rec, "redis"
+                        return (rec.get("req") or rec), "redis"
         except Exception as e:
             logger.warning("redis_load_failed: %s", e)
     try:
         for it in (ConfirmStore.pending() or []):
             if str(it.get("ticket_id")) == str(tid):
-                return it.get("req") or it, "confirmstore"
+                return (it.get("req") or it), "confirmstore"
     except Exception as e:
         logger.warning("confirmstore_load_failed: %s", e)
     return None, "none"
@@ -649,19 +654,20 @@ async def ui_pending(request: Request = None):
         with suppress(Exception):
             r = await _redis()
             if r:
-                # naive scan for keys (small scale)
-                it = 0
+                cursor: Any = 0
                 while True:
-                    res = await r.scan(it, match=f"{NS}:ticket:*", count=200)
-                    it = res[0]
+                    res = await r.scan(cursor, match=f"{NS}:ticket:*", count=200)
+                    # aioredis may return cursor as int or str
+                    cursor = int(res[0]) if not isinstance(res[0], int) else res[0]
                     keys = res[1]
                     for k in keys:
                         raw = await r.get(k)
-                        if not raw: continue
+                        if not raw:
+                            continue
                         obj = json.loads(raw)
                         req = obj.get("req") or {}
                         items.append(req)
-                    if it == 0:
+                    if cursor == 0:
                         break
 
     # from ConfirmStore
@@ -675,15 +681,16 @@ async def ui_pending(request: Request = None):
 
     rows = []
     for t in items:
-        tid = _md_html(str(t.get("ticket_id","")))
+        raw_tid = str(t.get("ticket_id",""))
+        tid_disp = _md_html(raw_tid)
         sym = _md_html(str(t.get("symbol","")))
         side = _md_html(str(t.get("side","")))
         qty = _md_html(str(t.get("qty","")))
         lev = _md_html(str(t.get("leverage","")))
-        link = f"{base}/ops/ui/ticket?ticket_id={tid}"
+        link = f"{base}/ops/ui/ticket?ticket_id={raw_tid}"
         rows.append(
             f"<tr>"
-            f"<td style='padding:.4rem .6rem'><a href='{link}'>👁 {tid}</a></td>"
+            f"<td style='padding:.4rem .6rem'><a href='{link}'>👁 {tid_disp}</a></td>"
             f"<td style='padding:.4rem .6rem'>{sym}</td>"
             f"<td style='padding:.4rem .6rem'>{side}</td>"
             f"<td style='padding:.4rem .6rem'>{qty}</td>"
@@ -934,6 +941,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
