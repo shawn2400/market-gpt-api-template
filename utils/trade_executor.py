@@ -79,7 +79,7 @@ async def _tg_send(text: str) -> Dict[str, Any]:
     chat_id = int(os.getenv("TRADE_LOG_CHAT_ID") or TELEGRAM_CHAT_ID or 0)
     token = os.getenv("TELEGRAM_BOT_TOKEN") or BOT_TOKEN
     if not (chat_id and token):
-        return {"ok": False, "skipped": True}
+        return {"ok": False, "skipped": True, "reason": "no_chat_or_token"}
     payload = {"chat_id": chat_id, "text": text, "parse_mode": TELEGRAM_PARSE_MODE or "HTML", "disable_web_page_preview": True}
     try:
         async with httpx.AsyncClient(timeout=12.0) as cli:
@@ -178,7 +178,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         stp_filled, stp_fill_px = await asyncio.to_thread(_is_filled, stp_id)
 
         if lim_filled and not stp_filled:
-            with suppress(Exception): futures_cancel_order(sym, lim_id)
+            # FIX: כש-LIMIT מתמלא – מבטלים את ה-STOP (ולא את ה-LIMIT)
+            with suppress(Exception): futures_cancel_order(sym, stp_id)
             mk = get_price(sym) or futures_mark_price(sym) or lim_fill_px or limit_p
             if mk and lim_fill_px:
                 bps = abs(lim_fill_px - mk) / max(mk, 1e-9) * 10000.0
@@ -617,6 +618,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
