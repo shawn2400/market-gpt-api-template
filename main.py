@@ -1,717 +1,681 @@
-# main.py
+# routes/ops_approve.py
 from __future__ import annotations
-import os, time, asyncio, logging, pkgutil, httpx
-from pathlib import Path
-from typing import Any, Dict, Optional, Iterable, List
-from fnmatch import fnmatch
+import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect, traceback
+from contextlib import suppress
+from typing import Any, Dict, Optional, List, Callable
+from fastapi import APIRouter, HTTPException, Body, Query, Request
+from fastapi.responses import HTMLResponse
+import httpx
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, PlainTextResponse
-from fastapi.openapi.utils import get_openapi
-from fastapi.staticfiles import StaticFiles
-from fastapi.exceptions import RequestValidationError
-from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.gzip import GZipMiddleware
+logger = logging.getLogger("algogpt.ops_approve")
+router = APIRouter(tags=["ops-approval"])
 
-# ---------- Prometheus (אופציונלי) ----------
+# --- (optional) metrics wiring ---
 try:
-    from prometheus_client import make_asgi_app
-    _prom_app = make_asgi_app()
+    from routes.metrics import (
+        record_approval_created,
+        record_approval_approved,
+        record_approval_rejected,
+    )
 except Exception:
-    def make_asgi_app():
-        async def _dummy_app(scope, receive, send):
-            # אפליקציה ריקה במקום /metrics אם prometheus_client לא מותקן
-            if scope["type"] == "http":
-                await send({
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [(b"content-type", b"text/plain; charset=utf-8")],
-                })
-                await send({"type": "http.response.body", "body": b""})
-        return _dummy_app
-    _prom_app = make_asgi_app()
+    def record_approval_created(): pass
+    def record_approval_approved(): pass
+    def record_approval_rejected(): pass
 
-# ---------- utils.* (פולבאקים בטוחים) ----------
-# auth
+# -------- Optional Redis ----------
 try:
-    from utils.auth import extract_token, allow_all, token_matches, get_loaded_tokens, get_public_paths
+    import redis.asyncio as aioredis  # type: ignore
 except Exception:
-    def extract_token(request: Request, a_hdr: Optional[str], x_hdr: Optional[str]) -> Optional[str]:
-        # מנסה לקחת מה-Header Authorization או X-API-Key או מה-query ?api_key=
-        tok = None
-        if a_hdr and a_hdr.lower().startswith("bearer "):
-            tok = a_hdr.split(" ", 1)[1].strip()
-        if not tok and x_hdr:
-            tok = x_hdr.strip()
-        if not tok:
-            tok = request.query_params.get("api_key")
-        return tok
+    aioredis = None  # type: ignore
 
-    def allow_all() -> bool:
-        # ברירת מחדל: אם לא טעונים טוקנים, נאפשר הכול (אפשר לשנות ל-False כדי לחסום)
-        return True
+NS                   = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL            = os.getenv("REDIS_URL", "").strip()
+PUBLIC_HOST          = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip()
+HMAC_SECRET          = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+ADMIN_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
+BOT_TOKEN            = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+API_BEARER_TOKEN     = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+TICKET_TTL_SEC       = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
+ETA_SMART_ENABLE     = (os.getenv("ETA_SMART_ENABLE","0").lower() in ("1","true","yes","on"))
+ETA_VELOCITY_WINDOW  = int(os.getenv("ETA_VELOCITY_WINDOW","30"))
+DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL","15m")
 
-    def token_matches(tok: Optional[str]) -> bool:
-        # אם תרצה לאכוף API KEY, שים משתנה סביבה API_KEY=...
-        expected = os.getenv("API_KEY", "").strip()
-        if not expected:
-            return True  # אין מפתח נדרש
-        return (tok or "") == expected
+def _bool_env(name: str, default: bool=False) -> bool:
+    return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
 
-    def get_loaded_tokens(mask: bool = True):
-        val = os.getenv("API_KEY","")
-        if not val:
-            return []
-        return [val[:2] + "***" + val[-2:] if mask else val]
+TP_LADDER_ON_APPROVE       = _bool_env("TP_LADDER_ON_APPROVE", False)
+APPROVAL_FAIL_OPEN_ON_VELOCITY = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
+VELOCITY_LOG_LEVEL         = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
+DEBUG_APPROVE_HTML         = _bool_env("DEBUG_APPROVE_HTML", False)
+# FALLBACK נשלט ע"י PROPOSE_BLOCK_ON_FAIL (0 ➜ fallback ON, 1 ➜ fallback OFF)
+APPROVE_FALLBACK_TO_MARKET = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
 
-    def get_public_paths():
-        return {"paths":[], "prefixes":[]}
-
-# json logger
+# -------- ConfirmStore fallback ----------
 try:
-    from utils.json_logger import setup_json_logging
-except Exception:
-    def setup_json_logging():
-        # לוגר בסיסי אם אין מודול json_logger
-        logger = logging.getLogger("algogpt")
-        handler = logging.StreamHandler()
-        fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
-        handler.setFormatter(fmt)
-        logger.handlers[:] = [handler]
-        logger.propagate = False
-        return logger
-
-# metrics middleware
-try:
-    from utils.metrics_middleware import MetricsMiddleware
-except Exception:
-    class MetricsMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
-            return await call_next(request)
-
-# response size limiter
-try:
-    from utils.response_limits import ResponseSizeLimiter
-except Exception:
-    class ResponseSizeLimiter(BaseHTTPMiddleware):
-        def __init__(self, app, max_bytes: int = 5_242_880):
-            super().__init__(app)
-            self.max_bytes = max_bytes
-        async def dispatch(self, request: Request, call_next):
-            resp = await call_next(request)
-            # אם התוכן גדול מדי – נחזיר 413; אחרת, נשמר סטטוס/כותרות/סוג-תוכן
-            try:
-                body_chunks: List[bytes] = []
-                total = 0
-                async for chunk in resp.body_iterator:
-                    body_chunks.append(chunk)
-                    total += len(chunk)
-                    if total > self.max_bytes:
-                        return PlainTextResponse("Response too large", status_code=413)
-                from starlette.responses import Response
-                status = getattr(resp, "status_code", 200)
-                media_type = getattr(resp, "media_type", None)
-                headers = dict(getattr(resp, "headers", {}))
-                return Response(b"".join(body_chunks), status_code=status, media_type=media_type, headers=headers)
-            except Exception:
-                return resp
-
-# ---- Binance client (fallbacks) ----
-try:
-    from utils.binance_client import fapi_ping, futures_balance, get_price, futures_exchange_info_safe
-except Exception:
-    def fapi_ping() -> bool: return False
-    def futures_balance(): return None
-    def get_price(symbol: str) -> Optional[float]: return None
-    def futures_exchange_info_safe(force_refresh: bool = False): return None
-
-# ---- Telegram notifier (fallbacks) ----
-try:
-    from utils.telegram_notifier_core import ensure_ops_schedulers_started, send_ops_digest_now, send_eod_report_now
-except Exception:
-    async def ensure_ops_schedulers_started() -> None: return None
-    async def send_ops_digest_now(hours: Optional[int] = None) -> None: return None
-    async def send_eod_report_now() -> None: return None
-
-# ---- InternalAuthMiddleware (optional) ----
-try:
-    from app.middlewares import InternalAuthMiddleware
-except Exception:
-    class InternalAuthMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next): return await call_next(request)
-
-# ---- RateLimitMiddleware (optional) ----
-try:
-    from app.rate_limit_mw import RateLimitMiddleware
-except Exception:
-    class RateLimitMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next): return await call_next(request)
-
-# ---- ConfirmStore (fallback) ----
-try:
-    from utils.trade_executor import ConfirmStore
+    from utils.trade_executor import ConfirmStore  # type: ignore
 except Exception:
     try:
-        from utils.auto_executor import ConfirmStore  # type: ignore
+        from app.trade_executor import ConfirmStore  # type: ignore
     except Exception:
-        class ConfirmStore:  # type: ignore
-            _P: Dict[str, Dict[str, Any]] = {}
-            @classmethod
-            def pending(cls) -> List[Dict[str, Any]]:
-                return list(cls._P.values())
-            @classmethod
-            def create(cls, payload: Dict[str, Any]) -> str:
-                import time as _t
-                tid = payload.get("ticket_id") or f"TKT-{int(_t.time()*1000)}"
-                payload["ticket_id"] = tid
-                payload.setdefault("created_ts", int(_t.time()))
-                payload.setdefault("ttl_sec", int(os.getenv("OPS_TICKET_TTL_SEC", "1800")))
-                cls._P[tid] = payload
-                return tid
-            @classmethod
-            def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]]:
-                it = cls._P.pop(ticket_id, None)
-                if not it:
-                    return {"ok": False, "error": "not_found"}
-                it["approved"] = approved
-                it["decided_ts"] = int(time.time())
-                return {"ok": True, "approved": approved, "ticket_id": ticket_id}
-            @classmethod
-            def flush_all(cls) -> None:
-                cls._P.clear()
-            flush = reset = flush_all
+        from main import ConfirmStore  # type: ignore
 
-# ---- runtime counters (fallbacks) ----
+# -------- Position sizing (AUTO_QTY) ----------
 try:
-    from utils.runtime_counters import ws_user_status, exec_get_counters
+    from app.utils.position_sizing import ensure_final_qty  # type: ignore
 except Exception:
-    def ws_user_status() -> Dict[str, Any]:
-        return {"running": False, "reconnects": None, "ttl_sec": None, "inter_event_ewma_ms": None}
-    def exec_get_counters() -> Dict[str, Any]:
-        return {"tick_ewma_ms": None,"tick_p95_ms": None,"tick_p99_ms": None,"last_tick_age_sec": None,
-                "timeouts_burst": 0,"no_trade_streak": 0,"current_interval": int(os.getenv("SCAN_INTERVAL","60"))}
+    from utils.position_sizing import ensure_final_qty  # type: ignore
 
-# ---- Trade Manager (optional) ----
-TRADE_MANAGER_ENABLE = os.getenv("TRADE_MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
-TRADE_MANAGER_INTERVAL_SEC = int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20"))
-try:
-    from utils.trade_manager import manage_open_trades_loop  # type: ignore
-except Exception:
-    manage_open_trades_loop = None  # type: ignore
-
-def _coerce_log_level(val):
-    import logging as _l
-    if isinstance(val,int) or (isinstance(val,str) and str(val).isdigit()): return int(val)
-    m = {"debug":_l.DEBUG,"info":_l.INFO,"warning":_l.WARNING,"warn":_l.WARNING,"error":_l.ERROR,"critical":_l.CRITICAL}
-    return m.get(str(val).strip().lower(), _l.INFO)
-
-logger = setup_json_logging()
-logging.getLogger().setLevel(_coerce_log_level(os.getenv("LOG_LEVEL","INFO")))
-
-# base dirs
-for d in ("static","logs","data"):
-    try: Path(d).mkdir(parents=True, exist_ok=True)
-    except Exception as e: logger.warning({"event":"mkdir_failed","dir":d,"error":str(e)})
-
-APP_VERSION = os.getenv("ALGOGPT_VERSION","2.18.0")
-app = FastAPI(title="AlgoGPT API", version=APP_VERSION, description="AlgoGPT - Algorithmic Trading")
-
-# ---------- Validation error => 422 ----------
-@app.exception_handler(RequestValidationError)
-async def _validation_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
-
-# ---------- OpenAPI filtering ----------
-def custom_openapi():
-    if getattr(app, "openapi_schema", None): return app.openapi_schema
-    schema = get_openapi(title=app.title, version=APP_VERSION, description=app.description, routes=app.routes)
-    max_ops = int(os.getenv("OPENAPI_PUBLIC_MAX_OPS","30"))
-    hide_patterns = [p.strip() for p in os.getenv("OPENAPI_HIDE_PATTERNS","").split(",") if p.strip()]
-    include_tags = {t.strip() for t in os.getenv("OPENAPI_INCLUDE_TAGS","").split(",") if t.strip()}
-    new_paths: Dict[str, Any] = {}; count = 0
-    for path in sorted(schema.get("paths", {}).keys()):
-        methods = schema["paths"][path]; new_methods = {}; path_hidden = any(fnmatch(path, pat) for pat in hide_patterns)
-        for method, op in list(methods.items()):
-            if method.startswith("x-"): continue
-            if op.get("x-internal") is True: continue
-            if include_tags and not include_tags.intersection(set(op.get("tags") or [])): continue
-            if path_hidden: continue
-            if max_ops > 0 and count >= max_ops: continue
-            new_methods[method] = op; count += 1
-        if new_methods: new_paths[path] = new_methods
-    schema["paths"] = new_paths; app.openapi_schema = schema; return app.openapi_schema
-app.openapi = custom_openapi
-
-# ---------- Class middlewares ----------
-app.add_middleware(ResponseSizeLimiter, max_bytes=int(os.getenv("RESPONSE_MAX_BYTES","5242880")))
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-
-UI_DOMAIN = os.getenv("UI_DOMAIN","").strip()
-_cao = os.getenv("CORS_ALLOW_ORIGINS", "*")
-CORS_ALLOWED = [UI_DOMAIN] if UI_DOMAIN else [o for o in _cao.split(",") if o]
-CORS_ALLOW_CREDENTIALS_CFG = os.getenv("CORS_ALLOW_CREDENTIALS","0").lower() in ("1","true","on")
-CORS_ALLOW_CREDENTIALS_EFFECTIVE = CORS_ALLOW_CREDENTIALS_CFG and CORS_ALLOWED != ["*"]
-
-app.add_middleware(CORSMiddleware,
-    allow_origins=["*"] if not CORS_ALLOWED else CORS_ALLOWED,
-    allow_methods=["*"], allow_headers=["*"], allow_credentials=CORS_ALLOW_CREDENTIALS_EFFECTIVE)
-
-# InternalAuthMiddleware כבוי כברירת מחדל — הדלקה רק אם צריך
-if os.getenv("INTERNAL_AUTH_ENABLE","0").lower() in ("1","true","on"):
-    app.add_middleware(InternalAuthMiddleware)
-
-# Rate limit (אם קיים)
-app.add_middleware(RateLimitMiddleware)
-
-app.add_middleware(MetricsMiddleware)
-app.mount("/metrics", _prom_app)
-
-# static
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# ---------- Public paths ----------
-METRICS_PUBLIC = os.getenv("METRICS_PUBLIC","1").lower() in ("1","true","yes","on")
-PUBLIC_STATUS  = os.getenv("SECURITY_PUBLIC_STATUS","1").lower() in ("1","true","yes","on")
-def _split_multi(s: str) -> Iterable[str]:
-    import re; return [x for x in re.split(r"[,\n\r\t ]+", (s or "").strip()) if x]
-
-DEFAULT_PUBLIC_PATHS = {
-    "/", "/openapi.json", "/health", "/healthz", "/readyz", "/docs", "/redoc",
-    "/telegram/webhook", "/telegram/callback", "/telegram/ping",
-    "/provider/cryptopanic/webhook",
-    "/status/ping", "/status/ws", "/status/executor", "/status/all", "/status/auth",
-    "/debug/health", "/_debug/auth", "/debug/env", "/debug/refresh-auth", "/executor/status",
-    "/ops/approve", "/ops/approve-link", "/ops/approve/signed", "/ops/reject", "/ops/digest/expired",
-    "/_debug/hmac", "/_debug/echo-hmac", "/_debug/routes",
-    "/alerts/ping", "/alerts/ingest", "/alerts/_debug/alerts-hmac-check",
-    "/ui/dashboard", "/ops/ui", "/ops/ui/ticket",
-    "/trade/approve", "/trade/reject",
-    "/metrics-json", "/metrics/labels", "/metrics/health",
-}
-DEFAULT_PUBLIC_PREFIXES = ["/price", "/static/", "/risk"]
-CFG_PUBLIC = set(_split_multi(os.getenv("SECURITY_PUBLIC_PATHS","")))
-CFG_PUBLIC_PREFIXES = set(_split_multi(os.getenv("SECURITY_PUBLIC_PREFIXES","")))
-if METRICS_PUBLIC: CFG_PUBLIC.add("/metrics")
-EFFECTIVE_PUBLIC_PATHS = set(DEFAULT_PUBLIC_PATHS) if PUBLIC_STATUS else set()
-EFFECTIVE_PUBLIC_PATHS |= CFG_PUBLIC
-EFFECTIVE_PUBLIC_PREFIXES = list(DEFAULT_PUBLIC_PREFIXES) if PUBLIC_STATUS else []
-EFFECTIVE_PUBLIC_PREFIXES += list(CFG_PUBLIC_PREFIXES)
-
-logger.info({"event":"public_paths_config","public_status":PUBLIC_STATUS,
-             "paths":sorted(EFFECTIVE_PUBLIC_PATHS),"prefixes":sorted(EFFECTIVE_PUBLIC_PREFIXES)})
-
-# ---------- rndr-id ----------
-INSTANCE_ID = (
-    os.getenv("RENDER_INSTANCE_ID")
-    or os.getenv("INSTANCE_ID")
-    or os.getenv("HOSTNAME")
-    or "unknown"
-)
-
-# ---------- Secure global auth middleware ----------
-class SecureAuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, public_paths: set[str], public_prefixes: list[str]):
-        super().__init__(app)
-        self.public_paths = set(public_paths)
-        self.public_prefixes = list(public_prefixes)
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if request.method.upper() == "OPTIONS":
-            return await call_next(request)
-        if path in self.public_paths or any(path.startswith(p) for p in self.public_prefixes):
-            return await call_next(request)
-        if allow_all():
-            return await call_next(request)
-        try:
-            a_hdr = request.headers.get("authorization") or request.headers.get("Authorization") or ""
-            x_hdr = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-            tok = extract_token(request, a_hdr, x_hdr)
-            if not token_matches(tok):
-                return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
-        except Exception:
-            logging.getLogger("algogpt").exception("SecureAuthMiddleware: auth logic failed")
-            return JSONResponse(status_code=500, content={"ok": False, "error": "middleware_auth_failed"})
-        return await call_next(request)
-
-app.add_middleware(
-    SecureAuthMiddleware,
-    public_paths=EFFECTIVE_PUBLIC_PATHS,
-    public_prefixes=EFFECTIVE_PUBLIC_PREFIXES,
-)
-
-# ---------- ONE safe middleware: רק מוסיף כותרות ושומר קוד סטטוס ----------
-@app.middleware("http")
-async def _final_safety_and_headers(request: Request, call_next):
-    try:
-        resp = await call_next(request)
-        if resp is None:
-            # אין Response — נזרוק שגיאה אמיתית (FastAPI יחזיר 500)
-            raise RuntimeError("No response from downstream")
-    except HTTPException:
-        # לא לגעת ב-HTTPException — לשמר 404/401/422 וכו'
-        raise
-    except Exception:
-        logging.getLogger("algogpt").exception("final_mw: call_next failed")
-        # לתת ל-FastAPI להחזיר 500 אמיתי
-        raise
-
-    # הזרקת כותרות בלי לשנות סטטוס/גוף
-    try:
-        resp.headers["x-app-instance-id"] = INSTANCE_ID
-        resp.headers["rndr-id"] = INSTANCE_ID
-    except Exception:
-        pass
-    return resp
-
-# ---------- our safe digest/eod routes (registered BEFORE routers) ----------
-@app.get("/ops/digest/now", include_in_schema=False)
-async def ops_digest_now(hours: Optional[int] = None):
+# -------- Prices ----------
+def _get_last_price(symbol: str) -> Optional[float]:
     """
-    תואם-לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
+    מנסה להביא מחיר מסינקים קיימים; נופל חזרה ל-binance client אם צריך.
     """
-    ok, err = True, None
-    try:
-        import inspect
-        params = {}
-        try:
-            sig = inspect.signature(send_ops_digest_now)  # type: ignore
-            if "hours" in sig.parameters:
-                params["hours"] = hours
-        except Exception:
-            params = {}
-        if params:
-            await send_ops_digest_now(**params)  # type: ignore
-        else:
-            await send_ops_digest_now()  # type: ignore
-    except TypeError:
-        try:
-            await send_ops_digest_now()  # type: ignore
-        except Exception as e:
-            ok, err = False, str(e)
-    except Exception as e:
-        ok, err = False, str(e)
-    effective_hours = hours or int(os.getenv("OPS_DIGEST_INTERVAL_HOURS","3"))
-    return {"ok": ok, "sent": ok, "hours": effective_hours, "error": err}
+    with suppress(Exception):
+        from utils.binance_client import get_price  # type: ignore
+        p = get_price(symbol)
+        if p: return float(p)
+    with suppress(Exception):
+        from binance.client import Client  # type: ignore
+        api_key = os.getenv("BINANCE_API_KEY","").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        if not api_key or not api_sec:
+            return None
+        cli = Client(api_key, api_sec)
+        info = cli.futures_symbol_ticker(symbol=symbol)
+        if info and "price" in info:
+            return float(info["price"])
+    return None
 
-@app.get("/ops/eod/now", include_in_schema=False)
-async def ops_eod_now():
-    await send_eod_report_now()
-    return {"ok":True,"sent":True}
+# -------- Helpers ----------
+def _md_html(s: str) -> str:
+    return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
-# ---------- include routers (WITHOUT routes.ops_digest to avoid conflicts) ----------
-def _try_include(module_path: str) -> bool:
-    try:
-        mod = __import__(module_path, fromlist=["router"])
-        if hasattr(mod, "router"):
-            app.include_router(mod.router)
-            logger.info({"event":"router_registered","router":module_path})
-            return True
-        logger.warning({"event":"router_missing_router_attr","router":module_path})
-    except Exception as e:
-        logger.warning({"event":"router_register_failed","router":module_path,"error":str(e)})
-    return False
+def _html(msg: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:560px;margin:3rem auto;line-height:1.5'>"
+        f"<h2 style='margin:0 0 .5rem 0'>{msg}</h2>"
+        "<p style='color:#666'>אפשר לחזור חזרה לטלגרם.</p>"
+        "</body>"
+    )
 
-_registered_paths = set()
-_routes_only = [m.strip() for m in os.getenv("ROUTES_ONLY","").split(",") if m.strip()]
+def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
+    key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text)==64 else secret_hex_or_text.encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
-if _routes_only:
-    for module_path in _routes_only:
-        if module_path == "routes.ops_digest":
-            continue
-        _try_include(module_path)
-else:
-    for _mod in (
-        "routes.scan_top_volume",
-        "routes.scan_now_alias",
-        "routes.ops_guard",
-        "routes.telegram_ping",
-        "routes.debug_hmac",
-        "routes.ops_approve",
-        "routes.trade",
-        "routes.trade_approvals",
-        "routes.auto_trade",
-        "routes.ops_ui",
-        "routes.ops_flags",
-        "routes.position_ops",
-        "routes.calibration",
-        # "routes.ops_digest",  # ← בכוונה לא לכלול כדי למנוע התנגשות עם /ops/digest/now
-    ):
-        _try_include(_mod)
-    # אם אין תיקיית routes – הקריאה הזו לא תכשיל את האפליקציה
-    try:
-        for m in pkgutil.iter_modules(["routes"]):
-            module_path = f"routes.{m.name}"
-            if module_path == "routes.ops_digest":
-                continue
-            _try_include(module_path)
-        try:
-            for r in app.router.routes:
-                try: _registered_paths.add(getattr(r, "path", None))
-                except Exception: pass
-        except Exception: pass
-    except Exception:
-        pass
+async def _redis():
+    if not (aioredis and REDIS_URL):
+        return None
+    return aioredis.from_url(REDIS_URL, decode_responses=True)
 
-def _route_exists(path: str) -> bool:
-    try:
-        for r in app.router.routes:
-            if getattr(r, "path", None) == path: return True
-    except Exception: pass
-    return False
+# -------- Mode parsing ----------
+_MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
+def _parse_mode(note: Optional[str]) -> Optional[str]:
+    if not note: return None
+    m = _MODE_RX.search(str(note))
+    return m.group(1).upper() if m else None
 
-# ---------- base routes ----------
-@app.get("/")
-async def root():
-    return {"ok":True,"status":"ok","service":"app_full","title":"AlgoGPT API","version":APP_VERSION}
-
-@app.get("/health")
-async def health():
-    return {"ok":True,"status":"ok","version":APP_VERSION}
-
-@app.get("/debug/health", include_in_schema=False)
-async def debug_health():
-    return {"ok":True,"status":"ok","env":os.getenv("ENV","prod"),"version":APP_VERSION}
-
-def _mask(v: str) -> str:
-    if not v: return ""
-    if len(v) <= 8: return "*" * len(v)
-    return v[:4] + "*" * (len(v)-8) + v[-4:]
-
-@app.get("/debug/env", include_in_schema=False)
-async def debug_env():
-    return {
-        "ok": True,
-        "INSTANCE_ID": os.getenv("INSTANCE_ID", ""),
-        "ALERTS_INGEST_HMAC_SECRET": _mask(os.getenv("ALERTS_INGEST_HMAC_SECRET","")),
-        "ALERTS_INGEST_HMAC_KEY_IS_HEX": os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX",""),
-        "WEBHOOK_HMAC_SECRET": _mask(os.getenv("WEBHOOK_HMAC_SECRET","")),
-        "RATE_LIMIT_ENABLE": os.getenv("RATE_LIMIT_ENABLE",""),
-        "RATE_LIMIT_BACKEND": os.getenv("RATE_LIMIT_BACKEND",""),
-        "RL_FAIL_OPEN": os.getenv("RL_FAIL_OPEN",""),
-        "SCAN_RL_LIMIT": os.getenv("SCAN_RL_LIMIT",""),
-        "SCAN_RL_WINDOW": os.getenv("SCAN_RL_WINDOW",""),
+# -------- Telegram --------
+async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
+                              reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
+    if not BOT_TOKEN or not ADMIN_CHAT_ID:
+        return {"ok": False, "skipped": True}
+    payload: Dict[str, Any] = {
+        "chat_id": int(ADMIN_CHAT_ID) if str(ADMIN_CHAT_ID).isdigit() else ADMIN_CHAT_ID,
+        "text": text, "parse_mode": "HTML", "disable_web_page_preview": True,
     }
+    if approve_url or reject_url or preview_url:
+        row: List[Dict[str, Any]] = []
+        if preview_url: row.append({"text":"👁 Preview","url":preview_url})
+        if approve_url: row.append({"text":"✅ Approve","url":approve_url})
+        if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
+        payload["reply_markup"] = {"inline_keyboard":[row]}
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as cli:
+            r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
+        try:
+            data = r.json()
+        except Exception:
+            data = {"ok": False, "status": r.status_code, "text": r.text}
+        return data
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-@app.get("/status/ping")
-async def status_ping():
-    return {"ok":True,"ts_ms":int(time.time()*1000)}
+# -------- utils: dynamic kwargs filter --------
+def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        sig = inspect.signature(fn)
+        allowed = set(sig.parameters.keys())
+        return {k: v for k, v in kwargs.items() if k in allowed}
+    except Exception:
+        bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
+        return {k: v for k, v in kwargs.items() if k not in bad}
 
-if not _route_exists("/status/ws"):
-    @app.get("/status/ws")
-    async def status_ws():
-        st = ws_user_status(); return {"ok":True, **st}
+def _is_code_4061(err: Exception | str) -> bool:
+    s = str(err)
+    return "code=-4061" in s or "position side does not match" in s.lower()
 
-if not _route_exists("/status/executor"):
-    @app.get("/status/executor")
-    async def status_executor():
-        st = exec_get_counters(); return {"ok":True, **st}
+# -------- Position mode alignment ----------
+def _align_position_mode(client) -> None:
+    """
+    מיושר את מצב החשבון (Hedge/One-Way) לפי POSITION_MODE_OVERRIDE אם סופק.
+    """
+    mode_override = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
+    with suppress(Exception):
+        if mode_override in ("hedge","dual","dual_side","dual_side_position","dualposition"):
+            client.futures_change_position_mode(dualSidePosition="true")
+        elif mode_override in ("oneway","one_way","single","single_side","oneside"):
+            client.futures_change_position_mode(dualSidePosition="false")
 
-if not _route_exists("/status/all"):
-    @app.get("/status/all")
-    async def status_all():
-        try: ping_ok = bool(fapi_ping())
-        except Exception: ping_ok = False
-        ws = ws_user_status(); ex = exec_get_counters()
-        manager_enabled = os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on")
-        return {
-            "ok": True,
-            "version": APP_VERSION,
-            "instance": INSTANCE_ID,
-            "ws": ws,
-            "executor": ex,
-            "manager": {"enabled": manager_enabled},
-            "binance_ping_ok": ping_ok
+# -------- Execution backends ----------
+async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        from utils.trade_executor import place_futures_market  # type: ignore
+        return await place_futures_market(ticket)
+    except Exception:
+        pass
+
+    try:
+        from binance.client import Client  # type: ignore
+    except Exception as e:
+        logger.error("binance import failed: %s", e)
+        return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
+
+    try:
+        api_key = os.getenv("BINANCE_API_KEY","").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        if not api_key or not api_sec:
+            return {"ok": False, "error": "binance_keys_missing"}
+        client = Client(api_key, api_sec)
+
+        # יישור מצב חשבון לפי ENV (אם מוגדר)
+        _align_position_mode(client)
+
+        symbol   = str(ticket.get("symbol","")).upper()
+        side     = str(ticket.get("side","")).upper()
+        qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
+        leverage = int(ticket.get("leverage") or 1)
+        if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+            return {"ok": False, "error": "bad_ticket_params"}
+
+        with suppress(Exception):
+            client.futures_change_leverage(symbol=symbol, leverage=leverage)
+
+        base_kwargs: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": qty,
+            "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-@app.get("/status/auth")
-async def status_auth():
-    toks = get_loaded_tokens(mask=True); public = get_public_paths()
-    return {"ok":True,"tokens_count":len(toks),"tokens":toks,"public":public}
+        # אל תשלח positionSide אם הוא "BOTH" או לא חוקי
+        pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
+        attempt_order = dict(base_kwargs)
+        if pos_side_supplied in ("LONG","SHORT"):
+            attempt_order["positionSide"] = pos_side_supplied
 
-@app.get("/price/{symbol}")
-async def price(symbol: str):
-    src = "binance_fapi"; ts = int(time.time()*1000); err = ""
-    try:
-        p = get_price(symbol); ok = bool(p and p > 0)
-        if not ok: err = "no price"
-    except Exception as e:
-        p = None; ok = False; err = str(e)
-    return {"ok":ok,"symbol":symbol.upper(),"price":float(p) if p is not None else None,"source":src,"ts":ts,"error":err}
-
-@app.get("/readyz")
-async def readyz():
-    details: Dict[str, Any] = {}; err: Optional[str] = None
-    try:
-        details["binance_ping_ok"] = bool(fapi_ping())
-        if not details["binance_ping_ok"]: err = "binance ping failed"
-    except Exception as e:
-        details["binance_ping_ok"] = False; err = f"binance ping error: {e}"
-    try:
-        bal = futures_balance(); details["balance_ok"] = bool(bal and isinstance(bal, list))
-        if not details["balance_ok"]: err = (err or "") + "; balance not ok"
-    except Exception as e:
-        details["balance_ok"] = False; err = (err or "") + f"; balance error: {e}"
-    for s in ("BTCUSDT","ETHUSDT","SOLUSDT"):
-        try: details[f"price_{s}"] = get_price(s)
-        except Exception: details[f"price_{s}"] = None
-    return {"ok":(err is None), "error":err, "details":details}
-
-@app.post("/flush")
-async def flush_kill_switch():
-    done = False
-    for name in ("flush_all","flush","reset"):
         try:
-            fn = getattr(ConfirmStore, name, None)
-            if callable(fn): fn(); done = True; break
-        except Exception as e:
-            logger.warning({"event":"flush_failed","err":str(e)})
-    return {"ok":True,"flushed":done}
+            order = client.futures_create_order(**attempt_order)
+            return {"ok": True, "exchange": "binance_futures", "order": order}
+        except Exception as e1:
+            if not _is_code_4061(e1):
+                raise
+            # --- RETRY חכם על -4061 ---
+            # 1) נסה בלי positionSide בכלל
+            try:
+                retry_kwargs = dict(base_kwargs)
+                order = client.futures_create_order(**retry_kwargs)
+                return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
+            except Exception as e2:
+                # 2) נסה עם גזירה: LONG/SHORT לפי side
+                try:
+                    retry2_kwargs = dict(base_kwargs)
+                    retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
+                    order = client.futures_create_order(**retry2_kwargs)
+                    return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "derived_positionSide"}
+                except Exception as e3:
+                    logger.error("futures_create_order retries failed: first=%s, no_ps=%s, derived=%s", e1, e2, e3)
+                    return {
+                        "ok": False,
+                        "error": "order_failed",
+                        "detail": str(e3),
+                        "first_error": str(e1),
+                        "second_error": str(e2),
+                    }
 
-@app.get("/_debug/auth", include_in_schema=False)
-async def _debug_auth(request: Request):
-    a = request.headers.get("authorization") or request.headers.get("Authorization")
-    x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    t = extract_token(request, a, x)
-    return {"ok":True,"auth_header":a,"x_api_key":x,"query":dict(request.query_params),
-            "extracted_token":t,"matches":bool(token_matches(t)),
-            "tokens_loaded":get_loaded_tokens(mask=True)}
+    except Exception as e:
+        logger.error("futures_create_order failed: %s", e)
+        return {"ok": False, "error": "order_failed", "detail": str(e)}
 
-@app.get("/_debug/routes", include_in_schema=False)
-async def _debug_routes():
-    paths = sorted({getattr(r, "path", None) for r in app.router.routes if getattr(r, "path", None)})
-    return {"paths": paths}
-
-# ---------- startup/shutdown ----------
-WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
-API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
-TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK","1").lower() in ("1","true","yes","on")
-
-@app.on_event("startup")
-async def _startup_preflight_warmup():
+async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        from utils.auth import get_loaded_tokens as _glt
-        logger.info({"event":"auth.tokens_loaded","tokens":_glt(mask=True)})
-    except Exception: pass
-    try: _ = futures_exchange_info_safe(force_refresh=True)
-    except Exception as e: logger.warning({"event":"warmup.exinfo_failed","error":str(e)})
-    try:
-        _ = get_price("BTCUSDT")
         try:
-            from utils.get_klines import get_klines_sync  # type: ignore
-            _ = get_klines_sync("BTCUSDT", interval=os.getenv("DEFAULT_INTERVAL","15m"), limit=50)
-        except Exception: pass
-    except Exception as e: logger.warning({"event":"warmup.price_failed","error":str(e)})
-
-@app.on_event("startup")
-async def _startup_webhook():
-    if not BOT_TOKEN or not TELEGRAM_AUTO_WEBHOOK: return
-    public_host = os.getenv("PUBLIC_HOST","").strip()
-    if not public_host: return
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(f"{API_BASE}/setWebhook",
-                json={"url":f"{public_host.rstrip('/')}/telegram/webhook",
-                      "secret_token":WEBHOOK_SECRET,"drop_pending_updates":True,"max_connections":40})
-    except Exception as e:
-        logging.getLogger("algogpt.telegram").warning("setWebhook failed: %s", e)
-
-@app.on_event("startup")
-async def _startup_user_stream():
-    try:
-        if os.getenv("USER_STREAM_ENABLE","1").lower() in ("1","true","yes","on"):
-            from utils import ws_user_stream  # type: ignore
-            ws_user_stream.start(); logger.info({"event":"ws_user_stream_autostart"})
-    except Exception as e:
-        logger.warning({"event":"ws_user_stream_autostart_failed","error":str(e)})
-
-@app.on_event("startup")
-async def _ops_schedulers():
-    await ensure_ops_schedulers_started()
-
-# --- Approvals GC (auto-reject expired) ---
-try:
-    from utils.approvals_gc import start_approvals_gc as _start_gc  # type: ignore
-    _gc_needs_interval = True
-except Exception:
-    try:
-        from utils.approvals_gc import start_gc_task as _start_gc  # type: ignore
-        _gc_needs_interval = False
-    except Exception:
-        _start_gc = None  # type: ignore
-        _gc_needs_interval = False
-
-APPROVAL_GC_ENABLE = os.getenv("APPROVAL_GC_ENABLE","1").lower() in ("1","true","yes","on")
-APPROVAL_GC_INTERVAL_SEC = int(os.getenv("APPROVAL_GC_INTERVAL_SEC","15"))
-
-@app.on_event("startup")
-async def _startup_approvals_gc():
-    try:
-        if APPROVAL_GC_ENABLE and _start_gc:
-            if _gc_needs_interval:
-                _start_gc(interval=APPROVAL_GC_INTERVAL_SEC)
-            else:
-                _start_gc()
-            logging.getLogger("algogpt.approvals.gc").info({"event":"gc.start_ok","interval":APPROVAL_GC_INTERVAL_SEC})
-    except Exception as e:
-        logging.getLogger("algogpt.approvals.gc").warning({"event":"gc.start_failed","err":str(e)})
-
-# --- Expired-digest Job (auto) ---
-try:
-    from utils.approvals_digest_job import start_expired_digest_job  # type: ignore
-except Exception:
-    start_expired_digest_job = None  # type: ignore
-
-_bg_tasks: Dict[str, asyncio.Task] = {}
-
-@app.on_event("startup")
-async def _startup_expired_digest_job():
-    try:
-        if start_expired_digest_job:
-            maybe = start_expired_digest_job()  # may return Task/None/Coroutine
-            task = None
-            if asyncio.iscoroutine(maybe):
-                task = asyncio.create_task(maybe, name="expired_digest_job")
-            elif isinstance(maybe, asyncio.Task):
-                task = maybe
-            if task:
-                _bg_tasks["expired_digest_job"] = task
-            logging.getLogger("algogpt.approvals.digest_job").info({"event":"digest_job.start_ok"})
-    except Exception as e:
-        logging.getLogger("algogpt.approvals.digest_job").warning({"event":"digest_job.start_failed","err":str(e)})
-
-@app.on_event("startup")
-async def _start_trade_manager_loop():
-    if TRADE_MANAGER_ENABLE and manage_open_trades_loop:
-        t = asyncio.create_task(manage_open_trades_loop(interval=TRADE_MANAGER_INTERVAL_SEC), name="trade_manager")
-        _bg_tasks["trade_manager"] = t
-        logger.info({"event":"trade_manager_loop_started","interval_sec":TRADE_MANAGER_INTERVAL_SEC})
-
-@app.on_event("shutdown")
-async def _graceful_shutdown():
-    for name, t in list(_bg_tasks.items()):
-        if t and not t.done():
-            try: t.cancel()
-            except Exception: pass
-    for name, t in list(_bg_tasks.items()):
-        if not t: continue
-        try:
-            await t
-        except asyncio.CancelledError:
-            pass
+            from utils.trade_executor import execute_trade_live  # type: ignore
         except Exception:
-            logging.getLogger("algogpt").exception("background task %s crashed on shutdown", name)
+            from app.trade_executor import execute_trade_live  # type: ignore
+    except Exception as e:
+        logger.error("execute_trade_live missing: %s", e)
+        return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
 
-# ---------- run ----------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+    symbol   = str(ticket.get("symbol","")).upper()
+    side     = str(ticket.get("side","")).upper()
+    qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
+    leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
 
+    # נרמל position_side ל-LONG/SHORT בלבד; אם "BOTH" או ריק — נגזור לפי side
+    raw_ps  = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
+    pos_side = raw_ps if raw_ps in ("LONG","SHORT") else ("LONG" if side=="BUY" else "SHORT")
 
+    tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
+    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
+    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
 
+    if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+        return {"ok": False, "error": "bad_ticket_params"}
+
+    base_kwargs: Dict[str, Any] = dict(
+        symbol=symbol,
+        side=side,
+        budget=None,
+        leverage=leverage,
+        dry_run=False,
+        quantity=qty,
+        entry=None,
+        tp_targets=tp_targets or None,
+        sl_targets=sl_targets or None,
+        tp_splits=ticket.get("tp_splits"),
+        sl_splits=None,
+        confirm_first=False,
+        telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
+        position_side=pos_side,
+        reduce_only=bool(ticket.get("reduce_only", False)),
+    )
+
+    clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
+
+    try:
+        res = await execute_trade_live(**clean)
+        return res
+    except Exception as e:
+        logger.error("armed_execute failed: %s", e)
+        return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
+
+# -------- Smart ETA (optional) --------
+def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
+    try:
+        from utils.get_klines import get_klines_sync  # type: ignore
+        m = {"1m":1, "3m":3, "5m":5, "15m":15, "30m":30, "1h":60}.get(interval, 15)
+        n = max(10, math.ceil(window_min / m) + 5)
+        kl = get_klines_sync(symbol, interval=interval, limit=n) or []
+
+        closes: List[float]
+        try:
+            if 'DataFrame' in str(type(kl)):
+                cols = getattr(kl, 'columns', [])
+                if hasattr(kl, 'columns') and ('close' in cols):
+                    closes = [float(x) for x in kl['close'].tolist()]
+                else:
+                    closes = [float(x) for x in kl.iloc[:, 4].tolist()]
+            else:
+                closes = [float(x[4]) for x in kl if len(x) >= 5]
+        except Exception:
+            closes = [float(x[4]) for x in kl if isinstance(x, (list, tuple)) and len(x) >= 5]
+
+        if len(closes) < 2:
+            return None
+        deltas = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
+        avg_per_candle = sum(deltas) / len(deltas)
+        per_min = avg_per_candle / m
+        return per_min if per_min > 0 else None
+    except Exception as e:
+        if VELOCITY_LOG_LEVEL == "INFO":
+            logger.info("velocity_calc_failed: %s", e)
+        else:
+            logger.warning("velocity_calc_failed: %s", e)
+        return None
+
+def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
+                interval: str = DEFAULT_INTERVAL, window_min: int = ETA_VELOCITY_WINDOW) -> Dict[str, Optional[int]]:
+    vpm = _calc_velocity_per_min(symbol, interval, window_min)
+    if not (price_now and isinstance(vpm, (int, float)) and vpm > 0):
+        return {"eta_tp1_min": None, "eta_tp2_min": None, "eta_tp3_min": None}
+    def _eta(tgt):
+        if tgt is None: return None
+        dist = abs(float(tgt) - float(price_now))
+        return int(math.ceil(dist / vpm)) if vpm > 0 else None
+    return {"eta_tp1_min": _eta(tp1), "eta_tp2_min": _eta(tp2), "eta_tp3_min": _eta(tp3)}
+
+# -------- Storage abstraction --------
+import json as _json
+async def _load_ticket(tid: str):
+    if aioredis and REDIS_URL:
+        try:
+            r = await _redis()
+            if r:
+                raw = await r.get(f"{NS}:ticket:{tid}")
+                if raw:
+                    rec = _json.loads(raw)
+                    from time import time as _now
+                    if (_now() - float(rec.get("ts", 0))) <= TICKET_TTL_SEC:
+                        return rec.get("req") or rec, "redis"
+        except Exception as e:
+            logger.warning("redis_load_failed: %s", e)
+    try:
+        for it in (ConfirmStore.pending() or []):
+            if str(it.get("ticket_id")) == str(tid):
+                return it.get("req") or it, "confirmstore"
+    except Exception as e:
+        logger.warning("confirmstore_load_failed: %s", e)
+    return None, "none"
+
+async def _delete_ticket(tid: str, source: str) -> None:
+    if source == "redis" and aioredis and REDIS_URL:
+        try:
+            r = await _redis()
+            if r:
+                await r.delete(f"{NS}:ticket:{tid}")
+                return
+        except Exception as e:
+            logger.warning("redis_delete_failed: %s", e)
+    with suppress(Exception):
+        ConfirmStore.decide(tid, approved=False)
+
+# -------------------- API --------------------
+@router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
+async def create_ticket(
+    payload: Dict[str, Any] = Body(...),
+    request: Request = None,
+):
+    symbol = (payload.get("symbol") or "").upper().strip()
+    side   = (payload.get("side") or "").upper().strip()
+    qty    = float(payload.get("qty") or payload.get("quantity") or 0)
+    lev    = int(payload.get("leverage") or payload.get("lev") or 0)
+    note   = payload.get("note") or ""
+    position_side = (payload.get("position_side") or payload.get("positionSide") or "BOTH").upper()
+    budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
+
+    # 🔸 מקל על ולידציה – מאפשר qty/lev = 0 כדי לאפשר AUTO_QTY בשלב האישור.
+    if not (symbol and side):
+        raise HTTPException(status_code=422, detail="Missing fields (symbol/side). qty/leverage may be auto at approve.")
+
+    tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
+
+    # חישוב ETA חכם (אם מאופשר)
+    if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
+        price_now = None
+        with suppress(Exception):
+            price_now = _get_last_price(symbol)
+        etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
+        for k, v in etas.items():
+            payload.setdefault(k, v)
+
+    try:
+        from routes.ops_flags import apply_note_flags  # type: ignore
+    except Exception:
+        def apply_note_flags(note, ticket): return ticket
+
+    req_body: Dict[str, Any] = {
+        "ticket_id": tid, "symbol": symbol, "side": side, "qty": qty,
+        "leverage": lev, "position_side": position_side, "budget": budget, "note": note,
+        "score": payload.get("score"), "eta_open_min": payload.get("eta_open_min"),
+        "tp1": payload.get("tp1"), "tp2": payload.get("tp2"), "tp3": payload.get("tp3"),
+        "eta_tp1_min": payload.get("eta_tp1_min"), "eta_tp2_min": payload.get("eta_tp2_min"), "eta_tp3_min": payload.get("eta_tp3_min"),
+        "sl": payload.get("sl"), "prob_overall_pct": payload.get("prob_overall_pct"),
+        "prob_tp1_pct": payload.get("prob_tp1_pct"), "prob_tp2_pct": payload.get("prob_tp2_pct"), "prob_tp3_pct": payload.get("prob_tp3_pct"),
+        "expiry_ts": payload.get("expiry_ts"),
+    }
+    req_body = apply_note_flags(note, req_body)
+
+    with suppress(Exception):
+        rr_min_flag = float(req_body.get("rr_min") or 0.0)
+        rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
+        rr_min_eff  = max(rr_min_flag, rr_env_lo)
+        if rr_min_eff > 0 and req_body.get("sl"):
+            current = float(_get_last_price(symbol) or 0)
+            tp1 = float(req_body.get("tp1") or 0); sl = float(req_body.get("sl") or 0)
+            rr  = None
+            if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
+                reward = abs(tp1 - current); risk = abs(current - sl); rr = (reward / risk) if risk > 0 else None
+            elif side == "SELL" and current > 0 and tp1 > 0 and sl > 0:
+                reward = abs(current - tp1); risk = abs(sl - current); rr = (reward / risk) if risk > 0 else None
+            if rr is not None and rr < rr_min_eff:
+                req_body["blocked_by_rr_min"] = True
+
+    with suppress(Exception):
+        ConfirmStore.create(dict(req_body))
+    record_approval_created()
+
+    if aioredis and REDIS_URL:
+        try:
+            r = await _redis()
+            if r:
+                rec = {"ts": time.time(), "req": req_body, "note": note}
+                await r.setex(f"{NS}:ticket:{tid}", TICKET_TTL_SEC, json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
+        except Exception as e:
+            logger.warning("redis_set_failed: %s", e)
+
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    approve_url = f"{base}/ops/approve?ticket_id={tid}" if base else ""
+    reject_url  = f"{base}/ops/reject?ticket_id={tid}"  if base else ""
+    preview_url = f"{base}/ops/ui/ticket?ticket_id={tid}" if base else ""
+
+    lines = []
+    lines.append("⚠️ <b>Approval Needed</b>")
+    lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
+    lines.append(f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{qty}</code> lev=<code>{lev}</code>")
+    if req_body.get("score") is not None:       lines.append(f"• Score: <code>{req_body['score']}</code>")
+    if req_body.get("eta_open_min") is not None:lines.append(f"• ETA Open: <code>{req_body['eta_open_min']}m</code>")
+    for i in (1,2,3):
+        tpv = req_body.get(f"tp{i}"); etv = req_body.get(f"eta_tp{i}_min"); prv = req_body.get(f"prob_tp{i}_pct")
+        if tpv is not None:
+            row = f"• TP{i}: <code>{tpv}</code>"
+            if etv is not None: row += f"  ETA:<code>{etv}m</code>"
+            if prv is not None: row += f"  P(s):<code>{prv}%</code>"
+            lines.append(row)
+    if req_body.get("sl") is not None: lines.append(f"• SL: <code>{req_body['sl']}</code>")
+    mode = _parse_mode(note)
+    if mode: lines.append(f"• Mode: <code>{mode}</code>")
+    if req_body.get("tp_splits"): lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
+    if req_body.get("blocked_by_rr_min"): lines.append("• RR Check: <code>Below RR_MIN (manual review)</code>")
+    if req_body.get("prob_overall_pct") is not None: lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
+    if req_body.get("expiry_ts") is not None:        lines.append(f"• Expires: <code>{req_body['expiry_ts']}</code>")
+    if note: lines.append(f"• Note: {_md_html(note)}")
+    lines.append("— — —")
+    lines.append("בחר:")
+    pretty = "\n".join(lines)
+    tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None, preview_url=preview_url or None)
+
+    return {
+        "ok": True, "ticket_id": tid,
+        "approve_url": approve_url, "reject_url": reject_url, "preview_url": preview_url,
+        "telegram_result": tg_resp
+    }
+
+def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
+    mode = _parse_mode(ticket.get("note"))
+    if mode in ("MARKET", "HYBRID", "AUTO"):
+        return mode
+    return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
+
+def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
+    symbol = (ticket.get("symbol") or "").upper()
+    price = _get_last_price(symbol)
+    if not price or float(price) <= 0:
+        return None
+    new_ticket = ensure_final_qty(dict(ticket), float(price))
+    # ניקוי/נרמול position_side: אל תעביר "BOTH" הלאה
+    ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
+    if ps == "BOTH":
+        new_ticket.pop("positionSide", None)
+        new_ticket["position_side"] = ""
+    return new_ticket
+
+@router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
+async def approve(ticket_id: str = Query(..., description="ticket_id")):
+    ticket, source = await _load_ticket(ticket_id)
+    if not ticket:
+        return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
+    flow = _decide_flow_by_mode(ticket)
+
+    with suppress(Exception):
+        for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
+            ticket.pop(k, None)
+
+    # 🔸 AUTO_QTY לפני ביצוע
+    t2 = _apply_auto_qty_on_ticket(ticket)
+    if t2 is None:
+        return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
+    ticket = t2
+    if float(ticket.get("qty") or 0) <= 0 or int(ticket.get("leverage") or 0) <= 0:
+        return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי (בדוק ENV AUTO_QTY_*).")
+
+    exec_res = await (_execute_trade(ticket) if flow=="MARKET"
+                      else _execute_trade_armed(ticket) if flow=="HYBRID"
+                      else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket)))
+    ok = bool(exec_res.get("ok"))
+
+    if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
+        logger.warning("approve_retry_market_after_hybrid_fail: %s", exec_res)
+        retry_res = await _execute_trade(ticket)
+        ok = bool(retry_res.get("ok"))
+        exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
+
+    if not ok:
+        logger.warning("approve_failed: ticket=%s flow=%s detail=%s", ticket_id, flow, json.dumps(exec_res, ensure_ascii=False))
+
+    try:
+        sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
+        msg = (
+            f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
+            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
+            if ok else
+            f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
+            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\n"
+            f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
+        )
+        await _send_telegram_html(msg)
+    except Exception:
+        pass
+
+    with suppress(Exception):
+        ConfirmStore.decide(ticket_id, approved=ok)
+
+    with suppress(Exception):
+        (record_approval_approved if ok else record_approval_rejected)()
+
+    await _delete_ticket(ticket_id, source)
+
+    if ok:
+        return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.")
+    if DEBUG_APPROVE_HTML:
+        return _html("⚠️ שגיאה בביצוע — " + _md_html(json.dumps(exec_res, ensure_ascii=False)))
+    return _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
+
+@router.get("/ops/approve-link", summary="Approve legacy link (?id=...)")
+async def approve_link(id: str = Query(..., description="ticket_id")):
+    return await approve(ticket_id=id)
+
+@router.get("/ops/reject", summary="Reject ticket (delete) – supports ticket_id")
+async def reject(ticket_id: str = Query(..., description="ticket_id")):
+    ticket, source = await _load_ticket(ticket_id)
+    await _delete_ticket(ticket_id, source)
+    with suppress(Exception):
+        await _send_telegram_html(
+            f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken."
+        )
+    with suppress(Exception):
+        ConfirmStore.decide(ticket_id, approved=False)
+    with suppress(Exception):
+        record_approval_rejected()
+    return _html("❌ נדחה. לא בוצעה פעולה.")
+
+@router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade) – signature required")
+async def approve_signed(request: Request):
+    if not HMAC_SECRET:
+        raise HTTPException(status_code=500, detail="HMAC secret not set")
+    raw = await request.body()
+    got = request.headers.get("X-Signature", "") or ""
+    want = _sign_hex(HMAC_SECRET, raw)
+    if not hmac.compare_digest(got, want):
+        raise HTTPException(status_code=401, detail="Bad signature")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # 🔸 AUTO_QTY גם בערוץ ה-signed
+    t2 = _apply_auto_qty_on_ticket(payload)
+    if t2 is None:
+        raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
+    payload = t2
+    if float(payload.get("qty") or 0) <= 0 or int(payload.get("leverage") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="AUTO_QTY: qty/leverage missing after auto sizing")
+
+    flow = _decide_flow_by_mode(payload)
+    exec_res = await (_execute_trade(payload) if flow=="MARKET"
+                      else _execute_trade_armed(payload) if flow=="HYBRID"
+                      else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(payload)))
+    ok = bool(exec_res.get("ok"))
+    if not ok:
+        logger.warning("approve_signed_failed: %s", json.dumps(exec_res, ensure_ascii=False))
+        if flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
+            retry = await _execute_trade(payload)
+            if not retry.get("ok"):
+                raise HTTPException(status_code=502, detail={"execute_error": exec_res, "fallback_market": retry})
+            exec_res = {"primary": exec_res, "fallback_market": retry}
+        else:
+            raise HTTPException(status_code=502, detail={"execute_error": exec_res})
+    with suppress(Exception):
+        record_approval_approved()
+    return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
+
+@router.get("/ops/digest/expired", summary="Send Telegram digest for expired approval tickets in last N hours")
+async def digest_expired(hours: int = Query(6, ge=1, le=48)):
+    if not (aioredis and REDIS_URL and BOT_TOKEN and ADMIN_CHAT_ID):
+        return {"ok": False, "error": "digest_dependencies_missing"}
+    try:
+        r = await _redis()
+        if not r:
+            return {"ok": False, "error": "redis_unavailable"}
+        key = f"{NS}:expired_log}"
+        # תיקון מפתח (ללא סוגר מיותר) אם השתבש בעבר:
+        key = f"{NS}:expired_log"
+        now = time.time()
+        since = now - (hours * 3600)
+        items = await r.lrange(key, 0, 2000)
+        events: List[Dict[str, Any]] = []
+        for it in items:
+            try:
+                obj = json.loads(it)
+                if float(obj.get("ts", 0)) >= since:
+                    events.append(obj)
+            except Exception:
+                continue
+        events.sort(key=lambda x: x.get("ts", 0), reverse=True)
+        total = len(events)
+        if total == 0:
+            await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
+            return {"ok": True, "sent": True, "count": 0}
+
+        from collections import Counter
+        by_sym = Counter((str(e.get("symbol","")).upper(), str(e.get("side","")).upper()) for e in events)
+        lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
+        for (sym, side), cnt in by_sym.most_common(20):
+            lines.append(f"• {sym} {side}: <code>{cnt}</code>")
+        lines.append("— — —")
+        lines.append("<b>Last events</b>:")
+        for e in events[:5]:
+            t = int(e.get("ts", now))
+            idem = e.get("idem","")
+            sym  = str(e.get("symbol","")).upper()
+            side = str(e.get("side","")).upper()
+            lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side} · <code>{idem}</code>")
+        await _send_telegram_html("\n".join(lines))
+        return {"ok": True, "sent": True, "count": total}
+    except Exception as e:
+        logger.warning("digest_expired_failed: %s", e)
+        return {"ok": False, "error": str(e)}
 
 
 
