@@ -82,3 +82,4 @@ async def quick_check_tp1(symbols: List[str], *, tp1_tags: Optional[List[str]] =
         except Exception as e:
             res[sym] = {"error": str(e)}
     return res
+
