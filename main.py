@@ -171,7 +171,7 @@ def _md_html(s: str) -> str:
 def _html(msg: str) -> HTMLResponse:
     return HTMLResponse(
         "<!doctype html><meta charset='utf-8'>"
-        "<body style='font-family:sans-serif;max-width:560px;margin:3rem auto;line-height:1.5'>"
+        "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto;line-height:1.5'>"
         f"<h2 style='margin:0 0 .5rem 0'>{msg}</h2>"
         "<p style='color:#666'>אפשר לחזור חזרה לטלגרם.</p>"
         "</body>"
@@ -355,7 +355,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         entry=None,
         tp_targets=tp_targets or None,
         sl_targets=sl_targets or None,
-        tp_splits=ticket.get("tp_splits"),
+        tp_splits= ticket.get("tp_splits"),
         sl_splits=None,
         confirm_first=False,
         telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
@@ -581,6 +581,135 @@ def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
         new_ticket["position_side"] = ""
     return new_ticket
 
+# -------------------- UI Helpers --------------------
+def _require_bearer(request: Request) -> None:
+    if not API_BEARER_TOKEN:
+        return
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth.split(" ", 1)[1].strip() != API_BEARER_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+def _ticket_rows_html(t: Dict[str, Any]) -> str:
+    def cv(k, default="—"):
+        v = t.get(k, default)
+        return default if v in (None, "", []) else _md_html(str(v))
+    rows = []
+    for k in ("ticket_id","symbol","side","qty","leverage","position_side","budget","score",
+              "tp1","tp2","tp3","sl","eta_tp1_min","eta_tp2_min","eta_tp3_min",
+              "prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
+              "tp_splits","expiry_ts","note"):
+        rows.append(f"<tr><th style='text-align:left;padding:.35rem .6rem;background:#fafafa'>{k}</th>"
+                    f"<td style='padding:.35rem .6rem'>{cv(k)}</td></tr>")
+    return "\n".join(rows)
+
+# -------------------- UI: Ticket preview --------------------
+@router.get("/ops/ui/ticket", summary="Simple HTML preview for a ticket")
+async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
+    _require_bearer(request)
+    rec, _ = await _load_ticket(ticket_id)
+    if not rec:
+        # also try showing stale (ConfirmStore) if exists
+        with suppress(Exception):
+            for it in ConfirmStore.pending():
+                if str(it.get("ticket_id")) == str(ticket_id):
+                    rec = it.get("req") or it
+                    break
+    if not rec:
+        return _html("⚠️ לא נמצא כרטיס או שפג תוקפו.")
+
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    approve_url = f"{base}/ops/approve?ticket_id={ticket_id}"
+    reject_url  = f"{base}/ops/reject?ticket_id={ticket_id}"
+
+    body = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
+        f"<h2 style='margin:0 0 1rem 0'>Ticket Preview · <code>{_md_html(ticket_id)}</code></h2>"
+        "<div style='margin:.5rem 0 1rem 0'>"
+        f"<a href='{approve_url}' style='display:inline-block;padding:.6rem 1rem;background:#16a34a;color:#fff;border-radius:9px;text-decoration:none'>✅ Approve</a>"
+        f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
+        "</div>"
+        "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
+        f"{_ticket_rows_html(rec)}"
+        "</table>"
+        "<p style='color:#777;margin-top:1rem'>טיפ: ניתן לקרוא/לאשר גם מהטלגרם.</p>"
+        "</body>"
+    )
+    return HTMLResponse(body)
+
+# -------------------- UI: Pending list --------------------
+@router.get("/ops/ui/pending", summary="List pending approval tickets")
+async def ui_pending(request: Request = None):
+    _require_bearer(request)
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    items: List[Dict[str, Any]] = []
+
+    # from Redis (fresh by TTL)
+    if aioredis and REDIS_URL:
+        with suppress(Exception):
+            r = await _redis()
+            if r:
+                # naive scan for keys (small scale)
+                it = 0
+                while True:
+                    res = await r.scan(it, match=f"{NS}:ticket:*", count=200)
+                    it = res[0]
+                    keys = res[1]
+                    for k in keys:
+                        raw = await r.get(k)
+                        if not raw: continue
+                        obj = json.loads(raw)
+                        req = obj.get("req") or {}
+                        items.append(req)
+                    if it == 0:
+                        break
+
+    # from ConfirmStore
+    with suppress(Exception):
+        for it in ConfirmStore.pending() or []:
+            req = it.get("req") or it
+            items.append(req)
+
+    if not items:
+        return _html("אין כרטיסים ממתינים כרגע.")
+
+    rows = []
+    for t in items:
+        tid = _md_html(str(t.get("ticket_id","")))
+        sym = _md_html(str(t.get("symbol","")))
+        side = _md_html(str(t.get("side","")))
+        qty = _md_html(str(t.get("qty","")))
+        lev = _md_html(str(t.get("leverage","")))
+        link = f"{base}/ops/ui/ticket?ticket_id={tid}"
+        rows.append(
+            f"<tr>"
+            f"<td style='padding:.4rem .6rem'><a href='{link}'>👁 {tid}</a></td>"
+            f"<td style='padding:.4rem .6rem'>{sym}</td>"
+            f"<td style='padding:.4rem .6rem'>{side}</td>"
+            f"<td style='padding:.4rem .6rem'>{qty}</td>"
+            f"<td style='padding:.4rem .6rem'>{lev}</td>"
+            f"</tr>"
+        )
+
+    body = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.5'>"
+        "<h2 style='margin:0 0 1rem 0'>Pending Approval Tickets</h2>"
+        "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
+        "<thead><tr style='background:#fafafa'><th style='text-align:left;padding:.4rem .6rem'>Ticket</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Symbol</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Side</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Qty</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Lev</th>"
+        "</tr></thead>"
+        "<tbody>"
+        + "\n".join(rows) +
+        "</tbody></table>"
+        "</body>"
+    )
+    return HTMLResponse(body)
+
+# -------------------- Approve/Reject/Approve Signed/Digest --------------------
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
