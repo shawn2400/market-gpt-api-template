@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 
 import os
@@ -12,6 +13,7 @@ import secrets
 import logging
 import traceback
 import inspect
+import asyncio
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable, Tuple
 from collections import Counter
@@ -132,6 +134,11 @@ APPROVAL_FAIL_OPEN_ON_VELOCITY  = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", Tr
 VELOCITY_LOG_LEVEL              = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
 DEBUG_APPROVE_HTML              = _bool_env("DEBUG_APPROVE_HTML", False)
 APPROVE_FALLBACK_TO_MARKET      = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
+
+# ===== Health TP1 config =====
+HEALTH_TP1_ENABLE = _bool_env("HEALTH_TP1_ENABLE", True)
+HEALTH_TP1_INTERVAL_SEC = int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600"))
+TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS","") or "").split(",") if t.strip()]
 
 # Position sizing (AUTO_QTY)
 try:
@@ -657,7 +664,6 @@ async def ui_pending(request: Request = None):
                 cursor: Any = 0
                 while True:
                     res = await r.scan(cursor, match=f"{NS}:ticket:*", count=200)
-                    # aioredis may return cursor as int or str
                     cursor = int(res[0]) if not isinstance(res[0], int) else res[0]
                     keys = res[1]
                     for k in keys:
@@ -843,7 +849,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        # valid key + backward-compat for an old wrong key
         key_good = f"{NS}:expired_log"
         key_bad  = key_good + "}"
 
@@ -925,6 +930,36 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
         safe[k] = v
     return {"ok": True, "env": safe}
 
+# =========================
+# Health TP1: startup task + manual endpoint
+# =========================
+try:
+    from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
+    _health_tp1_loaded = True
+except Exception as _e:
+    logger.warning("health_tp1 module not found (%s) – TP1 health disabled", _e)
+    _health_tp1_loaded = False
+
+@app.on_event("startup")
+async def _startup_tasks():
+    if _health_tp1_loaded and HEALTH_TP1_ENABLE:
+        # WATCHLIST -> סימבולים לבדיקה; ניתן להחליף לרשימה קבועה אם תרצה
+        watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
+        if watch:
+            # יוצר טסק רקע מתמשך
+            asyncio.create_task(health_check_tp1_tags(watch, interval_sec=HEALTH_TP1_INTERVAL_SEC))
+            logger.info("health_tp1 background started (interval=%ss, symbols=%s)", HEALTH_TP1_INTERVAL_SEC, ",".join(watch))
+
+@app.get("/health/tp1", tags=["meta"])
+async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV of symbols; default from WATCHLIST")):
+    if not _health_tp1_loaded:
+        raise HTTPException(status_code=501, detail="health_tp1 module not loaded")
+    sym_list = [s.strip().upper() for s in (symbols.split(",") if symbols else (os.getenv("WATCHLIST","") or "").split(",")) if s.strip()]
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="no symbols")
+    res = await quick_check_tp1(sym_list, tp1_tags=TP1_TAGS or None, notify_telegram=True)
+    return {"ok": True, "result": res}
+
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -941,6 +976,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
