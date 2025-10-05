@@ -5,6 +5,8 @@ import os, time, logging, asyncio
 from contextlib import suppress
 from typing import Optional, Dict, Any, List
 
+import httpx  # ← להודעות טלגרם ישירות מהמודול
+
 from utils.binance_client import (
     get_price, futures_mark_price, set_leverage, futures_create_order,
     get_all_orders, futures_cancel_order,
@@ -72,6 +74,26 @@ TRAIL_ENABLE_DEFAULT    = os.getenv("TRAIL_ENABLE", "0").lower() in ("1","true",
 TRAIL_ATR_MULT_DEFAULT  = float(os.getenv("TRAIL_ATR_MULT", os.getenv("SL_ATR_MULT", "0.6")))
 TRAIL_FREEZE_ENABLE_DEF = os.getenv("TRAIL_FREEZE_ENABLE", "1").lower() in ("1","true","yes","on")
 
+# ─────────── Telegram helper ───────────
+async def _tg_send(text: str) -> Dict[str, Any]:
+    chat_id = int(os.getenv("TRADE_LOG_CHAT_ID") or TELEGRAM_CHAT_ID or 0)
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or BOT_TOKEN
+    if not (chat_id and token):
+        return {"ok": False, "skipped": True}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": TELEGRAM_PARSE_MODE or "HTML", "disable_web_page_preview": True}
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as cli:
+            r = await cli.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload)
+        return r.json()
+    except Exception as e:
+        log.warning("telegram_send_failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+def _coid(kind: str, sym: str, side: str) -> str:
+    prefix = (ORDER_ID_PREFIX or "ALG").strip()
+    ts = int(time.time() * 1000)
+    return f"{prefix}_{kind}_{sym}_{side}_{ts}"
+
 # ─────────── Align position mode helper (fix -4061) ───────────
 def _ensure_runtime_position_mode() -> None:
     """
@@ -82,7 +104,6 @@ def _ensure_runtime_position_mode() -> None:
     if not mode:
         return
     try:
-        # אם המודול קיים — נשתמש בו כדי לקרוא ל-/positionSide/dual
         if 'BinanceFuturesExec' in globals():
             execu = BinanceFuturesExec()
             if mode in ("hedge","dual","dual_side","dual_side_position","dualposition"):
@@ -117,7 +138,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     entry_kwargs = dict(
         symbol=sym, side=side, type="LIMIT",
         timeInForce="GTC", price=limit_str, quantity=qty_str,
-        reduceOnly=False
+        reduceOnly=False, newClientOrderId=_coid("ENTRY_LIM", sym, side),
     )
     if eff_ps != "BOTH":
         entry_kwargs["positionSide"] = eff_ps
@@ -127,7 +148,8 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
     stop_kwargs = dict(
         symbol=sym, side=side, type="STOP",
         timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str,
-        reduceOnly=False, workingType="MARK_PRICE"
+        reduceOnly=False, workingType="MARK_PRICE",
+        newClientOrderId=_coid("ENTRY_STP", sym, side),
     )
     if eff_ps != "BOTH":
         stop_kwargs["positionSide"] = eff_ps
@@ -136,7 +158,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
 
     def _is_filled(oid: str):
         try:
-            lst = get_all_orders(sym, limit=15) or []
+            lst = get_all_orders(sym, limit=20) or []
             for o in lst:
                 if str(o.get("orderId")) == str(oid):
                     st = (o.get("status") or "").upper()
@@ -156,8 +178,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         stp_filled, stp_fill_px = await asyncio.to_thread(_is_filled, stp_id)
 
         if lim_filled and not stp_filled:
-            try: futures_cancel_order(sym, stp_id)
-            except Exception: pass
+            with suppress(Exception): futures_cancel_order(sym, stp_id)
             mk = get_price(sym) or futures_mark_price(sym) or lim_fill_px or limit_p
             if mk and lim_fill_px:
                 bps = abs(lim_fill_px - mk) / max(mk, 1e-9) * 10000.0
@@ -165,8 +186,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             return {"ok": True, "entry_kind": "LIMIT", "price": lim_fill_px or limit_p, "sanity_bps": None, "sanity_ok": True, "order": lim}
 
         if stp_filled and not lim_filled:
-            try: futures_cancel_order(sym, lim_id)
-            except Exception: pass
+            with suppress(Exception): futures_cancel_order(sym, lim_id)
             mk = get_price(sym) or futures_mark_price(sym) or stp_fill_px or stop_p
             if mk and stp_fill_px:
                 bps = abs(stp_fill_px - mk) / max(mk, 1e-9) * 10000.0
@@ -179,13 +199,14 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             gate = _quality_gate(sym, side)
             justified = (gate.get("enter_ok") is True) and (slip_bps >= ESCALATE_SLIP_BPS)
             if ALLOW_MARKET_ENTRY and justified:
-                try:
+                with suppress(Exception):
                     if lim_id: futures_cancel_order(sym, lim_id)
-                except Exception: pass
-                try:
+                with suppress(Exception):
                     if stp_id: futures_cancel_order(sym, stp_id)
-                except Exception: pass
-                mkt_kwargs = dict(symbol=sym, side=side, type="MARKET", quantity=qty_str, reduceOnly=False)
+                mkt_kwargs = dict(
+                    symbol=sym, side=side, type="MARKET", quantity=qty_str, reduceOnly=False,
+                    newClientOrderId=_coid("ENTRY_MKT", sym, side),
+                )
                 if eff_ps != "BOTH":
                     mkt_kwargs["positionSide"] = eff_ps
                 mkt = futures_create_order(**mkt_kwargs)
@@ -194,7 +215,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}
             t0 = time.time()
         await asyncio.sleep(1.0)
-
 
 # ─────────── Public API ───────────
 async def execute_trade_live(
@@ -282,10 +302,8 @@ async def execute_trade_live(
     trail_callback_pct: Optional[float] = None
     if trail_enabled:
         if kl:
-            try:
+            with suppress(Exception):
                 atr_now = _atr_from_klines(kl, 14)
-            except Exception:
-                atr_now = None
         else:
             atr_now = None
         trail_callback_pct = _compute_trailing_callback_pct(float(base_price), atr_now, float(trail_mult))
@@ -356,14 +374,13 @@ async def execute_trade_live(
         _ensure_runtime_position_mode()
 
     # עדכון מינוף (לא מפיל את הזרימה אם נכשל)
-    try:
+    with suppress(Exception):
         set_leverage(sym, int(dyn_leverage))
-    except Exception as e:
-        log.warning("set_leverage failed: %s", e)
 
     # כניסה היברידית
     entry_res = await _place_hybrid_entry(sym, side, float(qty), float(base_price), entry, position_side)
     if not entry_res or (entry_res.get("ok") is False):
+        await _tg_send(f"⚠️ <b>Entry failed</b>\n• {sym} {side}\n• Reason: <code>{entry_res.get('reason') if entry_res else 'entry_failed'}</code>")
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
     sanity_ok = bool(entry_res.get("sanity_ok", True))
@@ -371,6 +388,7 @@ async def execute_trade_live(
 
     if ENFORCE_POST_FILL_SANITY and not sanity_ok:
         rb = _safe_close_position(sym, side, float(qty), position_side=position_side)
+        await _tg_send(f"⚠️ <b>Post-fill sanity failed</b> ({sanity_bps:.1f}bps)\n• {sym} {side} qty={qty}\n• Rolled back: <code>{bool(rb.get('ok'))}</code>")
         return {
             "ok": False,
             "reason": "post_fill_sanity_failed",
@@ -425,13 +443,14 @@ async def execute_trade_live(
     sl_success = False
 
     # ---- חימוש TP ----
-    for o in plan["tp_orders"]:
+    for idx, o in enumerate(plan["tp_orders"], start=1):
         typ = str(o.get("type")).upper()
         args: Dict[str, Any] = dict(
             symbol=sym,
             side=close_side,
             type=typ,
             workingType="MARK_PRICE",
+            newClientOrderId=_coid(f"TP{idx}", sym, close_side),
         )
         eff_ps = _effective_position_side(position_side)
         if eff_ps != "BOTH":
@@ -473,6 +492,7 @@ async def execute_trade_live(
             callbackRate=f"{float(trail_callback_pct):.2f}",
             workingType="MARK_PRICE",
             quantity=qty_str,
+            newClientOrderId=_coid("SL_TRAIL", sym, close_side),
         )
 
         mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
@@ -502,13 +522,14 @@ async def execute_trade_live(
                 "response": {"ok": False, "error": str(e)},
             })
     else:
-        for o in plan["sl_orders"]:
+        for idx, o in enumerate(plan["sl_orders"], start=1):
             typ = str(o.get("type")).upper()
             args: Dict[str, Any] = dict(
                 symbol=sym,
                 side=close_side,
                 type=typ,
                 workingType="MARK_PRICE",
+                newClientOrderId=_coid(f"SL{idx}", sym, close_side),
             )
             eff_ps = _effective_position_side(position_side)
             if eff_ps != "BOTH":
@@ -543,10 +564,25 @@ async def execute_trade_live(
             "rolled_back": True,
             "rollback": rb,
         })
+        await _tg_send(f"⚠️ <b>Arming TP/SL failed</b>\n• {sym} {side} qty={qty}\n• rolled_back={bool(rb.get('ok'))}")
         return plan
 
-    return plan
+    # הודעה ל-טלגרם על כניסה + חימוש
+    try:
+        tp_cnt = sum(1 for o in plan["tp_orders"] if isinstance(o.get("response", {}).get("orderId"), (int, str)))
+        sl_cnt = sum(1 for o in plan["sl_orders"] if isinstance(o.get("response", {}).get("orderId"), (int, str)))
+        entry_kind = plan["entry_result"].get("entry_kind")
+        entry_px   = plan["entry_result"].get("price")
+        await _tg_send(
+            "✅ <b>Trade armed</b>\n"
+            f"• {sym} {side} qty={qty} lev={dyn_leverage}\n"
+            f"• Entry: <code>{entry_kind}@{entry_px}</code>\n"
+            f"• TP armed: <code>{tp_cnt}</code> · SL armed: <code>{'trail' if trail_enabled else sl_cnt}</code>"
+        )
+    except Exception:
+        pass
 
+    return plan
 
 # ─────────── Rollback helper ───────────
 def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "BOTH") -> Dict[str, Any]:
@@ -557,6 +593,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
         side=close_side,
         type="MARKET",
         quantity=_q_qty(sym, float(qty))[0],
+        newClientOrderId=_coid("RBK", sym, close_side),
     )
     if eff_ps != "BOTH":
         args["positionSide"] = eff_ps
@@ -573,13 +610,13 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
                 return {"ok": False, "error": str(e2)}
         return {"ok": False, "error": str(e)}
 
-
 __all__ = [
     "execute_trade_live",
     "ConfirmStore",
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
