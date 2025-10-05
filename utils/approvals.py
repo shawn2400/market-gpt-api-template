@@ -9,12 +9,18 @@ log = logging.getLogger("algogpt.approvals")
 # -------- helpers ----------
 def _as_bool(s: Optional[str], default: bool = False) -> bool:
     return str(s).strip().lower() in {"1","true","yes","on"} if s is not None else default
+
 def _as_float(s: Optional[str], default: float) -> float:
-    try: return float(str(s).strip())
-    except Exception: return default
+    try:
+        return float(str(s).strip())
+    except Exception:
+        return default
+
 def _as_int(s: Optional[str], default: int) -> int:
-    try: return int(str(s).strip())
-    except Exception: return default
+    try:
+        return int(str(s).strip())
+    except Exception:
+        return default
 
 # -------- env / policy ----------
 APPROVAL_ENABLED = _as_bool(os.getenv("APPROVAL_ENABLED","1"), True)
@@ -39,7 +45,8 @@ _recent: Dict[str, float] = {}
 def _purge_recent(now: float) -> None:
     cut = now - max(60, APPROVAL_DUP_COOLDOWN_SEC)
     for k, ts in list(_recent.items()):
-        if ts < cut: _recent.pop(k, None)
+        if ts < cut:
+            _recent.pop(k, None)
 
 def _key_for(tp: Dict[str, Any]) -> str:
     base = {
@@ -58,29 +65,43 @@ def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
     try:
         e = float(entry); s = float(sl); t = float(tp1); sd = (side or "").upper()
         risk = abs(e - s)
-        if risk <= 0: return None
+        if risk <= 0:
+            return None
         reward = (t - e) if sd in ("BUY","LONG") else (e - t)
         return float(reward / risk) if reward > 0 else None
     except Exception:
         return None
 
-def _pct(a: float, b: float) -> float:
-    try: return abs((a - b) / b) * 100.0
-    except Exception: return 0.0
+def _pct(a: float, b: float, ref: Optional[float] = None) -> float:
+    """
+    אחוז מרחק בין a ל-b ביחס ל-ref (ברירת מחדל: a).
+    שימושי לבדיקות entry↔sl ו-entry↔tp1 כיחס ל-entry.
+    """
+    try:
+        r = float(a if ref is None else ref)
+        if r == 0:
+            return 0.0
+        return abs((float(a) - float(b)) / r) * 100.0
+    except Exception:
+        return 0.0
 
 def _in_watchlist(sym: str) -> bool:
-    if not REQUIRE_IN_WATCHLIST: return True
+    if not REQUIRE_IN_WATCHLIST:
+        return True
     wl = [x.strip().upper() for x in (WATCHLIST_CSV or "").split(",") if x.strip()]
     return (not wl) or (sym.upper() in wl)
 
 def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
-    if not APPROVAL_REQUIRE_FRESH_PRICE: return (True, None)
+    if not APPROVAL_REQUIRE_FRESH_PRICE:
+        return (True, None)
+    # מועדף: price feed חי אם קיים
     try:
         from utils.ws_fallback import is_price_fresh, get_price  # type: ignore
         ok = is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC)
         px = float(get_price(symbol) or 0.0)
         return (bool(ok), px if px > 0 else None)
     except Exception:
+        # נפילה ל־HTTP
         try:
             from utils.binance_client import get_price as http_price  # type: ignore
             px = float(http_price(symbol) or 0.0)
@@ -89,29 +110,55 @@ def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
             return (False, None)
 
 def _aligned(val: float, step: float, tol: float = 1e-10) -> bool:
-    if step <= 0: return True
-    k = round(val / step); return abs(k * step - val) <= max(tol, step * 1e-8)
+    if step <= 0:
+        return True
+    k = round(val / step)
+    return abs(k * step - val) <= max(tol, step * 1e-8)
 
 def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[str]:
+    """
+    מוודא ש־entry/sl/tp1 מיושרים ל־tickSize של הסימבול (אם ידוע).
+    נופל ל־get_symbol_filters אם get_symbol_info לא זמין.
+    """
     out: List[str] = []
+    tick: Optional[float] = None
+
+    # ניסיון 1: get_symbol_info
     try:
-        from utils.binance_client import get_symbol_info
+        from utils.binance_client import get_symbol_info  # type: ignore
         info = get_symbol_info(symbol)
-        if not info: return out
-        tick = None
-        for f in info.get("filters", []):
-            if f.get("filterType") == "PRICE_FILTER":
-                tick = float(f.get("tickSize","0")) or None
-        if tick:
-            for name, val in [("entry", entry), ("sl", sl), ("tp1", tp1)]:
-                if not _aligned(float(val), float(tick)):
-                    out.append(f"{name}_not_aligned_tick({val})")
+        if info and "filters" in info:
+            for f in info.get("filters", []):
+                if f.get("filterType") == "PRICE_FILTER":
+                    tick = float(f.get("tickSize","0") or 0.0) or None
+                    break
     except Exception:
         pass
+
+    # ניסיון 2: get_symbol_filters
+    if tick is None:
+        try:
+            from utils.binance_client import get_symbol_filters  # type: ignore
+            flt = get_symbol_filters(symbol) or {}
+            ts = flt.get("tickSize")
+            tick = float(ts) if ts is not None else None
+        except Exception:
+            tick = None
+
+    if tick:
+        for name, val in (("entry", entry), ("sl", sl), ("tp1", tp1)):
+            try:
+                if not _aligned(float(val), float(tick)):
+                    out.append(f"{name}_not_aligned_tick({val})")
+            except Exception:
+                continue
     return out
 
 def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict[str, Any]:
-    out_errors: List[str] = []; out_warns: List[str] = []; metrics: Dict[str, Any] = {}
+    out_errors: List[str] = []
+    out_warns: List[str] = []
+    metrics: Dict[str, Any] = {}
+
     if not APPROVAL_ENABLED:
         return {"ok": True, "errors": [], "warnings": [], "metrics": {"disabled": True}}
 
@@ -121,23 +168,36 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     sl    = float(tp.get("sl", tp.get("sl_price", 0.0)) or 0.0)
     tp1   = float(tp.get("tp1", 0.0) or 0.0)
 
-    if not symbol: out_errors.append("missing_symbol")
-    if side not in ("BUY","SELL","LONG","SHORT"): out_errors.append("bad_side")
-    if entry <= 0: out_errors.append("bad_entry")
-    if sl    <= 0: out_errors.append("bad_sl")
-    if tp1   <= 0: out_errors.append("bad_tp1")
-    if out_errors: return {"ok": False, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
+    if not symbol:
+        out_errors.append("missing_symbol")
+    if side not in ("BUY","SELL","LONG","SHORT"):
+        out_errors.append("bad_side")
+    if entry <= 0:
+        out_errors.append("bad_entry")
+    if sl <= 0:
+        out_errors.append("bad_sl")
+    if tp1 <= 0:
+        out_errors.append("bad_tp1")
+    if out_errors:
+        return {"ok": False, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
-    if not _in_watchlist(symbol): out_errors.append("symbol_not_in_watchlist")
+    if not _in_watchlist(symbol):
+        out_errors.append("symbol_not_in_watchlist")
 
     fp_ok, px = _fresh_price_ok(symbol)
-    metrics["fresh_price_ok"] = fp_ok; metrics["last_price"] = px
-    if not fp_ok: out_warns.append("stale_or_missing_price")
+    metrics["fresh_price_ok"] = fp_ok
+    metrics["last_price"] = px
+    if not fp_ok:
+        out_warns.append("stale_or_missing_price")
 
+    # אחוזי מרחק ביחס ל-entry (הגיוני יותר)
     min_pct = float(MIN_TP_SL_DIFF_PCT)
-    if _pct(entry, sl)  < min_pct: out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
-    if _pct(entry, tp1) < min_pct: out_errors.append(f"entry_tp1_too_close(<{min_pct:.3f}%)")
-    if _pct(entry, sl)  > float(APPROVAL_MAX_SL_PCT): out_errors.append(f"sl_too_far(>{APPROVAL_MAX_SL_PCT:.2f}%)")
+    if _pct(entry, sl, ref=entry)  < min_pct:
+        out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
+    if _pct(entry, tp1, ref=entry) < min_pct:
+        out_errors.append(f"entry_tp1_too_close(<{min_pct:.3f}%)")
+    if _pct(entry, sl, ref=entry)  > float(APPROVAL_MAX_SL_PCT):
+        out_errors.append(f"sl_too_far(>{APPROVAL_MAX_SL_PCT:.2f}%)")
 
     rr = _rr(entry, sl, tp1, side); metrics["rr"] = rr
     if rr is None or rr < APPROVAL_RR_MIN:
@@ -153,8 +213,10 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
             out_warns.append("success_pct_not_numeric")
 
     lev = int(tp.get("leverage") or tp.get("lev") or 0)
-    if lev <= 0: out_warns.append("missing_leverage")
-    elif lev > MAX_LEVERAGE: out_errors.append(f"leverage_above_cap(x{lev}>x{MAX_LEVERAGE})")
+    if lev <= 0:
+        out_warns.append("missing_leverage")
+    elif lev > MAX_LEVERAGE:
+        out_errors.append(f"leverage_above_cap(x{lev}>x{MAX_LEVERAGE})")
     metrics["leverage"] = lev
 
     budget = tp.get("budget") or tp.get("budget_usd")
@@ -168,11 +230,15 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
 
     out_errors.extend(_precision_checks(symbol, entry, sl, tp1))
 
-    now = time.time(); key = _key_for(tp); last = _recent.get(key)
-    if last and (now - last < APPROVAL_DUP_COOLDOWN_SEC): out_errors.append("duplicate_recent")
+    now = time.time()
+    key = _key_for(tp)
+    last = _recent.get(key)
+    if last and (now - last < APPROVAL_DUP_COOLDOWN_SEC):
+        out_errors.append("duplicate_recent")
     if mutate_state:
         _purge_recent(now)
-        if not last or (now - last >= APPROVAL_DUP_COOLDOWN_SEC): _recent[key] = now
+        if not last or (now - last >= APPROVAL_DUP_COOLDOWN_SEC):
+            _recent[key] = now
 
     ok = (len(out_errors) == 0)
     return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
@@ -225,7 +291,8 @@ class ConfirmStore:
             return {"ok": False, "error": "not_pending"}
         it["status"] = "approved"
         it["approved_ts"] = int(time.time())
-        if approver: it["approved_by"] = str(approver)
+        if approver:
+            it["approved_by"] = str(approver)
         return {"ok": True, "idem": idem}
 
     @classmethod
@@ -237,7 +304,8 @@ class ConfirmStore:
             return {"ok": False, "error": "not_pending"}
         it["status"] = "rejected"
         it["rejected_ts"] = int(time.time())
-        if approver: it["rejected_by"] = str(approver)
+        if approver:
+            it["rejected_by"] = str(approver)
         # אין צורך לשמור handler לאחר דחייה
         cls._RUN.pop(idem, None)
         return {"ok": True, "idem": idem}
@@ -272,7 +340,8 @@ class ConfirmStore:
 
     @classmethod
     def flush_all(cls) -> None:
-        cls._P.clear(); cls._RUN.clear()
+        cls._P.clear()
+        cls._RUN.clear()
 
     # aliases
     flush = reset = flush_all
@@ -301,7 +370,9 @@ async def require_approval(chat_id: int, plan: Dict[str, Any], handler: Optional
     idem = ConfirmStore.create({**plan, "ttl_sec": ttl, "ticket_id": plan.get("idem") or None}, handler=handler)
 
     # attach idem to plan for links
-    plan = dict(plan); plan["idem"] = idem; plan["ttl_sec"] = ttl
+    plan = dict(plan)
+    plan["idem"] = idem
+    plan["ttl_sec"] = ttl
 
     # auto-approve policy
     auto = False
@@ -323,6 +394,16 @@ async def require_approval(chat_id: int, plan: Dict[str, Any], handler: Optional
         log.warning("send_trade_approval failed: %s", e)
 
     return {"status": "pending", "idem": idem, "ttl_sec": ttl}
+
+
+__all__ = [
+    "APPROVAL_ENABLED","APPROVAL_SUCCESS_MIN","APPROVAL_RR_MIN","MIN_TP_SL_DIFF_PCT",
+    "APPROVAL_MAX_SL_PCT","MIN_NOTIONAL_USDT","APPROVAL_REQUIRE_FRESH_PRICE","PRICE_MAX_AGE_SEC",
+    "WATCHLIST_CSV","REQUIRE_IN_WATCHLIST","APPROVAL_DUP_COOLDOWN_SEC","MAX_LEVERAGE",
+    "TICKET_TTL_SEC","AUTO_DECIDE_EXPIRED",
+    "preflight_proposal","can_auto_forward","ConfirmStore",
+    "send_confirm_request","require_approval",
+]
 
 
 
