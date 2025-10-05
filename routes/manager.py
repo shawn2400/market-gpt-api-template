@@ -3,6 +3,8 @@ from __future__ import annotations
 import os, json, time, hashlib, asyncio, logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import httpx  # ← חדש: נדרש לשליחת ה-POST ל-/alerts/ingest
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -15,11 +17,22 @@ INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "10"))
 
-# ---- ConfirmStore (מ-utils.trade_executor) ----
+# ---- Alerts ingest target / auth ----
+PUBLIC_HOST = (os.getenv("PUBLIC_HOST", "") or os.getenv("WEBHOOK_HOST", "")).rstrip("/")
+ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", f"{PUBLIC_HOST}/alerts/ingest").strip()
+API_TOKEN = os.getenv("API_TOKEN", os.getenv("PRIMARY_API_TOKEN", "")).strip()
+
+# ברירות מחדל כדי לעבור ולידציה בצד /alerts/ingest (גם אם דורשים אישור)
+DEFAULT_QTY = float(os.getenv("DEFAULT_QTY", "0.001"))
+DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
+
+HTTP_TIMEOUT = float(os.getenv("MANAGER_HTTP_TIMEOUT", "10.0"))
+
+# ---- ConfirmStore (מ-utils.trade_executor) – משמש *נפילה אחורה* בלבד ----
 try:
     from utils.trade_executor import ConfirmStore  # type: ignore
 except Exception as e:
-    logger.error("ConfirmStore missing: %s", e)
+    logger.error("ConfirmStore missing (fallback dummy will be used): %s", e)
     class _Dummy:
         _P: Dict[str, Dict[str, Any]] = {}
         @classmethod
@@ -113,7 +126,94 @@ def _already_pending(tid: str) -> bool:
     except Exception:
         return False
 
-def _create_ticket(obj: Dict[str, Any]) -> Optional[str]:
+def _auth_headers() -> Dict[str, str]:
+    h = {"Accept": "application/json"}
+    if API_TOKEN:
+        h["x-api-key"] = API_TOKEN
+    return h
+
+async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    שולח ל-/alerts/ingest. תואם לדרישות הולידציה בצד השרת:
+    - symbol (UPPER)
+    - side (BUY/SELL)
+    - qty > 0
+    - leverage > 0
+    הערה: גם אם require_approval=True, עדיין יש הולידציה על qty/leverage.
+    """
+    if not ALERTS_INGEST_URL or not PUBLIC_HOST:
+        raise RuntimeError("ALERTS_INGEST_URL/PUBLIC_HOST not configured")
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as cli:
+        r = await cli.post(ALERTS_INGEST_URL, json=payload, headers=_auth_headers())
+        # במידה וה-alerts מחזירים 401 עם הודעות מפורטות — נרצה אותן בלוג
+        try:
+            data = r.json()
+        except Exception:
+            data = {"status": r.status_code, "text": r.text}
+        if r.status_code >= 400:
+            raise RuntimeError(f"alerts_ingest_http_{r.status_code}: {data}")
+        return data
+
+def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ממפה פורמט הקובץ המקומי לפורמט /alerts/ingest.
+    משלימים qty/leverage מה-ENV כדי לעבור הולידציה.
+    """
+    symbol = str(obj.get("symbol","")).upper()
+    side = str(obj.get("side","")).upper()
+    # אם לא קיימים qty/leverage במקור – נשתמש בברירות מחדל
+    qty = float(obj.get("qty") or DEFAULT_QTY)
+    leverage = int(obj.get("leverage") or DEFAULT_LEVERAGE)
+    require_approval = bool(obj.get("require_approval", True))
+
+    # ערכים אינפורמטיביים
+    reason = obj.get("reason","")
+    score = float(obj.get("score", 0.0))
+    expiry_ts = obj.get("expiry_ts")  # אם אין — לא חייבים
+
+    # ניתן להרחיב: tp/sl אם קיימים במקור
+    payload: Dict[str, Any] = {
+        "trade_id": _ticket_id_for(obj),
+        "symbol": symbol,
+        "market": str(obj.get("market","futures")).lower(),
+        "side": side,  # BUY/SELL
+        "qty": qty,
+        "leverage": leverage,
+        "score": score,
+        "reason": reason,
+        "require_approval": require_approval,
+        "timeframe": obj.get("timeframe","15m"),
+    }
+
+    # מיפויים רלוונטיים אם קיימים (לא חובה):
+    for k_src, k_dst in [
+        ("tp1","tp1"),("tp2","tp2"),("tp3","tp3"),
+        ("sl","sl"),
+        ("prob_overall_pct","prob_overall_pct"),
+        ("prob_tp1_pct","prob_tp1_pct"),
+        ("prob_tp2_pct","prob_tp2_pct"),
+        ("prob_tp3_pct","prob_tp3_pct"),
+        ("eta_open_min","eta_open_min"),
+        ("eta_tp1_min","eta_tp1_min"),
+        ("eta_tp2_min","eta_tp2_min"),
+        ("eta_tp3_min","eta_tp3_min"),
+        ("expiry_ts","expiry_ts"),
+    ]:
+        if obj.get(k_src) is not None:
+            payload[k_dst] = obj.get(k_src)
+
+    # guard מינימלי
+    if not symbol or side not in ("BUY","SELL"):
+        raise ValueError("bad symbol/side in ingest payload")
+    if qty <= 0 or leverage <= 0:
+        raise ValueError("qty/leverage must be > 0 for alerts/ingest")
+    return payload
+
+def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
+    """
+    במידה וה-/alerts/ingest לא זמין/נכשל — נשמור ב-ConfirmStore (כמו קודם).
+    """
     if not obj.get("symbol") or not obj.get("side"):
         return None
     payload = {
@@ -141,14 +241,38 @@ def _create_ticket(obj: Dict[str, Any]) -> Optional[str]:
         logger.error("ConfirmStore.create failed: %s", e)
         return None
 
+async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
+    """
+    ניסיון עיקרי: POST ל-/alerts/ingest (ישלח לטלגרם עם כפתורי אישור/דחייה).
+    נפילה אחורה: ConfirmStore.create (ההתנהגות הישנה).
+    """
+    tid = _ticket_id_for(obj)
+    if _already_pending(tid):
+        return None
+
+    # אם אין host/URL – לא ננסה רשת
+    can_network = bool(PUBLIC_HOST and ALERTS_INGEST_URL)
+    if can_network:
+        try:
+            payload = _build_ingest_payload(obj)
+            resp = await _post_alerts_ingest(payload)
+            logger.info("alerts/ingest ok: %s", resp)
+            return tid
+        except Exception as e:
+            logger.warning("alerts/ingest failed (%s) — falling back to ConfirmStore", e)
+
+    # fallback מקומי
+    return _create_ticket_fallback(obj)
+
 async def _tick_once() -> Dict[str, Any]:
     global TICK_COUNT, LAST_TICK_TS, LAST_CREATED, LAST_PENDING, LAST_ERROR
     created: List[str] = []
     LAST_ERROR = None
     try:
         for obj in _load_ingests():
-            tid = _create_ticket(obj)
-            if tid: created.append(tid)
+            tid = await _dispatch_signal(obj)  # ← שינוי לוגי מרכזי
+            if tid:
+                created.append(tid)
         pend = _get_pending_safe()
         TICK_COUNT += 1
         LAST_TICK_TS = int(time.time())
@@ -204,12 +328,14 @@ async def ops_manager_health():
         "created_last": LAST_CREATED,
         "pending_count": LAST_PENDING,
         **({"errors_last": LAST_ERROR} if LAST_ERROR else {}),
+        "alerts_ingest_url": ALERTS_INGEST_URL or None,
+        "public_host": PUBLIC_HOST or None,
     }
 
 # ---- Background worker (optional) ----
 async def _manager_loop():
-    logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s",
-                MANAGER_ENABLE, MANAGER_INTERVAL_SEC, INGEST_DIR)
+    logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s",
+                MANAGER_ENABLE, MANAGER_INTERVAL_SEC, INGEST_DIR, ALERTS_INGEST_URL or "DISABLED")
     while True:
         try:
             await _tick_once()
@@ -234,6 +360,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
