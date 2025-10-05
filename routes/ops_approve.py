@@ -47,7 +47,6 @@ TP_LADDER_ON_APPROVE       = _bool_env("TP_LADDER_ON_APPROVE", False)
 APPROVAL_FAIL_OPEN_ON_VELOCITY = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
 VELOCITY_LOG_LEVEL         = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
 DEBUG_APPROVE_HTML         = _bool_env("DEBUG_APPROVE_HTML", False)
-# FALLBACK נשלט ע"י PROPOSE_BLOCK_ON_FAIL (0 ➜ fallback ON, 1 ➜ fallback OFF)
 APPROVE_FALLBACK_TO_MARKET = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
 
 # -------- ConfirmStore fallback ----------
@@ -67,9 +66,6 @@ except Exception:
 
 # -------- Prices ----------
 def _get_last_price(symbol: str) -> Optional[float]:
-    """
-    מנסה להביא מחיר מסינקים קיימים; נופל חזרה ל-binance client אם צריך.
-    """
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
@@ -157,9 +153,6 @@ def _is_code_4061(err: Exception | str) -> bool:
 
 # -------- Position mode alignment ----------
 def _align_position_mode(client) -> None:
-    """
-    מיושר את מצב החשבון (Hedge/One-Way) לפי POSITION_MODE_OVERRIDE אם סופק.
-    """
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
     with suppress(Exception):
         if mode_override in ("hedge","dual","dual_side","dual_side_position","dualposition"):
@@ -188,7 +181,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
 
-        # יישור מצב חשבון לפי ENV (אם מוגדר)
         _align_position_mode(client)
 
         symbol   = str(ticket.get("symbol","")).upper()
@@ -209,7 +201,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # אל תשלח positionSide אם הוא "BOTH" או לא חוקי
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
         if pos_side_supplied in ("LONG","SHORT"):
@@ -221,14 +212,11 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
-            # --- RETRY חכם על -4061 ---
-            # 1) נסה בלי positionSide בכלל
             try:
                 retry_kwargs = dict(base_kwargs)
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
-                # 2) נסה עם גזירה: LONG/SHORT לפי side
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -263,7 +251,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
 
-    # נרמל position_side ל-LONG/SHORT בלבד; אם "BOTH" או ריק — נגזור לפי side
     raw_ps  = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
     pos_side = raw_ps if raw_ps in ("LONG","SHORT") else ("LONG" if side=="BUY" else "SHORT")
 
@@ -395,13 +382,11 @@ async def create_ticket(
     position_side = (payload.get("position_side") or payload.get("positionSide") or "BOTH").upper()
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
 
-    # 🔸 מקל על ולידציה – מאפשר qty/lev = 0 כדי לאפשר AUTO_QTY בשלב האישור.
     if not (symbol and side):
         raise HTTPException(status_code=422, detail="Missing fields (symbol/side). qty/leverage may be auto at approve.")
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    # חישוב ETA חכם (אם מאופשר)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
@@ -504,7 +489,6 @@ def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     if not price or float(price) <= 0:
         return None
     new_ticket = ensure_final_qty(dict(ticket), float(price))
-    # ניקוי/נרמול position_side: אל תעביר "BOTH" הלאה
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
@@ -522,7 +506,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    # 🔸 AUTO_QTY לפני ביצוע
     t2 = _apply_auto_qty_on_ticket(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -604,7 +587,6 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # 🔸 AUTO_QTY גם בערוץ ה-signed
     t2 = _apply_auto_qty_on_ticket(payload)
     if t2 is None:
         raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
@@ -638,10 +620,19 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         r = await _redis()
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
-        key = f"{NS}:expired_log"  # תוקן: הוסר ה-'}' המיותר
+
+        # קריאה לשני המפתחות: התקין + השגוי מהעבר (לשמירה על דאטה היסטורי)
+        key_good = f"{NS}:expired_log"
+        key_bad  = key_good + "}"
+
+        items: List[str] = []
+        with suppress(Exception):
+            items.extend(await r.lrange(key_good, 0, 2000) or [])
+        with suppress(Exception):
+            items.extend(await r.lrange(key_bad, 0, 2000) or [])
+
         now = time.time()
         since = now - (hours * 3600)
-        items = await r.lrange(key, 0, 2000)
         events: List[Dict[str, Any]] = []
         for it in items:
             try:
@@ -650,6 +641,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
                     events.append(obj)
             except Exception:
                 continue
+
         events.sort(key=lambda x: x.get("ts", 0), reverse=True)
         total = len(events)
         if total == 0:
