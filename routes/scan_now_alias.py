@@ -1,150 +1,125 @@
 # routes/scan_now_alias.py
 from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
-from typing import Optional, List, Dict, Any
+from typing import List, Optional, Dict, Any
+import os, httpx, asyncio
 
-# --- auth (fallback בטוח) ---
-try:
-    from utils.auth import require_bearer_token  # type: ignore
-except Exception:
-    def require_bearer_token():
-        return None
+from routes.scan import scan_symbols, ScanResponse  # משתמש במודלים/לוגיקה הקיימת
+from fastapi import HTTPException
 
-router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
+router = APIRouter(tags=["ScanNow"], prefix="")
 
-# --- נייבא את הסורק הראשי ---
-try:
-    from routes.scan_top_volume import scan_top_volume  # type: ignore
-except Exception:
-    scan_top_volume = None
+PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").rstrip("/")
+ALERTS_ANALYSIS_URL = os.getenv("ALERTS_ANALYSIS_URL", f"{PUBLIC_HOST}/alerts/analysis").strip()
+API_TOKEN = os.getenv("API_TOKEN", os.getenv("PRIMARY_API_TOKEN", "")).strip()
 
+# מקור ברירת־מחדל לסימבולים
+WATCHLIST = [s.strip().upper() for s in os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
 
-def _passes_side(s: Optional[str]) -> bool:
-    return s in ("BUY", "SELL")
+async def _get_top_volume_symbols(host: str, headers: Dict[str, str]) -> List[str]:
+    url = f"{host}/scan/top-volume"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            # מצפה לשדה "symbols" או רשימת {symbol: "..."}
+            if isinstance(data, dict) and "symbols" in data:
+                syms = data["symbols"]
+                if isinstance(syms, list):
+                    return [str(x).upper() for x in syms]
+            if isinstance(data, list):
+                out = []
+                for row in data:
+                    sym = (row.get("symbol") if isinstance(row, dict) else str(row)).upper()
+                    out.append(sym)
+                return out
+    except Exception:
+        pass
+    return []
 
+async def _post_to_analysis(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(url, json=payload, headers=headers)
+        r.raise_for_status()
+        return r.json()
 
-def _post_filter(signals: List[Dict[str, Any]],
-                 min_score: Optional[float],
-                 require_side: bool) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for sig in signals or []:
-        score_ok = True if (min_score is None) else (float(sig.get("score") or 0.0) >= float(min_score))
-        side_ok = True if not require_side else _passes_side(sig.get("side"))
-        if score_ok and side_ok:
-            out.append(sig)
-    return out
+def _auth_headers() -> Dict[str, str]:
+    h = {"Accept": "application/json"}
+    if API_TOKEN:
+        h["x-api-key"] = API_TOKEN
+    return h
 
-
-@router.get("/now", summary="Alias to /scan/top-volume (with post-filter + notify-on-filtered)")
+@router.get("/scan/now", summary="Run immediate scan and push candidates to Telegram")
 async def scan_now(
-    market: str = Query("futures"),
-    quote: str = Query("USDT"),
-    limit: int = Query(10, ge=1, le=100),
-    timeframe: str = Query("15m"),
-    kline_limit: int = Query(200, ge=60, le=1000),
-
-    # תמיכה בסימבול בודד לשמירת תאימות (אם נשלח כאן, נפנה ל-top_volume עם symbol=)
-    symbols: Optional[str] = Query(None, description="CSV e.g. BTCUSDT,ETHUSDT"),
-
-    # סף ישן/תואם לאחור (נשמר לתאימות, אבל נעדיף min_score)
-    threshold: Optional[float] = Query(None, description="Deprecated alias for min_score"),
-
-    # פרמטרים חדשים לפוסט-פילטר:
-    min_score: Optional[float] = Query(None, description="Minimum score after scan"),
-    require_side: bool = Query(False, description="If true, require side to be BUY/SELL (exclude null)"),
-
-    # התראות:
-    notify: Optional[str] = Query(None, description="telegram | none"),
-    chat_id: Optional[str] = Query(None),
-    rich: int = Query(0, ge=0, le=1, description="If 1, try to send rich message with buttons"),
-):
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=200),
+    max_symbols: int = Query(30, ge=1, le=200),
+    host: Optional[str] = Query(None, description="override public host (debug)"),
+) -> Dict[str, Any]:
     """
-    שלבי עבודה:
-    1) מריצים את scan_top_volume ללא notify כדי לקבל תוצאות גולמיות.
-    2) מפעילים פוסט-פילטר (min_score/require_side).
-    3) אם יש notify=telegram – שולחים התראות *רק* על המסוננים:
-       כדי לעשות reuse ללוגיקת ההתראות שכבר קיימת ב-scan_top_volume,
-       נקרא אליו שוב לכל סימבול שעבר פילטר עם symbol=..., notify=telegram.
+    1) משיג רשימת סימבולים מ-/scan/top-volume (או WATCHLIST).
+    2) מחשב אינדיקטורים דרך scan_symbols (routes/scan.py).
+    3) משגר את הסיגנלים ל-/alerts/analysis כדי ליצור Approval בטלגרם.
     """
-    if not scan_top_volume:
-        return {"ok": False, "error": "scan_top_volume not available (import failed)",
-                "returned": 0, "count_total": 0}
+    public_host = (host or PUBLIC_HOST or "").rstrip("/")
+    if not public_host:
+        raise HTTPException(500, "PUBLIC_HOST is not set")
 
-    # תאימות: אם לא הועבר min_score אבל הועבר threshold – נשתמש בו:
-    if min_score is None and threshold is not None:
-        min_score = threshold
+    headers = _auth_headers()
 
-    # האם יש סימבול יחיד שנשלח? (לשמירת תאימות)
-    single_symbol: Optional[str] = None
-    if symbols:
-        parts = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-        if len(parts) == 1:
-            single_symbol = parts[0]
+    # שלב א: אסוף סימבולים
+    syms = await _get_top_volume_symbols(public_host, headers=headers)
+    if not syms:
+        syms = WATCHLIST[:]  # fallback
+    syms = [s for s in syms if s and s.endswith("USDT")]
+    syms = syms[:max_symbols]
 
-    # --- שלב 1: סריקה ללא notify (גולמי) ---
-    raw = await scan_top_volume(
-        market=market,
-        quote=quote,
-        limit=limit,
-        timeframe=timeframe,
-        kline_limit=kline_limit,
-        symbol=single_symbol,
-        threshold=min_score if min_score is not None else 0.0,  # כדי לא להגביל מוקדם מדי
-        notify=None,
-        chat_id=None,
-        rich=rich,
-    )
+    if not syms:
+        raise HTTPException(400, "No symbols to scan")
 
-    # נוודא פורמט צפוי
-    ok = bool(raw and isinstance(raw, dict) and raw.get("ok", False))
-    signals = (raw.get("signals") if ok else []) or []
-    count_total = int(raw.get("count_total") or len(signals))
-    mode = raw.get("mode") or "compact"
+    # שלב ב: הפעל את הסורק הקיים (routes/scan.py)
+    # נשתמש בפונקציה פנימית לאסוף response_model זהה
+    scan_resp: ScanResponse = await scan_symbols(symbols=syms, interval=interval, limit=limit)  # type: ignore
 
-    # --- שלב 2: פוסט-פילטר ---
-    filtered = _post_filter(signals, min_score=min_score, require_side=require_side)
-
-    # --- שלב 3: אם ביקשת התראה – נשלח רק למסוננים ---
-    notified = 0
-    notify_error: Optional[str] = None
-    if notify and notify.lower() == "telegram" and chat_id:
-        try:
-            # נבצע reuse: לכל סימבול שעבר פילטר – נקרא שוב ל-top_volume
-            # עם symbol=<X> ו-notify=telegram (הוא ישלח את ההודעה, כולל rich אם קיים).
-            for sig in filtered:
-                sym = sig.get("symbol")
-                if not sym:
-                    continue
-                _ = await scan_top_volume(
-                    market=market,
-                    quote=quote,
-                    limit=1,  # לא צריך יותר
-                    timeframe=timeframe,
-                    kline_limit=kline_limit,
-                    symbol=str(sym),
-                    threshold=min_score if min_score is not None else 0.0,
-                    notify="telegram",
-                    chat_id=chat_id,
-                    rich=rich,
-                )
-                notified += 1
-        except Exception as e:
-            notify_error = str(e)
-
-    # תשובה לקליינט: רק המסוננים
-    return {
-        "ok": True,
-        "count_total": count_total,        # כמה היו גולמיים
-        "returned": len(filtered),         # כמה אחרי פילטר
-        "signals": filtered,               # רק המסוננים
-        "mode": mode,
-        "notified": notified,
-        "notify_error": notify_error,
-        "post_filter": {"min_score": min_score, "require_side": require_side},
+    # שלב ג: שלח לניתוח/הצעה (alerts/analysis) – כאן מתבצרת הזרקת ההצעות לטלגרם
+    payload = {
+        "ok": scan_resp.ok,
+        "count_total": scan_resp.count_total,
+        "returned": scan_resp.returned,
+        # נשלח מבנה פשוט: [ {symbol, interval, indicators:{...}} ... ]
+        "signals": [
+            {
+                "symbol": s.symbol,
+                "interval": s.interval,
+                "indicators": (s.indicators.dict() if hasattr(s.indicators, "dict") else None)
+            }
+            for s in (scan_resp.signals or [])
+            if getattr(s, "ok", True)
+        ],
+        "source": "scan_now",
     }
 
+    try:
+        analysis_rsp = await _post_to_analysis(ALERTS_ANALYSIS_URL, payload, headers)
+    except Exception as e:
+        # עדיין נחזיר את תוצאת הסריקה, כדי שתוכל לראות מה יצא
+        return {
+            "ok": False,
+            "error": f"analysis_post_failed: {e}",
+            "public_host": public_host,
+            "sent_to": ALERTS_ANALYSIS_URL,
+            "scan": payload,
+        }
 
-__all__ = ["router"]
+    return {
+        "ok": True,
+        "public_host": public_host,
+        "sent_to": ALERTS_ANALYSIS_URL,
+        "analysis_result": analysis_rsp,
+        "scanned": len(syms),
+        "interval": interval,
+    }
 
 
 
