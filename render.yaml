@@ -194,15 +194,13 @@ services:
       - key: ARM_VERIFY_DISABLE
         value: "0"
 
-      # (אופציונלי – כוונון BE דינמי, אם תרצה לקבע לערכים ספציפיים)
-      # - key: BE_GUARD_ENABLE
-      #   value: "1"
-      # - key: BE_GUARD_EVERY_SEC
-      #   value: "30"
-      # - key: TP_BE_OFFSET_BPS
-      #   value: "8"
-      # - key: TP1_TAGS
-      #   value: TP1,tp1,tp_1,TAKE_PROFIT_1
+      # --- Health TP1 (חדש) ---
+      - key: HEALTH_TP1_ENABLE
+        value: "1"
+      - key: HEALTH_TP1_INTERVAL_SEC
+        value: "600"
+      - key: TP1_TAGS
+        value: TP1,tp1,tp_1,TAKE_PROFIT_1
 
       # --- Notifications / Reports ---
       - key: NOTIFY_OPEN
@@ -266,8 +264,9 @@ services:
       - key: ALERTS_ANALYSIS_URL
         value: https://algogpt-docker.onrender.com/alerts/ingest
 
-
-
+      # --- Security public paths (כולל החדשים) ---
+      - key: SECURITY_PUBLIC_PATHS
+        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
 
 
 
