@@ -7,21 +7,12 @@ import math
 import hashlib
 import logging
 from typing import Any, Dict, List, Optional, Tuple
-
-from fastapi import APIRouter, Body, HTTPException
 from contextlib import suppress
 
+from fastapi import APIRouter, Body, HTTPException
+
 logger = logging.getLogger("algogpt.position_ops")
-
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
-
-# =========================
-# External executors (optional, used for simple reduce-only close)
-# =========================
-_execute_live = None
-with suppress(Exception):
-    from utils.trade_executor import execute_trade_live  # type: ignore
-    _execute_live = execute_trade_live
 
 # =========================
 # Binance client helpers
@@ -46,8 +37,7 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="false")
 
 # =========================
-# clientOrderId (recommended format, UI-friendly)
-# ALG_MAIN_<SYMBOL>_<SIDE>_<ROLE>_<TS>[_EXTRA]  (<=32 chars)
+# clientOrderId (<=32 chars)
 # =========================
 def _coid_fit(s: str, limit: int = 32) -> str:
     if len(s) <= limit:
@@ -68,10 +58,42 @@ def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Op
     return _coid_fit(base, 32)
 
 # =========================
-# Core fetch & math
+# Exchange filters & rounding
+# =========================
+_FILTERS: Dict[str, Dict[str, float]] = {}
+
+def _filters(symbol: str) -> Dict[str, float]:
+    s = symbol.upper()
+    if s in _FILTERS:
+        return _FILTERS[s]
+    cli = _get_client()
+    info = cli.futures_exchange_info()
+    tick = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
+    step = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
+    for sym in info.get("symbols", []):
+        if sym.get("symbol") == s:
+            for f in sym.get("filters", []):
+                if f.get("filterType") == "PRICE_FILTER":
+                    tick = float(f.get("tickSize", tick))
+                elif f.get("filterType") == "LOT_SIZE":
+                    step = float(f.get("stepSize", step))
+            break
+    _FILTERS[s] = {"tick": tick, "step": step}
+    return _FILTERS[s]
+
+def _round_price(symbol: str, px: float) -> float:
+    tick = _filters(symbol)["tick"]
+    return math.floor(float(px) / tick) * tick
+
+def _round_qty(symbol: str, qty: float) -> float:
+    step = _filters(symbol)["step"]
+    q = math.floor(float(qty) / step) * step
+    return float(f"{q:.12f}")
+
+# =========================
+# Position & price helpers
 # =========================
 def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, float]:
-    """Returns (side, abs_qty, entry_price). side is BUY for long (>0), SELL for short (<0)."""
     infos = client.futures_position_information(symbol=symbol) or []
     if not infos:
         raise HTTPException(status_code=404, detail="No position information")
@@ -83,116 +105,28 @@ def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, flo
     side = "BUY" if qty > 0 else "SELL"
     return side, abs(qty), ep
 
-def _fetch_open_orders(client, symbol: str) -> List[Dict[str, Any]]:
-    return client.futures_get_open_orders(symbol=symbol) or []
+def _last_price(symbol: str) -> float:
+    cli = _get_client()
+    p = cli.futures_symbol_ticker(symbol=symbol.upper())
+    return float(p["price"])
 
-def _cancel_order_ids(client, symbol: str, order_ids: List[int | str]) -> None:
-    for oid in order_ids:
-        with suppress(Exception):
-            client.futures_cancel_order(symbol=symbol, orderId=oid if isinstance(oid, int) else None, origClientOrderId=None if isinstance(oid, int) else oid)
-
-def _cancel_all_tp(client, symbol: str) -> int:
-    orders = _fetch_open_orders(client, symbol)
-    to_cancel = []
-    for o in orders:
+def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET")) -> int:
+    n = 0
+    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
-        if "TAKE_PROFIT" in typ:
-            to_cancel.append(o.get("orderId"))
-    _cancel_order_ids(client, symbol, [oid for oid in to_cancel if oid is not None])
-    return len(to_cancel)
-
-def _cancel_all_sl(client, symbol: str) -> int:
-    orders = _fetch_open_orders(client, symbol)
-    to_cancel = []
-    for o in orders:
-        typ = (o.get("type") or "").upper()
-        if "STOP" in typ and "TAKE_PROFIT" not in typ:
-            to_cancel.append(o.get("orderId"))
-    _cancel_order_ids(client, symbol, [oid for oid in to_cancel if oid is not None])
-    return len(to_cancel)
-
-def _price_to_bps(base: float, bps: int, direction: int) -> float:
-    # direction: +1 = above, -1 = below
-    return base * (1.0 + (bps / 10000.0) * direction)
+        if typ in kinds or "STOP" in typ or "TAKE_PROFIT" in typ:
+            with suppress(Exception):
+                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+                n += 1
+    return n
 
 # =========================
-# ATR (simple)
+# BE: STOP_MARKET closePosition (בלי reduceOnly/quantity)
 # =========================
-def _atr(client, symbol: str, interval: str = "1m", length: int = 14) -> Optional[float]:
-    with suppress(Exception):
-        kl = client.futures_klines(symbol=symbol, interval=interval, limit=length + 2)
-        highs = [float(k[2]) for k in kl]
-        lows = [float(k[3]) for k in kl]
-        closes = [float(k[4]) for k in kl]
-        trs: List[float] = []
-        for i in range(1, len(kl)):
-            h, l, pc = highs[i], lows[i], closes[i - 1]
-            tr = max(h - l, abs(h - pc), abs(l - pc))
-            trs.append(tr)
-        if not trs:
-            return None
-        return sum(trs[-length:]) / min(len(trs), length)
-    return None
-
-# =========================
-# Close helpers (reduce-only market by fraction)
-# =========================
-async def _close_position(symbol: str, side: str, fraction: float, leverage: Optional[int] = None, position_side: str = "BOTH") -> Dict[str, Any]:
-    if not _execute_live:
-        # Fallback: place market reduce-only via Binance (quantity fraction)
-        client = _get_client()
-        _align_position_mode(client)
-        pos_side, abs_qty, _ = _fetch_position_side_qty_entry(client, symbol)
-        if pos_side != side.upper():
-            # already in opposite? just return ok
-            return {"ok": True, "note": "position side differs; nothing to close"}
-        qty_to_close = abs_qty * max(0.0, min(1.0, float(fraction)))
-        if qty_to_close <= 0:
-            return {"ok": False, "error": "qty_to_close_zero"}
-        opp_side = "SELL" if pos_side == "BUY" else "BUY"
-        order = client.futures_create_order(
-            symbol=symbol,
-            side=opp_side,
-            type="MARKET",
-            quantity=qty_to_close,
-            reduceOnly="true",
-            newClientOrderId=build_client_order_id(symbol, opp_side, role="CLOSE"),
-        )
-        return {"ok": True, "exchange": "binance_futures", "order": order, "qty_closed": qty_to_close}
-
-    # Preferred path: trade executor
-    try:
-        res = await _execute_live(
-            symbol=symbol,
-            side=("SELL" if side.upper() == "BUY" else "BUY"),
-            budget=None,
-            leverage=leverage or 0,
-            dry_run=False,
-            quantity=None,
-            entry=None,
-            tp_targets=None,
-            sl_targets=None,
-            tp_splits=None,
-            sl_splits=None,
-            confirm_first=False,
-            telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
-            position_side=(position_side or "BOTH").upper(),
-            reduce_only=True,
-            fraction=fraction,
-        )
-        return res
-    except Exception as e:
-        logger.exception("close_position failed")
-        return {"ok": False, "error": "close_failed", "detail": str(e)}
-
-# =========================
-# BE: move SL to breakeven ± offset_bps
-# =========================
-@router.post("/be", summary="Move SL to BE ± offset_bps (cancel existing SL, create new STOP_MARKET reduce-only)")
-async def be(payload: Dict[str, Any] = Body(...)):
+@router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
+def be(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
-    force = bool(payload.get("force") or False)  # not used here, provided for API compatibility
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
 
@@ -200,119 +134,120 @@ async def be(payload: Dict[str, Any] = Body(...)):
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
 
-    # Cancel existing SL orders
-    _cancel_all_sl(client, symbol)
-
-    # Compute BE price
+    # מחשב מחיר BE מעוגל
     if side == "BUY":
-        be_price = _price_to_bps(entry, offset_bps, +1)  # a bit above entry
-        opp_side = "SELL"
+        be_px = _round_price(symbol, entry * (1 + offset_bps/10000.0))
+        opp = "SELL"
     else:
-        be_price = _price_to_bps(entry, offset_bps, -1)  # a bit below entry
-        opp_side = "BUY"
+        be_px = _round_price(symbol, entry * (1 - offset_bps/10000.0))
+        opp = "BUY"
+
+    # מבטל SL/Trail ישנים
+    _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
     order = client.futures_create_order(
         symbol=symbol,
-        side=opp_side,
+        side=opp,
         type="STOP_MARKET",
-        stopPrice=be_price,
-        closePosition=True,
-        reduceOnly="true",
+        stopPrice=be_px,
+        closePosition=True,               # ❗ אין reduceOnly/quantity
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-        newClientOrderId=build_client_order_id(symbol, opp_side, role="BE"),
+        newClientOrderId=build_client_order_id(symbol, opp, role="BE"),
     )
-    return {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "be_price": be_price, "order": order}
+    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "be_price": be_px, "orderId": order.get("orderId")}
 
 # =========================
-# Trail: create/update TRAILING_STOP_MARKET
-# Either pass callback_rate (0.1–4.9), or atr_mult to compute callback from ATR
+# Trail: TRAILING_STOP_MARKET closePosition (בלי reduceOnly/quantity)
 # =========================
-@router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET). You can pass callback_rate or atr_mult.")
-async def trail(payload: Dict[str, Any] = Body(...)):
+@router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET closePosition)")
+def trail(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
+    cb = payload.get("callbackRate") or payload.get("callback_rate") or payload.get("callback_rate_pct")
     atr_mult = payload.get("atr_mult")
-    callback_rate = payload.get("callback_rate")
-    interval = payload.get("interval") or "1m"
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
+
+    cb_min = float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))
+    cb_max = float(os.getenv("TRAIL_CALLBACK_MAX_PCT", "4.9"))
 
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-    last = float(client.futures_symbol_ticker(symbol=symbol)["price"])
+    last = _last_price(symbol)
 
-    # Cancel SLs (not TP)
-    _cancel_all_sl(client, symbol)
+    if cb is None:
+        # חישוב גס אם לא נמסר: 1.0% או לפי ATR*mult אם נדרש (פשטות)
+        try:
+            if atr_mult:
+                # פשט: הופך ATR*mult לאחוז מהמחיר – למנוע חריגות נצמד ל-min/max
+                from math import fabs
+                # ATR מהיר (14/1m) – אופציונלי; אם אין, נ fallback
+                with suppress(Exception):
+                    kl = client.futures_klines(symbol=symbol, interval="1m", limit=16)
+                    trs = []
+                    for i in range(1, len(kl)):
+                        h = float(kl[i][2]); l = float(kl[i][3]); pc = float(kl[i-1][4])
+                        trs.append(max(h-l, fabs(h-pc), fabs(l-pc)))
+                    atr = (sum(trs[-14:]) / 14.0) if len(trs) >= 14 else 0.0
+                pct = (atr * float(atr_mult) / last * 100.0) if (last and atr) else 1.0
+            else:
+                pct = 1.0
+        except Exception:
+            pct = 1.0
+        cb = max(cb_min, min(cb_max, float(pct)))
+    else:
+        cb = max(cb_min, min(cb_max, float(cb)))
 
-    # Derive callbackRate
-    if callback_rate is None:
-        atr_val = _atr(client, symbol, interval=interval) or 0.0
-        if atr_val <= 0 or not atr_mult:
-            # Fallback fixed: 0.8% for top10, 1.2% others (like env defaults)
-            callback_rate = float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))
-            try:
-                # clamp between min/max
-                cb_min = float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))
-                cb_max = float(os.getenv("TRAIL_CALLBACK_MAX_PCT", "4.9"))
-                callback_rate = max(cb_min, min(cb_max, float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))))
-            except Exception:
-                callback_rate = 0.8
-        else:
-            # percent of price based on ATR*mult
-            pct = (atr_val * float(atr_mult)) / last * 100.0
-            cb_min = float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))
-            cb_max = float(os.getenv("TRAIL_CALLBACK_MAX_PCT", "4.9"))
-            callback_rate = max(cb_min, min(cb_max, pct))
+    opp = "SELL" if side == "BUY" else "BUY"
 
-    opp_side = "SELL" if side == "BUY" else "BUY"
+    # מבטל SL/Trail ישנים
+    _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
+
     order = client.futures_create_order(
         symbol=symbol,
-        side=opp_side,
+        side=opp,
         type="TRAILING_STOP_MARKET",
-        callbackRate=float(callback_rate),
-        activationPrice=None,
-        reduceOnly="true",
-        newClientOrderId=build_client_order_id(symbol, opp_side, role="TRAIL"),
+        callbackRate=float(cb),
+        closePosition=True,               # ❗ אין reduceOnly/quantity
+        newClientOrderId=build_client_order_id(symbol, opp, role="TRAIL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
-    return {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "callback_rate": float(callback_rate), "order": order}
+    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "callbackRate": float(cb), "orderId": order.get("orderId")}
 
 # =========================
-# Move SL to a specific price
+# SL למיקום ספציפי (STOP_MARKET closePosition)
 # =========================
 @router.post("/sl/move", summary="Move SL to a specific price (STOP_MARKET closePosition)")
-async def sl_move(payload: Dict[str, Any] = Body(...)):
+def sl_move(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
-    price = payload.get("price")
-    if not symbol or price is None:
+    price = float(payload.get("price") or 0)
+    if not symbol or price <= 0:
         raise HTTPException(status_code=422, detail="symbol, price required")
-    price = float(price)
 
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    opp = "SELL" if side == "BUY" else "BUY"
+    px = _round_price(symbol, price)
 
-    _cancel_all_sl(client, symbol)
+    _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
-    opp_side = "SELL" if side == "BUY" else "BUY"
     order = client.futures_create_order(
         symbol=symbol,
-        side=opp_side,
+        side=opp,
         type="STOP_MARKET",
-        stopPrice=price,
-        closePosition=True,
-        reduceOnly="true",
-        newClientOrderId=build_client_order_id(symbol, opp_side, role="SL"),
+        stopPrice=px,
+        closePosition=True,               # ❗ אין reduceOnly/quantity
+        newClientOrderId=build_client_order_id(symbol, opp, role="SL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
-    return {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "sl_price": price, "order": order}
+    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
 
 # =========================
-# TP Ladder create/refresh
-# pcts: [1.8,3.2,5.5]  splits: [0.40,0.35,0.25]
+# TP Ladder – partial reduce-only, עם עיגול כמות/מחיר
 # =========================
-@router.post("/tp/ladder", summary="Create/refresh TP ladder as TAKE_PROFIT_MARKET reduce-only")
-async def tp_ladder(payload: Dict[str, Any] = Body(...)):
+@router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
+def tp_ladder(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     pcts: List[float] = payload.get("pcts") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5").split(","))]
     splits: List[float] = payload.get("splits") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25").split(","))]
@@ -324,138 +259,136 @@ async def tp_ladder(payload: Dict[str, Any] = Body(...)):
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    last = _last_price(symbol)
 
-    # Cancel existing TP orders
-    _cancel_all_tp(client, symbol)
+    opp = "SELL" if side == "BUY" else "BUY"
 
-    opp_side = "SELL" if side == "BUY" else "BUY"
-    total = 0.0
+    # מנקה רק TP קיימים לפני בנייה
+    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
+        typ = (o.get("type") or "").upper()
+        if "TAKE_PROFIT" in typ:
+            with suppress(Exception):
+                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+
     placed = []
     for i, (pct, split) in enumerate(zip(pcts, splits), start=1):
-        q = abs_qty * float(split)
+        q_raw = abs_qty * float(split)
+        q = _round_qty(symbol, q_raw)
         if q <= 0:
             continue
+
+        # יעד לפי המחיר הנוכחי (אפשר לשנות ל-entry אם מעדיף)
         if side == "BUY":
-            trig = entry * (1.0 + float(pct) / 100.0)
+            trig = _round_price(symbol, last * (1.0 + float(pct)/100.0))
         else:
-            trig = entry * (1.0 - float(pct) / 100.0)
+            trig = _round_price(symbol, last * (1.0 - float(pct)/100.0))
 
         order = client.futures_create_order(
             symbol=symbol,
-            side=opp_side,
+            side=opp,
             type="TAKE_PROFIT_MARKET",
             stopPrice=trig,
-            reduceOnly="true",
+            quantity=q,                    # ❗ partial qty (מעוגל)
+            reduceOnly=True,
             timeInForce="GTC",
-            newClientOrderId=build_client_order_id(symbol, opp_side, role=f"TP{i}"),
+            newClientOrderId=build_client_order_id(symbol, opp, role=f"TP{i}"),
             workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-            quantity=q,
         )
         placed.append({"i": i, "pct": float(pct), "split": float(split), "qty": q, "stop": trig, "orderId": order.get("orderId")})
-        total += q
-    return {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "qty_scheduled": total, "placed": placed}
 
-@router.post("/tp/cancel", summary="Cancel all TP orders for the position")
-async def tp_cancel(payload: Dict[str, Any] = Body(...)):
+    return {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "built": len(placed), "orders": placed}
+
+# =========================
+# ביטול כל ה-TP
+# =========================
+@router.post("/tp/cancel", summary="Cancel all TP orders")
+def tp_cancel(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
     client = _get_client()
     _align_position_mode(client)
-    n = _cancel_all_tp(client, symbol)
+    n = 0
+    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
+        if "TAKE_PROFIT" in (o.get("type") or "").upper():
+            with suppress(Exception):
+                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+                n += 1
     return {"ok": True, "symbol": symbol, "cancelled": n}
 
 # =========================
-# Partial / Full close
+# Close fraction – reduce-only market (אופציונלי)
 # =========================
-@router.post("/close", summary="Close fraction of the position (reduce-only market)")
-async def close_fraction(payload: Dict[str, Any] = Body(...)):
+@router.post("/close", summary="Close fraction of the position (reduce-only MARKET)")
+def close_fraction(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     fraction = float(payload.get("fraction") or 1.0)
     fraction = max(0.0, min(1.0, fraction))
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
-    client = _get_client()
-    _align_position_mode(client)
-    side, _, _ = _fetch_position_side_qty_entry(client, symbol)
-    res = await _close_position(symbol, side, fraction=fraction, leverage=None, position_side="BOTH")
-    return {"ok": bool(res.get("ok")), "result": res}
 
-# =========================
-# Reverse (close-all + open opposite with same qty)
-# =========================
-@router.post("/reverse", summary="Reverse position: close-all, then open opposite with qty (MARKET)")
-async def reverse(payload: Dict[str, Any] = Body(...)):
-    symbol = (payload.get("symbol") or "").upper()
-    if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, _ = _fetch_position_side_qty_entry(client, symbol)
+    opp = "SELL" if side == "BUY" else "BUY"
+    qty = _round_qty(symbol, abs_qty * fraction)
+    if qty <= 0:
+        return {"ok": False, "error": "qty_to_close_zero"}
 
-    # close all
-    close_res = await _close_position(symbol, side, fraction=1.0, leverage=None, position_side="BOTH")
-    if not bool(close_res.get("ok")):
-        return {"ok": False, "step": "close", "result": close_res}
-
-    opp_side = "SELL" if side == "BUY" else "BUY"
     order = client.futures_create_order(
         symbol=symbol,
-        side=opp_side,
+        side=opp,
         type="MARKET",
-        quantity=abs_qty,
-        reduceOnly="false",
-        newClientOrderId=build_client_order_id(symbol, opp_side, role="ENTRY"),
+        quantity=qty,
+        reduceOnly=True,
+        newClientOrderId=build_client_order_id(symbol, opp, role="CLOSE"),
     )
-    return {"ok": True, "close": close_res, "open": order}
+    return {"ok": True, "symbol": symbol, "fraction": fraction, "qty_closed": qty, "orderId": order.get("orderId")}
 
 # =========================
-# Manage-once (run: be + trail + tp ladder)
+# ניהול חד-פעמי
 # =========================
 @router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder")
-async def manage_once(payload: Dict[str, Any] = Body(...)):
+def manage_once(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     do = payload.get("do") or ["be", "trail", "tp_ladder"]
     offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
-    atr_mult = payload.get("atr_mult", 1.5)
+    callbackRate = payload.get("callbackRate")
     pcts = payload.get("pcts")
     splits = payload.get("splits")
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
 
-    res: Dict[str, Any] = {"symbol": symbol, "ok": True, "steps": {}}
+    out: Dict[str, Any] = {"symbol": symbol, "ok": True, "steps": {}}
 
-    if "be" in do:
-        try:
-            r = await be({"symbol": symbol, "offset_bps": offset_bps, "force": True})
-            res["steps"]["be"] = r
-            res["ok"] = res["ok"] and bool(r.get("ok"))
-        except Exception as e:
-            res["steps"]["be"] = {"ok": False, "error": str(e)}
-            res["ok"] = False
+    try:
+        if "be" in do:
+            out["steps"]["be"] = be({"symbol": symbol, "offset_bps": offset_bps})
+    except Exception as e:
+        out["ok"] = False
+        out["steps"]["be"] = {"ok": False, "error": str(e)}
 
-    if "trail" in do:
-        try:
-            r = await trail({"symbol": symbol, "atr_mult": atr_mult})
-            res["steps"]["trail"] = r
-            res["ok"] = res["ok"] and bool(r.get("ok"))
-        except Exception as e:
-            res["steps"]["trail"] = {"ok": False, "error": str(e)}
-            res["ok"] = False
+    try:
+        if "trail" in do:
+            body = {"symbol": symbol}
+            if callbackRate is not None:
+                body["callbackRate"] = callbackRate
+            out["steps"]["trail"] = trail(body)
+    except Exception as e:
+        out["ok"] = False
+        out["steps"]["trail"] = {"ok": False, "error": str(e)}
 
-    if "tp_ladder" in do:
-        try:
+    try:
+        if "tp_ladder" in do:
             body = {"symbol": symbol}
             if pcts is not None: body["pcts"] = pcts
             if splits is not None: body["splits"] = splits
-            r = await tp_ladder(body)
-            res["steps"]["tp_ladder"] = r
-            res["ok"] = res["ok"] and bool(r.get("ok"))
-        except Exception as e:
-            res["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
-            res["ok"] = False
+            out["steps"]["tp_ladder"] = tp_ladder(body)
+    except Exception as e:
+        out["ok"] = False
+        out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
 
-    return res
+    return out
 
 
 
