@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import json
 import time
 import hmac
@@ -17,10 +16,9 @@ from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable
 from collections import Counter
 
-from fastapi import FastAPI, Request, HTTPException, Body, Query
+from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import APIRouter
 
 # =================================================
 # Logging
@@ -357,7 +355,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         entry=None,
         tp_targets=tp_targets or None,
         sl_targets=sl_targets or None,
-        tp_splits= ticket.get("tp_splits"),
+        tp_splits=ticket.get("tp_splits"),
         sl_splits=None,
         confirm_first=False,
         telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
@@ -709,7 +707,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        # מפתח תקין + תאימות למפתח היסטורי שגוי
+        # valid key + backward-compat for an old wrong key
         key_good = f"{NS}:expired_log"
         key_bad  = key_good + "}"
 
