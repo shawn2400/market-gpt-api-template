@@ -11,6 +11,10 @@ from contextlib import suppress
 
 from fastapi import APIRouter, Body, HTTPException
 
+# אחיד: בנאי COID אחד לכל האפליקציה
+with suppress(Exception):
+    from utils.order_ids import build_client_order_id  # type: ignore
+
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
 
@@ -35,27 +39,6 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="true")
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
-
-# =========================
-# clientOrderId (<=32 chars)
-# =========================
-def _coid_fit(s: str, limit: int = 32) -> str:
-    if len(s) <= limit:
-        return s
-    h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
-    return f"{s[:limit-8]}_{h}"
-
-def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
-    prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG_MAIN").strip() or "ALG_MAIN"
-    sym = str(symbol).upper()
-    sd = str(side).upper()
-    role = str(role).upper()
-    ts = int(time.time())
-    base = f"{prefix}_{sym}_{sd}_{role}_{ts}"
-    if extra:
-        extra_s = "".join(ch for ch in str(extra).upper() if ch.isalnum() or ch == "_")
-        base = f"{base}_{extra_s}"
-    return _coid_fit(base, 32)
 
 # =========================
 # Exchange filters & rounding
@@ -121,6 +104,53 @@ def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", 
     return n
 
 # =========================
+# TP/BE gating helpers
+# =========================
+def _tp1_filled(client, symbol: str) -> bool:
+    """
+    מזהה האם TP1 מולא בעבר הקרוב.
+    חיפוש לפי clientOrderId שכולל TP1 / תגיות מהסביבה, ומצב FILLED.
+    """
+    tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS","TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
+    try:
+        # מגביל כדי לא למשוך היסטוריה ענקית
+        orders = client.futures_get_all_orders(symbol=symbol.upper(), limit=100) or []
+        for o in orders:
+            st = (o.get("status") or "").upper()
+            cid = ((o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")).upper()
+            typ = (o.get("type") or "").upper()
+            if st == "FILLED" and ("TAKE_PROFIT" in typ):
+                if "TP1" in cid or any(t for t in tags if t and t in cid):
+                    return True
+    except Exception:
+        pass
+    return False
+
+def _profit_ok(entry: float, last: float, side: str, min_pct: float) -> bool:
+    if min_pct <= 0 or entry <= 0 or last <= 0:
+        return True
+    move = (last - entry) / entry * 100.0 if side == "BUY" else (entry - last) / entry * 100.0
+    return move >= min_pct
+
+def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, str]:
+    """
+    קובע אם לאפשר BE/Trail לפי:
+    - SMART_MANAGE_AFTER_TP1=1 => דרוש TP1 מלא.
+    - TRAIL_MIN_PROFIT_PCT=x => דרוש רווח מינימלי באחוזים מן הכניסה.
+    """
+    want_tp1 = (os.getenv("SMART_MANAGE_AFTER_TP1","0").lower() in ("1","true","yes","on"))
+    min_profit = float(os.getenv("TRAIL_MIN_PROFIT_PCT","0") or 0)
+    last = 0.0
+    with suppress(Exception):
+        last = _last_price(symbol)
+
+    if want_tp1 and not _tp1_filled(client, symbol):
+        return (False, "blocked_by_tp1_not_filled")
+    if min_profit > 0 and not _profit_ok(entry, last, side, min_profit):
+        return (False, "blocked_by_min_profit")
+    return (True, "ok")
+
+# =========================
 # BE: STOP_MARKET closePosition (בלי reduceOnly/quantity)
 # =========================
 @router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
@@ -133,6 +163,11 @@ def be(payload: Dict[str, Any] = Body(...)):
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+
+    # Gating (TP1 / min profit)
+    ok, why = _gate_be_trail(client, symbol, side, entry)
+    if not ok:
+        return {"ok": False, "reason": why, "skipped": "be"}
 
     # מחשב מחיר BE מעוגל
     if side == "BUY":
@@ -175,13 +210,16 @@ def trail(payload: Dict[str, Any] = Body(...)):
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     last = _last_price(symbol)
 
+    # Gating (TP1 / min profit)
+    ok, why = _gate_be_trail(client, symbol, side, entry)
+    if not ok:
+        return {"ok": False, "reason": why, "skipped": "trail"}
+
     if cb is None:
         # חישוב גס אם לא נמסר: 1.0% או לפי ATR*mult אם נדרש (פשטות)
         try:
             if atr_mult:
-                # פשט: הופך ATR*mult לאחוז מהמחיר – למנוע חריגות נצמד ל-min/max
                 from math import fabs
-                # ATR מהיר (14/1m) – אופציונלי; אם אין, נ fallback
                 with suppress(Exception):
                     kl = client.futures_klines(symbol=symbol, interval="1m", limit=16)
                     trs = []
@@ -227,6 +265,10 @@ def sl_move(payload: Dict[str, Any] = Body(...)):
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+
+    # SL ידני לא נחסם (בכוונה), אבל אם תרצה:
+    # ok, why = _gate_be_trail(client, symbol, side, entry)
+
     opp = "SELL" if side == "BUY" else "BUY"
     px = _round_price(symbol, price)
 
@@ -356,24 +398,38 @@ def manage_once(payload: Dict[str, Any] = Body(...)):
     callbackRate = payload.get("callbackRate")
     pcts = payload.get("pcts")
     splits = payload.get("splits")
+    atr_mult = payload.get("atr_mult") or os.getenv("SMART_MANAGE_TRAIL_ATR_MULT")
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
 
     out: Dict[str, Any] = {"symbol": symbol, "ok": True, "steps": {}}
 
+    client = _get_client()
+    _align_position_mode(client)
+    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+
+    # Gating once for BE/TRAIL
+    allow_be_trail, reason = _gate_be_trail(client, symbol, side, entry)
+
     try:
-        if "be" in do:
+        if "be" in do and allow_be_trail:
             out["steps"]["be"] = be({"symbol": symbol, "offset_bps": offset_bps})
+        elif "be" in do and not allow_be_trail:
+            out["steps"]["be"] = {"ok": False, "reason": reason, "skipped": "be"}
     except Exception as e:
         out["ok"] = False
         out["steps"]["be"] = {"ok": False, "error": str(e)}
 
     try:
-        if "trail" in do:
+        if "trail" in do and allow_be_trail:
             body = {"symbol": symbol}
             if callbackRate is not None:
                 body["callbackRate"] = callbackRate
+            if atr_mult is not None:
+                body["atr_mult"] = atr_mult
             out["steps"]["trail"] = trail(body)
+        elif "trail" in do and not allow_be_trail:
+            out["steps"]["trail"] = {"ok": False, "reason": reason, "skipped": "trail"}
     except Exception as e:
         out["ok"] = False
         out["steps"]["trail"] = {"ok": False, "error": str(e)}
@@ -389,6 +445,7 @@ def manage_once(payload: Dict[str, Any] = Body(...)):
         out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
 
     return out
+
 
 
 
