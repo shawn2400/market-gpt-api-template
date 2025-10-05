@@ -24,13 +24,11 @@ services:
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # --- Auth (פשוט: או תשתמש ב-API_KEY או תשנה בקוד) ---
+      # --- Auth / Secrets (להזין בדשבורד) ---
       - key: API_KEY
         sync: false
       - key: API_BEARER_TOKEN
         sync: false
-
-      # --- Redis / Secrets (לקנפג בדשבורד) ---
       - key: REDIS_URL
         sync: false
       - key: BINANCE_API_KEY
@@ -46,7 +44,7 @@ services:
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
 
-      # --- Redis client fine-tuning ---
+      # --- Redis client ---
       - key: REDIS_CONNECT_TIMEOUT
         value: "5.0"
       - key: REDIS_SOCKET_TIMEOUT
@@ -62,7 +60,7 @@ services:
       - key: REDIS_SSL_NO_VERIFY
         value: "0"
 
-      # --- Public/Readonly (לא חובה, רק אם יש לך ראוטים כאלה) ---
+      # --- Public/Readonly ---
       - key: ENABLE_READONLY_HTTP
         value: "1"
       - key: READONLY_ENDPOINTS
@@ -116,7 +114,7 @@ services:
       - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT
 
-      # --- Scanner caps & RL (Render) ---
+      # --- Scanner caps & RL ---
       - key: SCAN_MAX_SYMBOLS
         value: "150"
       - key: SCAN_MAX_LIMIT
@@ -150,7 +148,7 @@ services:
       - key: TELEGRAM_PARSE_MODE
         value: HTML
 
-      # --- Trade & Orders (רק אם יש לך לוגיקת טריידים בפועל)---
+      # --- Trade & Orders ---
       - key: EXECUTE_TRADES
         value: "1"
       - key: ALLOW_MARKET_ENTRY
@@ -242,8 +240,11 @@ services:
       - key: OPENAPI_INCLUDE_TAGS
         value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
 
-
-
+      # --- Alerts endpoints (העיקר כאן) ---
+      - key: ALERTS_INGEST_URL
+        value: https://algogpt-docker.onrender.com/alerts/ingest
+      - key: ALERTS_ANALYSIS_URL
+        value: https://algogpt-docker.onrender.com/alerts/ingest
 
 
 
