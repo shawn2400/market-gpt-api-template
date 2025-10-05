@@ -80,7 +80,7 @@ BOT_TOKEN           = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE            = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 CONFIRM_TTL_SEC     = int(os.getenv("CONFIRM_TTL_SEC", "180"))
 TELEGRAM_CHAT_ID    = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
-TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "").strip()
+TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "HTML").strip() or "HTML"
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 try:
@@ -443,31 +443,25 @@ def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[floa
     sl_targets: Optional[List[float]] = None
 
     if LADDER_TP_ENABLE:
-        try:
+        with suppress(Exception):
             tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
             sign = +1 if side=="BUY" else -1
             tp_targets = [anchor * (1.0 + sign * p/100.0) for p in tps]
             tp_splits = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_SPLITS)] or None
-        except Exception:
-            pass
 
     if SL_DYNAMIC_ENABLE and kl:
-        try:
+        with suppress(Exception):
             atr = _atr_from_klines(kl, 14)
             sign = -1 if side=="BUY" else +1
             sl_p = anchor * (1.0 + sign * ((atr / max(anchor, 1e-9)) * SL_ATR_MULT * 100.0) / 100.0)
             sl_targets = [sl_p]
-        except Exception:
-            sl_targets = None
 
     if (not sl_targets) and LADDER_SL_ENABLE:
-        try:
+        with suppress(Exception):
             src = LADDER_SL_DEFAULT_PCTS if LADDER_SL_DEFAULT_PCTS else "0.8"
             slps = [float(x) for x in _parse_csv_floats(src)]
             sign = -1 if side=="BUY" else +1
             sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
-        except Exception:
-            sl_targets = None
 
     return tp_targets, tp_splits, sl_targets
 
@@ -504,6 +498,7 @@ __all__ = [
     "_compute_tp_sl_targets","_compute_trailing_callback_pct",
     "_Idem",
 ]
+
 
 
 
