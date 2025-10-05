@@ -1,28 +1,114 @@
-# routes/ops_approve.py
 from __future__ import annotations
-import os, json, time, hmac, hashlib, secrets, logging, math, re, inspect, traceback
-from contextlib import suppress
-from typing import Any, Dict, Optional, List, Callable
-from fastapi import APIRouter, HTTPException, Body, Query, Request
-from fastapi.responses import HTMLResponse
-import httpx
 
-logger = logging.getLogger("algogpt.ops_approve")
+import os
+import sys
+import json
+import time
+import hmac
+import math
+import re
+import httpx
+import hashlib
+import secrets
+import logging
+import traceback
+import inspect
+from contextlib import suppress
+from typing import Any, Dict, List, Optional, Callable
+from collections import Counter
+
+from fastapi import FastAPI, Request, HTTPException, Body, Query
+from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter
+
+# =================================================
+# Logging
+# =================================================
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("algogpt.main")
+
+# =================================================
+# Simple in-memory ConfirmStore (fallback)
+# =================================================
+class ConfirmStore:
+    """
+    Very small in-memory ticket store used as a fallback when Redis isn't available.
+    {
+        "ticket_id": str,
+        "req": dict,
+        "ts": float,
+        "approved": None|bool
+    }
+    """
+    _items: Dict[str, Dict[str, Any]] = {}
+
+    @classmethod
+    def create(cls, req: Dict[str, Any]) -> None:
+        tid = str(req.get("ticket_id") or f"T_{int(time.time())}")
+        cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
+        logger.debug("ConfirmStore.create: %s", tid)
+
+    @classmethod
+    def decide(cls, ticket_id: str, approved: bool) -> None:
+        it = cls._items.get(str(ticket_id))
+        if it:
+            it["approved"] = bool(approved)
+        logger.debug("ConfirmStore.decide: %s -> %s", ticket_id, approved)
+
+    @classmethod
+    def pending(cls) -> List[Dict[str, Any]]:
+        return [v for v in cls._items.values() if v.get("approved") is None]
+
+# =================================================
+# FastAPI App
+# =================================================
+app = FastAPI(
+    title=os.getenv("APP_TITLE", "AlgoGPT Supervisor"),
+    version=os.getenv("APP_VERSION", "1.0.0"),
+    docs_url=os.getenv("DOCS_URL", "/docs"),
+    redoc_url=os.getenv("REDOC_URL", "/redoc"),
+    openapi_url=os.getenv("OPENAPI_URL", "/openapi.json"),
+)
+
+# CORS
+CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
+CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*")
+CORS_ALLOW_METHODS = os.getenv("CORS_ALLOW_METHODS", "*")
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "yes", "on")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in CORS_ALLOW_ORIGINS.split(",")] if CORS_ALLOW_ORIGINS else ["*"],
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
+    allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
+)
+
+# =================================================
+# OPS APPROVE (inlined router)
+# =================================================
 router = APIRouter(tags=["ops-approval"])
 
-# --- (optional) metrics wiring ---
-try:
-    from routes.metrics import (
-        record_approval_created,
-        record_approval_approved,
-        record_approval_rejected,
+# optional metrics (no-op fallbacks)
+def record_approval_created(): ...
+def record_approval_approved(): ...
+def record_approval_rejected(): ...
+with suppress(Exception):
+    from routes.metrics import (  # type: ignore
+        record_approval_created as _rac,
+        record_approval_approved as _raa,
+        record_approval_rejected as _rar,
     )
-except Exception:
-    def record_approval_created(): pass
-    def record_approval_approved(): pass
-    def record_approval_rejected(): pass
+    record_approval_created = _rac
+    record_approval_approved = _raa
+    record_approval_rejected = _rar
 
-# -------- Optional Redis ----------
+# Optional Redis
 try:
     import redis.asyncio as aioredis  # type: ignore
 except Exception:
@@ -43,37 +129,31 @@ DEFAULT_INTERVAL     = os.getenv("DEFAULT_INTERVAL","15m")
 def _bool_env(name: str, default: bool=False) -> bool:
     return str(os.getenv(name, "1" if default else "0")).lower() in ("1","true","yes","on")
 
-TP_LADDER_ON_APPROVE       = _bool_env("TP_LADDER_ON_APPROVE", False)
-APPROVAL_FAIL_OPEN_ON_VELOCITY = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
-VELOCITY_LOG_LEVEL         = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
-DEBUG_APPROVE_HTML         = _bool_env("DEBUG_APPROVE_HTML", False)
-# FALLBACK נשלט ע"י PROPOSE_BLOCK_ON_FAIL (0 ➜ fallback ON, 1 ➜ fallback OFF)
-APPROVE_FALLBACK_TO_MARKET = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
+TP_LADDER_ON_APPROVE            = _bool_env("TP_LADDER_ON_APPROVE", False)
+APPROVAL_FAIL_OPEN_ON_VELOCITY  = _bool_env("APPROVAL_FAIL_OPEN_ON_VELOCITY", True)
+VELOCITY_LOG_LEVEL              = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARNING").upper()
+DEBUG_APPROVE_HTML              = _bool_env("DEBUG_APPROVE_HTML", False)
+APPROVE_FALLBACK_TO_MARKET      = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
 
-# -------- ConfirmStore fallback ----------
-try:
-    from utils.trade_executor import ConfirmStore  # type: ignore
-except Exception:
-    try:
-        from app.trade_executor import ConfirmStore  # type: ignore
-    except Exception:
-        from main import ConfirmStore  # type: ignore
-
-# -------- Position sizing (AUTO_QTY) ----------
+# Position sizing (AUTO_QTY)
 try:
     from app.utils.position_sizing import ensure_final_qty  # type: ignore
 except Exception:
-    from utils.position_sizing import ensure_final_qty  # type: ignore
+    with suppress(Exception):
+        from utils.position_sizing import ensure_final_qty  # type: ignore
+    if "ensure_final_qty" not in globals():
+        # safe fallback: identity
+        def ensure_final_qty(ticket: Dict[str, Any], price: float) -> Dict[str, Any]:
+            return ticket
 
-# -------- Prices ----------
+# Prices
 def _get_last_price(symbol: str) -> Optional[float]:
-    """
-    מנסה להביא מחיר מסינקים קיימים; נופל חזרה ל-binance client אם צריך.
-    """
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
-        if p: return float(p)
+        if p:
+            return float(p)
+
     with suppress(Exception):
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -86,7 +166,7 @@ def _get_last_price(symbol: str) -> Optional[float]:
             return float(info["price"])
     return None
 
-# -------- Helpers ----------
+# Helpers
 def _md_html(s: str) -> str:
     return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
@@ -108,14 +188,15 @@ async def _redis():
         return None
     return aioredis.from_url(REDIS_URL, decode_responses=True)
 
-# -------- Mode parsing ----------
+# Mode parsing
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
-    if not note: return None
+    if not note:
+        return None
     m = _MODE_RX.search(str(note))
     return m.group(1).upper() if m else None
 
-# -------- Telegram --------
+# Telegram
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
     if not BOT_TOKEN or not ADMIN_CHAT_ID:
@@ -141,7 +222,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# -------- utils: dynamic kwargs filter --------
+# utils: dynamic kwargs filter
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     try:
         sig = inspect.signature(fn)
@@ -155,11 +236,8 @@ def _is_code_4061(err: Exception | str) -> bool:
     s = str(err)
     return "code=-4061" in s or "position side does not match" in s.lower()
 
-# -------- Position mode alignment ----------
+# Position mode alignment
 def _align_position_mode(client) -> None:
-    """
-    מיושר את מצב החשבון (Hedge/One-Way) לפי POSITION_MODE_OVERRIDE אם סופק.
-    """
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
     with suppress(Exception):
         if mode_override in ("hedge","dual","dual_side","dual_side_position","dualposition"):
@@ -167,13 +245,11 @@ def _align_position_mode(client) -> None:
         elif mode_override in ("oneway","one_way","single","single_side","oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
-# -------- Execution backends ----------
+# Execution backends
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    try:
+    with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
-    except Exception:
-        pass
 
     try:
         from binance.client import Client  # type: ignore
@@ -188,7 +264,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
 
-        # יישור מצב חשבון לפי ENV (אם מוגדר)
         _align_position_mode(client)
 
         symbol   = str(ticket.get("symbol","")).upper()
@@ -209,7 +284,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
         }
 
-        # אל תשלח positionSide אם הוא "BOTH" או לא חוקי
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
         if pos_side_supplied in ("LONG","SHORT"):
@@ -221,14 +295,13 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
-            # --- RETRY חכם על -4061 ---
-            # 1) נסה בלי positionSide בכלל
+            # retry #1: without positionSide
             try:
                 retry_kwargs = dict(base_kwargs)
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
-                # 2) נסה עם גזירה: LONG/SHORT לפי side
+                # retry #2: derived LONG/SHORT from side
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -243,27 +316,27 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
                         "first_error": str(e1),
                         "second_error": str(e2),
                     }
-
     except Exception as e:
         logger.error("futures_create_order failed: %s", e)
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        try:
-            from utils.trade_executor import execute_trade_live  # type: ignore
-        except Exception:
-            from app.trade_executor import execute_trade_live  # type: ignore
-    except Exception as e:
-        logger.error("execute_trade_live missing: %s", e)
-        return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
+    execute_trade_live = None
+    with suppress(Exception):
+        from utils.trade_executor import execute_trade_live as _x  # type: ignore
+        execute_trade_live = _x
+    if execute_trade_live is None:
+        with suppress(Exception):
+            from app.trade_executor import execute_trade_live as _x  # type: ignore
+            execute_trade_live = _x
+    if execute_trade_live is None:
+        return {"ok": False, "error": "execute_trade_live_missing", "detail": "not found in utils/app"}
 
     symbol   = str(ticket.get("symbol","")).upper()
     side     = str(ticket.get("side","")).upper()
     qty      = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
 
-    # נרמל position_side ל-LONG/SHORT בלבד; אם "BOTH" או ריק — נגזור לפי side
     raw_ps  = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
     pos_side = raw_ps if raw_ps in ("LONG","SHORT") else ("LONG" if side=="BUY" else "SHORT")
 
@@ -284,7 +357,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         entry=None,
         tp_targets=tp_targets or None,
         sl_targets=sl_targets or None,
-        tp_splits=ticket.get("tp_splits"),
+        tp_splits= ticket.get("tp_splits"),
         sl_splits=None,
         confirm_first=False,
         telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
@@ -295,13 +368,13 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
 
     try:
-        res = await execute_trade_live(**clean)
+        res = await execute_trade_live(**clean)  # type: ignore
         return res
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
-# -------- Smart ETA (optional) --------
+# Smart ETA
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
     try:
         from utils.get_klines import get_klines_sync  # type: ignore
@@ -329,10 +402,7 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         per_min = avg_per_candle / m
         return per_min if per_min > 0 else None
     except Exception as e:
-        if VELOCITY_LOG_LEVEL == "INFO":
-            logger.info("velocity_calc_failed: %s", e)
-        else:
-            logger.warning("velocity_calc_failed: %s", e)
+        (logger.info if VELOCITY_LOG_LEVEL == "INFO" else logger.warning)("velocity_calc_failed: %s", e)
         return None
 
 def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
@@ -346,8 +416,9 @@ def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp
         return int(math.ceil(dist / vpm)) if vpm > 0 else None
     return {"eta_tp1_min": _eta(tp1), "eta_tp2_min": _eta(tp2), "eta_tp3_min": _eta(tp3)}
 
-# -------- Storage abstraction --------
+# Storage abstraction (redis + ConfirmStore)
 import json as _json
+
 async def _load_ticket(tid: str):
     if aioredis and REDIS_URL:
         try:
@@ -381,7 +452,7 @@ async def _delete_ticket(tid: str, source: str) -> None:
     with suppress(Exception):
         ConfirmStore.decide(tid, approved=False)
 
-# -------------------- API --------------------
+# -------------------- API: Create Ticket --------------------
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
     payload: Dict[str, Any] = Body(...),
@@ -395,13 +466,12 @@ async def create_ticket(
     position_side = (payload.get("position_side") or payload.get("positionSide") or "BOTH").upper()
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
 
-    # 🔸 מקל על ולידציה – מאפשר qty/lev = 0 כדי לאפשר AUTO_QTY בשלב האישור.
     if not (symbol and side):
         raise HTTPException(status_code=422, detail="Missing fields (symbol/side). qty/leverage may be auto at approve.")
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    # חישוב ETA חכם (אם מאופשר)
+    # Smart ETA
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
@@ -410,10 +480,12 @@ async def create_ticket(
         for k, v in etas.items():
             payload.setdefault(k, v)
 
-    try:
-        from routes.ops_flags import apply_note_flags  # type: ignore
-    except Exception:
-        def apply_note_flags(note, ticket): return ticket
+    # optional flags
+    def apply_note_flags(note: str, ticket: Dict[str, Any]) -> Dict[str, Any]:
+        with suppress(Exception):
+            from routes.ops_flags import apply_note_flags as _anf  # type: ignore
+            return _anf(note, ticket)
+        return ticket
 
     req_body: Dict[str, Any] = {
         "ticket_id": tid, "symbol": symbol, "side": side, "qty": qty,
@@ -427,6 +499,7 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
+    # RR check (optional)
     with suppress(Exception):
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -496,7 +569,7 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
-    return "HYBRID" if str(os.getenv("TP_LADDER_ON_APPROVE","0")).lower() in ("1","true","yes","on") else "MARKET"
+    return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
 
 def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     symbol = (ticket.get("symbol") or "").upper()
@@ -504,7 +577,6 @@ def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     if not price or float(price) <= 0:
         return None
     new_ticket = ensure_final_qty(dict(ticket), float(price))
-    # ניקוי/נרמול position_side: אל תעביר "BOTH" הלאה
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
@@ -522,7 +594,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    # 🔸 AUTO_QTY לפני ביצוע
     t2 = _apply_auto_qty_on_ticket(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -604,7 +675,6 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # 🔸 AUTO_QTY גם בערוץ ה-signed
     t2 = _apply_auto_qty_on_ticket(payload)
     if t2 is None:
         raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
@@ -638,12 +708,19 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         r = await _redis()
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
-        key = f"{NS}:expired_log}"
-        # תיקון מפתח (ללא סוגר מיותר) אם השתבש בעבר:
-        key = f"{NS}:expired_log"
+
+        # ✅ תיקון מלא: משתמשים במפתח התקין; בנוסף, אם בעבר נרשם עם סוגר עודף — נאסוף גם ממנו.
+        key_good = f"{NS}:expired_log"
+        key_bad  = f"{NS}:expired_log}"
+        items: List[str] = []
+        with suppress(Exception):
+            items.extend(await r.lrange(key_good, 0, 2000) or [])
+        with suppress(Exception):
+            items.extend(await r.lrange(key_bad, 0, 2000) or [])
+
         now = time.time()
         since = now - (hours * 3600)
-        items = await r.lrange(key, 0, 2000)
+
         events: List[Dict[str, Any]] = []
         for it in items:
             try:
@@ -658,7 +735,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
             await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
             return {"ok": True, "sent": True, "count": 0}
 
-        from collections import Counter
         by_sym = Counter((str(e.get("symbol","")).upper(), str(e.get("side","")).upper()) for e in events)
         lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
         for (sym, side), cnt in by_sym.most_common(20):
@@ -676,6 +752,54 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
+# Mount router
+app.include_router(router)
+
+# =================================================
+# Root / Health / Ready / Debug
+# =================================================
+@app.get("/", response_class=PlainTextResponse, tags=["meta"])
+def root() -> str:
+    name = os.getenv("APP_NAME", "algogpt")
+    return f"{name} online"
+
+@app.get("/healthz", response_class=PlainTextResponse, tags=["meta"])
+def healthz() -> str:
+    return "ok"
+
+@app.get("/readyz", response_class=PlainTextResponse, tags=["meta"])
+def readyz() -> str:
+    return "ok"
+
+@app.get("/debug/env", tags=["debug"])
+def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
+    allowlist = set([k.strip() for k in (keys or "").split(",") if k.strip()]) if keys else set()
+    safe: Dict[str, Any] = {}
+    for k, v in os.environ.items():
+        if any(x in k.upper() for x in ("SECRET", "TOKEN", "KEY", "PASSWORD")):
+            continue
+        if allowlist and k not in allowlist:
+            continue
+        safe[k] = v
+    return {"ok": True, "env": safe}
+
+# Global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("unhandled_error: %s %s", request.method, request.url)
+    return JSONResponse(
+        status_code=500,
+        content={"ok": False, "error": "internal_error", "detail": str(exc)},
+    )
+
+# Local run
+if __name__ == "__main__":
+    import uvicorn
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "10000"))
+    reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
+    uvicorn.run("main:app", host=host, port=port, reload=reload_)
 
 
 
