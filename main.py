@@ -1,3 +1,4 @@
+
 # main.py
 from __future__ import annotations
 
@@ -139,6 +140,32 @@ APPROVE_FALLBACK_TO_MARKET      = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
 HEALTH_TP1_ENABLE = _bool_env("HEALTH_TP1_ENABLE", True)
 HEALTH_TP1_INTERVAL_SEC = int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS","") or "").split(",") if t.strip()]
+SL_TAGS = [t.strip() for t in (os.getenv("SL_TAGS","SL,STOP,STOP_LOSS,STOP_LOSS_LIMIT,STOP_MARKET") or "").split(",") if t.strip()]
+
+# =================================================
+# ClientOrderId builder (recommended format)
+# =================================================
+def _coid_fit(s: str, limit: int = 32) -> str:
+    if len(s) <= limit:
+        return s
+    h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
+    return f"{s[:limit-8]}_{h}"
+
+def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
+    """
+    Recommended format (<=32 chars safe): {PREFIX}_{SYM}_{SIDE}_{ROLE}_{TS}[_{EXTRA}]
+    PREFIX from ORDER_ID_PREFIX (default ALG_MAIN).
+    ROLE in: ENTRY | TP1 | TP2 | TP3 | SL | BE | TRAIL | MANUAL
+    """
+    prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG_MAIN").strip() or "ALG_MAIN"
+    sym = str(symbol).upper()
+    sd  = str(side).upper()
+    role = str(role).upper()
+    ts = int(time.time())
+    base = f"{prefix}_{sym}_{sd}_{role}_{ts}"
+    if extra:
+        base = f"{base}_{re.sub(r'[^A-Z0-9]+','',str(extra).upper())}"
+    return _coid_fit(base, 32)
 
 # Position sizing (AUTO_QTY)
 try:
@@ -291,7 +318,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "side": side,
             "type": "MARKET",
             "quantity": qty,
-            "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
+            "newClientOrderId": build_client_order_id(symbol, side, role="ENTRY"),
         }
 
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
@@ -601,7 +628,28 @@ def _require_bearer(request: Request) -> None:
     if not auth.startswith("Bearer ") or auth.split(" ", 1)[1].strip() != API_BEARER_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-def _ticket_rows_html(t: Dict[str, Any]) -> str:
+def _badge(text: str, color: str) -> str:
+    return f"<span style='display:inline-block;padding:.15rem .45rem;border-radius:999px;font-size:.8rem;color:#fff;background:{color}'>{_md_html(text)}</span>"
+
+def _status_badge(status: str) -> str:
+    s = (status or "").upper()
+    color = "#6b7280"
+    if s == "NEW": color = "#3b82f6"
+    elif s == "PARTIALLY_FILLED": color = "#f59e0b"
+    elif s == "FILLED": color = "#10b981"
+    elif s in ("CANCELED","EXPIRED","REJECTED"): color = "#ef4444"
+    return _badge(s, color)
+
+def _role_badge(role: str) -> str:
+    r = (role or "").upper()
+    color = "#6b7280"
+    if r.startswith("TP"): color = "#16a34a"
+    elif r == "SL": color = "#dc2626"
+    elif r == "ENTRY": color = "#3b82f6"
+    elif r in ("BE","TRAIL"): color = "#a855f7"
+    return _badge(r, color)
+
+def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
         return default if v in (None, "", []) else _md_html(str(v))
@@ -642,7 +690,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
         f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
         "</div>"
         "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
-        f"{_ticket_rows_html(rec)}"
+        f"{_rows_kv_html(rec)}"
         "</table>"
         "<p style='color:#777;margin-top:1rem'>טיפ: ניתן לקרוא/לאשר גם מהטלגרם.</p>"
         "</body>"
@@ -721,6 +769,145 @@ async def ui_pending(request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
+
+# -------------------- UI: Live Orders (TP/SL/Entry)
+@router.get("/ops/ui/orders", summary="List open orders for a symbol (highlights TP1 via tags)")
+async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT"), request: Request = None):
+    _require_bearer(request)
+    try:
+        from binance.client import Client  # type: ignore
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"binance import failed: {e}")
+
+    api_key = os.getenv("BINANCE_API_KEY","").strip()
+    api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+    if not api_key or not api_sec:
+        raise HTTPException(status_code=500, detail="BINANCE keys missing")
+
+    client = Client(api_key, api_sec)
+    sym = symbol.upper().strip()
+    with suppress(Exception):
+        _align_position_mode(client)
+
+    try:
+        orders = client.futures_get_open_orders(symbol=sym) or []
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"futures_get_open_orders error: {e}")
+
+    # Role/TP detection helpers
+    tp1_tags = set(t.upper() for t in TP1_TAGS) if TP1_TAGS else set()
+    sl_tags = set(t.upper() for t in SL_TAGS)
+
+    def detect_role(o: Dict[str, Any]) -> str:
+        # by type first
+        typ = (o.get("type") or "").upper()
+        cid = (o.get("clientOrderId") or "").upper()
+        if "TAKE_PROFIT" in typ:
+            role_guess = "TP?"
+            for t in ("TP1","TP_1","TP-1","TAKE_PROFIT_1"):
+                if t in cid:
+                    return "TP1"
+            if "TP2" in cid: return "TP2"
+            if "TP3" in cid: return "TP3"
+            # Check env tags for TP1
+            if any(t in cid for t in tp1_tags):
+                return "TP1"
+            return role_guess
+        if "STOP" in typ or any(t in cid for t in sl_tags):
+            return "SL"
+        # fallback by client id semantics
+        if "ENTRY" in cid or "OPEN" in cid:
+            return "ENTRY"
+        return "OTHER"
+
+    # If multiple TPs with no explicit tag, infer by price proximity to current TP ladder ordering
+    try:
+        last_price = _get_last_price(sym) or 0.0
+    except Exception:
+        last_price = 0.0
+
+    enriched: List[Dict[str, Any]] = []
+    for o in orders:
+        role = detect_role(o)
+        enriched.append({**o, "_role": role})
+
+    # Try to mark single ambiguous TP? as TP1 by nearest to market (heuristic) if no explicit TP1 exists
+    if not any(x["_role"] == "TP1" for x in enriched):
+        tps = [x for x in enriched if x["_role"].startswith("TP")]
+        if len(tps) >= 1 and last_price > 0:
+            def dist(o):
+                p = float(o.get("price") or o.get("stopPrice") or 0) or 0.0
+                return abs(p - last_price)
+            tps_sorted = sorted(tps, key=dist)
+            if tps_sorted:
+                tps_sorted[0]["_role"] = "TP1"
+
+    # build HTML
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    health_link = f"{base}/health/tp1?symbols={sym}"
+
+    head = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:1100px;margin:2rem auto;line-height:1.5'>"
+        f"<h2 style='margin:0 0 .6rem 0'>Open Orders · <code>{_md_html(sym)}</code></h2>"
+        f"<div style='margin:0 0 1rem 0'><a href='{health_link}' style='text-decoration:none'>{_badge('Check TP1 Health', '#0ea5e9')} 🔍</a></div>"
+        "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
+        "<thead><tr style='background:#fafafa'>"
+        "<th style='text-align:left;padding:.45rem .6rem'>Status</th>"
+        "<th style='text-align:left;padding:.45rem .6rem'>Role</th>"
+        "<th style='text-align:left;padding:.45rem .6rem'>Type</th>"
+        "<th style='text-align:left;padding:.45rem .6rem'>Side</th>"
+        "<th style='text-align:right;padding:.45rem .6rem'>Qty</th>"
+        "<th style='text-align:right;padding:.45rem .6rem'>Price</th>"
+        "<th style='text-align:right;padding:.45rem .6rem'>Stop</th>"
+        "<th style='text-align:left;padding:.45rem .6rem'>Client ID</th>"
+        "<th style='text-align:left;padding:.45rem .6rem'>ReduceOnly</th>"
+        "<th style='text-align:left;padding:.45rem .6rem'>PositionSide</th>"
+        "<th style='text-align:left;padding:.45rem .6rem'>Time</th>"
+        "</tr></thead><tbody>"
+    )
+    rows = []
+    def fmt_float(x):
+        try:
+            f = float(x)
+            return f"{f:.6g}"
+        except Exception:
+            return str(x or "")
+
+    for o in enriched:
+        status = _status_badge(str(o.get("status","")))
+        role_badge = _role_badge(o.get("_role","OTHER"))
+        typ = _md_html(str(o.get("type","")))
+        side = _md_html(str(o.get("side","")))
+        qty = fmt_float(o.get("origQty") or o.get("origqty"))
+        price = fmt_float(o.get("price"))
+        stop = fmt_float(o.get("stopPrice"))
+        coid = _md_html(str(o.get("clientOrderId","")))
+        ro = "Yes" if str(o.get("reduceOnly","false")).lower() == "true" else "No"
+        ps = _md_html(str(o.get("positionSide","")))
+        t_ms = int(o.get("time") or o.get("updateTime") or 0)
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(t_ms/1000)) + "Z" if t_ms else "—"
+
+        highlight = "background:#f0fff4" if o.get("_role") == "TP1" else "background:#fff"
+        rows.append(
+            f"<tr style='{highlight}'>"
+            f"<td style='padding:.4rem .6rem'>{status}</td>"
+            f"<td style='padding:.4rem .6rem;font-weight:600'>{role_badge}</td>"
+            f"<td style='padding:.4rem .6rem'>{typ}</td>"
+            f"<td style='padding:.4rem .6rem'>{side}</td>"
+            f"<td style='padding:.4rem .6rem;text-align:right'>{qty}</td>"
+            f"<td style='padding:.4rem .6rem;text-align:right'>{price}</td>"
+            f"<td style='padding:.4rem .6rem;text-align:right'>{stop}</td>"
+            f"<td style='padding:.4rem .6rem'><code>{coid}</code></td>"
+            f"<td style='padding:.4rem .6rem'>{ro}</td>"
+            f"<td style='padding:.4rem .6rem'>{ps}</td>"
+            f"<td style='padding:.4rem .6rem'>{ts}</td>"
+            f"</tr>"
+        )
+    if not rows:
+        rows.append("<tr><td colspan='11' style='padding:.8rem .6rem;color:#6b7280'>No open orders.</td></tr>")
+    tail = "</tbody></table></body>"
+    return HTMLResponse(head + "\n".join(rows) + tail)
 
 # -------------------- Approve/Reject/Approve Signed/Digest --------------------
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
@@ -976,6 +1163,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
