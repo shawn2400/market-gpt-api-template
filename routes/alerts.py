@@ -1,6 +1,6 @@
 # routes/alerts.py
 import binascii, hashlib, hmac, os, json, logging, time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 import httpx
@@ -86,6 +86,46 @@ def _client_hexdigest_from_headers(request: Request) -> Optional[str]:
     hv = hv.strip().lower()
     return hv if len(hv) == 64 else None
 
+# ---------- Alt auth (fallbacks) ----------
+def _safe_eq(a: Optional[str], b: Optional[str]) -> bool:
+    if not a or not b:
+        return False
+    try:
+        return hmac.compare_digest(a.strip(), b.strip())
+    except Exception:
+        return a.strip() == b.strip()
+
+def _alt_auth_ok(request: Request) -> bool:
+    """
+    מאפשר אימות אלטרנטיבי אם אין/לא תקין HMAC:
+    - x-api-key == $API_KEY או $API_TOKEN או $PRIMARY_API_TOKEN
+    - Authorization: Bearer == $API_BEARER_TOKEN
+    - או אם ALLOW_ALERTS_INGEST_NO_HMAC=1 (בייפאס מבוקר)
+    """
+    allow_no_hmac = (os.getenv("ALLOW_ALERTS_INGEST_NO_HMAC","0").lower() in ("1","true","yes","on"))
+
+    if allow_no_hmac:
+        return True
+
+    hdr_key = request.headers.get("x-api-key") or request.headers.get("X-Api-Key") or ""
+    bearer  = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if bearer.lower().startswith("bearer "):
+        bearer = bearer.split(" ",1)[1].strip()
+
+    env_keys: List[str] = [
+        os.getenv("API_KEY",""),
+        os.getenv("API_TOKEN",""),
+        os.getenv("PRIMARY_API_TOKEN",""),
+    ]
+    env_bearer = os.getenv("API_BEARER_TOKEN","")
+
+    if hdr_key and any(_safe_eq(hdr_key, ek) for ek in env_keys if ek):
+        return True
+    if bearer and env_bearer and _safe_eq(bearer, env_bearer):
+        return True
+
+    return False
+
 # ---------- Telegram ----------
 def _bool(v, default=False) -> bool:
     if isinstance(v, bool): return v
@@ -123,7 +163,6 @@ def _md_escape(s: str) -> str:
     return str(s).replace("_","\\_").replace("*","\\*").replace("[","\\[").replace("`","\\`")
 
 def _compose_new_trade_msg(t: Dict[str, Any], approve_url: Optional[str], reject_url: Optional[str]) -> str:
-    # הודעת פתיחה עשירה עם כל הפרטים
     sym = _md_escape(t["symbol"])
     lines = [
         "📈 *New Trade Signal*",
@@ -132,10 +171,8 @@ def _compose_new_trade_msg(t: Dict[str, Any], approve_url: Optional[str], reject
         f"• Qty: `{t.get('qty','?')}`   Lev: `{t.get('leverage','?')}`",
         f"• Score: `{t.get('score','?')}`",
     ]
-    # ETAs
     if t.get("eta_open_min") is not None:
         lines.append(f"• ETA Open: `{t['eta_open_min']}m`")
-    # Targets
     if t.get("tp1") is not None:
         lines.append(f"• TP1: `{t['tp1']}`  ETA:`{t.get('eta_tp1_min','?')}m`  P(s):`{t.get('prob_tp1_pct','?')}%`")
     if t.get("tp2") is not None:
@@ -153,7 +190,6 @@ def _compose_new_trade_msg(t: Dict[str, Any], approve_url: Optional[str], reject
     lines.append(f"• Require Approval: `{t.get('require_approval', True)}`")
     if t.get("trade_id"):
         lines.append(f"• Trade: `{t['trade_id']}`")
-    # כפתורים
     if approve_url and reject_url:
         lines += [f"✅ {approve_url}", f"❌ {reject_url}"]
     return "\n".join(lines)
@@ -181,32 +217,23 @@ def _compose_final_report(trade: Dict[str,Any]) -> str:
         f"• Side: `{trade.get('side','?')}`   Qty: `{trade.get('qty','?')}`   Lev: `{trade.get('leverage','?')}`",
         f"• Score Final: `{trade.get('final_score','?')}`",
     ]
-    # רווח/הפסד כולל
     if trade.get("pnl_usd") is not None or trade.get("pnl_pct") is not None:
         lines.append(f"• PnL: `{_fmt_money(trade.get('pnl_usd'))}`  (`{trade.get('pnl_pct','?')}%`)")
-    # פירוט TPs / SL בדולרים (אם נשלח)
     for key in ("tp1_usd","tp2_usd","tp3_usd","sl_usd"):
         if trade.get(key) is not None:
             label = key.upper().replace("_USD","")
             lines.append(f"• {label}: `{_fmt_money(trade[key])}`")
-    # ניהול ושיפור
     if trade.get("management_summary"):
         lines.append(f"• Management: { _md_escape(trade['management_summary']) }")
     if trade.get("improvement_suggestion"):
         lines.append(f"• Improve: { _md_escape(trade['improvement_suggestion']) }")
-    # תוקף
     if trade.get("expiry_ts"):
         lines.append(f"• Expiry: `{trade['expiry_ts']}`")
     return "\n".join(lines)
 
 # ---------- Helpers: normalize payload ----------
 def _mk_trade_from_payload(p: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """
-    יוצר מבנה טרייד “עשיר” עם שדות אופציונליים.
-    מחזיר (trade_id, trade_dict)
-    """
     trade_id = p.get("trade_id") or p.get("ticket_id") or f"T_{int(time.time()*1000)}"
-
     trade: Dict[str, Any] = {
         "trade_id": trade_id,
         "symbol":   str(p.get("symbol","")).upper(),
@@ -218,25 +245,20 @@ def _mk_trade_from_payload(p: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         "reason":   str(p.get("reason", "")),
         "require_approval": _bool(p.get("require_approval", True)),
         "created_ts": int(time.time()),
-        # ETAs (בדקות) — אופציונלי
         "eta_open_min":  p.get("eta_open_min"),
         "eta_tp1_min":   p.get("eta_tp1_min"),
         "eta_tp2_min":   p.get("eta_tp2_min"),
         "eta_tp3_min":   p.get("eta_tp3_min"),
-        # Targets
         "tp1": p.get("tp1"), "tp2": p.get("tp2"), "tp3": p.get("tp3"),
         "sl":  p.get("sl"),
-        # Probabilities
         "prob_overall_pct": p.get("prob_overall_pct"),
         "prob_tp1_pct":     p.get("prob_tp1_pct"),
         "prob_tp2_pct":     p.get("prob_tp2_pct"),
         "prob_tp3_pct":     p.get("prob_tp3_pct"),
-        # Expiry
         "expiry_ts": p.get("expiry_ts"),
-        # runtime flags
         "status": "pending",  # pending/open/closed
         "hits": {"tp1": False, "tp2": False, "tp3": False, "sl": False},
-        "history": [],  # רשימת אירועים (זמן/תאור)
+        "history": [],
     }
     return trade_id, trade
 
@@ -254,18 +276,35 @@ async def debug_hmac_check(request: Request):
         return JSONResponse(status_code=500, content={"ok": False, "error": "server_hmac_misconfigured", "body_len": len(raw)})
     return {"ok": True, "server_hex": calc, "body_len": len(raw)}
 
+# אליאס תואם-לאחור ל/alerts/analysis (אם מישהו עדיין פונה לשם)
+@router.post("/analysis")
+async def analysis_alias(request: Request):
+    return await ingest(request)
+
 @router.post("/ingest")
 async def ingest(request: Request):
-    # אימות HMAC
     raw = await request.body()
+
+    # 1) ניסיון HMAC מלא
     server_hex = _server_hexdigest(raw)
-    if not server_hex:
-        return JSONResponse(status_code=500, content={"ok": False, "error": "server_hmac_misconfigured"})
     client_hex = _client_hexdigest_from_headers(request)
-    if not client_hex:
-        return JSONResponse(status_code=401, content={"ok": False, "error": "missing_hmac_header"})
-    if client_hex != server_hex:
-        return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid HMAC signature"})
+
+    if server_hex and client_hex and hmac.compare_digest(client_hex, server_hex):
+        hmac_ok = True
+    else:
+        hmac_ok = False
+
+    # 2) Fallback: API key / Bearer / בייפאס ENV
+    if not hmac_ok:
+        if _alt_auth_ok(request):
+            auth_mode = "fallback"
+        else:
+            # שפרנו הודעת שגיאה כדי שתדע למה נפל
+            if not client_hex:
+                return JSONResponse(status_code=401, content={"ok": False, "error": "missing_hmac_header"})
+            return JSONResponse(status_code=401, content={"ok": False, "error": "invalid_hmac_signature"})
+    else:
+        auth_mode = "hmac"
 
     # Parse JSON
     try:
@@ -277,45 +316,40 @@ async def ingest(request: Request):
     if not trade["symbol"] or not trade["side"] or trade["qty"] <= 0 or trade["leverage"] <= 0:
         return JSONResponse(status_code=400, content={"ok": False, "error": "bad_trade_params"})
 
-    # שמירה/סטטוס
     await _store_trade(trade)
 
-    # אישור נדרש?
     executed_result: Optional[Dict[str, Any]] = None
     if not trade["require_approval"]:
         trade["status"] = "open"
         await _store_trade(trade)
-        # כאן אפשר לפתוח מיידית פקודה אמיתית (אם תרצה, חבר ל-executor שלך)
-        # executed_result = await _execute_real_order(trade)
+        # כאן אפשר להפעיל ביצוע אמיתי אם רלוונטי
 
-    # נוטיפיקציית פתיחה לטלגרם (עם כפתורי אישור אם צריך)
     public_host = (os.getenv("PUBLIC_HOST","") or os.getenv("WEBHOOK_HOST","")).rstrip("/")
     approve_url = reject_url = None
     if public_host:
         approve_url = f"{public_host}/ops/approve?ticket_id={trade_id}"
         reject_url  = f"{public_host}/ops/reject?ticket_id={trade_id}"
-    msg = _compose_new_trade_msg(trade, approve_url if trade["require_approval"] else None,
-                                       reject_url if trade["require_approval"] else None)
+
+    msg = _compose_new_trade_msg(
+        trade,
+        approve_url if trade["require_approval"] else None,
+        reject_url  if trade["require_approval"] else None
+    )
     notified = await _tg_send(msg)
 
-    resp: Dict[str, Any] = {"ok": True, "accepted": True, "trade_id": trade_id, "notified": {"telegram": notified}}
+    resp: Dict[str, Any] = {
+        "ok": True,
+        "accepted": True,
+        "trade_id": trade_id,
+        "notified": {"telegram": notified},
+        "auth_mode": auth_mode,
+    }
     if executed_result is not None:
         resp["executed"] = executed_result
     return resp
 
 @router.post("/trades/update")
 async def trades_update(request: Request):
-    """
-    עדכון טרייד בזמן אמת + התרעות:
-    קלט JSON יכול לכלול:
-    - trade_id (חובה)
-    - שינויים ב: sl, tp1, tp2, tp3 (למשל הזזת SL)
-    - אירועי hit: tp1_hit, tp2_hit, tp3_hit, sl_hit (boolean)
-    - סטטוס: status=open/closed
-    - ציון סופי: final_score
-    - ניהול/שיפור: management_summary, improvement_suggestion
-    - דוח סופי: pnl_usd, pnl_pct, tp1_usd, tp2_usd, tp3_usd, sl_usd, closed_ts
-    """
     try:
         upd = json.loads((await request.body()).decode("utf-8"))
     except Exception:
@@ -329,9 +363,8 @@ async def trades_update(request: Request):
     if not trade:
         return JSONResponse(status_code=404, content={"ok": False, "error": "trade_not_found"})
 
-    events: list[str] = []
+    events: List[str] = []
 
-    # שינויים ב-TP/SL
     for key in ("sl","tp1","tp2","tp3"):
         if key in upd and upd[key] is not None and upd[key] != trade.get(key):
             old, new = trade.get(key), upd[key]
@@ -339,7 +372,6 @@ async def trades_update(request: Request):
             events.append(f"moved_{key}:{old}->{new}")
             trade[key] = new
 
-    # הגעה ליעדים
     for tgt in ("tp1","tp2","tp3","sl"):
         flag = f"{tgt}_hit"
         if _bool(upd.get(flag, False)) and not trade["hits"].get(tgt):
@@ -347,34 +379,27 @@ async def trades_update(request: Request):
             await _tg_send(_compose_hit_msg(trade, tgt.upper(), trade.get(tgt)))
             events.append(f"hit_{tgt}")
 
-    # סטטוס
     if upd.get("status") in ("pending","open","closed") and upd["status"] != trade.get("status"):
         events.append(f"status:{trade.get('status')}->{upd['status']}")
         trade["status"] = upd["status"]
 
-    # ציונים וניהול
     for k in ("final_score","management_summary","improvement_suggestion"):
         if k in upd and upd[k] is not None:
             trade[k] = upd[k]
 
-    # דוח סופי / PnL
     for k in ("pnl_usd","pnl_pct","tp1_usd","tp2_usd","tp3_usd","sl_usd","closed_ts","expiry_ts"):
         if k in upd:
             trade[k] = upd[k]
 
-    # היסטוריה
     if events:
         trade["history"].append({"ts": int(time.time()), "events": events})
 
     await _store_trade(trade)
 
-    # אם נסגר — שלח דוח סופי קצר
     if trade.get("status") == "closed":
         await _tg_send(_compose_final_report(trade))
 
     return {"ok": True, "trade": trade}
-
-
 
 
 
