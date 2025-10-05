@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Iterable, List
 from fnmatch import fnmatch
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException  # ← הוספתי HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, PlainTextResponse
 from fastapi.openapi.utils import get_openapi
@@ -110,7 +110,15 @@ except Exception:
                         return PlainTextResponse(
                             "Response too large", status_code=413
                         )
-                return PlainTextResponse(body.decode("utf-8", errors="ignore"), status_code=getattr(resp, "status_code", 200), headers=getattr(resp, "headers", None))
+                # נשמר את קוד הסטטוס המקורי ונחזיר את הגוף כפי שהוא
+                status = getattr(resp, "status_code", 200)
+                # נשתדל לא לשנות תשובות JSON/וכו' – כאן אין לנו סוג,
+                # אז נחזיר PlainText עם אותו קוד סטטוס (כמו קודם).
+                return PlainTextResponse(
+                    body.decode("utf-8", errors="ignore"),
+                    status_code=status,
+                    headers=getattr(resp, "headers", None)
+                )
             except Exception:
                 return resp
 
@@ -345,6 +353,12 @@ async def _final_safety_and_headers(request: Request, call_next):
         resp = await call_next(request)
         if resp is None:
             resp = PlainTextResponse("Internal server error (no response)", status_code=500)
+
+    except HTTPException as exc:
+        # ← שמירת קוד הסטטוס וה־detail המקורי; לא להחזיר 200 בטעות
+        detail = exc.detail if isinstance(exc.detail, (str, dict, list)) else str(exc.detail)
+        resp = JSONResponse({"detail": detail}, status_code=exc.status_code)
+
     except Exception as exc:
         logging.getLogger("algogpt").exception(
             "final_mw: call_next failed",
@@ -356,6 +370,7 @@ async def _final_safety_and_headers(request: Request, call_next):
             },
         )
         resp = JSONResponse({"detail": "internal_error", "where": "final_mw", "message": str(exc)}, status_code=500)
+
     try:
         resp.headers["x-app-instance-id"] = INSTANCE_ID
         resp.headers["rndr-id"] = INSTANCE_ID
@@ -706,6 +721,7 @@ async def _graceful_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("BIND_HOST","0.0.0.0"), port=int(os.getenv("PORT","10000")))
+
 
 
 
