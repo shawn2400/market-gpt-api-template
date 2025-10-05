@@ -765,6 +765,12 @@ def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
     return f"{name} online"
 
+# Health alias for Render
+@app.get("/health", response_class=PlainTextResponse, tags=["meta"])
+@app.head("/health", response_class=PlainTextResponse)
+def health() -> str:
+    return "ok"
+
 @app.get("/healthz", response_class=PlainTextResponse, tags=["meta"])
 def healthz() -> str:
     return "ok"
