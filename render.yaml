@@ -153,10 +153,17 @@ services:
         value: "1"
       - key: ALLOW_MARKET_ENTRY
         value: "1"
+
+      # >>> Auto-Qty (חדש/מתוקנן)
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_BUDGET_USDT
         value: "30"
+      - key: AUTO_QTY_LEVERAGE_DEFAULT
+        value: "7"
+      - key: AUTO_QTY_MARGIN_BUFFER_PCT
+        value: "0.35"
+
       - key: NATIVE_TPSL_ENABLE
         value: "1"
       - key: ORDERS_USE_OCO
@@ -184,7 +191,7 @@ services:
       - key: STREAM_TP_BE
         value: "1"
 
-      # --- Hardening (חדש) ---
+      # --- Hardening ---
       - key: HYBRID_HARD_CANCEL_ENABLE
         value: "1"
       - key: HYBRID_CANCEL_CONFIRM_TRIES
@@ -194,7 +201,7 @@ services:
       - key: ARM_VERIFY_DISABLE
         value: "0"
 
-      # --- Health TP1 (חדש) ---
+      # --- Health TP1 ---
       - key: HEALTH_TP1_ENABLE
         value: "1"
       - key: HEALTH_TP1_INTERVAL_SEC
@@ -258,7 +265,7 @@ services:
       - key: OPENAPI_INCLUDE_TAGS
         value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
 
-      # --- Alerts endpoints (העיקר כאן) ---
+      # --- Alerts endpoints ---
       - key: ALERTS_INGEST_URL
         value: https://algogpt-docker.onrender.com/alerts/ingest
       - key: ALERTS_ANALYSIS_URL
