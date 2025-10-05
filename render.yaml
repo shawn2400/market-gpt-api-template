@@ -184,6 +184,26 @@ services:
       - key: STREAM_TP_BE
         value: "1"
 
+      # --- Hardening (חדש) ---
+      - key: HYBRID_HARD_CANCEL_ENABLE
+        value: "1"
+      - key: HYBRID_CANCEL_CONFIRM_TRIES
+        value: "4"
+      - key: HYBRID_CANCEL_CONFIRM_SLEEP_MS
+        value: "200"
+      - key: ARM_VERIFY_DISABLE
+        value: "0"
+
+      # (אופציונלי – כוונון BE דינמי, אם תרצה לקבע לערכים ספציפיים)
+      # - key: BE_GUARD_ENABLE
+      #   value: "1"
+      # - key: BE_GUARD_EVERY_SEC
+      #   value: "30"
+      # - key: TP_BE_OFFSET_BPS
+      #   value: "8"
+      # - key: TP1_TAGS
+      #   value: TP1,tp1,tp_1,TAKE_PROFIT_1
+
       # --- Notifications / Reports ---
       - key: NOTIFY_OPEN
         value: "true"
@@ -245,7 +265,6 @@ services:
         value: https://algogpt-docker.onrender.com/alerts/ingest
       - key: ALERTS_ANALYSIS_URL
         value: https://algogpt-docker.onrender.com/alerts/ingest
-
 
 
 
