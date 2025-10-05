@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Iterable, List
 from fnmatch import fnmatch
 
-from fastapi import FastAPI, Request, HTTPException  # ← הוספתי HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, PlainTextResponse
 from fastapi.openapi.utils import get_openapi
@@ -22,7 +22,6 @@ try:
 except Exception:
     def make_asgi_app():
         async def _dummy_app(scope, receive, send):
-            # אפליקציה ריקה במקום /metrics אם prometheus_client לא מותקן
             if scope["type"] == "http":
                 await send({
                     "type": "http.response.start",
@@ -39,7 +38,6 @@ try:
     from utils.auth import extract_token, allow_all, token_matches, get_loaded_tokens, get_public_paths
 except Exception:
     def extract_token(request: Request, a_hdr: Optional[str], x_hdr: Optional[str]) -> Optional[str]:
-        # מנסה לקחת מה-Header Authorization או X-API-Key או מה-query ?api_key=
         tok = None
         if a_hdr and a_hdr.lower().startswith("bearer "):
             tok = a_hdr.split(" ", 1)[1].strip()
@@ -50,14 +48,12 @@ except Exception:
         return tok
 
     def allow_all() -> bool:
-        # ברירת מחדל: אם לא טעונים טוקנים, נאפשר הכול (אפשר לשנות ל-False כדי לחסום)
         return True
 
     def token_matches(tok: Optional[str]) -> bool:
-        # אם תרצה לאכוף API KEY, שים משתנה סביבה API_KEY=...
         expected = os.getenv("API_KEY", "").strip()
         if not expected:
-            return True  # אין מפתח נדרש
+            return True
         return (tok or "") == expected
 
     def get_loaded_tokens(mask: bool = True):
@@ -74,7 +70,6 @@ try:
     from utils.json_logger import setup_json_logging
 except Exception:
     def setup_json_logging():
-        # לוגר בסיסי אם אין מודול json_logger
         logger = logging.getLogger("algogpt")
         handler = logging.StreamHandler()
         fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
@@ -99,27 +94,28 @@ except Exception:
         def __init__(self, app, max_bytes: int = 5_242_880):
             super().__init__(app)
             self.max_bytes = max_bytes
+
         async def dispatch(self, request: Request, call_next):
             resp = await call_next(request)
-            # אם התוכן גדול מדי – נחתוך/נחזיר שגיאה רכה
             try:
+                # קרא את הגוף לסף בלבד; אם עבר — החזר 413, אחרת אל תשנה את התגובה.
                 body = b""
+                chunks: List[bytes] = []
                 async for chunk in resp.body_iterator:
-                    body += chunk
-                    if len(body) > self.max_bytes:
-                        return PlainTextResponse(
-                            "Response too large", status_code=413
-                        )
-                # נשמר את קוד הסטטוס המקורי ונחזיר את הגוף כפי שהוא
+                    chunks.append(chunk)
+                    body_len = sum(len(c) for c in chunks)
+                    if body_len > self.max_bytes:
+                        return PlainTextResponse("Response too large", status_code=413)
+                # אם לא עברנו סף — שחזר סטרים והחזר את אותה תגובה בדיוק.
+                from starlette.responses import Response
+                full = b"".join(chunks)
+                # לשמר סטטוס/כותרות/סוג תוכן
                 status = getattr(resp, "status_code", 200)
-                # נשתדל לא לשנות תשובות JSON/וכו' – כאן אין לנו סוג,
-                # אז נחזיר PlainText עם אותו קוד סטטוס (כמו קודם).
-                return PlainTextResponse(
-                    body.decode("utf-8", errors="ignore"),
-                    status_code=status,
-                    headers=getattr(resp, "headers", None)
-                )
+                media_type = getattr(resp, "media_type", None)
+                headers = dict(getattr(resp, "headers", {}))
+                return Response(full, status_code=status, media_type=media_type, headers=headers)
             except Exception:
+                # במקרה קצה — אל תשבור את הזרימה
                 return resp
 
 # ---- Binance client (fallbacks) ----
@@ -346,31 +342,23 @@ app.add_middleware(
     public_prefixes=EFFECTIVE_PUBLIC_PREFIXES,
 )
 
-# ---------- ONE safe middleware: always returns a Response + adds headers ----------
+# ---------- מידלוור סופי: לא בולע חריגות, רק מוסיף כותרות ----------
 @app.middleware("http")
 async def _final_safety_and_headers(request: Request, call_next):
     try:
         resp = await call_next(request)
         if resp is None:
-            resp = PlainTextResponse("Internal server error (no response)", status_code=500)
+            # לא ממירים ל-200, לא כותבים גוף; זורקים 500 אמיתי
+            raise RuntimeError("No response from downstream")
+    except HTTPException:
+        # לשמר 404/401/422 וכו' — נותן ל-FastAPI לטפל (כולל detail/headers)
+        raise
+    except Exception:
+        logging.getLogger("algogpt").exception("final_mw: call_next failed")
+        # לתת למנגנון ברירת-המחדל להחזיר 500
+        raise
 
-    except HTTPException as exc:
-        # ← שמירת קוד הסטטוס וה־detail המקורי; לא להחזיר 200 בטעות
-        detail = exc.detail if isinstance(exc.detail, (str, dict, list)) else str(exc.detail)
-        resp = JSONResponse({"detail": detail}, status_code=exc.status_code)
-
-    except Exception as exc:
-        logging.getLogger("algogpt").exception(
-            "final_mw: call_next failed",
-            extra={
-                "path": str(getattr(request.url, "path", "")),
-                "method": request.method,
-                "client": getattr(getattr(request, "client", None), "host", None),
-                "x_req_id": request.headers.get("x-request-id"),
-            },
-        )
-        resp = JSONResponse({"detail": "internal_error", "where": "final_mw", "message": str(exc)}, status_code=500)
-
+    # הזרקת כותרות—בלי לשנות סטטוס/גוף
     try:
         resp.headers["x-app-instance-id"] = INSTANCE_ID
         resp.headers["rndr-id"] = INSTANCE_ID
@@ -381,9 +369,6 @@ async def _final_safety_and_headers(request: Request, call_next):
 # ---------- our safe digest/eod routes (registered BEFORE routers) ----------
 @app.get("/ops/digest/now", include_in_schema=False)
 async def ops_digest_now(hours: Optional[int] = None):
-    """
-    תואם-לאחור: אם send_ops_digest_now תומכת ב-hours נעביר, אחרת נקרא בלי פרמטרים.
-    """
     ok, err = True, None
     try:
         import inspect
@@ -449,10 +434,8 @@ else:
         "routes.ops_flags",
         "routes.position_ops",
         "routes.calibration",
-        # "routes.ops_digest",  # ← בכוונה לא לכלול כדי למנוע התנגשות עם /ops/digest/now
     ):
         _try_include(_mod)
-    # אם אין תיקיית routes – הקריאה הזו לא תכשיל את האפליקציה
     try:
         for m in pkgutil.iter_modules(["routes"]):
             module_path = f"routes.{m.name}"
