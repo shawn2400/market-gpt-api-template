@@ -299,7 +299,6 @@ async def ingest(request: Request):
         if _alt_auth_ok(request):
             auth_mode = "fallback"
         else:
-            # שפרנו הודעת שגיאה כדי שתדע למה נפל
             if not client_hex:
                 return JSONResponse(status_code=401, content={"ok": False, "error": "missing_hmac_header"})
             return JSONResponse(status_code=401, content={"ok": False, "error": "invalid_hmac_signature"})
