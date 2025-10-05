@@ -401,7 +401,7 @@ async def create_ticket(
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    # תיקון תחביר: and במקום &&
+    # חישוב ETA חכם (אם מאופשר)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
@@ -674,7 +674,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
-
 
 
 
