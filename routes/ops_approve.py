@@ -638,7 +638,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         r = await _redis()
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
-        key = f"{NS}:expired_log"  # ← תוקן: אין '}' מיותר
+        key = f"{NS}:expired_log"  # תוקן: הוסר ה-'}' המיותר
         now = time.time()
         since = now - (hours * 3600)
         items = await r.lrange(key, 0, 2000)
@@ -674,6 +674,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
