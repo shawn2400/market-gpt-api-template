@@ -490,7 +490,15 @@ __all__ = [
     "ORDER_ID_PREFIX","CANCEL_ONLY_PREFIXED_ORDERS","CANCEL_PREFIX_OVERRIDE",
     "IDEMPOTENCY_TTL_SEC","BOT_TOKEN","API_BASE","CONFIRM_TTL_SEC","TELEGRAM_CHAT_ID","TELEGRAM_PARSE_MODE",
     # helpers
-    "_q_p
+    "_q_price","_q_qty","_ensure_min_notional","_calc_qty","_offset_bps",
+    "_is_hedge_mode_runtime","_effective_position_side",
+    "_fetch_klines_raw","_adx_from_klines","_atr_from_klines","_quality_gate",
+    "_choose_budget_dynamic","_choose_leverage","_parse_csv_floats",
+    "_cancel_old_closing_orders","_build_ladders","_normalize_position_side",
+    "_close_side_for","_pos_side_for_entry","_normalize_entry_side",
+    "_compute_tp_sl_targets","_compute_trailing_callback_pct",
+    "_Idem",
+]
 
 
 
