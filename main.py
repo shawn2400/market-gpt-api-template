@@ -1079,8 +1079,13 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
 
-# Mount router
+# Mount routers
 app.include_router(router)
+
+# Mount position-ops router (BE/Trail/TP/Close/Manage)
+with suppress(Exception):
+    from routes.position_ops import router as position_ops_router  # type: ignore
+    app.include_router(position_ops_router)
 
 # =================================================
 # Root / Health / Ready / Debug
@@ -1117,24 +1122,90 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
     return {"ok": True, "env": safe}
 
 # =========================
-# Health TP1: startup task + manual endpoint
+# Health TP1: startup task + manual endpoint (with built-in fallback if utils missing)
 # =========================
 try:
     from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
     _health_tp1_loaded = True
 except Exception as _e:
-    logger.warning("health_tp1 module not found (%s) – TP1 health disabled", _e)
-    _health_tp1_loaded = False
+    logger.warning("health_tp1 module not found (%s) – using built-in fallback", _e)
+    _health_tp1_loaded = True
+
+    # --- Fallback implementations ---
+    from binance.client import Client  # type: ignore
+
+    async def quick_check_tp1(symbols, tp1_tags=None, notify_telegram=False):
+        api_key = os.getenv("BINANCE_API_KEY","").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        cli = Client(api_key, api_sec)
+        tags = tp1_tags or [t.strip() for t in (os.getenv("TP1_TAGS","") or "").split(",") if t.strip()]
+        out = {}
+        for sym in symbols:
+            orders = cli.futures_get_open_orders(symbol=sym)
+            has_tp1 = False
+            found = []
+            for o in (orders or []):
+                coid = (o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")
+                if any(t for t in tags if t and t.lower() in coid.lower()):
+                    has_tp1 = True
+                if o.get("type") in ("TAKE_PROFIT","TAKE_PROFIT_MARKET","STOP","STOP_MARKET"):
+                    found.append({
+                        "status": o.get("status"),
+                        "type": o.get("type"),
+                        "side": o.get("side"),
+                        "stopPrice": o.get("stopPrice"),
+                        "clientOrderId": o.get("clientOrderId"),
+                        "reduceOnly": o.get("reduceOnly"),
+                        "positionSide": o.get("positionSide","BOTH"),
+                        "time": o.get("time"),
+                    })
+            out[sym] = {"tp1_tags": tags, "tp1_present": has_tp1, "open_conditional": found}
+        if notify_telegram:
+            lines = ["🩺 <b>TP1 Health</b>"]
+            for s, v in out.items():
+                mark = "✅" if v["tp1_present"] else "⚠️"
+                lines.append(f"• {s}: {mark} TP1 {'found' if v['tp1_present'] else 'missing'}")
+            await _send_telegram_html("\n".join(lines))
+        return out
+
+    async def health_check_tp1_tags(symbols, interval_sec=600):
+        while True:
+            try:
+                await quick_check_tp1(symbols, tp1_tags=TP1_TAGS or None, notify_telegram=True)
+            except Exception as e:
+                logger.warning("health_tp1_fallback_loop_error: %s", e)
+            await asyncio.sleep(max(60, int(interval_sec)))
 
 @app.on_event("startup")
 async def _startup_tasks():
     if _health_tp1_loaded and HEALTH_TP1_ENABLE:
-        # WATCHLIST -> סימבולים לבדיקה; ניתן להחליף לרשימה קבועה אם תרצה
+        # WATCHLIST -> סימבולים לבדיקה
         watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if watch:
-            # יוצר טסק רקע מתמשך
             asyncio.create_task(health_check_tp1_tags(watch, interval_sec=HEALTH_TP1_INTERVAL_SEC))
             logger.info("health_tp1 background started (interval=%ss, symbols=%s)", HEALTH_TP1_INTERVAL_SEC, ",".join(watch))
+
+    # periodic "smart manage now" for WATCHLIST (optional)
+    async def periodic_manager():
+        base = PUBLIC_HOST.rstrip("/")
+        token = API_BEARER_TOKEN
+        if not base or not token:
+            return
+        syms = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
+        if not syms:
+            return
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as cli:
+                    for s in syms:
+                        await cli.post(f"{base}/position-ops/manage-once",
+                                       headers={"Authorization": f"Bearer {token}"},
+                                       json={"symbol": s})
+            except Exception as e:
+                logger.warning("periodic_manager_error: %s", e)
+            await asyncio.sleep(int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20")))
+    if _bool_env("MANAGER_ENABLE", True):
+        asyncio.create_task(periodic_manager())
 
 @app.get("/health/tp1", tags=["meta"])
 async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV of symbols; default from WATCHLIST")):
@@ -1162,6 +1233,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
