@@ -1,85 +1,122 @@
 # utils/health_tp1.py
 # -*- coding: utf-8 -*-
-import os, asyncio, logging
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+import os
+from typing import Dict, Any, List, Optional, Tuple
 from contextlib import suppress
 
-from utils.binance_client import get_all_orders
-from utils.trade_execution_core import BOT_TOKEN, TELEGRAM_PARSE_MODE, TELEGRAM_CHAT_ID
-import httpx
+from utils.binance_client import get_all_orders, futures_mark_price
 
-log = logging.getLogger("algogpt.health.tp1")
+TP_STATUSES = {"NEW", "PARTIALLY_FILLED"}
+TP_TYPES = {"TAKE_PROFIT", "TAKE_PROFIT_MARKET"}
+SL_TYPES = {"STOP", "STOP_MARKET"}
 
 def _env_tags() -> List[str]:
-    env = [t.strip() for t in (os.getenv("TP1_TAGS", "") or "").split(",") if t.strip()]
-    return env if env else ["TP1"]
+    raw = os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")
+    return [t.strip() for t in str(raw).split(",") if t.strip()]
 
-async def _tg_send(text: str) -> Dict[str, Any]:
-    chat_id = int(os.getenv("TRADE_LOG_CHAT_ID") or TELEGRAM_CHAT_ID or 0)
-    token = os.getenv("TELEGRAM_BOT_TOKEN") or BOT_TOKEN
-    if not (chat_id and token):
-        return {"ok": False, "skipped": True, "reason": "no_chat_or_token"}
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": TELEGRAM_PARSE_MODE or "HTML", "disable_web_page_preview": True}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload)
-        return r.json()
-    except Exception as e:
-        log.warning("telegram_send_failed: %s", e)
-        return {"ok": False, "error": str(e)}
+def _is_tp_order(o: Dict[str, Any]) -> bool:
+    typ = (o.get("type") or "").upper()
+    st  = (o.get("status") or "").upper()
+    return (typ in TP_TYPES) and (st in TP_STATUSES)
 
-def _tp_orders(symbol: str) -> List[Dict[str, Any]]:
-    try:
-        lst = get_all_orders(symbol, limit=100) or []
-        return [o for o in lst if str(o.get("type","")).upper().startswith("TAKE_PROFIT")]
-    except Exception:
-        return []
+def _is_sl_order(o: Dict[str, Any]) -> bool:
+    typ = (o.get("type") or "").upper()
+    st  = (o.get("status") or "").upper()
+    return (typ in SL_TYPES) and (st in TP_STATUSES)
 
-def _has_tp1_tag(order: Dict[str, Any], tags: List[str]) -> bool:
-    coi  = str(order.get("clientOrderId") or "")
-    name = str(order.get("origClientOrderId") or "")
-    s = (coi + "|" + name).upper()
-    return any(tag.upper() in s for tag in tags)
+def _has_tp1_tag(o: Dict[str, Any], tags: List[str]) -> bool:
+    coid = str(o.get("clientOrderId") or "")
+    return any(t in coid for t in tags)
 
-async def health_check_tp1_tags(symbols: List[str], *, interval_sec: int = 600) -> None:
-    """בדיקה מחזורית – אם יש TP לסימבול ואין שום TP1 לפי תג, שולח אזהרה."""
-    await asyncio.sleep(5.0)
-    while True:
-        try:
-            tags = _env_tags()
-            for sym in symbols:
-                sym = sym.upper().strip()
-                tps = _tp_orders(sym)
-                if not tps:
-                    continue
-                if not any(_has_tp1_tag(o, tags) for o in tps):
-                    await _tg_send(
-                        "⚠️ <b>TP1 tag health</b>\n"
-                        f"• {sym}: נמצאו הזמנות TP אך ללא תגית TP1 מזוהה.\n"
-                        f"• עדכן <code>TP1_TAGS</code> או clientOrderId (למשל TP1)."
-                    )
-        except Exception as e:
-            log.warning("health_check_tp1_tags_error: %s", e)
-        await asyncio.sleep(max(60, interval_sec))
+def _price_float(v: Any) -> Optional[float]:
+    with suppress(Exception):
+        if v is None: return None
+        return float(v)
+    return None
 
-async def quick_check_tp1(symbols: List[str], *, tp1_tags: Optional[List[str]] = None, notify_telegram: bool = False) -> Dict[str, Any]:
-    """בדיקה חד-פעמית שמחזירה מצב לכל סימבול. אופציונלית שולחת התרעות."""
-    res: Dict[str, Any] = {}
-    tags = tp1_tags if (tp1_tags and len(tp1_tags)>0) else _env_tags()
-    for sym in symbols:
-        sym = sym.upper().strip()
-        try:
-            tps = _tp_orders(sym)
-            ok = any(_has_tp1_tag(o, tags) for o in tps) if tps else True  # אם אין כלל TP, לא נתריע
-            res[sym] = {"has_tp": bool(tps), "has_tp1_tag": ok, "checked": len(tps)}
-            if notify_telegram and tps and not ok:
-                with suppress(Exception):
-                    await _tg_send(
-                        "⚠️ <b>TP1 tag health</b>\n"
-                        f"• {sym}: נמצאו הזמנות TP אך ללא תגית TP1 מזוהה.\n"
-                        f"• עדכן <code>TP1_TAGS</code> או clientOrderId (למשל TP1)."
-                    )
-        except Exception as e:
-            res[sym] = {"error": str(e)}
-    return res
+def _best_tp_by_price(symbol: str, orders: List[Dict[str, Any]]) -> Optional[str]:
+    """
+    Heuristic: בלי תג—מזהה TP1 כ-TP הקרוב ביותר בכיוון "רווחי".
+    • אם צד ההזמנה SELL → מניחים לונג: הטייק הקרוב ביותר שמעל מחיר הסימן.
+    • אם צד ההזמנה BUY  → מניחים שורט: הטייק הקרוב ביותר שמתחת למחיר הסימן.
+    מחזיר clientOrderId של המועמד או None.
+    """
+    mark = _price_float(futures_mark_price(symbol))
+    if not mark:
+        # fallback קטן
+        with suppress(Exception):
+            from utils.binance_client import get_price
+            mark = _price_float(get_price(symbol))
+    if not mark: 
+        return None
+
+    # TP קנדידטים
+    tps = [o for o in orders if _is_tp_order(o)]
+    if not tps:
+        return None
+
+    best: Tuple[float, Dict[str, Any]] | None = None
+    for o in tps:
+        side = (o.get("side") or "").upper()
+        # price יכול להיות None ב-TAKE_PROFIT_MARKET; נשתמש ב-stopPrice
+        p = _price_float(o.get("price")) or _price_float(o.get("stopPrice"))
+        if not p: 
+            continue
+        good = (side == "SELL" and p > mark) or (side == "BUY" and p < mark)
+        if not good:
+            continue
+        dist = abs(p - mark)
+        if (best is None) or (dist < best[0]):
+            best = (dist, o)
+    return str(best[1].get("clientOrderId")) if best else None
+
+def health_tp1_for_symbol(symbol: str) -> Dict[str, Any]:
+    lst = get_all_orders(symbol, limit=100) or []
+    tags = _env_tags()
+    tp_orders = [o for o in lst if _is_tp_order(o)]
+    sl_orders = [o for o in lst if _is_sl_order(o)]
+
+    has_tp = len(tp_orders) > 0
+    has_tp1_tag = any(_has_tp1_tag(o, tags) for o in tp_orders)
+
+    tp1_id: Optional[str] = None
+    if has_tp1_tag:
+        for o in tp_orders:
+            if _has_tp1_tag(o, tags):
+                tp1_id = str(o.get("clientOrderId") or "")
+                break
+    else:
+        tp1_id = _best_tp_by_price(symbol, tp_orders)
+
+    return {
+        "has_tp": has_tp,
+        "has_tp1_tag": has_tp1_tag,
+        "tp_count": len(tp_orders),
+        "sl_count": len(sl_orders),
+        "tp1_clientOrderId": tp1_id,
+    }
+
+def live_orders_for_symbol(symbol: str) -> List[Dict[str, Any]]:
+    """החזרה גולמית להצגה ב-UI (מטויבת)."""
+    lst = get_all_orders(symbol, limit=100) or []
+    keep = []
+    for o in lst:
+        st = (o.get("status") or "").upper()
+        if st in ("NEW","PARTIALLY_FILLED"):
+            keep.append({
+                "orderId": o.get("orderId"),
+                "clientOrderId": o.get("clientOrderId"),
+                "type": o.get("type"),
+                "side": o.get("side"),
+                "positionSide": o.get("positionSide"),
+                "status": o.get("status"),
+                "price": o.get("price"),
+                "stopPrice": o.get("stopPrice"),
+                "origQty": o.get("origQty"),
+                "executedQty": o.get("executedQty"),
+                "updateTime": o.get("updateTime"),
+            })
+    return keep
+
 
