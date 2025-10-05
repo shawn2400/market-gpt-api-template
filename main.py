@@ -186,6 +186,7 @@ def _get_last_price(symbol: str) -> Optional[float]:
             return float(p)
 
     with suppress(Exception):
+        # Import locally to avoid build-time failures
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
@@ -288,6 +289,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return await place_futures_market(ticket)
 
     try:
+        # Local import to avoid build-time failures
         from binance.client import Client  # type: ignore
     except Exception as e:
         logger.error("binance import failed: %s", e)
@@ -487,6 +489,59 @@ async def _delete_ticket(tid: str, source: str) -> None:
             logger.warning("redis_delete_failed: %s", e)
     with suppress(Exception):
         ConfirmStore.decide(tid, approved=False)
+
+# -------------------- Smart-Manage helper (immediate after approve) --------------------
+async def _smart_manage_now(symbol: str,
+                            offset_bps: Optional[int] = None,
+                            pcts: Optional[List[float]] = None,
+                            splits: Optional[List[float]] = None,
+                            atr_mult: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Triggers /position-ops/manage-once for a given symbol via internal HTTP.
+    Controlled by SMART_MANAGE_ON_APPROVE and SMART_MANAGE_* envs.
+    """
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else ""
+    token = API_BEARER_TOKEN
+    if not base or not token:
+        return {"ok": False, "skipped": True, "reason": "missing base or token"}
+
+    body: Dict[str, Any] = {"symbol": symbol}
+    if offset_bps is not None:
+        body["offset_bps"] = offset_bps
+    if pcts is not None:
+        body["pcts"] = pcts
+    if splits is not None:
+        body["splits"] = splits
+    if atr_mult is not None:
+        body["callback_rate"] = None
+        body["atr_mult"] = atr_mult
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(f"{base}/position-ops/manage-once",
+                               headers={"Authorization": f"Bearer {token}"},
+                               json=body)
+        return {"ok": r.status_code < 300, "status": r.status_code, "text": r.text}
+    except Exception as e:
+        logger.warning("smart_manage_now_error: %s", e)
+        return {"ok": False, "error": str(e)}
+
+def _smart_manage_env() -> Dict[str, Any]:
+    def _parse_floats_csv(val: Optional[str]) -> Optional[List[float]]:
+        if not val:
+            return None
+        try:
+            return [float(x.strip()) for x in str(val).split(",") if str(x).strip()]
+        except Exception:
+            return None
+
+    return {
+        "enable": _bool_env("SMART_MANAGE_ON_APPROVE", False),
+        "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS","8"))),
+        "pcts": _parse_floats_csv(os.getenv("SMART_MANAGE_PCTS")),
+        "splits": _parse_floats_csv(os.getenv("SMART_MANAGE_SPLITS")),
+        "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT","0") or 0) or None,
+    }
 
 # -------------------- API: Create Ticket --------------------
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
@@ -774,6 +829,7 @@ async def ui_pending(request: Request = None):
 async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT"), request: Request = None):
     _require_bearer(request)
     try:
+        # Local import only inside function
         from binance.client import Client  # type: ignore
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"binance import failed: {e}")
@@ -938,6 +994,21 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
 
+    # Smart-Manage immediately after approve (if enabled)
+    if ok:
+        try:
+            sm = _smart_manage_env()
+            if sm["enable"]:
+                sym = str(ticket.get("symbol","")).upper()
+                sm_result = await _smart_manage_now(sym,
+                                                    offset_bps=sm["offset_bps"],
+                                                    pcts=sm["pcts"],
+                                                    splits=sm["splits"],
+                                                    atr_mult=sm["atr_mult"])
+                logger.info("smart_manage_after_approve: %s -> %s", sym, sm_result)
+        except Exception as e:
+            logger.warning("smart_manage_after_approve_failed: %s", e)
+
     if not ok:
         logger.warning("approve_failed: ticket=%s flow=%s detail=%s", ticket_id, flow, json.dumps(exec_res, ensure_ascii=False))
 
@@ -1022,6 +1093,21 @@ async def approve_signed(request: Request):
             exec_res = {"primary": exec_res, "fallback_market": retry}
         else:
             raise HTTPException(status_code=502, detail={"execute_error": exec_res})
+
+    # Smart-Manage immediately after approve_signed (if enabled)
+    try:
+        sm = _smart_manage_env()
+        if sm["enable"]:
+            sym = str(payload.get("symbol","")).upper()
+            sm_result = await _smart_manage_now(sym,
+                                                offset_bps=sm["offset_bps"],
+                                                pcts=sm["pcts"],
+                                                splits=sm["splits"],
+                                                atr_mult=sm["atr_mult"])
+            logger.info("smart_manage_after_approve_signed: %s -> %s", sym, sm_result)
+    except Exception as e:
+        logger.warning("smart_manage_after_approve_signed_failed: %s", e)
+
     with suppress(Exception):
         record_approval_approved()
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
@@ -1131,24 +1217,50 @@ except Exception as _e:
     logger.warning("health_tp1 module not found (%s) – using built-in fallback", _e)
     _health_tp1_loaded = True
 
-    # --- Fallback implementations ---
-    from binance.client import Client  # type: ignore
-
+    # --- Fallback implementations (no top-level Binance import) ---
     async def quick_check_tp1(symbols, tp1_tags=None, notify_telegram=False):
+        # Import Binance client locally
+        from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
         cli = Client(api_key, api_sec)
+
         tags = tp1_tags or [t.strip() for t in (os.getenv("TP1_TAGS","") or "").split(",") if t.strip()]
-        out = {}
+        out: Dict[str, Any] = {}
+        batch_lines: List[str] = ["🩺 <b>TP1 Health</b>"]
+
         for sym in symbols:
-            orders = cli.futures_get_open_orders(symbol=sym)
+            symu = str(sym).upper().strip()
+
+            # Skip symbols with no open position
+            try:
+                pos_infos = cli.futures_position_information(symbol=symu) or []
+                pos_qty = 0.0
+                if pos_infos:
+                    q = float(pos_infos[0].get("positionAmt") or 0.0)
+                    pos_qty = abs(q)
+                if pos_qty < 1e-12:
+                    # Do not include in output if no open position
+                    out[symu] = {"skipped_no_position": True}
+                    continue
+            except Exception:
+                # On error, keep checking orders but mark unknown pos
+                pass
+
+            # Collect open orders and detect TP1
+            try:
+                orders = cli.futures_get_open_orders(symbol=symu)
+            except Exception:
+                orders = []
+
             has_tp1 = False
             found = []
             for o in (orders or []):
-                coid = (o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")
-                if any(t for t in tags if t and t.lower() in coid.lower()):
+                coid = ((o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")).upper()
+                if any(t for t in tags if t and t.upper() in coid):
                     has_tp1 = True
-                if o.get("type") in ("TAKE_PROFIT","TAKE_PROFIT_MARKET","STOP","STOP_MARKET"):
+                typ = (o.get("type") or "").upper()
+                if typ in ("TAKE_PROFIT","TAKE_PROFIT_MARKET","STOP","STOP_MARKET","STOP_LOSS_LIMIT","TAKE_PROFIT_LIMIT"):
                     found.append({
                         "status": o.get("status"),
                         "type": o.get("type"),
@@ -1159,13 +1271,16 @@ except Exception as _e:
                         "positionSide": o.get("positionSide","BOTH"),
                         "time": o.get("time"),
                     })
-            out[sym] = {"tp1_tags": tags, "tp1_present": has_tp1, "open_conditional": found}
-        if notify_telegram:
-            lines = ["🩺 <b>TP1 Health</b>"]
-            for s, v in out.items():
-                mark = "✅" if v["tp1_present"] else "⚠️"
-                lines.append(f"• {s}: {mark} TP1 {'found' if v['tp1_present'] else 'missing'}")
-            await _send_telegram_html("\n".join(lines))
+
+            out[symu] = {"tp1_tags": tags, "tp1_present": has_tp1, "open_conditional": found}
+            # Build batched line only for symbols with an open position
+            mark = "✅" if has_tp1 else "⚠️"
+            batch_lines.append(f"• {symu}: {mark} {'TP1 found' if has_tp1 else 'TP1 missing'}")
+
+        # Send a single batched Telegram message (optional)
+        if notify_telegram and len(batch_lines) > 1:
+            await _send_telegram_html("\n".join(batch_lines))
+
         return out
 
     async def health_check_tp1_tags(symbols, interval_sec=600):
@@ -1179,7 +1294,7 @@ except Exception as _e:
 @app.on_event("startup")
 async def _startup_tasks():
     if _health_tp1_loaded and HEALTH_TP1_ENABLE:
-        # WATCHLIST -> סימבולים לבדיקה
+        # WATCHLIST -> symbols to check
         watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if watch:
             asyncio.create_task(health_check_tp1_tags(watch, interval_sec=HEALTH_TP1_INTERVAL_SEC))
@@ -1233,6 +1348,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
