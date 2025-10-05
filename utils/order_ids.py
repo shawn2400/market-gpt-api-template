@@ -1,31 +1,21 @@
 # utils/order_ids.py
 from __future__ import annotations
-import hashlib
-import os
-import re
-import time
+import hashlib, os, re, time
 
 __all__ = ["build_client_order_id", "coid_fit"]
 
 def coid_fit(s: str, limit: int = 32) -> str:
-    """Clamp clientOrderId to <=32 chars with short hash suffix."""
     if len(s) <= limit:
         return s
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
     return f"{s[:limit-8]}_{h}"
 
 def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: str | None = None) -> str:
-    """
-    Format: {PREFIX}_{SYM}_{SIDE}_{ROLE}_{TS}[_{EXTRA}]  (<=32 chars)
-    PREFIX from env ORDER_ID_PREFIX (default ALG_MAIN).
-    ROLE: ENTRY | TP1 | TP2 | TP3 | SL | BE | TRAIL | CLOSE | MANUAL
-    """
     prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG_MAIN").strip() or "ALG_MAIN"
-    sym = str(symbol).upper()
-    sd  = str(side).upper()
-    rl  = str(role).upper()
-    ts  = int(time.time())
+    sym = str(symbol).upper(); sd = str(side).upper(); rl = str(role).upper()
+    ts = int(time.time())
     base = f"{prefix}_{sym}_{sd}_{rl}_{ts}"
     if extra:
         base = f"{base}_{re.sub(r'[^A-Z0-9_]+', '', str(extra).upper())}"
     return coid_fit(base, 32)
+
