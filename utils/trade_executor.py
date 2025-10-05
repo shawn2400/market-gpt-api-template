@@ -178,7 +178,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         stp_filled, stp_fill_px = await asyncio.to_thread(_is_filled, stp_id)
 
         if lim_filled and not stp_filled:
-            with suppress(Exception): futures_cancel_order(sym, stp_id)
+            with suppress(Exception): futures_cancel_order(sym, lim_id)
             mk = get_price(sym) or futures_mark_price(sym) or lim_fill_px or limit_p
             if mk and lim_fill_px:
                 bps = abs(lim_fill_px - mk) / max(mk, 1e-9) * 10000.0
@@ -422,7 +422,8 @@ async def execute_trade_live(
     # בניית סולמות TP/SL
     ladders = _build_ladders(
         sym, side, float(qty),
-        ([tp] if tp is not None else tp_targets), tp_splits,
+        ([tp] if tp is not None else tp_targets), tp_splits
+        ,
         (None if trail_enabled else ([sl] if sl is not None else sl_targets)), sl_splits
     )
     plan["tp_orders"] = ladders["tp_orders"]
@@ -616,6 +617,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
