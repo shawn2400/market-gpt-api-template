@@ -74,6 +74,19 @@ TRAIL_ENABLE_DEFAULT    = os.getenv("TRAIL_ENABLE", "0").lower() in ("1","true",
 TRAIL_ATR_MULT_DEFAULT  = float(os.getenv("TRAIL_ATR_MULT", os.getenv("SL_ATR_MULT", "0.6")))
 TRAIL_FREEZE_ENABLE_DEF = os.getenv("TRAIL_FREEZE_ENABLE", "1").lower() in ("1","true","yes","on")
 
+# ─────────── Hardening flags (ENV) ───────────
+HYBRID_HARD_CANCEL_ENABLE = os.getenv("HYBRID_HARD_CANCEL_ENABLE", "1").lower() in ("1","true","yes","on")
+HYBRID_CANCEL_CONFIRM_TRIES = int(os.getenv("HYBRID_CANCEL_CONFIRM_TRIES", "4"))
+HYBRID_CANCEL_CONFIRM_SLEEP_MS = int(os.getenv("HYBRID_CANCEL_CONFIRM_SLEEP_MS", "200"))
+ARM_VERIFY_DISABLE = os.getenv("ARM_VERIFY_DISABLE", "0").lower() in ("1","true","yes","on")
+
+# ─────────── BE-after-TP1 flags ───────────
+TP_BE_ONLY_AFTER_TP1 = os.getenv("TP_BE_ONLY_AFTER_TP1", "1").lower() in ("1","true","yes","on")
+TP_BE_OFFSET_BPS = float(os.getenv("TP_BE_OFFSET_BPS", "8"))
+BE_GUARD_ENABLE = os.getenv("BE_GUARD_ENABLE", "1").lower() in ("1","true","yes","on")
+BE_GUARD_EVERY_SEC = int(os.getenv("BE_GUARD_EVERY_SEC", "30"))
+TP1_TAGS_ENV = [t.strip() for t in (os.getenv("TP1_TAGS", "") or "").split(",") if t.strip()]
+
 # ─────────── Telegram helper ───────────
 async def _tg_send(text: str) -> Dict[str, Any]:
     chat_id = int(os.getenv("TRADE_LOG_CHAT_ID") or TELEGRAM_CHAT_ID or 0)
@@ -112,6 +125,219 @@ def _ensure_runtime_position_mode() -> None:
                 execu.set_position_side_dual(False)  # One-way
     except Exception as e:
         log.warning("align_position_mode_failed: %s", e)
+
+# ─────────── Order verification helpers (for TP/SL hardening) ───────────
+def _order_matches(o: Dict[str, Any], *, typ: str, qty: str, stop: Optional[str], price: Optional[str],
+                   side: str, eff_ps: str, expect_ro: bool) -> bool:
+    """בודק התאמה מינימלית לשדות מרכזיים אחרי place."""
+    try:
+        if str(o.get("type","")).upper() != typ: return False
+        if str(o.get("side","")).upper() != side: return False
+        if eff_ps != "BOTH" and str(o.get("positionSide","")).upper() != eff_ps: return False
+        if eff_ps == "BOTH" and ("positionSide" in o):  # לא אמור להיות positionSide ב-One-way
+            return False
+        if expect_ro:
+            ro = o.get("reduceOnly")
+            if ro not in (True, "true", 1): return False
+        # כמויות/מחירים עוברים עיגולים — נבדוק גם float
+        if qty and str(o.get("origQty") or o.get("quantity") or "") != qty:
+            try:
+                if abs(float(o.get("origQty", "0")) - float(qty)) > 1e-12: return False
+            except Exception:
+                return False
+        if stop is not None:
+            if str(o.get("stopPrice") or "") != stop:
+                try:
+                    if abs(float(o.get("stopPrice", "0")) - float(stop)) > 1e-9: return False
+                except Exception:
+                    return False
+        if price is not None and typ not in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
+            if str(o.get("price") or "") != price:
+                try:
+                    if abs(float(o.get("price", "0")) - float(price)) > 1e-9: return False
+                except Exception:
+                    return False
+        st = (o.get("status") or "").upper()
+        return st in ("NEW","PARTIALLY_FILLED")
+    except Exception:
+        return False
+
+def _place_close_order_hardened(args: Dict[str, Any], *, sym: str, typ: str, qty_str: str,
+                                stop_str: Optional[str], price_str: Optional[str],
+                                side: str, eff_ps: str, expect_ro: bool,
+                                place_fn, list_fn, cancel_fn,
+                                max_retries: int = 3) -> Dict[str, Any]:
+    """
+    מציב הזמנה → מאמת ב-get_all_orders התאמה (type/side/ps/qty/stop/price/RO) → אם לא מתאים: cancel+retry.
+    """
+    if ARM_VERIFY_DISABLE:
+        try:
+            return {"ok": True, "response": place_fn(**args)}
+        except Exception as e:
+            msg = str(e).lower(); code = getattr(e, "code", None)
+            if ("reduceonly" in msg or "-1106" in msg or "reduce only" in msg) and "reduceOnly" in args:
+                a2 = dict(args); a2.pop("reduceOnly", None)
+                return {"ok": True, "response": place_fn(**a2)}
+            raise
+
+    backoff = 0.35
+    last_err: Optional[str] = None
+    for attempt in range(1, max_retries+1):
+        try:
+            resp = place_fn(**args)
+        except Exception as e:
+            msg = str(e).lower(); code = getattr(e, "code", None)
+            if ("reduceonly" in msg or "-1106" in msg or "reduce only" in msg) and "reduceOnly" in args:
+                a2 = dict(args); a2.pop("reduceOnly", None)
+                try:
+                    resp = place_fn(**a2)
+                except Exception as e2:
+                    last_err = f"place_failed(ro_fallback): {e2}"
+                    time.sleep(backoff); backoff = min(1.5, backoff*1.6)
+                    continue
+            else:
+                last_err = f"place_failed: {e}"
+                time.sleep(backoff); backoff = min(1.5, backoff*1.6)
+                continue
+
+        oid = str(resp.get("orderId") or "")
+        ok = False
+        try:
+            lst = list_fn(sym, limit=50) or []
+            cand = next((o for o in lst if str(o.get("orderId")) == oid), None)
+            if cand and _order_matches(cand, typ=typ, qty=qty_str, stop=stop_str, price=price_str,
+                                       side=side, eff_ps=eff_ps, expect_ro=expect_ro):
+                ok = True
+        except Exception as e:
+            last_err = f"verify_failed: {e}"
+
+        if ok:
+            return {"ok": True, "response": resp}
+
+        with suppress(Exception):
+            cancel_fn(sym, oid)
+        time.sleep(backoff)
+        backoff = min(1.5, backoff*1.6)
+
+    return {"ok": False, "error": last_err or "verify_mismatch_after_place"}
+
+# ─────────── BE/TP1 helpers ───────────
+def _be_price_for(side: str, entry_px: float, offset_bps: float) -> float:
+    if side.upper() == "BUY":
+        return _offset_bps(entry_px, +offset_bps, +1)
+    else:
+        return _offset_bps(entry_px, -offset_bps, +1)
+
+def _find_tp1_filled(sym: str) -> bool:
+    """
+    מזהה אם TP1 התמלאה, לפי:
+    1) תגיות מה-ENV ב-TP1_TAGS (clientOrderId/שם מכיל אחת מהן), או
+    2) ברירת מחדל: clientOrderId שמכיל/מתחיל TP1.
+    """
+    try:
+        lst = get_all_orders(sym, limit=50) or []
+        tags = TP1_TAGS_ENV if TP1_TAGS_ENV else ["TP1"]
+        for o in lst:
+            st  = (o.get("status") or "").upper()
+            typ = (o.get("type") or "").upper()
+            if st != "FILLED" or not typ.startswith("TAKE_PROFIT"):
+                continue
+            coi = str(o.get("clientOrderId") or "")
+            name = (o.get("origClientOrderId") or "")  # לפעמים מחזיר זה
+            s = (coi + "|" + name).upper()
+            if any(tag.upper() in s for tag in tags):
+                return True
+        return False
+    except Exception:
+        return False
+
+def _list_open_sl_orders(sym: str) -> List[Dict[str, Any]]:
+    out = []
+    try:
+        lst = get_all_orders(sym, limit=50) or []
+        for o in lst:
+            st = (o.get("status") or "").upper()
+            typ = (o.get("type") or "").upper()
+            if st in ("NEW","PARTIALLY_FILLED") and typ.startswith("STOP"):
+                out.append(o)
+    except Exception:
+        pass
+    return out
+
+def _cancel_many(sym: str, orders: List[Dict[str, Any]]) -> None:
+    for o in orders:
+        with suppress(Exception):
+            futures_cancel_order(sym, str(o.get("orderId")))
+
+def _remaining_qty_hint(initial_qty: float, sym: str, side: str) -> float:
+    """
+    אומדן כמות שנותרה לאחר TP/ים שמולאו. שמרני — reduceOnly ימנע הגדלה במקרה קצה.
+    """
+    try:
+        lst = get_all_orders(sym, limit=50) or []
+        sold = 0.0
+        for o in lst:
+            st = (o.get("status") or "").upper()
+            typ = (o.get("type") or "").upper()
+            if st == "FILLED" and typ.startswith("TAKE_PROFIT"):
+                q = float(o.get("executedQty") or o.get("origQty") or 0)
+                sold += max(0.0, q)
+        rem = max(0.0, float(initial_qty) - sold)
+        return rem if rem > 0 else float(initial_qty)
+    except Exception:
+        return float(initial_qty)
+
+async def _arm_be_after_tp1(sym: str, side: str, *, entry_px: float, qty: float, position_side: str,
+                            poll_sec: int = None) -> None:
+    """
+    סוקר כל BE_GUARD_EVERY_SEC: כש-TP1 מתמלאת → מבטל SL פתוחים וחומש SL חדש ב-BE±offset.
+    """
+    if poll_sec is None: poll_sec = max(5, BE_GUARD_EVERY_SEC)
+    await asyncio.sleep(2.0)
+    while True:
+        try:
+            if _find_tp1_filled(sym):
+                sls = _list_open_sl_orders(sym)
+                _cancel_many(sym, sls)
+
+                eff_ps = _effective_position_side(position_side)
+                close_side = _close_side_for(side)
+
+                be_px = _be_price_for(side, float(entry_px), float(TP_BE_OFFSET_BPS))
+                stop_str = _q_price(sym, float(be_px))[0]
+                qty_rem  = _remaining_qty_hint(float(qty), sym, side)
+                qty_str  = _q_qty(sym, float(qty_rem))[0]
+
+                args: Dict[str, Any] = dict(
+                    symbol=sym,
+                    side=close_side,
+                    type="STOP_MARKET",
+                    workingType="MARK_PRICE",
+                    stopPrice=stop_str,
+                    quantity=qty_str,
+                    newClientOrderId=_coid("SL_BE", sym, close_side),
+                )
+                expect_ro = True
+                if eff_ps != "BOTH":
+                    args["positionSide"] = eff_ps
+                if expect_ro:
+                    args["reduceOnly"] = True
+
+                _ = _place_close_order_hardened(
+                    args, sym=sym, typ="STOP_MARKET", qty_str=qty_str, stop_str=stop_str, price_str=None,
+                    side=close_side, eff_ps=eff_ps, expect_ro=expect_ro,
+                    place_fn=futures_create_order, list_fn=get_all_orders, cancel_fn=futures_cancel_order,
+                )
+
+                await _tg_send(
+                    f"🟦 <b>BE armed after TP1</b>\n"
+                    f"• {sym} {side} → SL@<code>{stop_str}</code> (qty≈{qty_rem})"
+                )
+                return
+        except Exception as e:
+            log.warning("be_after_tp1_loop_error: %s", e)
+
+        await asyncio.sleep(poll_sec)
 
 # ─────────── Hybrid entry (LIMIT+STOP עם positionSide מותנה) ───────────
 async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float,
@@ -172,14 +398,41 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             pass
         return False, None
 
+    async def _confirm_cancel(oid: str) -> bool:
+        """מאשר שביטול אכן נקלט (poll קצר על get_all_orders)."""
+        tries = max(1, HYBRID_CANCEL_CONFIRM_TRIES)
+        sleep_ms = max(50, HYBRID_CANCEL_CONFIRM_SLEEP_MS)
+        for _ in range(tries):
+            try:
+                lst = get_all_orders(sym, limit=20) or []
+                cand = next((o for o in lst if str(o.get("orderId")) == str(oid)), None)
+                if not cand:
+                    return True
+                st = (cand.get("status") or "").upper()
+                if st in ("CANCELED","EXPIRED","REJECTED"):
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(sleep_ms / 1000.0)
+        return False
+
     t0 = time.time()
     while True:
         lim_filled, lim_fill_px = await asyncio.to_thread(_is_filled, lim_id)
         stp_filled, stp_fill_px = await asyncio.to_thread(_is_filled, stp_id)
 
         if lim_filled and not stp_filled:
-            # FIX: כש-LIMIT מתמלא – מבטלים את ה-STOP (ולא את ה-LIMIT)
-            with suppress(Exception): futures_cancel_order(sym, stp_id)
+            # FIX + קשיחה: כש-LIMIT מתמלא – מבטלים את ה-STOP ומאשרים ביטול
+            if HYBRID_HARD_CANCEL_ENABLE:
+                with suppress(Exception): futures_cancel_order(sym, stp_id)
+                with suppress(Exception):
+                    okc = await _confirm_cancel(stp_id)
+                    if not okc:
+                        with suppress(Exception): futures_cancel_order(sym, stp_id)
+                        await _confirm_cancel(stp_id)
+            else:
+                with suppress(Exception): futures_cancel_order(sym, stp_id)
+
             mk = get_price(sym) or futures_mark_price(sym) or lim_fill_px or limit_p
             if mk and lim_fill_px:
                 bps = abs(lim_fill_px - mk) / max(mk, 1e-9) * 10000.0
@@ -187,7 +440,16 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             return {"ok": True, "entry_kind": "LIMIT", "price": lim_fill_px or limit_p, "sanity_bps": None, "sanity_ok": True, "order": lim}
 
         if stp_filled and not lim_filled:
-            with suppress(Exception): futures_cancel_order(sym, lim_id)
+            if HYBRID_HARD_CANCEL_ENABLE:
+                with suppress(Exception): futures_cancel_order(sym, lim_id)
+                with suppress(Exception):
+                    okc = await _confirm_cancel(lim_id)
+                    if not okc:
+                        with suppress(Exception): futures_cancel_order(sym, lim_id)
+                        await _confirm_cancel(lim_id)
+            else:
+                with suppress(Exception): futures_cancel_order(sym, lim_id)
+
             mk = get_price(sym) or futures_mark_price(sym) or stp_fill_px or stop_p
             if mk and stp_fill_px:
                 bps = abs(stp_fill_px - mk) / max(mk, 1e-9) * 10000.0
@@ -423,28 +685,16 @@ async def execute_trade_live(
     # בניית סולמות TP/SL
     ladders = _build_ladders(
         sym, side, float(qty),
-        ([tp] if tp is not None else tp_targets), tp_splits
-        ,
+        ([tp] if tp is not None else tp_targets), tp_splits,
         (None if trail_enabled else ([sl] if sl is not None else sl_targets)), sl_splits
     )
     plan["tp_orders"] = ladders["tp_orders"]
     plan["sl_orders"] = ladders["sl_orders"]
 
-    def _place_with_retry(args: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            return futures_create_order(**args)
-        except Exception as e:
-            msg = str(e).lower()
-            code = getattr(e, "code", None)
-            if ("reduceonly" in msg or "reduce only" in msg or "-1106" in msg or code == -1106):
-                a2 = dict(args); a2.pop("reduceOnly", None)
-                return futures_create_order(**a2)
-            raise
-
     tp_success = False
     sl_success = False
 
-    # ---- חימוש TP ----
+    # ---- חימוש TP (קשיח + אימות) ----
     for idx, o in enumerate(plan["tp_orders"], start=1):
         typ = str(o.get("type")).upper()
         args: Dict[str, Any] = dict(
@@ -459,25 +709,32 @@ async def execute_trade_live(
             args["positionSide"] = eff_ps
 
         if "MARKET" in typ:
-            args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+            stop_str = _q_price(sym, float(o["stopPrice"]))[0]
+            price_str = None
+            args["stopPrice"] = stop_str
         else:
-            args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
-            args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+            stop_str = _q_price(sym, float(o["stopPrice"]))[0]
+            price_str = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+            args["stopPrice"] = stop_str
+            args["price"] = price_str
             args["timeInForce"] = "GTC"
 
-        args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
+        qty_str = _q_qty(sym, float(o["qty"]))[0]
+        args["quantity"] = qty_str
 
         is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
-        if not (is_market_trigger and eff_ps == "BOTH"):
+        expect_ro = not (is_market_trigger and eff_ps == "BOTH")
+        if expect_ro:
             args["reduceOnly"] = True
 
-        try:
-            resp = _place_with_retry(args)
-            o["response"] = resp
-            if typ.startswith("TAKE_PROFIT"):
-                tp_success = tp_success or bool(resp.get("orderId"))
-        except Exception as e:
-            o["response"] = {"ok": False, "error": str(e)}
+        res = _place_close_order_hardened(
+            args, sym=sym, typ=typ, qty_str=qty_str, stop_str=stop_str, price_str=price_str,
+            side=close_side, eff_ps=eff_ps, expect_ro=expect_ro,
+            place_fn=futures_create_order, list_fn=get_all_orders, cancel_fn=futures_cancel_order,
+        )
+        o["response"] = res.get("response", res)
+        if res.get("ok"):
+            tp_success = True
 
     # ---- חימוש SL (trailing או סטטי) ----
     if trail_enabled:
@@ -499,30 +756,28 @@ async def execute_trade_live(
 
         mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
         activation = _offset_bps(mark_now, (-STOP_BAND_BPS if side == "BUY" else +STOP_BAND_BPS), +1)
-        args["activationPrice"] = _q_price(sym, float(activation))[0]
+        activation_str = _q_price(sym, float(activation))[0]
+        args["activationPrice"] = activation_str
 
-        if eff_ps != "BOTH":
-            args["positionSide"] = eff_ps
+        expect_ro = (eff_ps != "BOTH")
+        if expect_ro:
             args["reduceOnly"] = True
+            args["positionSide"] = eff_ps
 
-        try:
-            resp = _place_with_retry(args)
-            plan["sl_orders"].append({
-                "type": "TRAILING_STOP_MARKET",
-                "callbackRate": float(trail_callback_pct),
-                "activationPrice": args["activationPrice"],
-                "qty": float(qty),
-                "response": resp,
-            })
-            sl_success = sl_success or bool(resp.get("orderId"))
-        except Exception as e:
-            plan["sl_orders"].append({
-                "type": "TRAILING_STOP_MARKET",
-                "callbackRate": float(trail_callback_pct),
-                "activationPrice": args.get("activationPrice"),
-                "qty": float(qty),
-                "response": {"ok": False, "error": str(e)},
-            })
+        res = _place_close_order_hardened(
+            args, sym=sym, typ="TRAILING_STOP_MARKET", qty_str=qty_str,
+            stop_str=None, price_str=None,
+            side=close_side, eff_ps=eff_ps, expect_ro=expect_ro,
+            place_fn=futures_create_order, list_fn=get_all_orders, cancel_fn=futures_cancel_order,
+        )
+        plan["sl_orders"].append({
+            "type": "TRAILING_STOP_MARKET",
+            "callbackRate": float(trail_callback_pct),
+            "activationPrice": activation_str,
+            "qty": float(qty),
+            "response": res.get("response", res),
+        })
+        sl_success = bool(res.get("ok"))
     else:
         for idx, o in enumerate(plan["sl_orders"], start=1):
             typ = str(o.get("type")).upper()
@@ -538,25 +793,32 @@ async def execute_trade_live(
                 args["positionSide"] = eff_ps
 
             if "MARKET" in typ:
-                args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
+                stop_str = _q_price(sym, float(o["stopPrice"]))[0]
+                price_str = None
+                args["stopPrice"] = stop_str
             else:
-                args["stopPrice"] = _q_price(sym, float(o["stopPrice"]))[0]
-                args["price"]     = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+                stop_str = _q_price(sym, float(o["stopPrice"]))[0]
+                price_str = _q_price(sym, float(o.get("price", o["stopPrice"])))[0]
+                args["stopPrice"] = stop_str
+                args["price"] = price_str
                 args["timeInForce"] = "GTC"
 
-            args["quantity"] = _q_qty(sym, float(o["qty"]))[0]
+            qty_str = _q_qty(sym, float(o["qty"]))[0]
+            args["quantity"] = qty_str
 
             is_market_trigger = typ in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
-            if not (is_market_trigger and eff_ps == "BOTH"):
+            expect_ro = not (is_market_trigger and eff_ps == "BOTH")
+            if expect_ro:
                 args["reduceOnly"] = True
 
-            try:
-                resp = _place_with_retry(args)
-                o["response"] = resp
-                if typ.startswith("STOP"):
-                    sl_success = sl_success or bool(resp.get("orderId"))
-            except Exception as e:
-                o["response"] = {"ok": False, "error": str(e)}
+            res = _place_close_order_hardened(
+                args, sym=sym, typ=typ, qty_str=qty_str, stop_str=stop_str, price_str=price_str,
+                side=close_side, eff_ps=eff_ps, expect_ro=expect_ro,
+                place_fn=futures_create_order, list_fn=get_all_orders, cancel_fn=futures_cancel_order,
+            )
+            o["response"] = res.get("response", res)
+            if res.get("ok") and typ.startswith("STOP"):
+                sl_success = True
 
     if REQUIRE_TP_AND_SL and not (tp_success and (sl_success or trail_enabled)):
         rb = _safe_close_position(sym, side, float(qty), position_side=position_side)
@@ -583,6 +845,16 @@ async def execute_trade_live(
         )
     except Exception:
         pass
+
+    # --- Arm BE only after TP1 (live & dynamic) ---
+    try:
+        if (not trail_enabled) and BE_GUARD_ENABLE and TP_BE_ONLY_AFTER_TP1:
+            entry_px = float(plan["entry_result"].get("price") or plan["base_price"])
+            asyncio.create_task(_arm_be_after_tp1(
+                sym, side, entry_px=entry_px, qty=float(qty), position_side=position_side
+            ))
+    except Exception as _e:
+        log.warning("spawn_be_after_tp1_failed: %s", _e)
 
     return plan
 
@@ -618,6 +890,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
