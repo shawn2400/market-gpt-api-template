@@ -24,7 +24,7 @@ services:
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # --- Auth / Secrets (להזין בדשבורד, לא בקובץ) ---
+      # --- Auth / Secrets (להזין בדשבורד) ---
       - key: API_KEY
         sync: false
       - key: API_BEARER_TOKEN
@@ -191,7 +191,7 @@ services:
       - key: STREAM_TP_BE
         value: "1"
 
-      # --- Smart-Manage: הפעלה מיידית אחרי approve + חסמים ---
+      # --- Smart-Manage: הפעלה מיידית אחרי approve + חסמים
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
       - key: SMART_MANAGE_PCTS
@@ -202,7 +202,6 @@ services:
         value: "8"
       - key: SMART_MANAGE_TRAIL_ATR_MULT
         value: "1.5"
-      # חדש: תנאי “אחרי TP1” וסף רווח מינימלי
       - key: SMART_MANAGE_AFTER_TP1
         value: "1"
       - key: TRAIL_MIN_PROFIT_PCT
@@ -280,7 +279,7 @@ services:
       - key: OPS_DIGEST_LOOKBACK_HOURS
         value: "3"
 
-      # --- OpenAPI include ---
+      # --- OpenAPI include (רשות) ---
       - key: OPENAPI_INCLUDE_TAGS
         value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
 
@@ -294,6 +293,13 @@ services:
       - key: SECURITY_PUBLIC_PATHS
         value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
 
+      # --- תקני עיגול/פילטרים (לבקשתך) ---
+      - key: TRAIL_USE_NATIVE
+        value: "0"
+      - key: ORDER_ROUND_TO_TICK
+        value: "1"
+      - key: USE_EXCHANGE_FILTERS
+        value: "1"
 
 
 
