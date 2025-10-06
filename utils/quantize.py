@@ -1,49 +1,46 @@
 # utils/quantize.py
 from __future__ import annotations
-from decimal import Decimal, ROUND_DOWN, InvalidOperation
-from typing import Dict
+import math
+from functools import lru_cache
+from typing import Dict, Any
 
-# מטמון פילטרים לסשן
-_FILTERS: Dict[str, Dict[str, float]] = {}
+__all__ = ["get_filters", "quantize_price", "quantize_qty"]
 
+@lru_cache(maxsize=512)
+def _exchange_info_raw(api_key: str, api_sec: str) -> Dict[str, Any]:
+    from binance.client import Client  # type: ignore
+    cli = Client(api_key, api_sec)
+    return cli.futures_exchange_info() or {}
+
+@lru_cache(maxsize=2048)
 def get_filters(client, symbol: str) -> Dict[str, float]:
-    s = symbol.upper()
-    if s in _FILTERS:
-        return _FILTERS[s]
-    info = client.futures_exchange_info()
+    """
+    מחלץ tickSize ו-stepSize עבור symbol (עם cache).
+    """
+    info = client.futures_exchange_info() or {}
+    sym = symbol.upper()
     tick = 0.01
     step = 0.001
-    for sym in info.get("symbols", []):
-        if sym.get("symbol") == s:
-            for f in sym.get("filters", []):
+    for s in info.get("symbols", []):
+        if s.get("symbol") == sym:
+            for f in s.get("filters", []):
                 if f.get("filterType") == "PRICE_FILTER":
                     tick = float(f.get("tickSize", tick))
                 elif f.get("filterType") == "LOT_SIZE":
                     step = float(f.get("stepSize", step))
             break
-    _FILTERS[s] = {"tick": tick, "step": step}
-    return _FILTERS[s]
+    return {"tick": float(tick), "step": float(step)}
 
-def _dec(x) -> Decimal:
-    return Decimal(str(x))
+def _floor_to(x: float, step: float) -> float:
+    return math.floor(float(x) / float(step)) * float(step)
 
-def quantize_price(symbol: str, price: float, flt: Dict[str, float]) -> float:
-    """ מעגל מחיר לפי tick בעזרת Decimal (למטה) """
-    tick = _dec(flt["tick"])
-    p = _dec(price)
-    try:
-        q = (p / tick).to_integral_value(rounding=ROUND_DOWN) * tick
-    except InvalidOperation:
-        q = p
-    return float(q)
+def quantize_price(symbol: str, px: float, filters: Dict[str, float]) -> float:
+    tick = float(filters.get("tick") or 0.01)
+    return float(f"{_floor_to(float(px), tick):.12f}")
 
-def quantize_qty(symbol: str, qty: float, flt: Dict[str, float]) -> float:
-    """ מעגל כמות לפי step בעזרת Decimal (למטה) """
-    step = _dec(flt["step"])
-    qv = _dec(qty)
-    try:
-        q = (qv / step).to_integral_value(rounding=ROUND_DOWN) * step
-    except InvalidOperation:
-        q = qv
-    # החזרה עם דיוק מספיק גבוה כדי לא לחצות את ה-step
-    return float(q.normalize())
+def quantize_qty(symbol: str, qty: float, filters: Dict[str, float]) -> float:
+    step = float(filters.get("step") or 0.001)
+    q = _floor_to(float(qty), step)
+    # חיתוך רעשים בינאריים
+    return float(f"{q:.12f}")
+
