@@ -24,7 +24,7 @@ services:
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
 
-      # --- Auth / Secrets (להזין בדשבורד) ---
+      # --- Auth / Secrets (להזין בדשבורד, לא בקובץ) ---
       - key: API_KEY
         sync: false
       - key: API_BEARER_TOKEN
@@ -191,7 +191,7 @@ services:
       - key: STREAM_TP_BE
         value: "1"
 
-      # --- Smart-Manage: הפעלה מיידית אחרי approve + חסמים
+      # --- Smart-Manage: הפעלה מיידית אחרי approve + חסמים ---
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
       - key: SMART_MANAGE_PCTS
@@ -206,7 +206,7 @@ services:
       - key: SMART_MANAGE_AFTER_TP1
         value: "1"
       - key: TRAIL_MIN_PROFIT_PCT
-        value: "0.7"   # לדוגמה: הפעל Trail/BE רק אם הפוזיציה ברווח ≥0.7%
+        value: "0.7"
 
       # --- Hardening ---
       - key: HYBRID_HARD_CANCEL_ENABLE
@@ -256,7 +256,7 @@ services:
 
       # --- Manager / Scheduler ---
       - key: MANAGER_ENABLE
-        value: "1"      # אפשר לשקול 0 אם מסתמכים רק על הטריגר המיידי
+        value: "1"
       - key: MANAGER_INTERVAL_SEC
         value: "10"
       - key: TRADE_MANAGER_ENABLE
@@ -280,7 +280,7 @@ services:
       - key: OPS_DIGEST_LOOKBACK_HOURS
         value: "3"
 
-      # --- OpenAPI include (רשות) ---
+      # --- OpenAPI include ---
       - key: OPENAPI_INCLUDE_TAGS
         value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
 
@@ -293,7 +293,6 @@ services:
       # --- Security public paths (כולל החדשים) ---
       - key: SECURITY_PUBLIC_PATHS
         value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
-
 
 
 
