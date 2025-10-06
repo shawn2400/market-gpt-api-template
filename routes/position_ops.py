@@ -2,20 +2,18 @@
 from __future__ import annotations
 
 import os
-import time
 import math
-import hashlib
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 from contextlib import suppress
 
 from fastapi import APIRouter, Body, HTTPException
 
-# אחיד: בנאי COID אחד לכל האפליקציה
+# COID אחיד
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
 
-# כימות מדויק ל-price/qty לפי exchangeInfo (מונע -1111)
+# כימות price/qty מדויק
 with suppress(Exception):
     from utils.quantize import get_filters, quantize_price, quantize_qty  # type: ignore
 
@@ -78,10 +76,6 @@ def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", 
 # TP/BE gating helpers
 # =========================
 def _tp1_filled(client, symbol: str) -> bool:
-    """
-    מזהה האם TP1 מולא בעבר הקרוב.
-    חיפוש לפי clientOrderId שכולל TP1 / תגיות מהסביבה, ומצב FILLED.
-    """
     tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS","TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
     try:
         orders = client.futures_get_all_orders(symbol=symbol.upper(), limit=100) or []
@@ -103,11 +97,6 @@ def _profit_ok(entry: float, last: float, side: str, min_pct: float) -> bool:
     return move >= min_pct
 
 def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, str]:
-    """
-    קובע אם לאפשר BE/Trail לפי:
-    - SMART_MANAGE_AFTER_TP1=1 => דרוש TP1 מלא.
-    - TRAIL_MIN_PROFIT_PCT=x => דרוש רווח מינימלי באחוזים מן הכניסה.
-    """
     want_tp1 = (os.getenv("SMART_MANAGE_AFTER_TP1","0").lower() in ("1","true","yes","on"))
     min_profit = float(os.getenv("TRAIL_MIN_PROFIT_PCT","0") or 0)
     last = 0.0
@@ -121,7 +110,7 @@ def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, 
     return (True, "ok")
 
 # =========================
-# BE: STOP_MARKET closePosition (נשאר כמו שהוא, עובד טוב)
+# BE: STOP_MARKET closePosition (יציב)
 # =========================
 @router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
 def be(payload: Dict[str, Any] = Body(...)):
@@ -134,12 +123,10 @@ def be(payload: Dict[str, Any] = Body(...)):
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
 
-    # Gating (TP1 / min profit)
     ok, why = _gate_be_trail(client, symbol, side, entry)
     if not ok:
         return {"ok": False, "reason": why, "skipped": "be"}
 
-    # מחיר BE מעוגל
     flt = get_filters(client, symbol)
     if side == "BUY":
         be_px = quantize_price(symbol, entry * (1 + offset_bps/10000.0), flt)
@@ -148,7 +135,6 @@ def be(payload: Dict[str, Any] = Body(...)):
         be_px = quantize_price(symbol, entry * (1 - offset_bps/10000.0), flt)
         opp = "BUY"
 
-    # מבטל SL/Trail ישנים
     _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
     order = client.futures_create_order(
@@ -156,14 +142,14 @@ def be(payload: Dict[str, Any] = Body(...)):
         side=opp,
         type="STOP_MARKET",
         stopPrice=be_px,
-        closePosition=True,               # נשאר closePosition – זה עובד יציב ל-BE
+        closePosition=True,
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
         newClientOrderId=build_client_order_id(symbol, opp, role="BE"),
     )
     return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "be_price": be_px, "orderId": order.get("orderId")}
 
 # =========================
-# Trail: TRAILING_STOP_MARKET עם quantity+reduceOnly (מתקן -4136)
+# Trail: TRAILING_STOP_MARKET reduceOnly+quantity (מתקן -4136)
 # =========================
 @router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
 def trail(payload: Dict[str, Any] = Body(...)):
@@ -182,13 +168,11 @@ def trail(payload: Dict[str, Any] = Body(...)):
     last = _last_price(symbol)
     flt = get_filters(client, symbol)
 
-    # Gating (TP1 / min profit)
     ok, why = _gate_be_trail(client, symbol, side, entry)
     if not ok:
         return {"ok": False, "reason": why, "skipped": "trail"}
 
     if cb is None:
-        # חישוב גס אם לא נמסר
         try:
             if atr_mult:
                 from math import fabs
@@ -209,11 +193,8 @@ def trail(payload: Dict[str, Any] = Body(...)):
         cb = max(cb_min, min(cb_max, float(cb)))
 
     opp = "SELL" if side == "BUY" else "BUY"
-
-    # מבטל SL/Trail ישנים
     _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
-    # כמות מלאה של הפוזיציה (מעוגל ל-step) – reduceOnly
     qty = quantize_qty(symbol, abs_qty, flt)
     if qty <= 0:
         raise HTTPException(status_code=409, detail="trail qty rounds to zero")
@@ -255,14 +236,90 @@ def sl_move(payload: Dict[str, Any] = Body(...)):
         side=opp,
         type="STOP_MARKET",
         stopPrice=px,
-        closePosition=True,               # ל-SL ידני/BE זה יציב
+        closePosition=True,
         newClientOrderId=build_client_order_id(symbol, opp, role="SL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
     return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
 
 # =========================
-# TP Ladder – partial reduce-only, עם כימות Decimal
+# TP Native — closePosition=true (מופיע בשורת הפוזיציה)
+# =========================
+def _cancel_native_tp(client, symbol: str) -> int:
+    n = 0
+    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
+        typ = (o.get("type") or "").upper()
+        if "TAKE_PROFIT" not in typ:
+            continue
+        is_native = str(o.get("closePosition", "")).lower() == "true" or not o.get("reduceOnly")
+        if is_native:
+            with suppress(Exception):
+                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+                n += 1
+    return n
+
+@router.post("/tp/native", summary="Set a single native TP (TAKE_PROFIT_MARKET closePosition=true)")
+def tp_native(payload: Dict[str, Any] = Body(...)):
+    symbol = (payload.get("symbol") or "").upper()
+    price = payload.get("price")
+    pct = payload.get("pct")
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol required")
+    if price is None and pct is None:
+        raise HTTPException(status_code=422, detail="one of {price,pct} required")
+
+    client = _get_client()
+    _align_position_mode(client)
+    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    flt = get_filters(client, symbol)
+
+    if price is not None:
+        try:
+            target = float(price)
+        except Exception:
+            raise HTTPException(status_code=422, detail="bad price")
+    else:
+        try:
+            pct = float(pct)
+        except Exception:
+            raise HTTPException(status_code=422, detail="bad pct")
+        if side == "BUY":
+            target = entry * (1.0 + pct / 100.0)
+        else:
+            target = entry * (1.0 - pct / 100.0)
+
+    stop = quantize_price(symbol, float(target), flt)
+    opp = "SELL" if side == "BUY" else "BUY"
+
+    cancelled = _cancel_native_tp(client, symbol)
+
+    order = client.futures_create_order(
+        symbol=symbol,
+        side=opp,
+        type="TAKE_PROFIT_MARKET",
+        stopPrice=stop,
+        closePosition=True,
+        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+        newClientOrderId=build_client_order_id(symbol, opp, role="TP_NATIVE"),
+        timeInForce="GTC",
+    )
+    return {
+        "ok": True, "symbol": symbol, "pos_side": side, "entry": entry,
+        "tp_price": stop, "cancelled_native": cancelled, "orderId": order.get("orderId")
+    }
+
+@router.post("/tp/native/cancel", summary="Cancel only native position TP (leave ladder intact)")
+def tp_native_cancel(payload: Dict[str, Any] = Body(...)):
+    symbol = (payload.get("symbol") or "").upper()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol required")
+    client = _get_client()
+    _align_position_mode(client)
+    n = _cancel_native_tp(client, symbol)
+    return {"ok": True, "symbol": symbol, "cancelled_native": n}
+
+# =========================
+# TP Ladder – partial reduce-only (עם כימות)
 # =========================
 @router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
 def tp_ladder(payload: Dict[str, Any] = Body(...)):
@@ -282,7 +339,7 @@ def tp_ladder(payload: Dict[str, Any] = Body(...)):
 
     opp = "SELL" if side == "BUY" else "BUY"
 
-    # מנקה רק TP קיימים לפני בנייה
+    # מנקה רק TP (כולל native ולדר)
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
         if "TAKE_PROFIT" in typ:
@@ -335,7 +392,7 @@ def tp_cancel(payload: Dict[str, Any] = Body(...)):
     return {"ok": True, "symbol": symbol, "cancelled": n}
 
 # =========================
-# Close fraction – reduce-only market (אופציונלי)
+# Close fraction – reduce-only market
 # =========================
 @router.post("/close", summary="Close fraction of the position (reduce-only MARKET)")
 def close_fraction(payload: Dict[str, Any] = Body(...)):
@@ -366,9 +423,9 @@ def close_fraction(payload: Dict[str, Any] = Body(...)):
     return {"ok": True, "symbol": symbol, "fraction": fraction, "qty_closed": qty, "orderId": order.get("orderId")}
 
 # =========================
-# ניהול חד-פעמי
+# ניהול חד-פעמי (כעת עם TP_NATIVE אופציונלי)
 # =========================
-@router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder")
+@router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder + (optional) TP native")
 def manage_once(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     do = payload.get("do") or ["be", "trail", "tp_ladder"]
@@ -377,6 +434,11 @@ def manage_once(payload: Dict[str, Any] = Body(...)):
     pcts = payload.get("pcts")
     splits = payload.get("splits")
     atr_mult = payload.get("atr_mult") or os.getenv("SMART_MANAGE_TRAIL_ATR_MULT")
+    # TP-Native opt-in
+    tp_native_pct = payload.get("tp_native_pct") or os.getenv("SMART_NATIVE_TP_PCT")
+    tp_native_price = payload.get("tp_native_price")
+    do_tp_native = payload.get("do_tp_native") or (os.getenv("SMART_NATIVE_ON_APPROVE","0").lower() in ("1","true","yes","on"))
+
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
 
@@ -386,7 +448,6 @@ def manage_once(payload: Dict[str, Any] = Body(...)):
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
 
-    # Gating once for BE/TRAIL
     allow_be_trail, reason = _gate_be_trail(client, symbol, side, entry)
 
     try:
@@ -421,6 +482,16 @@ def manage_once(payload: Dict[str, Any] = Body(...)):
     except Exception as e:
         out["ok"] = False
         out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
+
+    try:
+        if do_tp_native and (tp_native_price is not None or tp_native_pct is not None):
+            b = {"symbol": symbol}
+            if tp_native_price is not None: b["price"] = float(tp_native_price)
+            else: b["pct"] = float(tp_native_pct)
+            out["steps"]["tp_native"] = tp_native(b)
+    except Exception as e:
+        out["ok"] = False
+        out["steps"]["tp_native"] = {"ok": False, "error": str(e)}
 
     return out
 
