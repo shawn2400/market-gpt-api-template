@@ -1,0 +1,65 @@
+@router.post("/tp/native", summary="Set a single native TP (TAKE_PROFIT_MARKET closePosition=true)")
+def tp_native(payload: Dict[str, Any] = Body(...)):
+    """
+    קובע TP יחיד כ-TAKE_PROFIT_MARKET + closePosition=true כדי שיופיע בשורת הפוזיציה.
+    אפשר לתת:
+      - price: מחיר טריגר מדויק
+      - pct: אחוז מה-ENTRY (למעלה ב-Long, למטה ב-Short)
+    אם ניתנים price ו-pct יחד, price גובר.
+    מבטל קודם TP-native קיים, לא נוגע בסולמות partial.
+    """
+    symbol = (payload.get("symbol") or "").upper()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol required")
+
+    price = payload.get("price")
+    pct = payload.get("pct")  # אחוז מהכניסה (לדוגמה 2.0 = +2%)
+
+    client = _get_client()
+    _align_position_mode(client)
+    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+
+    if price is None and pct is None:
+        raise HTTPException(status_code=422, detail="one of {price,pct} required")
+
+    # מחשבים טריגר
+    if price is not None:
+        try:
+            target = float(price)
+        except Exception:
+            raise HTTPException(status_code=422, detail="bad price")
+    else:
+        try:
+            pct = float(pct)
+        except Exception:
+            raise HTTPException(status_code=422, detail="bad pct")
+        if side == "BUY":
+            target = entry * (1.0 + pct / 100.0)
+        else:
+            target = entry * (1.0 - pct / 100.0)
+
+    stop = _round_price(symbol, float(target))
+    opp = "SELL" if side == "BUY" else "BUY"
+
+    # מבטל רק TP-native קיים (לא נוגע ב-ladder partial)
+    cancelled = _cancel_native_tp(client, symbol)
+
+    order = client.futures_create_order(
+        symbol=symbol,
+        side=opp,
+        type="TAKE_PROFIT_MARKET",
+        stopPrice=stop,
+        closePosition=True,  # ✅ כך זה יופיע תחת "TP/SL for position"
+        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+        newClientOrderId=build_client_order_id(symbol, opp, role="TP_NATIVE"),
+        timeInForce="GTC",
+    )
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "pos_side": side,
+        "entry": entry,
+        "tp_price": stop,
+        "cancelled_native": cancelled,
+        "orderId": order.get("orderId"),
+    }
